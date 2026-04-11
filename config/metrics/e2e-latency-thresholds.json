@@ -1,0 +1,8 @@
+{
+  "regressionTolerancePct": 20,
+  "absoluteMaxMs": {
+    "p50": 8000,
+    "p95": 20000,
+    "p99": 30000
+  }
+}

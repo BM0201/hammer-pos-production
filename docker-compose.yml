@@ -1,0 +1,94 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: hammer
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hammer"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - hammer-db:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/hammer
+      AUTH_SESSION_SECRET: super_secure_session_secret_value_for_docker_env
+      AUTH_SESSION_TTL_HOURS: "12"
+      E2E_BASE_URL: http://app:3000
+      E2E_ADMIN_STORAGE_STATE: tests/e2e/.auth/admin.json
+      E2E_CASHIER_STORAGE_STATE: tests/e2e/.auth/cashier.json
+      E2E_ADMIN_USERNAME: supervisor.mga
+      E2E_ADMIN_PASSWORD: ChangeMeNow!123
+      E2E_CASHIER_USERNAME: caja.mga
+      E2E_CASHIER_PASSWORD: ChangeMeNow!123
+      NODE_ENV: production
+      APP_ENV: development
+    ports:
+      - "3000:3000"
+
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.54.0-jammy
+    depends_on:
+      app:
+        condition: service_started
+    working_dir: /workspace
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/hammer
+      AUTH_SESSION_SECRET: super_secure_session_secret_value_for_docker_env
+      AUTH_SESSION_TTL_HOURS: "12"
+      E2E_BASE_URL: http://app:3000
+      E2E_ADMIN_STORAGE_STATE: tests/e2e/.auth/admin.json
+      E2E_CASHIER_STORAGE_STATE: tests/e2e/.auth/cashier.json
+      E2E_ADMIN_USERNAME: supervisor.mga
+      E2E_ADMIN_PASSWORD: ChangeMeNow!123
+      E2E_CASHIER_USERNAME: caja.mga
+      E2E_CASHIER_PASSWORD: ChangeMeNow!123
+      CI: "true"
+    volumes:
+      - ./:/workspace
+    command: >
+      bash -lc "npm ci --no-audit --no-fund &&
+      npx playwright install --with-deps chromium &&
+      npm run test:e2e"
+
+
+  release-check:
+    image: mcr.microsoft.com/playwright:v1.54.0-jammy
+    depends_on:
+      db:
+        condition: service_healthy
+    working_dir: /workspace
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/hammer
+      AUTH_SESSION_SECRET: super_secure_session_secret_value_for_docker_env
+      AUTH_SESSION_TTL_HOURS: "12"
+      E2E_BASE_URL: http://127.0.0.1:3000
+      E2E_ADMIN_STORAGE_STATE: tests/e2e/.auth/admin.json
+      E2E_CASHIER_STORAGE_STATE: tests/e2e/.auth/cashier.json
+      E2E_ADMIN_USERNAME: supervisor.mga
+      E2E_ADMIN_PASSWORD: ChangeMeNow!123
+      E2E_CASHIER_USERNAME: caja.mga
+      E2E_CASHIER_PASSWORD: ChangeMeNow!123
+      PREVIOUS_METRICS_PATH: config/metrics/e2e-latency-baseline.json
+      CI: "true"
+    volumes:
+      - ./:/workspace
+    command: >
+      bash -lc "npm ci --no-audit --no-fund &&
+      npx playwright install --with-deps chromium &&
+      npm run release:check"
+
+volumes:
+  hammer-db:

@@ -1,0 +1,67 @@
+{
+  "name": "hammer",
+  "version": "0.2.0",
+  "private": true,
+  "packageManager": "npm@11.4.2",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "prisma:format": "prisma format",
+    "prisma:validate": "prisma validate",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:status": "prisma migrate status",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "seed": "prisma db seed",
+    "local:prepare-env": "node scripts/ensure-local-dev-env.mjs",
+    "local:prepare-sqlite": "node scripts/ensure-local-sqlite.mjs",
+    "local:doctor": "npm run local:prepare-env && npm run local:prepare-sqlite",
+    "bootstrap:check": "node scripts/bootstrap-check.mjs",
+    "bootstrap:validate": "npm run bootstrap:check && npm run typecheck && npm run build",
+    "verify:phase6": "python3 scripts/verify-phase6-operational-hardening.py",
+    "verify:sales": "python3 scripts/verify-sales-hardening.py",
+    "verify:payments": "python3 scripts/verify-phase5-payment-core.py",
+    "test:e2e": "npm run e2e:prepare && playwright test",
+    "quality:gate": "bash scripts/quality-gate.sh",
+    "verify:phase7": "python3 scripts/verify-phase7-observability.py",
+    "env:validate": "node scripts/validate-env.mjs",
+    "predev": "npm run env:validate",
+    "prebuild": "npm run env:validate",
+    "prestart": "npm run env:validate",
+    "dev:full": "node scripts/dev-full.mjs",
+    "e2e:prepare": "npx playwright install chromium",
+    "smoke:test": "node scripts/smoke/smoke-test.mjs",
+    "metrics:compare": "node scripts/compare-latency-metrics.mjs",
+    "smoke:infra": "node scripts/smoke/infra-smoke.mjs",
+    "smoke:functional": "node scripts/smoke/functional-smoke.mjs",
+    "release:check": "bash scripts/release-check.sh",
+    "release:check:linux": "bash scripts/release-check.sh"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.7.0",
+    "lucide-react": "^1.7.0",
+    "next": "15.3.0",
+    "prisma": "^6.7.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "tsx": "^4.19.2",
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.4",
+    "@types/node": "^22.15.2",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "tailwindcss": "^4.1.4",
+    "typescript": "^5.8.2"
+  },
+  "optionalDependencies": {
+    "@playwright/test": "^1.54.0"
+  }
+}

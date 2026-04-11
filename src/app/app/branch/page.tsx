@@ -1,0 +1,308 @@
+import Link from "next/link";
+import { requireSession } from "@/modules/auth/guards";
+import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import {
+  getBranchAdminDashboardSummary,
+  getCashierDashboardSummary,
+  getSalesDashboardSummary,
+  getWarehouseDashboardSummary,
+} from "@/modules/dashboard/service";
+import { listPendingTransports } from "@/modules/transport/service";
+import { KpiCard } from "@/components/dashboard/kpi-card";
+import { RoleSummary } from "@/components/dashboard/role-summary";
+import {
+  Store,
+  ArrowRight,
+  ShoppingCart,
+  CreditCard,
+  Truck,
+  ShieldCheck,
+  ClipboardList,
+  BarChart3,
+  PackageCheck,
+} from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import type { ReactNode } from "react";
+import type { SessionPayload } from "@/types/auth";
+
+type QuickLink = { href: string; label: string; icon: ReactNode };
+
+type BranchSession = Pick<
+  SessionPayload,
+  "roleCode" | "globalRoles" | "branchMemberships"
+>;
+
+function buildBranchAdminQuickLinks(session: BranchSession): QuickLink[] {
+  const links: QuickLink[] = [];
+
+  if (canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW)) {
+    links.push({
+      href: "/app/branch/sales/orders",
+      label: "Punto de venta",
+      icon: <ShoppingCart className="h-5 w-5" />,
+    });
+  }
+  if (canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)) {
+    links.push({
+      href: "/app/branch/cashier/payments",
+      label: "Caja y cobros",
+      icon: <CreditCard className="h-5 w-5" />,
+    });
+  }
+  if (canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW)) {
+    links.push({
+      href: "/app/branch/warehouse/dispatch",
+      label: "Despacho",
+      icon: <Truck className="h-5 w-5" />,
+    });
+  }
+  if (canInAnyAssignedBranch(session, CAPABILITIES.APPROVAL_REQUEST_REVIEW)) {
+    links.push({
+      href: "/app/branch/approvals",
+      label: "Aprobaciones",
+      icon: <ShieldCheck className="h-5 w-5" />,
+    });
+  }
+  if (canInAnyAssignedBranch(session, CAPABILITIES.AUDIT_VIEW)) {
+    links.push({
+      href: "/app/branch/audit",
+      label: "Supervisión y bitácora",
+      icon: <ClipboardList className="h-5 w-5" />,
+    });
+  }
+  if (canInAnyAssignedBranch(session, CAPABILITIES.REPORTS_EXPORT)) {
+    links.push({
+      href: "/app/branch/reports",
+      label: "Reportes",
+      icon: <BarChart3 className="h-5 w-5" />,
+    });
+  }
+
+  return links;
+}
+
+export default async function BranchPage() {
+  const session = await requireSession();
+  const primaryBranchId = session.primaryBranchId ?? session.branchIds[0];
+
+  /* ── MASTER users get redirected ── */
+  if (session.roleCode === "MASTER") {
+    return (
+      <section className="min-h-[50vh] flex items-center justify-center">
+        <Card className="p-8 text-center max-w-md animate-scale-in">
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-[var(--color-master-50)] flex items-center justify-center mb-4">
+            <Store className="h-7 w-7 text-[var(--color-master-600)]" />
+          </div>
+          <h1 className="text-lg font-bold text-[var(--color-text)]">Panel de Sucursal</h1>
+          <p className="mt-2 text-sm text-[var(--color-text-muted)]">
+            Los usuarios MASTER operan desde el Centro de Comando.
+          </p>
+          <Link href="/app/master" className="mt-5 inline-flex">
+            <Button variant="primary" icon={<ArrowRight className="h-4 w-4" />}>
+              Ir al Centro de Comando
+            </Button>
+          </Link>
+        </Card>
+      </section>
+    );
+  }
+
+  /* ── SALES-only dashboard — Orange (#ea580c) ── */
+  if (
+    canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW) &&
+    !canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW) &&
+    !canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW)
+  ) {
+    if (!primaryBranchId) {
+      return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
+    }
+    const summary = await getSalesDashboardSummary(primaryBranchId, session.userId);
+    return (
+      <RoleSummary
+        title="Punto de Venta"
+        subtitle="Tu actividad comercial del día."
+        roleAccent="SALES"
+        kpis={(
+          <>
+            <KpiCard label="Borradores abiertos" value={summary.draftsOpen} tone={summary.draftsOpen > 0 ? "alert" : "ok"} roleAccent="SALES" />
+            <KpiCard label="Enviadas a cobro" value={summary.sentToPayment} tone={summary.sentToPayment > 0 ? "alert" : "default"} roleAccent="SALES" />
+            <KpiCard label="Ventas del día" value={`$${summary.salesToday.toFixed(2)}`} tone="ok" roleAccent="SALES" />
+          </>
+        )}
+        quickLinks={[
+          {
+            href: "/app/branch/sales/orders",
+            label: "Abrir punto de venta",
+            icon: <ShoppingCart className="h-5 w-5" />,
+          },
+        ]}
+      />
+    );
+  }
+
+  /* ── CASHIER-only dashboard — Amber (#d97706) ── */
+  if (
+    canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW) &&
+    !canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW) &&
+    !canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW)
+  ) {
+    if (!primaryBranchId) {
+      return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
+    }
+    const summary = await getCashierDashboardSummary(primaryBranchId);
+    const alerts = summary.discrepancyApprovals > 0
+      ? [`Hay ${summary.discrepancyApprovals} cierres con discrepancia pendientes de revisión.`]
+      : [];
+    return (
+      <RoleSummary
+        title="Caja & Cobros"
+        subtitle="Operación de cobro y estado de sesión de caja."
+        roleAccent="CASHIER"
+        alerts={alerts}
+        kpis={(
+          <>
+            <KpiCard label="Sesiones activas" value={summary.activeSessionCount} tone={summary.activeSessionCount > 0 ? "ok" : "alert"} roleAccent="CASHIER" />
+            <KpiCard label="Órdenes por cobrar" value={summary.pendingPayments} tone={summary.pendingPayments > 0 ? "alert" : "ok"} roleAccent="CASHIER" />
+            <KpiCard
+              label="Último cobro"
+              value={summary.lastPayment ? `$${summary.lastPayment.amount.toFixed(2)}` : "—"}
+              helper={summary.lastPayment ? `${summary.lastPayment.orderNumber}` : "Sin cobros recientes"}
+              roleAccent="CASHIER"
+            />
+            <KpiCard label="Discrepancias pendientes" value={summary.discrepancyApprovals} tone={summary.discrepancyApprovals > 0 ? "alert" : "ok"} roleAccent="CASHIER" />
+          </>
+        )}
+        quickLinks={[
+          {
+            href: "/app/branch/cashier/payments",
+            label: "Abrir caja y cobros",
+            icon: <CreditCard className="h-5 w-5" />,
+          },
+        ]}
+      />
+    );
+  }
+
+  /* ── WAREHOUSE-only dashboard — Green (#16a34a) ── */
+  if (
+    canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW) &&
+    !canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW) &&
+    !canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)
+  ) {
+    if (!primaryBranchId) {
+      return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
+    }
+    const summary = await getWarehouseDashboardSummary(primaryBranchId);
+    const alerts = summary.overrideRequests > 0
+      ? [`Hay ${summary.overrideRequests} excepciones de despacho pendientes.`]
+      : [];
+
+    const warehouseQuickLinks: QuickLink[] = [
+      {
+        href: "/app/branch/warehouse/dispatch",
+        label: "Despacho y entregas",
+        icon: <Truck className="h-5 w-5" />,
+      },
+    ];
+
+    if (canInAnyAssignedBranch(session, CAPABILITIES.APPROVAL_REQUEST_CREATE)) {
+      warehouseQuickLinks.push({
+        href: "/app/branch/approvals",
+        label: "Excepciones y solicitudes",
+        icon: <ShieldCheck className="h-5 w-5" />,
+      });
+    }
+
+    return (
+      <RoleSummary
+        title="Bodega & Despacho"
+        subtitle="Estado operativo de entregas y excepciones."
+        roleAccent="WAREHOUSE"
+        alerts={alerts}
+        kpis={(
+          <>
+            <KpiCard label="Pendientes de despacho" value={summary.pendingDispatches} tone={summary.pendingDispatches > 0 ? "alert" : "ok"} roleAccent="WAREHOUSE" />
+            <KpiCard label="Despachos hoy" value={summary.recentDispatches} tone="ok" roleAccent="WAREHOUSE" />
+            <KpiCard label="Excepciones pendientes" value={summary.overrideRequests} tone={summary.overrideRequests > 0 ? "alert" : "ok"} roleAccent="WAREHOUSE" />
+          </>
+        )}
+        quickLinks={warehouseQuickLinks}
+      />
+    );
+  }
+
+  /* ── BRANCH_ADMIN — the supervisor dashboard — Purple (#9333ea) ── */
+  const adminBranchIds = Array.from(
+    new Set(
+      session.branchMemberships
+        .filter((item) => item.roleCode === "BRANCH_ADMIN")
+        .map((item) => item.branchId),
+    ),
+  );
+  const effectiveBranchIds = adminBranchIds.length ? adminBranchIds : session.branchIds;
+  const [summary, pendingTransports] = await Promise.all([
+    getBranchAdminDashboardSummary(effectiveBranchIds),
+    listPendingTransports(effectiveBranchIds),
+  ]);
+
+  return (
+    <>
+      <RoleSummary
+        title="Supervisión de Sucursal"
+        subtitle="Resumen operativo para administración local."
+        roleAccent="BRANCH_ADMIN"
+        showHeaderAccent={false}
+        alerts={summary.alerts}
+        kpis={(
+          <>
+            <KpiCard label="Ventas del día" value={`$${summary.salesToday.toFixed(2)}`} tone="ok" roleAccent="BRANCH_ADMIN" />
+            <KpiCard label="Cobros pendientes" value={summary.pendingPayments} tone={summary.pendingPayments > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
+            <KpiCard label="Despachos pendientes" value={summary.pendingDispatches} tone={summary.pendingDispatches > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
+            <KpiCard label="Aprobaciones pendientes" value={summary.pendingApprovals} tone={summary.pendingApprovals > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
+            <KpiCard label="Inventario crítico" value={summary.criticalInventory} tone={summary.criticalInventory > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
+            <KpiCard label="Transportes en tránsito" value={summary.pendingTransports} tone={summary.pendingTransports > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
+          </>
+        )}
+        quickLinks={buildBranchAdminQuickLinks(session)}
+      />
+
+      {/* ── Servicios en Tránsito ── */}
+      {pendingTransports.length > 0 && (
+        <section className="mt-6 animate-fade-in-up">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-[var(--color-branch_admin-50,var(--color-surface-alt))]">
+              <PackageCheck className="h-4 w-4 text-[var(--color-branch_admin-600,var(--color-text-muted))]" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-[var(--color-text)]">Servicios en tránsito</h2>
+              <p className="text-xs text-[var(--color-text-muted)]">{pendingTransports.length} transporte(s) pendiente(s) de entrega</p>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {pendingTransports.map((t) => (
+              <Card key={t.id} className="p-4 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-[var(--color-text)]">{t.customerName}</span>
+                  <span className={`text-[0.65rem] font-semibold uppercase px-2 py-0.5 rounded-full ${
+                    t.status === "IN_TRANSIT"
+                      ? "bg-[var(--color-warning-50)] text-[var(--color-warning-700)]"
+                      : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"
+                  }`}>
+                    {t.status === "IN_TRANSIT" ? "En tránsito" : "Pendiente"}
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)]">Orden: {t.saleOrder.orderNumber}</p>
+                <p className="text-xs text-[var(--color-text-muted)]">Precio transporte: <strong>C${Number(t.price).toFixed(2)}</strong></p>
+                {t.reference && <p className="text-xs text-[var(--color-text-muted)]">Ref: {t.reference}</p>}
+                {t.scheduledPaymentTime && (
+                  <p className="text-xs text-[var(--color-text-muted)]">Pago prog.: {new Date(t.scheduledPaymentTime).toLocaleString("es-NI", { dateStyle: "short", timeStyle: "short" })}</p>
+                )}
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+    </>
+  );
+}

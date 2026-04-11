@@ -1,0 +1,98 @@
+name: quality-gates
+
+on:
+  pull_request:
+  push:
+    branches: ["main", "master", "work"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hammer
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hammer"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/hammer
+      AUTH_SESSION_SECRET: ci_super_secure_session_secret_with_more_than_32_chars
+      AUTH_SESSION_TTL_HOURS: "12"
+      E2E_BASE_URL: http://127.0.0.1:3000
+      E2E_ADMIN_STORAGE_STATE: tests/e2e/.auth/admin.json
+      E2E_CASHIER_STORAGE_STATE: tests/e2e/.auth/cashier.json
+      E2E_ADMIN_USERNAME: supervisor.mga
+      E2E_ADMIN_PASSWORD: ChangeMeNow!123
+      E2E_CASHIER_USERNAME: caja.mga
+      E2E_CASHIER_PASSWORD: ChangeMeNow!123
+      CI: "true"
+      PREVIOUS_METRICS_PATH: config/metrics/e2e-latency-baseline.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install deps
+        run: npm ci
+      - name: Install Playwright browser + deps
+        run: npx playwright install --with-deps chromium
+      - name: Run release safety check
+        run: npm run release:check
+      - name: Validate required artifacts
+        if: always()
+        run: |
+          required=(
+            artifacts/release/release-check-result.json
+            artifacts/release/readiness-contract.json
+            artifacts/smoke/infra-smoke.json
+            artifacts/smoke/functional-smoke.json
+            artifacts/metrics/e2e-latency.json
+            artifacts/metrics/e2e-latency-comparison.json
+          )
+          missing=0
+          for file in "${required[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "missing artifact: $file"
+              missing=1
+            fi
+          done
+          [[ "$missing" -eq 0 ]]
+      - name: Validate readiness booleans
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('artifacts/release/readiness-contract.json')
+          if not p.exists():
+              raise SystemExit('readiness-contract.json missing')
+          data = json.loads(p.read_text())
+          result = data.get('result', {})
+          if result.get('readyForStaging') is not True or result.get('readyForPilot') is not True:
+              raise SystemExit(f"readiness contract not green: {result}")
+          print('readiness contract green:', result)
+          PY
+      - name: Upload release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-artifacts
+          path: |
+            artifacts/metrics/e2e-latency.json
+            artifacts/metrics/e2e-latency-comparison.json
+            artifacts/smoke/infra-smoke.json
+            artifacts/smoke/functional-smoke.json
+            artifacts/release/release-check-result.json
+            artifacts/release/readiness-contract.json
+            artifacts/release/release-start.log
+            playwright-report
+          if-no-files-found: error

@@ -1,0 +1,10 @@
+{
+  "generatedAt": "2026-04-02T00:00:00.000Z",
+  "status": "passed",
+  "count": 3,
+  "durationMs": {
+    "p50": 2500,
+    "p95": 5000,
+    "p99": 7000
+  }
+}
