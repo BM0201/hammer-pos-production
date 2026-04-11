@@ -1,331 +1,133 @@
-# H.A.M.M.E.R. (Operational Baseline)
+# H.A.M.M.E.R. POS (Next.js + Prisma + PostgreSQL)
 
-Executable operational base for multi-branch hardware ERP/POS.
+Aplicación ERP/POS multi-sucursal lista para ejecutar en local y desplegar en Railway.
 
----
+## Stack base
+- Next.js 15
+- Prisma ORM
+- PostgreSQL (única base soportada para despliegue)
+- Node.js 22 + npm
 
-## 🔔 IMPORTANTE: Configuración SQLite
-
-**Este proyecto ha sido modificado para usar SQLite en lugar de PostgreSQL.**
-
-- ✅ **No necesitas instalar PostgreSQL**
-- ✅ **No necesitas Docker**
-- ✅ **La base de datos es local y autónoma**
-
-📖 **Lee el archivo [`INSTRUCCIONES_SQLITE.md`](./INSTRUCCIONES_SQLITE.md) para instrucciones completas.**
-
----
-
-## Canonical package manager
-This repository uses **npm** as the single package manager standard.
-
-## Prerequisites
+## Requisitos
 - Node.js 22+
 - npm 11+
-- ~~PostgreSQL 15+~~ ✅ **SQLite (incluido, no requiere instalación)**
+- PostgreSQL 15+ (local o gestionado)
 
-## Minimum required environment variables
-At minimum, configure:
-- `DATABASE_URL`
-- `AUTH_SESSION_SECRET` (32+ chars)
+## Variables mínimas requeridas
+Copia plantilla:
 
-Template:
 ```bash
 cp .env.example .env
 ```
 
-`npm run env:validate` runs automatically before `dev`, `build`, and `start`.
+Variables obligatorias:
+- `DATABASE_URL` (PostgreSQL, `postgresql://...`)
+- `AUTH_SESSION_SECRET` (mínimo 32 caracteres)
 
-If validation fails, the script now prints:
-- the failing npm context (example: `npm run build`)
-- which required variables are missing/invalid
-- actionable hints (create `.env`, generate secret, SQLite `DATABASE_URL` sample)
+Variables recomendadas:
+- `AUTH_SESSION_TTL_HOURS` (default: `12`)
+- `APP_ENV` (`development`, `staging`, `production`)
 
-Security note:
-- `AUTH_SESSION_SECRET` must be 32+ chars and **cannot** remain as the template placeholder value.
-- Canonical local SQLite URL is `file:./dev.db`.
-
-## Canonical local setup (Windows PowerShell / macOS / Linux)
+## Flujo local rápido
 ```bash
 npm install
-npm run local:doctor
+npm run env:validate
+npm run prisma:generate
+npm run prisma:migrate:deploy
 npm run seed
 npm run dev
 ```
 
-`local:doctor` performs local bootstrap preflight/repair:
-- ensures `.env` exists from `.env.example`
-- normalizes `DATABASE_URL` to canonical SQLite local path
-- auto-generates a secure local `AUTH_SESSION_SECRET` if missing/placeholder
-- runs `prisma generate`
-- runs `prisma migrate status` and repairs local SQLite drift by rebuilding `prisma/dev.db` (with backup) when needed
-- applies existing migrations with `prisma migrate deploy`
+## Prisma y migraciones (coherente con PostgreSQL)
+- `prisma/schema.prisma` usa `provider = "postgresql"`.
+- El historial de migraciones está normalizado para PostgreSQL desde una base limpia.
+- Comandos operativos:
 
-## One-command local bootstrap
 ```bash
-npm run dev:full
-```
-`dev:full` is cross-platform and runs:
-1. `npm install`
-2. `npm run local:doctor`
-3. `npm run bootstrap:check`
-4. `npm run seed`
-5. `npm run dev`
-
-## Bootstrap verification (cross-platform)
-```bash
-npm run bootstrap:check
-```
-Checks:
-- dependencies installed
-- next CLI available
-- prisma CLI available
-- tsx CLI available
-- environment valid
-- Prisma generate works
-
-## Prisma workflow semantics (local)
-- `npm run prisma:migrate:status` → diagnostic/preflight only.
-- `npm run prisma:migrate:dev` → create **new** migrations during schema development.
-- `npm run prisma:migrate:deploy` → apply existing migrations.
-
-## CI/Linux validation flow
-```bash
-npm run bootstrap:validate
-```
-
-## Prisma workflow (manual)
-```bash
-npm run prisma:format
-npm run prisma:validate
 npm run prisma:generate
 npm run prisma:migrate:deploy
+```
+
+## Docker (runtime de producción)
+El contenedor:
+1. valida entorno,
+2. ejecuta `prisma generate`,
+3. ejecuta `prisma migrate deploy`,
+4. **no** corre seed automático en `staging/production`,
+5. expone Next.js en `0.0.0.0` usando `PORT` (fallback `3000`).
+
+Construcción local:
+```bash
+docker build -t hammer-pos .
+```
+
+Ejecución local:
+```bash
+docker run --rm -p 3000:3000 \
+  -e APP_ENV=production \
+  -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/hammer?schema=public" \
+  -e AUTH_SESSION_SECRET="<SECRET_32+>" \
+  hammer-pos
+```
+
+---
+
+## Deploy en Railway (paso a paso real)
+
+### 1) Subir repo a GitHub
+```bash
+git add .
+git commit -m "Prepare production deploy for Railway + PostgreSQL"
+git push origin <tu-rama>
+```
+
+### 2) Crear proyecto en Railway
+- Railway Dashboard → **New Project** → **Deploy from GitHub repo**.
+- Selecciona este repositorio y rama.
+
+### 3) Agregar PostgreSQL gestionado
+- Dentro del proyecto: **New** → **Database** → **PostgreSQL**.
+- Railway inyectará variables del servicio DB.
+
+### 4) Configurar variables del servicio web
+En el servicio de la app (no en DB), define al menos:
+- `DATABASE_URL=${{Postgres.DATABASE_URL}}` (o referencia equivalente de Railway)
+- `AUTH_SESSION_SECRET=<valor aleatorio fuerte, 32+ chars>`
+- `AUTH_SESSION_TTL_HOURS=12`
+- `APP_ENV=production`
+- `NODE_ENV=production`
+
+### 5) Pre-deploy command para migraciones
+En Railway, configura exactamente:
+
+```bash
+npm run prisma:migrate:deploy
+```
+
+> Nota: el entrypoint también ejecuta migraciones al iniciar. Mantener el pre-deploy evita arrancar una release si la migración falla.
+
+### 6) Generar dominio público
+- Servicio web → **Settings** → **Networking**.
+- Click en **Generate Domain**.
+- (Opcional) agrega dominio custom y apunta DNS según Railway.
+
+### 7) Primer acceso / seed
+- Producción **no** ejecuta seed automático.
+- Si necesitas datos iniciales en staging o primer bootstrap manual:
+
+```bash
 npm run seed
 ```
 
-## Default seeded users
-Password for all users: `ChangeMeNow!123`
+Ejecuta este comando sólo cuando sea intencional poblar datos de prueba/iniciales.
 
-- master (global MASTER)
-- supervisor.mga, vendedor.mga, caja.mga, bodega.mga
-- supervisor.msy, vendedor.msy, caja.msy, bodega.msy
-- supervisor.riv, vendedor.riv, caja.riv, bodega.riv
+---
 
-## Staging simulation dataset
-Seed now includes realistic operational volume:
-- 20 categories
-- 1,200 products
-- inventory balances per branch for each product
-- 80 pending-payment sale orders in Managua branch
-
-This enables POS, cashier, and dispatch flows under non-trivial load.
-
-## E2E automation
+## Comandos útiles
 ```bash
-npm run test:e2e
+npm run env:validate
+npm run prisma:generate
+npm run prisma:migrate:deploy
+npm run build
+npm run start
 ```
-
-E2E readiness is automatic:
-- Playwright browser install is done by `e2e:prepare`
-- authenticated `storageState` is generated by global setup (`scripts/e2e/global-setup.ts`)
-- global setup also ensures an active cash session for payment flow
-
-## E2E metrics output
-After each E2E run, latency metrics are exported to:
-- `artifacts/metrics/e2e-latency.json`
-
-Metrics include:
-- `durationMs.p50`
-- `durationMs.p95`
-- `durationMs.p99`
-
-## Quality gate
-```bash
-npm run quality:gate
-```
-
-Runs: typecheck + build + static verification scripts + Playwright e2e.
-
-## Branch routes
-- `/app/branch`
-- `/app/branch/catalog/products`
-- `/app/branch/inventory`
-- `/app/branch/sales/orders`
-- `/app/branch/cashier/payments`
-- `/app/branch/warehouse/dispatch`
-
-## Master routes
-- `/app/master`
-- `/app/master/catalog/categories`
-- `/app/master/catalog/products`
-- `/app/master/inventory?branchId=...`
-- `/app/master/sales/orders?branchId=...`
-
-## Core API highlights
-- Cash session:
-  - `GET /api/cashier/cash-boxes`
-  - `POST /api/cashier/cash-sessions/open`
-  - `GET /api/cashier/cash-sessions/active`
-  - `POST /api/cashier/cash-sessions/close-request`
-  - `POST /api/cashier/cash-sessions/close`
-- Payments:
-  - `GET /api/cashier/orders/pending-payment`
-  - `POST /api/cashier/payments`
-- Dispatch:
-  - `GET /api/warehouse/dispatch/pending`
-  - `GET /api/warehouse/dispatch/history`
-  - `POST /api/warehouse/dispatch/:orderId/dispatch`
-
-
-## Containerized execution (fully isolated)
-### Build and run app + db
-```bash
-docker compose up --build app db
-```
-
-This runs:
-- PostgreSQL 15 (`db`)
-- Next.js + Prisma app (`app`) with startup migration + seed via container entrypoint
-
-### Run E2E fully inside containers
-```bash
-docker compose run --rm e2e
-```
-
-The `e2e` service installs dependencies, installs Playwright browsers with OS deps, and executes `npm run test:e2e` against the containerized app.
-
-## CI execution
-GitHub Actions (`.github/workflows/quality-gates.yml`) now provides environment-isolated validation:
-1. starts PostgreSQL service container
-2. installs dependencies
-3. installs Playwright Chromium + system deps
-4. applies migrations and seed
-5. runs full quality gate
-6. uploads `artifacts/metrics/e2e-latency.json` and Playwright HTML report as artifacts
-
-## Staging deployment blueprint
-1. Build and push image:
-   ```bash
-   docker build -t <registry>/hammer:<tag> .
-   docker push <registry>/hammer:<tag>
-   ```
-2. Provision managed PostgreSQL (or containerized Postgres) for staging.
-3. Deploy container with required env vars:
-   - `DATABASE_URL`
-   - `AUTH_SESSION_SECRET`
-   - `AUTH_SESSION_TTL_HOURS`
-4. Health-check app at `/login` and run smoke E2E in staging using:
-   ```bash
-   E2E_BASE_URL=https://<staging-host> npm run test:e2e
-   ```
-
-
-## Environment-aware container runtime
-Container startup behavior depends on `APP_ENV`:
-- `development`: env validate + prisma generate + migrate + seed + start
-- `staging`: env validate + prisma generate + migrate + start (no auto-seed)
-- `production`: env validate + prisma generate + migrate + start (no auto-seed)
-
-Example:
-```bash
-docker run --rm -p 3000:3000 \
-  -e APP_ENV=staging \
-  -e DATABASE_URL=postgresql://... \
-  -e AUTH_SESSION_SECRET=... \
-  ghcr.io/<org>/<repo>:<tag>
-```
-
-## Smoke tests (machine-readable)
-Run post-start smoke validation:
-```bash
-SMOKE_BASE_URL=http://127.0.0.1:3000 \
-DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/hammer \
-npm run smoke:test
-```
-
-Checks included (split by phase):
-- infra: app readiness, DB/auth readiness via login pipeline, session layer reachability
-- functional: POS API, cashier/cash-session API, warehouse/dispatch API reachability
-
-Output is JSON and exits with non-zero code on failure.
-
-## Staging deployment workflow (build -> push -> deploy -> migrate -> smoke)
-Manual GitHub Actions workflow:
-- `.github/workflows/staging-deploy.yml`
-
-It executes:
-1. `docker build -t ghcr.io/<repo>:<tag> .`
-2. `docker push ghcr.io/<repo>:<tag>`
-3. SSH deploy to staging host with `APP_ENV=staging` (auto-migrate via entrypoint, no seed)
-4. post-deploy `npm run smoke:test`
-
-### Required secrets
-- `STAGING_SSH_HOST`
-- `STAGING_SSH_USER`
-- `STAGING_SSH_KEY`
-- `STAGING_DATABASE_URL`
-- `STAGING_AUTH_SESSION_SECRET`
-- `STAGING_E2E_USERNAME`
-- `STAGING_E2E_PASSWORD`
-
-## Metrics continuity and regression checks
-CI now compares latest E2E latency output with baseline thresholds:
-- current: `artifacts/metrics/e2e-latency.json`
-- baseline: `config/metrics/e2e-latency-baseline.json`
-- thresholds: `config/metrics/e2e-latency-thresholds.json`
-- comparison output: `artifacts/metrics/e2e-latency-comparison.json`
-
-Pipeline fails if p50/p95/p99 regress beyond allowed tolerance or exceed absolute max.
-
-
-## Release hardening and pilot gates
-### Self-contained smoke commands (no runtime `npx` downloads)
-```bash
-npm run smoke:infra
-npm run smoke:functional
-npm run smoke:test
-```
-
-### Full release safety check
-```bash
-npm run release:check
-```
-
-`release:check` evaluates:
-- env validation
-- Prisma readiness
-- build + verification scripts
-- Playwright E2E
-- latency regression baseline check
-- infra smoke
-- functional smoke
-- pilot readiness contract generation
-
-See `docs/release-pilot-readiness.md` for explicit ready-for-staging and ready-for-pilot criteria.
-
-
-## Full live release validation (runnable stack)
-Use Docker-based isolated validation to prove end-to-end release path:
-```bash
-bash scripts/live-release-validation.sh
-```
-
-Manual equivalent:
-```bash
-docker compose up -d db
-docker compose run --rm release-check
-```
-
-This produces machine-readable evidence:
-- `artifacts/release/live-validation-result.json`
-- `artifacts/release/release-check-result.json`
-- `artifacts/release/readiness-contract.json`
-- `artifacts/smoke/infra-smoke.json`
-- `artifacts/smoke/functional-smoke.json`
-- `artifacts/metrics/e2e-latency-comparison.json`
-- `artifacts/release/live-validation-artifacts.tar.gz`
-
-If `result.readyForPilot` is `true`, the build qualifies for pilot.
-
-
-CI alternative (Docker-capable runner): trigger `.github/workflows/live-certification.yml` to produce the same artifact bundle and final certification evidence.

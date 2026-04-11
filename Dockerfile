@@ -7,7 +7,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 
 FROM base AS builder
-ENV DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/hammer
+ENV DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/hammer?schema=public
 ENV AUTH_SESSION_SECRET=build_time_secret_value_with_more_than_32_chars
 ENV AUTH_SESSION_TTL_HOURS=12
 ENV E2E_BASE_URL=http://127.0.0.1:3000
@@ -42,4 +42,4 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 EXPOSE 3000
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
+CMD ["sh", "-c", "npm run start -- --hostname 0.0.0.0 --port ${PORT:-3000}"]

@@ -44,15 +44,25 @@ const env = {
 };
 
 const errors = {};
-if (!env.DATABASE_URL) errors.DATABASE_URL = "Required";
-if (typeof env.DATABASE_URL === "string" && env.DATABASE_URL.startsWith("file:") && env.DATABASE_URL !== "file:./dev.db") {
-  errors.DATABASE_URL = "SQLite local path must be canonical: file:./dev.db";
+if (!env.DATABASE_URL) {
+  errors.DATABASE_URL = "Required";
+} else {
+  try {
+    const protocol = new URL(env.DATABASE_URL).protocol;
+    if (!["postgresql:", "postgres:"].includes(protocol)) {
+      errors.DATABASE_URL = "Must use PostgreSQL connection string (postgresql:// or postgres://)";
+    }
+  } catch {
+    errors.DATABASE_URL = "Must be a valid PostgreSQL URL";
+  }
 }
+
 if (!env.AUTH_SESSION_SECRET || env.AUTH_SESSION_SECRET.length < 32) errors.AUTH_SESSION_SECRET = "Must have 32+ chars";
 if (!/^\d+$/.test(env.AUTH_SESSION_TTL_HOURS) || Number(env.AUTH_SESSION_TTL_HOURS) < 1) errors.AUTH_SESSION_TTL_HOURS = "Must be integer >= 1";
 if (
   typeof env.AUTH_SESSION_SECRET === "string" &&
   (
+    env.AUTH_SESSION_SECRET.includes("replace_with_a_unique_random_secret_min_32_chars") ||
     env.AUTH_SESSION_SECRET.includes("replace_with_a_very_long_random_secret_value_min_32_chars") ||
     env.AUTH_SESSION_SECRET.toLowerCase().includes("change_me") ||
     env.AUTH_SESSION_SECRET.toLowerCase().includes("changeme")
@@ -92,7 +102,7 @@ if (Object.keys(errors).length > 0) {
     console.error('node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
   }
   if (errors.DATABASE_URL) {
-    console.error("Hint: for local SQLite use DATABASE_URL=\"file:./dev.db\"");
+    console.error('Hint: use a PostgreSQL URL, e.g. DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/hammer?schema=public"');
   }
   process.exit(1);
 }

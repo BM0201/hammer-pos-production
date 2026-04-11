@@ -6,14 +6,15 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { submitDirectSale } from "@/modules/sales/service";
 import { toHttpErrorResponse } from "@/lib/http";
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     const body = await request.json();
 
+    const { id } = await params;
     const result = await submitDirectSale({
-      saleOrderId: params.id,
+      saleOrderId: id,
       actorUserId: session.userId,
       method: body?.method ?? "CASH",
       requiresTransport: body?.requiresTransport,

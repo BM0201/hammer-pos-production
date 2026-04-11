@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd /app
 
-APP_ENV="${APP_ENV:-development}"
+APP_ENV="${APP_ENV:-production}"
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "DATABASE_URL is required"
@@ -20,18 +20,11 @@ npm run env:validate
 npm run prisma:generate
 npm run prisma:migrate:deploy
 
-case "$APP_ENV" in
-  development)
-    echo "[entrypoint] Development mode: running seed"
-    npm run seed
-    ;;
-  staging|production)
-    echo "[entrypoint] ${APP_ENV} mode: skipping automatic seed"
-    ;;
-  *)
-    echo "[entrypoint] Unsupported APP_ENV=$APP_ENV"
-    exit 2
-    ;;
-esac
+if [[ "${APP_ENV}" == "development" ]]; then
+  echo "[entrypoint] Development mode: running seed"
+  npm run seed
+else
+  echo "[entrypoint] ${APP_ENV} mode: skipping automatic seed"
+fi
 
 exec "$@"
