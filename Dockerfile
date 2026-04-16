@@ -1,5 +1,6 @@
-FROM node:22-bookworm-slim AS base
+FROM node:20-alpine AS base
 WORKDIR /app
+RUN apk add --no-cache openssl libc6-compat
 ENV NEXT_TELEMETRY_DISABLED=1
 
 FROM base AS deps
@@ -7,19 +8,13 @@ COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 
 FROM base AS builder
-ENV DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/hammer
+ARG BUILD_DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/hammer?schema=public"
+ENV DATABASE_URL=${BUILD_DATABASE_URL}
 ENV AUTH_SESSION_SECRET=build_time_secret_value_with_more_than_32_chars
 ENV AUTH_SESSION_TTL_HOURS=12
-ENV E2E_BASE_URL=http://127.0.0.1:3000
-ENV E2E_ADMIN_STORAGE_STATE=tests/e2e/.auth/admin.json
-ENV E2E_CASHIER_STORAGE_STATE=tests/e2e/.auth/cashier.json
-ENV E2E_ADMIN_USERNAME=supervisor.mga
-ENV E2E_ADMIN_PASSWORD=ChangeMeNow!123
-ENV E2E_CASHIER_USERNAME=caja.mga
-ENV E2E_CASHIER_PASSWORD=ChangeMeNow!123
+ENV SKIP_ENV_VALIDATION=true
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run prisma:generate
 RUN npm run build
 
 FROM base AS runtime
@@ -42,4 +37,4 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 EXPOSE 3000
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
+CMD ["npm", "run", "start:railway"]

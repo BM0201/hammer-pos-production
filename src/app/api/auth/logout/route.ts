@@ -10,7 +10,6 @@ export async function POST(request: Request) {
     const session = await getCurrentSession();
 
     if (session) {
-      // Revoke the session token
       const store = await cookies();
       const rawToken = store.get(makeSessionCookieName())?.value;
       if (rawToken) {
@@ -30,8 +29,14 @@ export async function POST(request: Request) {
         entityId: session.userId,
       });
     }
+  } catch (error) {
+    console.error("[auth/logout] failed during logout flow", error);
   } finally {
-    await clearSessionCookie();
+    try {
+      await clearSessionCookie();
+    } catch (cookieError) {
+      console.error("[auth/logout] failed to clear session cookie", cookieError);
+    }
   }
 
   return NextResponse.redirect(new URL("/login", request.url), { status: 303 });

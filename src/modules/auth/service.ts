@@ -1,6 +1,6 @@
 import type { RoleCode } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
-import { env } from "@/lib/env";
+import { prisma, MissingDatabaseUrlError } from "@/lib/prisma";
+import { env, envStatus, logRuntimeEnvWarnings } from "@/lib/env";
 import { verifyPassword } from "@/modules/auth/password";
 import { buildSessionPayload, decodeSession, encodeSession, makeSessionCookieName } from "@/modules/auth/session";
 import { cookies } from "next/headers";
@@ -9,6 +9,16 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { isTokenRevoked } from "@/modules/security/token-revocation";
 
 export async function authenticate(username: string, password: string): Promise<{ token: string; role: RoleCode; mustChangePassword: boolean } | null> {
+  if (!envStatus.hasDatabaseUrl) {
+    logRuntimeEnvWarnings();
+    throw new MissingDatabaseUrlError();
+  }
+
+  if (!envStatus.hasAuthSessionSecret) {
+    logRuntimeEnvWarnings();
+    throw new Error("AUTH_SESSION_SECRET_MISSING");
+  }
+
   const user = await prisma.user.findUnique({
     where: { username },
     include: { userBranchRoles: { where: { isActive: true } } },
@@ -125,10 +135,15 @@ export async function getCurrentSession(): Promise<SessionPayload | null> {
     return null;
   }
 
-  // Check token revocation
-  const revoked = await isTokenRevoked(raw);
-  if (revoked) {
-    return null;
+  // Check token revocation when DB is available. If DB is unavailable,
+  // keep request flow alive and degrade gracefully instead of crashing pages.
+  try {
+    const revoked = await isTokenRevoked(raw);
+    if (revoked) {
+      return null;
+    }
+  } catch {
+    logRuntimeEnvWarnings();
   }
 
   return session;

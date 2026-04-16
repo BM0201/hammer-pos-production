@@ -25,10 +25,45 @@ function parseDotEnvFile(filePath) {
     }, {});
 }
 
+const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const isTrue = (value) => typeof value === "string" && TRUE_VALUES.has(value.toLowerCase());
+
 const fileEnv = parseDotEnvFile(envPath);
 const read = (key, fallback) => process.env[key] ?? fileEnv[key] ?? fallback;
 const lifecycle = process.env.npm_lifecycle_event ?? "unknown";
 const hasEnvFile = fs.existsSync(envPath);
+const cliMode = process.argv.find((arg) => arg.startsWith("--mode="))?.split("=")[1];
+
+const envValidationModeFromEnv = process.env.ENV_VALIDATION_MODE;
+const skipValidation = isTrue(process.env.SKIP_ENV_VALIDATION);
+
+function resolveValidationMode() {
+  if (skipValidation) return "skip";
+
+  const requestedMode = (cliMode ?? envValidationModeFromEnv ?? "auto").toLowerCase();
+  if (!["auto", "strict", "warn"].includes(requestedMode)) {
+    console.warn(`[env:validate] Unknown mode '${requestedMode}', falling back to auto.`);
+    return "auto";
+  }
+
+  if (requestedMode !== "auto") return requestedMode;
+
+  const runtimeLikeContext =
+    lifecycle === "prestart" ||
+    lifecycle === "start" ||
+    process.env.APP_ENV === "production" ||
+    process.env.NODE_ENV === "production";
+
+  return runtimeLikeContext ? "warn" : "strict";
+}
+
+const validationMode = resolveValidationMode();
+
+if (validationMode === "skip") {
+  console.log("ENV_VALIDATION_SKIPPED");
+  console.log("Reason: SKIP_ENV_VALIDATION=true");
+  process.exit(0);
+}
 
 const env = {
   DATABASE_URL: read("DATABASE_URL"),
@@ -44,15 +79,25 @@ const env = {
 };
 
 const errors = {};
-if (!env.DATABASE_URL) errors.DATABASE_URL = "Required";
-if (typeof env.DATABASE_URL === "string" && env.DATABASE_URL.startsWith("file:") && env.DATABASE_URL !== "file:./dev.db") {
-  errors.DATABASE_URL = "SQLite local path must be canonical: file:./dev.db";
+if (!env.DATABASE_URL) {
+  errors.DATABASE_URL = "Required";
+} else {
+  try {
+    const protocol = new URL(env.DATABASE_URL).protocol;
+    if (!["postgresql:", "postgres:"].includes(protocol)) {
+      errors.DATABASE_URL = "Must use PostgreSQL connection string (postgresql:// or postgres://)";
+    }
+  } catch {
+    errors.DATABASE_URL = "Must be a valid PostgreSQL URL";
+  }
 }
+
 if (!env.AUTH_SESSION_SECRET || env.AUTH_SESSION_SECRET.length < 32) errors.AUTH_SESSION_SECRET = "Must have 32+ chars";
 if (!/^\d+$/.test(env.AUTH_SESSION_TTL_HOURS) || Number(env.AUTH_SESSION_TTL_HOURS) < 1) errors.AUTH_SESSION_TTL_HOURS = "Must be integer >= 1";
 if (
   typeof env.AUTH_SESSION_SECRET === "string" &&
   (
+    env.AUTH_SESSION_SECRET.includes("replace_with_a_unique_random_secret_min_32_chars") ||
     env.AUTH_SESSION_SECRET.includes("replace_with_a_very_long_random_secret_value_min_32_chars") ||
     env.AUTH_SESSION_SECRET.toLowerCase().includes("change_me") ||
     env.AUTH_SESSION_SECRET.toLowerCase().includes("changeme")
@@ -82,7 +127,9 @@ if (Object.keys(errors).length > 0) {
   console.error("ENV_VALIDATION_FAILED");
   console.error(errors);
   console.error(`Context: npm run ${lifecycle}`);
+  console.error(`Mode: ${validationMode}`);
   console.error(`Expected template: ${examplePath}`);
+
   if (!hasEnvFile) {
     console.error("Hint: .env file not found.");
     console.error("Create it with: cp .env.example .env");
@@ -92,9 +139,16 @@ if (Object.keys(errors).length > 0) {
     console.error('node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
   }
   if (errors.DATABASE_URL) {
-    console.error("Hint: for local SQLite use DATABASE_URL=\"file:./dev.db\"");
+    console.error('Hint: use a PostgreSQL URL, e.g. DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/hammer?schema=public"');
   }
-  process.exit(1);
+
+  if (validationMode === "strict") {
+    process.exit(1);
+  }
+
+  console.warn("ENV_VALIDATION_WARN_ONLY");
+  console.warn("Application startup will continue, but features depending on missing variables may fail until env vars are available.");
+  process.exit(0);
 }
 
-console.log("ENV_VALIDATION_OK");
+console.log(`ENV_VALIDATION_OK (mode=${validationMode})`);

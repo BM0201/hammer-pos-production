@@ -20,6 +20,8 @@ async function upsertUser(params: {
       fullName: params.fullName,
       email: params.email,
       globalRole: params.globalRole ?? null,
+      passwordHash: params.passwordHash,
+      mustChangePassword: false,
       isActive: true,
     },
     create: {
@@ -28,6 +30,7 @@ async function upsertUser(params: {
       email: params.email,
       globalRole: params.globalRole ?? null,
       passwordHash: params.passwordHash,
+      mustChangePassword: false,
       isActive: true,
     },
   });
@@ -251,18 +254,17 @@ async function main() {
     }),
   ]);
 
-  // ── Unique default passwords per role for security ──
-  // Each user gets a unique hashed password. mustChangePassword forces change on first login.
-  const masterPasswordHash = hashPassword("Master#Init2026!");
-  const supervisorPasswordHash = hashPassword("Super#Init2026!");
-  const salesPasswordHash = hashPassword("Sales#Init2026!");
-  const cashierPasswordHash = hashPassword("Caja#Init2026!");
-  const warehousePasswordHash = hashPassword("Bodega#Init2026!");
-  // Fallback for legacy compatibility
-  const defaultPasswordHash = masterPasswordHash;
+  // ── Bootstrap password (simple/testing) ──
+  // Nota: por solicitud operativa, todos los usuarios bootstrap usan la misma contraseña.
+  const BOOTSTRAP_PASSWORD = "admin123";
+  const ownerPasswordHash = hashPassword(BOOTSTRAP_PASSWORD);
+  const masterPasswordHash = hashPassword(BOOTSTRAP_PASSWORD);
+  const supervisorPasswordHash = hashPassword(BOOTSTRAP_PASSWORD);
+  const salesPasswordHash = hashPassword(BOOTSTRAP_PASSWORD);
+  const cashierPasswordHash = hashPassword(BOOTSTRAP_PASSWORD);
+  const warehousePasswordHash = hashPassword(BOOTSTRAP_PASSWORD);
 
   // ── OWNER user (Propietario) ──
-  const ownerPasswordHash = hashPassword("Owner#Init2026!");
   const owner = await upsertUser({
     username: "propietario",
     fullName: "Propietario HAMMER",

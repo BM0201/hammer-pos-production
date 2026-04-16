@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { MissingDatabaseUrlError, isDatabaseConnectionError } from "@/lib/prisma";
 
 /**
  * Convert errors to appropriate HTTP responses.
@@ -15,6 +16,13 @@ export function toHttpErrorResponse(error: unknown) {
     if (["INVALID_MOVEMENT_QUANTITY", "NEGATIVE_UNIT_COST", "ZERO_COST_INBOUND", "NEGATIVE_CURRENT_QUANTITY", "NEGATIVE_CURRENT_WAC", "NEGATIVE_RESULTING_WAC", "NEGATIVE_INVENTORY_VALUE", "INVALID_INBOUND_QUANTITY"].includes(code)) {
       return NextResponse.json({ message: error.message, code }, { status: 400 });
     }
+  }
+
+  if (error instanceof MissingDatabaseUrlError || isDatabaseConnectionError(error)) {
+    return NextResponse.json(
+      { message: "Base de datos no disponible o mal configurada. Verifica DATABASE_URL en Railway." },
+      { status: 503 }
+    );
   }
 
   if (error instanceof Error) {

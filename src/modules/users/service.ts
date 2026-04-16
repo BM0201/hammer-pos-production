@@ -99,7 +99,10 @@ export async function updateUser(
   if (typeof input.fullName === "string") data.fullName = input.fullName;
   if (typeof input.isActive === "boolean") data.isActive = input.isActive;
   if (input.globalRole !== undefined) data.globalRole = input.globalRole;
-  if (typeof input.password === "string") data.passwordHash = hashPassword(input.password);
+  if (typeof input.password === "string") {
+    data.passwordHash = hashPassword(input.password);
+    data.mustChangePassword = true;
+  }
 
   return prisma.user.update({
     where: { id: userId },

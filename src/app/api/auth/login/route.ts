@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticate, setSessionCookie } from "@/modules/auth/service";
+import { MissingDatabaseUrlError, isDatabaseConnectionError } from "@/lib/prisma";
 import { getRoleAwareHome } from "@/modules/rbac/guards";
 import { checkRateLimit, recordLoginAttempt } from "@/modules/security/rate-limiter";
 
@@ -23,11 +24,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Solicitud inválida." }, { status: 400 });
   }
 
-  // Rate limiting check
   const ip = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
   const rateLimitKey = `${parsed.data.username}:${ip}`;
 
-  const rateLimit = await checkRateLimit(rateLimitKey);
+  let rateLimit: Awaited<ReturnType<typeof checkRateLimit>>;
+  try {
+    rateLimit = await checkRateLimit(rateLimitKey);
+  } catch (error) {
+    if (error instanceof MissingDatabaseUrlError || isDatabaseConnectionError(error)) {
+      return NextResponse.json(
+        { message: "Base de datos no disponible o mal configurada. Verifica DATABASE_URL en Railway." },
+        { status: 503 }
+      );
+    }
+
+    console.error("[auth/login] Error verificando rate limit", error);
+    return NextResponse.json({ message: "No fue posible iniciar sesión." }, { status: 500 });
+  }
+
   if (!rateLimit.allowed) {
     return NextResponse.json(
       {
@@ -61,9 +75,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      redirectTo: authResult.mustChangePassword
-        ? "/app/change-password"
-        : getRoleAwareHome(authResult.role),
+      redirectTo: authResult.mustChangePassword ? "/app/change-password" : getRoleAwareHome(authResult.role),
       mustChangePassword: authResult.mustChangePassword,
     });
   } catch (error) {
@@ -71,6 +83,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "No tienes permisos para acceder." }, { status: 403 });
     }
 
+    if (error instanceof MissingDatabaseUrlError || isDatabaseConnectionError(error)) {
+      return NextResponse.json(
+        { message: "Base de datos no disponible o mal configurada. Verifica DATABASE_URL en Railway." },
+        { status: 503 }
+      );
+    }
+
+    if (error instanceof Error && error.message === "AUTH_SESSION_SECRET_MISSING") {
+      return NextResponse.json(
+        { message: "El sistema no tiene AUTH_SESSION_SECRET configurada. Contacta al administrador." },
+        { status: 503 }
+      );
+    }
+
+    console.error("[auth/login] Error inesperado", error);
     return NextResponse.json({ message: "No fue posible iniciar sesión." }, { status: 500 });
   }
 }

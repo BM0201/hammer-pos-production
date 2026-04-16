@@ -1,37 +1,43 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 cd /app
 
-APP_ENV="${APP_ENV:-development}"
+log() {
+  echo "[entrypoint][$(date -u +"%Y-%m-%dT%H:%M:%SZ")] $*"
+}
 
-if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "DATABASE_URL is required"
-  exit 1
+APP_ENV="${APP_ENV:-production}"
+NODE_ENV="${NODE_ENV:-production}"
+PORT="${PORT:-3000}"
+HOST="${HOST:-0.0.0.0}"
+
+log "Booting container (APP_ENV=${APP_ENV}, NODE_ENV=${NODE_ENV}, HOST=${HOST}, PORT=${PORT})"
+
+# Non-blocking runtime validation: warns in production/auto contexts.
+if ! npm run env:validate -- --mode=auto; then
+  log "WARNING: env validation command returned non-zero. Continuing startup."
 fi
 
-if [[ -z "${AUTH_SESSION_SECRET:-}" ]]; then
-  echo "AUTH_SESSION_SECRET is required"
-  exit 1
+# Prisma tasks should not block the web process in dynamic environments.
+if [[ -n "${DATABASE_URL:-}" ]]; then
+  log "DATABASE_URL detected; running prisma generate"
+  if ! npm run prisma:generate; then
+    log "WARNING: prisma generate failed. Continuing startup."
+  fi
+
+  log "Running prisma migrate deploy"
+  if ! npm run prisma:migrate:deploy; then
+    log "WARNING: prisma migrate deploy failed. Continuing startup."
+  fi
+else
+  log "WARNING: DATABASE_URL not set; skipping prisma generate/migrate."
 fi
 
-echo "[entrypoint] APP_ENV=${APP_ENV}"
-npm run env:validate
-npm run prisma:generate
-npm run prisma:migrate:deploy
+if [[ "$#" -eq 0 ]]; then
+  log "No command passed to entrypoint; starting Next.js default command."
+  set -- sh -c "npm run start -- --hostname ${HOST} --port ${PORT}"
+fi
 
-case "$APP_ENV" in
-  development)
-    echo "[entrypoint] Development mode: running seed"
-    npm run seed
-    ;;
-  staging|production)
-    echo "[entrypoint] ${APP_ENV} mode: skipping automatic seed"
-    ;;
-  *)
-    echo "[entrypoint] Unsupported APP_ENV=$APP_ENV"
-    exit 2
-    ;;
-esac
-
+log "Executing command: $*"
 exec "$@"

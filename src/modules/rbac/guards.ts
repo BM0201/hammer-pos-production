@@ -1,4 +1,5 @@
 import type { RoleCode } from "@prisma/client";
+import type { Route } from "next";
 import type { SessionPayload } from "@/types/auth";
 import { getPermissionsForRole, type PermissionKey } from "@/modules/rbac/permissions";
 import { can, canInAnyAssignedBranch, canInBranch, type Capability } from "@/modules/rbac/policies";
@@ -53,6 +54,6 @@ export function hasAnyAssignedBranch(session: SessionPayload | null): boolean {
 export function getRoleAwareHome(
   roleCode: RoleCode,
   globalRoles?: RoleCode[],
-): string {
+): Route {
   return resolveRoleHome(roleCode as string, (globalRoles as unknown as string[] | undefined) ?? []);
 }

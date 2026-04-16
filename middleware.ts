@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { decodeSession, makeSessionCookieName } from "@/modules/auth/session";
 import { resolveRoleHome } from "@/modules/rbac/role-routing";
 
-const PUBLIC_PATHS = new Set(["/login", "/unauthorized", "/forbidden"]);
+const PUBLIC_PATHS = new Set(["/login", "/unauthorized", "/forbidden", "/health"]);
 
 // Paths that are exempt from CSRF checks (e.g., auth endpoints, read-only)
 const CSRF_EXEMPT_PATHS = new Set([

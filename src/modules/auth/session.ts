@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { SessionPayload } from "@/types/auth";
-import { env } from "@/lib/env";
+import { env, envStatus, logRuntimeEnvWarnings } from "@/lib/env";
 
 const SESSION_COOKIE = "hammer_session";
 
@@ -13,6 +13,10 @@ function base64UrlDecode(input: string): string {
 }
 
 function sign(payloadEncoded: string): string {
+  if (envStatus.isUsingFallbackAuthSecret) {
+    logRuntimeEnvWarnings();
+  }
+
   return createHmac("sha256", env.AUTH_SESSION_SECRET).update(payloadEncoded).digest("base64url");
 }
 
