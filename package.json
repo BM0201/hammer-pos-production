@@ -16,7 +16,7 @@
     "prisma:migrate:status": "prisma migrate status",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "railway:migrate": "bash scripts/railway-migrate.sh",
+    "railway:migrate": "sh scripts/railway-migrate.sh",
     "seed": "prisma db seed",
     "password:reset:bootstrap": "tsx scripts/reset-bootstrap-passwords.ts",
     "local:prepare-env": "node scripts/ensure-local-dev-env.mjs",
