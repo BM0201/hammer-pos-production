@@ -1,3 +1,5 @@
+import type { Route } from "next";
+
 export type AppRoleCode =
   | "SYSTEM_ADMIN"
   | "OWNER"
@@ -25,7 +27,7 @@ export function isMasterOrAbove(roleCode: string, globalRoles?: readonly string[
   return isMasterRole(roleCode, globalRoles) || isOwnerRole(roleCode, globalRoles) || isSystemAdminRole(roleCode, globalRoles);
 }
 
-export function resolveRoleHome(roleCode: AppRoleCode, globalRoles: readonly string[] = []): string {
+export function resolveRoleHome(roleCode: AppRoleCode, globalRoles: readonly string[] = []): Route {
   if (isSystemAdminRole(roleCode, globalRoles)) return "/app/system-admin";
   if (isOwnerRole(roleCode, globalRoles)) return "/app/owner";
   if (isMasterRole(roleCode, globalRoles)) return "/app/master";

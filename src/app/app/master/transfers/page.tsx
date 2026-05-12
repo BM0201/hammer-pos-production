@@ -11,6 +11,7 @@ import {
   ArrowRight,
   Package,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 /* ── Types ── */
 type Product = { id: string; sku: string; name: string; unit: string };
@@ -133,7 +134,7 @@ export default function TransfersPage() {
       if (formFromBranchId === formToBranchId) throw new Error("Origen y destino deben ser diferentes");
       if (!lines.length) throw new Error("Agregue al menos una línea");
 
-      const res = await fetch("/api/master/transfers", {
+      const res = await apiFetch("/api/master/transfers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -162,7 +163,7 @@ export default function TransfersPage() {
     try {
       setActionLoading(id);
       setError(null);
-      const res = await fetch(`/api/master/transfers/${id}/approve`, { method: "POST" });
+      const res = await apiFetch(`/api/master/transfers/${id}/approve`, { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "Error al aprobar");
       setSuccess("Envío aprobado e inventario actualizado");
@@ -180,7 +181,7 @@ export default function TransfersPage() {
     if (!confirm("¿Cancelar este envío?")) return;
     try {
       setActionLoading(id);
-      const res = await fetch(`/api/master/transfers/${id}/cancel`, { method: "POST" });
+      const res = await apiFetch(`/api/master/transfers/${id}/cancel`, { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "Error al cancelar");
       setSuccess("Envío cancelado");

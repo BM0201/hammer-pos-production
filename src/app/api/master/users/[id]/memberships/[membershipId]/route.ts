@@ -4,11 +4,13 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { removeMembershipFromUser, updateMembership } from "@/modules/users/service";
 import { updateMembershipSchema } from "@/modules/users/validators";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string; membershipId: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
 
     const { id, membershipId } = await context.params;
@@ -24,10 +26,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 }
 
-export async function DELETE(_request: Request, context: { params: Promise<{ id: string; membershipId: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string; membershipId: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
 
     const { id, membershipId } = await context.params;

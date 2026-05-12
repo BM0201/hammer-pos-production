@@ -4,12 +4,14 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { calculateMonthlyPayroll, generateSalaryHistory } from "@/modules/payroll/payroll-calculator";
 import { syncPayrollToExpenses } from "@/modules/payroll/payroll-service";
+import { requireCsrf } from "@/modules/security/csrf";
 
 /** POST /api/payroll/calculate — calculate payroll for a month */
 export async function POST(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(req, session);
     assertMaster(session!);
 
     const body = await req.json();

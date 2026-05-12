@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { apiFetch } from "@/lib/client/api";
 
 type Branch = { id: string; code: string; name: string };
 type Category = { id: string; name: string };
@@ -82,7 +83,7 @@ export function InventoryImportAdmin({ branches, categories }: { branches: Branc
     setLoadingPreview(true);
     setFeedback({ tone: "info", text: "Procesando preview..." });
     try {
-      const response = await fetch("/api/master/inventory/import", {
+      const response = await apiFetch("/api/master/inventory/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -121,7 +122,7 @@ export function InventoryImportAdmin({ branches, categories }: { branches: Branc
     setExecuting(true);
     setFeedback({ tone: "info", text: "Ejecutando importación..." });
     try {
-      const response = await fetch("/api/master/inventory/import", {
+      const response = await apiFetch("/api/master/inventory/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

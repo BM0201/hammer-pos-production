@@ -139,7 +139,28 @@ export async function updateSaleOrderLine(input: {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
     if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
 
-    const existing = await tx.saleOrderLine.findUniqueOrThrow({ where: { id: input.lineId } });
+    const existing = await tx.saleOrderLine.findFirst({
+      where: { id: input.lineId, saleOrderId: input.saleOrderId },
+    });
+
+    if (!existing) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "sales",
+          action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
+          entityType: "SaleOrderLine",
+          entityId: input.lineId,
+          metadataJson: {
+            reason: "LINE_NOT_IN_ORDER",
+            saleOrderId: input.saleOrderId,
+          },
+        },
+      });
+      throw new Error("SALE_ORDER_LINE_NOT_FOUND");
+    }
+
     const quantity = new Prisma.Decimal(input.quantity ?? existing.quantity);
     const unitPrice = new Prisma.Decimal(input.unitPrice ?? existing.unitPrice);
     const discountAmount = new Prisma.Decimal(input.discountAmount ?? existing.discountAmount);
@@ -147,7 +168,7 @@ export async function updateSaleOrderLine(input: {
     const lineSubtotal = calculateLineSubtotal(quantity, unitPrice, discountAmount);
 
     const updated = await tx.saleOrderLine.update({
-      where: { id: input.lineId },
+      where: { id: existing.id },
       data: { quantity, unitPrice, discountAmount, lineSubtotal },
     });
 
@@ -162,9 +183,17 @@ export async function updateSaleOrderLine(input: {
         entityType: "SaleOrderLine",
         entityId: updated.id,
         metadataJson: {
-          quantity: updated.quantity.toString(),
-          unitPrice: updated.unitPrice.toString(),
-          discountAmount: updated.discountAmount.toString(),
+          saleOrderId: input.saleOrderId,
+          previous: {
+            quantity: existing.quantity.toString(),
+            unitPrice: existing.unitPrice.toString(),
+            discountAmount: existing.discountAmount.toString(),
+          },
+          current: {
+            quantity: updated.quantity.toString(),
+            unitPrice: updated.unitPrice.toString(),
+            discountAmount: updated.discountAmount.toString(),
+          },
         },
       },
     });
@@ -178,7 +207,29 @@ export async function removeSaleOrderLine(input: { saleOrderId: string; lineId: 
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
     if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
 
-    await tx.saleOrderLine.delete({ where: { id: input.lineId } });
+    const deleted = await tx.saleOrderLine.deleteMany({
+      where: { id: input.lineId, saleOrderId: input.saleOrderId },
+    });
+
+    if (deleted.count !== 1) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "sales",
+          action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
+          entityType: "SaleOrderLine",
+          entityId: input.lineId,
+          metadataJson: {
+            reason: "LINE_NOT_IN_ORDER",
+            saleOrderId: input.saleOrderId,
+            deletedCount: deleted.count,
+          },
+        },
+      });
+      throw new Error("SALE_ORDER_LINE_NOT_FOUND");
+    }
+
     const orderUpdated = await recalcOrderTotalsTx(tx, input.saleOrderId);
 
     await tx.auditLog.create({
@@ -189,6 +240,9 @@ export async function removeSaleOrderLine(input: { saleOrderId: string; lineId: 
         action: SALE_AUDIT_EVENTS.ORDER_LINE_REMOVED,
         entityType: "SaleOrderLine",
         entityId: input.lineId,
+        metadataJson: {
+          saleOrderId: input.saleOrderId,
+        },
       },
     });
 
@@ -285,6 +339,21 @@ export async function submitSaleOrderToPendingPayment(input: {
       },
     });
 
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: SALE_AUDIT_EVENTS.ORDER_STATUS_CHANGED,
+        entityType: "SaleOrder",
+        entityId: order.id,
+        metadataJson: {
+          previousStatus: order.status,
+          currentStatus: updated.status,
+        },
+      },
+    });
+
     return updated;
   });
 }
@@ -296,6 +365,7 @@ export async function submitSaleOrderToPendingPayment(input: {
 export async function submitDirectSale(input: {
   saleOrderId: string;
   actorUserId: string;
+  cashSessionId: string;
   method: PaymentMethod;
   requiresTransport?: boolean;
   transportAmount?: number;
@@ -319,11 +389,25 @@ export async function submitDirectSale(input: {
     if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
     if (order.lines.length === 0) throw new Error("ORDER_EMPTY");
 
-    // Verify stock
+    const uniqueProductIds = [...new Set(order.lines.map((line) => line.productId))].sort();
+    for (const productId of uniqueProductIds) {
+      await tx.$queryRaw`
+        SELECT id
+        FROM "InventoryBalance"
+        WHERE "branchId" = ${order.branchId}
+          AND "productId" = ${productId}
+        FOR UPDATE
+      `;
+    }
+
+    const balances = await tx.inventoryBalance.findMany({
+      where: { branchId: order.branchId, productId: { in: uniqueProductIds } },
+    });
+    const balanceByProductId = new Map(balances.map((balance) => [balance.productId, balance]));
+
+    // Verify stock (locked balances)
     for (const line of order.lines) {
-      const balance = await tx.inventoryBalance.findUnique({
-        where: { branchId_productId: { branchId: order.branchId, productId: line.productId } },
-      });
+      const balance = balanceByProductId.get(line.productId);
       const available = balance?.quantityOnHand ?? new Prisma.Decimal(0);
       if (available.lt(line.quantity)) throw new Error("INSUFFICIENT_STOCK");
     }
@@ -333,29 +417,24 @@ export async function submitDirectSale(input: {
       ? new Prisma.Decimal(input.transportAmount)
       : new Prisma.Decimal(0);
     const totals = aggregateOrderTotals(
-      order.lines.map((line: any) => ({ lineSubtotal: line.lineSubtotal, discountAmount: line.discountAmount })),
+      order.lines.map((line) => ({ lineSubtotal: line.lineSubtotal, discountAmount: line.discountAmount })),
       transportAmt,
     );
     const grandTotal = totals.grandTotal;
 
-    // Find cash session
-    const cashBox = await tx.physicalCashBox.findFirst({
-      where: { branchId: order.branchId, isActive: true },
-      orderBy: { createdAt: "asc" },
+    // Validate explicit cash session (no fallback to first active box/session)
+    const session = await tx.cashSession.findUnique({
+      where: { id: input.cashSessionId },
+      include: { physicalCashBox: true },
     });
-    if (!cashBox) throw new Error("NO_ACTIVE_CASH_BOX");
+    if (!session) throw new Error("INVALID_CASH_SESSION");
+    if (session.status !== CashSessionStatus.OPEN || !session.activeSessionKey) throw new Error("CASH_SESSION_NOT_OPEN");
+    if (!session.physicalCashBox?.isActive) throw new Error("CASH_BOX_INACTIVE");
+    if (session.physicalCashBox.branchId !== order.branchId) throw new Error("CASH_BOX_BRANCH_MISMATCH");
 
-    const session = await tx.cashSession.findFirst({
-      where: { physicalCashBoxId: cashBox.id, status: CashSessionStatus.OPEN, activeSessionKey: { not: null } },
-      orderBy: { openedAt: "desc" },
-    });
-    if (!session) throw new Error("NO_ACTIVE_CASH_SESSION");
-
-    // Deduct inventory
+    // Deduct inventory (same locked balances)
     for (const line of order.lines) {
-      const balance = await tx.inventoryBalance.findUnique({
-        where: { branchId_productId: { branchId: order.branchId, productId: line.productId } },
-      });
+      const balance = balanceByProductId.get(line.productId);
       const currentWac = balance?.weightedAverageCost ?? new Prisma.Decimal(0);
       await createInventoryMovementTx(tx, {
         actorUserId: input.actorUserId,

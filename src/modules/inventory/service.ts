@@ -86,8 +86,16 @@ export async function createInventoryMovementTx(
     update: {},
   });
 
-  // Step 2: Read the current balance row.
-  // Note: SQLite uses serialized transactions, so FOR UPDATE is not needed.
+  // Step 2: Lock balance row to guarantee atomic stock/WAC updates under concurrency.
+  await tx.$queryRaw`
+    SELECT id
+    FROM "InventoryBalance"
+    WHERE "branchId" = ${input.branchId}
+      AND "productId" = ${input.productId}
+    FOR UPDATE
+  `;
+
+  // Step 3: Read the current balance row after lock acquisition.
   const balance = await tx.inventoryBalance.findUnique({
     where: {
       branchId_productId: {

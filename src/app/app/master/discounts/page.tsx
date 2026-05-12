@@ -17,6 +17,7 @@ import {
   Lightbulb,
   Sparkles,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 /* ── Types ── */
 type Discount = {
@@ -250,7 +251,7 @@ export default function DiscountsPage() {
 
       const url = editingId ? `/api/master/discounts/${editingId}` : "/api/master/discounts";
       const method = editingId ? "PUT" : "POST";
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -274,7 +275,7 @@ export default function DiscountsPage() {
     if (!confirm("¿Eliminar este descuento?")) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/master/discounts/${id}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/master/discounts/${id}`, { method: "DELETE" });
       if (res.ok) {
         setNotice("Descuento eliminado");
         loadDiscounts();
@@ -292,7 +293,7 @@ export default function DiscountsPage() {
   async function handleToggleActive(d: Discount) {
     setBusy(true);
     try {
-      const res = await fetch(`/api/master/discounts/${d.id}`, {
+      const res = await apiFetch(`/api/master/discounts/${d.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active: !d.active }),

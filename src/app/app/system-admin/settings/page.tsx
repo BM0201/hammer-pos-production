@@ -11,6 +11,7 @@ import {
   Edit2,
   Trash2,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 type SystemSetting = {
   id: string;
@@ -49,7 +50,7 @@ export default function SettingsPage() {
   async function handleSave(key: string, value: string) {
     setBusy(true);
     try {
-      const res = await fetch("/api/system-admin/settings", {
+      const res = await apiFetch("/api/system-admin/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key, value }),

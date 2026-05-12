@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { nonNegativeMoneySchema } from "@/modules/shared/validators";
 
 export const openCashSessionSchema = z.object({
   branchId: z.string().cuid(),
   physicalCashBoxId: z.string().cuid(),
-  openingAmount: z.coerce.number().min(0),
+  openingAmount: nonNegativeMoneySchema,
   notes: z.string().max(500).optional().nullable(),
 });
 
@@ -19,6 +20,6 @@ export const requestCloseCashSessionSchema = z.object({
 
 export const closeCashSessionSchema = z.object({
   cashSessionId: z.string().cuid(),
-  closingAmount: z.coerce.number().min(0),
+  closingAmount: nonNegativeMoneySchema,
   notes: z.string().max(500).optional().nullable(),
 });

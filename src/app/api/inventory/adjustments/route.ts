@@ -8,6 +8,7 @@ import { canRequestStockAdjustment } from "@/modules/inventory/policy";
 import { logAuditEvent } from "@/modules/audit/service";
 import { hasBranchAccess } from "@/modules/rbac/guards";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function POST(request: Request) {
   try {
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
     }
 
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const parsed = stockAdjustmentSchema.safeParse(await request.json());
     if (!parsed.success) {

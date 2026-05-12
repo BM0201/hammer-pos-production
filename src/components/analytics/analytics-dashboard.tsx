@@ -6,6 +6,7 @@ import {
   Loader2, RefreshCw, Zap, Target, Clock, ArrowUpRight, ArrowDownRight,
   CheckCircle2, Filter,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 type DashboardData = {
   abcDistribution: { A: number; B: number; C: number; unclassified: number };
@@ -103,7 +104,7 @@ export function AnalyticsDashboard() {
     try {
       const d = new Date();
       const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const r = await fetch("/api/analytics/classify", {
+      const r = await apiFetch("/api/analytics/classify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ month }),

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/lib/client/api";
 
 type SaleLine = {
   id: string;
@@ -58,7 +59,7 @@ export function OrdersAdmin({ branchId, isMaster }: { branchId?: string; isMaste
 
   async function createOrder() {
     if (!activeBranchId) return;
-    await fetch("/api/sales/orders", {
+    await apiFetch("/api/sales/orders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ branchId: activeBranchId }),
@@ -69,7 +70,7 @@ export function OrdersAdmin({ branchId, isMaster }: { branchId?: string; isMaste
   async function addLine(event: React.FormEvent) {
     event.preventDefault();
     if (!selected) return;
-    await fetch(`/api/sales/orders/${selected}/lines`, {
+    await apiFetch(`/api/sales/orders/${selected}/lines`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -85,13 +86,13 @@ export function OrdersAdmin({ branchId, isMaster }: { branchId?: string; isMaste
 
   async function removeLine(lineId: string) {
     if (!selected) return;
-    await fetch(`/api/sales/orders/${selected}/lines/${lineId}`, { method: "DELETE" });
+    await apiFetch(`/api/sales/orders/${selected}/lines/${lineId}`, { method: "DELETE" });
     await load();
   }
 
   async function submitOrder() {
     if (!selected) return;
-    await fetch(`/api/sales/orders/${selected}/submit`, { method: "POST" });
+    await apiFetch(`/api/sales/orders/${selected}/submit`, { method: "POST" });
     await load();
   }
 

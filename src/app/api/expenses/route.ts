@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { createExpenseSchema } from "@/modules/pricing/validators";
+import { requireCsrf } from "@/modules/security/csrf";
 import {
   createOperatingExpense,
   listExpensesByBranch,
@@ -47,6 +48,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(req, session);
     assertMaster(session);
 
     const body = await req.json();

@@ -3,15 +3,23 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { closeCashSessionSchema } from "@/modules/cash-session/validators";
 import { closeCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
+import { logAuditEvent } from "@/modules/audit/service";
+import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
 import { prisma } from "@/lib/prisma";
 import { isMaster } from "@/modules/rbac/guards";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
-import { PaymentMethod, PaymentStatus } from "@prisma/client";
+import { PaymentMethod, PaymentStatus, SaleOrderStatus } from "@prisma/client";
+import { requireCsrf } from "@/modules/security/csrf";
 
-const CONFLICT_REASONS = new Set(["CASH_SESSION_NOT_RECONCILING"]);
+const CONFLICT_REASONS = new Set([
+  "CASH_SESSION_NOT_RECONCILING",
+  "CASH_SESSION_UNRESOLVED_ORDERS",
+  "CASH_SESSION_HAS_PENDING_PAYMENTS",
+  "CASH_SESSION_DISCREPANCY_REQUIRES_APPROVAL",
+]);
 const CASH_DISCREPANCY_APPROVAL_THRESHOLD = 5;
 
 export async function POST(request: Request) {
@@ -21,6 +29,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const parsed = closeCashSessionSchema.safeParse(await request.json());
     if (!parsed.success) {
@@ -73,37 +82,94 @@ export async function POST(request: Request) {
       );
     }
 
-    // ── FIX: Compute expected amount = opening + cash payments in session ──
-    // Previously: discrepancy = closingAmount - openingAmount (WRONG)
-    // Now:        discrepancy = closingAmount - (openingAmount + totalCashPayments)
-    const cashPaymentsAggregate = await prisma.payment.aggregate({
+    const pendingOrders = await prisma.saleOrder.count({
+      where: {
+        branchId: cashSession.physicalCashBox.branchId,
+        status: SaleOrderStatus.PENDING_PAYMENT,
+      },
+    });
+
+    if (pendingOrders > 0) {
+      return NextResponse.json(
+        { message: "CASH_SESSION_UNRESOLVED_ORDERS", reason: "CASH_SESSION_UNRESOLVED_ORDERS" },
+        { status: 409 },
+      );
+    }
+
+    const pendingPayments = await prisma.payment.count({
+      where: {
+        cashSessionId: cashSession.id,
+        status: { not: PaymentStatus.POSTED },
+      },
+    });
+
+    if (pendingPayments > 0) {
+      return NextResponse.json(
+        { message: "CASH_SESSION_HAS_PENDING_PAYMENTS", reason: "CASH_SESSION_HAS_PENDING_PAYMENTS" },
+        { status: 409 },
+      );
+    }
+
+    const cashInAggregate = await prisma.payment.aggregate({
       where: {
         cashSessionId: cashSession.id,
         status: PaymentStatus.POSTED,
         method: PaymentMethod.CASH,
+        amount: { gte: 0 },
+      },
+      _sum: { amount: true },
+    });
+
+    const cashOutAggregate = await prisma.payment.aggregate({
+      where: {
+        cashSessionId: cashSession.id,
+        status: PaymentStatus.POSTED,
+        method: PaymentMethod.CASH,
+        amount: { lt: 0 },
       },
       _sum: { amount: true },
     });
 
     const openingAmount = Number(cashSession.openingAmount);
-    const totalCashPayments = Number(cashPaymentsAggregate._sum.amount ?? 0);
-    const expectedAmount = openingAmount + totalCashPayments;
-    const discrepancy = Number(parsed.data.closingAmount) - expectedAmount;
+    const postedCashPayments = Number(cashInAggregate._sum.amount ?? 0);
+    const refundsOrWithdrawals = Math.abs(Number(cashOutAggregate._sum.amount ?? 0));
+    const expectedCash = openingAmount + postedCashPayments - refundsOrWithdrawals;
+    const countedCash = Number(parsed.data.closingAmount);
+    const difference = countedCash - expectedCash;
 
-    if (Math.abs(discrepancy) > CASH_DISCREPANCY_APPROVAL_THRESHOLD) {
+    if (Math.abs(difference) > CASH_DISCREPANCY_APPROVAL_THRESHOLD) {
+      await logAuditEvent({
+        actorUserId: session.userId,
+        branchId: cashSession.physicalCashBox.branchId,
+        module: "cash_session",
+        action: CASH_SESSION_AUDIT_EVENTS.DISCREPANCY_DETECTED,
+        entityType: "CashSession",
+        entityId: cashSession.id,
+        metadataJson: {
+          openingAmount,
+          postedCashPayments,
+          refundsOrWithdrawals,
+          expectedCash,
+          countedCash,
+          difference,
+          threshold: CASH_DISCREPANCY_APPROVAL_THRESHOLD,
+        },
+      });
+
       const approval = await approvalService.createRequest({
         branchId: cashSession.physicalCashBox.branchId,
         requestedByUserId: session.userId,
         type: APPROVAL_REQUEST_TYPES.CASH_SESSION_DISCREPANCY,
         referenceType: "CASH_SESSION",
         referenceId: cashSession.id,
-        reason: `Cierre con diferencia de caja (${discrepancy.toFixed(2)}).`,
+        reason: `Cierre con diferencia de caja (${difference.toFixed(2)}).`,
         payloadJson: {
           openingAmount,
-          totalCashPayments,
-          expectedAmount,
-          closingAmount: parsed.data.closingAmount,
-          discrepancy,
+          postedCashPayments,
+          refundsOrWithdrawals,
+          expectedCash,
+          countedCash,
+          difference,
           threshold: CASH_DISCREPANCY_APPROVAL_THRESHOLD,
         },
       });
@@ -123,6 +189,7 @@ export async function POST(request: Request) {
     const data = await closeCashSession({
       ...parsed.data,
       actorUserId: session.userId,
+      allowedThreshold: CASH_DISCREPANCY_APPROVAL_THRESHOLD,
     });
 
     return NextResponse.json({ data });

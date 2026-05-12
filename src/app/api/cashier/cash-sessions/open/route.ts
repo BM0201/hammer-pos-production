@@ -6,6 +6,7 @@ import { openCashSessionSchema } from "@/modules/cash-session/validators";
 import { logCashSessionDenied, openCashSession } from "@/modules/cash-session/service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { requireCsrf } from "@/modules/security/csrf";
 
 const CONFLICT_REASONS = new Set(["CASH_SESSION_ALREADY_OPEN", "CASH_SESSION_CASH_BOX_INVALID"]);
 
@@ -16,6 +17,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const parsed = openCashSessionSchema.safeParse(await request.json());
     if (!parsed.success) {

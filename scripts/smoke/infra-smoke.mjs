@@ -10,6 +10,16 @@ const checks = [
     expectedStatuses: [200],
   }),
   await checkHttp({
+    name: "health_liveness",
+    path: "/health",
+    expectedStatuses: [200],
+  }),
+  await checkHttp({
+    name: "ready_readiness",
+    path: "/ready",
+    expectedStatuses: [200],
+  }),
+  await checkHttp({
     name: "db_readiness_via_auth",
     path: "/api/auth/login",
     method: "POST",

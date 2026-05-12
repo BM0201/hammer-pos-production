@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
+import { apiFetch } from "@/lib/client/api";
 
 type ApprovalItem = {
   id: string;
@@ -41,7 +42,7 @@ export function ApprovalsQueue({ branchId }: { branchId?: string }) {
 
   async function resolve(id: string, decision: "APPROVE" | "REJECT") {
     setBusyId(id);
-    const response = await fetch(`/api/approvals/${id}`, {
+    const response = await apiFetch(`/api/approvals/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

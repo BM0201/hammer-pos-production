@@ -4,7 +4,9 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { isMaster } from "@/modules/rbac/guards";
 import { createTimberProduct, listTimberProducts } from "@/modules/timber/service";
 import { createTimberProductSchema } from "@/modules/timber/validators";
+import { toHttpErrorResponse } from "@/lib/http";
 import { z } from "zod";
+import { requireCsrf } from "@/modules/security/csrf";
 
 /** GET /api/timber — List timber products with optional filters */
 export async function GET(request: Request) {
@@ -21,11 +23,7 @@ export async function GET(request: Request) {
     const result = await listTimberProducts({ timberType, search, page, limit });
     return NextResponse.json(result);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    if (message === "NOT_AUTHENTICATED") {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
-    return NextResponse.json({ error: message }, { status: 500 });
+    return toHttpErrorResponse(err);
   }
 }
 
@@ -34,6 +32,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     // Only MASTER can create timber products
     if (!isMaster(session)) {
@@ -49,14 +48,9 @@ export async function POST(request: Request) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: "Validación fallida", details: err.errors }, { status: 422 });
     }
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    if (message === "NOT_AUTHENTICATED") {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
-    // Prisma unique constraint (duplicate SKU)
-    if (message.includes("Unique constraint")) {
+    if (err instanceof Error && err.message.includes("Unique constraint")) {
       return NextResponse.json({ error: "Ya existe un producto con ese SKU" }, { status: 409 });
     }
-    return NextResponse.json({ error: message }, { status: 500 });
+    return toHttpErrorResponse(err);
   }
 }

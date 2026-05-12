@@ -6,11 +6,13 @@ import { resolveApprovalSchema } from "@/modules/approvals/validators";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { isMaster } from "@/modules/rbac/guards";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     if (!canInAnyAssignedBranch(session, CAPABILITIES.APPROVAL_REQUEST_REVIEW)) {
       return NextResponse.json({ message: "Forbidden" }, { status: 403 });

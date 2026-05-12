@@ -4,6 +4,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { cleanupProductWithPolicy } from "@/modules/inventory/import-service";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 const cleanupSchema = z.object({
   mode: z.enum(["AUTO", "DEACTIVATE", "DELETE_HARD"]).default("AUTO"),
@@ -13,6 +14,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
 
     const { id } = await context.params;

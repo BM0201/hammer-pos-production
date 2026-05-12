@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { updateExpenseSchema } from "@/modules/pricing/validators";
+import { requireCsrf } from "@/modules/security/csrf";
 import {
   updateOperatingExpense,
   deleteOperatingExpense,
@@ -17,6 +18,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(req, session);
     assertMaster(session);
 
     const { id } = await params;
@@ -40,6 +42,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(req, session);
     assertMaster(session);
 
     const { id } = await params;

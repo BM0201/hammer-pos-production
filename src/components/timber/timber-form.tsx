@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { apiFetch } from "@/lib/client/api";
 
 type TimberFormProps = {
   categories: Array<{ id: string; name: string }>;
@@ -64,7 +65,7 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
 
       if (mode === "create") {
         body.categoryId = categoryId;
-        const res = await fetch("/api/timber", {
+        const res = await apiFetch("/api/timber", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -74,7 +75,7 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
           throw new Error(data.error || "Error al crear producto");
         }
       } else {
-        const res = await fetch(`/api/timber/${initialData?.id}`, {
+        const res = await apiFetch(`/api/timber/${initialData?.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),

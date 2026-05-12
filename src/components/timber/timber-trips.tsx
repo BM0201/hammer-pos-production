@@ -21,6 +21,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
+import { apiFetch } from "@/lib/client/api";
 
 /* ── Types ── */
 
@@ -245,7 +246,7 @@ export function TimberTrips({ showHeader = true }: { showHeader?: boolean }) {
     const labels = { confirm: "confirmar", cancel: "cancelar" };
     if (!confirm(`¿Seguro que desea ${labels[action]} este viaje?`)) return;
     try {
-      const res = await fetch(`/api/timber/trips/${id}`, {
+      const res = await apiFetch(`/api/timber/trips/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
@@ -590,7 +591,7 @@ function CreateTripForm({
         return;
       }
 
-      const res = await fetch("/api/timber/trips", {
+      const res = await apiFetch("/api/timber/trips", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

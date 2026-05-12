@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getEmployee, updateEmployee, deactivateEmployee } from "@/modules/payroll/payroll-service";
+import { requireCsrf } from "@/modules/security/csrf";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -28,6 +29,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(req, session);
     assertMaster(session!);
 
     const { id } = await params;
@@ -48,6 +50,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(req, session);
     assertMaster(session!);
 
     const { id } = await params;

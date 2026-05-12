@@ -11,6 +11,7 @@ import {
   X,
   Users,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 type RoleConfig = {
   id: string;
@@ -67,7 +68,7 @@ export default function RoleConfigPage() {
     const current = getRoleEnabled(branchId, roleCode);
     setBusy(true);
     try {
-      const res = await fetch("/api/system-admin/role-config", {
+      const res = await apiFetch("/api/system-admin/role-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ branchId, role: roleCode, enabled: !current }),

@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { showToast } from "@/components/ui/toast";
+import { apiFetch } from "@/lib/client/api";
 
 /* ── Types ── */
 
@@ -187,7 +188,7 @@ export function ExpenseManager() {
   const handleCreateExpense = async () => {
     if (!newExpense.description || !newExpense.amount || !selectedBranchId) return;
     try {
-      const res = await fetch("/api/expenses", {
+      const res = await apiFetch("/api/expenses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -210,7 +211,7 @@ export function ExpenseManager() {
   const handleDeleteExpense = async (id: string) => {
     if (!confirm("¿Desactivar este gasto?")) return;
     try {
-      await fetch(`/api/expenses/${id}`, { method: "DELETE" });
+      await apiFetch(`/api/expenses/${id}`, { method: "DELETE" });
       showToast("success", "Gasto desactivado");
       loadBranchData();
     } catch (e) {
@@ -222,7 +223,7 @@ export function ExpenseManager() {
   const handleSaveConfig = async () => {
     if (!selectedBranchId) return;
     try {
-      const res = await fetch("/api/pricing/config", {
+      const res = await apiFetch("/api/pricing/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

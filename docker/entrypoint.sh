@@ -1,37 +1,37 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 cd /app
 
-APP_ENV="${APP_ENV:-development}"
+log() {
+  echo "[entrypoint][$(date -u +"%Y-%m-%dT%H:%M:%SZ")] $*"
+}
 
-if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "DATABASE_URL is required"
-  exit 1
-fi
+APP_ENV="${APP_ENV:-production}"
+NODE_ENV="${NODE_ENV:-production}"
+PORT="${PORT:-3000}"
+HOST="${HOST:-0.0.0.0}"
+RUN_MIGRATIONS="${RUN_MIGRATIONS:-true}"
 
-if [[ -z "${AUTH_SESSION_SECRET:-}" ]]; then
-  echo "AUTH_SESSION_SECRET is required"
-  exit 1
-fi
+log "Booting container (APP_ENV=${APP_ENV}, NODE_ENV=${NODE_ENV}, HOST=${HOST}, PORT=${PORT})"
 
-echo "[entrypoint] APP_ENV=${APP_ENV}"
-npm run env:validate
+log "Validating environment (strict mode)"
+npm run env:validate -- --mode=strict
+
+log "Generating Prisma client"
 npm run prisma:generate
-npm run prisma:migrate:deploy
 
-case "$APP_ENV" in
-  development)
-    echo "[entrypoint] Development mode: running seed"
-    npm run seed
-    ;;
-  staging|production)
-    echo "[entrypoint] ${APP_ENV} mode: skipping automatic seed"
-    ;;
-  *)
-    echo "[entrypoint] Unsupported APP_ENV=$APP_ENV"
-    exit 2
-    ;;
-esac
+if [[ "${NODE_ENV}" == "production" && "${RUN_MIGRATIONS}" == "true" ]]; then
+  log "Running prisma migrate deploy (fail-fast enabled)"
+  npm run prisma:migrate:deploy
+else
+  log "Skipping migrations (NODE_ENV=${NODE_ENV}, RUN_MIGRATIONS=${RUN_MIGRATIONS})"
+fi
 
+if [[ "$#" -eq 0 ]]; then
+  log "No command passed to entrypoint; starting Next.js default command."
+  set -- sh -c "npm run start -- --hostname ${HOST} --port ${PORT}"
+fi
+
+log "Executing command: $*"
 exec "$@"

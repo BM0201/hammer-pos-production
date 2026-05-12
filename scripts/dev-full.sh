@@ -11,7 +11,7 @@ else
   echo "[dev:full] Dependencies already installed"
 fi
 
-echo "[dev:full] Running local doctor (env + sqlite preflight/repair)"
+echo "[dev:full] Running local doctor (env + PostgreSQL validation)"
 npm run local:doctor
 
 echo "[dev:full] Running bootstrap check"

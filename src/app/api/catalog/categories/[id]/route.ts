@@ -4,11 +4,13 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { updateCategory } from "@/modules/catalog/service";
 import { updateCategorySchema } from "@/modules/catalog/validators";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
 
     const { id } = await context.params;

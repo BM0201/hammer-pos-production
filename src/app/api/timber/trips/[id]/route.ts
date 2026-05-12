@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
+import { assertAuthenticated } from "@/modules/auth/access";
+import { assertMaster } from "@/modules/security/rbac-helpers";
 import {
   getTimberTrip,
   updateTimberTrip,
@@ -7,6 +9,8 @@ import {
   cancelTimberTrip,
 } from "@/modules/timber/service";
 import { updateTimberTripSchema } from "@/modules/timber/validators";
+import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 /**
  * BUG FIX: Added try-catch to GET handler.
@@ -28,7 +32,7 @@ export async function GET(
     return NextResponse.json(trip);
   } catch (err: unknown) {
     console.error("[TIMBER_TRIP_GET]", err);
-    return NextResponse.json({ error: "Error al obtener viaje" }, { status: 500 });
+    return toHttpErrorResponse(err);
   }
 }
 
@@ -38,9 +42,9 @@ export async function PUT(
 ) {
   try {
     const session = await getCurrentSession();
-    if (!session || !session.globalRoles.includes("MASTER")) {
-      return NextResponse.json({ error: "Acceso denegado" }, { status: 403 });
-    }
+    assertAuthenticated(session);
+    await requireCsrf(req, session);
+    assertMaster(session);
 
     const { id } = await params;
     const body = await req.json();
@@ -52,9 +56,15 @@ export async function PUT(
     const result = await updateTimberTrip(id, parsed.data);
     return NextResponse.json(result);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    const status = message === "TIMBER_TRIP_NOT_FOUND" ? 404 : message === "TRIP_NOT_EDITABLE" ? 409 : 500;
-    return NextResponse.json({ error: message }, { status });
+    if (err instanceof Error) {
+      if (err.message === "TIMBER_TRIP_NOT_FOUND") {
+        return NextResponse.json({ error: err.message }, { status: 404 });
+      }
+      if (err.message === "TRIP_NOT_EDITABLE") {
+        return NextResponse.json({ error: err.message }, { status: 409 });
+      }
+    }
+    return toHttpErrorResponse(err);
   }
 }
 
@@ -64,9 +74,9 @@ export async function PATCH(
 ) {
   try {
     const session = await getCurrentSession();
-    if (!session || !session.globalRoles.includes("MASTER")) {
-      return NextResponse.json({ error: "Acceso denegado" }, { status: 403 });
-    }
+    assertAuthenticated(session);
+    await requireCsrf(req, session);
+    assertMaster(session);
 
     const { id } = await params;
     const body = await req.json();
@@ -87,8 +97,14 @@ export async function PATCH(
     }
     return NextResponse.json({ error: `Acción desconocida: ${action}` }, { status: 400 });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    const status = message.includes("NOT_FOUND") ? 404 : message.includes("CANNOT") ? 409 : 500;
-    return NextResponse.json({ error: message }, { status });
+    if (err instanceof Error) {
+      if (err.message.includes("NOT_FOUND")) {
+        return NextResponse.json({ error: err.message }, { status: 404 });
+      }
+      if (err.message.includes("CANNOT")) {
+        return NextResponse.json({ error: err.message }, { status: 409 });
+      }
+    }
+    return toHttpErrorResponse(err);
   }
 }

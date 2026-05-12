@@ -1,6 +1,6 @@
 import type { RoleCode } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
-import { env } from "@/lib/env";
+import { prisma, MissingDatabaseUrlError } from "@/lib/prisma";
+import { env, envStatus, logRuntimeEnvWarnings } from "@/lib/env";
 import { verifyPassword } from "@/modules/auth/password";
 import { buildSessionPayload, decodeSession, encodeSession, makeSessionCookieName } from "@/modules/auth/session";
 import { cookies } from "next/headers";
@@ -9,6 +9,16 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { isTokenRevoked } from "@/modules/security/token-revocation";
 
 export async function authenticate(username: string, password: string): Promise<{ token: string; role: RoleCode; mustChangePassword: boolean } | null> {
+  if (!envStatus.hasDatabaseUrl) {
+    logRuntimeEnvWarnings();
+    throw new MissingDatabaseUrlError();
+  }
+
+  if (!envStatus.hasAuthSessionSecret) {
+    logRuntimeEnvWarnings();
+    throw new Error("AUTH_SESSION_SECRET_MISSING");
+  }
+
   const user = await prisma.user.findUnique({
     where: { username },
     include: { userBranchRoles: { where: { isActive: true } } },
@@ -75,6 +85,7 @@ export async function authenticate(username: string, password: string): Promise<
     primaryBranchId,
     roleCode: derivedRole,
     branchIds,
+    sessionVersion: user.sessionVersion ?? 0,
   });
 
   const token = encodeSession(payload);
@@ -125,10 +136,37 @@ export async function getCurrentSession(): Promise<SessionPayload | null> {
     return null;
   }
 
-  // Check token revocation
-  const revoked = await isTokenRevoked(raw);
-  if (revoked) {
-    return null;
+  // Check token revocation and sessionVersion when DB is available.
+  // If DB is unavailable, degrade gracefully instead of crashing pages.
+  try {
+    const revoked = await isTokenRevoked(raw);
+    if (revoked) {
+      return null;
+    }
+
+    // ── sessionVersion check ──
+    // Verify the token's sessionVersion matches the current DB value.
+    // If the user changed password, roles were modified, or an admin
+    // explicitly revoked sessions, sessionVersion will have been
+    // incremented and this token becomes invalid.
+    const user = await prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { sessionVersion: true, isActive: true },
+    });
+
+    if (!user) {
+      return null; // User deleted
+    }
+
+    if (!user.isActive) {
+      return null; // User deactivated
+    }
+
+    if ((session.sessionVersion ?? 0) !== (user.sessionVersion ?? 0)) {
+      return null; // Session invalidated by version mismatch
+    }
+  } catch {
+    logRuntimeEnvWarnings();
   }
 
   return session;

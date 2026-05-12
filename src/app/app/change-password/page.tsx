@@ -2,6 +2,7 @@
 
 import { useState, FormEvent } from "react";
 import { Lock, Eye, EyeOff, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 export default function ChangePasswordPage() {
   const [currentPassword, setCurrentPassword] = useState("");
@@ -31,7 +32,7 @@ export default function ChangePasswordPage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/change-password", {
+      const res = await apiFetch("/api/auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ currentPassword, newPassword }),

@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -152,6 +152,7 @@ model User {
   globalRole       RoleCode?
   isActive         Boolean            @default(true)
   mustChangePassword Boolean          @default(true)
+  sessionVersion   Int                @default(0)  /// Incremented on password/role changes to invalidate existing tokens
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 
@@ -559,6 +560,8 @@ model SaleOrderLine {
 }
 
 model Payment {
+  /// DB-level partial unique index (manual migration):
+  /// Payment_one_posted_per_sale_order ON (saleOrderId) WHERE status='POSTED'
   id                    String        @id @default(cuid())
   saleOrderId           String
   cashSessionId         String

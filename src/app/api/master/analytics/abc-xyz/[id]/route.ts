@@ -4,6 +4,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function PUT(
   request: Request,
@@ -12,6 +13,7 @@ export async function PUT(
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
 
     const { id } = await params;

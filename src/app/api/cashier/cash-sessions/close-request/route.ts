@@ -7,8 +7,9 @@ import { prisma } from "@/lib/prisma";
 import { isMaster } from "@/modules/rbac/guards";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { requireCsrf } from "@/modules/security/csrf";
 
-const CONFLICT_REASONS = new Set(["CASH_SESSION_NOT_OPEN", "CASH_SESSION_UNRESOLVED_ORDERS"]);
+const CONFLICT_REASONS = new Set(["CASH_SESSION_NOT_OPEN", "CASH_SESSION_UNRESOLVED_ORDERS", "CASH_SESSION_HAS_PENDING_PAYMENTS"]);
 
 export async function POST(request: Request) {
   let targetSessionId = "unknown";
@@ -17,6 +18,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const parsed = requestCloseCashSessionSchema.safeParse(await request.json());
     if (!parsed.success) {

@@ -1,10 +1,12 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowLeftCircle, CreditCard, LogOut, ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RoleBadge } from "@/components/ui/role-badge";
+import { apiFetch } from "@/lib/client/api";
 
 /**
  * POS Shell — POS-focused topbar/content wrapper.
@@ -25,6 +27,20 @@ export function PosShellWrapper({
   integrated?: boolean;
   exitHref?: string;
 }) {
+  const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const handleLogout = useCallback(async () => {
+    setLoggingOut(true);
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Even if the request fails, redirect to login
+    } finally {
+      router.push("/login");
+    }
+  }, [router]);
+
   const modeTitle = mode === "cashier" ? "Caja & Cobros" : "Punto de Venta";
   const modeSubtitle = mode === "cashier"
     ? "Cobro operativo y control de caja en tiempo real"
@@ -54,18 +70,18 @@ export function PosShellWrapper({
             </Link>
             <RoleBadge roleCode={roleCode} size="sm" />
             <span className="hidden sm:block text-xs text-[var(--color-text-muted)]">{username}</span>
-            <form action="/api/auth/logout" method="post">
-              <Button
-                variant="ghost"
-                size="sm"
-                type="submit"
-                title="Cerrar sesión"
-                className="text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-danger-600)]"
-                icon={<LogOut className="h-4 w-4" />}
-              >
-                <span className="hidden sm:inline">Salir</span>
-              </Button>
-            </form>
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              disabled={loggingOut}
+              onClick={handleLogout}
+              title="Cerrar sesión"
+              className="text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-danger-600)]"
+              icon={<LogOut className="h-4 w-4" />}
+            >
+              <span className="hidden sm:inline">{loggingOut ? "Saliendo…" : "Salir"}</span>
+            </Button>
           </div>
         </div>
       </header>

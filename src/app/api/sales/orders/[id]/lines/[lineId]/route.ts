@@ -9,6 +9,7 @@ import { isMaster } from "@/modules/rbac/guards";
 import { logAuditEvent } from "@/modules/audit/service";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { requireCsrf } from "@/modules/security/csrf";
 
 async function checkBranch(
   session: NonNullable<Awaited<ReturnType<typeof getCurrentSession>>>,
@@ -54,6 +55,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const parsed = updateSaleOrderLineSchema.safeParse(await request.json());
     if (!parsed.success) {
@@ -72,10 +74,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 }
 
-export async function DELETE(_: Request, context: { params: Promise<{ id: string; lineId: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string; lineId: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const { id, lineId } = await context.params;
     if (!(await ensureCanMutateLine(session, id))) {

@@ -3,6 +3,9 @@ import { defineConfig } from "@playwright/test";
 const baseURL = process.env.E2E_BASE_URL ?? "http://127.0.0.1:3000";
 const storageState = process.env.E2E_ADMIN_STORAGE_STATE ?? "tests/e2e/.auth/admin.json";
 
+// Credentials are sourced in global setup from:
+// E2E_ADMIN_EMAIL, E2E_ADMIN_PASSWORD, E2E_CASHIER_EMAIL, E2E_CASHIER_PASSWORD
+
 export default defineConfig({
   testDir: "tests/e2e",
   timeout: 60_000,

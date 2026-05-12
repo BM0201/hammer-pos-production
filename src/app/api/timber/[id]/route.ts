@@ -4,7 +4,9 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { isMaster } from "@/modules/rbac/guards";
 import { getTimberProduct, updateTimberProduct, deleteTimberProduct } from "@/modules/timber/service";
 import { updateTimberProductSchema } from "@/modules/timber/validators";
+import { toHttpErrorResponse } from "@/lib/http";
 import { z } from "zod";
+import { requireCsrf } from "@/modules/security/csrf";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -21,11 +23,7 @@ export async function GET(_request: Request, { params }: Params) {
     }
     return NextResponse.json(result);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    if (message === "NOT_AUTHENTICATED") {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
-    return NextResponse.json({ error: message }, { status: 500 });
+    return toHttpErrorResponse(err);
   }
 }
 
@@ -34,6 +32,7 @@ export async function PUT(request: Request, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     const { id } = await params;
 
     if (!isMaster(session)) {
@@ -49,22 +48,19 @@ export async function PUT(request: Request, { params }: Params) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: "Validación fallida", details: err.errors }, { status: 422 });
     }
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    if (message === "NOT_AUTHENTICATED") {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
-    if (message === "TIMBER_PRODUCT_NOT_FOUND") {
+    if (err instanceof Error && err.message === "TIMBER_PRODUCT_NOT_FOUND") {
       return NextResponse.json({ error: "Producto de madera no encontrado" }, { status: 404 });
     }
-    return NextResponse.json({ error: message }, { status: 500 });
+    return toHttpErrorResponse(err);
   }
 }
 
 /** DELETE /api/timber/[id] — Delete (deactivate) a timber product */
-export async function DELETE(_request: Request, { params }: Params) {
+export async function DELETE(request: Request, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     const { id } = await params;
 
     if (!isMaster(session)) {
@@ -74,13 +70,9 @@ export async function DELETE(_request: Request, { params }: Params) {
     const result = await deleteTimberProduct(id);
     return NextResponse.json(result);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    if (message === "NOT_AUTHENTICATED") {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
-    if (message === "TIMBER_PRODUCT_NOT_FOUND") {
+    if (err instanceof Error && err.message === "TIMBER_PRODUCT_NOT_FOUND") {
       return NextResponse.json({ error: "Producto de madera no encontrado" }, { status: 404 });
     }
-    return NextResponse.json({ error: message }, { status: 500 });
+    return toHttpErrorResponse(err);
   }
 }

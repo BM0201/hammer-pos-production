@@ -7,6 +7,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { mapDispatchStatusToSpanish, mapDispatchStatusVariant, mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
+import { apiFetch } from "@/lib/client/api";
 
 type DispatchOrder = {
   id: string;
@@ -19,7 +21,7 @@ type DispatchOrder = {
     id: string;
     customerName: string;
     price: string;
-    status: "PENDING" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
+    status: "PENDING" | "ASSIGNED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED" | "FAILED";
     reference?: string | null;
     scheduledPaymentTime?: string | null;
   }>;
@@ -35,42 +37,12 @@ type DispatchTicket = {
     transportServices?: Array<{
       id: string;
       customerName: string;
-      status: "PENDING" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED";
+      status: "PENDING" | "ASSIGNED" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED" | "FAILED";
     }>;
   };
   branch: { code: string };
   dispatchedAt: string | null;
 };
-
-const DISPATCH_REASON_MESSAGES: Record<string, string> = {
-  FORBIDDEN_ROLE: "Tu rol no puede despachar pedidos.",
-  FORBIDDEN_BRANCH: "No tienes acceso a esta sucursal.",
-  DISPATCH_INVALID_STATUS: "La orden ya no está pendiente de despacho.",
-  DISPATCH_ALREADY_COMPLETED: "La orden ya fue despachada.",
-  APPROVAL_REQUESTED: "Solicitud enviada para corrección excepcional de despacho.",
-};
-
-function mapDispatchMessage(message?: string, reason?: string) {
-  if (reason && DISPATCH_REASON_MESSAGES[reason]) return DISPATCH_REASON_MESSAGES[reason];
-  if (message && DISPATCH_REASON_MESSAGES[message]) return DISPATCH_REASON_MESSAGES[message];
-  return message ?? "No se pudo completar el despacho.";
-}
-
-function mapTransportStatusLabel(status?: "PENDING" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED") {
-  if (status === "PENDING") return "Pendiente";
-  if (status === "IN_TRANSIT") return "En tránsito";
-  if (status === "DELIVERED") return "Entregado";
-  if (status === "CANCELLED") return "Cancelado";
-  return "Sin registro";
-}
-
-function mapTransportStatusVariant(status?: "PENDING" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED"): "neutral" | "warning" | "info" | "success" | "danger" {
-  if (status === "PENDING") return "warning";
-  if (status === "IN_TRANSIT") return "info";
-  if (status === "DELIVERED") return "success";
-  if (status === "CANCELLED") return "danger";
-  return "neutral";
-}
 
 export function DispatchWorkspace({ branchId }: { branchId: string }) {
   const [pending, setPending] = useState<DispatchOrder[]>([]);
@@ -117,12 +89,12 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
     const historyJson = (await historyResponse.json()) as { data?: DispatchTicket[]; message?: string; reason?: string };
 
     if (!pendingResponse.ok) {
-      setMessage(mapDispatchMessage(pendingJson.message, pendingJson.reason));
+      setMessage(mapPosErrorToSpanish({ payload: pendingJson, status: pendingResponse.status, fallback: "No se pudo completar el despacho." }));
       return;
     }
 
     if (!historyResponse.ok) {
-      setMessage(mapDispatchMessage(historyJson.message, historyJson.reason));
+      setMessage(mapPosErrorToSpanish({ payload: historyJson, status: historyResponse.status, fallback: "No se pudo cargar el historial de despacho." }));
       return;
     }
 
@@ -151,15 +123,15 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
 
     const stopMetric = measurePosMetric("dispatch_latency", { orderId });
     setBusyOrderId(orderId);
-    const response = await fetch(`/api/warehouse/dispatch/${orderId}/dispatch`, {
+    const response = await apiFetch(`/api/warehouse/dispatch/${orderId}/dispatch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ notes: "Despachado desde mesa operativa" }),
     });
-    const json = (await response.json()) as { message?: string; reason?: string; status?: string };
+    const json = (await response.json()) as ApiErrorPayload & { status?: string };
 
     if (!response.ok) {
-      setMessage(mapDispatchMessage(json.message, json.reason));
+      setMessage(mapPosErrorToSpanish({ payload: json, status: response.status, fallback: "No se pudo completar el despacho." }));
       setBusyOrderId(null);
       stopMetric(false);
       return;
@@ -197,7 +169,7 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
     }
 
     setTransportBusy(true);
-    const response = await fetch("/api/transport", {
+    const response = await apiFetch("/api/transport", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -210,10 +182,10 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
         notes: transportNotes.trim() || null,
       }),
     });
-    const json = (await response.json()) as { message?: string };
+    const json = (await response.json()) as ApiErrorPayload;
 
     if (!response.ok) {
-      setMessage(json.message ?? "No se pudo registrar el servicio de transporte.");
+      setMessage(mapPosErrorToSpanish({ payload: json, status: response.status, fallback: "No se pudo registrar el servicio de transporte." }));
       setTransportBusy(false);
       return;
     }
@@ -226,15 +198,15 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
 
   async function changeTransportStatus(transportId: string, status: "IN_TRANSIT" | "DELIVERED") {
     setTransportBusy(true);
-    const response = await fetch(`/api/transport/${transportId}`, {
+    const response = await apiFetch(`/api/transport/${transportId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
     });
-    const json = (await response.json()) as { message?: string };
+    const json = (await response.json()) as ApiErrorPayload;
 
     if (!response.ok) {
-      setMessage(json.message ?? "No se pudo actualizar el estado del transporte.");
+      setMessage(mapPosErrorToSpanish({ payload: json, status: response.status, fallback: "No se pudo actualizar el estado del transporte." }));
       setTransportBusy(false);
       return;
     }
@@ -262,7 +234,7 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
                   <div className="font-medium">{order.orderNumber}</div>
                   <span className="text-xs text-[var(--color-text-soft)]">{order.branch.code}</span>
                 </div>
-                <div className="text-xs text-[var(--color-text-muted)]">Total: C$ {Number(order.grandTotal).toFixed(2)}</div>
+                <div className="text-xs text-[var(--color-text-muted)]">Estado: {mapDispatchStatusToSpanish(order.status)} · Total: C$ {Number(order.grandTotal).toFixed(2)}</div>
                 <Button
                   variant="success"
                   size="sm"
@@ -288,8 +260,8 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
                 {ticket.saleOrder.requiresTransport ? (
                   <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
                     <span>Transporte:</span>
-                    <Badge variant={mapTransportStatusVariant(ticket.saleOrder.transportServices?.[0]?.status)}>
-                      {mapTransportStatusLabel(ticket.saleOrder.transportServices?.[0]?.status)}
+                    <Badge variant={mapDispatchStatusVariant(ticket.saleOrder.transportServices?.[0]?.status)}>
+                      {mapDispatchStatusToSpanish(ticket.saleOrder.transportServices?.[0]?.status)}
                     </Badge>
                   </div>
                 ) : null}
@@ -323,8 +295,8 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-medium text-[var(--color-text)]">{order.orderNumber}</span>
-                        <Badge variant={mapTransportStatusVariant(transport?.status)} className="text-[0.65rem]">
-                          {mapTransportStatusLabel(transport?.status)}
+                        <Badge variant={mapDispatchStatusVariant(transport?.status)} className="text-[0.65rem]">
+                          {mapDispatchStatusToSpanish(transport?.status)}
                         </Badge>
                       </div>
                       <p className="text-xs text-[var(--color-text-muted)]">Total orden: C$ {Number(order.grandTotal ?? 0).toFixed(2)}</p>
@@ -395,8 +367,8 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
                     <p className="text-sm text-[var(--color-text)]">Cliente: <strong>{selectedTransportOrder.transportServices[0].customerName}</strong></p>
                     <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
                       <span>Estado actual:</span>
-                      <Badge variant={mapTransportStatusVariant(selectedTransportOrder.transportServices[0].status)}>
-                        {mapTransportStatusLabel(selectedTransportOrder.transportServices[0].status)}
+                      <Badge variant={mapDispatchStatusVariant(selectedTransportOrder.transportServices[0].status)}>
+                        {mapDispatchStatusToSpanish(selectedTransportOrder.transportServices[0].status)}
                       </Badge>
                     </div>
                     <div className="flex gap-2">

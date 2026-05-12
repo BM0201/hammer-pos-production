@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
+import { apiFetch } from "@/lib/client/api";
 
 type CashBoxRow = {
   id: string;
@@ -38,7 +39,7 @@ export function MasterCashBoxes() {
   async function toggle(id: string) {
     setToggling(id);
     try {
-      const response = await fetch(`/api/master/cash-boxes/${id}/toggle`, { method: "PATCH" });
+      const response = await apiFetch(`/api/master/cash-boxes/${id}/toggle`, { method: "PATCH" });
       const json = (await response.json()) as { data: CashBoxRow };
       if (!response.ok) {
         showToast("error", "No se pudo cambiar el estado de la caja.");

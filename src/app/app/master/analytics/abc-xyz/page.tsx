@@ -9,6 +9,7 @@ import {
   Grid3x3,
   Table,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 /* ── Types ── */
 type ProductClassification = {
@@ -133,7 +134,7 @@ export default function AbcXyzPage() {
     try {
       setSaving(productId);
       setError(null);
-      const res = await fetch(`/api/master/analytics/abc-xyz/${productId}`, {
+      const res = await apiFetch(`/api/master/analytics/abc-xyz/${productId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [field]: value }),
@@ -195,7 +196,7 @@ export default function AbcXyzPage() {
     try {
       setSaving(product.id);
       setError(null);
-      const res = await fetch(`/api/master/analytics/abc-xyz/${product.id}`, {
+      const res = await apiFetch(`/api/master/analytics/abc-xyz/${product.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

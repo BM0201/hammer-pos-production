@@ -1,19 +1,60 @@
 import type { RoleCode } from "@prisma/client";
+import type { Route } from "next";
 import type { SessionPayload } from "@/types/auth";
 import { getPermissionsForRole, type PermissionKey } from "@/modules/rbac/permissions";
-import { can, canInAnyAssignedBranch, canInBranch, type Capability } from "@/modules/rbac/policies";
-import { resolveRoleHome, isMasterRole, isMasterOrAbove, isOwnerRole, isSystemAdminRole } from "@/modules/rbac/role-routing";
+import { can, canInAnyAssignedBranch, canInBranch as policyCanInBranch, type Capability } from "@/modules/rbac/policies";
+import { resolveRoleHome, isMasterOrAbove, isOwnerRole, isSystemAdminRole } from "@/modules/rbac/role-routing";
 
 export function isMaster(session: SessionPayload | null): boolean {
   return Boolean(session && isMasterOrAbove(session.roleCode as string, session.globalRoles as unknown as string[]));
 }
 
 export function isOwner(session: SessionPayload | null): boolean {
-  return Boolean(session && (isOwnerRole(session.roleCode as string, session.globalRoles as unknown as string[]) || isSystemAdminRole(session.roleCode as string, session.globalRoles as unknown as string[])));
+  return Boolean(
+    session &&
+      (isOwnerRole(session.roleCode as string, session.globalRoles as unknown as string[]) ||
+        isSystemAdminRole(session.roleCode as string, session.globalRoles as unknown as string[])),
+  );
 }
 
 export function isSystemAdmin(session: SessionPayload | null): boolean {
   return Boolean(session && isSystemAdminRole(session.roleCode as string, session.globalRoles as unknown as string[]));
+}
+
+export function isPrivilegedGlobal(session: SessionPayload | null): boolean {
+  return isMaster(session) || isOwner(session) || isSystemAdmin(session);
+}
+
+export function canInBranch(session: SessionPayload | null, branchId: string, capability: Capability): boolean {
+  return policyCanInBranch(session, branchId, capability);
+}
+
+export function requireBranchCapability(session: SessionPayload | null, branchId: string, capability: Capability): void {
+  if (!session || !canInBranch(session, branchId, capability)) {
+    throw new Error("FORBIDDEN_BRANCH");
+  }
+}
+
+export function requireAnyBranchCapability(session: SessionPayload | null, capabilities: Capability[]): void {
+  if (!session || capabilities.length === 0) {
+    throw new Error("FORBIDDEN_CAPABILITY");
+  }
+
+  const allowed = capabilities.some((capability) => canInAnyAssignedBranch(session, capability));
+  if (!allowed) {
+    throw new Error("FORBIDDEN_CAPABILITY");
+  }
+}
+
+export function getBranchIdsWithCapability(session: SessionPayload | null, capability: Capability): string[] {
+  if (!session) return [];
+  if (isPrivilegedGlobal(session)) {
+    return [];
+  }
+
+  return session.branchMemberships
+    .filter((membership) => can(membership.roleCode, capability))
+    .map((membership) => membership.branchId);
 }
 
 export function hasPermission(roleCode: RoleCode, permission: PermissionKey): boolean {
@@ -34,25 +75,22 @@ export function hasCapabilityInAnyAssignedBranch(session: SessionPayload | null,
 
 export function hasBranchAccess(session: SessionPayload | null, branchId: string): boolean {
   if (!session) return false;
-  if (isMaster(session)) return true;
+  if (isPrivilegedGlobal(session)) return true;
   return session.branchMemberships.some((item) => item.branchId === branchId);
 }
 
 export function hasBranchRole(session: SessionPayload | null, branchId: string, allowedRoles: RoleCode[]): boolean {
   if (!session) return false;
-  if (isMaster(session)) return true;
+  if (isPrivilegedGlobal(session)) return true;
   return session.branchMemberships.some((item) => item.branchId === branchId && allowedRoles.includes(item.roleCode));
 }
 
 export function hasAnyAssignedBranch(session: SessionPayload | null): boolean {
   if (!session) return false;
-  if (isMaster(session)) return true;
+  if (isPrivilegedGlobal(session)) return true;
   return session.branchMemberships.length > 0;
 }
 
-export function getRoleAwareHome(
-  roleCode: RoleCode,
-  globalRoles?: RoleCode[],
-): string {
+export function getRoleAwareHome(roleCode: RoleCode, globalRoles?: RoleCode[]): Route {
   return resolveRoleHome(roleCode as string, (globalRoles as unknown as string[] | undefined) ?? []);
 }

@@ -4,6 +4,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { executeInventoryImport, previewInventoryImport } from "@/modules/inventory/import-service";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 const destinationModeSchema = z.enum(["SINGLE", "MULTI", "ALL", "FILE"]);
 
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
 
     const payload = await request.json();

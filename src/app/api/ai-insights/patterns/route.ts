@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
+import { assertMaster } from "@/modules/security/rbac-helpers";
 import { getPatterns, getRecommendations } from "@/modules/ai-insights/service";
 
 export async function GET(req: NextRequest) {
@@ -8,10 +9,7 @@ export async function GET(req: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
 
-    const globalRoles = session.globalRoles as unknown as string[];
-    if (!globalRoles.includes("MASTER") && !globalRoles.includes("SYSTEM_ADMIN")) {
-      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
-    }
+    assertMaster(session);
 
     const { searchParams } = new URL(req.url);
     const branchId = searchParams.get("branchId") ?? undefined;

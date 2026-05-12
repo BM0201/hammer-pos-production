@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/lib/client/api";
 
 type Category = { id: string; code: string; name: string; isActive: boolean };
 
@@ -24,7 +25,7 @@ export function CategoriesAdmin() {
     event.preventDefault();
     setError(null);
 
-    const res = await fetch("/api/catalog/categories", {
+    const res = await apiFetch("/api/catalog/categories", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code, name }),
@@ -41,7 +42,7 @@ export function CategoriesAdmin() {
   }
 
   async function toggleActive(item: Category) {
-    await fetch(`/api/catalog/categories/${item.id}`, {
+    await apiFetch(`/api/catalog/categories/${item.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ isActive: !item.isActive }),

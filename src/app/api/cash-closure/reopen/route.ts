@@ -3,6 +3,10 @@ import { z } from "zod";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { reopenCashClosure } from "@/modules/cash-closure/service";
+import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
+import { assertBranchAccess } from "@/modules/security/rbac-helpers";
+import { isMaster as checkIsMaster } from "@/modules/rbac/guards";
 
 const reopenSchema = z.object({
   branchId: z.string().min(1),
@@ -14,14 +18,14 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
-    const globalRoles = session.globalRoles as unknown as string[];
-    const isMaster = globalRoles.includes("MASTER") || globalRoles.includes("SYSTEM_ADMIN");
+    const isMasterRole = checkIsMaster(session);
     const isBranchAdmin = session.branchMemberships.some(
       (m) => m.roleCode === "BRANCH_ADMIN"
     );
 
-    if (!isMaster && !isBranchAdmin) {
+    if (!isMasterRole && !isBranchAdmin) {
       return NextResponse.json({ message: "Solo MASTER o BRANCH_ADMIN pueden reabrir la caja" }, { status: 403 });
     }
 
@@ -31,15 +35,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "Datos inválidos" }, { status: 400 });
     }
 
-    // Branch admin can only reopen their own branch
-    if (!isMaster) {
-      const hasBranchAccess = session.branchMemberships.some(
-        (m) => m.branchId === parsed.data.branchId && m.roleCode === "BRANCH_ADMIN"
-      );
-      if (!hasBranchAccess) {
-        return NextResponse.json({ message: "No tienes acceso a esta sucursal" }, { status: 403 });
-      }
-    }
+    // Validate branch access using centralized helper
+    assertBranchAccess(session, parsed.data.branchId);
 
     const result = await reopenCashClosure({
       branchId: parsed.data.branchId,
@@ -59,9 +56,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (error instanceof Error) {
-      if (error.message === "UNAUTHENTICATED") {
-        return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
-      }
       if (error.message === "NO_CLOSURE_TO_REOPEN") {
         return NextResponse.json({ message: "No hay cierre para reabrir hoy" }, { status: 404 });
       }
@@ -69,6 +63,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: "El cierre es permanente, no se puede reabrir hasta mañana" }, { status: 409 });
       }
     }
-    return NextResponse.json({ message: "Error al reabrir caja" }, { status: 500 });
+    return toHttpErrorResponse(error);
   }
 }
