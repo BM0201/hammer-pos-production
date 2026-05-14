@@ -95,8 +95,8 @@ export default function PurchaseOrdersPage() {
   const fetchMeta = useCallback(async () => {
     try {
       const [branchRes, prodRes] = await Promise.all([
-        fetch("/api/master/users"),
-        fetch("/api/catalog/products"),
+        apiFetch("/api/master/users"),
+        apiFetch("/api/catalog/products"),
       ]);
       const branchJson = await branchRes.json();
       const prodJson = await prodRes.json();

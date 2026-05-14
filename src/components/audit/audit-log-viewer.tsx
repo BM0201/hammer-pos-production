@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "@/lib/client/api";
 
 type AuditRow = {
   id: string;
@@ -56,7 +57,7 @@ export function AuditLogViewer({ branchFixed = false, defaultBranchId }: { branc
     if (actorUsername) query.set("actorUsername", actorUsername);
     if (result) query.set("result", result);
 
-    const response = await fetch(`/api/audit?${query.toString()}`);
+    const response = await apiFetch(`/api/audit?${query.toString()}`);
     const json = (await response.json()) as { data?: AuditRow[]; message?: string };
     if (!response.ok) {
       setMessage(json.message ?? "No se pudo cargar la bitácora.");

@@ -17,6 +17,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import Link from "next/link";
+import { apiFetch } from "@/lib/client/api";
 
 type BranchConfig = {
   branchId: string;
@@ -37,7 +38,7 @@ export function OwnerDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/branch-config")
+    apiFetch("/api/branch-config")
       .then((r) => r.json())
       .then((data: any) => setConfigs(Array.isArray(data) ? data : []))
       .catch(() => setConfigs([]))

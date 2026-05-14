@@ -211,7 +211,7 @@ export function TimberTrips({ showHeader = true }: { showHeader?: boolean }) {
   const loadTrips = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/timber/trips");
+      const res = await apiFetch("/api/timber/trips");
       if (!res.ok) throw new Error("Error al cargar viajes");
       const data = await res.json();
       setTrips(data.items);
@@ -232,7 +232,7 @@ export function TimberTrips({ showHeader = true }: { showHeader?: boolean }) {
     setExpandedTrip(id);
     setDetailLoading(true);
     try {
-      const res = await fetch(`/api/timber/trips/${id}`);
+      const res = await apiFetch(`/api/timber/trips/${id}`);
       if (!res.ok) throw new Error("Error al cargar detalle");
       setTripDetail(await res.json());
     } catch {
@@ -512,7 +512,7 @@ function CreateTripForm({
 
   // Load branches
   useEffect(() => {
-    fetch("/api/branches")
+    apiFetch("/api/branches")
       .then((r) => r.ok ? r.json() : [])
       .then((data: Branch[]) => {
         if (Array.isArray(data) && data.length > 0) {

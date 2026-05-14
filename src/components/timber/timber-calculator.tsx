@@ -91,7 +91,7 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
 
   // Load pricing config from API
   useEffect(() => {
-    fetch("/api/timber/pricing")
+    apiFetch("/api/timber/pricing")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         if (data) setPricing(data);

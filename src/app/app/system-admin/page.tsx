@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
+import { apiFetch } from "@/lib/client/api";
   Shield,
   Settings,
   Users,
@@ -27,8 +28,8 @@ export default function SystemAdminDashboard() {
     async function load() {
       try {
         const [branchRes, roleRes] = await Promise.all([
-          fetch("/api/branches"),
-          fetch("/api/system-admin/role-config"),
+          apiFetch("/api/branches"),
+          apiFetch("/api/system-admin/role-config"),
         ]);
         const branchJson = await branchRes.json();
         const roleJson = await roleRes.json();

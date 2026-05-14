@@ -62,7 +62,7 @@ export function InventoryAdmin({
 
   const loadProducts = useCallback(async (query: string) => {
     const q = query.trim();
-    const response = await fetch(`/api/catalog/products${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+    const response = await apiFetch(`/api/catalog/products${q ? `?q=${encodeURIComponent(q)}` : ""}`);
     const json = (await response.json()) as { data?: ProductOption[] };
     setProducts(json.data ?? []);
   }, []);
@@ -72,7 +72,7 @@ export function InventoryAdmin({
     setBalancesError(null);
     const query = new URLSearchParams({ branchId, ...(filterProductId ? { productId: filterProductId } : {}) });
     try {
-      const res = await fetch(`/api/inventory/balances?${query.toString()}`, { cache: "no-store" });
+      const res = await apiFetch(`/api/inventory/balances?${query.toString()}`, { cache: "no-store" });
       const json = (await res.json()) as { data?: BalanceRow[]; message?: string };
       if (!res.ok) {
         throw new Error(json.message ?? "No se pudieron cargar los balances.");
@@ -91,7 +91,7 @@ export function InventoryAdmin({
     setMovementsError(null);
     const query = new URLSearchParams({ branchId, ...(filterProductId ? { productId: filterProductId } : {}) });
     try {
-      const res = await fetch(`/api/inventory/movements?${query.toString()}`, { cache: "no-store" });
+      const res = await apiFetch(`/api/inventory/movements?${query.toString()}`, { cache: "no-store" });
       const json = (await res.json()) as { data?: MovementRow[]; message?: string };
       if (!res.ok) {
         throw new Error(json.message ?? "No se pudieron cargar los movimientos.");

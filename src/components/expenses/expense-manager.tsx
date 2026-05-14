@@ -136,7 +136,7 @@ export function ExpenseManager() {
 
   /* ── Load branches ── */
   useEffect(() => {
-    fetch("/api/branches")
+    apiFetch("/api/branches")
       .then((r) => r.json())
       .then((data) => {
         setBranches(data);
@@ -153,9 +153,9 @@ export function ExpenseManager() {
     setLoading(true);
     try {
       const [expRes, sumRes, cfgRes] = await Promise.all([
-        fetch(`/api/expenses?branchId=${selectedBranchId}`),
-        fetch(`/api/expenses?branchId=${selectedBranchId}&summary=true`),
-        fetch(`/api/pricing/config?branchId=${selectedBranchId}`),
+        apiFetch(`/api/expenses?branchId=${selectedBranchId}`),
+        apiFetch(`/api/expenses?branchId=${selectedBranchId}&summary=true`),
+        apiFetch(`/api/pricing/config?branchId=${selectedBranchId}`),
       ]);
       const expData = await expRes.json();
       const sumData = await sumRes.json();

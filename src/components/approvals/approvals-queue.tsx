@@ -24,7 +24,7 @@ export function ApprovalsQueue({ branchId }: { branchId?: string }) {
   const load = useCallback(async () => {
     const query = new URLSearchParams();
     if (branchId) query.set("branchId", branchId);
-    const response = await fetch(`/api/approvals?${query.toString()}`);
+    const response = await apiFetch(`/api/approvals?${query.toString()}`);
     const json = (await response.json()) as { data?: ApprovalItem[]; message?: string };
     if (!response.ok) {
       setMessage(json.message ?? "No se pudo cargar la cola de aprobaciones.");

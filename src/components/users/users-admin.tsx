@@ -80,7 +80,7 @@ export function UsersAdmin() {
   async function load(keepFeedback = true) {
     if (!keepFeedback) setFeedback(null);
 
-    const response = await fetch("/api/master/users", { cache: "no-store" });
+    const response = await apiFetch("/api/master/users", { cache: "no-store" });
     const json = (await response.json()) as {
       data?: { users?: UserRow[]; branches?: BranchOption[] };
       message?: string;

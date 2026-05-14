@@ -44,7 +44,7 @@ export function BranchModuleConfigPanel() {
 
   const loadConfigs = useCallback(() => {
     setLoading(true);
-    fetch("/api/branch-config")
+    apiFetch("/api/branch-config")
       .then((r) => r.json())
       .then((data: any) => {
         const arr = Array.isArray(data) ? data : [];

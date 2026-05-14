@@ -180,8 +180,8 @@ export default function ReorderPage() {
   const fetchMeta = useCallback(async () => {
     try {
       const [bRes, pRes] = await Promise.all([
-        fetch("/api/master/users"),
-        fetch("/api/catalog/products"),
+        apiFetch("/api/master/users"),
+        apiFetch("/api/catalog/products"),
       ]);
       const bJson = await bRes.json();
       const pJson = await pRes.json();
@@ -196,7 +196,7 @@ export default function ReorderPage() {
       const params = new URLSearchParams();
       if (alertStatusFilter) params.set("status", alertStatusFilter);
       if (alertBranchFilter) params.set("branchId", alertBranchFilter);
-      const res = await fetch(`/api/master/reorder/alerts?${params.toString()}`);
+      const res = await apiFetch(`/api/master/reorder/alerts?${params.toString()}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "Error al cargar alertas");
       setAlerts(json.data || []);
@@ -212,7 +212,7 @@ export default function ReorderPage() {
       setBatchesLoading(true);
       const params = new URLSearchParams();
       if (batchStatusFilter) params.set("status", batchStatusFilter);
-      const res = await fetch(`/api/master/reorder/batches?${params.toString()}`);
+      const res = await apiFetch(`/api/master/reorder/batches?${params.toString()}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "Error al cargar lotes");
       setBatches(json.data || []);
@@ -228,7 +228,7 @@ export default function ReorderPage() {
       setPoliciesLoading(true);
       const params = new URLSearchParams();
       if (policyBranchFilter) params.set("branchId", policyBranchFilter);
-      const res = await fetch(`/api/master/reorder/policies?${params.toString()}`);
+      const res = await apiFetch(`/api/master/reorder/policies?${params.toString()}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "Error al cargar políticas");
       setPolicies(json.data || []);

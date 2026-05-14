@@ -71,7 +71,7 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
 
   async function loadCashBoxes() {
     const query = new URLSearchParams({ branchId });
-    const response = await fetch(`/api/cashier/cash-boxes?${query.toString()}`);
+    const response = await apiFetch(`/api/cashier/cash-boxes?${query.toString()}`);
     const json = (await response.json()) as { data: CashBox[]; message?: string; reason?: string };
 
     if (!response.ok) {
@@ -114,7 +114,7 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
     }
 
     const query = new URLSearchParams({ branchId, physicalCashBoxId: cashBoxId });
-    const response = await fetch(`/api/cashier/cash-sessions/active?${query.toString()}`);
+    const response = await apiFetch(`/api/cashier/cash-sessions/active?${query.toString()}`);
     const json = (await response.json()) as { data: CashSession | null; message?: string; reason?: string };
 
     if (!response.ok) {

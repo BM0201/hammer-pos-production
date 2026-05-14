@@ -64,7 +64,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
 
     try {
       const query = new URLSearchParams({ branchId });
-      const response = await fetch(`/api/cashier/orders/pending-payment?${query.toString()}`);
+      const response = await apiFetch(`/api/cashier/orders/pending-payment?${query.toString()}`);
       const json = (await response.json()) as { data: PendingOrder[]; message?: string; reason?: string };
 
       if (!response.ok) {

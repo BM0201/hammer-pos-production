@@ -6,8 +6,52 @@ const PUBLIC_PATHS = new Set(["/login", "/unauthorized", "/forbidden", "/health"
 const PUBLIC_API_PATHS = new Set(["/api/auth/login", "/api/auth/session", "/api/auth/csrf"]);
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+// ── CORS configuration ──
+// Reads comma-separated allowed origins from env (e.g. "https://app.example.com,http://localhost:3000")
+const ALLOWED_ORIGINS: Set<string> = new Set(
+  (process.env.ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean),
+);
+
+function applyCorsHeaders(
+  response: NextResponse,
+  origin: string | null,
+): NextResponse {
+  if (!origin) return response;
+  // Allow if origin is in whitelist, or in development allow localhost origins
+  const isAllowed =
+    ALLOWED_ORIGINS.has(origin) ||
+    (process.env.NODE_ENV !== "production" &&
+      (origin.startsWith("http://localhost:") ||
+        origin.startsWith("http://127.0.0.1:")));
+
+  if (isAllowed) {
+    response.headers.set("Access-Control-Allow-Origin", origin);
+    response.headers.set("Access-Control-Allow-Credentials", "true");
+    response.headers.set(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    );
+    response.headers.set(
+      "Access-Control-Allow-Headers",
+      "Content-Type, x-csrf-token, Authorization",
+    );
+    response.headers.set("Access-Control-Max-Age", "86400");
+  }
+  return response;
+}
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const origin = request.headers.get("origin");
+
+  // Handle CORS preflight (OPTIONS) for API routes
+  if (request.method === "OPTIONS" && pathname.startsWith("/api/")) {
+    const preflightResponse = new NextResponse(null, { status: 204 });
+    return applyCorsHeaders(preflightResponse, origin);
+  }
 
   if (pathname.startsWith("/_next") || pathname.includes(".")) {
     return NextResponse.next();
@@ -22,14 +66,16 @@ export function middleware(request: NextRequest) {
 
   if (pathname.startsWith("/api/")) {
     if (PUBLIC_API_PATHS.has(pathname)) {
-      return NextResponse.next();
+      const res = NextResponse.next();
+      return applyCorsHeaders(res, origin);
     }
 
     if (!session) {
-      return NextResponse.json(
+      const res = NextResponse.json(
         { message: "Unauthorized", reason: "NO_SESSION" },
         { status: 401 },
       );
+      return applyCorsHeaders(res, origin);
     }
 
     // ── CSRF: Shallow check (header existence only) ──
@@ -42,14 +88,16 @@ export function middleware(request: NextRequest) {
     if (!SAFE_METHODS.has(request.method.toUpperCase())) {
       const csrfHeader = request.headers.get("x-csrf-token");
       if (!csrfHeader) {
-        return NextResponse.json(
+        const res = NextResponse.json(
           { message: "CSRF validation failed", reason: "MISSING_CSRF_TOKEN" },
           { status: 403 },
         );
+        return applyCorsHeaders(res, origin);
       }
     }
 
-    return NextResponse.next();
+    const res = NextResponse.next();
+    return applyCorsHeaders(res, origin);
   }
 
   if (!session && pathname.startsWith("/app")) {

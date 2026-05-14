@@ -24,7 +24,7 @@ export function MasterCashBoxes() {
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/master/cash-boxes");
+      const response = await apiFetch("/api/master/cash-boxes");
       const json = (await response.json()) as { data: CashBoxRow[] };
       setCashBoxes(json.data ?? []);
     } catch {

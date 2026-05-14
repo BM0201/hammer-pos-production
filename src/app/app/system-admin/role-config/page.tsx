@@ -41,7 +41,7 @@ export default function RoleConfigPage() {
   const loadConfigs = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/system-admin/role-config");
+      const res = await apiFetch("/api/system-admin/role-config");
       const json = await res.json();
       if (res.ok) setConfigs(json.data ?? []);
       else setNotice(json.message || "Error al cargar configuración");

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
+import { apiFetch } from "@/lib/client/api";
   BarChart3,
   AlertTriangle,
   Clock,
@@ -226,7 +227,7 @@ export default function CashClosureReportsPage() {
 
   const fetchBranches = useCallback(async () => {
     try {
-      const res = await fetch("/api/branches");
+      const res = await apiFetch("/api/branches");
       if (res.ok) {
         const data = await res.json();
         setBranches(data.branches ?? data ?? []);
@@ -247,7 +248,7 @@ export default function CashClosureReportsPage() {
       params.set("page", String(page));
       params.set("limit", "20");
 
-      const res = await fetch(`/api/cash-closure/reports?${params.toString()}`);
+      const res = await apiFetch(`/api/cash-closure/reports?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch reports");
       const data = await res.json();
       setClosures(data.closures ?? []);

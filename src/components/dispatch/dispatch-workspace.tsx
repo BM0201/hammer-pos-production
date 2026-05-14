@@ -81,8 +81,8 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
   const load = useCallback(async () => {
     const query = new URLSearchParams({ branchId });
     const [pendingResponse, historyResponse] = await Promise.all([
-      fetch(`/api/warehouse/dispatch/pending?${query.toString()}`),
-      fetch(`/api/warehouse/dispatch/history?${query.toString()}`),
+      apiFetch(`/api/warehouse/dispatch/pending?${query.toString()}`),
+      apiFetch(`/api/warehouse/dispatch/history?${query.toString()}`),
     ]);
 
     const pendingJson = (await pendingResponse.json()) as { data?: DispatchOrder[]; message?: string; reason?: string };

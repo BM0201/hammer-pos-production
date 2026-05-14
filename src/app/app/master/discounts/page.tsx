@@ -141,7 +141,7 @@ export default function DiscountsPage() {
     setLoading(true);
     try {
       const params = filterActive !== "all" ? `?active=${filterActive}` : "";
-      const res = await fetch(`/api/master/discounts${params}`);
+      const res = await apiFetch(`/api/master/discounts${params}`);
       const json = await res.json();
       if (res.ok) setDiscounts(json.data ?? []);
       else setNotice(json.message || "Error al cargar descuentos");
@@ -153,7 +153,7 @@ export default function DiscountsPage() {
 
   const loadBranches = useCallback(async () => {
     try {
-      const res = await fetch("/api/branches");
+      const res = await apiFetch("/api/branches");
       const json = await res.json();
       if (res.ok) setBranches(json.data ?? []);
     } catch { /* ignore */ }
@@ -161,7 +161,7 @@ export default function DiscountsPage() {
 
   const loadProducts = useCallback(async () => {
     try {
-      const res = await fetch("/api/catalog/products?isActive=true");
+      const res = await apiFetch("/api/catalog/products?isActive=true");
       const json = await res.json();
       if (res.ok) setProducts(json.data ?? []);
     } catch { /* ignore */ }
@@ -170,7 +170,7 @@ export default function DiscountsPage() {
   const loadSuggestions = useCallback(async () => {
     setSuggestionsLoading(true);
     try {
-      const res = await fetch("/api/master/discounts/suggestions?limit=18");
+      const res = await apiFetch("/api/master/discounts/suggestions?limit=18");
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "No se pudo cargar sugerencias");
       const data: SuggestionEnvelope = json.data ?? { generatedAt: "", suggested: [], insufficientData: [] };

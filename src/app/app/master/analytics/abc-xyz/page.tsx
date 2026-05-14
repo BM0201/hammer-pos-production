@@ -116,7 +116,7 @@ export default function AbcXyzPage() {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/master/analytics/abc-xyz");
+      const res = await apiFetch("/api/master/analytics/abc-xyz");
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "Error al cargar datos");
       setProducts(json.data.products || []);

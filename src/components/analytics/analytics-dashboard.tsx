@@ -59,7 +59,7 @@ export function AnalyticsDashboard() {
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/analytics/dashboard");
+      const r = await apiFetch("/api/analytics/dashboard");
       const j = await r.json();
       // BUG FIX: Show error when API fails
       if (!r.ok) {
@@ -81,7 +81,7 @@ export function AnalyticsDashboard() {
       if (filterABC) params.set("abcClass", filterABC);
       if (filterXYZ) params.set("xyzClass", filterXYZ);
       params.set("take", "100");
-      const r = await fetch(`/api/analytics/products?${params.toString()}`);
+      const r = await apiFetch(`/api/analytics/products?${params.toString()}`);
       const j = await r.json();
       // BUG FIX: Show error when API fails
       if (!r.ok) {

@@ -131,7 +131,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const reloadOrder = useCallback(async () => {
     try {
       const query = new URLSearchParams({ branchId });
-      const response = await fetch(`/api/sales/orders?${query.toString()}`);
+      const response = await apiFetch(`/api/sales/orders?${query.toString()}`);
       const json = (await response.json()) as { data?: TicketOrder[]; message?: string; reason?: string };
 
       if (!response.ok) {
@@ -171,7 +171,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const loadTopSelling = useCallback(async () => {
     try {
       const params = new URLSearchParams({ isActive: "true", topSelling: "true", limit: "5" });
-      const response = await fetch(`/api/catalog/products?${params.toString()}`);
+      const response = await apiFetch(`/api/catalog/products?${params.toString()}`);
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
       if (!response.ok) {
@@ -207,7 +207,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
     try {
       const params = new URLSearchParams({ q: query, isActive: "true" });
-      const response = await fetch(`/api/catalog/products?${params.toString()}`);
+      const response = await apiFetch(`/api/catalog/products?${params.toString()}`);
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
       if (!response.ok) {
@@ -308,7 +308,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     if (typeof known === "number") return known;
 
     const query = new URLSearchParams({ branchId, productId });
-    const response = await fetch(`/api/inventory/balances?${query.toString()}`);
+    const response = await apiFetch(`/api/inventory/balances?${query.toString()}`);
     const json = (await response.json()) as { data?: InventoryBalanceRow[]; message?: string; reason?: string };
 
     if (!response.ok) {

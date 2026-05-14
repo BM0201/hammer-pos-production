@@ -62,7 +62,7 @@ export function ProductsAdmin() {
 
     try {
       const query = search.trim();
-      const response = await fetch(`/api/catalog/products${query ? `?q=${encodeURIComponent(query)}` : ""}`);
+      const response = await apiFetch(`/api/catalog/products${query ? `?q=${encodeURIComponent(query)}` : ""}`);
       const payload = (await response.json()) as ApiListResponse<Product>;
 
       if (!response.ok) {
@@ -80,7 +80,7 @@ export function ProductsAdmin() {
     setCategoriesLoading(true);
 
     try {
-      const response = await fetch("/api/catalog/categories");
+      const response = await apiFetch("/api/catalog/categories");
       const payload = (await response.json()) as ApiListResponse<Category>;
 
       if (!response.ok) {

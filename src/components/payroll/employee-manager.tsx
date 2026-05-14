@@ -96,14 +96,14 @@ export function EmployeeManager() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/branches").then((r) => r.json()).then((j) => setBranches(j.data ?? [])).catch(() => {});
+    apiFetch("/api/branches").then((r) => r.json()).then((j) => setBranches(j.data ?? [])).catch(() => {});
   }, []);
 
   const loadEmployees = useCallback(async () => {
     setLoading(true);
     try {
       const q = selectedBranch ? `?branchId=${selectedBranch}` : "";
-      const r = await fetch(`/api/employees${q}`);
+      const r = await apiFetch(`/api/employees${q}`);
       const j = await r.json();
       setEmployees(j.data ?? []);
     } catch {
@@ -212,7 +212,7 @@ export function EmployeeManager() {
   const loadHistory = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/payroll/history");
+      const r = await apiFetch("/api/payroll/history");
       const j = await r.json();
       setHistory(j.data ?? []);
     } catch {

@@ -70,7 +70,7 @@ export function TimberList() {
       params.set("page", String(page));
       params.set("limit", "15");
 
-      const res = await fetch(`/api/timber?${params.toString()}`);
+      const res = await apiFetch(`/api/timber?${params.toString()}`);
       if (res.ok) {
         const json = await res.json();
         setData(json);

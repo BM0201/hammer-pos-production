@@ -35,7 +35,7 @@ export function OrdersAdmin({ branchId, isMaster }: { branchId?: string; isMaste
   async function load() {
     const query = new URLSearchParams();
     if (activeBranchId) query.set("branchId", activeBranchId);
-    const res = await fetch(`/api/sales/orders?${query.toString()}`);
+    const res = await apiFetch(`/api/sales/orders?${query.toString()}`);
     const json = (await res.json()) as { data: SaleOrder[] };
     setOrders(json.data ?? []);
     if (!selected && json.data?.length) setSelected(json.data[0].id);
@@ -48,7 +48,7 @@ export function OrdersAdmin({ branchId, isMaster }: { branchId?: string; isMaste
   useEffect(() => {
     const timer = setTimeout(() => {
       const q = productSearch.trim();
-      fetch(`/api/catalog/products${q ? `?q=${encodeURIComponent(q)}` : ""}`)
+      apiFetch(`/api/catalog/products${q ? `?q=${encodeURIComponent(q)}` : ""}`)
         .then((res) => res.json())
         .then((json: { data?: Array<{ id: string; sku: string; name: string }> }) => setProducts(json.data ?? []))
         .catch(() => undefined);

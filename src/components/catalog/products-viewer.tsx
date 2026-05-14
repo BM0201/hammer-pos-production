@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Loader2, RefreshCcw, Search } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 type Product = {
   id: string;
@@ -37,7 +38,7 @@ export function ProductsViewer() {
 
     try {
       const query = search.trim();
-      const response = await fetch(`/api/catalog/products${query ? `?q=${encodeURIComponent(query)}` : ""}`);
+      const response = await apiFetch(`/api/catalog/products${query ? `?q=${encodeURIComponent(query)}` : ""}`);
       const payload = (await response.json()) as ApiListResponse<Product>;
 
       if (!response.ok) {

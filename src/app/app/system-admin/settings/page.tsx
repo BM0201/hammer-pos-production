@@ -35,7 +35,7 @@ export default function SettingsPage() {
   const loadSettings = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/system-admin/settings");
+      const res = await apiFetch("/api/system-admin/settings");
       const json = await res.json();
       if (res.ok) setSettings(json.data ?? []);
       else setNotice(json.message || "Error al cargar");

@@ -12,7 +12,7 @@ export function CategoriesAdmin() {
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    const res = await fetch("/api/catalog/categories");
+    const res = await apiFetch("/api/catalog/categories");
     const json = (await res.json()) as { data: Category[] };
     setItems(json.data ?? []);
   }

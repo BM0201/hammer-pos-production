@@ -274,7 +274,7 @@ export default function AiInsightsPage() {
 
   // Fetch branches
   useEffect(() => {
-    fetch("/api/branches")
+    apiFetch("/api/branches")
       .then((r) => r.json())
       .then((d) => {
         if (Array.isArray(d)) setBranches(d);
@@ -316,10 +316,10 @@ export default function AiInsightsPage() {
         } else {
           // Parallel fetch
           const [discRes, anomRes, discpRes, patRes] = await Promise.all([
-            fetch(`/api/ai-insights/discount-suggestions?${q}`),
-            fetch(`/api/ai-insights/anomalies?${q}`),
-            fetch(`/api/ai-insights/discrepancies?${q}`),
-            fetch(`/api/ai-insights/patterns?${q}`),
+            apiFetch(`/api/ai-insights/discount-suggestions?${q}`),
+            apiFetch(`/api/ai-insights/anomalies?${q}`),
+            apiFetch(`/api/ai-insights/discrepancies?${q}`),
+            apiFetch(`/api/ai-insights/patterns?${q}`),
           ]);
 
           const [discJson, anomJson, discpJson, patJson] = await Promise.all([
