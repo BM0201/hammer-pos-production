@@ -1,8 +1,10 @@
 import { LoginForm } from "@/components/login-form";
+import { SessionExpiredToast } from "@/components/session-expired-toast";
 import { redirect } from "next/navigation";
 import { getCurrentSession } from "@/modules/auth/service";
 import { getRoleAwareHome } from "@/modules/rbac/guards";
 import { Hammer, Shield, Zap, BarChart3 } from "lucide-react";
+import { Suspense } from "react";
 
 export default async function LoginPage() {
   const session = await getCurrentSession();
@@ -79,6 +81,9 @@ export default async function LoginPage() {
           </p>
 
           <div className="mt-6">
+            <Suspense fallback={null}>
+              <SessionExpiredToast />
+            </Suspense>
             <LoginForm />
           </div>
 

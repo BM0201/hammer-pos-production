@@ -90,5 +90,17 @@ export async function apiFetch(
     }
   }
 
+  // Auto-redirect to login on expired/missing session
+  if (res.status === 401) {
+    try {
+      const body = (await res.clone().json()) as { reason?: string };
+      if (body.reason === "NO_SESSION" && typeof window !== "undefined") {
+        window.location.href = "/login?expired=1";
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
   return res;
 }

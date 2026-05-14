@@ -2,16 +2,17 @@
  *  H.A.M.M.E.R. Responsive & Accessibility Styles
  * ═══════════════════════════════════════════════ */
 
-/* Touch-friendly minimum sizes */
-button, a, select, [role="button"] {
+/* Touch-friendly minimum sizes — only for interactive controls,
+   NOT inline links which would break breadcrumbs, badges, etc. */
+button,
+select,
+[role="button"],
+nav a,
+[role="navigation"] a,
+a.touch-target,
+a[role="button"] {
   min-height: 44px;
   min-width: 44px;
-}
-
-/* Exception: inline text links and small badges */
-a.inline-link, .badge, [class*="badge"], span a {
-  min-height: unset;
-  min-width: unset;
 }
 
 /* Focus states - highly visible */
