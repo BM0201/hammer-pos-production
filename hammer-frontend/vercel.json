@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "regions": ["iad1"],
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://hammer-api.vercel.app/api/:path*"
+    }
+  ]
+}

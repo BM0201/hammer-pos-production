@@ -1,0 +1,70 @@
+/* ═══════════════════════════════════════════════
+ *  H.A.M.M.E.R. Responsive & Accessibility Styles
+ * ═══════════════════════════════════════════════ */
+
+/* Touch-friendly minimum sizes */
+button, a, select, [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Exception: inline text links and small badges */
+a.inline-link, .badge, [class*="badge"], span a {
+  min-height: unset;
+  min-width: unset;
+}
+
+/* Focus states - highly visible */
+*:focus-visible {
+  outline: 2px solid var(--color-info-500);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Improved form inputs */
+input, select, textarea {
+  font-size: 16px; /* Prevents zoom on iOS */
+}
+
+/* Toast animation */
+@keyframes slide-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.animate-slide-in { animation: slide-in 0.3s ease-out; }
+
+/* Responsive tables */
+@media (max-width: 768px) {
+  table { font-size: 0.8125rem; }
+  th, td { padding: 0.5rem 0.75rem; }
+  
+  /* Stack cards on mobile */
+  .grid-cols-3, .grid-cols-4 {
+    grid-template-columns: 1fr !important;
+  }
+  
+  /* Full-screen modals on mobile */
+  .modal-content {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+    max-width: none;
+    max-height: none;
+  }
+}
+
+/* High contrast text */
+body {
+  color: var(--color-text); /* gray-800 for base text */
+}
+
+/* Ensure links are underlined for accessibility */
+main a:not([class*="btn"]):not([class*="nav"]):not(.no-underline) {
+  text-decoration-line: underline;
+  text-underline-offset: 2px;
+}
+
+/* Spacing between touch targets */
+@media (pointer: coarse) {
+  button + button { margin-left: 0.5rem; }
+}
