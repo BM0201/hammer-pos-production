@@ -66,3 +66,7 @@ backups/*.sql.gz
 backups/backup.log
 FRONTEND_API_MIGRATION.docx
 FRONTEND_API_MIGRATION.pdf
+
+# Archivos de resumen generados
+RESUMEN_FINAL_LIMPIEZA.docx
+RESUMEN_FINAL_LIMPIEZA.pdf
