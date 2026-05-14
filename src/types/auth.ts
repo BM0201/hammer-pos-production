@@ -13,5 +13,6 @@ export type SessionPayload = {
   primaryBranchId: string | null;
   roleCode: RoleCode;
   branchIds: string[];
+  sessionVersion: number;
   exp: number;
 };

@@ -5,6 +5,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { listBranchModuleConfigs, upsertBranchModuleConfig, bulkUpdateBranchModuleConfigs } from "@/modules/branch-config/service";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 function isOwnerOrAbove(session: any): boolean {
   const role = session?.roleCode;
@@ -30,6 +31,7 @@ export async function PUT(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     if (!isOwnerOrAbove(session)) {
       return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }

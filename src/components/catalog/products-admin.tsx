@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Loader2, Plus, Search, RefreshCcw } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 type Product = {
   id: string;
@@ -141,7 +142,7 @@ export function ProductsAdmin() {
     setSuccessFeedback(null);
 
     try {
-      const response = await fetch("/api/catalog/products", {
+      const response = await apiFetch("/api/catalog/products", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -173,7 +174,7 @@ export function ProductsAdmin() {
     setSuccessFeedback(null);
 
     try {
-      const response = await fetch(`/api/catalog/products/${item.id}`, {
+      const response = await apiFetch(`/api/catalog/products/${item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isActive: !item.isActive }),
@@ -199,7 +200,7 @@ export function ProductsAdmin() {
     setSuccessFeedback(null);
 
     try {
-      const response = await fetch(`/api/master/catalog/products/${item.id}/cleanup`, {
+      const response = await apiFetch(`/api/master/catalog/products/${item.id}/cleanup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "AUTO" }),

@@ -1,6 +1,7 @@
 import type { Prisma, RoleCode } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/modules/auth/password";
+import { revokeAllUserSessions } from "@/modules/security/token-revocation";
 
 export async function listUsersWithMemberships() {
   return prisma.user.findMany({
@@ -94,17 +95,38 @@ export async function updateUser(
     globalRole?: "MASTER" | null;
   },
 ) {
+  // Determine if this change requires session invalidation
+  const requiresSessionRevocation =
+    typeof input.password === "string" ||       // Password reset by admin
+    typeof input.isActive === "boolean" ||       // Activation/deactivation
+    input.globalRole !== undefined;               // Global role change
+
   const data: Prisma.UserUpdateInput = {};
   if (typeof input.email === "string") data.email = input.email;
   if (typeof input.fullName === "string") data.fullName = input.fullName;
   if (typeof input.isActive === "boolean") data.isActive = input.isActive;
   if (input.globalRole !== undefined) data.globalRole = input.globalRole;
-  if (typeof input.password === "string") data.passwordHash = hashPassword(input.password);
+  if (typeof input.password === "string") {
+    data.passwordHash = hashPassword(input.password);
+    data.mustChangePassword = true;
+  }
 
-  return prisma.user.update({
+  const result = await prisma.user.update({
     where: { id: userId },
     data,
   });
+
+  // Revoke all sessions when security-critical fields change
+  if (requiresSessionRevocation) {
+    const reason = typeof input.password === "string"
+      ? "ADMIN_PASSWORD_RESET"
+      : input.isActive === false
+      ? "USER_DEACTIVATED"
+      : "GLOBAL_ROLE_CHANGE";
+    await revokeAllUserSessions(userId, reason);
+  }
+
+  return result;
 }
 
 export async function upsertMembership(input: {
@@ -118,7 +140,7 @@ export async function upsertMembership(input: {
     select: { id: true },
   });
 
-  return prisma.userBranchRole.upsert({
+  const result = await prisma.userBranchRole.upsert({
     where: {
       userId_branchId_roleCode: {
         userId: input.userId,
@@ -134,6 +156,11 @@ export async function upsertMembership(input: {
       isActive: input.isActive ?? true,
     },
   });
+
+  // Branch membership changes affect session payload → invalidate sessions
+  await revokeAllUserSessions(input.userId, "BRANCH_ROLE_CHANGE");
+
+  return result;
 }
 
 export async function updateMembership(
@@ -150,9 +177,10 @@ export async function updateMembership(
     throw new Error("NOT_FOUND: membresía no encontrada para el usuario indicado");
   }
 
+  let result;
   if (input.roleCode && input.roleCode !== membership.roleCode) {
     await prisma.userBranchRole.delete({ where: { id: membership.id } });
-    return prisma.userBranchRole.upsert({
+    result = await prisma.userBranchRole.upsert({
       where: {
         userId_branchId_roleCode: {
           userId: membership.userId,
@@ -168,14 +196,19 @@ export async function updateMembership(
         isActive: input.isActive ?? true,
       },
     });
+  } else {
+    result = await prisma.userBranchRole.update({
+      where: { id: membership.id },
+      data: {
+        ...(typeof input.isActive === "boolean" ? { isActive: input.isActive } : {}),
+      },
+    });
   }
 
-  return prisma.userBranchRole.update({
-    where: { id: membership.id },
-    data: {
-      ...(typeof input.isActive === "boolean" ? { isActive: input.isActive } : {}),
-    },
-  });
+  // Membership role/status changes affect session payload → invalidate sessions
+  await revokeAllUserSessions(userId, "BRANCH_ROLE_CHANGE");
+
+  return result;
 }
 
 export async function removeMembership(membershipId: string) {
@@ -193,7 +226,12 @@ export async function removeMembershipFromUser(userId: string, membershipId: str
     throw new Error("NOT_FOUND: membresía no encontrada para el usuario indicado");
   }
 
-  return prisma.userBranchRole.delete({
+  const result = await prisma.userBranchRole.delete({
     where: { id: membership.id },
   });
+
+  // Removing a membership changes the session payload → invalidate sessions
+  await revokeAllUserSessions(userId, "BRANCH_MEMBERSHIP_REMOVED");
+
+  return result;
 }

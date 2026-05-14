@@ -1,7 +1,31 @@
 import { randomBytes, createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
+import type { SessionPayload } from "@/types/auth";
 
 const CSRF_TOKEN_TTL_HOURS = 12;
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * Custom error class for CSRF validation failures.
+ * Always carries the reason "INVALID_CSRF_TOKEN" so that
+ * toHttpErrorResponse() (and any catch block) can reliably
+ * map it to HTTP 403 with a consistent JSON payload.
+ */
+export class CsrfError extends Error {
+  public readonly reason = "INVALID_CSRF_TOKEN" as const;
+
+  constructor(detail?: string) {
+    super(detail ?? "INVALID_CSRF_TOKEN");
+    this.name = "CsrfError";
+  }
+}
+
+/**
+ * Type-guard: returns true when the unknown value is a CsrfError.
+ */
+export function isCsrfError(error: unknown): error is CsrfError {
+  return error instanceof CsrfError;
+}
 
 export function generateCsrfToken(): string {
   return randomBytes(32).toString("hex");
@@ -23,7 +47,7 @@ export async function createCsrfToken(sessionUserId: string): Promise<string> {
 }
 
 export async function validateCsrfToken(token: string, sessionUserId: string): Promise<boolean> {
-  if (!token) return false;
+  if (!token || !sessionUserId) return false;
 
   const hashed = hashToken(token);
   const record = await prisma.csrfToken.findFirst({
@@ -35,6 +59,26 @@ export async function validateCsrfToken(token: string, sessionUserId: string): P
   });
 
   return !!record;
+}
+
+export async function requireCsrf(request: Request, session: SessionPayload | null): Promise<void> {
+  if (SAFE_METHODS.has(request.method.toUpperCase())) {
+    return;
+  }
+
+  if (!session?.userId) {
+    throw new CsrfError("Missing session for CSRF validation");
+  }
+
+  const csrfToken = request.headers.get("x-csrf-token");
+  if (!csrfToken) {
+    throw new CsrfError("Missing x-csrf-token header");
+  }
+
+  const isValid = await validateCsrfToken(csrfToken, session.userId);
+  if (!isValid) {
+    throw new CsrfError("CSRF token is invalid or expired");
+  }
 }
 
 function hashToken(token: string): string {

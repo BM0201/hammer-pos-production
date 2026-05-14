@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { apiFetch } from "@/lib/client/api";
 
 type BalanceRow = {
   id: string;
@@ -132,7 +133,7 @@ export function InventoryAdmin({
     setActionFeedback(null);
 
     try {
-      const response = await fetch("/api/inventory/movements", {
+      const response = await apiFetch("/api/inventory/movements", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...movement, branchId, quantity: Number(movement.quantity), unitCost: Number(movement.unitCost) }),

@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
-import { useSelectedLayoutSegments } from "next/navigation";
+import { useCallback, useMemo, useState } from "react";
+import { useSelectedLayoutSegments, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import type { SessionPayload } from "@/types/auth";
 import { AppSidebar } from "@/components/navigation/app-sidebar";
@@ -11,6 +11,7 @@ import { AppFooter } from "@/components/layout/app-footer";
 import { PosShellWrapper } from "@/components/pos/PosShellWrapper";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { apiFetch } from "@/lib/client/api";
 
 type ShellSession = Pick<
   SessionPayload,
@@ -43,9 +44,22 @@ export function AppShellRouter({
   session: ShellSession;
   children: ReactNode;
 }) {
+  const router = useRouter();
   const segments = useSelectedLayoutSegments();
   const isPosShell = useMemo(() => usesPosShell(segments), [segments]);
   const posMode = useMemo(() => resolvePosMode(segments), [segments]);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const handleLogout = useCallback(async () => {
+    setLoggingOut(true);
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Even if the request fails, redirect to login
+    } finally {
+      router.push("/login");
+    }
+  }, [router]);
 
   if (isPosShell) {
     return (
@@ -88,18 +102,18 @@ export function AppShellRouter({
               <span className="hidden sm:block text-xs text-[var(--color-text-muted)]">
                 {session.username}
               </span>
-              <form action="/api/auth/logout" method="post">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="submit"
-                  title="Cerrar sesión"
-                  className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-600)]"
-                  icon={<LogOut className="h-4 w-4" />}
-                >
-                  <span className="hidden sm:inline">Salir</span>
-                </Button>
-              </form>
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                disabled={loggingOut}
+                onClick={handleLogout}
+                title="Cerrar sesión"
+                className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-600)]"
+                icon={<LogOut className="h-4 w-4" />}
+              >
+                <span className="hidden sm:inline">{loggingOut ? "Saliendo…" : "Salir"}</span>
+              </Button>
             </div>
           </div>
         </header>

@@ -1,4 +1,4 @@
-import { CashSessionStatus, Prisma, SaleOrderStatus } from "@prisma/client";
+import { CashSessionStatus, PaymentMethod, PaymentStatus, Prisma, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
@@ -113,6 +113,17 @@ export async function requestCloseCashSession(input: {
       throw new Error("CASH_SESSION_UNRESOLVED_ORDERS");
     }
 
+    const pendingPayments = await tx.payment.count({
+      where: {
+        cashSessionId: session.id,
+        status: { not: PaymentStatus.POSTED },
+      },
+    });
+
+    if (pendingPayments > 0) {
+      throw new Error("CASH_SESSION_HAS_PENDING_PAYMENTS");
+    }
+
     const updated = await tx.cashSession.update({
       where: { id: session.id },
       data: {
@@ -146,8 +157,16 @@ export async function closeCashSession(input: {
   closingAmount: number;
   notes?: string | null;
   actorUserId: string;
+  allowedThreshold?: number;
 }) {
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`
+      SELECT id
+      FROM "CashSession"
+      WHERE id = ${input.cashSessionId}
+      FOR UPDATE
+    `;
+
     const session = await tx.cashSession.findUniqueOrThrow({
       where: { id: input.cashSessionId },
       include: { physicalCashBox: true },
@@ -155,6 +174,77 @@ export async function closeCashSession(input: {
 
     if (session.status !== CashSessionStatus.RECONCILING) {
       throw new Error("CASH_SESSION_NOT_RECONCILING");
+    }
+
+    const pendingOrders = await tx.saleOrder.count({
+      where: {
+        branchId: session.physicalCashBox.branchId,
+        status: SaleOrderStatus.PENDING_PAYMENT,
+      },
+    });
+
+    if (pendingOrders > 0) {
+      throw new Error("CASH_SESSION_UNRESOLVED_ORDERS");
+    }
+
+    const pendingPayments = await tx.payment.count({
+      where: {
+        cashSessionId: session.id,
+        status: { not: PaymentStatus.POSTED },
+      },
+    });
+
+    if (pendingPayments > 0) {
+      throw new Error("CASH_SESSION_HAS_PENDING_PAYMENTS");
+    }
+
+    const cashInAggregate = await tx.payment.aggregate({
+      where: {
+        cashSessionId: session.id,
+        status: PaymentStatus.POSTED,
+        method: PaymentMethod.CASH,
+        amount: { gte: 0 },
+      },
+      _sum: { amount: true },
+    });
+
+    const cashOutAggregate = await tx.payment.aggregate({
+      where: {
+        cashSessionId: session.id,
+        status: PaymentStatus.POSTED,
+        method: PaymentMethod.CASH,
+        amount: { lt: 0 },
+      },
+      _sum: { amount: true },
+    });
+
+    const openingAmount = Number(session.openingAmount);
+    const postedCashPayments = Number(cashInAggregate._sum.amount ?? 0);
+    const refundsOrWithdrawals = Math.abs(Number(cashOutAggregate._sum.amount ?? 0));
+    const expectedCash = openingAmount + postedCashPayments - refundsOrWithdrawals;
+    const countedCash = Number(input.closingAmount);
+    const difference = countedCash - expectedCash;
+    const threshold = input.allowedThreshold ?? 0;
+
+    if (Math.abs(difference) > threshold) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: session.physicalCashBox.branchId,
+          module: "cash_session",
+          action: CASH_SESSION_AUDIT_EVENTS.DISCREPANCY_DETECTED,
+          entityType: "CashSession",
+          entityId: session.id,
+          metadataJson: {
+            expectedCash,
+            countedCash,
+            difference,
+            threshold,
+          },
+        },
+      });
+
+      throw new Error("CASH_SESSION_DISCREPANCY_REQUIRES_APPROVAL");
     }
 
     const updated = await tx.cashSession.update({
@@ -177,13 +267,25 @@ export async function closeCashSession(input: {
         entityType: "CashSession",
         entityId: session.id,
         metadataJson: {
-          closingAmount: input.closingAmount,
+          openingAmount,
+          postedCashPayments,
+          refundsOrWithdrawals,
+          expectedCash,
+          countedCash,
+          difference,
+          threshold,
           notes: input.notes ?? null,
         },
       },
     });
 
-    return updated;
+    return {
+      ...updated,
+      expectedCash,
+      countedCash,
+      difference,
+      threshold,
+    };
   });
 }
 

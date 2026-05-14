@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "@/lib/client/api";
 
 type CashBox = {
   id: string;
@@ -13,6 +14,13 @@ type CashSession = {
   status: "OPEN" | "RECONCILING" | "CLOSED";
   openingAmount: string;
   openedAt: string;
+};
+
+export type CashSessionState = {
+  hasOpenSession: boolean;
+  cashSessionId: string | null;
+  physicalCashBoxId: string | null;
+  status: "OPEN" | "RECONCILING" | "CLOSED" | null;
 };
 
 const SESSION_REASON_MESSAGES: Record<string, string> = {
@@ -32,7 +40,7 @@ function mapSessionMessage(message?: string, reason?: string): string {
   return message ?? "No se pudo completar la operación de caja.";
 }
 
-export function CashSessionPanel({ branchId, onStatusChange }: { branchId: string; onStatusChange?: (hasOpenSession: boolean) => void }) {
+export function CashSessionPanel({ branchId, onStatusChange }: { branchId: string; onStatusChange?: (state: CashSessionState) => void }) {
   const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
   const [selectedCashBoxId, setSelectedCashBoxId] = useState("");
   const [activeSession, setActiveSession] = useState<CashSession | null>(null);
@@ -56,6 +64,10 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
   }, [activeSession, isReconciling]);
 
   const hasSingleBox = cashBoxes.length === 1;
+
+  function publishStatus(next: CashSessionState) {
+    onStatusChange?.(next);
+  }
 
   async function loadCashBoxes() {
     const query = new URLSearchParams({ branchId });
@@ -92,7 +104,12 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
   async function loadActiveSession(cashBoxId: string) {
     if (!cashBoxId) {
       setActiveSession(null);
-      onStatusChange?.(false);
+      publishStatus({
+        hasOpenSession: false,
+        cashSessionId: null,
+        physicalCashBoxId: cashBoxId || null,
+        status: null,
+      });
       return;
     }
 
@@ -108,13 +125,23 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
     if (json.data?.status === "RECONCILING") {
       setActiveSession(null);
       setReconcilingSessionId(json.data.id);
-      onStatusChange?.(false);
+      publishStatus({
+        hasOpenSession: false,
+        cashSessionId: json.data.id,
+        physicalCashBoxId: cashBoxId,
+        status: "RECONCILING",
+      });
       return;
     }
 
     setReconcilingSessionId("");
     setActiveSession(json.data ?? null);
-    onStatusChange?.(Boolean(json.data));
+    publishStatus({
+      hasOpenSession: Boolean(json.data),
+      cashSessionId: json.data?.id ?? null,
+      physicalCashBoxId: cashBoxId,
+      status: (json.data?.status as CashSessionState["status"]) ?? null,
+    });
   }
 
   useEffect(() => {
@@ -138,77 +165,101 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
     if (!selectedCashBoxId || busyAction) return;
     setBusyAction("open");
     setMessage("Abriendo sesión...");
-    const response = await fetch("/api/cashier/cash-sessions/open", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ branchId, physicalCashBoxId: selectedCashBoxId, openingAmount: Number(openingAmount) }),
-    });
-    const json = (await response.json()) as { message?: string; reason?: string; status?: string };
+    try {
+      const response = await apiFetch("/api/cashier/cash-sessions/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branchId, physicalCashBoxId: selectedCashBoxId, openingAmount: Number(openingAmount) }),
+      });
+      const json = (await response.json()) as { message?: string; reason?: string; status?: string };
 
-    if (!response.ok) {
+      if (!response.ok) {
+        setMessage(mapSessionMessage(json.message, json.reason));
+        return;
+      }
+
+      setReconcilingSessionId("");
+      setMessage("Sesión abierta correctamente. Ya puedes cobrar. ✓");
+      await loadActiveSession(selectedCashBoxId);
+    } catch (error) {
+      console.error("[CashSession][openSession]", error);
+      setMessage(error instanceof TypeError ? "Error de red. Verifica tu conexión." : "No se pudo abrir la sesión.");
+    } finally {
       setBusyAction(null);
-      setMessage(mapSessionMessage(json.message, json.reason));
-      return;
     }
-
-    setReconcilingSessionId("");
-    setMessage("Sesion abierta correctamente. Ya puedes cobrar.");
-    await loadActiveSession(selectedCashBoxId);
-    setBusyAction(null);
   }
 
   async function requestCloseSession() {
     if (!activeSession || busyAction) return;
     setBusyAction("requestClose");
     setMessage("Solicitando cierre para conciliación...");
-    const response = await fetch("/api/cashier/cash-sessions/close-request", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cashSessionId: activeSession.id }),
-    });
-    const json = (await response.json()) as { message?: string; reason?: string; status?: string };
+    try {
+      const response = await apiFetch("/api/cashier/cash-sessions/close-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cashSessionId: activeSession.id }),
+      });
+      const json = (await response.json()) as { message?: string; reason?: string; status?: string };
 
-    if (!response.ok) {
+      if (!response.ok) {
+        setMessage(mapSessionMessage(json.message, json.reason));
+        return;
+      }
+
+      setMessage("Sesión en conciliación. Ingresa monto final para cerrar.");
+      setReconcilingSessionId(activeSession.id);
+      setActiveSession(null);
+      publishStatus({
+        hasOpenSession: false,
+        cashSessionId: activeSession.id,
+        physicalCashBoxId: selectedCashBoxId || null,
+        status: "RECONCILING",
+      });
+    } catch (error) {
+      console.error("[CashSession][requestCloseSession]", error);
+      setMessage(error instanceof TypeError ? "Error de red. Verifica tu conexión." : "No se pudo solicitar el cierre.");
+    } finally {
       setBusyAction(null);
-      setMessage(mapSessionMessage(json.message, json.reason));
-      return;
     }
-
-    setMessage("Sesión en conciliación. Ingresa monto final para cerrar.");
-    setReconcilingSessionId(activeSession.id);
-    setActiveSession(null);
-    onStatusChange?.(false);
-    setBusyAction(null);
   }
 
   async function closeSession() {
     if (!reconcilingSessionId || busyAction) return;
     setBusyAction("close");
     setMessage("Cerrando sesión...");
-    const response = await fetch("/api/cashier/cash-sessions/close", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cashSessionId: reconcilingSessionId, closingAmount: Number(closingAmount) }),
-    });
-    const json = (await response.json()) as { message?: string; reason?: string; status?: string };
+    try {
+      const response = await apiFetch("/api/cashier/cash-sessions/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cashSessionId: reconcilingSessionId, closingAmount: Number(closingAmount) }),
+      });
+      const json = (await response.json()) as { message?: string; reason?: string; status?: string };
 
-    if (!response.ok) {
+      if (!response.ok) {
+        setMessage(mapSessionMessage(json.message, json.reason));
+        return;
+      }
+
+      if (json.status === "REQUESTED") {
+        setMessage(mapSessionMessage(json.message, json.reason ?? "APPROVAL_REQUESTED"));
+        return;
+      }
+
+      setMessage("Sesión cerrada correctamente. ✓");
+      setActiveSession(null);
+      setReconcilingSessionId("");
+      publishStatus({
+        hasOpenSession: false,
+        cashSessionId: null,
+        physicalCashBoxId: selectedCashBoxId || null,
+        status: "CLOSED",
+      });
+    } catch (error) {
+      console.error("[CashSession][closeSession]", error);
+      setMessage(error instanceof TypeError ? "Error de red. Verifica tu conexión." : "No se pudo cerrar la sesión.");
+    } finally {
       setBusyAction(null);
-      setMessage(mapSessionMessage(json.message, json.reason));
-      return;
     }
-
-    if (json.status === "REQUESTED") {
-      setMessage("Solicitud enviada.");
-      setBusyAction(null);
-      return;
-    }
-
-    setMessage("Sesion cerrada correctamente.");
-    setActiveSession(null);
-    setReconcilingSessionId("");
-    onStatusChange?.(false);
-    setBusyAction(null);
   }
 
   const stateColors = {

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Loader2, ShieldAlert, UserPlus, KeyRound, Link2, UserRoundCheck } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 type BranchOption = { id: string; code: string; name: string; isActive: boolean };
 type MembershipRole = "BRANCH_ADMIN" | "SALES" | "CASHIER" | "WAREHOUSE";
@@ -132,7 +133,7 @@ export function UsersAdmin() {
     setFeedback({ tone: "info", text: "Creando usuario..." });
 
     try {
-      const response = await fetch("/api/master/users", {
+      const response = await apiFetch("/api/master/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -164,7 +165,7 @@ export function UsersAdmin() {
     setSavingUser(true);
 
     try {
-      const response = await fetch(`/api/master/users/${user.id}`, {
+      const response = await apiFetch(`/api/master/users/${user.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updates),
@@ -197,7 +198,7 @@ export function UsersAdmin() {
     setFeedback({ tone: "info", text: "Asignando membresía..." });
 
     try {
-      const response = await fetch(`/api/master/users/${selectedUser.id}/memberships`, {
+      const response = await apiFetch(`/api/master/users/${selectedUser.id}/memberships`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(membershipForm),
@@ -219,7 +220,7 @@ export function UsersAdmin() {
     setUpdatingMembership((prev) => ({ ...prev, [membershipId]: true }));
 
     try {
-      const response = await fetch(`/api/master/users/${selectedUserId}/memberships/${membershipId}`, {
+      const response = await apiFetch(`/api/master/users/${selectedUserId}/memberships/${membershipId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isActive }),
@@ -241,7 +242,7 @@ export function UsersAdmin() {
     setRemovingMembership((prev) => ({ ...prev, [membershipId]: true }));
 
     try {
-      const response = await fetch(`/api/master/users/${selectedUserId}/memberships/${membershipId}`, { method: "DELETE" });
+      const response = await apiFetch(`/api/master/users/${selectedUserId}/memberships/${membershipId}`, { method: "DELETE" });
       const json = (await response.json()) as { message?: string; reason?: string; error?: string };
 
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo remover la membresía."));

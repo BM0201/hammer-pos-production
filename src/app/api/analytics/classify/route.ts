@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 import {
   calculateABCClassification,
   calculateXYZClassification,
@@ -16,6 +17,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(req, session);
     assertMaster(session!);
 
     const body = await req.json();

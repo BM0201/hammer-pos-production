@@ -1,16 +1,27 @@
 /**
  * Cash Closure Scheduler
- * 
- * Runs a check every minute. At 5:30 PM Nicaragua time (GMT-6),
- * triggers automatic closure for all active branches.
- * 
- * This runs as a background interval when the Next.js server starts.
+ *
+ * Default behavior:
+ * - production: disabled unless ENABLE_CASH_CLOSURE_SCHEDULER=true
+ * - non-production: enabled
  */
 
 import { executeAutoClosureForAllBranches, isAfterAutoCloseTime } from "@/modules/cash-closure/service";
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __hammerCashClosureSchedulerRunning: boolean | undefined;
+}
+
 let schedulerInterval: ReturnType<typeof setInterval> | null = null;
 let lastClosureDate: string | null = null;
+
+function isSchedulerEnabled(): boolean {
+  const raw = (process.env.ENABLE_CASH_CLOSURE_SCHEDULER ?? "").toLowerCase();
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0") return false;
+  return process.env.NODE_ENV !== "production";
+}
 
 function getNicaraguaDateString(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -25,23 +36,13 @@ async function checkAndClose(): Promise<void> {
   try {
     const todayStr = getNicaraguaDateString();
 
-    // Only close once per day
-    if (lastClosureDate === todayStr) {
-      return;
-    }
-
-    if (!isAfterAutoCloseTime()) {
-      return;
-    }
+    if (lastClosureDate === todayStr) return;
+    if (!isAfterAutoCloseTime()) return;
 
     console.log(`[CashClosure Scheduler] Triggering auto-closure for ${todayStr}`);
     const results = await executeAutoClosureForAllBranches();
 
-    let newClosures = 0;
-    for (const r of results) {
-      if (!r.alreadyClosed) newClosures++;
-    }
-
+    const newClosures = results.filter((r) => !r.alreadyClosed).length;
     if (newClosures > 0) {
       console.log(`[CashClosure Scheduler] Closed ${newClosures} branches for ${todayStr}`);
     }
@@ -53,23 +54,29 @@ async function checkAndClose(): Promise<void> {
 }
 
 export function startCashClosureScheduler(): void {
-  if (schedulerInterval) {
-    return; // Already running
+  if (!isSchedulerEnabled()) {
+    console.log("[CashClosure Scheduler] Disabled by environment configuration.");
+    return;
   }
 
+  if (globalThis.__hammerCashClosureSchedulerRunning || schedulerInterval) {
+    return;
+  }
+
+  globalThis.__hammerCashClosureSchedulerRunning = true;
   console.log("[CashClosure Scheduler] Starting (checks every 60s, closes at 17:30 GMT-6)");
 
-  // Run initial check
-  checkAndClose();
-
-  // Check every 60 seconds
-  schedulerInterval = setInterval(checkAndClose, 60_000);
+  void checkAndClose();
+  schedulerInterval = setInterval(() => {
+    void checkAndClose();
+  }, 60_000);
 }
 
 export function stopCashClosureScheduler(): void {
   if (schedulerInterval) {
     clearInterval(schedulerInterval);
     schedulerInterval = null;
-    console.log("[CashClosure Scheduler] Stopped");
   }
+  globalThis.__hammerCashClosureSchedulerRunning = false;
+  console.log("[CashClosure Scheduler] Stopped");
 }

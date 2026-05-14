@@ -17,6 +17,7 @@ import {
   Building2, DollarSign, Calendar, Briefcase, Loader2,
   CheckCircle2, AlertTriangle, RefreshCw,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 type Branch = { id: string; code: string; name: string };
 type Employee = {
@@ -130,7 +131,7 @@ export function EmployeeManager() {
     try {
       const url = editingId ? `/api/employees/${editingId}` : "/api/employees";
       const method = editingId ? "PUT" : "POST";
-      const r = await fetch(url, {
+      const r = await apiFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...form, monthlySalary: salaryNum }),
@@ -156,7 +157,7 @@ export function EmployeeManager() {
     if (!confirm("¿Desactivar este empleado? Se registrará la fecha de finalización.")) return;
     setLoading(true);
     try {
-      const r = await fetch(`/api/employees/${id}`, { method: "DELETE" });
+      const r = await apiFetch(`/api/employees/${id}`, { method: "DELETE" });
       // BUG FIX: Check response status
       if (!r.ok) {
         const j = await r.json();
@@ -187,7 +188,7 @@ export function EmployeeManager() {
   const handleCalculatePayroll = async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/payroll/calculate", {
+      const r = await apiFetch("/api/payroll/calculate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ month: payrollMonth, branchId: selectedBranch || undefined, syncToExpenses: true }),

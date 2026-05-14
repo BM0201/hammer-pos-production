@@ -27,6 +27,7 @@ import {
   Zap,
   Activity,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 /* ────────────────────────────── Types ────────────────────────────── */
 
@@ -298,7 +299,7 @@ export default function AiInsightsPage() {
       try {
         if (isRefresh) {
           // Use refresh endpoint
-          const res = await fetch("/api/ai-insights/refresh", {
+          const res = await apiFetch("/api/ai-insights/refresh", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ branchId: branchId || undefined, days }),

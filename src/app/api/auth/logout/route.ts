@@ -4,13 +4,15 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { revokeSessionToken } from "@/modules/security/token-revocation";
 import { makeSessionCookieName } from "@/modules/auth/session";
 import { cookies } from "next/headers";
+import { requireCsrf, isCsrfError } from "@/modules/security/csrf";
 
 export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
 
     if (session) {
-      // Revoke the session token
+      await requireCsrf(request, session);
+
       const store = await cookies();
       const rawToken = store.get(makeSessionCookieName())?.value;
       if (rawToken) {
@@ -30,8 +32,21 @@ export async function POST(request: Request) {
         entityId: session.userId,
       });
     }
+  } catch (error) {
+    // CSRF errors must surface as 403, never be swallowed
+    if (isCsrfError(error) || (error instanceof Error && error.message === "INVALID_CSRF_TOKEN")) {
+      return NextResponse.json(
+        { message: "CSRF inválido", reason: "INVALID_CSRF_TOKEN" },
+        { status: 403 },
+      );
+    }
+    console.error("[auth/logout] failed during logout flow", error);
   } finally {
-    await clearSessionCookie();
+    try {
+      await clearSessionCookie();
+    } catch (cookieError) {
+      console.error("[auth/logout] failed to clear session cookie", cookieError);
+    }
   }
 
   return NextResponse.redirect(new URL("/login", request.url), { status: 303 });

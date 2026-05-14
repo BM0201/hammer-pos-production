@@ -1,0 +1,66 @@
+# =============================================================================
+# H.A.M.M.E.R. POS — Caddy Reverse Proxy Configuration
+# =============================================================================
+# Este archivo configura Caddy como reverse proxy con HTTPS automático.
+#
+# En producción: reemplazar {$DOMAIN} con tu dominio real (ej: pos.tuempresa.com)
+# Variable de entorno DOMAIN definida en .env.production
+#
+# Para desarrollo local con HTTPS: usar "localhost" como dominio
+# =============================================================================
+
+{$DOMAIN:localhost} {
+	# -------------------------------------------------------------------------
+	# Reverse proxy → aplicación Next.js
+	# -------------------------------------------------------------------------
+	reverse_proxy app:3000 {
+		# Health check del backend
+		health_uri /health
+		health_interval 30s
+		health_timeout 10s
+		health_status 200
+
+		# Headers para que Next.js conozca la IP real del cliente
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+
+	# -------------------------------------------------------------------------
+	# Headers de seguridad
+	# -------------------------------------------------------------------------
+	header {
+		# Prevenir clickjacking
+		X-Frame-Options "SAMEORIGIN"
+
+		# Prevenir MIME-type sniffing
+		X-Content-Type-Options "nosniff"
+
+		# Referrer policy estricta
+		Referrer-Policy "strict-origin-when-cross-origin"
+
+		# Permissions Policy - restringir APIs del navegador
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+
+		# Strict Transport Security (HSTS) — 1 año
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+		# Eliminar header de servidor para no revelar tecnología
+		-Server
+	}
+
+	# -------------------------------------------------------------------------
+	# Compresión
+	# -------------------------------------------------------------------------
+	encode gzip zstd
+
+	# -------------------------------------------------------------------------
+	# Logs de acceso
+	# -------------------------------------------------------------------------
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+}

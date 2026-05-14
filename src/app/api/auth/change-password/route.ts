@@ -5,9 +5,9 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { verifyPassword, hashPassword } from "@/modules/auth/password";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
-import { revokeSessionToken } from "@/modules/security/token-revocation";
-import { makeSessionCookieName } from "@/modules/auth/session";
-import { cookies } from "next/headers";
+import { revokeAllUserSessions } from "@/modules/security/token-revocation";
+import { requireCsrf } from "@/modules/security/csrf";
+import { toHttpErrorResponse } from "@/lib/http";
 
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
@@ -24,6 +24,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const body = await request.json();
     const parsed = changePasswordSchema.safeParse(body);
@@ -66,17 +67,8 @@ export async function POST(request: Request) {
       },
     });
 
-    // Revoke current session token to force re-login with new password
-    const store = await cookies();
-    const rawToken = store.get(makeSessionCookieName())?.value;
-    if (rawToken) {
-      await revokeSessionToken({
-        token: rawToken,
-        userId: session.userId,
-        expiresAt: new Date(session.exp),
-        reason: "PASSWORD_CHANGE",
-      });
-    }
+    // Revoke ALL user sessions (increments sessionVersion) to force re-login
+    await revokeAllUserSessions(session.userId, "PASSWORD_CHANGE");
 
     await logAuditEvent({
       actorUserId: session.userId,
@@ -91,9 +83,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, message: "Contraseña actualizada exitosamente. Inicia sesión con tu nueva contraseña." });
   } catch (error) {
-    if (error instanceof Error && error.message === "UNAUTHENTICATED") {
-      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
-    }
-    return NextResponse.json({ message: "Error al cambiar la contraseña" }, { status: 500 });
+    return toHttpErrorResponse(error);
   }
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { getTodayClosure, isAfterAutoCloseTime } from "@/modules/cash-closure/service";
+import { assertBranchAccess } from "@/modules/security/rbac-helpers";
 
 // GET: Check closure status for a branch
 export async function GET(request: NextRequest) {
@@ -13,6 +14,9 @@ export async function GET(request: NextRequest) {
     if (!branchId) {
       return NextResponse.json({ message: "branchId is required" }, { status: 400 });
     }
+
+    // Validate branch access
+    assertBranchAccess(session, branchId);
 
     const { closure, isClosed, canSell } = await getTodayClosure(branchId);
     return NextResponse.json({

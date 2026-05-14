@@ -1,0 +1,246 @@
+# Auditoría técnica completa - hammer-pos-production (2026-04-16)
+
+## Resumen ejecutivo
+- Estado general: **funcional con observaciones de configuración/operación**.
+- TypeScript: ✅ `npm run typecheck` sin errores.
+- Build producción: ✅ `npm run build` (con variables mínimas válidas) completa correctamente.
+- Prisma schema/migración: ✅ sincronizados por nombre de tablas/enums y `prisma validate`.
+- Verificadores de fases (sales/payments/phase6/phase7): ✅ pasan tras ajustar verificadores a arquitectura actual por capacidades.
+
+## Hallazgos corregidos durante la auditoría
+1. **Prestart bloqueante por validación en modo estricto** en escenarios sin env completa.
+   - Riesgo: impedir arranque en runtime dinámico (Railway) y provocar caída de servicio.
+   - Corrección: `prestart` ahora ejecuta `node scripts/validate-env.mjs --mode=warn` (no bloqueante).
+2. **Manejo de errores en `GET /api/auth/session`**.
+   - Riesgo: error no controlado => 500.
+   - Corrección: `try/catch` + `toHttpErrorResponse`.
+3. **Robustez en `POST /api/auth/logout`**.
+   - Riesgo: excepción durante revocación/auditoría podía romper flujo de logout.
+   - Corrección: manejo defensivo de errores y limpieza de cookie en `finally` con fallback.
+4. **Verificadores de calidad desfasados (falsos negativos)**.
+   - Riesgo: reportar falsamente que sales/payments estaban incompletos.
+   - Corrección: scripts actualizados para validar guardas RBAC por capacidades y transición adaptativa de pagos.
+
+## Hallazgos pendientes / consideraciones
+- **Advertencia Prisma deprecación**: `package.json#prisma` será removido en Prisma 7; migrar a `prisma.config.ts` (prioridad importante, no bloqueante inmediata).
+- **Modo degradado sin env productiva completa**: la app puede arrancar, pero sin `DATABASE_URL`/`AUTH_SESSION_SECRET` válidos habrá funcionalidades no operativas o limitadas (esperado por diseño).
+
+## Inventario auditado
+- Rutas API auditadas: **91**
+- Páginas auditadas: **44**
+- Archivos de módulos auditados: **74**
+
+### Rutas API (`src/app/api/**/route.ts`)
+- `src/app/api/ai-insights/anomalies/route.ts`
+- `src/app/api/ai-insights/discount-suggestions/route.ts`
+- `src/app/api/ai-insights/discrepancies/route.ts`
+- `src/app/api/ai-insights/patterns/route.ts`
+- `src/app/api/ai-insights/refresh/route.ts`
+- `src/app/api/analytics/classify/route.ts`
+- `src/app/api/analytics/dashboard/route.ts`
+- `src/app/api/analytics/products/route.ts`
+- `src/app/api/approvals/[id]/route.ts`
+- `src/app/api/approvals/route.ts`
+- `src/app/api/audit/route.ts`
+- `src/app/api/auth/change-password/route.ts`
+- `src/app/api/auth/csrf/route.ts`
+- `src/app/api/auth/login/route.ts`
+- `src/app/api/auth/logout/route.ts`
+- `src/app/api/auth/session/route.ts`
+- `src/app/api/branch-config/[branchId]/route.ts`
+- `src/app/api/branch-config/route.ts`
+- `src/app/api/branches/route.ts`
+- `src/app/api/cash-closure/reopen/route.ts`
+- `src/app/api/cash-closure/reports/route.ts`
+- `src/app/api/cash-closure/route.ts`
+- `src/app/api/cash-closure/status/route.ts`
+- `src/app/api/cashier/cash-boxes/route.ts`
+- `src/app/api/cashier/cash-sessions/active/route.ts`
+- `src/app/api/cashier/cash-sessions/close-request/route.ts`
+- `src/app/api/cashier/cash-sessions/close/route.ts`
+- `src/app/api/cashier/cash-sessions/open/route.ts`
+- `src/app/api/cashier/orders/pending-payment/route.ts`
+- `src/app/api/cashier/payments/route.ts`
+- `src/app/api/catalog/categories/[id]/route.ts`
+- `src/app/api/catalog/categories/route.ts`
+- `src/app/api/catalog/products/[id]/route.ts`
+- `src/app/api/catalog/products/route.ts`
+- `src/app/api/employees/[id]/route.ts`
+- `src/app/api/employees/route.ts`
+- `src/app/api/expenses/[id]/route.ts`
+- `src/app/api/expenses/route.ts`
+- `src/app/api/inventory/adjustments/route.ts`
+- `src/app/api/inventory/balances/route.ts`
+- `src/app/api/inventory/movements/route.ts`
+- `src/app/api/master/analytics/abc-xyz/[id]/route.ts`
+- `src/app/api/master/analytics/abc-xyz/route.ts`
+- `src/app/api/master/cash-boxes/[id]/toggle/route.ts`
+- `src/app/api/master/cash-boxes/route.ts`
+- `src/app/api/master/catalog/products/[id]/cleanup/route.ts`
+- `src/app/api/master/discounts/[id]/route.ts`
+- `src/app/api/master/discounts/active/route.ts`
+- `src/app/api/master/discounts/route.ts`
+- `src/app/api/master/discounts/suggestions/route.ts`
+- `src/app/api/master/inventory/import/route.ts`
+- `src/app/api/master/purchase-orders/[id]/approve/route.ts`
+- `src/app/api/master/purchase-orders/[id]/cancel/route.ts`
+- `src/app/api/master/purchase-orders/[id]/route.ts`
+- `src/app/api/master/purchase-orders/route.ts`
+- `src/app/api/master/transfers/[id]/approve/route.ts`
+- `src/app/api/master/transfers/[id]/cancel/route.ts`
+- `src/app/api/master/transfers/[id]/route.ts`
+- `src/app/api/master/transfers/route.ts`
+- `src/app/api/master/users/[id]/memberships/[membershipId]/route.ts`
+- `src/app/api/master/users/[id]/memberships/route.ts`
+- `src/app/api/master/users/[id]/route.ts`
+- `src/app/api/master/users/route.ts`
+- `src/app/api/payroll/calculate/route.ts`
+- `src/app/api/payroll/history/route.ts`
+- `src/app/api/pricing/config/route.ts`
+- `src/app/api/pricing/suggested/route.ts`
+- `src/app/api/reports/approvals/route.ts`
+- `src/app/api/reports/audit/route.ts`
+- `src/app/api/reports/dispatch/route.ts`
+- `src/app/api/reports/inventory-critical/route.ts`
+- `src/app/api/reports/payments/route.ts`
+- `src/app/api/reports/sales/route.ts`
+- `src/app/api/sales/orders/[id]/direct-sale/route.ts`
+- `src/app/api/sales/orders/[id]/lines/[lineId]/route.ts`
+- `src/app/api/sales/orders/[id]/lines/route.ts`
+- `src/app/api/sales/orders/[id]/submit/route.ts`
+- `src/app/api/sales/orders/route.ts`
+- `src/app/api/system-admin/role-config/route.ts`
+- `src/app/api/system-admin/settings/route.ts`
+- `src/app/api/timber/[id]/route.ts`
+- `src/app/api/timber/calculate/route.ts`
+- `src/app/api/timber/pricing/route.ts`
+- `src/app/api/timber/route.ts`
+- `src/app/api/timber/trips/[id]/route.ts`
+- `src/app/api/timber/trips/route.ts`
+- `src/app/api/transport/[id]/route.ts`
+- `src/app/api/transport/route.ts`
+- `src/app/api/warehouse/dispatch/[orderId]/dispatch/route.ts`
+- `src/app/api/warehouse/dispatch/history/route.ts`
+- `src/app/api/warehouse/dispatch/pending/route.ts`
+
+### Páginas (`src/app/**/page.tsx`)
+- `src/app/app/branch/approvals/page.tsx`
+- `src/app/app/branch/audit/page.tsx`
+- `src/app/app/branch/cashier/payments/page.tsx`
+- `src/app/app/branch/catalog/products/page.tsx`
+- `src/app/app/branch/inventory/page.tsx`
+- `src/app/app/branch/page.tsx`
+- `src/app/app/branch/reports/page.tsx`
+- `src/app/app/branch/sales/orders/page.tsx`
+- `src/app/app/branch/warehouse/dispatch/page.tsx`
+- `src/app/app/change-password/page.tsx`
+- `src/app/app/master/ai-insights/page.tsx`
+- `src/app/app/master/analytics/abc-xyz/page.tsx`
+- `src/app/app/master/analytics/page.tsx`
+- `src/app/app/master/approvals/page.tsx`
+- `src/app/app/master/audit/page.tsx`
+- `src/app/app/master/cash-boxes/page.tsx`
+- `src/app/app/master/cash-closure-reports/page.tsx`
+- `src/app/app/master/catalog/categories/page.tsx`
+- `src/app/app/master/catalog/products/page.tsx`
+- `src/app/app/master/discounts/page.tsx`
+- `src/app/app/master/employees/page.tsx`
+- `src/app/app/master/expenses/page.tsx`
+- `src/app/app/master/inventory/page.tsx`
+- `src/app/app/master/page.tsx`
+- `src/app/app/master/purchase-orders/page.tsx`
+- `src/app/app/master/reports/page.tsx`
+- `src/app/app/master/sales/orders/page.tsx`
+- `src/app/app/master/timber/[id]/edit/page.tsx`
+- `src/app/app/master/timber/catalog/page.tsx`
+- `src/app/app/master/timber/new/page.tsx`
+- `src/app/app/master/timber/page.tsx`
+- `src/app/app/master/timber/trips/page.tsx`
+- `src/app/app/master/transfers/page.tsx`
+- `src/app/app/master/users/page.tsx`
+- `src/app/app/owner/module-config/page.tsx`
+- `src/app/app/owner/page.tsx`
+- `src/app/app/page.tsx`
+- `src/app/app/system-admin/page.tsx`
+- `src/app/app/system-admin/role-config/page.tsx`
+- `src/app/app/system-admin/settings/page.tsx`
+- `src/app/forbidden/page.tsx`
+- `src/app/login/page.tsx`
+- `src/app/page.tsx`
+- `src/app/unauthorized/page.tsx`
+
+### Módulos (`src/modules/**/*.ts`)
+- `src/modules/ai-insights/analyzer.ts`
+- `src/modules/ai-insights/anomaly-detector.ts`
+- `src/modules/ai-insights/discount-optimizer.ts`
+- `src/modules/ai-insights/discrepancy-detector.ts`
+- `src/modules/ai-insights/pattern-analyzer.ts`
+- `src/modules/ai-insights/service.ts`
+- `src/modules/analytics/abc-classifier.ts`
+- `src/modules/analytics/dynamic-pricing.ts`
+- `src/modules/approvals/constants.ts`
+- `src/modules/approvals/service.ts`
+- `src/modules/approvals/types.ts`
+- `src/modules/approvals/validators.ts`
+- `src/modules/audit/service.ts`
+- `src/modules/audit/validators.ts`
+- `src/modules/auth/access.ts`
+- `src/modules/auth/guards.ts`
+- `src/modules/auth/password.ts`
+- `src/modules/auth/service.ts`
+- `src/modules/auth/session.ts`
+- `src/modules/branch-config/service.ts`
+- `src/modules/cash-closure/scheduler.ts`
+- `src/modules/cash-closure/service.ts`
+- `src/modules/cash-session/audit-events.ts`
+- `src/modules/cash-session/policy.ts`
+- `src/modules/cash-session/service.ts`
+- `src/modules/cash-session/validators.ts`
+- `src/modules/catalog/service.ts`
+- `src/modules/catalog/validators.ts`
+- `src/modules/dashboard/service.ts`
+- `src/modules/discounts/service.ts`
+- `src/modules/dispatch/audit-events.ts`
+- `src/modules/dispatch/policy.ts`
+- `src/modules/dispatch/service.ts`
+- `src/modules/dispatch/validators.ts`
+- `src/modules/inventory/import-service.ts`
+- `src/modules/inventory/policy.ts`
+- `src/modules/inventory/service.ts`
+- `src/modules/inventory/validators.ts`
+- `src/modules/inventory/wac.ts`
+- `src/modules/payments/audit-events.ts`
+- `src/modules/payments/policy.ts`
+- `src/modules/payments/service.ts`
+- `src/modules/payments/validators.ts`
+- `src/modules/payroll/payroll-calculator.ts`
+- `src/modules/payroll/payroll-service.ts`
+- `src/modules/pricing/calculator.ts`
+- `src/modules/pricing/service.ts`
+- `src/modules/pricing/validators.ts`
+- `src/modules/purchase-orders/service.ts`
+- `src/modules/rbac/guards.ts`
+- `src/modules/rbac/permissions.ts`
+- `src/modules/rbac/policies.ts`
+- `src/modules/rbac/role-routing.ts`
+- `src/modules/reports/access.ts`
+- `src/modules/reports/http.ts`
+- `src/modules/reports/serializers.ts`
+- `src/modules/reports/service.ts`
+- `src/modules/reports/validators.ts`
+- `src/modules/sales/audit-events.ts`
+- `src/modules/sales/policy.ts`
+- `src/modules/sales/service.ts`
+- `src/modules/sales/totals.ts`
+- `src/modules/sales/validators.ts`
+- `src/modules/security/csrf.ts`
+- `src/modules/security/rate-limiter.ts`
+- `src/modules/security/token-revocation.ts`
+- `src/modules/system-admin/service.ts`
+- `src/modules/timber/calculator.ts`
+- `src/modules/timber/service.ts`
+- `src/modules/timber/validators.ts`
+- `src/modules/transfers/service.ts`
+- `src/modules/transport/service.ts`
+- `src/modules/users/service.ts`
+- `src/modules/users/validators.ts`

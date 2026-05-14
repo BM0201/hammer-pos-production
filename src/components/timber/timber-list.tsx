@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
+import { apiFetch } from "@/lib/client/api";
 
 type TimberItem = {
   id: string;
@@ -92,7 +93,7 @@ export function TimberList() {
     setDeletingId(id);
     setError(null);
     try {
-      const res = await fetch(`/api/timber/${id}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/timber/${id}`, { method: "DELETE" });
       if (res.ok) {
         await fetchData();
       } else {

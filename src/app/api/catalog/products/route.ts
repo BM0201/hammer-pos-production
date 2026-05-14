@@ -4,6 +4,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { createProduct, listProducts, getTopSellingProducts } from "@/modules/catalog/service";
 import { createProductSchema } from "@/modules/catalog/validators";
 import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function GET(request: Request) {
   try {
@@ -34,6 +35,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
 
     const parsed = createProductSchema.safeParse(await request.json());

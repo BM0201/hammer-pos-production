@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { showToast } from "@/components/ui/toast";
+import { apiFetch } from "@/lib/client/api";
 
 type PriceGroup = "TABLA" | "TABLILLA" | "CUADRO";
 interface Pricing {
@@ -102,7 +103,7 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
 
   const savePricing = useCallback(async () => {
     try {
-      const res = await fetch("/api/timber/pricing", {
+      const res = await apiFetch("/api/timber/pricing", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(pricing),

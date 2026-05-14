@@ -1,0 +1,142 @@
+# =============================================================================
+# H.A.M.M.E.R. POS — Docker Compose para Producción
+# =============================================================================
+# Uso:
+#   1. Copiar .env.production.example → .env.production y ajustar valores
+#   2. docker compose -f docker-compose.production.yml --env-file .env.production up -d
+#
+# Servicios:
+#   app   — Next.js (producción)
+#   db    — PostgreSQL 15 (solo red interna, sin puerto expuesto al host)
+#   caddy — Reverse proxy con HTTPS automático (Let's Encrypt)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Base de datos (solo accesible internamente)
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hammer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-hammer_pos}
+    # ⚠️  NO se expone el puerto 5432 al host — solo accesible via red interna
+    # ports: []  # Intencionalmente sin ports
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups        # Backups accesibles desde el host
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hammer} -d ${POSTGRES_DB:-hammer_pos}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # App — Next.js (producción)
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-hammer}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hammer_pos}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?AUTH_SESSION_SECRET is required}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-12}
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
+      ENABLE_CASH_CLOSURE_SCHEDULER: ${ENABLE_CASH_CLOSURE_SCHEDULER:-false}
+      # Bootstrap (solo se usa en el primer seed)
+      BOOTSTRAP_OWNER_EMAIL: ${BOOTSTRAP_OWNER_EMAIL:-}
+      BOOTSTRAP_OWNER_NAME: ${BOOTSTRAP_OWNER_NAME:-}
+      BOOTSTRAP_OWNER_PASSWORD: ${BOOTSTRAP_OWNER_PASSWORD:-}
+      BOOTSTRAP_SYSADMIN_EMAIL: ${BOOTSTRAP_SYSADMIN_EMAIL:-}
+      BOOTSTRAP_SYSADMIN_NAME: ${BOOTSTRAP_SYSADMIN_NAME:-}
+      BOOTSTRAP_SYSADMIN_PASSWORD: ${BOOTSTRAP_SYSADMIN_PASSWORD:-}
+      BOOTSTRAP_BRANCH_CODE: ${BOOTSTRAP_BRANCH_CODE:-}
+      BOOTSTRAP_BRANCH_NAME: ${BOOTSTRAP_BRANCH_NAME:-}
+      BOOTSTRAP_CREATE_CASH_BOX: ${BOOTSTRAP_CREATE_CASH_BOX:-true}
+    # No se expone al host — Caddy hace reverse proxy
+    expose:
+      - "3000"
+    networks:
+      - internal
+    # Healthcheck usa /ready (readiness) para validar que la app Y la DB estén
+    # operativas. Diferencia con /health (liveness):
+    #   /health → siempre 200, sin tocar DB (útil para liveness probes)
+    #   /ready  → 200 solo si PostgreSQL responde (útil para readiness probes)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ready || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # Caddy — Reverse Proxy + HTTPS automático (Let's Encrypt)
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # Certificados SSL
+      - caddy_config:/config    # Configuración runtime
+    networks:
+      - internal
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+# =============================================================================
+# Volúmenes persistentes
+# =============================================================================
+volumes:
+  postgres_data:
+    name: hammer_pos_postgres_data
+    driver: local
+  caddy_data:
+    name: hammer_pos_caddy_data
+    driver: local
+  caddy_config:
+    name: hammer_pos_caddy_config
+    driver: local
+
+# =============================================================================
+# Red interna — comunicación entre servicios
+# =============================================================================
+networks:
+  internal:
+    name: hammer_pos_internal
+    driver: bridge

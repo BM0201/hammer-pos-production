@@ -4,7 +4,9 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { calculateTimber, DEFAULT_PRICING, type TimberPricing } from "@/modules/timber/calculator";
 import { getPricingConfig } from "@/modules/timber/service";
 import { calculateTimberSchema } from "@/modules/timber/validators";
+import { toHttpErrorResponse } from "@/lib/http";
 import { z } from "zod";
+import { requireCsrf } from "@/modules/security/csrf";
 
 /**
  * POST /api/timber/calculate
@@ -15,6 +17,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const body = await request.json();
     const parsed = calculateTimberSchema.parse(body);
@@ -54,10 +57,6 @@ export async function POST(request: Request) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: "Validación fallida", details: err.errors }, { status: 422 });
     }
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    if (message === "NOT_AUTHENTICATED") {
-      return NextResponse.json({ error: "No autenticado" }, { status: 401 });
-    }
-    return NextResponse.json({ error: message }, { status: 500 });
+    return toHttpErrorResponse(err);
   }
 }

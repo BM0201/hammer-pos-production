@@ -9,6 +9,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
+import { requireCsrf } from "@/modules/security/csrf";
 
 const CONFLICT_REASONS = new Set(["DISPATCH_INVALID_STATUS", "DISPATCH_ALREADY_COMPLETED"]);
 
@@ -19,6 +20,7 @@ export async function POST(request: Request, context: { params: Promise<{ orderI
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const { orderId } = await context.params;
     const payload = (await request.json().catch(() => ({}))) as { notes?: string | null };

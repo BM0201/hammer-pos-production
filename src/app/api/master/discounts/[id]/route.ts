@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getDiscount, updateDiscount, deleteDiscount } from "@/modules/discounts/service";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -21,6 +22,7 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
     const { id } = await context.params;
     const body = await request.json();
@@ -31,10 +33,11 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
   }
 }
 
-export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
     const { id } = await context.params;
     await deleteDiscount(id, session.userId);

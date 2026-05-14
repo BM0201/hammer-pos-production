@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { createEmployee, listEmployees } from "@/modules/payroll/payroll-service";
+import { requireCsrf } from "@/modules/security/csrf";
 
 /** GET /api/employees — list employees with optional filters */
 export async function GET(req: NextRequest) {
@@ -33,6 +34,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(req, session);
     assertMaster(session!);
 
     const body = await req.json();

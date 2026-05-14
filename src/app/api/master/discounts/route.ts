@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { listDiscounts, createDiscount } from "@/modules/discounts/service";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function GET(request: Request) {
   try {
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertMaster(session);
     const body = await request.json();
 

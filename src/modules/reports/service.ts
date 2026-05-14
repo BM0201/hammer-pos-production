@@ -1,5 +1,8 @@
-import { ApprovalStatus, SaleOrderStatus } from "@prisma/client";
+import { ApprovalStatus, Prisma, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+
+/** Default fallback reorder point when no StockReorderPolicy exists. */
+const DEFAULT_REORDER_FALLBACK = 5;
 
 type ReportFilters = {
   branchIds?: string[];
@@ -164,24 +167,51 @@ export async function getAuditReportRows(filters: ReportFilters) {
 }
 
 export async function getInventoryCriticalReportRows(filters: ReportFilters) {
-  const rows = await prisma.inventoryBalance.findMany({
-    where: {
-      ...branchWhere(filters),
-      quantityOnHand: { lte: 5 },
-    },
-    include: {
-      branch: { select: { code: true, name: true } },
-      product: { select: { sku: true, name: true } },
-    },
-    orderBy: { quantityOnHand: "asc" },
-    take: 2000,
-  });
+  // Use StockReorderPolicy.reorderPoint when configured; otherwise fall back to
+  // the legacy threshold. The query joins on the active policy for each
+  // (branch, product) pair and selects balances at-or-below the effective threshold.
+  const hasBranchFilter = !!filters.branchIds?.length;
+  const branchClause = hasBranchFilter
+    ? Prisma.sql`AND ib."branchId" IN (${Prisma.join(filters.branchIds!)})`
+    : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<
+    Array<{
+      branchCode: string;
+      branchName: string;
+      sku: string;
+      productName: string;
+      quantityOnHand: Prisma.Decimal;
+      weightedAverageCost: Prisma.Decimal;
+      inventoryValue: Prisma.Decimal;
+    }>
+  >`
+    SELECT
+      b."code"                                AS "branchCode",
+      b."name"                                AS "branchName",
+      p."sku"                                 AS "sku",
+      p."name"                                AS "productName",
+      ib."quantityOnHand"                     AS "quantityOnHand",
+      ib."weightedAverageCost"                AS "weightedAverageCost",
+      ib."inventoryValue"                     AS "inventoryValue"
+    FROM "InventoryBalance" ib
+    INNER JOIN "Branch"  b ON b."id" = ib."branchId"
+    INNER JOIN "Product" p ON p."id" = ib."productId"
+    LEFT JOIN "StockReorderPolicy" srp
+      ON srp."branchId"  = ib."branchId"
+     AND srp."productId" = ib."productId"
+     AND srp."isActive"  = true
+    WHERE ib."quantityOnHand" <= COALESCE(srp."reorderPoint", ${DEFAULT_REORDER_FALLBACK})
+    ${branchClause}
+    ORDER BY ib."quantityOnHand" ASC
+    LIMIT 2000
+  `;
 
   return rows.map((row) => ({
-    sucursal_codigo: row.branch.code,
-    sucursal_nombre: row.branch.name,
-    sku: row.product.sku,
-    producto: row.product.name,
+    sucursal_codigo: row.branchCode,
+    sucursal_nombre: row.branchName,
+    sku: row.sku,
+    producto: row.productName,
     existencia: row.quantityOnHand.toString(),
     costo_promedio: row.weightedAverageCost.toString(),
     valor_inventario: row.inventoryValue.toString(),

@@ -1,25 +1,23 @@
 import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
+import { assertMaster } from "@/modules/security/rbac-helpers";
 import { executeAutoClosureForAllBranches } from "@/modules/cash-closure/service";
+import { toHttpErrorResponse } from "@/lib/http";
+import { requireCsrf } from "@/modules/security/csrf";
 
 // POST: Manually trigger auto-closure (MASTER/SYSTEM_ADMIN only)
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
-    const globalRoles = session.globalRoles as unknown as string[];
-    if (!globalRoles.includes("MASTER") && !globalRoles.includes("SYSTEM_ADMIN")) {
-      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
-    }
+    assertMaster(session);
 
     const results = await executeAutoClosureForAllBranches();
     return NextResponse.json({ ok: true, results });
   } catch (error) {
-    if (error instanceof Error && error.message === "UNAUTHENTICATED") {
-      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
-    }
-    return NextResponse.json({ message: "Error al ejecutar cierre automático" }, { status: 500 });
+    return toHttpErrorResponse(error);
   }
 }

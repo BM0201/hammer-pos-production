@@ -3,6 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertSystemAdmin } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getSystemSettings, updateSystemSetting } from "@/modules/system-admin/service";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function GET() {
   try {
@@ -20,6 +21,7 @@ export async function PUT(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
     assertSystemAdmin(session);
     const body = await request.json();
     const { key, value } = body;

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { prisma } from "@/lib/prisma";
+import { prisma, isDatabaseConfigured } from "@/lib/prisma";
+import { logRuntimeEnvWarnings } from "@/lib/env";
 
 function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -11,6 +12,11 @@ export async function revokeSessionToken(input: {
   expiresAt: Date;
   reason: string;
 }): Promise<void> {
+  if (!isDatabaseConfigured()) {
+    logRuntimeEnvWarnings();
+    return;
+  }
+
   const tokenHash = hashSessionToken(input.token);
 
   try {
@@ -28,6 +34,10 @@ export async function revokeSessionToken(input: {
 }
 
 export async function isTokenRevoked(token: string): Promise<boolean> {
+  if (!isDatabaseConfigured()) {
+    return false;
+  }
+
   const tokenHash = hashSessionToken(token);
 
   const revoked = await prisma.revokedSession.findFirst({
@@ -38,8 +48,20 @@ export async function isTokenRevoked(token: string): Promise<boolean> {
 }
 
 export async function revokeAllUserSessions(userId: string, reason: string): Promise<void> {
-  // We can't revoke all stateless tokens, but we mark the user's revocation time
-  // Future tokens will be checked against the revocation list
+  if (!isDatabaseConfigured()) {
+    logRuntimeEnvWarnings();
+    return;
+  }
+
+  // 1. Increment sessionVersion – this is the primary invalidation mechanism.
+  //    All existing stateless tokens carry the old sessionVersion value and will
+  //    be rejected by getCurrentSession() on the next request.
+  await prisma.user.update({
+    where: { id: userId },
+    data: { sessionVersion: { increment: 1 } },
+  });
+
+  // 2. Also create an audit marker in the revocation table for traceability.
   await prisma.revokedSession.create({
     data: {
       tokenHash: `user_revoke_${userId}_${Date.now()}`,
@@ -52,6 +74,11 @@ export async function revokeAllUserSessions(userId: string, reason: string): Pro
 
 // Cleanup expired revocations
 export async function cleanupExpiredRevocations(): Promise<void> {
+  if (!isDatabaseConfigured()) {
+    logRuntimeEnvWarnings();
+    return;
+  }
+
   await prisma.revokedSession.deleteMany({
     where: { expiresAt: { lt: new Date() } },
   });

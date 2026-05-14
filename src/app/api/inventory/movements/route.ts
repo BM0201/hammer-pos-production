@@ -10,6 +10,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { hasBranchAccess } from "@/modules/rbac/guards";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { calculateSuggestedPriceForProduct } from "@/modules/pricing/service";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function GET(request: Request) {
   try {
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
     }
 
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const parsed = createInventoryMovementSchema.safeParse(await request.json());
     if (!parsed.success) {

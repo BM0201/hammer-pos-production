@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { SessionPayload } from "@/types/auth";
-import { env } from "@/lib/env";
+import { env, envStatus, logRuntimeEnvWarnings } from "@/lib/env";
 
 const SESSION_COOKIE = "hammer_session";
 
@@ -13,6 +13,10 @@ function base64UrlDecode(input: string): string {
 }
 
 function sign(payloadEncoded: string): string {
+  if (envStatus.isUsingFallbackAuthSecret) {
+    logRuntimeEnvWarnings();
+  }
+
   return createHmac("sha256", env.AUTH_SESSION_SECRET).update(payloadEncoded).digest("base64url");
 }
 
@@ -57,6 +61,8 @@ export function decodeSession(token: string): SessionPayload | null {
       ? parsed.primaryBranchId
       : (branchMemberships[0]?.branchId ?? null);
 
+    const sessionVersion = typeof parsed.sessionVersion === "number" ? parsed.sessionVersion : 0;
+
     return {
       userId: parsed.userId,
       username: parsed.username,
@@ -65,6 +71,7 @@ export function decodeSession(token: string): SessionPayload | null {
       branchMemberships,
       globalRoles: globalRoles as any,
       primaryBranchId,
+      sessionVersion,
       exp: parsed.exp,
     };
   } catch {

@@ -14,21 +14,27 @@ type CashBoxResponse = {
   data: Array<{ id: string }>;
 };
 
+function toUsernameFromEmail(emailOrUsername: string): string {
+  if (!emailOrUsername.includes("@")) return emailOrUsername;
+  return emailOrUsername.split("@")[0] ?? emailOrUsername;
+}
+
 async function loginAndSaveState(params: {
   baseURL: string;
   storageStatePath: string;
-  username: string;
+  emailOrUsername: string;
   password: string;
   ensureCashSession?: boolean;
 }): Promise<void> {
   const context = await request.newContext({ baseURL: params.baseURL });
+  const username = toUsernameFromEmail(params.emailOrUsername);
 
   const loginResponse = await context.post("/api/auth/login", {
-    data: { username: params.username, password: params.password },
+    data: { username, password: params.password },
   });
 
   if (!loginResponse.ok()) {
-    throw new Error(`E2E auth bootstrap failed for ${params.username} with status ${loginResponse.status()}`);
+    throw new Error(`E2E auth bootstrap failed for ${params.emailOrUsername} with status ${loginResponse.status()}`);
   }
 
   if (params.ensureCashSession) {
@@ -37,7 +43,7 @@ async function loginAndSaveState(params: {
     const branchId = session.user?.branchIds[0];
 
     if (!branchId) {
-      throw new Error(`E2E auth bootstrap did not return branch scope for ${params.username}.`);
+      throw new Error(`E2E auth bootstrap did not return branch scope for ${params.emailOrUsername}.`);
     }
 
     const cashBoxResponse = await context.get(`/api/cashier/cash-boxes?branchId=${branchId}`);
@@ -59,7 +65,7 @@ async function loginAndSaveState(params: {
       });
 
       if (![201, 409].includes(openResponse.status())) {
-        throw new Error(`Unable to ensure active cash session for ${params.username}. status=${openResponse.status()}`);
+        throw new Error(`Unable to ensure active cash session for ${params.emailOrUsername}. status=${openResponse.status()}`);
       }
     }
   }
@@ -77,15 +83,15 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   await loginAndSaveState({
     baseURL,
     storageStatePath: adminStoragePath,
-    username: process.env.E2E_ADMIN_USERNAME ?? "supervisor.mga",
-    password: process.env.E2E_ADMIN_PASSWORD ?? "ChangeMeNow!123",
+    emailOrUsername: process.env.E2E_ADMIN_EMAIL ?? "supervisor.mga@hammer.local",
+    password: process.env.E2E_ADMIN_PASSWORD ?? process.env.E2E_BOOTSTRAP_PASSWORD ?? process.env.TEST_USER_PASSWORD ?? "ChangeMeNow!123!",
   });
 
   await loginAndSaveState({
     baseURL,
     storageStatePath: cashierStoragePath,
-    username: process.env.E2E_CASHIER_USERNAME ?? "caja.mga",
-    password: process.env.E2E_CASHIER_PASSWORD ?? "ChangeMeNow!123",
+    emailOrUsername: process.env.E2E_CASHIER_EMAIL ?? "caja.mga@hammer.local",
+    password: process.env.E2E_CASHIER_PASSWORD ?? process.env.E2E_BOOTSTRAP_PASSWORD ?? process.env.TEST_USER_PASSWORD ?? "ChangeMeNow!123!",
     ensureCashSession: true,
   });
 }

@@ -8,6 +8,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function GET(request: Request) {
   try {
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     if (!canInAnyAssignedBranch(session, CAPABILITIES.SALES_DRAFT_MANAGE)) {
       await logAuditEvent({

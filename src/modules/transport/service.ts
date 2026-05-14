@@ -1,4 +1,4 @@
-import { TransportServiceStatus } from "@prisma/client";
+import { Prisma, TransportServiceStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export async function createTransportService(input: {
@@ -11,13 +11,22 @@ export async function createTransportService(input: {
   notes?: string | null;
   createdByUserId: string;
 }) {
+  const saleOrder = await prisma.saleOrder.findUniqueOrThrow({
+    where: { id: input.saleOrderId },
+    select: { id: true, branchId: true },
+  });
+
+  if (saleOrder.branchId !== input.branchId) {
+    throw new Error("FORBIDDEN_BRANCH");
+  }
+
   const transport = await prisma.transportService.create({
     data: {
       saleOrderId: input.saleOrderId,
       branchId: input.branchId,
       customerName: input.customerName,
       reference: input.reference ?? null,
-      price: input.price,
+      price: new Prisma.Decimal(input.price),
       scheduledPaymentTime: input.scheduledPaymentTime ?? null,
       notes: input.notes ?? null,
       status: TransportServiceStatus.PENDING,
@@ -45,12 +54,12 @@ export async function createTransportService(input: {
 }
 
 export async function listTransportServices(params: {
-  branchIds: string[];
+  branchIds?: string[];
   status?: TransportServiceStatus[];
 }) {
   return prisma.transportService.findMany({
     where: {
-      branchId: { in: params.branchIds },
+      ...(params.branchIds && params.branchIds.length > 0 ? { branchId: { in: params.branchIds } } : {}),
       ...(params.status ? { status: { in: params.status } } : {}),
     },
     include: {
@@ -58,6 +67,13 @@ export async function listTransportServices(params: {
     },
     orderBy: { createdAt: "asc" },
     take: 100,
+  });
+}
+
+export async function getTransportServiceById(transportId: string) {
+  return prisma.transportService.findUniqueOrThrow({
+    where: { id: transportId },
+    select: { id: true, branchId: true, saleOrderId: true, status: true },
   });
 }
 

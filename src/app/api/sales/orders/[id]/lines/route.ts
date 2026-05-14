@@ -10,11 +10,13 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { getActiveDiscountsForBranch, calculateDiscountForProduct } from "@/modules/discounts/service";
+import { requireCsrf } from "@/modules/security/csrf";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    await requireCsrf(request, session);
 
     const { id } = await context.params;
     const order = await prisma.saleOrder.findUniqueOrThrow({ where: { id } });

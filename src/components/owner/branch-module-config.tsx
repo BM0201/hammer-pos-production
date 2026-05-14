@@ -16,6 +16,7 @@ import {
   Layers,
   ArrowRight,
 } from "lucide-react";
+import { apiFetch } from "@/lib/client/api";
 
 type BranchConfig = {
   branchId: string;
@@ -69,7 +70,7 @@ export function BranchModuleConfigPanel() {
     if (!cfg) return;
     setSaving((prev) => ({ ...(prev ?? {}), [branchId]: true }));
     try {
-      const res = await fetch("/api/branch-config", {
+      const res = await apiFetch("/api/branch-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -111,7 +112,7 @@ export function BranchModuleConfigPanel() {
     if (selectedBranches.size === 0) return;
     setBulkSaving(true);
     try {
-      const res = await fetch("/api/branch-config", {
+      const res = await apiFetch("/api/branch-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

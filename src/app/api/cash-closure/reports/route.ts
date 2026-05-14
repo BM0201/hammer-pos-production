@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
+import { assertMaster } from "@/modules/security/rbac-helpers";
 import { getClosureReports } from "@/modules/cash-closure/service";
 
 // GET: Fetch closure reports (MASTER only)
@@ -9,10 +10,7 @@ export async function GET(request: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
 
-    const globalRoles = session.globalRoles as unknown as string[];
-    if (!globalRoles.includes("MASTER") && !globalRoles.includes("SYSTEM_ADMIN")) {
-      return NextResponse.json({ message: "Forbidden" }, { status: 403 });
-    }
+    assertMaster(session);
 
     const branchId = request.nextUrl.searchParams.get("branchId") ?? undefined;
     const startDate = request.nextUrl.searchParams.get("startDate") ?? undefined;
