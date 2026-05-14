@@ -1,8 +1,5 @@
-import { ApprovalStatus, Prisma, SaleOrderStatus, TransportServiceStatus } from "@prisma/client";
+import { ApprovalStatus, SaleOrderStatus, TransportServiceStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-
-/** Default fallback reorder point when no StockReorderPolicy exists for a (branch, product). */
-const DEFAULT_REORDER_FALLBACK = 5;
 
 function dayBounds(date = new Date()) {
   const start = new Date(date);
@@ -16,32 +13,10 @@ function toNumber(value: { toNumber: () => number } | null | undefined): number 
   return value ? value.toNumber() : 0;
 }
 
-/**
- * Count inventory balances considered "critical" — i.e. quantityOnHand below the
- * effective reorder threshold for each (branch, product). The effective threshold
- * is the active StockReorderPolicy.reorderPoint when present, otherwise the
- * legacy fallback constant. Replaces the previous hardcoded `quantityOnHand <= 5`.
- */
-export async function countCriticalInventoryByPolicy(branchIds: string[]): Promise<number> {
-  if (!branchIds.length) return 0;
-  const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
-    SELECT COUNT(*)::bigint AS count
-    FROM "InventoryBalance" ib
-    LEFT JOIN "StockReorderPolicy" srp
-      ON srp."branchId"  = ib."branchId"
-     AND srp."productId" = ib."productId"
-     AND srp."isActive"  = true
-    WHERE ib."branchId" IN (${Prisma.join(branchIds)})
-      AND ib."quantityOnHand" <= COALESCE(srp."reorderPoint", ${DEFAULT_REORDER_FALLBACK})
-  `;
-  const raw = rows[0]?.count ?? BigInt(0);
-  return Number(raw);
-}
-
 export async function getMasterDashboardSummary() {
   const { start, end } = dayBounds();
 
-  const [branches, salesToday, pendingOrders, pendingApprovals, pendingDispatch, reorderAlertsByBranch] = await Promise.all([
+  const [branches, salesToday, pendingOrders, pendingApprovals, pendingDispatch] = await Promise.all([
     prisma.branch.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true }, orderBy: { code: "asc" } }),
     prisma.saleOrder.groupBy({
       by: ["branchId"],
@@ -66,11 +41,6 @@ export async function getMasterDashboardSummary() {
       where: { status: SaleOrderStatus.DISPATCH_PENDING },
       _count: { _all: true },
     }),
-    prisma.reorderAlert.groupBy({
-      by: ["branchId"],
-      where: { status: "OPEN" },
-      _count: { _all: true },
-    }),
   ]);
 
   const byBranch = branches.map((branch) => {
@@ -78,7 +48,6 @@ export async function getMasterDashboardSummary() {
     const pending = pendingOrders.find((item) => item.branchId === branch.id);
     const approvals = pendingApprovals.find((item) => item.branchId === branch.id);
     const dispatch = pendingDispatch.find((item) => item.branchId === branch.id);
-    const reorder = reorderAlertsByBranch.find((item) => item.branchId === branch.id);
     return {
       branchId: branch.id,
       branchCode: branch.code,
@@ -87,22 +56,19 @@ export async function getMasterDashboardSummary() {
       pendingOrders: pending?._count._all ?? 0,
       pendingApprovals: approvals?._count._all ?? 0,
       pendingDispatch: dispatch?._count._all ?? 0,
-      reorderAlerts: reorder?._count._all ?? 0,
     };
   });
 
   const totalPendingApprovals = byBranch.reduce((acc, item) => acc + item.pendingApprovals, 0);
   const totalPendingDispatch = byBranch.reduce((acc, item) => acc + item.pendingDispatch, 0);
   const totalPendingOrders = byBranch.reduce((acc, item) => acc + item.pendingOrders, 0);
-  const totalReorderAlerts = byBranch.reduce((acc, item) => acc + item.reorderAlerts, 0);
 
   const alerts: string[] = [];
-  if (totalReorderAlerts > 0) alerts.push(`Hay ${totalReorderAlerts} alertas de reposición de inventario abiertas.`);
   if (totalPendingApprovals > 0) alerts.push(`Hay ${totalPendingApprovals} solicitudes de aprobación pendientes.`);
   if (totalPendingDispatch > 0) alerts.push(`Hay ${totalPendingDispatch} órdenes pendientes de despacho.`);
   if (totalPendingOrders > 0) alerts.push(`Hay ${totalPendingOrders} órdenes pendientes de cobro o despacho.`);
 
-  return { byBranch, alerts, totalReorderAlerts };
+  return { byBranch, alerts };
 }
 
 export async function getBranchAdminDashboardSummary(branchIds: string[]) {
@@ -126,9 +92,9 @@ export async function getBranchAdminDashboardSummary(branchIds: string[]) {
     prisma.approvalRequest.count({
       where: { branchId: { in: branchIds }, status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] } },
     }),
-    // Count critical inventory using StockReorderPolicy.reorderPoint when defined,
-    // falling back to 5 if no policy is configured for the (branch, product) pair.
-    countCriticalInventoryByPolicy(branchIds),
+    prisma.inventoryBalance.count({
+      where: { branchId: { in: branchIds }, quantityOnHand: { lte: 5 } },
+    }),
     prisma.transportService.count({
       where: {
         branchId: { in: branchIds },
@@ -142,7 +108,7 @@ export async function getBranchAdminDashboardSummary(branchIds: string[]) {
   if (pendingPayments > 0) alerts.push(`Hay ${pendingPayments} órdenes pendientes de cobro.`);
   if (pendingDispatches > 0) alerts.push(`Hay ${pendingDispatches} órdenes pendientes de despacho.`);
   if (pendingTransports > 0) alerts.push(`Hay ${pendingTransports} servicios de transporte pendientes de entrega.`);
-  if (criticalInventory > 0) alerts.push(`Hay ${criticalInventory} balances con inventario crítico (bajo el punto de reorden configurado).`);
+  if (criticalInventory > 0) alerts.push(`Hay ${criticalInventory} balances con inventario crítico (≤ 5).`);
 
   return {
     salesToday: toNumber(salesToday._sum.grandTotal),

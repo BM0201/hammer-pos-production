@@ -37,7 +37,6 @@ import {
   Shield,
   Settings,
   Brain,
-  PackageSearch,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -76,7 +75,6 @@ function buildNavSections(
           { href: "/app/master/inventory", label: "Inventario Global", icon: Boxes },
           { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus },
           { href: "/app/master/transfers", label: "Envios Sucursales", icon: ArrowLeftRight },
-          { href: "/app/master/reorder", label: "Reposición", icon: PackageSearch },
           { href: "/app/master/sales/orders", label: "Ordenes", icon: ShoppingCart },
           { href: "/app/master/timber", label: "Madera", icon: TreePine },
         ],
@@ -133,7 +131,6 @@ function buildNavSections(
           { href: "/app/master/inventory", label: "Inventario Global", icon: Boxes },
           { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus },
           { href: "/app/master/transfers", label: "Envíos Sucursales", icon: ArrowLeftRight },
-          { href: "/app/master/reorder", label: "Reposición", icon: PackageSearch },
           { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart },
           { href: "/app/master/timber", label: "Madera", icon: TreePine },
         ],
@@ -183,7 +180,6 @@ function buildNavSections(
           { href: "/app/master/inventory", label: "Inventario Global", icon: Boxes },
           { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus },
           { href: "/app/master/transfers", label: "Envíos Sucursales", icon: ArrowLeftRight },
-          { href: "/app/master/reorder", label: "Reposición", icon: PackageSearch },
           { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart },
           { href: "/app/master/timber", label: "Madera", icon: TreePine },
         ],

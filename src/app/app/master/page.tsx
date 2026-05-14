@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   Building2,
   Globe,
-  PackageSearch,
 } from "lucide-react";
 
 /* ── Horizontal bar item for branch sales chart ── */
@@ -84,17 +83,11 @@ export default async function MasterPage() {
       </div>
 
       {/* ── Executive KPIs ── */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5 stagger-children">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 stagger-children">
         <KpiCard label="Ventas globales (hoy)" value={`C$${totalSalesToday.toFixed(2)}`} tone="ok" roleAccent="MASTER" />
         <KpiCard label="Órdenes pendientes" value={totalPendingOrders} tone={totalPendingOrders > 0 ? "alert" : "ok"} roleAccent="MASTER" />
         <KpiCard label="Aprobaciones pendientes" value={totalPendingApprovals} tone={totalPendingApprovals > 0 ? "alert" : "ok"} roleAccent="MASTER" />
         <KpiCard label="Despachos pendientes" value={totalPendingDispatch} tone={totalPendingDispatch > 0 ? "alert" : "ok"} roleAccent="MASTER" />
-        <KpiCard
-          label="Alertas reposición"
-          value={summary.totalReorderAlerts}
-          tone={summary.totalReorderAlerts > 0 ? "alert" : "ok"}
-          roleAccent="MASTER"
-        />
       </div>
 
       {/* ── Store Pill Filter ── */}
@@ -169,7 +162,6 @@ export default async function MasterPage() {
               <TH className="text-right">Pendientes</TH>
               <TH className="text-right">Aprobaciones</TH>
               <TH className="text-right">Despachos</TH>
-              <TH className="text-right">Reposición</TH>
             </TR>
           </THead>
           <TBody>
@@ -203,17 +195,6 @@ export default async function MasterPage() {
                 <TD className="text-right">
                   {row.pendingDispatch > 0
                     ? <Badge variant="warning">{row.pendingDispatch}</Badge>
-                    : <span className="text-[var(--color-text-soft)]">0</span>
-                  }
-                </TD>
-                <TD className="text-right">
-                  {row.reorderAlerts > 0
-                    ? (
-                      <Badge variant="danger">
-                        <PackageSearch className="h-3 w-3 mr-1 inline" />
-                        {row.reorderAlerts}
-                      </Badge>
-                    )
                     : <span className="text-[var(--color-text-soft)]">0</span>
                   }
                 </TD>

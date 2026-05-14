@@ -141,11 +141,6 @@ model Branch {
   cashClosures       CashClosure[]
   transportServices  TransportService[]
   moduleConfig       BranchModuleConfig?
-  reorderPolicies    StockReorderPolicy[]
-  reorderAlerts      ReorderAlert[]       @relation("ReorderAlertBranch")
-  reorderAlertSources ReorderAlert[]      @relation("ReorderAlertSourceBranch")
-  suggestionBatches  ReorderSuggestionBatch[] @relation("SuggestionBatchBranch")
-  suggestionBatchSources ReorderSuggestionBatch[] @relation("SuggestionBatchSourceBranch")
 }
 
 model User {
@@ -179,9 +174,6 @@ model User {
   updatedSystemSettings SystemSetting[] @relation("SystemSettingUpdatedBy")
   createdTransportServices TransportService[] @relation("TransportServiceCreatedBy")
   updatedBranchModuleConfigs BranchModuleConfig[] @relation("BranchModuleConfigUpdatedBy")
-  updatedReorderPolicies StockReorderPolicy[] @relation("ReorderPolicyUpdatedBy")
-  resolvedReorderAlerts ReorderAlert[] @relation("ReorderAlertResolvedBy")
-  reviewedSuggestionBatches ReorderSuggestionBatch[] @relation("SuggestionBatchReviewedBy")
   @@index([globalRole, isActive])
 }
 
@@ -337,9 +329,6 @@ model Product {
   timberProduct          TimberProduct?
   productPricings        ProductPricing[]
   productAnalytics       ProductAnalytics[]
-  reorderPolicies        StockReorderPolicy[]
-  reorderAlerts          ReorderAlert[]
-  reorderSuggestionLines ReorderSuggestionLine[]
 
   @@index([abcClassification])
   @@index([rotationIndex])
@@ -1096,133 +1085,4 @@ model BranchModuleConfig {
 
   branch          Branch   @relation(fields: [branchId], references: [id])
   updatedBy       User?    @relation("BranchModuleConfigUpdatedBy", fields: [updatedByUserId], references: [id])
-}
-
-/* ════════════════════════════════════════════════════════════════
- *  REORDER ENGINE — Smart inventory replenishment
- *  Detects low-stock products, suggests purchases or transfers.
- * ════════════════════════════════════════════════════════════════ */
-
-enum ReorderAlertType {
-  PURCHASE
-  TRANSFER
-  BOTH
-}
-
-enum ReorderAlertStatus {
-  OPEN
-  DISMISSED
-  CONVERTED_TO_PURCHASE_ORDER
-  CONVERTED_TO_TRANSFER
-}
-
-enum ReorderSuggestionType {
-  PURCHASE
-  TRANSFER
-}
-
-enum ReorderSuggestionStatus {
-  DRAFT
-  CONVERTED
-  DISMISSED
-}
-
-/// Per-product per-branch reorder policy (configurable thresholds)
-model StockReorderPolicy {
-  id                String   @id @default(cuid())
-  branchId          String
-  productId         String
-  minQuantity       Decimal  @default(0)   /// Absolute minimum — CRITICAL alert if below
-  reorderPoint      Decimal                /// When stock <= this, generate alert
-  targetQuantity    Decimal                /// Desired stock level after replenishment
-  safetyStock       Decimal  @default(0)   /// Extra buffer above targetQuantity
-  preferredSupplier String?                /// Preferred supplier name for purchases
-  leadTimeDays      Int      @default(0)   /// Average supplier delivery time in days
-  isActive          Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  updatedByUserId   String?
-
-  branch            Branch   @relation(fields: [branchId], references: [id])
-  product           Product  @relation(fields: [productId], references: [id])
-  updatedBy         User?    @relation("ReorderPolicyUpdatedBy", fields: [updatedByUserId], references: [id])
-
-  @@unique([branchId, productId])
-  @@index([branchId, isActive])
-}
-
-/// Individual low-stock alert per product per branch
-model ReorderAlert {
-  id                    String              @id @default(cuid())
-  branchId              String
-  productId             String
-  currentQuantity       Decimal             /// Stock at time of evaluation
-  reorderPoint          Decimal             /// Threshold that triggered this alert
-  targetQuantity        Decimal             /// Target stock level
-  suggestedQuantity     Decimal             /// How much to order/transfer
-  alertType             ReorderAlertType    /// PURCHASE, TRANSFER, or BOTH
-  status                ReorderAlertStatus  @default(OPEN)
-  nearestSourceBranchId String?             /// Branch with surplus (for TRANSFER)
-  nearestSourceStock    Decimal?            /// How much that branch has
-  preferredSupplier     String?             /// Supplier name (for PURCHASE)
-  reason                String              /// Human-readable explanation
-  linkedPurchaseOrderId String?             /// PO created from this alert (reference only)
-  linkedTransferId      String?             /// Transfer created from this alert (reference only)
-  createdAt             DateTime            @default(now())
-  resolvedAt            DateTime?
-  resolvedByUserId      String?
-
-  branch                Branch              @relation("ReorderAlertBranch", fields: [branchId], references: [id])
-  product               Product             @relation(fields: [productId], references: [id])
-  sourceBranch          Branch?             @relation("ReorderAlertSourceBranch", fields: [nearestSourceBranchId], references: [id])
-  resolvedBy            User?               @relation("ReorderAlertResolvedBy", fields: [resolvedByUserId], references: [id])
-  suggestionLines       ReorderSuggestionLine[]
-
-  @@index([branchId, status])
-  @@index([productId, branchId, status])
-  @@index([createdAt])
-}
-
-/// Groups alerts into actionable batches (by supplier or source branch)
-model ReorderSuggestionBatch {
-  id                    String                    @id @default(cuid())
-  branchId              String                    /// Destination branch (needs product)
-  supplier              String?                   /// Supplier name (for PURCHASE batches)
-  suggestionType        ReorderSuggestionType
-  status                ReorderSuggestionStatus   @default(DRAFT)
-  sourceBranchId        String?                   /// Source branch (for TRANSFER batches)
-  totalEstimatedCost    Decimal?                  /// Sum of lines (qty * WAC)
-  createdAt             DateTime                  @default(now())
-  createdBySystem       Boolean                   @default(true)
-  reviewedByUserId      String?
-  reviewedAt            DateTime?
-  linkedPurchaseOrderId String?
-  linkedTransferId      String?
-
-  branch                Branch                    @relation("SuggestionBatchBranch", fields: [branchId], references: [id])
-  sourceBranch          Branch?                   @relation("SuggestionBatchSourceBranch", fields: [sourceBranchId], references: [id])
-  reviewedBy            User?                     @relation("SuggestionBatchReviewedBy", fields: [reviewedByUserId], references: [id])
-  lines                 ReorderSuggestionLine[]
-
-  @@index([branchId, status])
-  @@index([suggestionType, status])
-}
-
-/// Line item within a suggestion batch
-model ReorderSuggestionLine {
-  id                String                 @id @default(cuid())
-  batchId           String
-  alertId           String?                /// Alert that originated this line
-  productId         String
-  currentQuantity   Decimal
-  suggestedQuantity Decimal
-  unitCostSnapshot  Decimal?               /// WAC at evaluation time
-  sourceBranchId    String?                /// For TRANSFER lines
-  notes             String?
-
-  batch             ReorderSuggestionBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  alert             ReorderAlert?          @relation(fields: [alertId], references: [id])
-  product           Product                @relation(fields: [productId], references: [id])
-
-  @@index([batchId])
 }

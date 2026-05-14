@@ -26,8 +26,6 @@ export const CAPABILITIES = {
   APPROVAL_REQUEST_REVIEW: "approval.request.review",
   AUDIT_VIEW: "audit.view",
   REPORTS_EXPORT: "reports.export",
-  MASTER_REORDER_VIEW: "master.reorder.view",
-  MASTER_REORDER_MANAGE: "master.reorder.manage",
 } as const;
 
 export type Capability = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -51,7 +49,6 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.APPROVAL_REQUEST_REVIEW,
     CAPABILITIES.AUDIT_VIEW,
     CAPABILITIES.REPORTS_EXPORT,
-    CAPABILITIES.MASTER_REORDER_VIEW,
   ],
   SALES: [
     CAPABILITIES.BRANCH_DASHBOARD_VIEW,
