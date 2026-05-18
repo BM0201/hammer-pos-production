@@ -28,54 +28,13 @@ export const updateSaleOrderLineSchema = z.object({
   discountPercent: percentageSchema.optional(),
 });
 
-/**
- * Transport validation with cross-field rules:
- * - requiresTransport=true → transportAmount must be > 0
- * - requiresTransport=false → transportAmount must be 0 or absent
- */
 export const saleOrderTransportSchema = z.object({
   requiresTransport: z.boolean().optional(),
   transportAmount: nonNegativeMoneySchema.optional(),
-}).superRefine((data, ctx) => {
-  if (data.requiresTransport === true) {
-    if (typeof data.transportAmount !== "number" || data.transportAmount <= 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "El monto de transporte debe ser mayor que 0 cuando se requiere transporte",
-        path: ["transportAmount"],
-      });
-    }
-  }
-  if (data.requiresTransport === false && typeof data.transportAmount === "number" && data.transportAmount > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "No se puede especificar monto de transporte cuando no se requiere transporte",
-      path: ["transportAmount"],
-    });
-  }
 });
 
-export const saleOrderDirectSaleSchema = z.object({
+export const saleOrderDirectSaleSchema = saleOrderTransportSchema.extend({
   cashSessionId: z.string().cuid(),
   method: z.nativeEnum(PaymentMethod).optional(),
   referenceNumber: z.string().max(100).optional().nullable(),
-  requiresTransport: z.boolean().optional(),
-  transportAmount: nonNegativeMoneySchema.optional(),
-}).superRefine((data, ctx) => {
-  if (data.requiresTransport === true) {
-    if (typeof data.transportAmount !== "number" || data.transportAmount <= 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "El monto de transporte debe ser mayor que 0 cuando se requiere transporte",
-        path: ["transportAmount"],
-      });
-    }
-  }
-  if (data.requiresTransport === false && typeof data.transportAmount === "number" && data.transportAmount > 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "No se puede especificar monto de transporte cuando no se requiere transporte",
-      path: ["transportAmount"],
-    });
-  }
 });

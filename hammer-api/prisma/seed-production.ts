@@ -1,185 +1,185 @@
+/**
+ * seed-production.ts — Production bootstrap
+ *
+ * Creates ONLY:
+ *   1. One initial branch (from env BOOTSTRAP_BRANCH_CODE / BOOTSTRAP_BRANCH_NAME)
+ *   2. One physical cash box (optional, BOOTSTRAP_CREATE_CASH_BOX=true)
+ *   3. One MASTER user via username (from env or defaults)
+ *
+ * Idempotent: safe to run multiple times without duplicating data.
+ * NO demo users. NO test products. NO staging orders.
+ *
+ * Environment variables:
+ *   MASTER_INITIAL_USERNAME  (default: "master")
+ *   MASTER_INITIAL_PASSWORD  (REQUIRED — must meet password policy)
+ *   BOOTSTRAP_BRANCH_CODE    (default: "MGA")
+ *   BOOTSTRAP_BRANCH_NAME    (default: "Managua Central")
+ *   BOOTSTRAP_CREATE_CASH_BOX (default: "true")
+ *   RESET_MASTER_PASSWORD     (default: "false") — if "true", resets existing master password
+ */
+
 import { PrismaClient, RoleCode } from "@prisma/client";
 import { hashPassword } from "../src/modules/auth/password";
 
 const prisma = new PrismaClient();
 
+// ── Password policy ──────────────────────────────────────────────────────────
 const PASSWORD_POLICY = {
-  minLength: 12,
+  minLength: 10,
   uppercase: /[A-Z]/,
   lowercase: /[a-z]/,
   number: /\d/,
   symbol: /[^A-Za-z0-9]/,
 };
 
-function readEnv(name: string): string | undefined {
-  const value = process.env[name]?.trim();
-  return value ? value : undefined;
-}
+function assertStrongPassword(password: string, label: string): void {
+  const errors: string[] = [];
+  if (password.length < PASSWORD_POLICY.minLength) errors.push(`min ${PASSWORD_POLICY.minLength} chars`);
+  if (!PASSWORD_POLICY.uppercase.test(password)) errors.push("needs uppercase");
+  if (!PASSWORD_POLICY.lowercase.test(password)) errors.push("needs lowercase");
+  if (!PASSWORD_POLICY.number.test(password)) errors.push("needs number");
+  if (!PASSWORD_POLICY.symbol.test(password)) errors.push("needs symbol");
 
-function requireEnv(...names: string[]): string {
-  for (const name of names) {
-    const value = readEnv(name);
-    if (value) {
-      return value;
-    }
-  }
-
-  throw new Error(`MISSING_ENV_${names.join("_OR_")}`);
-}
-
-function assertStrongPassword(password: string, envName: string): void {
-  if (
-    password.length < PASSWORD_POLICY.minLength ||
-    !PASSWORD_POLICY.uppercase.test(password) ||
-    !PASSWORD_POLICY.lowercase.test(password) ||
-    !PASSWORD_POLICY.number.test(password) ||
-    !PASSWORD_POLICY.symbol.test(password)
-  ) {
-    throw new Error(`WEAK_${envName}`);
+  if (errors.length > 0) {
+    throw new Error(`Weak password for ${label}: ${errors.join(", ")}`);
   }
 }
 
-async function ensurePrivilegedUser(params: {
-  email: string;
-  username: string;
-  fullName: string;
-  password: string;
-  globalRole: RoleCode;
-}): Promise<{ id: string; email: string; created: boolean }> {
-  const existing = await prisma.user.findUnique({
-    where: { email: params.email },
-    select: { id: true, email: true },
-  });
-
-  if (existing) {
-    return { ...existing, created: false };
+// ── Config from environment ──────────────────────────────────────────────────
+function getConfig() {
+  const masterPassword = process.env.MASTER_INITIAL_PASSWORD?.trim();
+  if (!masterPassword) {
+    throw new Error("MASTER_INITIAL_PASSWORD environment variable is REQUIRED for production seed.");
   }
 
-  const created = await prisma.user.create({
-    data: {
-      email: params.email,
-      username: params.username,
-      fullName: params.fullName,
-      passwordHash: hashPassword(params.password),
-      globalRole: params.globalRole,
-      mustChangePassword: true,
-      isActive: true,
-    },
-    select: { id: true, email: true },
-  });
+  assertStrongPassword(masterPassword, "MASTER_INITIAL_PASSWORD");
 
-  return { ...created, created: true };
+  return {
+    masterUsername: (process.env.MASTER_INITIAL_USERNAME?.trim() || "master"),
+    masterPassword,
+    masterEmail: "master@hammer.local",
+    masterFullName: "System Master",
+    branchCode: (process.env.BOOTSTRAP_BRANCH_CODE?.trim() || "MGA").toUpperCase(),
+    branchName: process.env.BOOTSTRAP_BRANCH_NAME?.trim() || "Managua Central",
+    createCashBox: (process.env.BOOTSTRAP_CREATE_CASH_BOX ?? "true").toLowerCase() === "true",
+    resetMasterPassword: process.env.RESET_MASTER_PASSWORD === "true",
+  };
 }
 
-async function ensureBranchRole(userId: string, branchId: string, roleCode: RoleCode): Promise<void> {
-  await prisma.userBranchRole.upsert({
-    where: {
-      userId_branchId_roleCode: {
-        userId,
-        branchId,
-        roleCode,
-      },
-    },
-    update: { isActive: true },
-    create: {
-      userId,
-      branchId,
-      roleCode,
-      isActive: true,
-    },
-  });
-}
+async function main(): Promise<void> {
+  const config = getConfig();
 
-async function main() {
-  const ownerEmail = requireEnv("BOOTSTRAP_OWNER_EMAIL", "BOOTSTRAP_ADMIN_EMAIL").toLowerCase();
-  const ownerName = requireEnv("BOOTSTRAP_OWNER_NAME", "BOOTSTRAP_ADMIN_NAME");
-  const ownerPassword = requireEnv("BOOTSTRAP_OWNER_PASSWORD");
+  console.log("🔧 Seed (production) — starting …");
 
-  const sysadminEmail = (readEnv("BOOTSTRAP_SYSADMIN_EMAIL") ?? `${ownerEmail.split("@")[0]}.sysadmin@${ownerEmail.split("@")[1]}`).toLowerCase();
-  const sysadminName = readEnv("BOOTSTRAP_SYSADMIN_NAME") ?? `${ownerName} (System Admin)`;
-  const sysadminPassword = requireEnv("BOOTSTRAP_SYSADMIN_PASSWORD");
-
-  const branchCode = requireEnv("BOOTSTRAP_BRANCH_CODE").toUpperCase();
-  const branchName = requireEnv("BOOTSTRAP_BRANCH_NAME");
-  const createCashBox = (process.env.BOOTSTRAP_CREATE_CASH_BOX ?? "false").toLowerCase() === "true";
-
-  assertStrongPassword(ownerPassword, "BOOTSTRAP_OWNER_PASSWORD");
-  assertStrongPassword(sysadminPassword, "BOOTSTRAP_SYSADMIN_PASSWORD");
-
-  if (ownerPassword === sysadminPassword) {
-    throw new Error("BOOTSTRAP_PASSWORDS_MUST_BE_DIFFERENT");
-  }
-
+  // ── 1. Branch ───────────────────────────────────────────────────────────────
   const branch = await prisma.branch.upsert({
-    where: { code: branchCode },
-    update: { name: branchName, isActive: true },
-    create: { code: branchCode, name: branchName, isActive: true },
+    where: { code: config.branchCode },
+    update: { name: config.branchName, isActive: true },
+    create: { code: config.branchCode, name: config.branchName, isActive: true },
   });
+  console.log(`  ✔ Branch "${branch.name}" (${branch.code})`);
 
-  const ownerUser = await ensurePrivilegedUser({
-    email: ownerEmail,
-    username: ownerEmail.split("@")[0] || "owner",
-    fullName: ownerName,
-    password: ownerPassword,
-    globalRole: RoleCode.OWNER,
-  });
-
-  const systemAdminUser = await ensurePrivilegedUser({
-    email: sysadminEmail,
-    username: `${sysadminEmail.split("@")[0]}`,
-    fullName: sysadminName,
-    password: sysadminPassword,
-    globalRole: RoleCode.SYSTEM_ADMIN,
-  });
-
-  await ensureBranchRole(ownerUser.id, branch.id, RoleCode.BRANCH_ADMIN);
-  await ensureBranchRole(systemAdminUser.id, branch.id, RoleCode.BRANCH_ADMIN);
-
-  if (createCashBox) {
+  // ── 2. Physical cash box (optional) ────────────────────────────────────────
+  if (config.createCashBox) {
+    const cashBoxCode = `CASH-${config.branchCode}-01`;
     await prisma.physicalCashBox.upsert({
-      where: { branchId_code: { branchId: branch.id, code: `CASH-${branch.code}-01` } },
-      update: { isActive: true, description: "Caja inicial bootstrap producción" },
+      where: { branchId_code: { branchId: branch.id, code: cashBoxCode } },
+      update: { isActive: true, description: "Caja principal producción" },
       create: {
         branchId: branch.id,
-        code: `CASH-${branch.code}-01`,
-        description: "Caja inicial bootstrap producción",
+        code: cashBoxCode,
+        description: "Caja principal producción",
         isActive: true,
       },
     });
+    console.log(`  ✔ Physical cash box "${cashBoxCode}"`);
+  } else {
+    console.log("  ⊘ Cash box creation skipped (BOOTSTRAP_CREATE_CASH_BOX != true)");
   }
 
-  await prisma.systemSetting.upsert({
-    where: { key: "BOOTSTRAP_COMPLETED_AT" },
-    update: { value: new Date().toISOString(), updatedByUserId: systemAdminUser.id },
-    create: { key: "BOOTSTRAP_COMPLETED_AT", value: new Date().toISOString(), updatedByUserId: systemAdminUser.id },
+  // ── 3. Master user (lookup by username, NOT email) ─────────────────────────
+  const passwordHash = hashPassword(config.masterPassword);
+
+  const existing = await prisma.user.findUnique({
+    where: { username: config.masterUsername },
+    select: { id: true, username: true },
   });
 
+  let masterUserId: string;
+  let wasCreated: boolean;
+
+  if (existing) {
+    // Master already exists — only update password if explicitly requested
+    if (config.resetMasterPassword) {
+      await prisma.user.update({
+        where: { username: config.masterUsername },
+        data: {
+          passwordHash,
+          mustChangePassword: false,
+          isActive: true,
+          globalRole: RoleCode.MASTER,
+        },
+      });
+      console.log(`  ✔ Master user "${config.masterUsername}" — password RESET`);
+    } else {
+      console.log(`  ✔ Master user "${config.masterUsername}" — already exists (no password change)`);
+    }
+    masterUserId = existing.id;
+    wasCreated = false;
+  } else {
+    const created = await prisma.user.create({
+      data: {
+        username: config.masterUsername,
+        email: config.masterEmail,
+        fullName: config.masterFullName,
+        passwordHash,
+        globalRole: RoleCode.MASTER,
+        mustChangePassword: false,
+        isActive: true,
+      },
+    });
+    masterUserId = created.id;
+    wasCreated = true;
+    console.log(`  ✔ Master user "${config.masterUsername}" — CREATED`);
+  }
+
+  // ── Bootstrap complete marker ──────────────────────────────────────────────
+  await prisma.systemSetting.upsert({
+    where: { key: "BOOTSTRAP_COMPLETED_AT" },
+    update: { value: new Date().toISOString(), updatedByUserId: masterUserId },
+    create: { key: "BOOTSTRAP_COMPLETED_AT", value: new Date().toISOString(), updatedByUserId: masterUserId },
+  });
+
+  // ── Audit log ──────────────────────────────────────────────────────────────
   await prisma.auditLog.create({
     data: {
-      actorUserId: systemAdminUser.id,
+      actorUserId: masterUserId,
       branchId: branch.id,
       module: "seed-production",
       action: "PRODUCTION_BOOTSTRAP_COMPLETED",
-      entityType: "Branch",
-      entityId: branch.id,
+      entityType: "User",
+      entityId: masterUserId,
       metadataJson: {
-        branchCode: branch.code,
-        ownerEmail: ownerUser.email,
-        systemAdminEmail: systemAdminUser.email,
-        ownerCreated: ownerUser.created,
-        systemAdminCreated: systemAdminUser.created,
-        createCashBox,
-        enabledModules: ["ventas", "pagos", "caja", "despacho", "transporte", "usuarios", "auditoria"],
+        branchCode: config.branchCode,
+        masterUsername: config.masterUsername,
+        masterCreated: wasCreated,
+        passwordReset: config.resetMasterPassword,
+        cashBoxCreated: config.createCashBox,
+        environment: "production",
       },
     },
   });
 
-  console.log("Production bootstrap completed successfully.");
+  console.log("✅ Production seed completed successfully.");
+  console.log(`   Branch: ${config.branchName} (${config.branchCode})`);
+  console.log(`   Master: ${config.masterUsername}`);
+  console.log("   Demo users: NONE");
+  console.log("   Test products: NONE");
 }
 
 main()
   .catch((error) => {
-    console.error(error instanceof Error ? error.message : "SEED_PRODUCTION_FAILED");
+    console.error("❌ Production seed failed:", error instanceof Error ? error.message : "UNKNOWN_ERROR");
     process.exit(1);
   })
   .finally(async () => {

@@ -7,7 +7,7 @@ export const membershipSchema = z.object({
 
 export const createUserSchema = z.object({
   username: z.string().min(3),
-  email: z.string().email(),
+  email: z.string().email().optional(),
   fullName: z.string().min(2),
   password: z.string().min(8),
   isActive: z.boolean().optional(),

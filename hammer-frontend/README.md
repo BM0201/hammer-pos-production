@@ -15,7 +15,7 @@ Cliente web construido con Next.js App Router que consume la API REST de `hammer
 | TypeScript | 5.9.3 | Strict mode |
 | Node.js | 22 | Runtime |
 
-> **Sin dependencias de servidor.** No usa Prisma, iron-session ni acceso directo a DB.
+> **Sin dependencias de servidor.** No usa Prisma ni acceso directo a DB.
 
 ---
 
@@ -78,7 +78,7 @@ Esto permite:
 
 ### Flujo de Autenticación
 
-1. **Login:** `POST /api/auth/login` → backend setea cookie `iron-session`
+1. **Login:** `POST /api/auth/login` → backend setea cookie de sesión firmada
 2. **Sesión:** `useSession()` hace `GET /api/auth/session` para obtener el estado
 3. **CSRF:** `apiFetch()` obtiene token desde `/api/auth/csrf`, lo cachea y lo envía como `x-csrf-token`
 4. **Logout:** `POST /api/auth/logout` → backend invalida sesión

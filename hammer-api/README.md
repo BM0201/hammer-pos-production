@@ -12,7 +12,6 @@ Backend API-only construido con Next.js Route Handlers, Prisma ORM y PostgreSQL.
 | Prisma | 6.19.3 | ORM + migraciones |
 | @prisma/adapter-neon | 6.19.3 | Driver serverless para Neon (producción) |
 | Zod | 3.25.76 | Validación de request bodies |
-| iron-session | 8.x | Cookies firmadas (autenticación) |
 | TypeScript | 5.9.3 | Strict mode |
 | Node.js | 22 | Runtime |
 
@@ -44,10 +43,12 @@ Copiar `.env.example` a `.env` y configurar:
 | `NODE_ENV` | `development` \| `production` |
 | `AUTH_SESSION_TTL_HOURS` | TTL de sesión en horas (default: 12) |
 | `ENABLE_CASH_CLOSURE_SCHEDULER` | Habilitar cierre automático de caja |
-| `BOOTSTRAP_OWNER_EMAIL` | Email del Owner para seed inicial |
-| `BOOTSTRAP_OWNER_PASSWORD` | Password del Owner para seed |
-| `BOOTSTRAP_BRANCH_CODE` | Código de sucursal inicial |
-| `BOOTSTRAP_BRANCH_NAME` | Nombre de sucursal inicial |
+| `MASTER_INITIAL_USERNAME` | Username del master (default: `master`) |
+| `MASTER_INITIAL_PASSWORD` | Password del master (REQUERIDA en producción; dev: `ElChele1234!`) |
+| `BOOTSTRAP_BRANCH_CODE` | Código de sucursal inicial (default: `MGA`) |
+| `BOOTSTRAP_BRANCH_NAME` | Nombre de sucursal inicial (default: `Managua Central`) |
+| `BOOTSTRAP_CREATE_CASH_BOX` | Crear caja física en seed (default: `true`) |
+| `RESET_MASTER_PASSWORD` | Si `true`, resetea password del master en próximo seed |
 
 ---
 
@@ -189,7 +190,7 @@ src/
 
 | Mecanismo | Implementación |
 |-----------|---------------|
-| Autenticación | iron-session — cookies `httpOnly + secure + sameSite=lax` |
+| Autenticación | Cookies `httpOnly + secure + sameSite=lax` firmadas con HMAC-SHA256 |
 | RBAC | 2 niveles: roles globales + roles por sucursal filtrados via `BranchRoleConfig` |
 | CSRF | Double-submit token (`x-csrf-token` header vs cookie) en métodos no-GET |
 | Hashing | PBKDF2, 600k iteraciones, salt 32 bytes, SHA-512 |

@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev --port 4000",
     "build": "npm run prisma:generate && next build",
+    "vercel-build": "npx prisma generate && next build",
     "start": "next start --port 4000",
     "test": "node --import tsx --test src/modules/dashboard/access.test.ts src/modules/rbac/effective-permissions.test.ts src/modules/workflow/branch-workflow.test.ts src/modules/transport/validators.test.ts src/lib/api/errors.test.ts",
     "typecheck": "tsc --noEmit",
@@ -20,6 +21,7 @@
     "prisma:deploy:standard": "prisma validate && prisma generate && prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:prod": "tsx prisma/seed-production.ts",
+    "auth:reset-master": "RESET_MASTER_PASSWORD=true tsx prisma/seed.ts",
     "security:audit": "npm audit --omit=dev",
     "postinstall": "prisma generate"
   },

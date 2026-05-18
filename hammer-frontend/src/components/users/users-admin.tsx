@@ -139,7 +139,7 @@ export function UsersAdmin() {
         body: JSON.stringify({
           username: createForm.username.trim(),
           fullName: createForm.fullName.trim(),
-          email: createForm.email.trim(),
+          email: createForm.email.trim() || undefined,
           password: createForm.password,
           globalRole: createForm.globalRole === "MASTER" ? "MASTER" : undefined,
           memberships: [],
@@ -271,7 +271,7 @@ export function UsersAdmin() {
         <form className="grid gap-2 md:grid-cols-5" onSubmit={createUser}>
           <Input placeholder="Usuario" value={createForm.username} onChange={(e) => setCreateForm((prev) => ({ ...prev, username: e.target.value }))} required />
           <Input placeholder="Nombre completo" value={createForm.fullName} onChange={(e) => setCreateForm((prev) => ({ ...prev, fullName: e.target.value }))} required />
-          <Input placeholder="Correo" type="email" value={createForm.email} onChange={(e) => setCreateForm((prev) => ({ ...prev, email: e.target.value }))} required />
+          <Input placeholder="Correo (opcional)" type="email" value={createForm.email} onChange={(e) => setCreateForm((prev) => ({ ...prev, email: e.target.value }))} />
           <Input placeholder="Contraseña inicial" type="password" value={createForm.password} onChange={(e) => setCreateForm((prev) => ({ ...prev, password: e.target.value }))} required />
           <select className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" value={createForm.globalRole} onChange={(e) => setCreateForm((prev) => ({ ...prev, globalRole: e.target.value }))}>
             <option value="">Sin rol global</option>

@@ -1,9 +1,9 @@
+import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { approvePurchaseOrder } from "@/modules/purchase-orders/service";
+import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
-import { ok } from "@/lib/api/response";
-import { toApiErrorResponse } from "@/lib/api/errors";
 
 export async function POST(
   request: Request,
@@ -17,8 +17,8 @@ export async function POST(
 
     const { id } = await params;
     const result = await approvePurchaseOrder(id, session.userId);
-    return ok(result);
+    return NextResponse.json({ data: result, message: "Pedido aprobado e inventario actualizado" });
   } catch (error) {
-    return toApiErrorResponse(error);
+    return toHttpErrorResponse(error);
   }
 }

@@ -70,7 +70,6 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const [transportAmount, setTransportAmount] = useState("");
   const [transportTouched, setTransportTouched] = useState(false);
   const [showingTopSelling, setShowingTopSelling] = useState(true);
-  const [showTransportModal, setShowTransportModal] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const catalogViewportRef = useRef<HTMLDivElement | null>(null);
@@ -270,25 +269,23 @@ export function BranchPos({ branchId }: { branchId: string }) {
     loadBranchConfig();
   }, [branchId]);
 
-  // Phase 4 fix: Load active cash session with branchId for direct-sale flow
+  // Load active cash session for direct-sale flow
   useEffect(() => {
     if (branchConfig?.enableCashier !== false) return;
     async function loadActiveCashSession() {
       try {
-        const res = await fetch(`/api/cashier/cash-sessions/active?branchId=${branchId}`);
+        const res = await fetch("/api/cashier/cash-sessions/active");
         const json = await res.json();
         const data = json?.data ?? json;
         if (data?.id) {
           setActiveCashSessionId(data.id);
-        } else {
-          setActiveCashSessionId(null);
         }
       } catch {
-        setActiveCashSessionId(null);
+        // Will show error when trying to sell
       }
     }
     loadActiveCashSession();
-  }, [branchConfig, branchId]);
+  }, [branchConfig]);
 
   useEffect(() => {
     reloadOrder();
@@ -498,42 +495,28 @@ export function BranchPos({ branchId }: { branchId: string }) {
     }
   }
 
-  /**
-   * Phase 3 fix: Show transport modal before submitting.
-   * The modal asks the user if transport is needed before calling the API.
-   */
-  function handleSendToPaymentClick() {
+  async function sendToPayment() {
     if (!order || isSubmittingPayment || order.lines.length === 0) return;
 
-    const isDirectSale = branchConfig?.enableCashier === false;
-
-    // Direct sale requires active cash session (Phase 4)
-    if (isDirectSale && !activeCashSessionId) {
-      setNoticeTimed("No hay sesión de caja abierta para registrar venta directa. Abra una sesión de caja primero.", 10000);
-      return;
-    }
-
-    // Show transport decision modal before submitting
-    setShowTransportModal(true);
-  }
-
-  async function confirmAndSendToPayment() {
-    if (!order || isSubmittingPayment || order.lines.length === 0) return;
-
-    // Validate transport if selected
     if (includeTransport && transportValidationError) {
       setTransportTouched(true);
       setNoticeTimed(transportValidationError, 10000);
       return;
     }
 
-    setShowTransportModal(false);
     const isDirectSale = branchConfig?.enableCashier === false;
+
+    // Direct sale requires active cash session
+    if (isDirectSale && !activeCashSessionId) {
+      setNoticeTimed("No hay sesión de caja abierta para registrar venta directa. Abra una sesión de caja primero.", 10000);
+      return;
+    }
 
     setIsSubmittingPayment(true);
 
     try {
       if (isDirectSale) {
+        // Direct sale flow: seller submits + pays in one step
         const body: Record<string, unknown> = {
           cashSessionId: activeCashSessionId,
           method: paymentMethod,
@@ -551,6 +534,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
         const json = (await response.json()) as ApiErrorPayload;
 
         if (!response.ok) {
+          // Map specific error codes
           const errorCode = (json as Record<string, unknown>)?.error && typeof (json as Record<string, unknown>).error === "object"
             ? ((json as Record<string, { code?: string }>).error?.code ?? "")
             : "";
@@ -569,6 +553,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
           : "Venta completada. Pendiente de despacho. ✓";
         setNoticeTimed(completionMsg);
       } else {
+        // Standard flow: submit to cashier
         const body: Record<string, unknown> = {
           requiresTransport: includeTransport,
         };
@@ -864,26 +849,92 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   </div>
                 </div>
 
-                {/* Phase 3: Transport & payment method are now in the pre-payment modal */}
-                {branchConfig?.enableCashier === false && !activeCashSessionId && (
-                  <p className="mt-2 text-xs text-[var(--color-danger-600)]">
-                    No hay sesión de caja abierta para registrar venta directa.
-                  </p>
+                <label className="mt-3 flex cursor-pointer select-none items-center gap-2" data-testid="pos-transport-toggle">
+                  <input
+                    type="checkbox"
+                    checked={includeTransport}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setIncludeTransport(checked);
+                      if (!checked) {
+                        setTransportAmount("");
+                        setTransportTouched(false);
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-[var(--color-border)] text-[var(--color-primary-600)] focus:ring-[var(--color-primary-500)]"
+                    disabled={isBusy}
+                  />
+                  <span className="text-sm text-[var(--color-text-secondary)]">Requiere servicio de transporte</span>
+                </label>
+
+                {includeTransport ? (
+                  <div className="mt-2 space-y-1">
+                    <label className="block text-xs font-medium text-[var(--color-text-muted)]">Monto de transporte (C$)</label>
+                    <input
+                      className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${transportTouched && transportValidationError ? "border-[var(--color-danger-500)] focus:border-[var(--color-danger-500)] focus:ring-[var(--color-danger-100)]" : "border-[var(--color-border)] focus:border-[var(--color-primary-500)] focus:ring-[var(--color-primary-100)]"}`}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={transportAmount}
+                      onChange={(event) => {
+                        setTransportAmount(event.target.value);
+                        if (transportTouched) {
+                          setNoticeTimed("");
+                        }
+                      }}
+                      onBlur={() => setTransportTouched(true)}
+                      placeholder="Ej: 150.00"
+                      disabled={isBusy}
+                      data-testid="pos-transport-amount"
+                    />
+                    {transportTouched && transportValidationError ? (
+                      <p className="text-xs text-[var(--color-danger-600)]" data-testid="pos-transport-error">
+                        {transportValidationError}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {branchConfig?.enableCashier === false && (
+                  <div className="mt-3 space-y-2">
+                    <label className="block text-xs font-medium text-[var(--color-text-muted)]">Método de pago</label>
+                    <select
+                      className="w-full rounded-xl border border-[var(--color-border)] px-3 py-2 text-sm"
+                      value={paymentMethod}
+                      onChange={(e) => setPaymentMethod(e.target.value)}
+                      disabled={isBusy}
+                      data-testid="pos-payment-method"
+                    >
+                      <option value="CASH">Efectivo</option>
+                      <option value="CARD">Tarjeta</option>
+                      <option value="TRANSFER">Transferencia</option>
+                      <option value="CREDIT">Crédito</option>
+                    </select>
+                    {!activeCashSessionId && (
+                      <p className="text-xs text-[var(--color-danger-600)]">
+                        No hay sesión de caja abierta para registrar venta directa.
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 <Button
                   ref={sendButtonRef}
                   variant="success"
                   className="mt-3 w-full rounded-xl"
-                  onClick={handleSendToPaymentClick}
-                  disabled={isBusy || !order || order.lines.length === 0}
+                  onClick={sendToPayment}
+                  disabled={isBusy || !order || order.lines.length === 0 || Boolean(includeTransport && transportValidationError)}
                   data-testid="pos-send-to-payment"
                 >
                   {isSubmittingPayment
                     ? (branchConfig?.enableCashier === false ? "Registrando venta directa..." : "Enviando a caja...")
                     : branchConfig?.enableCashier === false
-                      ? "Registrar venta directa"
-                      : "Enviar a caja (pendiente de pago)"}
+                      ? (includeTransport
+                          ? `Registrar venta directa con transporte (C$ ${(Number(order?.subtotal ?? 0) + transportAmountValue).toFixed(2)})`
+                          : "Registrar venta directa")
+                      : (includeTransport
+                          ? `Enviar a caja con transporte (C$ ${(Number(order?.subtotal ?? 0) + transportAmountValue).toFixed(2)})`
+                          : "Enviar a caja (pendiente de pago)")}
                 </Button>
               </div>
             </Card>
@@ -896,141 +947,6 @@ export function BranchPos({ branchId }: { branchId: string }) {
           {notice}
         </p>
       ) : null}
-
-      {/* ── Phase 3: Transport decision modal ── */}
-      {showTransportModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          data-testid="pos-transport-modal-overlay"
-          onClick={() => { setShowTransportModal(false); }}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-xl"
-            data-testid="pos-transport-modal"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold text-[var(--color-text)]">¿Este pedido lleva transporte?</h3>
-            <p className="mt-1 text-sm text-[var(--color-text-soft)]">
-              Confirme si el pedido incluye servicio de transporte antes de continuar.
-            </p>
-
-            <div className="mt-4 flex gap-3">
-              <label className="flex cursor-pointer items-center gap-2">
-                <input
-                  type="radio"
-                  name="transportDecision"
-                  checked={!includeTransport}
-                  onChange={() => {
-                    setIncludeTransport(false);
-                    setTransportAmount("");
-                    setTransportTouched(false);
-                  }}
-                  className="h-4 w-4 text-[var(--color-primary-600)]"
-                />
-                <span className="text-sm">Sin transporte</span>
-              </label>
-              <label className="flex cursor-pointer items-center gap-2">
-                <input
-                  type="radio"
-                  name="transportDecision"
-                  checked={includeTransport}
-                  onChange={() => setIncludeTransport(true)}
-                  className="h-4 w-4 text-[var(--color-primary-600)]"
-                />
-                <span className="text-sm">Con transporte</span>
-              </label>
-            </div>
-
-            {includeTransport && (
-              <div className="mt-3 space-y-1">
-                <label className="block text-xs font-medium text-[var(--color-text-muted)]">Monto de transporte (C$)</label>
-                <input
-                  className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 ${transportTouched && transportValidationError ? "border-[var(--color-danger-500)] focus:border-[var(--color-danger-500)] focus:ring-[var(--color-danger-100)]" : "border-[var(--color-border)] focus:border-[var(--color-primary-500)] focus:ring-[var(--color-primary-100)]"}`}
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={transportAmount}
-                  onChange={(event) => {
-                    setTransportAmount(event.target.value);
-                    if (transportTouched) setNoticeTimed("");
-                  }}
-                  onBlur={() => setTransportTouched(true)}
-                  placeholder="Ej: 150.00"
-                  autoFocus
-                  data-testid="pos-transport-amount"
-                />
-                {transportTouched && transportValidationError && (
-                  <p className="text-xs text-[var(--color-danger-600)]" data-testid="pos-transport-error">
-                    {transportValidationError}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/* Payment method selector for direct-sale mode */}
-            {branchConfig?.enableCashier === false && (
-              <div className="mt-3 space-y-1">
-                <label className="block text-xs font-medium text-[var(--color-text-muted)]">Método de pago</label>
-                <select
-                  className="w-full rounded-xl border border-[var(--color-border)] px-3 py-2 text-sm"
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  data-testid="pos-payment-method"
-                >
-                  <option value="CASH">Efectivo</option>
-                  <option value="CARD">Tarjeta</option>
-                  <option value="TRANSFER">Transferencia</option>
-                  <option value="CREDIT">Crédito</option>
-                </select>
-              </div>
-            )}
-
-            {/* Summary */}
-            <div className="mt-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3 text-sm">
-              <div className="flex justify-between">
-                <span>Subtotal</span>
-                <strong>C$ {Number(order?.subtotal ?? 0).toFixed(2)}</strong>
-              </div>
-              {includeTransport && transportAmountValue > 0 && (
-                <div className="flex justify-between text-[var(--color-text)]">
-                  <span>Transporte</span>
-                  <strong>C$ {transportAmountValue.toFixed(2)}</strong>
-                </div>
-              )}
-              <div className="mt-1 flex justify-between border-t border-[var(--color-border)] pt-1 font-semibold">
-                <span>Total</span>
-                <span>C$ {(Number(order?.subtotal ?? 0) + transportAmountValue).toFixed(2)}</span>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="mt-5 flex gap-3">
-              <Button
-                variant="secondary"
-                className="flex-1 rounded-xl"
-                onClick={() => {
-                  setShowTransportModal(false);
-                  setIncludeTransport(false);
-                  setTransportAmount("");
-                  setTransportTouched(false);
-                }}
-                data-testid="pos-transport-modal-cancel"
-              >
-                Cancelar
-              </Button>
-              <Button
-                variant="success"
-                className="flex-1 rounded-xl"
-                onClick={confirmAndSendToPayment}
-                disabled={includeTransport && Boolean(transportValidationError)}
-                data-testid="pos-transport-modal-confirm"
-              >
-                {branchConfig?.enableCashier === false ? "Confirmar y registrar venta" : "Confirmar y enviar a caja"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </section>
   );
 }

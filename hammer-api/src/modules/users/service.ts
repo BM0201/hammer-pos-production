@@ -50,18 +50,20 @@ type NewMembership = {
 
 export async function createUser(input: {
   username: string;
-  email: string;
+  email?: string;
   fullName: string;
   password: string;
   isActive?: boolean;
   globalRole?: "MASTER";
   memberships: NewMembership[];
 }) {
+  const email = input.email?.trim() || `${input.username}@hammer.local`;
+
   return prisma.$transaction(async (tx) => {
     const user = await tx.user.create({
       data: {
         username: input.username,
-        email: input.email,
+        email,
         fullName: input.fullName,
         passwordHash: hashPassword(input.password),
         isActive: input.isActive ?? true,

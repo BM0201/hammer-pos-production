@@ -72,7 +72,7 @@ El campo `details` es opcional y se incluye principalmente en errores de validac
 
 | Método | Ruta | Descripción |
 |:------:|------|-------------|
-| POST | `/api/auth/login` | Iniciar sesión (devuelve cookie iron-session) |
+| POST | `/api/auth/login` | Iniciar sesión (devuelve cookie de sesión firmada) |
 | POST | `/api/auth/logout` | Cerrar sesión |
 | GET | `/api/auth/session` | Obtener sesión actual |
 | GET | `/api/auth/csrf` | Obtener token CSRF |
@@ -158,7 +158,7 @@ Content-Type: application/json
 | POST | `/api/cashier/cash-sessions/open` | Authenticated | Abrir sesión de caja |
 | POST | `/api/cashier/cash-sessions/close` | Authenticated | Cerrar sesión de caja |
 | POST | `/api/cashier/cash-sessions/close-request` | Authenticated | Solicitar cierre de caja |
-| GET | `/api/cashier/cash-sessions/active?branchId=...` | Authenticated | Obtener sesión activa (requiere `branchId`; opcionalmente `physicalCashBoxId`) |
+| GET | `/api/cashier/cash-sessions/active` | Authenticated | Obtener sesión activa |
 
 #### Ejemplo: Registrar Pago
 
@@ -305,52 +305,22 @@ Content-Type: application/json
 | DELETE | `/api/master/users/:id/memberships/:membershipId` | Eliminar membresía |
 
 #### Órdenes de Compra
-
 | Método | Ruta | Descripción |
 |:------:|------|-------------|
 | GET | `/api/master/purchase-orders` | Listar órdenes de compra |
-| POST | `/api/master/purchase-orders` | Crear orden de compra (status: DRAFT) |
+| POST | `/api/master/purchase-orders` | Crear orden de compra |
 | GET | `/api/master/purchase-orders/:id` | Obtener orden de compra |
-| POST | `/api/master/purchase-orders/:id/approve` | Aprobar orden (DRAFT → APPROVED) — solo cambia estado, **no** crea inventario |
-| POST | `/api/master/purchase-orders/:id/receive` | Recibir mercadería (APPROVED → RECEIVED) — crea movimientos PURCHASE_IN |
-| POST | `/api/master/purchase-orders/:id/cancel` | Cancelar orden (DRAFT o APPROVED → CANCELLED) |
-
-##### Flujo de Estados — Orden de Compra
-
-```
-DRAFT ──► APPROVED ──► RECEIVED   (terminal)
-  │           │
-  └──► CANCELLED ◄──┘              (terminal)
-```
-
-- **Aprobar** solo cambia el estado a APPROVED. No se genera inventario.
-- **Recibir** valida APPROVED, crea movimientos de inventario (PURCHASE_IN por línea), y marca RECEIVED.
-- **Cancelar** solo es posible desde DRAFT o APPROVED (no desde RECEIVED).
+| POST | `/api/master/purchase-orders/:id/approve` | Aprobar orden |
+| POST | `/api/master/purchase-orders/:id/cancel` | Cancelar orden |
 
 #### Transferencias
-
 | Método | Ruta | Descripción |
 |:------:|------|-------------|
 | GET | `/api/master/transfers` | Listar transferencias |
-| POST | `/api/master/transfers` | Crear transferencia (status: DRAFT) |
+| POST | `/api/master/transfers` | Crear transferencia |
 | GET | `/api/master/transfers/:id` | Obtener transferencia |
-| POST | `/api/master/transfers/:id/approve` | Aprobar (DRAFT → APPROVED) — solo cambia estado |
-| POST | `/api/master/transfers/:id/dispatch` | Despachar (APPROVED → IN_TRANSIT) — crea TRANSFER_OUT en origen |
-| POST | `/api/master/transfers/:id/receive` | Recibir (IN_TRANSIT → RECEIVED/PARTIALLY_RECEIVED) — crea TRANSFER_IN en destino |
-| POST | `/api/master/transfers/:id/cancel` | Cancelar (DRAFT/REQUESTED/APPROVED → CANCELLED) |
-
-##### Flujo de Estados — Transferencia
-
-```
-DRAFT ──► APPROVED ──► IN_TRANSIT ──► RECEIVED            (terminal)
-  │           │                   └──► PARTIALLY_RECEIVED  (terminal)
-  └──► CANCELLED ◄──┘
-```
-
-- **Aprobar** solo cambia estado. No toca inventario.
-- **Despachar** valida stock en origen, crea movimientos TRANSFER_OUT, marca IN_TRANSIT.
-- **Recibir** acepta líneas recibidas, crea TRANSFER_IN en destino, marca RECEIVED o PARTIALLY_RECEIVED.
-- **Cancelar** solo es posible desde DRAFT, REQUESTED, o APPROVED (no desde IN_TRANSIT o RECEIVED).
+| POST | `/api/master/transfers/:id/approve` | Aprobar transferencia |
+| POST | `/api/master/transfers/:id/cancel` | Cancelar transferencia |
 
 #### Cajas (Master)
 | Método | Ruta | Descripción |
@@ -461,7 +431,7 @@ DRAFT ──► APPROVED ──► IN_TRANSIT ──► RECEIVED            (ter
 |--------|--------|-------------|
 | `Content-Type: application/json` | POST/PUT/PATCH | Tipo de contenido |
 | `x-csrf-token: <token>` | POST/PUT/PATCH/DELETE | Token CSRF (obtener de `GET /api/auth/csrf`) |
-| `Cookie: iron-session=...` | Siempre (automático) | Cookie de sesión |
+| `Cookie: hammer-session=...` | Siempre (automático) | Cookie de sesión |
 
 ---
 

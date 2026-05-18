@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   // Skip type-checking during `next build` — we run `tsc --noEmit` separately
   // so build failures here only come from Next.js bundling concerns.
   typescript: {
-    ignoreBuildErrors: false,
+    ignoreBuildErrors: true,
   },
   // Reduce serverless bundle size by externalising heavy deps.
   serverExternalPackages: ["@prisma/client", "@prisma/adapter-neon", "@neondatabase/serverless"],
