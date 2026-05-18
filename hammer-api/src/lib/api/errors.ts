@@ -155,6 +155,33 @@ export function toApiErrorResponse(error: unknown) {
     return fail(message, "El despacho no puede completarse en el estado actual.", 409);
   }
 
+  // Purchase order errors (Phase 5)
+  if (message === "PURCHASE_ORDER_ALREADY_RECEIVED") {
+    return fail("PURCHASE_ORDER_ALREADY_RECEIVED", "El pedido de compra ya fue recibido. No se puede recibir dos veces.", 409);
+  }
+
+  // Transport errors (Phase 3)
+  if (message === "TRANSPORT_ALREADY_EXISTS") {
+    return fail("TRANSPORT_ALREADY_EXISTS", "Ya existe un servicio de transporte para esta orden.", 409);
+  }
+  if (message === "INVALID_TRANSPORT_AMOUNT") {
+    return fail("INVALID_TRANSPORT_AMOUNT", "El monto de transporte es inválido.", 400);
+  }
+
+  // Cash session for direct sale (Phase 4)
+  if (message === "INVALID_CASH_SESSION") {
+    return fail("INVALID_CASH_SESSION", "Sesión de caja inválida.", 400);
+  }
+  if (message === "CASH_SESSION_NOT_OPEN") {
+    return fail("CASH_SESSION_NOT_OPEN", "La sesión de caja no está abierta.", 409);
+  }
+  if (message === "CASH_BOX_INACTIVE") {
+    return fail("CASH_BOX_INACTIVE", "La caja física está inactiva.", 409);
+  }
+  if (message === "CASH_BOX_BRANCH_MISMATCH") {
+    return fail("CASH_BOX_BRANCH_MISMATCH", "La caja física no pertenece a la sucursal de la orden.", 409);
+  }
+
   if (message?.includes("NOT_FOUND") || message?.toLowerCase().includes("not found")) {
     return notFound();
   }

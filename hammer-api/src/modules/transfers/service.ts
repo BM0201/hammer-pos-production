@@ -125,7 +125,7 @@ export async function createTransfer(input: CreateTransferInput) {
   return transfer;
 }
 
-/* ── Approve (moves inventory) ── */
+/* ── Approve (DOES NOT move inventory — Phase 6 fix) ── */
 export async function approveTransfer(id: string, userId: string) {
   const transfer = await prisma.transfer.findUnique({
     where: { id },
@@ -133,77 +133,17 @@ export async function approveTransfer(id: string, userId: string) {
   });
 
   if (!transfer) throw new Error("NOT_FOUND");
-  if (transfer.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden aprobar envíos en estado BORRADOR");
+  if (transfer.status !== "DRAFT" && transfer.status !== "REQUESTED") {
+    throw new Error("INVALID_INPUT: Solo se pueden aprobar envíos en estado BORRADOR o SOLICITADO");
+  }
 
-  const result = await prisma.$transaction(async (tx) => {
-    // Check stock availability INSIDE the transaction to avoid race conditions
-    for (const line of transfer.lines) {
-      const balance = await tx.inventoryBalance.findUnique({
-        where: { branchId_productId: { branchId: transfer.fromBranchId, productId: line.productId } },
-      });
-      const available = balance ? Number(balance.quantityOnHand) : 0;
-      if (available < Number(line.quantityRequested)) {
-        throw new Error(`INVALID_INPUT: Stock insuficiente para ${line.product.name}. Disponible: ${available}, Solicitado: ${Number(line.quantityRequested)}`);
-      }
-    }
-
-    const updated = await tx.transfer.update({
-      where: { id },
-      data: {
-        status: "IN_TRANSIT",
-        approvedByUserId: userId,
-        approvedAt: new Date(),
-        dispatchedAt: new Date(),
-      },
-    });
-
-    for (const line of transfer.lines) {
-      const qty = Number(line.quantityRequested);
-      const cost = Number(line.unitCostSnapshot);
-
-      // Subtract from origin
-      await createInventoryMovementTx(tx, {
-        actorUserId: userId,
-        branchId: transfer.fromBranchId,
-        productId: line.productId,
-        movementType: "TRANSFER_OUT",
-        quantity: qty,
-        unitCost: cost,
-        referenceType: "Transfer",
-        referenceId: transfer.id,
-        notes: `Envío ${transfer.transferNumber} → ${transfer.toBranch.code}`,
-      });
-
-      // Add to destination
-      await createInventoryMovementTx(tx, {
-        actorUserId: userId,
-        branchId: transfer.toBranchId,
-        productId: line.productId,
-        movementType: "TRANSFER_IN",
-        quantity: qty,
-        unitCost: cost,
-        referenceType: "Transfer",
-        referenceId: transfer.id,
-        notes: `Envío ${transfer.transferNumber} ← ${transfer.fromBranch.code}`,
-      });
-
-      // Update dispatched/received quantities
-      await tx.transferLine.update({
-        where: { id: line.id },
-        data: {
-          quantityDispatched: line.quantityRequested,
-          quantityReceived: line.quantityRequested,
-        },
-      });
-    }
-
-    // Mark as received immediately (MVP simplification)
-    await tx.transfer.update({
-      where: { id },
-      data: { status: "RECEIVED", receivedAt: new Date() },
-    });
-
-    return updated;
+  const result = await prisma.transfer.update({
+    where: { id },
+    data: {
+      status: "APPROVED",
+      approvedByUserId: userId,
+      approvedAt: new Date(),
+    },
   });
 
   await logAuditEvent({
@@ -218,13 +158,175 @@ export async function approveTransfer(id: string, userId: string) {
       fromBranch: transfer.fromBranch.code,
       toBranch: transfer.toBranch.code,
       linesCount: transfer.lines.length,
+      note: "Aprobado sin movimiento de inventario. Inventario se descuenta al despachar.",
     },
   });
 
   return result;
 }
 
-/* ── Cancel ── */
+/* ── Dispatch (creates TRANSFER_OUT in origin — Phase 6 fix) ── */
+export async function dispatchTransfer(id: string, userId: string) {
+  const transfer = await prisma.transfer.findUnique({
+    where: { id },
+    include: { lines: { include: { product: true } }, fromBranch: true, toBranch: true },
+  });
+
+  if (!transfer) throw new Error("NOT_FOUND");
+  if (transfer.status !== "APPROVED") throw new Error("INVALID_INPUT: Solo se pueden despachar envíos en estado APROBADO");
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Lock and check stock availability
+    for (const line of transfer.lines) {
+      await tx.$queryRaw`
+        SELECT id FROM "InventoryBalance"
+        WHERE "branchId" = ${transfer.fromBranchId}
+          AND "productId" = ${line.productId}
+        FOR UPDATE
+      `;
+      const balance = await tx.inventoryBalance.findUnique({
+        where: { branchId_productId: { branchId: transfer.fromBranchId, productId: line.productId } },
+      });
+      const available = balance ? Number(balance.quantityOnHand) : 0;
+      if (available < Number(line.quantityRequested)) {
+        throw new Error(`INVALID_INPUT: Stock insuficiente para ${line.product.name}. Disponible: ${available}, Solicitado: ${Number(line.quantityRequested)}`);
+      }
+    }
+
+    // Create TRANSFER_OUT movements (origin only)
+    for (const line of transfer.lines) {
+      const qty = Number(line.quantityRequested);
+      const cost = Number(line.unitCostSnapshot);
+
+      await createInventoryMovementTx(tx, {
+        actorUserId: userId,
+        branchId: transfer.fromBranchId,
+        productId: line.productId,
+        movementType: "TRANSFER_OUT",
+        quantity: qty,
+        unitCost: cost,
+        referenceType: "Transfer",
+        referenceId: transfer.id,
+        notes: `Despacho ${transfer.transferNumber} → ${transfer.toBranch.code}`,
+      });
+
+      // Update dispatched quantity
+      await tx.transferLine.update({
+        where: { id: line.id },
+        data: { quantityDispatched: line.quantityRequested },
+      });
+    }
+
+    const updated = await tx.transfer.update({
+      where: { id },
+      data: {
+        status: "IN_TRANSIT",
+        dispatchedByUserId: userId,
+        dispatchedAt: new Date(),
+      },
+    });
+
+    return updated;
+  });
+
+  await logAuditEvent({
+    actorUserId: userId,
+    branchId: transfer.fromBranchId,
+    module: "transfers",
+    action: "TRANSFER_DISPATCHED",
+    entityType: "Transfer",
+    entityId: transfer.id,
+    metadataJson: {
+      transferNumber: transfer.transferNumber,
+      fromBranch: transfer.fromBranch.code,
+      toBranch: transfer.toBranch.code,
+      linesCount: transfer.lines.length,
+    },
+  });
+
+  return result;
+}
+
+/* ── Receive (creates TRANSFER_IN in destination — Phase 6 fix) ── */
+export async function receiveTransfer(id: string, userId: string) {
+  const transfer = await prisma.transfer.findUnique({
+    where: { id },
+    include: { lines: { include: { product: true } }, fromBranch: true, toBranch: true },
+  });
+
+  if (!transfer) throw new Error("NOT_FOUND");
+  if (transfer.status !== "IN_TRANSIT" && transfer.status !== "PARTIALLY_RECEIVED") {
+    throw new Error("INVALID_INPUT: Solo se pueden recibir envíos en estado EN TRÁNSITO o PARCIALMENTE RECIBIDO");
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    let allFullyReceived = true;
+
+    for (const line of transfer.lines) {
+      const pendingQty = Number(line.quantityDispatched) - Number(line.quantityReceived);
+      if (pendingQty <= 0) continue; // Already fully received
+
+      const cost = Number(line.unitCostSnapshot);
+
+      await createInventoryMovementTx(tx, {
+        actorUserId: userId,
+        branchId: transfer.toBranchId,
+        productId: line.productId,
+        movementType: "TRANSFER_IN",
+        quantity: pendingQty,
+        unitCost: cost,
+        referenceType: "Transfer",
+        referenceId: transfer.id,
+        notes: `Recepción ${transfer.transferNumber} ← ${transfer.fromBranch.code}`,
+      });
+
+      await tx.transferLine.update({
+        where: { id: line.id },
+        data: { quantityReceived: line.quantityDispatched },
+      });
+    }
+
+    // Re-read lines to check if all fully received
+    const updatedLines = await tx.transferLine.findMany({ where: { transferId: id } });
+    for (const line of updatedLines) {
+      if (Number(line.quantityReceived) < Number(line.quantityDispatched)) {
+        allFullyReceived = false;
+        break;
+      }
+    }
+
+    const finalStatus = allFullyReceived ? "RECEIVED" : "PARTIALLY_RECEIVED";
+    const updated = await tx.transfer.update({
+      where: { id },
+      data: {
+        status: finalStatus as TransferStatus,
+        ...(allFullyReceived ? { receivedByUserId: userId, receivedAt: new Date() } : {}),
+      },
+    });
+
+    return updated;
+  });
+
+  await logAuditEvent({
+    actorUserId: userId,
+    branchId: transfer.toBranchId,
+    module: "transfers",
+    action: "TRANSFER_RECEIVED",
+    entityType: "Transfer",
+    entityId: transfer.id,
+    metadataJson: {
+      transferNumber: transfer.transferNumber,
+      fromBranch: transfer.fromBranch.code,
+      toBranch: transfer.toBranch.code,
+      linesCount: transfer.lines.length,
+      finalStatus: result.status,
+    },
+  });
+
+  return result;
+}
+
+/* ── Cancel (allowed for DRAFT, REQUESTED, or APPROVED — Phase 6 fix) ── */
 export async function cancelTransfer(id: string, userId: string) {
   const t = await prisma.transfer.findUnique({
     where: { id },
@@ -235,7 +337,13 @@ export async function cancelTransfer(id: string, userId: string) {
     },
   });
   if (!t) throw new Error("NOT_FOUND");
-  if (t.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden cancelar envíos en estado BORRADOR");
+  if (t.status === "IN_TRANSIT" || t.status === "RECEIVED" || t.status === "PARTIALLY_RECEIVED") {
+    throw new Error("INVALID_INPUT: No se puede cancelar un envío en tránsito o ya recibido");
+  }
+  if (t.status === "CANCELLED") throw new Error("INVALID_INPUT: El envío ya está cancelado");
+  if (t.status !== "DRAFT" && t.status !== "REQUESTED" && t.status !== "APPROVED") {
+    throw new Error("INVALID_INPUT: Solo se pueden cancelar envíos en estado BORRADOR, SOLICITADO o APROBADO");
+  }
 
   const result = await prisma.transfer.update({
     where: { id },

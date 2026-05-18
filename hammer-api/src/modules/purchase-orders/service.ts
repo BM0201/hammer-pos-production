@@ -103,7 +103,7 @@ export async function createPurchaseOrder(input: CreatePOInput) {
   return po;
 }
 
-/* ── Approve (adds to inventory) ── */
+/* ── Approve (DOES NOT touch inventory — Phase 5 fix) ── */
 export async function approvePurchaseOrder(id: string, userId: string) {
   const po = await prisma.purchaseOrder.findUnique({
     where: { id },
@@ -113,29 +113,13 @@ export async function approvePurchaseOrder(id: string, userId: string) {
   if (!po) throw new Error("NOT_FOUND");
   if (po.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden aprobar pedidos en estado BORRADOR");
 
-  // Use a transaction: update status + create inventory movements
-  const result = await prisma.$transaction(async (tx) => {
-    const updated = await tx.purchaseOrder.update({
-      where: { id },
-      data: { status: "APPROVED" },
-    });
-
-    // Add each line to inventory
-    for (const line of po.lines) {
-      await createInventoryMovementTx(tx, {
-        actorUserId: userId,
-        branchId: po.branchId,
-        productId: line.productId,
-        movementType: "PURCHASE_IN",
-        quantity: Number(line.quantity),
-        unitCost: Number(line.unitCost),
-        referenceType: "PurchaseOrder",
-        referenceId: po.id,
-        notes: `Pedido de compra ${po.orderNumber}`,
-      });
-    }
-
-    return updated;
+  const result = await prisma.purchaseOrder.update({
+    where: { id },
+    data: {
+      status: "APPROVED",
+      approvedByUserId: userId,
+      approvedAt: new Date(),
+    },
   });
 
   await logAuditEvent({
@@ -150,13 +134,71 @@ export async function approvePurchaseOrder(id: string, userId: string) {
       total: po.total.toString(),
       linesCount: po.lines.length,
       branchCode: po.branch.code,
+      note: "Aprobado sin movimiento de inventario. Inventario se actualiza al recibir.",
     },
   });
 
   return result;
 }
 
-/* ── Cancel ── */
+/* ── Receive (creates PURCHASE_IN inventory movements — Phase 5 fix) ── */
+export async function receivePurchaseOrder(id: string, userId: string) {
+  const po = await prisma.purchaseOrder.findUnique({
+    where: { id },
+    include: { lines: { include: { product: true } }, branch: true },
+  });
+
+  if (!po) throw new Error("NOT_FOUND");
+  if (po.status === "RECEIVED") throw new Error("PURCHASE_ORDER_ALREADY_RECEIVED");
+  if (po.status !== "APPROVED") throw new Error("INVALID_INPUT: Solo se pueden recibir pedidos en estado APROBADO");
+
+  const result = await prisma.$transaction(async (tx) => {
+    const updated = await tx.purchaseOrder.update({
+      where: { id },
+      data: {
+        status: "RECEIVED",
+        receivedByUserId: userId,
+        receivedAt: new Date(),
+      },
+    });
+
+    // Create PURCHASE_IN inventory movements for each line
+    for (const line of po.lines) {
+      await createInventoryMovementTx(tx, {
+        actorUserId: userId,
+        branchId: po.branchId,
+        productId: line.productId,
+        movementType: "PURCHASE_IN",
+        quantity: Number(line.quantity),
+        unitCost: Number(line.unitCost),
+        referenceType: "PurchaseOrder",
+        referenceId: po.id,
+        notes: `Recepción pedido de compra ${po.orderNumber}`,
+      });
+    }
+
+    return updated;
+  });
+
+  await logAuditEvent({
+    actorUserId: userId,
+    branchId: po.branchId,
+    module: "purchase-orders",
+    action: "PURCHASE_ORDER_RECEIVED",
+    entityType: "PurchaseOrder",
+    entityId: po.id,
+    metadataJson: {
+      orderNumber: po.orderNumber,
+      total: po.total.toString(),
+      linesCount: po.lines.length,
+      branchCode: po.branch.code,
+    },
+  });
+
+  return result;
+}
+
+/* ── Cancel (allowed for DRAFT or APPROVED, not RECEIVED) ── */
 export async function cancelPurchaseOrder(id: string, userId: string) {
   const po = await prisma.purchaseOrder.findUnique({
     where: { id },
@@ -166,7 +208,9 @@ export async function cancelPurchaseOrder(id: string, userId: string) {
     },
   });
   if (!po) throw new Error("NOT_FOUND");
-  if (po.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden cancelar pedidos en estado BORRADOR");
+  if (po.status === "RECEIVED") throw new Error("INVALID_INPUT: No se puede cancelar un pedido ya recibido");
+  if (po.status === "CANCELLED") throw new Error("INVALID_INPUT: El pedido ya está cancelado");
+  if (po.status !== "DRAFT" && po.status !== "APPROVED") throw new Error("INVALID_INPUT: Solo se pueden cancelar pedidos en estado BORRADOR o APROBADO");
 
   const result = await prisma.purchaseOrder.update({
     where: { id },

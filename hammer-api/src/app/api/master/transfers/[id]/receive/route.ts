@@ -1,6 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
-import { cancelTransfer } from "@/modules/transfers/service";
+import { receiveTransfer } from "@/modules/transfers/service";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok } from "@/lib/api/response";
 import { toApiErrorResponse } from "@/lib/api/errors";
@@ -16,7 +16,7 @@ export async function POST(
     assertMaster(session);
 
     const { id } = await params;
-    const result = await cancelTransfer(id, session.userId);
+    const result = await receiveTransfer(id, session.userId);
     return ok(result);
   } catch (error) {
     return toApiErrorResponse(error);

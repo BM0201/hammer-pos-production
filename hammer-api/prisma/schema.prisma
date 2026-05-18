@@ -644,19 +644,21 @@ model ApprovalRequest {
 }
 
 model Transfer {
-  id                String         @id @default(cuid())
-  transferNumber    String         @unique
-  fromBranchId      String
-  toBranchId        String
-  status            TransferStatus @default(DRAFT)
-  requestedByUserId String
-  approvedByUserId  String?
-  approvedAt        DateTime?
-  dispatchedAt      DateTime?
-  receivedAt        DateTime?
-  notes             String?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  id                  String         @id @default(cuid())
+  transferNumber      String         @unique
+  fromBranchId        String
+  toBranchId          String
+  status              TransferStatus @default(DRAFT)
+  requestedByUserId   String
+  approvedByUserId    String?
+  approvedAt          DateTime?
+  dispatchedByUserId  String?
+  dispatchedAt        DateTime?
+  receivedByUserId    String?
+  receivedAt          DateTime?
+  notes               String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   fromBranch  Branch         @relation("TransferFromBranch", fields: [fromBranchId], references: [id])
   toBranch    Branch         @relation("TransferToBranch", fields: [toBranchId], references: [id])
@@ -849,17 +851,21 @@ enum PurchaseOrderStatus {
 }
 
 model PurchaseOrder {
-  id          String              @id @default(cuid())
-  orderNumber String              @unique
-  date        DateTime            @default(now())
-  supplier    String?
-  status      PurchaseOrderStatus @default(DRAFT)
-  total       Decimal             @default(0)
-  notes       String?
-  branchId    String
-  userId      String
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  id               String              @id @default(cuid())
+  orderNumber      String              @unique
+  date             DateTime            @default(now())
+  supplier         String?
+  status           PurchaseOrderStatus @default(DRAFT)
+  total            Decimal             @default(0)
+  notes            String?
+  branchId         String
+  userId           String
+  approvedByUserId String?
+  approvedAt       DateTime?
+  receivedByUserId String?
+  receivedAt       DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 
   branch    Branch              @relation(fields: [branchId], references: [id])
   createdBy User                @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
@@ -1098,8 +1104,8 @@ model TransportService {
   branch    Branch    @relation(fields: [branchId], references: [id])
   createdBy User      @relation("TransportServiceCreatedBy", fields: [createdByUserId], references: [id])
 
+  @@unique([saleOrderId])
   @@index([branchId, status])
-  @@index([saleOrderId])
 }
 
 /**

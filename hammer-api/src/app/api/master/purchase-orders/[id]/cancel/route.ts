@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { cancelPurchaseOrder } from "@/modules/purchase-orders/service";
-import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
+import { ok } from "@/lib/api/response";
+import { toApiErrorResponse } from "@/lib/api/errors";
 
 export async function POST(
   request: Request,
@@ -17,8 +17,8 @@ export async function POST(
 
     const { id } = await params;
     const result = await cancelPurchaseOrder(id, session.userId);
-    return NextResponse.json({ data: result, message: "Pedido cancelado" });
+    return ok(result);
   } catch (error) {
-    return toHttpErrorResponse(error);
+    return toApiErrorResponse(error);
   }
 }

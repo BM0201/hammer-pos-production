@@ -459,6 +459,47 @@ hammer-project/
 
 ---
 
+## Changelog — v1.1.0 (2026-05-18) — Corrección de Flujos de Negocio
+
+### Fase 3 — Transporte
+- Modal de confirmación de transporte antes del pago (POS frontend).
+- Validación cruzada backend: `requiresTransport=true` exige `transportAmount > 0`.
+- Restricción `@@unique([saleOrderId])` en `TransportService` para evitar duplicados.
+
+### Fase 4 — Sesión de Caja Activa
+- Endpoint `GET /api/cashier/cash-sessions/active` ahora requiere `?branchId=...`.
+- Frontend POS envía `branchId` al consultar sesión activa.
+
+### Fase 5 — Órdenes de Compra
+- **Aprobar** ya no crea inventario. Solo cambia status a APPROVED.
+- Nuevo endpoint `POST /api/master/purchase-orders/:id/receive` crea movimientos PURCHASE_IN.
+- Cancelar acepta DRAFT o APPROVED (no RECEIVED).
+
+### Fase 6 — Transferencias
+- **Aprobar** ya no mueve inventario. Solo marca APPROVED.
+- Nuevo endpoint `POST /api/master/transfers/:id/dispatch` — valida stock, crea TRANSFER_OUT, marca IN_TRANSIT.
+- Nuevo endpoint `POST /api/master/transfers/:id/receive` — crea TRANSFER_IN en destino, marca RECEIVED o PARTIALLY_RECEIVED.
+- Cancelar acepta DRAFT/REQUESTED/APPROVED (no IN_TRANSIT ni RECEIVED).
+
+### Fase 7 — Reorden
+- Verificado: conversiones de alertas a PO/Transferencia crean documentos en DRAFT (default de schema).
+
+### Fase 8 — Control de Acceso en Despacho
+- Endpoints `dispatch/pending` y `dispatch/history` ahora filtran por sucursales asignadas al usuario.
+- Usa `requireBranchCapability` / `getBranchIdsWithCapability` para acceso granular.
+
+### Fase 9 — Respuestas Estandarizadas
+- Rutas nuevas y modificadas usan `ok()` / `fail()` + `toApiErrorResponse()`.
+- Nuevos códigos de error: `PURCHASE_ORDER_ALREADY_RECEIVED`, `TRANSPORT_ALREADY_EXISTS`, `INVALID_TRANSPORT_AMOUNT`, etc.
+
+### Migración de Base de Datos
+- `PurchaseOrder`: campos `approvedByUserId`, `approvedAt`, `receivedByUserId`, `receivedAt`.
+- `Transfer`: campos `dispatchedByUserId`, `receivedByUserId`.
+- `TransportService`: unique constraint en `saleOrderId`.
+- Archivo: `prisma/migrations/20260518100000_phase2_to_phase6_schema_updates/migration.sql`
+
+---
+
 ## Licencia
 
 Proyecto privado — todos los derechos reservados.
