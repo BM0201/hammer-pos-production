@@ -23,5 +23,6 @@ export type SessionPayload = {
   roleCode: RoleCode;
   branchIds: string[];
   sessionVersion: number;
+  mustChangePassword?: boolean;
   exp: number;
 };

@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/client/api";
 import { AppShellRouter } from "@/components/layout/app-shell-router";
 import type { SessionPayload } from "@/types/auth";
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -25,10 +26,18 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         if (cancelled) return;
         // /api/auth/session returns { authenticated: boolean, user: {...} }
         if (payload?.authenticated && payload.user) {
+          // If user must change password, redirect to change-password page
+          // (unless they're already there)
+          if (payload.user.mustChangePassword && pathname !== "/app/change-password") {
+            router.replace("/app/change-password");
+            return;
+          }
+
           // Reconstruct session with required fields (defaults for those not surfaced via API)
           setSession({
             ...payload.user,
             sessionVersion: payload.user.sessionVersion ?? 0,
+            mustChangePassword: payload.user.mustChangePassword ?? false,
             exp: payload.user.exp ?? Math.floor(Date.now() / 1000) + 3600,
           } as SessionPayload);
         } else {
@@ -44,12 +53,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, pathname]);
 
   if (loading || !session) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-[var(--color-page-bg)]">
-        <span className="text-sm text-[var(--color-text-muted)] animate-pulse">Cargando…</span>
+        <span className="text-sm text-[var(--color-text-muted)] animate-pulse">Cargando...</span>
       </div>
     );
   }

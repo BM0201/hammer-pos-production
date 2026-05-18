@@ -68,6 +68,7 @@ export async function createUser(input: {
         passwordHash: hashPassword(input.password),
         isActive: input.isActive ?? true,
         globalRole: input.globalRole ?? null,
+        mustChangePassword: true,
       },
       select: { id: true },
     });

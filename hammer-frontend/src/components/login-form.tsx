@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { parseErrorResponse } from "@/lib/http/parse-error-response";
 import { User, Lock, LogIn, AlertCircle, Eye, EyeOff } from "lucide-react";
@@ -9,11 +9,17 @@ import { Input } from "@/components/ui/input";
 
 export function LoginForm() {
   const router = useRouter();
+  const usernameRef = useRef<HTMLInputElement>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Auto-focus username field on mount
+  useEffect(() => {
+    usernameRef.current?.focus();
+  }, []);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -60,6 +66,7 @@ export function LoginForm() {
             <User className="h-4 w-4" />
           </span>
           <Input
+            ref={usernameRef}
             id="username"
             name="username"
             value={username}
