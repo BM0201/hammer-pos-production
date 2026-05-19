@@ -104,12 +104,13 @@ export default function ChangePasswordPage() {
       <div className="bg-white rounded-xl shadow-lg p-6 sm:p-8 max-w-md w-full">
         {/* First login banner */}
         {isFirstLogin && (
-          <div className="mb-6 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4">
-            <ShieldAlert className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="mb-6 flex items-start gap-3 rounded-lg border border-blue-300 bg-blue-50 p-4">
+            <ShieldAlert className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-semibold text-amber-800">Primer inicio de sesión</p>
-              <p className="text-xs text-amber-700 mt-1">
-                Por seguridad, debes cambiar tu contraseña temporal antes de acceder al sistema.
+              <p className="text-sm font-semibold text-blue-800">Debe cambiar su contraseña inicial</p>
+              <p className="text-xs text-blue-700 mt-1">
+                La contraseña <span className="font-mono font-medium">ElChele1234!</span> es temporal.
+                Debes crear una contraseña personal y segura antes de acceder al sistema.
               </p>
             </div>
           </div>
@@ -150,7 +151,7 @@ export default function ChangePasswordPage() {
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2.5 pr-10 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                placeholder={isFirstLogin ? "Contraseña temporal que te dieron" : "Ingresa tu contraseña actual"}
+                placeholder={isFirstLogin ? "ElChele1234!" : "Ingresa tu contraseña actual"}
                 autoComplete="current-password"
                 required
               />

@@ -42,28 +42,45 @@ Hammer POS/ERP usa un sistema de autenticación **basado en usuario y contraseñ
 
 ## 🔄 Cómo Funciona el Primer Login
 
-1. **Se ejecuta el seed** → Se crea el usuario MASTER con `mustChangePassword: false` (el master inicial ya conoce su contraseña)
-2. **El master crea un nuevo usuario** → El usuario se crea con `mustChangePassword: true`
-3. **El nuevo usuario hace login** → El backend detecta `mustChangePassword: true` y retorna `redirectTo: "/app/change-password"`
-4. **El frontend redirige** → El layout de `/app/*` verifica `mustChangePassword` en la sesión y fuerza la redirección a `/app/change-password`
-5. **El usuario cambia su contraseña** → El backend marca `mustChangePassword: false` y revoca todas las sesiones
-6. **Re-login** → El usuario inicia sesión con su nueva contraseña y accede normalmente
+> **IMPORTANTE**: TODOS los usuarios (incluido MASTER) deben cambiar la contraseña inicial en su primer login.
+
+1. **Se ejecuta el seed** → Se crea el usuario MASTER con contraseña `ElChele1234!` y `mustChangePassword: true`
+2. **El MASTER hace su primer login** → Es redirigido a `/app/change-password` para cambiar la contraseña inicial
+3. **El MASTER cambia su contraseña** → Se marca `mustChangePassword: false`, sesiones revocadas
+4. **El MASTER crea un nuevo usuario** → El usuario se crea automáticamente con contraseña `ElChele1234!` y `mustChangePassword: true`
+5. **El nuevo usuario hace login** → El backend detecta `mustChangePassword: true` y retorna `redirectTo: "/app/change-password"`
+6. **El usuario cambia su contraseña** → Se marca `mustChangePassword: false`, sesiones revocadas
+7. **Re-login** → El usuario inicia sesión con su nueva contraseña y accede normalmente
+
+### Contraseña Universal
+
+La contraseña `ElChele1234!` se usa como contraseña inicial universal para:
+- ✅ Usuarios MASTER creados por seed
+- ✅ Usuarios nuevos creados desde el panel master
+- ✅ Resets de contraseña (tanto desde panel como por script)
+
+**Nunca se generan contraseñas aleatorias.** Esto simplifica la comunicación con los empleados.
 
 ### Flujo visual
 
 ```
-Usuario nuevo → Login → ¿mustChangePassword?
-                           │
-                     ┌─────┴─────┐
-                     │ Sí        │ No
-                     ▼           ▼
-              /change-password  /app (dashboard)
+Seed crea MASTER (ElChele1234! + mustChangePassword: true)
+         │
+Master Login → ¿mustChangePassword?
+                     │ Sí
+                     ▼
+              /change-password → Cambia contraseña
                      │
-              Cambia contraseña
+              Re-login → Dashboard
                      │
-              Sesiones revocadas
+         Master crea usuario (ElChele1234! automático)
                      │
-              Re-login → /app (dashboard)
+         Nuevo usuario login → ¿mustChangePassword?
+                                    │ Sí
+                                    ▼
+                             /change-password → Cambia contraseña
+                                    │
+                             Re-login → Dashboard
 ```
 
 ---
@@ -77,12 +94,12 @@ Usuario nuevo → Login → ¿mustChangePassword?
    - **Usuario**: nombre único (ej: `juan.mga`)
    - **Nombre completo**: nombre real del empleado
    - **Correo**: opcional (se auto-genera `usuario@hammer.local` si está vacío)
-   - **Contraseña inicial**: contraseña temporal (mín. 8 caracteres)
    - **Rol global**: `MASTER` o vacío (sin rol global)
 3. Clic en **"Crear usuario"**
-4. El usuario creado tendrá `mustChangePassword: true`
-5. Compartir las credenciales temporales con el empleado
-6. En su primer login, será forzado a cambiar la contraseña
+4. La contraseña se asigna **automáticamente** como `ElChele1234!` (no se puede personalizar)
+5. El usuario tendrá `mustChangePassword: true`
+6. Informar al empleado: "Tu contraseña es ElChele1234!, cámbiala al hacer login"
+7. En su primer login, será obligado a cambiar la contraseña
 
 ### Asignar Sucursal/Rol
 
@@ -102,31 +119,27 @@ Después de crear el usuario:
 ### Desde el Panel Master
 
 1. Seleccionar el usuario en la lista
-2. Usar el botón **"Resetear Contraseña"** que genera una contraseña aleatoria
-3. Se muestra un modal con la nueva contraseña
+2. Usar el botón **"Resetear Contraseña a ElChele1234!"**
+3. Se muestra un modal de confirmación con la contraseña `ElChele1234!`
 4. **Copiar la contraseña** con el botón de copiar
-5. Compartirla con el empleado
-6. El usuario deberá cambiarla en su siguiente login (`mustChangePassword: true`)
+5. Confirmar el reset
+6. Informar al empleado que su nueva contraseña es `ElChele1234!`
+7. El usuario deberá cambiarla en su siguiente login (`mustChangePassword: true`)
 
-### Reset manual (campo de texto)
-
-1. Seleccionar el usuario
-2. Escribir una nueva contraseña en el campo
-3. Clic en **"Guardar contraseña"**
-4. El usuario deberá cambiarla en su siguiente login
+> **Nota**: No se generan contraseñas aleatorias. Siempre se restablece a `ElChele1234!`.
 
 ### Resetear Contraseña del Master (CLI)
 
 ```bash
-# Desarrollo
+# Desarrollo — restablece a ElChele1234!
 cd hammer-api
 npm run auth:reset-master
 
-# Producción (con nueva contraseña)
-MASTER_INITIAL_PASSWORD="NuevaContraseña1!" RESET_MASTER_PASSWORD=true npm run db:seed:prod
+# Producción — restablece a ElChele1234! con mustChangePassword: true
+npx tsx scripts/reset-master-password.ts
 
-# O usar el script dedicado:
-npx tsx scripts/reset-master-password.ts "NuevaContraseña1!"
+# O vía seed con reset
+MASTER_INITIAL_PASSWORD="ElChele1234!" RESET_MASTER_PASSWORD=true npm run db:seed:prod
 ```
 
 ---

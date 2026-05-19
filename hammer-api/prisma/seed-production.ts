@@ -115,12 +115,13 @@ async function main(): Promise<void> {
         where: { username: config.masterUsername },
         data: {
           passwordHash,
-          mustChangePassword: false,
+          // Master también debe cambiar contraseña tras reset
+          mustChangePassword: true,
           isActive: true,
           globalRole: RoleCode.MASTER,
         },
       });
-      console.log(`  ✔ Master user "${config.masterUsername}" — password RESET`);
+      console.log(`  ✔ Master user "${config.masterUsername}" — password RESET (deberá cambiarla en próximo login)`);
     } else {
       console.log(`  ✔ Master user "${config.masterUsername}" — already exists (no password change)`);
     }
@@ -134,7 +135,8 @@ async function main(): Promise<void> {
         fullName: config.masterFullName,
         passwordHash,
         globalRole: RoleCode.MASTER,
-        mustChangePassword: false,
+        // Master también debe cambiar contraseña en su primer login
+        mustChangePassword: true,
         isActive: true,
       },
     });

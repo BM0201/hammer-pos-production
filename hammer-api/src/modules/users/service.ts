@@ -3,6 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/modules/auth/password";
 import { revokeAllUserSessions } from "@/modules/security/token-revocation";
 
+/**
+ * Contraseña inicial universal para TODOS los usuarios nuevos y resets.
+ * El usuario SIEMPRE debe cambiarla en su primer login.
+ */
+const INITIAL_PASSWORD = "ElChele1234!";
+
 export async function listUsersWithMemberships() {
   return prisma.user.findMany({
     orderBy: { username: "asc" },
@@ -52,7 +58,7 @@ export async function createUser(input: {
   username: string;
   email?: string;
   fullName: string;
-  password: string;
+  password?: string; // Se ignora — siempre se usa la contraseña universal ElChele1234!
   isActive?: boolean;
   globalRole?: "MASTER";
   memberships: NewMembership[];
@@ -65,7 +71,8 @@ export async function createUser(input: {
         username: input.username,
         email,
         fullName: input.fullName,
-        passwordHash: hashPassword(input.password),
+        // SIEMPRE usa la contraseña universal — el usuario la cambiará en su primer login
+        passwordHash: hashPassword(INITIAL_PASSWORD),
         isActive: input.isActive ?? true,
         globalRole: input.globalRole ?? null,
         mustChangePassword: true,
@@ -110,7 +117,8 @@ export async function updateUser(
   if (typeof input.isActive === "boolean") data.isActive = input.isActive;
   if (input.globalRole !== undefined) data.globalRole = input.globalRole;
   if (typeof input.password === "string") {
-    data.passwordHash = hashPassword(input.password);
+    // Admin reset: SIEMPRE usa la contraseña universal ElChele1234!
+    data.passwordHash = hashPassword(INITIAL_PASSWORD);
     data.mustChangePassword = true;
   }
 

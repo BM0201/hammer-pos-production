@@ -15,13 +15,16 @@ import {
   X,
   Copy,
   Check,
-  RefreshCw,
   Eye,
   EyeOff,
   Search,
   AlertTriangle,
+  Info,
 } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
+
+/** Contraseña inicial universal — igual para todos los usuarios */
+const INITIAL_PASSWORD = "ElChele1234!";
 
 type BranchOption = { id: string; code: string; name: string; isActive: boolean };
 type MembershipRole = "BRANCH_ADMIN" | "SALES" | "CASHIER" | "WAREHOUSE";
@@ -62,35 +65,8 @@ function getErrorMessage(payload?: { message?: string; reason?: string; error?: 
   return payload?.message ?? payload?.reason ?? payload?.error ?? fallback ?? "No se pudo completar la operación.";
 }
 
-/** Generate a random secure password (12 chars: uppercase + lowercase + digits + symbols) */
-function generateSecurePassword(): string {
-  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-  const lower = "abcdefghjkmnpqrstuvwxyz";
-  const digits = "23456789";
-  const symbols = "!@#$%&*_+-=";
-  const all = upper + lower + digits + symbols;
-
-  // Ensure at least one of each
-  let pwd = "";
-  pwd += upper[Math.floor(Math.random() * upper.length)];
-  pwd += lower[Math.floor(Math.random() * lower.length)];
-  pwd += digits[Math.floor(Math.random() * digits.length)];
-  pwd += symbols[Math.floor(Math.random() * symbols.length)];
-
-  // Fill remaining characters
-  for (let i = pwd.length; i < 12; i++) {
-    pwd += all[Math.floor(Math.random() * all.length)];
-  }
-
-  // Shuffle
-  return pwd
-    .split("")
-    .sort(() => Math.random() - 0.5)
-    .join("");
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Password Reset Modal
+// Password Reset Confirmation Modal
 // ─────────────────────────────────────────────────────────────────────────────
 function ResetPasswordModal({
   user,
@@ -102,27 +78,20 @@ function ResetPasswordModal({
   user: UserRow;
   open: boolean;
   onClose: () => void;
-  onConfirm: (password: string) => Promise<void>;
+  onConfirm: () => Promise<void>;
   loading: boolean;
 }) {
-  const [generatedPassword, setGeneratedPassword] = useState(() => generateSecurePassword());
   const [copied, setCopied] = useState(false);
   const [showPassword, setShowPassword] = useState(true);
 
-  const regenerate = useCallback(() => {
-    setGeneratedPassword(generateSecurePassword());
-    setCopied(false);
-  }, []);
-
   const copyToClipboard = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(generatedPassword);
+      await navigator.clipboard.writeText(INITIAL_PASSWORD);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch {
-      // Fallback for older browsers
       const textarea = document.createElement("textarea");
-      textarea.value = generatedPassword;
+      textarea.value = INITIAL_PASSWORD;
       textarea.style.position = "fixed";
       textarea.style.opacity = "0";
       document.body.appendChild(textarea);
@@ -132,7 +101,7 @@ function ResetPasswordModal({
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     }
-  }, [generatedPassword]);
+  }, []);
 
   if (!open) return null;
 
@@ -170,18 +139,18 @@ function ResetPasswordModal({
         <div className="px-6 py-5 space-y-4">
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-            <p>Se generará una nueva contraseña temporal. El usuario deberá cambiarla en su próximo inicio de sesión.</p>
+            <p>Se restablecerá la contraseña a la contraseña universal. El usuario deberá cambiarla en su próximo inicio de sesión.</p>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Contraseña generada
+              Contraseña se restablecerá a:
             </label>
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <input
                   type={showPassword ? "text" : "password"}
-                  value={generatedPassword}
+                  value={INITIAL_PASSWORD}
                   readOnly
                   className="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2.5 pr-10 text-sm font-mono tracking-wider select-all focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                   onClick={(e) => (e.target as HTMLInputElement).select()}
@@ -218,17 +187,12 @@ function ResetPasswordModal({
                   </>
                 )}
               </button>
-
-              {/* Regenerate button */}
-              <button
-                type="button"
-                onClick={regenerate}
-                className="rounded-lg border border-gray-300 p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
-                title="Generar nueva contraseña"
-              >
-                <RefreshCw className="h-4 w-4" />
-              </button>
             </div>
+          </div>
+
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 flex items-start gap-2">
+            <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
+            <p>Comparte esta contraseña con el usuario. Al iniciar sesión, será obligado a crear una contraseña nueva y personal.</p>
           </div>
         </div>
 
@@ -244,7 +208,7 @@ function ResetPasswordModal({
           </button>
           <button
             type="button"
-            onClick={() => onConfirm(generatedPassword)}
+            onClick={() => onConfirm()}
             disabled={loading}
             className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 transition-colors disabled:opacity-50"
           >
@@ -297,14 +261,10 @@ export function UsersAdmin() {
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [resetModalLoading, setResetModalLoading] = useState(false);
 
-  // Manual password reset
-  const [resetPassword, setResetPassword] = useState("");
-
   const [createForm, setCreateForm] = useState({
     username: "",
     fullName: "",
     email: "",
-    password: "",
     globalRole: "",
   });
   const [membershipForm, setMembershipForm] = useState<{ branchId: string; roleCode: MembershipRole }>({
@@ -395,10 +355,6 @@ export function UsersAdmin() {
       setFeedback({ tone: "error", text: "El nombre completo es obligatorio." });
       return;
     }
-    if (createForm.password.length < 8) {
-      setFeedback({ tone: "error", text: "La contraseña debe tener al menos 8 caracteres." });
-      return;
-    }
 
     setCreatingUser(true);
     setFeedback({ tone: "info", text: "Creando usuario..." });
@@ -411,7 +367,6 @@ export function UsersAdmin() {
           username: createForm.username.trim(),
           fullName: createForm.fullName.trim(),
           email: createForm.email.trim() || undefined,
-          password: createForm.password,
           globalRole: createForm.globalRole === "MASTER" ? "MASTER" : undefined,
           memberships: [],
         }),
@@ -420,9 +375,9 @@ export function UsersAdmin() {
 
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo crear el usuario."));
 
-      setCreateForm({ username: "", fullName: "", email: "", password: "", globalRole: "" });
+      setCreateForm({ username: "", fullName: "", email: "", globalRole: "" });
       await load(false);
-      setFeedback({ tone: "success", text: "✅ Usuario creado correctamente. Deberá cambiar su contraseña en el primer login." });
+      setFeedback({ tone: "success", text: `✅ Usuario creado. Contraseña inicial: ${INITIAL_PASSWORD} — Deberá cambiarla en su primer login.` });
     } catch (error) {
       setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo crear el usuario." });
     } finally {
@@ -450,7 +405,7 @@ export function UsersAdmin() {
         tone: "success",
         text: mode === "toggle"
           ? `✅ Usuario ${updates.isActive ? "activado" : "desactivado"} correctamente.`
-          : "✅ Contraseña actualizada. El usuario deberá cambiarla en su próximo login.",
+          : `✅ Contraseña restablecida a ${INITIAL_PASSWORD}. El usuario deberá cambiarla en su próximo login.`,
       });
     } catch (error) {
       setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo actualizar el usuario." });
@@ -461,15 +416,15 @@ export function UsersAdmin() {
     }
   }
 
-  // Handle modal-based password reset
-  async function handleModalReset(password: string) {
+  // Handle modal-based password reset — always resets to ElChele1234!
+  async function handleModalReset() {
     if (!selectedUser) return;
     setResetModalLoading(true);
     try {
       const response = await apiFetch(`/api/master/users/${selectedUser.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password: "reset" }), // Backend ignora el valor, siempre usa ElChele1234!
       });
       const json = (await response.json()) as { message?: string; reason?: string; error?: string };
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo resetear la contraseña."));
@@ -477,7 +432,7 @@ export function UsersAdmin() {
       await load(false);
       setFeedback({
         tone: "success",
-        text: "✅ Contraseña reseteada correctamente. El usuario deberá cambiarla en su próximo login.",
+        text: `✅ Contraseña restablecida a ${INITIAL_PASSWORD}. El usuario deberá cambiarla en su próximo login.`,
       });
       setResetModalOpen(false);
     } catch (error) {
@@ -557,7 +512,7 @@ export function UsersAdmin() {
     <section className="space-y-4" data-testid="users-admin-root">
       <Card className="p-3 text-sm text-[var(--color-text-secondary)]">
         Módulo operativo para crear usuarios, activar/desactivar, resetear contraseña y gestionar membresías por sucursal.
-        Los nuevos usuarios deberán cambiar su contraseña en el primer inicio de sesión.
+        Todos los usuarios nuevos reciben la contraseña inicial <strong className="font-mono">{INITIAL_PASSWORD}</strong> y deben cambiarla en su primer inicio de sesión.
       </Card>
 
       {/* Create User Form */}
@@ -567,46 +522,49 @@ export function UsersAdmin() {
           <h2 className="text-sm font-semibold text-[var(--color-text)]">Crear usuario</h2>
         </div>
 
-        <form className="grid gap-2 md:grid-cols-5" onSubmit={createUser}>
-          <Input
-            placeholder="Usuario *"
-            value={createForm.username}
-            onChange={(e) => setCreateForm((prev) => ({ ...prev, username: e.target.value }))}
-            required
-            minLength={3}
-            autoComplete="off"
-          />
-          <Input
-            placeholder="Nombre completo *"
-            value={createForm.fullName}
-            onChange={(e) => setCreateForm((prev) => ({ ...prev, fullName: e.target.value }))}
-            required
-            minLength={2}
-          />
-          <Input
-            placeholder="Correo (opcional)"
-            type="email"
-            value={createForm.email}
-            onChange={(e) => setCreateForm((prev) => ({ ...prev, email: e.target.value }))}
-          />
-          <Input
-            placeholder="Contraseña inicial *"
-            type="password"
-            value={createForm.password}
-            onChange={(e) => setCreateForm((prev) => ({ ...prev, password: e.target.value }))}
-            required
-            minLength={8}
-            autoComplete="new-password"
-          />
-          <select
-            className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm"
-            value={createForm.globalRole}
-            onChange={(e) => setCreateForm((prev) => ({ ...prev, globalRole: e.target.value }))}
-          >
-            <option value="">Sin rol global</option>
-            <option value="MASTER">MASTER</option>
-          </select>
-          <Button className="md:col-span-5" type="submit" loading={creatingUser} disabled={initialLoading}>
+        <form className="space-y-3" onSubmit={createUser}>
+          <div className="grid gap-2 md:grid-cols-4">
+            <Input
+              placeholder="Usuario *"
+              value={createForm.username}
+              onChange={(e) => setCreateForm((prev) => ({ ...prev, username: e.target.value }))}
+              required
+              minLength={3}
+              autoComplete="off"
+            />
+            <Input
+              placeholder="Nombre completo *"
+              value={createForm.fullName}
+              onChange={(e) => setCreateForm((prev) => ({ ...prev, fullName: e.target.value }))}
+              required
+              minLength={2}
+            />
+            <Input
+              placeholder="Correo (opcional)"
+              type="email"
+              value={createForm.email}
+              onChange={(e) => setCreateForm((prev) => ({ ...prev, email: e.target.value }))}
+            />
+            <select
+              className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm"
+              value={createForm.globalRole}
+              onChange={(e) => setCreateForm((prev) => ({ ...prev, globalRole: e.target.value }))}
+            >
+              <option value="">Sin rol global</option>
+              <option value="MASTER">MASTER</option>
+            </select>
+          </div>
+
+          {/* Info banner about universal password */}
+          <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+            <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
+            <p>
+              La contraseña inicial será: <strong className="font-mono">{INITIAL_PASSWORD}</strong>
+              {" "}— El usuario deberá cambiarla en su primer inicio de sesión.
+            </p>
+          </div>
+
+          <Button className="w-full" type="submit" loading={creatingUser} disabled={initialLoading}>
             <UserPlus className="h-4 w-4" />
             Crear usuario
           </Button>
@@ -724,63 +682,30 @@ export function UsersAdmin() {
               </Card>
 
               {/* Actions: toggle active + password reset */}
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant={selectedUser.isActive ? "secondary" : "success"}
-                    loading={togglingActiveState}
-                    disabled={savingUser || resettingPassword || assigningMembership}
-                    onClick={() => {
-                      if (selectedUser.isActive && !confirm("¿Desactivar este usuario? Se cerrarán todas sus sesiones activas.")) return;
-                      saveUser(selectedUser, { isActive: !selectedUser.isActive }, "toggle");
-                    }}
-                  >
-                    {selectedUser.isActive ? "Desactivar usuario" : "Activar usuario"}
-                  </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant={selectedUser.isActive ? "secondary" : "success"}
+                  loading={togglingActiveState}
+                  disabled={savingUser || resettingPassword || assigningMembership}
+                  onClick={() => {
+                    if (selectedUser.isActive && !confirm("¿Desactivar este usuario? Se cerrarán todas sus sesiones activas.")) return;
+                    saveUser(selectedUser, { isActive: !selectedUser.isActive }, "toggle");
+                  }}
+                >
+                  {selectedUser.isActive ? "Desactivar usuario" : "Activar usuario"}
+                </Button>
 
-                  {/* Modal-based reset (generates random password) */}
-                  <Button
-                    type="button"
-                    variant="primary"
-                    disabled={savingUser || resettingPassword || assigningMembership || resetModalLoading}
-                    onClick={() => setResetModalOpen(true)}
-                  >
-                    <KeyRound className="h-4 w-4" />
-                    Resetear Contraseña
-                  </Button>
-                </div>
-
-                {/* Manual password input (alternative) */}
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="password"
-                    placeholder="O escribe una nueva contraseña manual..."
-                    value={resetPassword}
-                    onChange={(event) => setResetPassword(event.target.value)}
-                    disabled={resettingPassword}
-                    className="flex-1"
-                    autoComplete="new-password"
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    loading={resettingPassword}
-                    disabled={!resetPassword.trim() || resetPassword.trim().length < 8}
-                    onClick={() => {
-                      if (resetPassword.trim().length < 8) {
-                        setFeedback({ tone: "error", text: "La nueva contraseña debe tener al menos 8 caracteres." });
-                        return;
-                      }
-
-                      saveUser(selectedUser, { password: resetPassword.trim() }, "password")
-                        .then(() => setResetPassword(""))
-                        .catch(() => setFeedback({ tone: "error", text: "No se pudo resetear contraseña." }));
-                    }}
-                  >
-                    Guardar
-                  </Button>
-                </div>
+                {/* Reset password — always to ElChele1234! */}
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={savingUser || resettingPassword || assigningMembership || resetModalLoading}
+                  onClick={() => setResetModalOpen(true)}
+                >
+                  <KeyRound className="h-4 w-4" />
+                  Resetear Contraseña a {INITIAL_PASSWORD}
+                </Button>
               </div>
 
               {/* Membership assignment */}

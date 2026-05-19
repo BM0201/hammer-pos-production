@@ -60,7 +60,7 @@ async function main(): Promise<void> {
       globalRole: RoleCode.MASTER,
       isActive: true,
       // Only reset the password if explicitly requested
-      ...(process.env.RESET_MASTER_PASSWORD === "true" ? { passwordHash, mustChangePassword: false } : {}),
+      ...(process.env.RESET_MASTER_PASSWORD === "true" ? { passwordHash, mustChangePassword: true } : {}),
     },
     create: {
       username: MASTER_USERNAME,
@@ -68,7 +68,8 @@ async function main(): Promise<void> {
       email: MASTER_EMAIL,
       globalRole: RoleCode.MASTER,
       passwordHash,
-      mustChangePassword: false,
+      // Master también debe cambiar contraseña en su primer login
+      mustChangePassword: true,
       isActive: true,
     },
   });
@@ -94,6 +95,8 @@ async function main(): Promise<void> {
   console.log("✅ Seed completed successfully.");
   console.log(`   Branch: ${BRANCH_NAME} (${BRANCH_CODE})`);
   console.log(`   Master: ${MASTER_USERNAME}`);
+  console.log(`   Contraseña inicial: ElChele1234!`);
+  console.log("   ⚠️  Master deberá cambiar contraseña en su primer login");
   console.log("   Demo users: NONE");
   console.log("   Test products: NONE");
 }

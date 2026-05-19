@@ -9,7 +9,7 @@ export const createUserSchema = z.object({
   username: z.string().min(3),
   email: z.string().email().optional(),
   fullName: z.string().min(2),
-  password: z.string().min(8),
+  password: z.string().optional(), // Se ignora — la contraseña siempre es ElChele1234!
   isActive: z.boolean().optional(),
   globalRole: z.enum(["MASTER"]).optional(),
   memberships: z.array(membershipSchema).default([]),
