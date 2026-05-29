@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import toast from "react-hot-toast";
 import {
   Truck,
   Plus,
@@ -9,8 +10,18 @@ import {
   Loader2,
   AlertTriangle,
   ArrowRight,
+  X,
+  Save,
+  Package,
+  Building2,
+  FileText,
+  Trash2,
+  Eye,
+  Send,
+  Ban,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { fmtDateTime } from "@/lib/format";
 
 /* ── Types ── */
 type Product = { id: string; sku: string; name: string; unit: string };
@@ -69,7 +80,6 @@ export default function TransfersPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [selectedTransfer, setSelectedTransfer] = useState<Transfer | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>("");
@@ -152,12 +162,11 @@ export default function TransfersPage() {
       const rawCreate = await res.json();
       if (!res.ok) throw new Error(rawCreate.error?.message ?? rawCreate.message ?? "Error al crear envío");
 
-      setSuccess("Envío creado exitosamente");
+      toast.success("✅ Envío creado exitosamente");
       setShowModal(false);
       fetchTransfers();
-      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al crear envío"));
+      toast.error(getErrorMessage(error, "Error al crear envío"));
     } finally {
       setActionLoading(null);
     }
@@ -170,12 +179,11 @@ export default function TransfersPage() {
       setError(null);
       const res = await apiFetch(`/api/master/transfers/${id}/approve`, { method: "POST" });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al aprobar"); }
-      setSuccess("Envío aprobado e inventario actualizado");
+      toast.success("✅ Envío aprobado e inventario actualizado");
       fetchTransfers();
       setSelectedTransfer(null);
-      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al aprobar"));
+      toast.error(getErrorMessage(error, "Error al aprobar"));
     } finally {
       setActionLoading(null);
     }
@@ -187,12 +195,11 @@ export default function TransfersPage() {
       setActionLoading(id);
       const res = await apiFetch(`/api/master/transfers/${id}/cancel`, { method: "POST" });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al cancelar"); }
-      setSuccess("Envío cancelado");
+      toast.success("Envío cancelado");
       fetchTransfers();
       setSelectedTransfer(null);
-      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al cancelar"));
+      toast.error(getErrorMessage(error, "Error al cancelar"));
     } finally {
       setActionLoading(null);
     }
@@ -235,16 +242,11 @@ export default function TransfersPage() {
         </button>
       </div>
 
-      {/* Messages */}
+      {/* Error Banner */}
       {error && (
         <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-4 py-3 text-sm text-[var(--color-danger-700)] flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 flex-shrink-0" /> {error}
-          <button onClick={() => setError(null)} className="ml-auto text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]">✕</button>
-        </div>
-      )}
-      {success && (
-        <div className="rounded-lg border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-4 py-3 text-sm text-[var(--color-success-700)] flex items-center gap-2">
-          <CheckCircle className="h-4 w-4 flex-shrink-0" /> {success}
+          <button onClick={() => setError(null)} className="ml-auto text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]"><X className="h-4 w-4" /></button>
         </div>
       )}
 
@@ -277,16 +279,21 @@ export default function TransfersPage() {
           <p className="text-[var(--color-text-muted)]">No hay envíos registrados.</p>
         </div>
       ) : (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
+          <div className="hm-card-header-blue px-5 py-3 flex items-center gap-2">
+            <Truck className="h-5 w-5" />
+            <h2 className="font-semibold">Listado de Envíos</h2>
+            <span className="ml-auto text-xs opacity-80">{transfers.length} registros</span>
+          </div>
+          <table className="hm-table">
             <thead>
-              <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]">
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Envío</th>
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Ruta</th>
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Estado</th>
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Productos</th>
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Fecha</th>
-                <th className="px-4 py-3 text-center font-semibold text-[var(--color-text-secondary)]">Acciones</th>
+              <tr>
+                <th>Envío</th>
+                <th>Ruta</th>
+                <th>Estado</th>
+                <th>Productos</th>
+                <th>Fecha</th>
+                <th className="text-center">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -296,40 +303,55 @@ export default function TransfersPage() {
                   className="border-b border-[var(--color-border)] hover:bg-[var(--color-surface-alt)] cursor-pointer transition-colors"
                   onClick={() => setSelectedTransfer(t)}
                 >
-                  <td className="px-4 py-3 font-mono text-xs font-medium text-[var(--color-text)]">
+                  <td className="font-mono text-xs font-bold text-[var(--color-text)]">
                     {t.transferNumber}
                   </td>
-                  <td className="px-4 py-3">
+                  <td>
                     <span className="inline-flex items-center gap-1.5 text-[var(--color-text)]">
-                      <span className="font-medium">{t.fromBranch.code}</span>
+                      <span className="inline-flex items-center justify-center w-6 h-6 rounded bg-blue-50 text-blue-700 text-[10px] font-bold">{t.fromBranch.code}</span>
                       <ArrowRight className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
-                      <span className="font-medium">{t.toBranch.code}</span>
+                      <span className="inline-flex items-center justify-center w-6 h-6 rounded bg-emerald-50 text-emerald-700 text-[10px] font-bold">{t.toBranch.code}</span>
                     </span>
                   </td>
-                  <td className="px-4 py-3"><StatusBadge status={t.status} /></td>
-                  <td className="px-4 py-3 text-[var(--color-text-secondary)]">{t.lines.length} líneas</td>
-                  <td className="px-4 py-3 text-[var(--color-text-secondary)]">
-                    {new Date(t.createdAt).toLocaleDateString("es-NI")}
+                  <td><StatusBadge status={t.status} /></td>
+                  <td>
+                    <span className="inline-flex items-center gap-1 text-[var(--color-text-secondary)]">
+                      <Package className="h-3.5 w-3.5" /> {t.lines.length} líneas
+                    </span>
                   </td>
-                  <td className="px-4 py-3 text-center">
-                    {t.status === "DRAFT" && (
-                      <div className="flex items-center justify-center gap-1">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleApprove(t.id); }}
-                          disabled={actionLoading === t.id}
-                          className="rounded bg-[var(--color-success-600)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-success-700)] disabled:opacity-50"
-                        >
-                          {actionLoading === t.id ? "..." : "Aprobar"}
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleCancel(t.id); }}
-                          disabled={actionLoading === t.id}
-                          className="rounded bg-[var(--color-danger-600)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-danger-700)] disabled:opacity-50"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    )}
+                  <td className="text-[var(--color-text-secondary)]">
+                    {fmtDateTime(t.createdAt)}
+                  </td>
+                  <td className="text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setSelectedTransfer(t); }}
+                        className="rounded-lg p-1.5 text-[var(--color-info-600)] hover:bg-[var(--color-info-50)] transition-colors"
+                        title="Ver detalle"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      {t.status === "DRAFT" && (
+                        <>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleApprove(t.id); }}
+                            disabled={actionLoading === t.id}
+                            className="rounded-lg p-1.5 text-[var(--color-success-600)] hover:bg-[var(--color-success-50)] transition-colors disabled:opacity-50"
+                            title="Aprobar envío"
+                          >
+                            {actionLoading === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleCancel(t.id); }}
+                            disabled={actionLoading === t.id}
+                            className="rounded-lg p-1.5 text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)] transition-colors disabled:opacity-50"
+                            title="Cancelar envío"
+                          >
+                            <Ban className="h-4 w-4" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -340,97 +362,104 @@ export default function TransfersPage() {
 
       {/* Detail Panel */}
       {selectedTransfer && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-bold text-[var(--color-text)]">
-                Envío {selectedTransfer.transferNumber}
-              </h2>
-              <p className="text-sm text-[var(--color-text-muted)]">
-                Creado por {selectedTransfer.requestedBy.fullName ? `${selectedTransfer.requestedBy.fullName} (usuario: ${selectedTransfer.requestedBy.username})` : selectedTransfer.requestedBy.username} — {new Date(selectedTransfer.createdAt).toLocaleString("es-NI")}
-              </p>
-            </div>
+        <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-md">
+          {/* Header */}
+          <div className="hm-card-header-purple px-5 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              <h2 className="font-semibold">Envío {selectedTransfer.transferNumber}</h2>
               <StatusBadge status={selectedTransfer.status} />
-              <button onClick={() => setSelectedTransfer(null)} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">✕</button>
             </div>
+            <button onClick={() => setSelectedTransfer(null)} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-            <div>
-              <span className="text-[var(--color-text-muted)]">Origen:</span>
-              <span className="ml-1 font-medium text-[var(--color-text)]">{selectedTransfer.fromBranch.code} — {selectedTransfer.fromBranch.name}</span>
+          <div className="p-5 space-y-4">
+            {/* Meta info */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              <div className="rounded-lg bg-blue-50 border border-blue-200 p-3">
+                <p className="text-xs font-bold uppercase text-blue-600 mb-1"><Building2 className="h-3 w-3 inline mr-1" />Origen</p>
+                <p className="font-semibold text-[var(--color-text)]">{selectedTransfer.fromBranch.code} — {selectedTransfer.fromBranch.name}</p>
+              </div>
+              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+                <p className="text-xs font-bold uppercase text-emerald-600 mb-1"><Building2 className="h-3 w-3 inline mr-1" />Destino</p>
+                <p className="font-semibold text-[var(--color-text)]">{selectedTransfer.toBranch.code} — {selectedTransfer.toBranch.name}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                <p className="text-xs font-bold uppercase text-slate-600 mb-1">Creado por</p>
+                <p className="font-medium text-[var(--color-text)]">{selectedTransfer.requestedBy.fullName || selectedTransfer.requestedBy.username}</p>
+                <p className="text-xs text-[var(--color-text-muted)]">{fmtDateTime(selectedTransfer.createdAt)}</p>
+              </div>
             </div>
-            <div>
-              <span className="text-[var(--color-text-muted)]">Destino:</span>
-              <span className="ml-1 font-medium text-[var(--color-text)]">{selectedTransfer.toBranch.code} — {selectedTransfer.toBranch.name}</span>
-            </div>
-            <div>
-              <span className="text-[var(--color-text-muted)]">Fecha:</span>
-              <span className="ml-1 font-medium text-[var(--color-text)]">{new Date(selectedTransfer.createdAt).toLocaleDateString("es-NI")}</span>
-            </div>
-          </div>
 
-          {selectedTransfer.notes && (
-            <p className="text-sm text-[var(--color-text-secondary)] italic">{selectedTransfer.notes}</p>
-          )}
+            {selectedTransfer.notes && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-[var(--color-text-secondary)] flex items-start gap-2">
+                <FileText className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                {selectedTransfer.notes}
+              </div>
+            )}
 
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border)]">
-                <th className="py-2 text-left font-semibold text-[var(--color-text-secondary)]">Producto</th>
-                <th className="py-2 text-left font-semibold text-[var(--color-text-secondary)]">SKU</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">Cant. Solicitada</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">Cant. Enviada</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">Cant. Recibida</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedTransfer.lines.map((line, i) => (
-                <tr key={i} className="border-b border-[var(--color-border)]">
-                  <td className="py-2 text-[var(--color-text)]">{line.product.name}</td>
-                  <td className="py-2 font-mono text-xs text-[var(--color-text-muted)]">{line.product.sku}</td>
-                  <td className="py-2 text-right text-[var(--color-text)]">{Number(line.quantityRequested)}</td>
-                  <td className="py-2 text-right text-[var(--color-text)]">{Number(line.quantityDispatched)}</td>
-                  <td className="py-2 text-right text-[var(--color-text)]">{Number(line.quantityReceived)}</td>
+            {/* Lines table */}
+            <table className="hm-table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th>SKU</th>
+                  <th className="text-right">Solicitada</th>
+                  <th className="text-right">Enviada</th>
+                  <th className="text-right">Recibida</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {selectedTransfer.lines.map((line, i) => (
+                  <tr key={i}>
+                    <td className="font-medium text-[var(--color-text)]">{line.product.name}</td>
+                    <td className="font-mono text-xs text-[var(--color-text-muted)]">{line.product.sku}</td>
+                    <td className="text-right font-mono font-semibold">{Number(line.quantityRequested)}</td>
+                    <td className="text-right font-mono">{Number(line.quantityDispatched)}</td>
+                    <td className="text-right font-mono">{Number(line.quantityReceived)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
-          {selectedTransfer.status === "DRAFT" && (
-            <div className="flex gap-2 pt-2">
-              <button
-                onClick={() => handleApprove(selectedTransfer.id)}
-                disabled={!!actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] disabled:opacity-50"
-              >
-                <CheckCircle className="h-4 w-4" /> Aprobar Envío
-              </button>
-              <button
-                onClick={() => handleCancel(selectedTransfer.id)}
-                disabled={!!actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] disabled:opacity-50"
-              >
-                <XCircle className="h-4 w-4" /> Cancelar Envío
-              </button>
-            </div>
-          )}
+            {/* Action buttons */}
+            {selectedTransfer.status === "DRAFT" && (
+              <div className="flex gap-3 pt-2 border-t border-[var(--color-border)]">
+                <button
+                  onClick={() => handleApprove(selectedTransfer.id)}
+                  disabled={!!actionLoading}
+                  className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                >
+                  {actionLoading === selectedTransfer.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                  Aprobar Envío
+                </button>
+                <button
+                  onClick={() => handleCancel(selectedTransfer.id)}
+                  disabled={!!actionLoading}
+                  className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                >
+                  <Ban className="h-4 w-4" /> Cancelar Envío
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       {/* Create Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl p-6 space-y-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-[var(--color-text)]">Crear Envío entre Sucursales</h2>
-              <button onClick={() => setShowModal(false)} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-xl">✕</button>
+          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-[var(--color-surface)] border border-[var(--color-border-strong)] shadow-2xl overflow-hidden">
+            {/* Modal header */}
+            <div className="hm-card-header-blue px-6 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold flex items-center gap-2"><Send className="h-5 w-5" /> Crear Envío entre Sucursales</h2>
+              <button onClick={() => setShowModal(false)} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
             </div>
+            <div className="p-6 space-y-5">
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Sucursal Origen</label>
+                <label className="block text-sm font-semibold text-[var(--color-text-secondary)] mb-1"><Building2 className="h-3.5 w-3.5 inline mr-1 text-blue-600" />Sucursal Origen</label>
                 <select
                   value={formFromBranchId}
                   onChange={(e) => setFormFromBranchId(e.target.value)}
@@ -443,7 +472,7 @@ export default function TransfersPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Sucursal Destino</label>
+                <label className="block text-sm font-semibold text-[var(--color-text-secondary)] mb-1"><Building2 className="h-3.5 w-3.5 inline mr-1 text-emerald-600" />Sucursal Destino</label>
                 <select
                   value={formToBranchId}
                   onChange={(e) => setFormToBranchId(e.target.value)}
@@ -458,7 +487,7 @@ export default function TransfersPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Notas</label>
+              <label className="block text-sm font-semibold text-[var(--color-text-secondary)] mb-1"><FileText className="h-3.5 w-3.5 inline mr-1" />Notas (opcional)</label>
               <textarea
                 value={formNotes}
                 onChange={(e) => setFormNotes(e.target.value)}
@@ -513,22 +542,24 @@ export default function TransfersPage() {
               ))}
             </div>
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex justify-end gap-3 pt-4 border-t border-[var(--color-border)]">
               <button
                 onClick={() => setShowModal(false)}
-                className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]"
+                className="flex items-center gap-2 rounded-lg border border-[var(--color-border-strong)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] transition-colors"
               >
+                <X className="h-4 w-4" />
                 Cancelar
               </button>
               <button
                 onClick={handleCreate}
                 disabled={actionLoading === "create"}
-                className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-6 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
               >
-                {actionLoading === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="h-4 w-4" />}
+                {actionLoading === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 Crear Envío
               </button>
             </div>
+            </div>{/* end p-6 */}
           </div>
         </div>
       )}

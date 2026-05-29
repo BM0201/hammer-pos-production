@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import toast from "react-hot-toast";
 import {
   Package,
   Plus,
@@ -9,8 +10,18 @@ import {
   Loader2,
   FileText,
   AlertTriangle,
+  X,
+  ShoppingCart,
+  Building2,
+  Eye,
+  Ban,
+  PackageCheck,
+  Truck,
+  DollarSign,
+  ReceiptText,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money, fmtDateTime } from "@/lib/format";
 
 /* ── Types ── */
 type Product = { id: string; sku: string; name: string; unit: string };
@@ -80,7 +91,6 @@ export default function PurchaseOrdersPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>("");
@@ -177,12 +187,11 @@ export default function PurchaseOrdersPage() {
       const raw = await res.json();
       if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al crear pedido");
 
-      setSuccess("Pedido creado exitosamente");
+      toast.success("✅ Pedido creado exitosamente");
       setShowModal(false);
       fetchOrders();
-      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al crear pedido"));
+      toast.error(getErrorMessage(error, "Error al crear pedido"));
     } finally {
       setActionLoading(null);
     }
@@ -195,12 +204,11 @@ export default function PurchaseOrdersPage() {
       setError(null);
       const res = await apiFetch(`/api/master/purchase-orders/${id}/approve`, { method: "POST" });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al aprobar"); }
-      setSuccess("Pedido aprobado");
+      toast.success("✅ Pedido aprobado");
       fetchOrders();
       setSelectedOrder(null);
-      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al aprobar"));
+      toast.error(getErrorMessage(error, "Error al aprobar"));
     } finally {
       setActionLoading(null);
     }
@@ -213,12 +221,11 @@ export default function PurchaseOrdersPage() {
       setError(null);
       const res = await apiFetch(`/api/master/purchase-orders/${id}/receive`, { method: "POST" });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al recibir inventario"); }
-      setSuccess("Inventario recibido");
+      toast.success("✅ Inventario recibido");
       fetchOrders();
       setSelectedOrder(null);
-      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al recibir inventario"));
+      toast.error(getErrorMessage(error, "Error al recibir inventario"));
     } finally {
       setActionLoading(null);
     }
@@ -230,12 +237,11 @@ export default function PurchaseOrdersPage() {
       setActionLoading(id);
       const res = await apiFetch(`/api/master/purchase-orders/${id}/cancel`, { method: "POST" });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al cancelar"); }
-      setSuccess("Pedido cancelado");
+      toast.success("Pedido cancelado");
       fetchOrders();
       setSelectedOrder(null);
-      setTimeout(() => setSuccess(null), 3000);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al cancelar"));
+      toast.error(getErrorMessage(error, "Error al cancelar"));
     } finally {
       setActionLoading(null);
     }
@@ -286,16 +292,11 @@ export default function PurchaseOrdersPage() {
         </button>
       </div>
 
-      {/* Messages */}
+      {/* Error Banner */}
       {error && (
         <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-4 py-3 text-sm text-[var(--color-danger-700)] flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 flex-shrink-0" /> {error}
-          <button onClick={() => setError(null)} className="ml-auto text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]">✕</button>
-        </div>
-      )}
-      {success && (
-        <div className="rounded-lg border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-4 py-3 text-sm text-[var(--color-success-700)] flex items-center gap-2">
-          <CheckCircle className="h-4 w-4 flex-shrink-0" /> {success}
+          <button onClick={() => setError(null)} className="ml-auto text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]"><X className="h-4 w-4" /></button>
         </div>
       )}
 
@@ -328,66 +329,87 @@ export default function PurchaseOrdersPage() {
           <p className="text-[var(--color-text-muted)]">No hay pedidos de compra.</p>
         </div>
       ) : (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
+          <div className="hm-card-header-green px-5 py-3 flex items-center gap-2">
+            <ShoppingCart className="h-5 w-5" />
+            <h2 className="font-semibold">Pedidos de Compra</h2>
+            <span className="ml-auto text-xs opacity-80">{orders.length} registros</span>
+          </div>
+          <table className="hm-table">
             <thead>
-              <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]">
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Pedido</th>
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Fecha</th>
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Proveedor</th>
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Sucursal</th>
-                <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">Estado</th>
-                <th className="px-4 py-3 text-right font-semibold text-[var(--color-text-secondary)]">Total</th>
-                <th className="px-4 py-3 text-center font-semibold text-[var(--color-text-secondary)]">Acciones</th>
+              <tr>
+                <th>Pedido</th>
+                <th>Fecha</th>
+                <th>Proveedor</th>
+                <th>Sucursal</th>
+                <th>Estado</th>
+                <th className="text-right">Total</th>
+                <th className="text-center">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {orders.map((order) => (
                 <tr
                   key={order.id}
-                  className="border-b border-[var(--color-border)] hover:bg-[var(--color-surface-alt)] cursor-pointer transition-colors"
+                  className="cursor-pointer"
                   onClick={() => setSelectedOrder(order)}
                 >
-                  <td className="px-4 py-3 font-mono text-xs font-medium text-[var(--color-text)]">
+                  <td className="font-mono text-xs font-bold text-[var(--color-text)]">
                     {order.orderNumber}
                   </td>
-                  <td className="px-4 py-3 text-[var(--color-text-secondary)]">
-                    {new Date(order.date).toLocaleDateString("es-NI")}
+                  <td className="text-[var(--color-text-secondary)]">
+                    {fmtDateTime(order.date)}
                   </td>
-                  <td className="px-4 py-3 text-[var(--color-text)]">{order.supplier || "—"}</td>
-                  <td className="px-4 py-3 text-[var(--color-text)]">{order.branch.code}</td>
-                  <td className="px-4 py-3"><StatusBadge status={order.status} /></td>
-                  <td className="px-4 py-3 text-right font-semibold text-[var(--color-text)]">
-                    C${Number(order.total).toFixed(2)}
+                  <td className="text-[var(--color-text)]">{order.supplier || <span className="text-[var(--color-text-muted)]">—</span>}</td>
+                  <td>
+                    <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--color-master-50)] text-[var(--color-master-700)] text-xs font-bold">
+                      {order.branch.code}
+                    </span>
                   </td>
-                  <td className="px-4 py-3 text-center">
-                    {order.status === "DRAFT" && (
-                      <div className="flex items-center justify-center gap-1">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleApprove(order.id); }}
-                          disabled={actionLoading === order.id}
-                          className="rounded bg-[var(--color-success-600)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-success-700)] disabled:opacity-50"
-                        >
-                          {actionLoading === order.id ? "..." : "Aprobar"}
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleCancel(order.id); }}
-                          disabled={actionLoading === order.id}
-                          className="rounded bg-[var(--color-danger-600)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-danger-700)] disabled:opacity-50"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    )}
-                    {order.status === "APPROVED" && (
+                  <td><StatusBadge status={order.status} /></td>
+                  <td className="text-right font-mono font-semibold text-[var(--color-text)]">
+                    {money(order.total)}
+                  </td>
+                  <td className="text-center">
+                    <div className="flex items-center justify-center gap-1">
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleReceive(order.id); }}
-                        disabled={actionLoading === order.id}
-                        className="rounded bg-[var(--color-info-700)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-info-800)] disabled:opacity-50"
+                        onClick={(e) => { e.stopPropagation(); setSelectedOrder(order); }}
+                        className="rounded-lg p-1.5 text-[var(--color-info-600)] hover:bg-[var(--color-info-50)] transition-colors"
+                        title="Ver detalle"
                       >
-                        {actionLoading === order.id ? "..." : "Recibir inventario"}
+                        <Eye className="h-4 w-4" />
                       </button>
-                    )}
+                      {order.status === "DRAFT" && (
+                        <>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleApprove(order.id); }}
+                            disabled={actionLoading === order.id}
+                            className="rounded-lg p-1.5 text-[var(--color-success-600)] hover:bg-[var(--color-success-50)] transition-colors disabled:opacity-50"
+                            title="Aprobar"
+                          >
+                            {actionLoading === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleCancel(order.id); }}
+                            disabled={actionLoading === order.id}
+                            className="rounded-lg p-1.5 text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)] transition-colors disabled:opacity-50"
+                            title="Cancelar"
+                          >
+                            <Ban className="h-4 w-4" />
+                          </button>
+                        </>
+                      )}
+                      {order.status === "APPROVED" && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleReceive(order.id); }}
+                          disabled={actionLoading === order.id}
+                          className="rounded-lg p-1.5 text-[var(--color-info-700)] hover:bg-[var(--color-info-50)] transition-colors disabled:opacity-50"
+                          title="Recibir inventario"
+                        >
+                          {actionLoading === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -398,109 +420,131 @@ export default function PurchaseOrdersPage() {
 
       {/* Detail Panel */}
       {selectedOrder && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-bold text-[var(--color-text)]">
-                Pedido {selectedOrder.orderNumber}
-              </h2>
-              <p className="text-sm text-[var(--color-text-muted)]">
-                Creado por {selectedOrder.createdBy.fullName ? `${selectedOrder.createdBy.fullName} (usuario: ${selectedOrder.createdBy.username})` : selectedOrder.createdBy.username} — {new Date(selectedOrder.createdAt).toLocaleString("es-NI")}
-              </p>
-            </div>
+        <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-md">
+          <div className="hm-card-header-amber px-5 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
+              <ReceiptText className="h-5 w-5" />
+              <h2 className="font-semibold">Pedido {selectedOrder.orderNumber}</h2>
               <StatusBadge status={selectedOrder.status} />
-              <button onClick={() => setSelectedOrder(null)} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">✕</button>
             </div>
+            <button onClick={() => setSelectedOrder(null)} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div><span className="text-[var(--color-text-muted)]">Proveedor:</span> <span className="font-medium text-[var(--color-text)]">{selectedOrder.supplier || "—"}</span></div>
-            <div><span className="text-[var(--color-text-muted)]">Sucursal:</span> <span className="font-medium text-[var(--color-text)]">{selectedOrder.branch.code}</span></div>
-            <div><span className="text-[var(--color-text-muted)]">Fecha:</span> <span className="font-medium text-[var(--color-text)]">{new Date(selectedOrder.date).toLocaleDateString("es-NI")}</span></div>
-            <div><span className="text-[var(--color-text-muted)]">Total pagado:</span> <span className="font-bold text-[var(--color-text)]">C${Number(selectedOrder.total).toFixed(2)}</span></div>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs">
-            <div><span className="text-[var(--color-text-muted)]">Modo IVA</span><p className="font-medium text-[var(--color-text)]">{selectedOrder.purchaseTaxTreatment === "SEPARATE_CREDIT" ? "IVA separado como credito fiscal" : "IVA incluido en costo"}</p></div>
-            <div><span className="text-[var(--color-text-muted)]">Subtotal sin IVA</span><p className="font-medium text-[var(--color-text)]">C${Number(selectedOrder.subtotalBeforeTax ?? 0).toFixed(2)}</p></div>
-            <div><span className="text-[var(--color-text-muted)]">IVA</span><p className="font-medium text-[var(--color-text)]">C${Number(selectedOrder.taxAmount ?? 0).toFixed(2)}</p></div>
-            <div><span className="text-[var(--color-text-muted)]">Flete / otros</span><p className="font-medium text-[var(--color-text)]">C${(Number(selectedOrder.freightAmount ?? 0) + Number(selectedOrder.otherChargesAmount ?? 0)).toFixed(2)}</p></div>
-            <div><span className="text-[var(--color-text-muted)]">Descuento</span><p className="font-medium text-[var(--color-text)]">C${Number(selectedOrder.globalDiscountAmount ?? 0).toFixed(2)}</p></div>
-          </div>
+          <div className="p-5 space-y-4">
+            {/* Meta */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                <p className="text-xs font-bold uppercase text-slate-600 mb-1"><Truck className="h-3 w-3 inline mr-1" />Proveedor</p>
+                <p className="font-semibold text-[var(--color-text)]">{selectedOrder.supplier || "—"}</p>
+              </div>
+              <div className="rounded-lg bg-blue-50 border border-blue-200 p-3">
+                <p className="text-xs font-bold uppercase text-blue-600 mb-1"><Building2 className="h-3 w-3 inline mr-1" />Sucursal</p>
+                <p className="font-semibold text-[var(--color-text)]">{selectedOrder.branch.code} — {selectedOrder.branch.name}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
+                <p className="text-xs font-bold uppercase text-slate-600 mb-1">Creado por</p>
+                <p className="font-medium text-[var(--color-text)]">{selectedOrder.createdBy.fullName || selectedOrder.createdBy.username}</p>
+                <p className="text-xs text-[var(--color-text-muted)]">{fmtDateTime(selectedOrder.createdAt)}</p>
+              </div>
+              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+                <p className="text-xs font-bold uppercase text-emerald-600 mb-1"><DollarSign className="h-3 w-3 inline mr-1" />Total</p>
+                <p className="text-xl font-extrabold text-[var(--color-text)]">{money(selectedOrder.total)}</p>
+              </div>
+            </div>
 
-          {selectedOrder.notes && (
-            <p className="text-sm text-[var(--color-text-secondary)] italic">{selectedOrder.notes}</p>
-          )}
+            {/* Financial breakdown */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] p-3 text-xs">
+              <div><span className="font-bold text-[var(--color-text-secondary)]">Modo IVA</span><p className="font-medium text-[var(--color-text)]">{selectedOrder.purchaseTaxTreatment === "SEPARATE_CREDIT" ? "Crédito fiscal" : "Incluido en costo"}</p></div>
+              <div><span className="font-bold text-[var(--color-text-secondary)]">Subtotal sin IVA</span><p className="font-medium text-[var(--color-text)]">{money(selectedOrder.subtotalBeforeTax ?? 0)}</p></div>
+              <div><span className="font-bold text-[var(--color-text-secondary)]">IVA</span><p className="font-medium text-[var(--color-text)]">{money(selectedOrder.taxAmount ?? 0)}</p></div>
+              <div><span className="font-bold text-[var(--color-text-secondary)]">Flete / otros</span><p className="font-medium text-[var(--color-text)]">{money((Number(selectedOrder.freightAmount ?? 0) + Number(selectedOrder.otherChargesAmount ?? 0)))}</p></div>
+              <div><span className="font-bold text-[var(--color-text-secondary)]">Descuento</span><p className="font-medium text-red-600">{money(selectedOrder.globalDiscountAmount ?? 0)}</p></div>
+            </div>
 
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border)]">
-                <th className="py-2 text-left font-semibold text-[var(--color-text-secondary)]">Producto</th>
-                <th className="py-2 text-left font-semibold text-[var(--color-text-secondary)]">SKU</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">Cantidad</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">Costo sin IVA</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">IVA unit.</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">Costo con IVA</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">Costo final</th>
-                <th className="py-2 text-right font-semibold text-[var(--color-text-secondary)]">Subtotal</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedOrder.lines.map((line, i) => (
-                <tr key={i} className="border-b border-[var(--color-border)]">
-                  <td className="py-2 text-[var(--color-text)]">{line.product.name}</td>
-                  <td className="py-2 font-mono text-xs text-[var(--color-text-muted)]">{line.product.sku}</td>
-                  <td className="py-2 text-right text-[var(--color-text)]">{Number(line.quantity)}</td>
-                  <td className="py-2 text-right text-[var(--color-text)]">C${Number(line.unitCostBeforeTax ?? line.unitCost).toFixed(2)}</td>
-                  <td className="py-2 text-right text-[var(--color-text)]">C${Number(line.unitTaxAmount ?? 0).toFixed(2)}</td>
-                  <td className="py-2 text-right text-[var(--color-text)]">C${Number(line.costWithTax ?? line.unitCost).toFixed(2)}</td>
-                  <td className="py-2 text-right text-[var(--color-text)]">C${Number(line.finalUnitCost ?? line.unitCost).toFixed(2)}</td>
-                  <td className="py-2 text-right font-semibold text-[var(--color-text)]">C${Number(line.subtotal).toFixed(2)}</td>
+            {selectedOrder.notes && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-[var(--color-text-secondary)] flex items-start gap-2">
+                <FileText className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                {selectedOrder.notes}
+              </div>
+            )}
+
+            {/* Lines table */}
+            <table className="hm-table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th>SKU</th>
+                  <th className="text-right">Cant.</th>
+                  <th className="text-right">Costo s/IVA</th>
+                  <th className="text-right">IVA unit.</th>
+                  <th className="text-right">Costo c/IVA</th>
+                  <th className="text-right">Costo final</th>
+                  <th className="text-right">Subtotal</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {selectedOrder.lines.map((line, i) => (
+                  <tr key={i}>
+                    <td className="font-medium text-[var(--color-text)]">{line.product.name}</td>
+                    <td className="font-mono text-xs text-[var(--color-text-muted)]">{line.product.sku}</td>
+                    <td className="text-right font-mono">{Number(line.quantity)}</td>
+                    <td className="text-right font-mono">{money(line.unitCostBeforeTax ?? line.unitCost)}</td>
+                    <td className="text-right font-mono">{money(line.unitTaxAmount ?? 0)}</td>
+                    <td className="text-right font-mono">{money(line.costWithTax ?? line.unitCost)}</td>
+                    <td className="text-right font-mono">{money(line.finalUnitCost ?? line.unitCost)}</td>
+                    <td className="text-right font-mono font-bold text-[var(--color-text)]">{money(line.subtotal)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
-          {selectedOrder.status === "DRAFT" && (
-            <div className="flex gap-2 pt-2">
-              <button
-                onClick={() => handleApprove(selectedOrder.id)}
-                disabled={!!actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] disabled:opacity-50"
-              >
-                <CheckCircle className="h-4 w-4" /> Aprobar Pedido
-              </button>
-              <button
-                onClick={() => handleCancel(selectedOrder.id)}
-                disabled={!!actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] disabled:opacity-50"
-              >
-                <XCircle className="h-4 w-4" /> Cancelar Pedido
-              </button>
-            </div>
-          )}
-          {selectedOrder.status === "APPROVED" && (
-            <div className="flex gap-2 pt-2">
-              <button
-                onClick={() => handleReceive(selectedOrder.id)}
-                disabled={!!actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] disabled:opacity-50"
-              >
-                <Package className="h-4 w-4" /> Recibir inventario
-              </button>
-            </div>
-          )}
+            {/* Actions */}
+            {(selectedOrder.status === "DRAFT" || selectedOrder.status === "APPROVED") && (
+              <div className="flex gap-3 pt-2 border-t border-[var(--color-border)]">
+                {selectedOrder.status === "DRAFT" && (
+                  <>
+                    <button
+                      onClick={() => handleApprove(selectedOrder.id)}
+                      disabled={!!actionLoading}
+                      className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                    >
+                      {actionLoading === selectedOrder.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                      Aprobar Pedido
+                    </button>
+                    <button
+                      onClick={() => handleCancel(selectedOrder.id)}
+                      disabled={!!actionLoading}
+                      className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                    >
+                      <Ban className="h-4 w-4" /> Cancelar
+                    </button>
+                  </>
+                )}
+                {selectedOrder.status === "APPROVED" && (
+                  <button
+                    onClick={() => handleReceive(selectedOrder.id)}
+                    disabled={!!actionLoading}
+                    className="flex items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                  >
+                    {actionLoading === selectedOrder.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+                    Recibir Inventario
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       {/* Create Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-2xl p-6 space-y-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-[var(--color-text)]">Crear Pedido de Compra</h2>
-              <button onClick={() => setShowModal(false)} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-xl">✕</button>
+          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-[var(--color-surface)] border border-[var(--color-border-strong)] shadow-2xl overflow-hidden">
+            <div className="hm-card-header-green px-6 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold flex items-center gap-2"><ShoppingCart className="h-5 w-5" /> Crear Pedido de Compra</h2>
+              <button onClick={() => setShowModal(false)} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
             </div>
+            <div className="p-6 space-y-5">
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -650,20 +694,22 @@ export default function PurchaseOrdersPage() {
                 </div>
               </div>
             </div>
+            </div>{/* end p-6 */}
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex justify-end gap-3 border-t border-[var(--color-border)] px-6 py-4 bg-[var(--color-surface-alt)]">
               <button
                 onClick={() => setShowModal(false)}
-                className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]"
+                className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] px-5 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface)] shadow-md hover:shadow-lg transition-all"
               >
+                <X className="h-4 w-4" />
                 Cancelar
               </button>
               <button
                 onClick={handleCreate}
                 disabled={actionLoading === "create"}
-                className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-6 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
               >
-                {actionLoading === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="h-4 w-4" />}
+                {actionLoading === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
                 Crear Pedido
               </button>
             </div>

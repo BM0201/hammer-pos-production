@@ -2,6 +2,7 @@
 
 import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { Toaster } from "react-hot-toast";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
 import { AppShellRouter } from "@/components/layout/app-shell-router";
 import type { SessionPayload } from "@/types/auth";
@@ -64,5 +65,18 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  return <AppShellRouter session={session}>{children}</AppShellRouter>;
+  return (
+    <>
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 3500,
+          style: { borderRadius: "0.75rem", padding: "12px 16px", fontSize: "0.875rem" },
+          success: { iconTheme: { primary: "#16a34a", secondary: "#fff" } },
+          error: { iconTheme: { primary: "#dc2626", secondary: "#fff" } },
+        }}
+      />
+      <AppShellRouter session={session}>{children}</AppShellRouter>
+    </>
+  );
 }
