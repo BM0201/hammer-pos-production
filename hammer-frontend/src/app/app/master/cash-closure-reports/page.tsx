@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { unwrapApiData } from "@/lib/client/api";
+import { money, fmtDate } from "@/lib/format";
 import {
   BarChart3,
   AlertTriangle,
@@ -57,19 +58,7 @@ type Branch = {
   name: string;
 };
 
-function formatCurrency(value: string): string {
-  return `C$ ${parseFloat(value).toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("es-NI", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    timeZone: "America/Managua",
-  });
-}
 
 function formatTime(dateStr: string): string {
   const d = new Date(dateStr);
@@ -130,11 +119,11 @@ function ClosureDetail({ closure }: { closure: ClosureReport }) {
         </div>
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <p className="text-sm font-bold text-[var(--color-text)]">{formatCurrency(closure.totalSales)}</p>
+            <p className="text-sm font-bold text-[var(--color-text)]">{money(closure.totalSales)}</p>
             <p className="text-xs text-[var(--color-text-muted)]">{closure.transactionCount} transacciones</p>
           </div>
           <div className="text-right">
-            <p className="text-xs text-[var(--color-text-muted)]">{formatDate(closure.closureDate)}</p>
+            <p className="text-xs text-[var(--color-text-muted)]">{fmtDate(closure.closureDate)}</p>
             <p className="text-xs text-[var(--color-text-soft)]">{formatTime(closure.closedAt)}</p>
           </div>
           {expanded ? <ChevronUp className="h-4 w-4 text-[var(--color-text-soft)]" /> : <ChevronDown className="h-4 w-4 text-[var(--color-text-soft)]" />}
@@ -157,7 +146,7 @@ function ClosureDetail({ closure }: { closure: ClosureReport }) {
               ].map(({ label, value, color }) => (
                 <div key={label} className="bg-[var(--color-surface-alt)] rounded p-2">
                   <p className="text-xs text-[var(--color-text-muted)]">{label}</p>
-                  <p className={`text-sm font-semibold ${color}`}>{formatCurrency(value)}</p>
+                  <p className={`text-sm font-semibold ${color}`}>{money(value)}</p>
                 </div>
               ))}
             </div>
@@ -313,7 +302,7 @@ export default function CashClosureReportsPage() {
           <div className="space-y-1">
             {reopenAlerts.map((c) => (
               <p key={c.id} className="text-sm text-[var(--color-warning-700)]">
-                <span className="font-semibold">{c.branchName}</span> — {formatDate(c.closureDate)}
+                <span className="font-semibold">{c.branchName}</span> — {fmtDate(c.closureDate)}
                 {" "} ({c.emergencySalesCount} ventas de emergencia, {c.reopenCount} reaperturas)
                 {c.isPermanentlyClosed && " — Cierre permanente ejecutado"}
               </p>
@@ -329,7 +318,7 @@ export default function CashClosureReportsPage() {
             <DollarSign className="h-4 w-4" />
             <span className="text-xs uppercase tracking-wider font-semibold">Ventas Totales</span>
           </div>
-          <p className="text-xl font-bold text-[var(--color-text)]">{formatCurrency(String(totalSalesSum))}</p>
+          <p className="text-xl font-bold text-[var(--color-text)]">{money(String(totalSalesSum))}</p>
         </div>
         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
           <div className="flex items-center gap-2 text-[var(--color-text-muted)] mb-1">

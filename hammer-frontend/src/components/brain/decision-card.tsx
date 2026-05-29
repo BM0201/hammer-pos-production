@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { DecisionActionButtons, type BrainDecisionAction } from "@/components/brain/decision-action-buttons";
 import { DecisionDetailDrawer } from "@/components/brain/decision-detail-drawer";
+import { money as formatMoney } from "@/lib/format";
 import { DecisionEvidence } from "@/components/brain/decision-evidence";
 import type { BrainDecisionLog } from "@/components/brain/decision-timeline";
 
@@ -77,10 +78,6 @@ function asNumber(value: string | number | null | undefined) {
 function scorePercent(value: string | number | null | undefined) {
   const number = asNumber(value);
   return Math.round(number <= 1 ? number * 100 : number);
-}
-
-function formatMoney(value: string | number | null | undefined) {
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(asNumber(value));
 }
 
 export function DecisionCard({ decision, busy, onAction }: DecisionCardProps) {

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { money } from "@/lib/format";
 
 type Branch = { id: string; code: string; name: string };
 type ProductDetail = {
@@ -27,10 +28,6 @@ type ProductDetail = {
 };
 
 type Tab = "general" | "stock" | "movements" | "pricing" | "brain" | "audit";
-
-function money(value: string | number | null | undefined) {
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
-}
 
 export function Product360({ productId }: { productId: string }) {
   const [data, setData] = useState<ProductDetail | null>(null);
