@@ -186,6 +186,7 @@ export function ExpenseManager() {
   /* Calculator state */
   const [calcCost, setCalcCost] = useState("");
   const [calcResult, setCalcResult] = useState<SuggestedPriceResult | null>(null);
+  const [ivaPercent, setIvaPercent] = useState("15");
 
   /* Internal freight */
   const [freightRoutes, setFreightRoutes] = useState<InternalFreightRoute[]>([]);
@@ -799,6 +800,20 @@ export function ExpenseManager() {
                   onKeyDown={(e) => e.key === "Enter" && handleCalculate()}
                 />
               </div>
+              <div>
+                <Input
+                  label="IVA (%)"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.5"
+                  className="w-28"
+                  placeholder="15"
+                  value={ivaPercent}
+                  onChange={(e) => setIvaPercent(e.target.value)}
+                  hint="0 = sin IVA"
+                />
+              </div>
               <Button
                 variant="success"
                 onClick={handleCalculate}
@@ -829,50 +844,84 @@ export function ExpenseManager() {
               )}
 
               {/* Price breakdown */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
-                    <span className="text-xs text-[var(--color-text-muted)]">Costo de Compra</span>
-                    <span className="text-sm font-semibold">{formatC(calcResult.purchaseCost)}</span>
-                  </div>
-                  <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
-                    <span className="text-xs text-[var(--color-text-muted)]">Gasto Operativo / Unidad</span>
-                    <span className="text-sm font-semibold text-[var(--color-danger-600)]">
-                      + {formatC(calcResult.operatingExpensePerUnit)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
-                    <span className="text-xs text-[var(--color-text-muted)]">Costo Total / Unidad</span>
-                    <span className="text-sm font-bold">{formatC(calcResult.totalCostPerUnit)}</span>
-                  </div>
-                  <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
-                    <span className="text-xs text-[var(--color-text-muted)]">Margen Aplicado</span>
-                    <span className="text-sm font-semibold text-[var(--color-info-600)]">
-                      {calcResult.marginPercent}%
-                    </span>
-                  </div>
-                </div>
+              {(() => {
+                const iva = Number(ivaPercent) || 0;
+                const ivaAmount = iva > 0 ? calcResult.suggestedPrice * (iva / 100) : 0;
+                const priceWithIva = calcResult.suggestedPrice + ivaAmount;
+                return (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
+                          <span className="text-xs text-[var(--color-text-muted)]">Costo de Compra</span>
+                          <span className="text-sm font-semibold">{formatC(calcResult.purchaseCost)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
+                          <span className="text-xs text-[var(--color-text-muted)]">Gasto Operativo / Unidad</span>
+                          <span className="text-sm font-semibold text-[var(--color-danger-600)]">
+                            + {formatC(calcResult.operatingExpensePerUnit)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
+                          <span className="text-xs text-[var(--color-text-muted)]">Costo Total / Unidad</span>
+                          <span className="text-sm font-bold">{formatC(calcResult.totalCostPerUnit)}</span>
+                        </div>
+                        <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
+                          <span className="text-xs text-[var(--color-text-muted)]">Margen Aplicado</span>
+                          <span className="text-sm font-semibold text-[var(--color-info-600)]">
+                            {calcResult.marginPercent}%
+                          </span>
+                        </div>
+                        {iva > 0 && (
+                          <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
+                            <span className="text-xs text-[var(--color-text-muted)]">IVA ({iva}%)</span>
+                            <span className="text-sm font-semibold text-[var(--color-warning-600)]">
+                              + {formatC(ivaAmount)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
 
-                <div className="flex flex-col items-center justify-center bg-[var(--color-success-100)]/50 rounded-xl p-6">
-                  <p className="text-xs text-[var(--color-success-700)] font-medium mb-1">PRECIO SUGERIDO</p>
-                  <p className="text-3xl font-bold text-[var(--color-success-700)]">
-                    {formatC(calcResult.suggestedPrice)}
-                  </p>
-                  <p className="text-xs text-[var(--color-success-600)] mt-2">
-                    Ganancia: {formatC(calcResult.suggestedPrice - calcResult.totalCostPerUnit)} por unidad
-                  </p>
-                </div>
-              </div>
+                      <div className="flex flex-col items-center justify-center bg-[var(--color-success-100)]/50 rounded-xl p-6">
+                        {iva > 0 ? (
+                          <>
+                            <p className="text-xs text-[var(--color-text-muted)] font-medium mb-0.5">PRECIO SIN IVA</p>
+                            <p className="text-lg font-bold text-[var(--color-text-secondary)]">
+                              {formatC(calcResult.suggestedPrice)}
+                            </p>
+                            <div className="w-full border-t border-[var(--color-success-200)] my-2" />
+                            <p className="text-xs text-[var(--color-success-700)] font-medium mb-0.5">PRECIO CON IVA ({iva}%)</p>
+                            <p className="text-3xl font-bold text-[var(--color-success-700)]">
+                              {formatC(priceWithIva)}
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-xs text-[var(--color-success-700)] font-medium mb-1">PRECIO SUGERIDO</p>
+                            <p className="text-3xl font-bold text-[var(--color-success-700)]">
+                              {formatC(calcResult.suggestedPrice)}
+                            </p>
+                          </>
+                        )}
+                        <p className="text-xs text-[var(--color-success-600)] mt-2">
+                          Ganancia: {formatC(calcResult.suggestedPrice - calcResult.totalCostPerUnit)} por unidad
+                          {iva > 0 ? " (antes de IVA)" : ""}
+                        </p>
+                      </div>
+                    </div>
 
-              <div className="mt-4 pt-3 border-t border-[var(--color-success-100)] grid grid-cols-2 gap-4 text-xs text-[var(--color-text-muted)]">
-                <p>
-                  <strong>Gastos mensuales totales:</strong> {formatC(calcResult.totalMonthlyExpenses)}
-                </p>
-                <p>
-                  <strong>Unidades estimadas/mes:</strong>{" "}
-                  {calcResult.estimatedMonthlyUnits.toLocaleString()}
-                </p>
-              </div>
+                    <div className="mt-4 pt-3 border-t border-[var(--color-success-100)] grid grid-cols-2 gap-4 text-xs text-[var(--color-text-muted)]">
+                      <p>
+                        <strong>Gastos mensuales totales:</strong> {formatC(calcResult.totalMonthlyExpenses)}
+                      </p>
+                      <p>
+                        <strong>Unidades estimadas/mes:</strong>{" "}
+                        {calcResult.estimatedMonthlyUnits.toLocaleString()}
+                      </p>
+                    </div>
+                  </>
+                );
+              })()}
             </Card>
           )}
 
@@ -887,6 +936,7 @@ export function ExpenseManager() {
                 <p><strong>1.</strong> Gasto por Unidad = Gastos Mensuales Totales ÷ Unidades Estimadas</p>
                 <p><strong>2.</strong> Costo Total = Costo de Compra + Gasto por Unidad</p>
                 <p><strong>3.</strong> Precio Sugerido = Costo Total ÷ (1 − Margen/100)</p>
+                <p><strong>4.</strong> Precio con IVA = Precio Sugerido × (1 + IVA/100)</p>
               </div>
               <div className="mt-3 bg-[var(--color-surface)]/60 rounded-lg p-3">
                 <p className="font-semibold mb-1">Ejemplo:</p>
@@ -896,6 +946,8 @@ export function ExpenseManager() {
                 <p>Costo total = C$400 + C$50 = <strong>C$450.00</strong></p>
                 <p>Margen deseado = 7%</p>
                 <p>Precio sugerido = C$450 ÷ (1 − 0.07) = <strong>C$483.87</strong></p>
+                <p>IVA 15% = C$483.87 × 0.15 = <strong>C$72.58</strong></p>
+                <p>Precio con IVA = C$483.87 + C$72.58 = <strong>C$556.45</strong></p>
               </div>
             </div>
           </Card>
