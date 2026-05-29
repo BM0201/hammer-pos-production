@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 
 type Branch = { id: string; code: string; name: string };
-type Category = { id: string; name: string };
+type Category = { id: string; code: string; name: string; isActive: boolean };
 type ProductRow = {
   id: string;
   sku: string;
@@ -94,18 +94,19 @@ type CenterData = {
   auditLogs: AuditRow[];
 };
 
-type Tab = "summary" | "products" | "import" | "stock" | "movements" | "pricing" | "transfers" | "reorder" | "audit";
+type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "transfers" | "reorder" | "audit";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "summary", label: "Resumen", icon: BarChart3 },
   { id: "products", label: "Productos", icon: Package },
+  { id: "categories", label: "Categorías", icon: Tags },
   { id: "import", label: "Importar", icon: FileUp },
   { id: "stock", label: "Existencias", icon: Boxes },
   { id: "movements", label: "Movimientos / Kardex", icon: History },
   { id: "pricing", label: "Precios y costos", icon: TrendingUp },
   { id: "transfers", label: "Transferencias", icon: Shuffle },
   { id: "reorder", label: "Reposicion", icon: Settings2 },
-  { id: "audit", label: "Auditoria", icon: Tags },
+  { id: "audit", label: "Auditoria", icon: BarChart3 },
 ];
 
 const FILTERS = [
@@ -464,6 +465,8 @@ export function CatalogInventoryAdmin() {
         </>
       ) : null}
 
+      {data && tab === "categories" ? <CategoriesPanel categories={data.categories} onDone={load} /> : null}
+
       {data && tab === "import" ? <UnifiedImportPanel branches={data.branches} categories={data.categories} onDone={load} /> : null}
 
       {data && tab === "stock" ? (
@@ -661,6 +664,93 @@ function TransfersPanel({ transfers }: { transfers: Transfer[] }) {
 
 function ReorderPanel({ alerts }: { alerts: ReorderAlert[] }) {
   return <Card className="p-4"><div className="space-y-2">{alerts.map((alert) => <div key={alert.id} className="rounded border border-[var(--color-border)] p-3 text-sm"><div className="flex justify-between"><strong>{alert.product.sku} · {alert.product.name}</strong><Badge variant="warning">{alert.alertType}</Badge></div><p className="text-xs text-[var(--color-text-muted)]">{alert.branch.code} · Actual {qty(alert.currentQuantity)} · Sugerido {qty(alert.suggestedQuantity)}</p><p className="text-xs">{alert.reason}</p></div>)}</div></Card>;
+}
+
+function CategoriesPanel({ categories, onDone }: { categories: Category[]; onDone: () => Promise<void> }) {
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function createCategory(event: React.FormEvent) {
+    event.preventDefault();
+    if (!code.trim() || !name.trim()) { setFeedback("Código y nombre son obligatorios."); return; }
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const res = await apiFetch("/api/catalog/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: code.trim(), name: name.trim() }),
+      });
+      if (!res.ok) { const body = await res.json().catch(() => null); throw new Error(body?.message ?? "No se pudo crear la categoría."); }
+      setCode("");
+      setName("");
+      setFeedback("Categoría creada exitosamente.");
+      await onDone();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Error al crear categoría.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleActive(item: Category) {
+    try {
+      await apiFetch(`/api/catalog/categories/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: !item.isActive }),
+      });
+      setFeedback(`Categoría ${item.isActive ? "archivada" : "activada"}.`);
+      await onDone();
+    } catch {
+      setFeedback("No se pudo actualizar la categoría.");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-4 sm:p-5">
+        <h2 className="text-sm font-semibold text-[var(--color-text)] mb-3">Crear nueva categoría</h2>
+        <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={createCategory}>
+          <Input placeholder="Código (ej: FER)" value={code} onChange={(e) => setCode(e.target.value)} required />
+          <Input placeholder="Nombre (ej: Ferretería)" value={name} onChange={(e) => setName(e.target.value)} required />
+          <Button type="submit" variant="success" disabled={saving}>{saving ? "Creando…" : "Crear categoría"}</Button>
+        </form>
+        {feedback ? <p className="mt-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-sm">{feedback}</p> : null}
+      </Card>
+      <Card noPadding>
+        <div className="overflow-x-auto">
+          <table className="min-w-[600px] w-full text-sm">
+            <thead className="text-left text-xs uppercase text-[var(--color-text-soft)]">
+              <tr className="border-b border-[var(--color-border)]">
+                <th className="px-3 py-3">Código</th>
+                <th>Nombre</th>
+                <th>Estado</th>
+                <th className="text-right pr-3">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categories.map((item) => (
+                <tr key={item.id} className="border-b border-[var(--color-border)]">
+                  <td className="px-3 py-3 font-semibold">{item.code}</td>
+                  <td>{item.name}</td>
+                  <td><Badge variant={item.isActive ? "success" : "warning"}>{item.isActive ? "Activo" : "Inactivo"}</Badge></td>
+                  <td className="px-3 text-right">
+                    <button className="rounded border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-alt)]" onClick={() => toggleActive(item)}>
+                      {item.isActive ? "Archivar" : "Activar"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {categories.length === 0 ? <tr><td colSpan={4} className="px-3 py-6 text-center text-[var(--color-text-muted)]">No hay categorías registradas.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
 }
 
 function AuditPanel({ logs }: { logs: AuditRow[] }) {
