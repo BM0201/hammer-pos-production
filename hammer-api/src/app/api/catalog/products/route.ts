@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
-import { createProduct, listProducts, getTopSellingProducts } from "@/modules/catalog/service";
+import { createProduct, listProducts, getTopSellingProducts, checkSkuAvailable, previewAutoSku } from "@/modules/catalog/service";
 import { createProductSchema } from "@/modules/catalog/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -13,6 +13,22 @@ export async function GET(request: Request) {
     assertAuthenticated(session);
 
     const { searchParams } = new URL(request.url);
+
+    // SKU availability check: GET /api/catalog/products?checkSku=ABC-123
+    const checkSku = searchParams.get("checkSku");
+    if (checkSku) {
+      const excludeId = searchParams.get("excludeProductId") ?? undefined;
+      return ok(await checkSkuAvailable(checkSku, excludeId));
+    }
+
+    // SKU preview: GET /api/catalog/products?previewSku=true&productName=...&categoryId=...
+    if (searchParams.get("previewSku") === "true") {
+      const productName = searchParams.get("productName") ?? "";
+      const categoryId = searchParams.get("categoryId") ?? "";
+      if (!productName || !categoryId) return fail("VALIDATION_ERROR", "productName y categoryId son obligatorios.", 400);
+      return ok(await previewAutoSku({ productName, categoryId }));
+    }
+
     const q = searchParams.get("q") ?? undefined;
     const isActiveParam = searchParams.get("isActive");
     const isActive = isActiveParam === null ? undefined : isActiveParam === "true";

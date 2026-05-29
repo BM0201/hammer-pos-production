@@ -3,12 +3,12 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  BarChart3, Boxes, Check, ChevronDown, ChevronUp, DollarSign,
+  AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronUp, DollarSign,
   FileUp, History, Loader2, Package, Pencil, Plus, RefreshCcw, Save, Search,
-  Settings2, Shuffle, Tags, TrendingUp, X,
+  Settings2, Shuffle, Sparkles, Tags, Trash2, TrendingUp, X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -251,10 +251,56 @@ export function CatalogInventoryAdmin() {
     allowsFraction: false,
   });
   const [creating, setCreating] = useState(false);
+  const [skuPreview, setSkuPreview] = useState("");
+  const [skuStatus, setSkuStatus] = useState<"idle" | "checking" | "available" | "taken">("idle");
+  const skuCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-preview SKU when name + category change
+  useEffect(() => {
+    if (!newProduct.name.trim() || !newProduct.categoryId || newProduct.sku.trim()) {
+      setSkuPreview("");
+      return;
+    }
+    if (skuCheckTimer.current) clearTimeout(skuCheckTimer.current);
+    skuCheckTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/catalog/products?previewSku=true&productName=${encodeURIComponent(newProduct.name.trim())}&categoryId=${encodeURIComponent(newProduct.categoryId)}`, { cache: "no-store" });
+        if (res.ok) {
+          const raw = await res.json();
+          const data = unwrapApiData(raw);
+          setSkuPreview(data.sku ?? "");
+        }
+      } catch { /* silent */ }
+    }, 500);
+    return () => { if (skuCheckTimer.current) clearTimeout(skuCheckTimer.current); };
+  }, [newProduct.name, newProduct.categoryId, newProduct.sku]);
+
+  // Validate manual SKU uniqueness with debounce
+  useEffect(() => {
+    const sku = newProduct.sku.trim();
+    if (!sku) { setSkuStatus("idle"); return; }
+    setSkuStatus("checking");
+    if (skuCheckTimer.current) clearTimeout(skuCheckTimer.current);
+    skuCheckTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/catalog/products?checkSku=${encodeURIComponent(sku)}`, { cache: "no-store" });
+        if (res.ok) {
+          const raw = await res.json();
+          const data = unwrapApiData(raw);
+          setSkuStatus(data.available ? "available" : "taken");
+        }
+      } catch { setSkuStatus("idle"); }
+    }, 400);
+    return () => { if (skuCheckTimer.current) clearTimeout(skuCheckTimer.current); };
+  }, [newProduct.sku]);
 
   async function handleCreateProduct() {
     if (!newProduct.name.trim() || !newProduct.categoryId || !newProduct.standardSalePrice) {
       toast.error("Nombre, categoría y precio son obligatorios.");
+      return;
+    }
+    if (skuStatus === "taken") {
+      toast.error("El SKU ingresado ya existe. Cambialo o déjalo vacío para generar automáticamente.");
       return;
     }
     setCreating(true);
@@ -274,16 +320,47 @@ export function CatalogInventoryAdmin() {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
-        throw new Error(body?.message ?? "No se pudo crear el producto.");
+        throw new Error(body?.error?.message ?? body?.message ?? "No se pudo crear el producto.");
       }
       toast.success("Producto creado exitosamente.");
       setNewProduct({ name: "", sku: "", categoryId: "", unit: "UN", standardSalePrice: "", description: "", allowsFraction: false });
+      setSkuPreview("");
+      setSkuStatus("idle");
       setShowCreateForm(false);
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Error al crear producto.");
     } finally {
       setCreating(false);
+    }
+  }
+
+  /* ── Eliminar/desactivar producto ── */
+  const [deletingProductId, setDeletingProductId] = useState<string | null>(null);
+
+  async function handleDeleteProduct(product: ProductRow) {
+    const confirmed = window.confirm(
+      `¿Estás seguro de eliminar "${product.sku} · ${product.name}"?\n\nSi tiene ventas o movimientos se desactivará en su lugar.`
+    );
+    if (!confirmed) return;
+    setDeletingProductId(product.id);
+    try {
+      const response = await apiFetch(`/api/catalog/products/${product.id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error?.message ?? "No se pudo eliminar el producto.");
+      }
+      const result = unwrapApiData(await response.json());
+      if (result.action === "DELETED") {
+        toast.success(result.reason, { duration: 4000 });
+      } else {
+        toast(result.reason, { icon: "⚠️", duration: 5000 });
+      }
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Error al eliminar producto.");
+    } finally {
+      setDeletingProductId(null);
     }
   }
 
@@ -389,7 +466,7 @@ export function CatalogInventoryAdmin() {
             </button>
           </div>
           {showCreateForm && (
-            <div className="p-4 space-y-4">
+            <div className="p-5 space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <Input
                   label="Nombre del producto *"
@@ -397,27 +474,43 @@ export function CatalogInventoryAdmin() {
                   onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
                   placeholder="Ej: Cemento Canal 42.5 kg"
                 />
-                <Input
-                  label="SKU (opcional, se genera automáticamente)"
-                  value={newProduct.sku}
-                  onChange={(e) => setNewProduct({ ...newProduct, sku: e.target.value })}
-                  placeholder="Ej: CEM-001"
-                />
                 <div>
-                  <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Categoría *</label>
+                  <Input
+                    label="SKU (opcional, se genera automáticamente)"
+                    value={newProduct.sku}
+                    onChange={(e) => setNewProduct({ ...newProduct, sku: e.target.value })}
+                    placeholder="Dejar vacío para auto-generar"
+                  />
+                  {/* SKU validation feedback */}
+                  {newProduct.sku.trim() && skuStatus === "checking" && (
+                    <p className="mt-1 flex items-center gap-1 text-xs text-[var(--color-text-muted)]"><Loader2 className="h-3 w-3 animate-spin" /> Verificando SKU…</p>
+                  )}
+                  {newProduct.sku.trim() && skuStatus === "available" && (
+                    <p className="mt-1 flex items-center gap-1 text-xs text-emerald-600 font-medium"><Check className="h-3 w-3" /> SKU disponible</p>
+                  )}
+                  {newProduct.sku.trim() && skuStatus === "taken" && (
+                    <p className="mt-1 flex items-center gap-1 text-xs text-red-600 font-medium"><AlertTriangle className="h-3 w-3" /> SKU duplicado — ya existe</p>
+                  )}
+                  {/* Auto SKU preview */}
+                  {!newProduct.sku.trim() && skuPreview && (
+                    <p className="mt-1 flex items-center gap-1 text-xs text-blue-600 font-medium"><Sparkles className="h-3 w-3" /> Auto-SKU: <code className="rounded bg-blue-50 px-1.5 py-0.5 font-mono text-xs text-blue-700">{skuPreview}</code></p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-[var(--color-text-secondary)] mb-1">Categoría *</label>
                   <select
                     className="hm-input w-full"
                     value={newProduct.categoryId}
                     onChange={(e) => setNewProduct({ ...newProduct, categoryId: e.target.value })}
                   >
                     <option value="">Seleccionar categoría</option>
-                    {(data.categories ?? []).map((cat) => (
+                    {(data.categories ?? []).filter(c => c.isActive).map((cat) => (
                       <option key={cat.id} value={cat.id}>{cat.name}</option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Unidad</label>
+                  <label className="block text-xs font-bold text-[var(--color-text-secondary)] mb-1">Unidad</label>
                   <select
                     className="hm-input w-full"
                     value={newProduct.unit}
@@ -456,17 +549,18 @@ export function CatalogInventoryAdmin() {
                 />
               </div>
               <div className="flex items-center gap-4">
-                <label className="inline-flex items-center gap-2 text-sm">
+                <label className="inline-flex items-center gap-2 text-sm cursor-pointer select-none">
                   <input
                     type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300 text-[var(--color-master-600)] focus:ring-[var(--color-master-500)]"
                     checked={newProduct.allowsFraction}
                     onChange={(e) => setNewProduct({ ...newProduct, allowsFraction: e.target.checked })}
                   />
                   Permite fracciones (venta por peso/medida)
                 </label>
               </div>
-              <div className="flex gap-3">
-                <Button variant="success" onClick={handleCreateProduct} disabled={creating} icon={<Save className="h-4 w-4" />}>
+              <div className="flex gap-3 border-t border-[var(--color-border)] pt-4">
+                <Button variant="success" onClick={handleCreateProduct} disabled={creating || skuStatus === "taken"} icon={<Save className="h-4 w-4" />}>
                   {creating ? "Creando…" : "Crear producto"}
                 </Button>
                 <Button variant="ghost" onClick={() => setShowCreateForm(false)} icon={<X className="h-4 w-4" />}>
@@ -526,6 +620,15 @@ export function CatalogInventoryAdmin() {
                             <Button variant="ghost" size="sm" onClick={() => setTab("pricing")} icon={<DollarSign className="h-3.5 w-3.5" />}>Precio</Button>
                             <Button variant={product.isActive ? "danger" : "success"} size="sm" onClick={() => toggleProduct(product).catch((error) => toast.error(error.message))}>
                               {product.isActive ? "Desactivar" : "Activar"}
+                            </Button>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              onClick={() => handleDeleteProduct(product)}
+                              disabled={deletingProductId === product.id}
+                              icon={deletingProductId === product.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                            >
+                              Eliminar
                             </Button>
                           </>
                         )}
@@ -802,10 +905,14 @@ function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingD
 function PricingPanel({ branches, products, onSave }: { branches: Branch[]; products: ProductRow[]; onSave: (product: ProductRow, branch: Branch, field: "branchPrice" | "branchCost", value: string) => Promise<void> }) {
   const [draft, setDraft] = useState<PricingDraft>(() => buildPricingDraft(products, branches));
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const productsRef = useRef(products);
 
-  // Re-sync draft when products change (after a save + reload)
+  // Re-sync draft when products reference changes (after external load)
   useEffect(() => {
-    setDraft(buildPricingDraft(products, branches));
+    if (productsRef.current !== products) {
+      productsRef.current = products;
+      setDraft(buildPricingDraft(products, branches));
+    }
   }, [products, branches]);
 
   function updateCell(productId: string, branchId: string, field: "cost" | "price", value: string) {
@@ -826,6 +933,14 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
     setSavingKey(key);
     try {
       await onSave(product, branch, apiField as "branchCost" | "branchPrice", cell[field]);
+      // Mark cell as no longer dirty after successful save (optimistic)
+      setDraft((prev) => ({
+        ...prev,
+        [product.id]: {
+          ...prev[product.id],
+          [branch.id]: { ...prev[product.id][branch.id], dirty: false },
+        },
+      }));
     } finally {
       setSavingKey(null);
     }
@@ -838,7 +953,6 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
     for (const branch of branches) {
       const cell = cells[branch.id];
       if (!cell?.dirty) continue;
-      // Save both cost and price if changed
       const origSetting = product.branchProductSettings.find((s) => s.branchId === branch.id);
       if (cell.cost !== (origSetting?.branchCost ?? "")) {
         await onSave(product, branch, "branchCost", cell.cost);
@@ -849,7 +963,18 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
         saved++;
       }
     }
-    if (saved === 0) toast("Sin cambios pendientes", { icon: "ℹ️" });
+    if (saved > 0) {
+      // Mark all cells for this product as not dirty
+      setDraft((prev) => {
+        const updated = { ...prev[product.id] };
+        for (const branch of branches) {
+          if (updated[branch.id]) updated[branch.id] = { ...updated[branch.id], dirty: false };
+        }
+        return { ...prev, [product.id]: updated };
+      });
+    } else {
+      toast("Sin cambios pendientes", { icon: "ℹ️" });
+    }
   }
 
   return (
@@ -895,10 +1020,10 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
                     const priceKey = `${p.id}-${b.id}-price`;
                     return (
                       <td key={b.id} className="py-2">
-                        <div className="flex flex-col gap-1">
+                        <div className="flex flex-col gap-1.5">
                           <div className="flex items-center gap-1">
                             <Input
-                              className="h-7 text-xs flex-1"
+                              className={`h-7 text-xs flex-1 ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`}
                               type="number"
                               min="0"
                               step="0.01"
@@ -909,7 +1034,9 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
                             <button
                               type="button"
                               title="Guardar costo"
-                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-success-600)] text-white hover:bg-[var(--color-success-700)] disabled:opacity-50 transition-colors"
+                              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${
+                                savingKey === costKey ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm hover:shadow"
+                              }`}
                               disabled={savingKey === costKey}
                               onClick={() => saveCell(p, b, "cost")}
                             >
@@ -918,7 +1045,7 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
                           </div>
                           <div className="flex items-center gap-1">
                             <Input
-                              className="h-7 text-xs flex-1"
+                              className={`h-7 text-xs flex-1 ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`}
                               type="number"
                               min="0"
                               step="0.01"
@@ -929,7 +1056,9 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
                             <button
                               type="button"
                               title="Guardar precio"
-                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-info-600)] text-white hover:bg-[var(--color-info-700)] disabled:opacity-50 transition-colors"
+                              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${
+                                savingKey === priceKey ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700 shadow-sm hover:shadow"
+                              }`}
                               disabled={savingKey === priceKey}
                               onClick={() => saveCell(p, b, "price")}
                             >
