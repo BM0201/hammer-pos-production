@@ -4,7 +4,12 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Boxes, ChevronDown, ChevronUp, FileUp, History, Package, Plus, RefreshCcw, Search, Settings2, Shuffle, Tags, TrendingUp } from "lucide-react";
+import toast from "react-hot-toast";
+import {
+  BarChart3, Boxes, Check, ChevronDown, ChevronUp, DollarSign,
+  FileUp, History, Loader2, Package, Pencil, Plus, RefreshCcw, Save, Search,
+  Settings2, Shuffle, Tags, TrendingUp, X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -12,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty } from "@/lib/format";
 
+/* ───────────────────────── Types ───────────────────────── */
 type Branch = { id: string; code: string; name: string };
 type Category = { id: string; code: string; name: string; isActive: boolean };
 type ProductRow = {
@@ -127,6 +133,9 @@ function statusFor(total: number) {
   return { label: "OK", variant: "success" as const };
 }
 
+/* ═══════════════════════════════════════════════════════════
+   MAIN COMPONENT
+   ═══════════════════════════════════════════════════════════ */
 export function CatalogInventoryAdmin() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<CenterData | null>(null);
@@ -136,7 +145,11 @@ export function CatalogInventoryAdmin() {
   const [categoryId, setCategoryId] = useState("");
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
-  const [feedback, setFeedback] = useState<string | null>(null);
+
+  /* ── Inline edit state for product rows ── */
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({ name: "", standardSalePrice: "" });
+  const [savingProduct, setSavingProduct] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -154,7 +167,7 @@ export function CatalogInventoryAdmin() {
 
   useEffect(() => {
     load().catch((error) => {
-      setFeedback(error instanceof Error ? error.message : "No se pudo cargar Catalogo e Inventario.");
+      toast.error(error instanceof Error ? error.message : "No se pudo cargar Catalogo e Inventario.");
       setLoading(false);
     });
   }, [load]);
@@ -166,13 +179,14 @@ export function CatalogInventoryAdmin() {
       body: JSON.stringify({ isActive: !product.isActive }),
     });
     if (!response.ok) throw new Error("No se pudo actualizar el producto.");
+    toast.success(product.isActive ? "Producto desactivado" : "Producto activado");
     await load();
   }
 
   async function updateBranchPrice(product: ProductRow, branch: Branch, field: "branchPrice" | "branchCost", value: string) {
     const numeric = value.trim() === "" ? null : Number(value);
     if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
-      setFeedback("No se permiten costos o precios negativos.");
+      toast.error("No se permiten costos o precios negativos.");
       return;
     }
     const response = await apiFetch("/api/master/catalog-inventory", {
@@ -181,11 +195,48 @@ export function CatalogInventoryAdmin() {
       body: JSON.stringify({ branchId: branch.id, productId: product.id, [field]: numeric }),
     });
     if (!response.ok) {
-      setFeedback("No se pudo guardar la configuracion por sucursal.");
+      toast.error("No se pudo guardar la configuracion por sucursal.");
       return;
     }
-    setFeedback("Configuracion guardada.");
+    toast.success(`${field === "branchCost" ? "Costo" : "Precio"} guardado para ${branch.code}`);
     await load();
+  }
+
+  /* ── Inline product edit handlers ── */
+  function startEditing(product: ProductRow) {
+    setEditingProductId(product.id);
+    setEditDraft({ name: product.name, standardSalePrice: String(product.basePrice || "") });
+  }
+  function cancelEditing() {
+    setEditingProductId(null);
+    setEditDraft({ name: "", standardSalePrice: "" });
+  }
+  async function saveProductEdit(product: ProductRow) {
+    if (!editDraft.name.trim()) { toast.error("El nombre es obligatorio."); return; }
+    setSavingProduct(true);
+    try {
+      const body: Record<string, unknown> = {};
+      if (editDraft.name.trim() !== product.name) body.name = editDraft.name.trim();
+      const newPrice = Number(editDraft.standardSalePrice);
+      if (editDraft.standardSalePrice && newPrice !== product.basePrice) body.standardSalePrice = newPrice;
+      if (Object.keys(body).length === 0) { cancelEditing(); return; }
+      const response = await apiFetch(`/api/catalog/products/${product.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const json = await response.json().catch(() => null);
+        throw new Error(json?.message ?? "No se pudo actualizar el producto.");
+      }
+      toast.success("Producto actualizado");
+      cancelEditing();
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Error al guardar producto.");
+    } finally {
+      setSavingProduct(false);
+    }
   }
 
   /* ── Estado para creación manual de producto ── */
@@ -203,7 +254,7 @@ export function CatalogInventoryAdmin() {
 
   async function handleCreateProduct() {
     if (!newProduct.name.trim() || !newProduct.categoryId || !newProduct.standardSalePrice) {
-      setFeedback("Nombre, categoría y precio son obligatorios.");
+      toast.error("Nombre, categoría y precio son obligatorios.");
       return;
     }
     setCreating(true);
@@ -225,12 +276,12 @@ export function CatalogInventoryAdmin() {
         const body = await response.json().catch(() => null);
         throw new Error(body?.message ?? "No se pudo crear el producto.");
       }
-      setFeedback("Producto creado exitosamente.");
+      toast.success("Producto creado exitosamente.");
       setNewProduct({ name: "", sku: "", categoryId: "", unit: "UN", standardSalePrice: "", description: "", allowsFraction: false });
       setShowCreateForm(false);
       await load();
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Error al crear producto.");
+      toast.error(error instanceof Error ? error.message : "Error al crear producto.");
     } finally {
       setCreating(false);
     }
@@ -246,27 +297,29 @@ export function CatalogInventoryAdmin() {
 
   return (
     <section className="space-y-5">
-      <Card className="p-4 sm:p-5">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold tracking-tight text-[var(--color-text)]">Catalogo e Inventario</h1>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--color-text-muted)]">Centro MASTER para productos, existencias, precios, movimientos, transferencias y reposicion.</p>
+      {/* ── Header card con gradiente ── */}
+      <Card noPadding>
+        <div className="hm-card-header-blue">
+          <h1 className="text-xl font-bold tracking-tight">Catálogo e Inventario</h1>
+          <p className="mt-1 text-sm opacity-90">Centro MASTER para productos, existencias, precios, movimientos, transferencias y reposición.</p>
         </div>
-        <div className="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(220px,1.5fr)_minmax(180px,1fr)_minmax(180px,1fr)_auto] xl:max-w-[820px]">
-          <Input className="h-10" placeholder="Buscar SKU o producto" value={q} onChange={(event) => setQ(event.target.value)} />
-          <select className="h-10 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text)]" value={branchId} onChange={(event) => setBranchId(event.target.value)}>
-            <option value="">Todas las sucursales</option>
-            {data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
-          </select>
-          <select className="h-10 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text)]" value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
-            <option value="">Todas las categorias</option>
-            {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-          </select>
-          <Button className="h-10 justify-center sm:col-span-2 lg:col-span-1" variant="secondary" onClick={() => load().catch((error) => setFeedback(error.message))} loading={loading} icon={<Search className="h-4 w-4" />}>Aplicar</Button>
+        <div className="p-4 sm:p-5">
+          <div className="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(220px,1.5fr)_minmax(180px,1fr)_minmax(180px,1fr)_auto]">
+            <Input className="h-10" placeholder="🔍 Buscar SKU o producto" value={q} onChange={(event) => setQ(event.target.value)} />
+            <select className="hm-input h-10" value={branchId} onChange={(event) => setBranchId(event.target.value)}>
+              <option value="">Todas las sucursales</option>
+              {data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
+            </select>
+            <select className="hm-input h-10" value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+              <option value="">Todas las categorias</option>
+              {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+            </select>
+            <Button className="h-10 justify-center sm:col-span-2 lg:col-span-1" variant="primary" onClick={() => load().catch((e) => toast.error(e.message))} loading={loading} icon={<Search className="h-4 w-4" />}>Aplicar</Button>
+          </div>
         </div>
-      </div>
       </Card>
 
+      {/* ── Tabs ── */}
       <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]">
         <div className="overflow-x-auto">
           <div className="flex min-w-max gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1.5">
@@ -293,9 +346,9 @@ export function CatalogInventoryAdmin() {
         </div>
       </div>
 
-      {feedback ? <Card className="border-[var(--color-info-300)] bg-[var(--color-info-50)] p-3 text-sm text-[var(--color-info-700)]">{feedback}</Card> : null}
       {loading || !data ? <Card className="p-4 text-sm text-[var(--color-text-muted)]">Cargando centro de catalogo e inventario...</Card> : null}
 
+      {/* ════════════ TAB: RESUMEN ════════════ */}
       {data && tab === "summary" ? (
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -308,30 +361,35 @@ export function CatalogInventoryAdmin() {
             <Kpi label="Sin precio" value={data.kpis.productsWithoutPrice} />
             <Kpi label="Movimientos recientes" value={data.movements.length} />
           </div>
-          <Card className="p-4 sm:p-5">
-            <h2 className="text-sm font-semibold text-[var(--color-text)]">Ultimos movimientos</h2>
-            <div className="mt-3">
+          <Card noPadding>
+            <div className="hm-card-header-purple">
+              <h2 className="text-sm font-semibold">Últimos movimientos</h2>
+            </div>
+            <div className="p-4">
               <CompactMovements movements={data.movements.slice(0, 10)} />
             </div>
           </Card>
         </div>
       ) : null}
 
+      {/* ════════════ TAB: PRODUCTOS (con edición inline) ════════════ */}
       {data && tab === "products" ? (
         <>
         {/* ── Panel para crear producto manual ── */}
-        <Card className="p-4">
-          <button
-            type="button"
-            className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)] w-full"
-            onClick={() => setShowCreateForm(!showCreateForm)}
-          >
-            <Plus className="h-4 w-4" />
-            Crear producto manualmente
-            {showCreateForm ? <ChevronUp className="h-4 w-4 ml-auto" /> : <ChevronDown className="h-4 w-4 ml-auto" />}
-          </button>
+        <Card noPadding>
+          <div className="hm-card-header-green">
+            <button
+              type="button"
+              className="flex items-center gap-2 text-sm font-semibold w-full"
+              onClick={() => setShowCreateForm(!showCreateForm)}
+            >
+              <Plus className="h-4 w-4" />
+              Crear producto manualmente
+              {showCreateForm ? <ChevronUp className="h-4 w-4 ml-auto" /> : <ChevronDown className="h-4 w-4 ml-auto" />}
+            </button>
+          </div>
           {showCreateForm && (
-            <div className="mt-4 space-y-4">
+            <div className="p-4 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <Input
                   label="Nombre del producto *"
@@ -348,7 +406,7 @@ export function CatalogInventoryAdmin() {
                 <div>
                   <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Categoría *</label>
                   <select
-                    className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+                    className="hm-input w-full"
                     value={newProduct.categoryId}
                     onChange={(e) => setNewProduct({ ...newProduct, categoryId: e.target.value })}
                   >
@@ -361,7 +419,7 @@ export function CatalogInventoryAdmin() {
                 <div>
                   <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Unidad</label>
                   <select
-                    className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+                    className="hm-input w-full"
                     value={newProduct.unit}
                     onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })}
                   >
@@ -408,10 +466,10 @@ export function CatalogInventoryAdmin() {
                 </label>
               </div>
               <div className="flex gap-3">
-                <Button variant="success" onClick={handleCreateProduct} disabled={creating}>
+                <Button variant="success" onClick={handleCreateProduct} disabled={creating} icon={<Save className="h-4 w-4" />}>
                   {creating ? "Creando…" : "Crear producto"}
                 </Button>
-                <Button variant="ghost" onClick={() => setShowCreateForm(false)}>
+                <Button variant="ghost" onClick={() => setShowCreateForm(false)} icon={<X className="h-4 w-4" />}>
                   Cancelar
                 </Button>
               </div>
@@ -420,36 +478,63 @@ export function CatalogInventoryAdmin() {
         </Card>
 
         <Card noPadding>
+          <div className="hm-card-header-blue">
+            <h2 className="text-sm font-semibold flex items-center gap-2"><Package className="h-4 w-4" /> Productos ({data.products.length})</h2>
+          </div>
           <div className="overflow-x-auto">
-            <table className="min-w-[1100px] w-full text-sm">
-              <thead className="text-left text-xs font-bold uppercase text-[var(--color-text-secondary)]">
-                <tr className="border-b border-[var(--color-border)]">
-                  <th className="px-3 py-3">SKU</th><th>Producto</th><th>Categoria</th><th>Unidad</th><th>Stock total</th><th>Suc.</th><th>Costo base</th><th>Precio base</th><th>Estado</th><th className="text-right pr-3">Acciones</th>
+            <table className="hm-table min-w-[1100px] w-full">
+              <thead>
+                <tr>
+                  <th>SKU</th><th>Producto</th><th>Categoria</th><th>Unidad</th><th>Stock total</th><th>Suc.</th><th>Costo base</th><th>Precio base</th><th>Estado</th><th className="text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {data.products.map((product) => (
-                  <tr key={product.id} className="border-b border-[var(--color-border)]">
-                    <td className="px-3 py-3 font-semibold">{product.sku}</td>
-                    <td>{product.name}</td>
+                {data.products.map((product) => {
+                  const isEditing = editingProductId === product.id;
+                  return (
+                  <tr key={product.id}>
+                    <td className="font-semibold">{product.sku}</td>
+                    <td>
+                      {isEditing ? (
+                        <Input className="h-8 min-w-[200px]" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} />
+                      ) : product.name}
+                    </td>
                     <td>{product.category?.name ?? "Sin categoria"}</td>
                     <td>{product.unit}</td>
                     <td>{qty(product.totalStock)}</td>
                     <td>{product.branchesWithStock}</td>
                     <td>{money(product.baseCost)}</td>
-                    <td>{money(product.basePrice)}</td>
+                    <td>
+                      {isEditing ? (
+                        <Input className="h-8 w-28" type="number" min="0" step="0.01" value={editDraft.standardSalePrice} onChange={(e) => setEditDraft({ ...editDraft, standardSalePrice: e.target.value })} />
+                      ) : money(product.basePrice)}
+                    </td>
                     <td><Badge variant={product.isActive ? "success" : "warning"}>{product.isActive ? "Activo" : "Inactivo"}</Badge></td>
-                    <td className="px-3 py-3">
-                      <div className="flex justify-end gap-2">
-                        <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="rounded border border-[var(--color-border)] px-2 py-1 text-xs">Ver</Link>
-                        <button className="rounded border border-[var(--color-border)] px-2 py-1 text-xs" onClick={() => setTab("stock")}>Existencias</button>
-                        <button className="rounded border border-[var(--color-border)] px-2 py-1 text-xs" onClick={() => setTab("movements")}>Ajustar</button>
-                        <button className="rounded border border-[var(--color-border)] px-2 py-1 text-xs" onClick={() => setTab("pricing")}>Precio</button>
-                        <button className="rounded border border-[var(--color-border)] px-2 py-1 text-xs" onClick={() => toggleProduct(product).catch((error) => setFeedback(error.message))}>{product.isActive ? "Desactivar" : "Activar"}</button>
+                    <td>
+                      <div className="flex justify-end gap-1.5">
+                        {isEditing ? (
+                          <>
+                            <Button variant="success" size="sm" onClick={() => saveProductEdit(product)} loading={savingProduct} icon={<Check className="h-3.5 w-3.5" />}>Guardar</Button>
+                            <Button variant="ghost" size="sm" onClick={cancelEditing} icon={<X className="h-3.5 w-3.5" />}>Cancelar</Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button variant="secondary" size="sm" onClick={() => startEditing(product)} icon={<Pencil className="h-3.5 w-3.5" />}>Editar</Button>
+                            <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 text-xs font-medium hover:bg-[var(--color-surface-alt)]">
+                              <Search className="h-3 w-3" /> Ver
+                            </Link>
+                            <Button variant="ghost" size="sm" onClick={() => setTab("pricing")} icon={<DollarSign className="h-3.5 w-3.5" />}>Precio</Button>
+                            <Button variant={product.isActive ? "danger" : "success"} size="sm" onClick={() => toggleProduct(product).catch((error) => toast.error(error.message))}>
+                              {product.isActive ? "Desactivar" : "Activar"}
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
+                {data.products.length === 0 ? <tr><td colSpan={10} className="text-center py-6 text-[var(--color-text-muted)]">No hay productos que coincidan con los filtros.</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -461,25 +546,31 @@ export function CatalogInventoryAdmin() {
 
       {data && tab === "import" ? <UnifiedImportPanel branches={data.branches} categories={data.categories} onDone={load} /> : null}
 
+      {/* ════════════ TAB: EXISTENCIAS ════════════ */}
       {data && tab === "stock" ? (
-        <Card className="space-y-3 p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <select className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" value={filter} onChange={(event) => setFilter(event.target.value)}>
-              {FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>
-            <Button variant="ghost" onClick={() => load().catch((error) => setFeedback(error.message))} icon={<RefreshCcw className="h-4 w-4" />}>Refrescar</Button>
+        <Card noPadding>
+          <div className="hm-card-header-teal">
+            <h2 className="text-sm font-semibold flex items-center gap-2"><Boxes className="h-4 w-4" /> Matriz de existencias</h2>
           </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-[900px] w-full text-sm">
-              <thead><tr className="border-b border-[var(--color-border)] text-left text-xs font-bold uppercase text-[var(--color-text-secondary)]"><th className="py-2">Producto</th>{data.branches.map((branch) => <th key={branch.id}>{branch.code}</th>)}<th>Total</th><th>Estado</th></tr></thead>
-              <tbody>
-                {matrix.map((row) => {
-                  const total = row.branches.reduce((sum, item) => sum + item.quantity, 0);
-                  const state = statusFor(total);
-                  return <tr key={row.product.id} className="border-b border-[var(--color-border)]"><td className="py-2 font-medium">{row.product.sku} · {row.product.name}</td>{row.branches.map((item) => <td key={item.branch.id}>{qty(item.quantity)}</td>)}<td>{qty(total)}</td><td><Badge variant={state.variant}>{state.label}</Badge></td></tr>;
-                })}
-              </tbody>
-            </table>
+          <div className="p-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <select className="hm-input" value={filter} onChange={(event) => setFilter(event.target.value)}>
+                {FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select>
+              <Button variant="ghost" onClick={() => load().catch((e) => toast.error(e.message))} icon={<RefreshCcw className="h-4 w-4" />}>Refrescar</Button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="hm-table min-w-[900px] w-full">
+                <thead><tr><th>Producto</th>{data.branches.map((branch) => <th key={branch.id}>{branch.code}</th>)}<th>Total</th><th>Estado</th></tr></thead>
+                <tbody>
+                  {matrix.map((row) => {
+                    const total = row.branches.reduce((sum, item) => sum + item.quantity, 0);
+                    const state = statusFor(total);
+                    return <tr key={row.product.id}><td className="font-medium">{row.product.sku} · {row.product.name}</td>{row.branches.map((item) => <td key={item.branch.id}>{qty(item.quantity)}</td>)}<td className="font-semibold">{qty(total)}</td><td><Badge variant={state.variant}>{state.label}</Badge></td></tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </Card>
       ) : null}
@@ -493,15 +584,24 @@ export function CatalogInventoryAdmin() {
   );
 }
 
+/* ═══════════════════════════════════════════════════════════
+   KPI card
+   ═══════════════════════════════════════════════════════════ */
 function Kpi({ label, value }: { label: string; value: string | number }) {
   return <Card className="min-h-[104px] p-4"><p className="text-xs font-medium text-[var(--color-text-muted)]">{label}</p><p className="mt-3 break-words text-2xl font-bold leading-tight text-[var(--color-text)]">{value}</p></Card>;
 }
 
+/* ═══════════════════════════════════════════════════════════
+   Compact movements list
+   ═══════════════════════════════════════════════════════════ */
 function CompactMovements({ movements }: { movements: Movement[] }) {
   if (!movements.length) return <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-5"><p className="text-sm text-[var(--color-text-muted)]">Sin movimientos recientes.</p></div>;
   return <div className="space-y-2">{movements.map((item) => <div key={item.id} className="grid gap-2 rounded border border-[var(--color-border)] p-2 text-xs md:grid-cols-6"><span>{new Date(item.createdAt).toLocaleString("es-NI")}</span><span>{item.product.sku}</span><span className="md:col-span-2">{item.product.name}</span><span>{item.branch.code}</span><span>{item.movementType} · {qty(item.quantity)}</span></div>)}</div>;
 }
 
+/* ═══════════════════════════════════════════════════════════
+   UNIFIED IMPORT PANEL
+   ═══════════════════════════════════════════════════════════ */
 function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch[]; categories: Category[]; onDone: () => Promise<void> }) {
   const [importType, setImportType] = useState("CATALOG_WITH_INITIAL_INVENTORY");
   const [destinationMode, setDestinationMode] = useState("SINGLE");
@@ -514,7 +614,6 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
   const [errorCsv, setErrorCsv] = useState("");
   const [createMissingProducts, setCreateMissingProducts] = useState(true);
   const [defaultCategoryId, setDefaultCategoryId] = useState(categories[0]?.id ?? "");
-  const [feedback, setFeedback] = useState("");
 
   async function onFile(file: File | null) {
     if (!file) return;
@@ -551,18 +650,18 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
     });
     const raw = await response.json();
     if (!response.ok) throw new Error(raw.message ?? "No se pudo generar preview.");
-    const data = unwrapApiData(raw);
-    setBatchId(data.batchId ?? "");
-    setItems(data.items ?? []);
-    setSummary(data.summary ?? null);
-    setPreviewCsv(data.previewCsv ?? "");
+    const result = unwrapApiData(raw);
+    setBatchId(result.batchId ?? "");
+    setItems(result.items ?? []);
+    setSummary(result.summary ?? null);
+    setPreviewCsv(result.previewCsv ?? "");
     setErrorCsv("");
-    setFeedback("Preview generado.");
+    toast.success("Preview generado.");
   }
 
   async function execute() {
     if (!batchId || !summary || Number(summary.readyRows ?? summary.ready ?? 0) <= 0 || summary.status !== "PREVIEWED") {
-      setFeedback("Genera un preview vigente con lineas READY antes de ejecutar.");
+      toast.error("Genera un preview vigente con lineas READY antes de ejecutar.");
       return;
     }
     const confirmed = window.confirm("CONFIRMACION FUERTE: esta importacion modificara catalogo, precios o inventario usando las lineas READY guardadas en BD. Continua solo si ya revisaste el preview.");
@@ -589,7 +688,7 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
     };
     setSummary(nextSummary);
     setErrorCsv(result.errorCsv ?? "");
-    setFeedback(`Importacion ejecutada. Lineas: ${result.executedLines}, omitidas: ${result.skippedLines}, fallidas: ${result.failedLines}. Movimientos: ${result.inventoryMovements}.`);
+    toast.success(`Importación ejecutada — Ejecutadas: ${result.executedLines}, Omitidas: ${result.skippedLines}, Fallidas: ${result.failedLines}`);
     await onDone();
   }
 
@@ -607,68 +706,323 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
   const readyRows = Number(summary?.readyRows ?? summary?.ready ?? 0);
   const canExecute = Boolean(batchId && summary?.status === "PREVIEWED" && readyRows > 0);
 
-  return <Card className="space-y-4 p-4">
-    <div className="grid gap-2 md:grid-cols-4">
-      <Input type="file" accept=".xlsx,.csv,.tsv,.txt" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
-      <select className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" value={importType} onChange={(event) => { setImportType(event.target.value); setBatchId(""); setItems([]); setSummary(null); }}>
-        <option value="CATALOG_ONLY">Solo catalogo</option><option value="CATALOG_WITH_INITIAL_INVENTORY">Catalogo + inventario inicial</option><option value="INVENTORY_ONLY">Solo inventario</option><option value="PRICES_COSTS_ONLY">Solo precios/costos</option><option value="PHYSICAL_COUNT">Ajuste por conteo fisico</option>
-      </select>
-      <select className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" value={destinationMode} onChange={(event) => { setDestinationMode(event.target.value); setBatchId(""); setItems([]); setSummary(null); }}>
-        <option value="SINGLE">Una sucursal</option><option value="ALL">Todas</option><option value="FILE">Sucursal del archivo</option>
-      </select>
-      <select className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" value={defaultBranchId} onChange={(event) => { setDefaultBranchId(event.target.value); setBatchId(""); setItems([]); setSummary(null); }}>
-        {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
-      </select>
-    </div>
-    <div className="grid gap-2 md:grid-cols-3">
-      <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={createMissingProducts} onChange={(event) => setCreateMissingProducts(event.target.checked)} /> Crear productos si no existen</label>
-      <select className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" value={defaultCategoryId} onChange={(event) => setDefaultCategoryId(event.target.value)}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
-      <div className="flex gap-2"><Button variant="secondary" onClick={() => preview().catch((error) => setFeedback(error.message))}>Preview</Button><Button variant="success" onClick={() => execute().catch((error) => setFeedback(error.message))} disabled={!canExecute}>Ejecutar</Button></div>
-    </div>
-    {feedback ? <p className="rounded border border-[var(--color-border)] p-2 text-sm">{feedback}</p> : null}
-    {summary ? <div className="grid gap-2 text-xs md:grid-cols-5"><span>Filas: {summary.parsedRows ?? "-"}</span><span>Expandidas: {summary.expandedRows ?? "-"}</span><span>Existentes: {summary.existingProducts ?? "-"}</span><span>Nuevos: {summary.newProducts ?? "-"}</span><span>READY/ERROR: {summary.readyRows ?? summary.ready ?? 0}/{summary.errorRows ?? summary.errors ?? 0}</span><span>Estado: {summary.status ?? "-"}</span><span>Ejecutadas: {summary.executedLines ?? 0}</span><span>Omitidas: {summary.skippedLines ?? 0}</span><span>Fallidas: {summary.failedLines ?? 0}</span><span>Movimientos: {summary.inventoryMovements ?? 0}</span></div> : null}
-    <div className="flex flex-wrap gap-2">
-      <Button variant="ghost" disabled={!previewCsv} onClick={() => downloadCsv(previewCsv, `preview-importacion-${batchId || "catalogo"}.csv`)}>CSV preview</Button>
-      <Button variant="ghost" disabled={!errorCsv} onClick={() => downloadCsv(errorCsv, `errores-importacion-${batchId || "catalogo"}.csv`)}>CSV errores</Button>
-    </div>
-    {items.length ? <div className="overflow-x-auto"><table className="min-w-[980px] w-full text-xs"><thead><tr className="border-b text-left"><th>Fila</th><th>SKU</th><th>Producto</th><th>Accion</th><th>Sucursal</th><th>Cantidad</th><th>Costo</th><th>Precio</th><th>Estado</th><th>Mensajes</th></tr></thead><tbody>{items.slice(0, 200).map((item, index) => <tr key={`${item.rowNumber}-${index}`} className="border-b"><td>{item.rowNumber}</td><td>{item.sku}</td><td>{item.name}</td><td>{item.action}</td><td>{item.targetBranchCode}</td><td>{item.quantity ?? ""}</td><td>{item.unitCost ?? ""}</td><td>{item.standardSalePrice ?? ""}</td><td>{item.status}</td><td>{item.messages?.join(" | ") || "OK"}</td></tr>)}</tbody></table></div> : null}
-  </Card>;
+  return (
+    <Card noPadding>
+      <div className="hm-card-header-amber">
+        <h2 className="text-sm font-semibold flex items-center gap-2"><FileUp className="h-4 w-4" /> Importación masiva</h2>
+      </div>
+      <div className="p-4 space-y-4">
+        <div className="grid gap-2 md:grid-cols-4">
+          <Input type="file" accept=".xlsx,.csv,.tsv,.txt" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
+          <select className="hm-input" value={importType} onChange={(event) => { setImportType(event.target.value); setBatchId(""); setItems([]); setSummary(null); }}>
+            <option value="CATALOG_ONLY">Solo catalogo</option><option value="CATALOG_WITH_INITIAL_INVENTORY">Catalogo + inventario inicial</option><option value="INVENTORY_ONLY">Solo inventario</option><option value="PRICES_COSTS_ONLY">Solo precios/costos</option><option value="PHYSICAL_COUNT">Ajuste por conteo fisico</option>
+          </select>
+          <select className="hm-input" value={destinationMode} onChange={(event) => { setDestinationMode(event.target.value); setBatchId(""); setItems([]); setSummary(null); }}>
+            <option value="SINGLE">Una sucursal</option><option value="ALL">Todas</option><option value="FILE">Sucursal del archivo</option>
+          </select>
+          <select className="hm-input" value={defaultBranchId} onChange={(event) => { setDefaultBranchId(event.target.value); setBatchId(""); setItems([]); setSummary(null); }}>
+            {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
+          </select>
+        </div>
+        <div className="grid gap-2 md:grid-cols-3">
+          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={createMissingProducts} onChange={(event) => setCreateMissingProducts(event.target.checked)} /> Crear productos si no existen</label>
+          <select className="hm-input" value={defaultCategoryId} onChange={(event) => setDefaultCategoryId(event.target.value)}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => preview().catch((error) => toast.error(error.message))} icon={<Search className="h-4 w-4" />}>Preview</Button>
+            <Button variant="success" onClick={() => execute().catch((error) => toast.error(error.message))} disabled={!canExecute} icon={<Check className="h-4 w-4" />}>Ejecutar</Button>
+          </div>
+        </div>
+        {summary ? <div className="grid gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs md:grid-cols-5"><span>Filas: {summary.parsedRows ?? "-"}</span><span>Expandidas: {summary.expandedRows ?? "-"}</span><span>Existentes: {summary.existingProducts ?? "-"}</span><span>Nuevos: {summary.newProducts ?? "-"}</span><span>READY/ERROR: {summary.readyRows ?? summary.ready ?? 0}/{summary.errorRows ?? summary.errors ?? 0}</span><span>Estado: {summary.status ?? "-"}</span><span>Ejecutadas: {summary.executedLines ?? 0}</span><span>Omitidas: {summary.skippedLines ?? 0}</span><span>Fallidas: {summary.failedLines ?? 0}</span><span>Movimientos: {summary.inventoryMovements ?? 0}</span></div> : null}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" disabled={!previewCsv} onClick={() => downloadCsv(previewCsv, `preview-importacion-${batchId || "catalogo"}.csv`)} icon={<FileUp className="h-4 w-4" />}>CSV preview</Button>
+          <Button variant="ghost" disabled={!errorCsv} onClick={() => downloadCsv(errorCsv, `errores-importacion-${batchId || "catalogo"}.csv`)} icon={<FileUp className="h-4 w-4" />}>CSV errores</Button>
+        </div>
+        {items.length ? <div className="overflow-x-auto"><table className="hm-table min-w-[980px] w-full text-xs"><thead><tr><th>Fila</th><th>SKU</th><th>Producto</th><th>Accion</th><th>Sucursal</th><th>Cantidad</th><th>Costo</th><th>Precio</th><th>Estado</th><th>Mensajes</th></tr></thead><tbody>{items.slice(0, 200).map((item, index) => <tr key={`${item.rowNumber}-${index}`}><td>{item.rowNumber}</td><td>{item.sku}</td><td>{item.name}</td><td>{item.action}</td><td>{item.targetBranchCode}</td><td>{item.quantity ?? ""}</td><td>{item.unitCost ?? ""}</td><td>{item.standardSalePrice ?? ""}</td><td><Badge variant={item.status === "READY" || item.status === "EXECUTED" ? "success" : item.status === "ERROR" || item.status === "FAILED" ? "danger" : "warning"}>{item.status}</Badge></td><td>{item.messages?.join(" | ") || "OK"}</td></tr>)}</tbody></table></div> : null}
+      </div>
+    </Card>
+  );
 }
 
+/* ═══════════════════════════════════════════════════════════
+   MOVEMENTS PANEL
+   ═══════════════════════════════════════════════════════════ */
 function MovementsPanel({ branches, products, movements, onDone }: { branches: Branch[]; products: ProductRow[]; movements: Movement[]; onDone: () => Promise<void> }) {
   const [form, setForm] = useState({ branchId: branches[0]?.id ?? "", productId: products[0]?.id ?? "", movementType: "ADJUSTMENT_IN", quantity: "1", unitCost: "1", referenceType: "MASTER_ADJUSTMENT", referenceId: "MANUAL" });
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     const response = await apiFetch("/api/inventory/movements", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, quantity: Number(form.quantity), unitCost: Number(form.unitCost) }) });
     if (!response.ok) throw new Error("No se pudo registrar el movimiento.");
+    toast.success("Movimiento registrado");
     await onDone();
   }
-  return <Card className="space-y-4 p-4"><form className="grid gap-2 md:grid-cols-6" onSubmit={(event) => submit(event).catch(() => undefined)}><select className="rounded border px-2 py-2" value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code}</option>)}</select><select className="rounded border px-2 py-2" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} · {p.name}</option>)}</select><select className="rounded border px-2 py-2" value={form.movementType} onChange={(e) => setForm({ ...form, movementType: e.target.value })}><option>ADJUSTMENT_IN</option><option>ADJUSTMENT_OUT</option><option>PURCHASE_IN</option><option>RETURN_IN</option><option>RETURN_OUT</option></select><Input type="number" min="0.0001" step="0.0001" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /><Input type="number" min="0" step="0.0001" value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value })} /><Button type="submit">Registrar</Button></form><CompactMovements movements={movements} /></Card>;
+  return (
+    <Card noPadding>
+      <div className="hm-card-header-purple">
+        <h2 className="text-sm font-semibold flex items-center gap-2"><History className="h-4 w-4" /> Movimientos / Kardex</h2>
+      </div>
+      <div className="p-4 space-y-4">
+        <form className="grid gap-2 md:grid-cols-6" onSubmit={(event) => submit(event).catch((e) => toast.error(e.message))}>
+          <select className="hm-input" value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code}</option>)}</select>
+          <select className="hm-input" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} · {p.name}</option>)}</select>
+          <select className="hm-input" value={form.movementType} onChange={(e) => setForm({ ...form, movementType: e.target.value })}><option>ADJUSTMENT_IN</option><option>ADJUSTMENT_OUT</option><option>PURCHASE_IN</option><option>RETURN_IN</option><option>RETURN_OUT</option></select>
+          <Input type="number" min="0.0001" step="0.0001" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
+          <Input type="number" min="0" step="0.0001" value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value })} />
+          <Button type="submit" icon={<Plus className="h-4 w-4" />}>Registrar</Button>
+        </form>
+        <CompactMovements movements={movements} />
+      </div>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PRICING PANEL — FULL REWRITE
+   Pre-populates inputs with current branchProductSettings,
+   uses controlled state, shows save button per cell, toast.
+   ═══════════════════════════════════════════════════════════ */
+type PricingDraft = Record<string, Record<string, { cost: string; price: string; dirty: boolean }>>;
+
+function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingDraft {
+  const draft: PricingDraft = {};
+  for (const product of products) {
+    draft[product.id] = {};
+    const settingsMap = new Map(product.branchProductSettings.map((s) => [s.branchId, s]));
+    for (const branch of branches) {
+      const setting = settingsMap.get(branch.id);
+      draft[product.id][branch.id] = {
+        cost: setting?.branchCost ?? "",
+        price: setting?.branchPrice ?? "",
+        dirty: false,
+      };
+    }
+  }
+  return draft;
 }
 
 function PricingPanel({ branches, products, onSave }: { branches: Branch[]; products: ProductRow[]; onSave: (product: ProductRow, branch: Branch, field: "branchPrice" | "branchCost", value: string) => Promise<void> }) {
-  return <Card className="p-4"><div className="overflow-x-auto"><table className="min-w-[1100px] w-full text-sm"><thead><tr className="border-b text-left"><th>Producto</th><th>Costo base</th><th>Precio base</th><th>Margen</th>{branches.map((b) => <th key={b.id}>{b.code}</th>)}</tr></thead><tbody>{products.map((p) => <tr key={p.id} className="border-b"><td className="py-2">{p.sku} · {p.name}</td><td>{money(p.baseCost)}</td><td>{money(p.basePrice)}</td><td>{p.baseCost > 0 ? `${(((p.basePrice - p.baseCost) / p.baseCost) * 100).toFixed(1)}%` : "N/D"}</td>{branches.map((b) => <td key={b.id} className="min-w-[150px] py-2"><div className="flex gap-1"><Input className="h-8" placeholder="Costo" onBlur={(e) => e.currentTarget.value && onSave(p, b, "branchCost", e.currentTarget.value)} /><Input className="h-8" placeholder="Precio" onBlur={(e) => e.currentTarget.value && onSave(p, b, "branchPrice", e.currentTarget.value)} /></div></td>)}</tr>)}</tbody></table></div></Card>;
+  const [draft, setDraft] = useState<PricingDraft>(() => buildPricingDraft(products, branches));
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  // Re-sync draft when products change (after a save + reload)
+  useEffect(() => {
+    setDraft(buildPricingDraft(products, branches));
+  }, [products, branches]);
+
+  function updateCell(productId: string, branchId: string, field: "cost" | "price", value: string) {
+    setDraft((prev) => ({
+      ...prev,
+      [productId]: {
+        ...prev[productId],
+        [branchId]: { ...prev[productId][branchId], [field]: value, dirty: true },
+      },
+    }));
+  }
+
+  async function saveCell(product: ProductRow, branch: Branch, field: "cost" | "price") {
+    const cell = draft[product.id]?.[branch.id];
+    if (!cell) return;
+    const apiField = field === "cost" ? "branchCost" : "branchPrice";
+    const key = `${product.id}-${branch.id}-${field}`;
+    setSavingKey(key);
+    try {
+      await onSave(product, branch, apiField as "branchCost" | "branchPrice", cell[field]);
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
+  async function saveAllDirty(product: ProductRow) {
+    const cells = draft[product.id];
+    if (!cells) return;
+    let saved = 0;
+    for (const branch of branches) {
+      const cell = cells[branch.id];
+      if (!cell?.dirty) continue;
+      // Save both cost and price if changed
+      const origSetting = product.branchProductSettings.find((s) => s.branchId === branch.id);
+      if (cell.cost !== (origSetting?.branchCost ?? "")) {
+        await onSave(product, branch, "branchCost", cell.cost);
+        saved++;
+      }
+      if (cell.price !== (origSetting?.branchPrice ?? "")) {
+        await onSave(product, branch, "branchPrice", cell.price);
+        saved++;
+      }
+    }
+    if (saved === 0) toast("Sin cambios pendientes", { icon: "ℹ️" });
+  }
+
+  return (
+    <Card noPadding>
+      <div className="hm-card-header-green">
+        <h2 className="text-sm font-semibold flex items-center gap-2">
+          <DollarSign className="h-4 w-4" /> Precios y costos por sucursal
+        </h2>
+        <p className="mt-0.5 text-xs opacity-90">Edite los valores y presione el botón 💾 para guardar cada celda, o &quot;Guardar fila&quot; para guardar todos los cambios de un producto.</p>
+      </div>
+      <div className="overflow-x-auto p-4">
+        <table className="hm-table min-w-[1100px] w-full">
+          <thead>
+            <tr>
+              <th className="min-w-[200px]">Producto</th>
+              <th>Costo base</th>
+              <th>Precio base</th>
+              <th>Margen</th>
+              {branches.map((b) => (
+                <th key={b.id} className="min-w-[180px] text-center">
+                  <span className="block">{b.code}</span>
+                  <span className="block text-[10px] font-normal opacity-70">Costo / Precio</span>
+                </th>
+              ))}
+              <th className="min-w-[100px]">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {products.map((p) => {
+              const margin = p.baseCost > 0 ? (((p.basePrice - p.baseCost) / p.baseCost) * 100).toFixed(1) + "%" : "N/D";
+              const hasDirty = branches.some((b) => draft[p.id]?.[b.id]?.dirty);
+              return (
+                <tr key={p.id}>
+                  <td className="font-medium">{p.sku} · {p.name}</td>
+                  <td>{money(p.baseCost)}</td>
+                  <td>{money(p.basePrice)}</td>
+                  <td>
+                    <Badge variant={p.baseCost > 0 && p.basePrice > p.baseCost ? "success" : "warning"}>{margin}</Badge>
+                  </td>
+                  {branches.map((b) => {
+                    const cell = draft[p.id]?.[b.id] ?? { cost: "", price: "", dirty: false };
+                    const costKey = `${p.id}-${b.id}-cost`;
+                    const priceKey = `${p.id}-${b.id}-price`;
+                    return (
+                      <td key={b.id} className="py-2">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-1">
+                            <Input
+                              className="h-7 text-xs flex-1"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder="Costo"
+                              value={cell.cost}
+                              onChange={(e) => updateCell(p.id, b.id, "cost", e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              title="Guardar costo"
+                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-success-600)] text-white hover:bg-[var(--color-success-700)] disabled:opacity-50 transition-colors"
+                              disabled={savingKey === costKey}
+                              onClick={() => saveCell(p, b, "cost")}
+                            >
+                              {savingKey === costKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Input
+                              className="h-7 text-xs flex-1"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder="Precio"
+                              value={cell.price}
+                              onChange={(e) => updateCell(p.id, b.id, "price", e.target.value)}
+                            />
+                            <button
+                              type="button"
+                              title="Guardar precio"
+                              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-info-600)] text-white hover:bg-[var(--color-info-700)] disabled:opacity-50 transition-colors"
+                              disabled={savingKey === priceKey}
+                              onClick={() => saveCell(p, b, "price")}
+                            >
+                              {savingKey === priceKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                    );
+                  })}
+                  <td>
+                    <Button
+                      variant={hasDirty ? "success" : "ghost"}
+                      size="sm"
+                      onClick={() => saveAllDirty(p)}
+                      icon={<Save className="h-3.5 w-3.5" />}
+                    >
+                      Guardar fila
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+            {products.length === 0 ? (
+              <tr><td colSpan={4 + branches.length + 1} className="py-6 text-center text-[var(--color-text-muted)]">No hay productos.</td></tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
 }
 
+/* ═══════════════════════════════════════════════════════════
+   TRANSFERS PANEL
+   ═══════════════════════════════════════════════════════════ */
 function TransfersPanel({ transfers }: { transfers: Transfer[] }) {
-  return <Card className="p-4"><div className="space-y-2">{transfers.map((transfer) => <div key={transfer.id} className="rounded border border-[var(--color-border)] p-3 text-sm"><div className="flex justify-between gap-2"><strong>{transfer.transferNumber}</strong><Badge>{transfer.status}</Badge></div><p className="text-xs text-[var(--color-text-muted)]">{transfer.fromBranch.code} a {transfer.toBranch.code} · {new Date(transfer.createdAt).toLocaleDateString("es-NI")}</p><p className="text-xs">{transfer.lines.map((line) => `${line.product.sku} (${qty(line.quantityRequested)})`).join(", ")}</p></div>)}</div></Card>;
+  return (
+    <Card noPadding>
+      <div className="hm-card-header-blue">
+        <h2 className="text-sm font-semibold flex items-center gap-2"><Shuffle className="h-4 w-4" /> Transferencias</h2>
+      </div>
+      <div className="p-4 space-y-2">
+        {transfers.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-muted)] py-4 text-center">Sin transferencias registradas.</p>
+        ) : transfers.map((transfer) => (
+          <div key={transfer.id} className="rounded-lg border border-[var(--color-border)] p-3 text-sm">
+            <div className="flex justify-between gap-2"><strong>{transfer.transferNumber}</strong><Badge>{transfer.status}</Badge></div>
+            <p className="text-xs text-[var(--color-text-muted)]">{transfer.fromBranch.code} → {transfer.toBranch.code} · {new Date(transfer.createdAt).toLocaleDateString("es-NI")}</p>
+            <p className="text-xs">{transfer.lines.map((line) => `${line.product.sku} (${qty(line.quantityRequested)})`).join(", ")}</p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
 }
 
+/* ═══════════════════════════════════════════════════════════
+   REORDER PANEL
+   ═══════════════════════════════════════════════════════════ */
 function ReorderPanel({ alerts }: { alerts: ReorderAlert[] }) {
-  return <Card className="p-4"><div className="space-y-2">{alerts.map((alert) => <div key={alert.id} className="rounded border border-[var(--color-border)] p-3 text-sm"><div className="flex justify-between"><strong>{alert.product.sku} · {alert.product.name}</strong><Badge variant="warning">{alert.alertType}</Badge></div><p className="text-xs text-[var(--color-text-muted)]">{alert.branch.code} · Actual {qty(alert.currentQuantity)} · Sugerido {qty(alert.suggestedQuantity)}</p><p className="text-xs">{alert.reason}</p></div>)}</div></Card>;
+  return (
+    <Card noPadding>
+      <div className="hm-card-header-amber">
+        <h2 className="text-sm font-semibold flex items-center gap-2"><Settings2 className="h-4 w-4" /> Alertas de reposición</h2>
+      </div>
+      <div className="p-4 space-y-2">
+        {alerts.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-muted)] py-4 text-center">Sin alertas de reposición.</p>
+        ) : alerts.map((alert) => (
+          <div key={alert.id} className="rounded-lg border border-[var(--color-border)] p-3 text-sm">
+            <div className="flex justify-between"><strong>{alert.product.sku} · {alert.product.name}</strong><Badge variant="warning">{alert.alertType}</Badge></div>
+            <p className="text-xs text-[var(--color-text-muted)]">{alert.branch.code} · Actual {qty(alert.currentQuantity)} · Sugerido {qty(alert.suggestedQuantity)}</p>
+            <p className="text-xs">{alert.reason}</p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
 }
 
+/* ═══════════════════════════════════════════════════════════
+   CATEGORIES PANEL
+   ═══════════════════════════════════════════════════════════ */
 function CategoriesPanel({ categories, onDone }: { categories: Category[]; onDone: () => Promise<void> }) {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
-  const [feedback, setFeedback] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   async function createCategory(event: React.FormEvent) {
     event.preventDefault();
-    if (!code.trim() || !name.trim()) { setFeedback("Código y nombre son obligatorios."); return; }
+    if (!code.trim() || !name.trim()) { toast.error("Código y nombre son obligatorios."); return; }
     setSaving(true);
-    setFeedback(null);
     try {
       const res = await apiFetch("/api/catalog/categories", {
         method: "POST",
@@ -678,10 +1032,10 @@ function CategoriesPanel({ categories, onDone }: { categories: Category[]; onDon
       if (!res.ok) { const body = await res.json().catch(() => null); throw new Error(body?.message ?? "No se pudo crear la categoría."); }
       setCode("");
       setName("");
-      setFeedback("Categoría creada exitosamente.");
+      toast.success("Categoría creada exitosamente.");
       await onDone();
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Error al crear categoría.");
+      toast.error(error instanceof Error ? error.message : "Error al crear categoría.");
     } finally {
       setSaving(false);
     }
@@ -694,49 +1048,55 @@ function CategoriesPanel({ categories, onDone }: { categories: Category[]; onDon
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isActive: !item.isActive }),
       });
-      setFeedback(`Categoría ${item.isActive ? "archivada" : "activada"}.`);
+      toast.success(`Categoría ${item.isActive ? "archivada" : "activada"}.`);
       await onDone();
     } catch {
-      setFeedback("No se pudo actualizar la categoría.");
+      toast.error("No se pudo actualizar la categoría.");
     }
   }
 
   return (
     <div className="space-y-4">
-      <Card className="p-4 sm:p-5">
-        <h2 className="text-sm font-semibold text-[var(--color-text)] mb-3">Crear nueva categoría</h2>
-        <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={createCategory}>
-          <Input placeholder="Código (ej: FER)" value={code} onChange={(e) => setCode(e.target.value)} required />
-          <Input placeholder="Nombre (ej: Ferretería)" value={name} onChange={(e) => setName(e.target.value)} required />
-          <Button type="submit" variant="success" disabled={saving}>{saving ? "Creando…" : "Crear categoría"}</Button>
-        </form>
-        {feedback ? <p className="mt-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-sm">{feedback}</p> : null}
+      <Card noPadding>
+        <div className="hm-card-header-purple">
+          <h2 className="text-sm font-semibold flex items-center gap-2"><Tags className="h-4 w-4" /> Crear nueva categoría</h2>
+        </div>
+        <div className="p-4">
+          <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]" onSubmit={createCategory}>
+            <Input placeholder="Código (ej: FER)" value={code} onChange={(e) => setCode(e.target.value)} required />
+            <Input placeholder="Nombre (ej: Ferretería)" value={name} onChange={(e) => setName(e.target.value)} required />
+            <Button type="submit" variant="success" disabled={saving} icon={<Save className="h-4 w-4" />}>{saving ? "Creando…" : "Crear categoría"}</Button>
+          </form>
+        </div>
       </Card>
       <Card noPadding>
+        <div className="hm-card-header-teal">
+          <h2 className="text-sm font-semibold flex items-center gap-2"><Tags className="h-4 w-4" /> Categorías ({categories.length})</h2>
+        </div>
         <div className="overflow-x-auto">
-          <table className="min-w-[600px] w-full text-sm">
-            <thead className="text-left text-xs font-bold uppercase text-[var(--color-text-secondary)]">
-              <tr className="border-b border-[var(--color-border)]">
-                <th className="px-3 py-3">Código</th>
+          <table className="hm-table min-w-[600px] w-full">
+            <thead>
+              <tr>
+                <th>Código</th>
                 <th>Nombre</th>
                 <th>Estado</th>
-                <th className="text-right pr-3">Acciones</th>
+                <th className="text-right">Acciones</th>
               </tr>
             </thead>
             <tbody>
               {categories.map((item) => (
-                <tr key={item.id} className="border-b border-[var(--color-border)]">
-                  <td className="px-3 py-3 font-semibold">{item.code}</td>
+                <tr key={item.id}>
+                  <td className="font-semibold">{item.code}</td>
                   <td>{item.name}</td>
                   <td><Badge variant={item.isActive ? "success" : "warning"}>{item.isActive ? "Activo" : "Inactivo"}</Badge></td>
-                  <td className="px-3 text-right">
-                    <button className="rounded border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-alt)]" onClick={() => toggleActive(item)}>
+                  <td className="text-right">
+                    <Button variant={item.isActive ? "danger" : "success"} size="sm" onClick={() => toggleActive(item)} icon={item.isActive ? <X className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}>
                       {item.isActive ? "Archivar" : "Activar"}
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}
-              {categories.length === 0 ? <tr><td colSpan={4} className="px-3 py-6 text-center text-[var(--color-text-muted)]">No hay categorías registradas.</td></tr> : null}
+              {categories.length === 0 ? <tr><td colSpan={4} className="py-6 text-center text-[var(--color-text-muted)]">No hay categorías registradas.</td></tr> : null}
             </tbody>
           </table>
         </div>
@@ -745,6 +1105,35 @@ function CategoriesPanel({ categories, onDone }: { categories: Category[]; onDon
   );
 }
 
+/* ═══════════════════════════════════════════════════════════
+   AUDIT PANEL
+   ═══════════════════════════════════════════════════════════ */
 function AuditPanel({ logs }: { logs: AuditRow[] }) {
-  return <Card className="p-4"><div className="overflow-x-auto"><table className="min-w-[760px] w-full text-sm"><thead><tr className="border-b text-left"><th>Fecha</th><th>Modulo</th><th>Accion</th><th>Entidad</th><th>Sucursal</th><th>Usuario</th></tr></thead><tbody>{logs.map((log) => <tr key={log.id} className="border-b"><td className="py-2">{new Date(log.occurredAt).toLocaleString("es-NI")}</td><td>{log.module}</td><td>{log.action}</td><td>{log.entityType}</td><td>{log.branch?.code ?? "GLOBAL"}</td><td>{log.actor ? `${log.actor.fullName || log.actor.username} (usuario: ${log.actor.username})` : "sistema"}</td></tr>)}</tbody></table></div></Card>;
+  return (
+    <Card noPadding>
+      <div className="hm-card-header-red">
+        <h2 className="text-sm font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Auditoría</h2>
+      </div>
+      <div className="overflow-x-auto p-4">
+        <table className="hm-table min-w-[760px] w-full">
+          <thead>
+            <tr><th>Fecha</th><th>Módulo</th><th>Acción</th><th>Entidad</th><th>Sucursal</th><th>Usuario</th></tr>
+          </thead>
+          <tbody>
+            {logs.map((log) => (
+              <tr key={log.id}>
+                <td>{new Date(log.occurredAt).toLocaleString("es-NI")}</td>
+                <td>{log.module}</td>
+                <td>{log.action}</td>
+                <td>{log.entityType}</td>
+                <td>{log.branch?.code ?? "GLOBAL"}</td>
+                <td>{log.actor ? `${log.actor.fullName || log.actor.username}` : "sistema"}</td>
+              </tr>
+            ))}
+            {logs.length === 0 ? <tr><td colSpan={6} className="py-6 text-center text-[var(--color-text-muted)]">Sin registros de auditoría.</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
 }

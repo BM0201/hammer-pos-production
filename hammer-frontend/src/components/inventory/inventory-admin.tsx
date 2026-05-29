@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
+import { Boxes, History, Plus, RefreshCcw, Search } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { money, qty } from "@/lib/format";
 
 type BalanceRow = {
   id: string;
@@ -43,7 +49,6 @@ export function InventoryAdmin({
   const [savingMovement, setSavingMovement] = useState(false);
   const [balancesError, setBalancesError] = useState<string | null>(null);
   const [movementsError, setMovementsError] = useState<string | null>(null);
-  const [actionFeedback, setActionFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [movement, setMovement] = useState({
     productId: "",
     movementType: "PURCHASE_IN",
@@ -122,7 +127,6 @@ export function InventoryAdmin({
   }, [loadProducts, productSearch]);
 
   useEffect(() => {
-    setActionFeedback(null);
     loadInventoryData().catch(() => undefined);
   }, [branchId, filterProductId, loadInventoryData]);
 
@@ -130,7 +134,6 @@ export function InventoryAdmin({
     event.preventDefault();
     if (!movement.productId) return;
     setSavingMovement(true);
-    setActionFeedback(null);
 
     try {
       const response = await apiFetch("/api/inventory/movements", {
@@ -144,9 +147,9 @@ export function InventoryAdmin({
       }
 
       await loadInventoryData();
-      setActionFeedback({ tone: "success", text: `Movimiento registrado en ${currentBranchLabel}.` });
+      toast.success(`Movimiento registrado en ${currentBranchLabel}.`);
     } catch (error) {
-      setActionFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo registrar el movimiento." });
+      toast.error(error instanceof Error ? error.message : "No se pudo registrar el movimiento.");
     } finally {
       setSavingMovement(false);
     }
@@ -154,133 +157,154 @@ export function InventoryAdmin({
 
   return (
     <section className="space-y-4">
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
-        <p className="font-medium text-[var(--color-text)]">Contexto activo de sucursal: {currentBranchLabel}</p>
-        <p className="mt-1 text-[var(--color-text-muted)]">
-          Balances, disponibilidad y movimientos se filtran estrictamente por esta sucursal.
-        </p>
-      </div>
+      {/* Contexto de sucursal */}
+      <Card noPadding>
+        <div className="hm-card-header-teal">
+          <p className="text-sm font-semibold">Contexto activo: {currentBranchLabel}</p>
+          <p className="text-xs opacity-90">Balances, disponibilidad y movimientos se filtran por esta sucursal.</p>
+        </div>
+      </Card>
 
-      <div className="grid gap-2 rounded border p-3 md:grid-cols-[1fr_1fr_auto]">
-        <input
-          className="rounded-lg border border-[var(--color-border)] px-3 py-2"
-          placeholder="Buscar producto por nombre o SKU"
-          value={productSearch}
-          onChange={(e) => setProductSearch(e.target.value)}
-        />
-        <select className="rounded-lg border border-[var(--color-border)] px-3 py-2" value={filterProductId} onChange={(e) => setFilterProductId(e.target.value)}>
-          <option value="">Todos los productos</option>
-          {products.map((item) => (
-            <option key={item.id} value={item.id}>{item.sku} · {item.name}</option>
-          ))}
-        </select>
-        <button className="rounded-lg border border-[var(--color-border)] px-3" onClick={() => loadInventoryData()} type="button">
-          Refrescar datos
-        </button>
-      </div>
-
-      {canPostManualMovements ? (
-        <form className="grid gap-2 md:grid-cols-3" onSubmit={postMovement}>
-          <select className="rounded-lg border border-[var(--color-border)] px-3 py-2" value={movement.productId} onChange={(e) => setMovement({ ...movement, productId: e.target.value })} required>
-            <option value="">Selecciona producto</option>
+      {/* Filtros */}
+      <Card className="p-4">
+        <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+          <input
+            className="hm-input"
+            placeholder="🔍 Buscar producto por nombre o SKU"
+            value={productSearch}
+            onChange={(e) => setProductSearch(e.target.value)}
+          />
+          <select className="hm-input" value={filterProductId} onChange={(e) => setFilterProductId(e.target.value)}>
+            <option value="">Todos los productos</option>
             {products.map((item) => (
               <option key={item.id} value={item.id}>{item.sku} · {item.name}</option>
             ))}
           </select>
-          <select className="rounded-lg border border-[var(--color-border)] px-3 py-2" value={movement.movementType} onChange={(e) => setMovement({ ...movement, movementType: e.target.value })}>
-            <option>PURCHASE_IN</option><option>RETURN_IN</option><option>ADJUSTMENT_IN</option><option>TRANSFER_IN</option>
-            <option>RETURN_OUT</option><option>ADJUSTMENT_OUT</option><option>TRANSFER_OUT</option>
-          </select>
-          <input className="rounded-lg border border-[var(--color-border)] px-3 py-2" type="number" min="0.0001" step="0.0001" value={movement.quantity} onChange={(e) => setMovement({ ...movement, quantity: e.target.value })} required />
-          <input className="rounded-lg border border-[var(--color-border)] px-3 py-2" type="number" min="0" step="0.000001" value={movement.unitCost} onChange={(e) => setMovement({ ...movement, unitCost: e.target.value })} required />
-          <input className="rounded-lg border border-[var(--color-border)] px-3 py-2" placeholder="Tipo referencia" value={movement.referenceType} onChange={(e) => setMovement({ ...movement, referenceType: e.target.value })} required />
-          <input className="rounded-lg border border-[var(--color-border)] px-3 py-2" placeholder="ID referencia" value={movement.referenceId} onChange={(e) => setMovement({ ...movement, referenceId: e.target.value })} required />
-          <button className="rounded-lg bg-[var(--color-info-700)] hover:bg-[var(--color-info-800)] px-3 py-2 text-white md:col-span-3 disabled:opacity-60" type="submit" disabled={savingMovement}>
-            {savingMovement ? "Registrando..." : "Registrar movimiento"}
-          </button>
-        </form>
-      ) : (
-        <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
-          Tu rol tiene acceso de supervisión. Los movimientos manuales deben solicitarse mediante flujo de aprobación.
+          <Button variant="secondary" onClick={() => loadInventoryData()} icon={<RefreshCcw className="h-4 w-4" />}>
+            Refrescar
+          </Button>
         </div>
+      </Card>
+
+      {/* Formulario de movimiento */}
+      {canPostManualMovements ? (
+        <Card noPadding>
+          <div className="hm-card-header-purple">
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Plus className="h-4 w-4" /> Registrar movimiento manual</h3>
+          </div>
+          <div className="p-4">
+            <form className="grid gap-2 md:grid-cols-3" onSubmit={postMovement}>
+              <select className="hm-input" value={movement.productId} onChange={(e) => setMovement({ ...movement, productId: e.target.value })} required>
+                <option value="">Selecciona producto</option>
+                {products.map((item) => (
+                  <option key={item.id} value={item.id}>{item.sku} · {item.name}</option>
+                ))}
+              </select>
+              <select className="hm-input" value={movement.movementType} onChange={(e) => setMovement({ ...movement, movementType: e.target.value })}>
+                <option>PURCHASE_IN</option><option>RETURN_IN</option><option>ADJUSTMENT_IN</option><option>TRANSFER_IN</option>
+                <option>RETURN_OUT</option><option>ADJUSTMENT_OUT</option><option>TRANSFER_OUT</option>
+              </select>
+              <input className="hm-input" type="number" min="0.0001" step="0.0001" value={movement.quantity} onChange={(e) => setMovement({ ...movement, quantity: e.target.value })} required />
+              <input className="hm-input" type="number" min="0" step="0.000001" value={movement.unitCost} onChange={(e) => setMovement({ ...movement, unitCost: e.target.value })} required />
+              <input className="hm-input" placeholder="Tipo referencia" value={movement.referenceType} onChange={(e) => setMovement({ ...movement, referenceType: e.target.value })} required />
+              <input className="hm-input" placeholder="ID referencia" value={movement.referenceId} onChange={(e) => setMovement({ ...movement, referenceId: e.target.value })} required />
+              <div className="md:col-span-3">
+                <Button type="submit" variant="success" className="w-full" loading={savingMovement} icon={<Plus className="h-4 w-4" />}>
+                  {savingMovement ? "Registrando..." : "Registrar movimiento"}
+                </Button>
+              </div>
+            </form>
+            {selectedMovementProduct ? (
+              <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+                Producto seleccionado: <strong>{selectedMovementProduct.sku}</strong> · {selectedMovementProduct.name}
+              </p>
+            ) : null}
+          </div>
+        </Card>
+      ) : (
+        <Card className="border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
+          Tu rol tiene acceso de supervisión. Los movimientos manuales deben solicitarse mediante flujo de aprobación.
+        </Card>
       )}
 
-      {selectedMovementProduct ? (
-        <p className="text-xs text-[var(--color-text-muted)]">
-          Producto seleccionado: <strong>{selectedMovementProduct.sku}</strong> · {selectedMovementProduct.name}
-        </p>
-      ) : null}
-
-      {actionFeedback ? (
-        <div className={`rounded-lg border p-3 text-sm ${actionFeedback.tone === "success" ? "border-[var(--color-success-300)] bg-[var(--color-success-50)] text-[var(--color-success-700)]" : "border-[var(--color-danger-300)] bg-[var(--color-danger-50)] text-[var(--color-danger-700)]"}`}>
-          {actionFeedback.text}
+      {/* Balances */}
+      <Card noPadding>
+        <div className="hm-card-header-blue">
+          <h3 className="text-sm font-semibold flex items-center gap-2"><Boxes className="h-4 w-4" /> Balances y disponibilidad</h3>
         </div>
-      ) : null}
+        <div className="p-4">
+          {balancesLoading ? <p className="text-sm text-[var(--color-text-muted)] animate-pulse">Cargando balances...</p> : null}
+          {balancesError ? <p className="text-sm text-[var(--color-danger-700)]">{balancesError}</p> : null}
+          {!balancesLoading && !balancesError ? (
+            rows.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-[var(--color-border)] p-3 text-sm text-[var(--color-text-muted)]">
+                No hay balances para la sucursal seleccionada.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="hm-table w-full">
+                  <thead><tr><th>SKU</th><th>Producto</th><th>Cantidad</th><th>Costo promedio</th></tr></thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr key={row.id}>
+                        <td className="font-semibold">{row.product.sku}</td>
+                        <td>{row.product.name}</td>
+                        <td>{qty(row.quantityOnHand)}</td>
+                        <td>{money(row.weightedAverageCost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : null}
+        </div>
+      </Card>
 
-      <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-[var(--color-text)]">Balances y disponibilidad</h3>
-        {balancesLoading ? <p className="text-sm text-[var(--color-text-muted)]">Cargando balances...</p> : null}
-        {balancesError ? <p className="text-sm text-[var(--color-danger-700)]">{balancesError}</p> : null}
-        {!balancesLoading && !balancesError ? (
-          rows.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-[var(--color-border)] p-3 text-sm text-[var(--color-text-muted)]">
-              No hay balances para la sucursal seleccionada.
-            </p>
-          ) : (
-            <table className="w-full text-sm border-collapse">
-              <thead><tr className="border-b text-left"><th className="py-2">SKU</th><th>Producto</th><th>Cantidad</th><th>Costo promedio</th></tr></thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id} className="border-b">
-                    <td className="py-2">{row.product.sku}</td>
-                    <td>{row.product.name}</td>
-                    <td>{row.quantityOnHand}</td>
-                    <td>{row.weightedAverageCost}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-        ) : null}
-      </div>
-
-      <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-[var(--color-text)]">Movimientos recientes</h3>
-        {movementsLoading ? <p className="text-sm text-[var(--color-text-muted)]">Cargando movimientos...</p> : null}
-        {movementsError ? <p className="text-sm text-[var(--color-danger-700)]">{movementsError}</p> : null}
-        {!movementsLoading && !movementsError ? (
-          movements.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-[var(--color-border)] p-3 text-sm text-[var(--color-text-muted)]">
-              No hay movimientos para la sucursal seleccionada.
-            </p>
-          ) : (
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="border-b text-left">
-                  <th className="py-2">Fecha</th>
-                  <th>SKU</th>
-                  <th>Producto</th>
-                  <th>Tipo</th>
-                  <th>Cantidad</th>
-                  <th>Costo unitario</th>
-                </tr>
-              </thead>
-              <tbody>
-                {movements.map((item) => (
-                  <tr key={item.id} className="border-b">
-                    <td className="py-2">{new Date(item.createdAt).toLocaleString("es-NI")}</td>
-                    <td>{item.product.sku}</td>
-                    <td>{item.product.name}</td>
-                    <td>{item.movementType}</td>
-                    <td>{item.quantity}</td>
-                    <td>{item.unitCost}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
-        ) : null}
-      </div>
+      {/* Movimientos recientes */}
+      <Card noPadding>
+        <div className="hm-card-header-amber">
+          <h3 className="text-sm font-semibold flex items-center gap-2"><History className="h-4 w-4" /> Movimientos recientes</h3>
+        </div>
+        <div className="p-4">
+          {movementsLoading ? <p className="text-sm text-[var(--color-text-muted)] animate-pulse">Cargando movimientos...</p> : null}
+          {movementsError ? <p className="text-sm text-[var(--color-danger-700)]">{movementsError}</p> : null}
+          {!movementsLoading && !movementsError ? (
+            movements.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-[var(--color-border)] p-3 text-sm text-[var(--color-text-muted)]">
+                No hay movimientos para la sucursal seleccionada.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="hm-table w-full">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>SKU</th>
+                      <th>Producto</th>
+                      <th>Tipo</th>
+                      <th>Cantidad</th>
+                      <th>Costo unitario</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {movements.map((item) => (
+                      <tr key={item.id}>
+                        <td>{new Date(item.createdAt).toLocaleString("es-NI")}</td>
+                        <td className="font-semibold">{item.product.sku}</td>
+                        <td>{item.product.name}</td>
+                        <td><Badge variant={item.movementType.includes("IN") ? "success" : "warning"}>{item.movementType}</Badge></td>
+                        <td>{qty(item.quantity)}</td>
+                        <td>{money(item.unitCost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          ) : null}
+        </div>
+      </Card>
     </section>
   );
 }
