@@ -214,18 +214,19 @@ export async function analyzeUnifiedImport(input: Pick<PreviewInput, "fileConten
     prisma.category.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true } }),
   ]);
   const categoryByCode = new Map(categories.map((c) => [c.code.toUpperCase(), c]));
+  const categoryByName = new Map(categories.map((c) => [c.name.toUpperCase(), c]));
   const defaultCategory = input.defaultCategoryId ? categories.find((c) => c.id === input.defaultCategoryId) : null;
 
-  // Collect unique category codes from file
+  // Collect unique category values from file (could be codes or names)
   const fileCategoryCodes = new Set<string>();
   for (const row of rows) {
     if (row.categoryCode?.trim()) fileCategoryCodes.add(row.categoryCode.trim().toUpperCase());
   }
 
-  // Detect which are missing
+  // Detect which are missing (check by code AND by name)
   const missingCategories: string[] = [];
   for (const code of fileCategoryCodes) {
-    if (!categoryByCode.has(code)) missingCategories.push(code);
+    if (!categoryByCode.has(code) && !categoryByName.has(code)) missingCategories.push(code);
   }
 
   // Detect SKUs that don't exist → new products
@@ -256,15 +257,45 @@ export async function analyzeUnifiedImport(input: Pick<PreviewInput, "fileConten
   };
 }
 
+/**
+ * Generate a smart short code from a category name.
+ * Examples: "CEMENTO" → "CEM", "ALAMBRE" → "ALM", "TORNILLOS" → "TOR", "FERRETERIA" → "FER"
+ * If the 3-letter code already exists, tries 4 letters, then adds a number suffix.
+ */
+export function generateSmartCategoryCode(name: string, existingCodes: Set<string>): string {
+  const clean = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!clean) return name.toUpperCase().slice(0, 6);
+
+  // Try 3, 4, 5 letter prefixes
+  for (const len of [3, 4, 5]) {
+    const candidate = clean.slice(0, len);
+    if (candidate.length >= len && !existingCodes.has(candidate)) return candidate;
+  }
+
+  // Try with numeric suffix
+  const base = clean.slice(0, 3);
+  for (let i = 2; i <= 99; i++) {
+    const candidate = `${base}${i}`;
+    if (!existingCodes.has(candidate)) return candidate;
+  }
+
+  return clean.slice(0, 8);
+}
+
 /* ── Bulk-create missing categories (called before preview if user confirms) ── */
 export async function createMissingCategoriesForImport(categoryCodes: string[], actorUserId: string) {
-  const existing = await prisma.category.findMany({ select: { code: true } });
+  const existing = await prisma.category.findMany({ select: { code: true, name: true } });
   const existingCodes = new Set(existing.map((c) => c.code.toUpperCase()));
-  const toCreate = categoryCodes.filter((code) => !existingCodes.has(code.toUpperCase()));
+  const existingNames = new Set(existing.map((c) => c.name.toUpperCase()));
+  // Filter out codes whose name already exists as well
+  const toCreate = categoryCodes.filter((code) => !existingCodes.has(code.toUpperCase()) && !existingNames.has(code.toUpperCase()));
   const created: Array<{ id: string; code: string; name: string }> = [];
-  for (const code of toCreate) {
+  for (const rawName of toCreate) {
+    const smartCode = generateSmartCategoryCode(rawName, existingCodes);
+    existingCodes.add(smartCode); // Reserve so next iteration won't collide
+    const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase();
     const cat = await prisma.category.create({
-      data: { code: code.toUpperCase(), name: code },
+      data: { code: smartCode, name: displayName },
     });
     await prisma.auditLog.create({
       data: {
@@ -273,7 +304,7 @@ export async function createMissingCategoriesForImport(categoryCodes: string[], 
         action: "CATEGORY_CREATE",
         entityType: "Category",
         entityId: cat.id,
-        metadataJson: { source: "IMPORT_AUTO_CREATE", code: cat.code },
+        metadataJson: { source: "IMPORT_AUTO_CREATE", code: cat.code, originalName: rawName },
       },
     });
     created.push({ id: cat.id, code: cat.code, name: cat.name });
@@ -291,6 +322,7 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
   const branchById = new Map(branches.map((branch) => [branch.id, branch]));
   const branchByCode = new Map(branches.map((branch) => [branch.code.toUpperCase(), branch]));
   const categoryByCode = new Map(categories.map((category) => [category.code.toUpperCase(), category]));
+  const categoryByName = new Map(categories.map((category) => [category.name.toUpperCase(), category]));
   const defaultCategory = input.defaultCategoryId ? categories.find((category) => category.id === input.defaultCategoryId) : null;
   const reservedSkus = new Set<string>();
   const skuByRowNumber = new Map<number, string>();
@@ -301,7 +333,7 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
       // Manual SKU already normalized at read time — skip DB call
       sku = row.sku;
     } else if (row.name.trim()) {
-      const categoryName = row.categoryCode ? categoryByCode.get(row.categoryCode.toUpperCase())?.name ?? row.categoryCode : defaultCategory?.name ?? null;
+      const categoryName = row.categoryCode ? (categoryByCode.get(row.categoryCode.toUpperCase()) ?? categoryByName.get(row.categoryCode.toUpperCase()))?.name ?? row.categoryCode : defaultCategory?.name ?? null;
       sku = await generateSkuForProduct(prisma, {
         productName: row.name,
         categoryName,
@@ -624,8 +656,9 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
     }, { timeout: IMPORT_TX_TIMEOUT, maxWait: IMPORT_TX_MAX_WAIT });
 
     // Pre-load shared data once (outside transactions)
-    const categories = await prisma.category.findMany({ select: { id: true, code: true, isActive: true } });
+    const categories = await prisma.category.findMany({ select: { id: true, code: true, name: true, isActive: true } });
     const categoryByCode = new Map(categories.map((category) => [category.code.toUpperCase(), category]));
+    const categoryByNameExec = new Map(categories.map((category) => [category.name.toUpperCase(), category]));
     const importType = normalizeImportType(batch.importType as UnifiedImportType, batch.destinationMode as DestinationMode);
 
     // Phase 2: Process lines in chunks
@@ -652,7 +685,7 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
           if (!product) throw new ImportLineExecutionError("Producto no encontrado.", line.id, line.rowNumber);
 
           if (importType === "CATALOG_ONLY" || importType === "CATALOG_WITH_INITIAL_STOCK") {
-            const category = line.categoryCode ? categoryByCode.get(line.categoryCode.toUpperCase()) : null;
+            const category = line.categoryCode ? (categoryByCode.get(line.categoryCode.toUpperCase()) ?? categoryByNameExec.get(line.categoryCode.toUpperCase())) : null;
             await tx.product.update({
               where: { id: product.id },
               data: {
