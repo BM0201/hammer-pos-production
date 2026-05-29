@@ -63,13 +63,6 @@ type SuggestedPriceResult = {
   totalMonthlyExpenses: number;
   estimatedMonthlyUnits: number;
   configExists: boolean;
-  expenseBreakdown?: {
-    totalMonthlyExpenses: number;
-    expensesByCategory: Record<string, number>;
-    payrollAutoTotal: number;
-    manualPayrollTotal: number;
-  };
-  pricingNote?: string;
 };
 
 type InternalFreightRoute = {
@@ -157,6 +150,13 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 const CATEGORIES = Object.keys(CATEGORY_LABELS);
 
+const FREIGHT_STATUS_LABELS: Record<string, string> = {
+  CALCULATED: "Calculado",
+  APPLIED: "Aplicado",
+  CANCELLED: "Cancelado",
+  DRAFT: "Borrador",
+};
+
 /* ══════════════════════════════════════════════════════════════ */
 
 export function ExpenseManager() {
@@ -167,7 +167,7 @@ export function ExpenseManager() {
   const [summary, setSummary] = useState<ExpenseSummary | null>(null);
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"expenses" | "config" | "calculator" | "freight">("expenses");
+  const [activeTab, setActiveTab] = useState<"expenses" | "pricing" | "freight">("expenses");
 
   /* Form state */
   const [newExpense, setNewExpense] = useState({
@@ -519,11 +519,10 @@ export function ExpenseManager() {
 
       {/* ── Tabs ── */}
       <div className="flex gap-1 bg-[var(--color-surface-raised)] rounded-lg p-1 overflow-x-auto">
-        {(["expenses", "config", "calculator", "freight"] as const).map((tab) => {
+        {(["expenses", "pricing", "freight"] as const).map((tab) => {
           const labels = {
             expenses: { label: "Gastos Operativos", icon: DollarSign },
-            config: { label: "Configuración de Precios", icon: Settings },
-            calculator: { label: "Calculadora de Precio", icon: Calculator },
+            pricing: { label: "Precios", icon: Calculator },
             freight: { label: "Flete interno", icon: TrendingUp },
           };
           const { label, icon: Icon } = labels[tab];
@@ -720,10 +719,11 @@ export function ExpenseManager() {
       )}
 
       {/* ══════════════════════════════════════════════════════════ */}
-      {/* TAB: CONFIGURACIÓN DE PRECIOS */}
+      {/* TAB: PRECIOS (Configuración + Calculadora) */}
       {/* ══════════════════════════════════════════════════════════ */}
-      {activeTab === "config" && selectedBranchId && !loading && (
+      {activeTab === "pricing" && selectedBranchId && !loading && (
         <div className="space-y-6">
+          {/* ── Configuración de precios ── */}
           <Card className="p-6">
             <h4 className="text-sm font-semibold text-[var(--color-text)] mb-1 flex items-center gap-2">
               <Settings className="h-4 w-4" />
@@ -775,37 +775,7 @@ export function ExpenseManager() {
             </Button>
           </Card>
 
-          {/* Formula explanation */}
-          <Card variant="outlined" className="border-[var(--color-info-200)] bg-[var(--color-info-50)] p-5">
-            <h5 className="text-sm font-semibold text-[var(--color-info-700)] mb-3 flex items-center gap-2">
-              <Calculator className="h-4 w-4" />
-              Fórmula de Cálculo
-            </h5>
-            <div className="space-y-2 text-xs text-[var(--color-info-700)]">
-              <div className="font-mono bg-[var(--color-surface)]/60 rounded-lg p-3 space-y-1">
-                <p><strong>1.</strong> Gasto por Unidad = Gastos Mensuales Totales ÷ Unidades Estimadas</p>
-                <p><strong>2.</strong> Costo Total = Costo de Compra + Gasto por Unidad</p>
-                <p><strong>3.</strong> Precio Sugerido = Costo Total ÷ (1 − Margen/100)</p>
-              </div>
-              <div className="mt-3 bg-[var(--color-surface)]/60 rounded-lg p-3">
-                <p className="font-semibold mb-1">Ejemplo:</p>
-                <p>Gastos mensuales = C$50,000 · Unidades estimadas = 1,000</p>
-                <p>Gasto por unidad = C$50,000 ÷ 1,000 = <strong>C$50.00</strong></p>
-                <p>Costo de compra del cemento = C$400</p>
-                <p>Costo total = C$400 + C$50 = <strong>C$450.00</strong></p>
-                <p>Margen deseado = 7%</p>
-                <p>Precio sugerido = C$450 ÷ (1 − 0.07) = <strong>C$483.87</strong></p>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* ══════════════════════════════════════════════════════════ */}
-      {/* TAB: CALCULADORA DE PRECIO SUGERIDO */}
-      {/* ══════════════════════════════════════════════════════════ */}
-      {activeTab === "calculator" && selectedBranchId && !loading && (
-        <div className="space-y-6">
+          {/* ── Calculadora de precio sugerido ── */}
           <Card className="p-6">
             <h4 className="text-sm font-semibold text-[var(--color-text)] mb-1 flex items-center gap-2">
               <Calculator className="h-4 w-4" />
@@ -840,7 +810,7 @@ export function ExpenseManager() {
             </div>
           </Card>
 
-          {/* ── Result ── */}
+          {/* ── Resultado del cálculo ── */}
           {calcResult && (
             <Card variant="outlined" className="border-2 border-[var(--color-success-200)] bg-gradient-to-br from-[var(--color-success-50)] to-white p-6">
               <h4 className="text-sm font-semibold text-[var(--color-success-700)] mb-4 flex items-center gap-2">
@@ -854,31 +824,6 @@ export function ExpenseManager() {
                   <p className="text-xs text-[var(--color-warning-700)]">
                     No hay configuración de precios para esta sucursal. Se usan valores por defecto
                     (Margen: 30%, Unidades: 1,000).
-                  </p>
-                </div>
-              )}
-
-              {calcResult.pricingNote && (
-                <div className="mb-4 flex items-start gap-2 rounded-lg bg-[var(--color-info-50)] border border-[var(--color-info-100)] p-3">
-                  <AlertTriangle className="h-4 w-4 text-[var(--color-info-600)] mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-[var(--color-info-700)]">{calcResult.pricingNote}</p>
-                </div>
-              )}
-
-              {calcResult.expenseBreakdown && calcResult.expenseBreakdown.payrollAutoTotal === 0 && (
-                <div className="mb-4 flex items-start gap-2 rounded-lg bg-[var(--color-warning-50)] border border-[var(--color-warning-100)] p-3">
-                  <AlertTriangle className="h-4 w-4 text-[var(--color-warning-600)] mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-[var(--color-warning-700)]">
-                    No hay nómina automática activa para este mes; sincroniza Personal & Nómina si aplica.
-                  </p>
-                </div>
-              )}
-
-              {calcResult.expenseBreakdown && calcResult.expenseBreakdown.manualPayrollTotal > 0 && (
-                <div className="mb-4 flex items-start gap-2 rounded-lg bg-[var(--color-danger-50)] border border-[var(--color-danger-100)] p-3">
-                  <AlertTriangle className="h-4 w-4 text-[var(--color-danger-600)] mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-[var(--color-danger-700)]">
-                    Hay nómina manual registrada; puede duplicar costos si también sincronizas Personal & Nómina.
                   </p>
                 </div>
               )}
@@ -928,22 +873,32 @@ export function ExpenseManager() {
                   {calcResult.estimatedMonthlyUnits.toLocaleString()}
                 </p>
               </div>
-
-              {calcResult.expenseBreakdown && (
-                <div className="mt-4 pt-3 border-t border-[var(--color-success-100)]">
-                  <p className="mb-2 text-xs font-semibold text-[var(--color-text-secondary)]">Desglose de gastos usados</p>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {Object.entries(calcResult.expenseBreakdown.expensesByCategory).map(([category, amount]) => (
-                      <div key={category} className="flex items-center justify-between rounded-lg bg-white/70 px-3 py-2 text-xs">
-                        <span className="text-[var(--color-text-muted)]">{CATEGORY_LABELS[category] || category}</span>
-                        <span className="font-semibold text-[var(--color-text)]">{formatC(amount)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </Card>
           )}
+
+          {/* Formula explanation */}
+          <Card variant="outlined" className="border-[var(--color-info-200)] bg-[var(--color-info-50)] p-5">
+            <h5 className="text-sm font-semibold text-[var(--color-info-700)] mb-3 flex items-center gap-2">
+              <Calculator className="h-4 w-4" />
+              Fórmula de Cálculo
+            </h5>
+            <div className="space-y-2 text-xs text-[var(--color-info-700)]">
+              <div className="font-mono bg-[var(--color-surface)]/60 rounded-lg p-3 space-y-1">
+                <p><strong>1.</strong> Gasto por Unidad = Gastos Mensuales Totales ÷ Unidades Estimadas</p>
+                <p><strong>2.</strong> Costo Total = Costo de Compra + Gasto por Unidad</p>
+                <p><strong>3.</strong> Precio Sugerido = Costo Total ÷ (1 − Margen/100)</p>
+              </div>
+              <div className="mt-3 bg-[var(--color-surface)]/60 rounded-lg p-3">
+                <p className="font-semibold mb-1">Ejemplo:</p>
+                <p>Gastos mensuales = C$50,000 · Unidades estimadas = 1,000</p>
+                <p>Gasto por unidad = C$50,000 ÷ 1,000 = <strong>C$50.00</strong></p>
+                <p>Costo de compra del cemento = C$400</p>
+                <p>Costo total = C$400 + C$50 = <strong>C$450.00</strong></p>
+                <p>Margen deseado = 7%</p>
+                <p>Precio sugerido = C$450 ÷ (1 − 0.07) = <strong>C$483.87</strong></p>
+              </div>
+            </div>
+          </Card>
         </div>
       )}
 
@@ -998,7 +953,7 @@ export function ExpenseManager() {
                 {freightRoutes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select>
               <select className="rounded-lg border px-3 py-2 text-sm" value={tripForm.transferId} onChange={(e) => setTripForm({ ...tripForm, transferId: e.target.value })}>
-                <option value="">Transferencia opcional</option>
+                <option value="">Transferencia (requerida)</option>
                 {transfers.map((t) => <option key={t.id} value={t.id}>{t.transferNumber}</option>)}
               </select>
               <select className="rounded-lg border px-3 py-2 text-sm" value={tripForm.truckId} onChange={(e) => setTripForm({ ...tripForm, truckId: e.target.value })}>
@@ -1014,7 +969,7 @@ export function ExpenseManager() {
               <Input type="number" min="0" step="0.01" placeholder="Conductor" value={tripForm.driverCost} onChange={(e) => setTripForm({ ...tripForm, driverCost: e.target.value })} />
               <Input type="number" min="0" step="0.01" placeholder="Ayudante" value={tripForm.helperCost} onChange={(e) => setTripForm({ ...tripForm, helperCost: e.target.value })} />
               <Input type="number" min="0" step="0.01" placeholder="Otros costos" value={tripForm.otherCost} onChange={(e) => setTripForm({ ...tripForm, otherCost: e.target.value })} />
-              <Button onClick={handleCreateTrip} disabled={!tripForm.routeId || !tripForm.fuelPricePerGallon}>Calcular viaje</Button>
+              <Button onClick={handleCreateTrip} disabled={!tripForm.routeId || !tripForm.transferId || !tripForm.fuelPricePerGallon}>Calcular viaje</Button>
             </div>
           </Card>
 
@@ -1029,7 +984,7 @@ export function ExpenseManager() {
                       <td className="py-2">{trip.route.name}</td>
                       <td>{trip.truck?.name ?? "Manual"}</td>
                       <td>{formatC(Number(trip.totalTripCost))}</td>
-                      <td>{trip.status}</td>
+                      <td>{FREIGHT_STATUS_LABELS[trip.status] ?? trip.status}</td>
                       <td>
                         <div className="space-y-1">
                           {trip.lines.slice(0, 5).map((line) => (
