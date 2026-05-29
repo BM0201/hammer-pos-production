@@ -182,7 +182,7 @@ export default function MasterHistoryPage() {
             {/* Tabla para desktop */}
             <div className="hidden md:block">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="hm-table w-full text-sm">
               <thead className="bg-[var(--color-surface-alt)]">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">Fecha</th>

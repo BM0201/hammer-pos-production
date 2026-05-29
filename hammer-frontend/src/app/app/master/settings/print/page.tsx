@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
+import toast from "react-hot-toast";
 import { Printer, Save, RefreshCw, CheckCircle, AlertCircle } from "lucide-react";
 
 type Branch = { id: string; code: string; name: string };
@@ -55,7 +56,7 @@ export default function PrintSettingsPage() {
   const [settings, setSettings] = useState<PrintSettingsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  
 
   // Cargar sucursales
   useEffect(() => {
@@ -96,7 +97,7 @@ export default function PrintSettingsPage() {
   const handleSave = async () => {
     if (!settings) return;
     setSaving(true);
-    setMessage(null);
+    
     try {
       const r = await apiFetch("/api/master/print-settings", {
         method: "POST",
@@ -106,12 +107,12 @@ export default function PrintSettingsPage() {
         const json = await r.json();
         const saved = unwrapApiData(json as ApiResponse<PrintSettingsData>);
         setSettings(saved);
-        setMessage({ type: "success", text: "Configuración guardada exitosamente." });
+        toast.success("Configuración guardada exitosamente.");
       } else {
-        setMessage({ type: "error", text: "Error al guardar la configuración." });
+        toast.error("Error al guardar la configuración.");
       }
     } catch {
-      setMessage({ type: "error", text: "Error de conexión al guardar." });
+      toast.error("Error de conexión al guardar.");
     } finally {
       setSaving(false);
     }
@@ -120,7 +121,7 @@ export default function PrintSettingsPage() {
   const updateField = <K extends keyof PrintSettingsData>(key: K, value: PrintSettingsData[K]) => {
     if (!settings) return;
     setSettings({ ...settings, [key]: value });
-    setMessage(null);
+    
   };
 
   if (loading) {
@@ -281,17 +282,7 @@ export default function PrintSettingsPage() {
             </div>
           </div>
 
-          {/* Mensajes y botón guardar */}
-          {message && (
-            <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${
-              message.type === "success"
-                ? "bg-[var(--color-success-50)] text-[var(--color-success-700)] border border-[var(--color-success-200)]"
-                : "bg-[var(--color-danger-50)] text-[var(--color-danger-700)] border border-[var(--color-danger-200)]"
-            }`}>
-              {message.type === "success" ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
-              <span>{message.text}</span>
-            </div>
-          )}
+          {/* Feedback via react-hot-toast */}
 
           <div className="flex gap-3">
             <button
