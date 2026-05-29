@@ -198,12 +198,12 @@ export async function approveTransfer(id: string, userId: string) {
     }
 
     // Mark as received immediately (MVP simplification)
-    await tx.transfer.update({
+    const received = await tx.transfer.update({
       where: { id },
       data: { status: "RECEIVED", receivedAt: new Date() },
     });
 
-    return updated;
+    return received;
   });
 
   await logAuditEvent({
