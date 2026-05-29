@@ -115,25 +115,28 @@
 
   /* ── Text (all meet 4.5:1+ on white) ── */
   --color-text:       #0f172a;        /* 15.4:1 */
-  --color-text-secondary: #334155;    /* 8.5:1 */
+  --color-text-secondary: #1e293b;    /* 13.6:1 — darker for readability */
   --color-text-muted: #475569;        /* 6.37:1 */
   --color-text-soft:  #64748b;        /* 4.63:1 */
 
-  /* ── Semantic ── */
-  --color-success-50:  #f0fdf4;
-  --color-success-100: #dcfce7;
-  --color-success-500: #22c55e;
-  --color-success-600: #16a34a;
-  --color-success-700: #15803d;
+  /* ── Semantic — vibrant & accessible ── */
+  --color-success-50:  #ecfdf5;
+  --color-success-100: #d1fae5;
+  --color-success-200: #a7f3d0;
+  --color-success-500: #10b981;
+  --color-success-600: #059669;
+  --color-success-700: #047857;
 
   --color-warning-50:  #fffbeb;
   --color-warning-100: #fef3c7;
+  --color-warning-200: #fde68a;
   --color-warning-500: #f59e0b;
   --color-warning-600: #d97706;
   --color-warning-700: #b45309;
 
   --color-danger-50:   #fef2f2;
   --color-danger-100:  #fee2e2;
+  --color-danger-200:  #fecaca;
   --color-danger-500:  #ef4444;
   --color-danger-600:  #dc2626;
   --color-danger-700:  #b91c1c;
@@ -141,10 +144,12 @@
   --color-info-50:     #eff6ff;
   --color-info-100:    #dbeafe;
   --color-info-200:    #bfdbfe;
+  --color-info-300:    #93c5fd;
   --color-info-400:    #60a5fa;
   --color-info-500:    #3b82f6;
   --color-info-600:    #2563eb;
   --color-info-700:    #1d4ed8;
+  --color-info-800:    #1e40af;
 
   /* Legacy primary aliases used by older modules */
   --color-primary-50:  var(--color-info-50);
@@ -353,7 +358,7 @@ select.hm-input {
 .hm-input {
   width: 100%;
   border-radius: var(--radius-lg);
-  border: 1.5px solid var(--color-border);
+  border: 1.5px solid var(--color-border-strong);
   padding-top: 0.625rem;
   padding-bottom: 0.625rem;
   padding-right: 0.875rem;
@@ -392,7 +397,7 @@ select.hm-input {
 }
 
 .hm-module-card {
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   box-shadow: var(--shadow-card);
@@ -404,7 +409,7 @@ select.hm-input {
   justify-content: space-between;
   gap: 1rem;
   padding: 1rem 1.125rem;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1.5px solid var(--color-border-strong);
   background: var(--color-surface-muted);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 }
@@ -438,6 +443,39 @@ select.hm-input {
 }
 .hm-input::placeholder { color: var(--color-text-soft); }
 
+/* ── Vibrant Card Headers — high contrast, visible gradients ── */
+.hm-card-header-blue {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+}
+.hm-card-header-green {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  color: #ffffff;
+}
+.hm-card-header-amber {
+  background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+  color: #ffffff;
+}
+.hm-card-header-purple {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+  color: #ffffff;
+}
+.hm-card-header-red {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  color: #ffffff;
+}
+.hm-card-header-teal {
+  background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
+  color: #ffffff;
+}
+
+/* Gradient accent bars for card tops */
+.hm-accent-blue   { background: linear-gradient(90deg, #3b82f6, #2563eb, #1d4ed8); }
+.hm-accent-green  { background: linear-gradient(90deg, #10b981, #059669, #047857); }
+.hm-accent-amber  { background: linear-gradient(90deg, #f59e0b, #d97706, #b45309); }
+.hm-accent-purple { background: linear-gradient(90deg, #8b5cf6, #7c3aed, #6d28d9); }
+.hm-accent-red    { background: linear-gradient(90deg, #f87171, #ef4444, #dc2626); }
+
 /* ── Badges ── WCAG AA contrast ≥ 4.5:1 on their backgrounds */
 .hm-badge {
   display: inline-flex;
@@ -463,7 +501,7 @@ select.hm-input {
 .hm-badge-warehouse    { background: var(--color-warehouse-50);    color: var(--color-warehouse-700);    border: 1px solid var(--color-warehouse-100); }
 /* Legacy alias */
 .hm-badge-branch       { background: var(--color-branch-admin-50); color: var(--color-branch-admin-700); border: 1px solid var(--color-branch-admin-100); }
-.hm-badge-neutral { background: var(--color-surface-alt); color: var(--color-text-muted); border: 1px solid var(--color-border); }
+.hm-badge-neutral { background: var(--color-surface-alt); color: var(--color-text-secondary); border: 1px solid var(--color-border-strong); }
 
 /* ── Tables ── */
 .hm-table {
@@ -475,8 +513,8 @@ select.hm-input {
 }
 .hm-table thead th {
   background: var(--color-surface-alt);
-  color: var(--color-text-muted);
-  font-weight: 600;
+  color: var(--color-text-secondary);
+  font-weight: 700;
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;

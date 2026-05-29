@@ -968,7 +968,7 @@ export function UsersAdmin() {
                 <div className="overflow-x-auto">
                   <table className="min-w-[720px] w-full border-collapse text-sm">
                     <thead>
-                      <tr className="border-b border-[var(--color-border)] text-left text-xs uppercase tracking-wide text-[var(--color-text-soft)]">
+                      <tr className="border-b border-[var(--color-border)] text-left text-xs font-bold uppercase tracking-wide text-[var(--color-text-secondary)]">
                         <th className="px-3 py-3">Sucursal</th>
                         <th className="px-3 py-3">Rol</th>
                         <th className="px-3 py-3">Estado</th>

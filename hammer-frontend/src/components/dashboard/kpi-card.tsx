@@ -71,27 +71,36 @@ export function KpiCard({
 
   return (
     <Card
-      className={`${cfg.card} p-4 flex items-start gap-3 hover:shadow-md transition-shadow cursor-default`}
+      className={`${cfg.card} overflow-hidden hover:shadow-lg transition-shadow cursor-default`}
     >
-      {/* Icon */}
-      <div className={`flex-shrink-0 rounded-xl p-2.5 ${cfg.iconBg}`}>
-        <Icon className={`h-5 w-5 ${cfg.iconColor}`} />
-      </div>
-
-      {/* Content */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
-          <p className="text-[0.6875rem] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-            {label}
-          </p>
+      {/* Top accent bar */}
+      <div
+        className="h-1"
+        style={{
+          background: `linear-gradient(90deg, var(--color-${roleCfg.cssPrefix}-400), var(--color-${roleCfg.cssPrefix}-600))`,
+        }}
+      />
+      <div className="p-4 flex items-start gap-3">
+        {/* Icon */}
+        <div className={`flex-shrink-0 rounded-xl p-2.5 ${cfg.iconBg}`}>
+          <Icon className={`h-5 w-5 ${cfg.iconColor}`} />
         </div>
-        <p className="mt-1.5 text-2xl font-bold leading-none text-[var(--color-text)]">
-          {value}
-        </p>
-        {helper ? (
-          <p className="mt-1 text-[0.6875rem] text-[var(--color-text-soft)] truncate">{helper}</p>
-        ) : null}
+
+        {/* Content */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
+            <p className="text-[0.6875rem] font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
+              {label}
+            </p>
+          </div>
+          <p className="mt-1.5 text-2xl font-bold leading-none text-[var(--color-text)]">
+            {value}
+          </p>
+          {helper ? (
+            <p className="mt-1 text-[0.6875rem] text-[var(--color-text-muted)] truncate">{helper}</p>
+          ) : null}
+        </div>
       </div>
     </Card>
   );

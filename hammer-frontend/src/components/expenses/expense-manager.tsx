@@ -758,16 +758,16 @@ export function ExpenseManager() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
             {/* ── COLUMNA IZQUIERDA: Configuración de precios ── */}
-            <div className="relative overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-sm">
-              {/* Header con gradiente sutil */}
-              <div className="border-b border-[var(--color-border)] bg-gradient-to-r from-slate-50 to-slate-100/50 dark:from-slate-900/50 dark:to-slate-800/30 px-6 py-4">
+            <div className="relative overflow-hidden rounded-2xl border border-[var(--color-info-200)] bg-[var(--color-surface)] shadow-md">
+              {/* Header azul vibrante */}
+              <div className="hm-card-header-blue px-6 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--color-info-50)] dark:bg-indigo-900/30">
-                    <Settings className="h-4 w-4 text-[var(--color-master-600)] dark:text-[var(--color-master-400)]" />
+                  <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-white/20">
+                    <Settings className="h-5 w-5 text-white" />
                   </div>
                   <div>
-                    <h4 className="text-sm font-semibold text-[var(--color-text)]">Configuración de Precios</h4>
-                    <p className="text-[11px] text-[var(--color-text-muted)]">Parámetros para el cálculo automático</p>
+                    <h4 className="text-sm font-bold text-white">Configuración de Precios</h4>
+                    <p className="text-xs text-blue-100">Parámetros para el cálculo automático</p>
                   </div>
                 </div>
               </div>
@@ -775,8 +775,8 @@ export function ExpenseManager() {
               <div className="p-6 space-y-5">
                 {/* Margen */}
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                    <Percent className="h-3.5 w-3.5" />
+                  <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                    <Percent className="h-3.5 w-3.5 text-[var(--color-info-600)]" />
                     Margen de Utilidad
                   </label>
                   <div className="relative">
@@ -787,20 +787,20 @@ export function ExpenseManager() {
                       step="0.1"
                       value={configForm.desiredMarginPercent}
                       onChange={(e) => setConfigForm((p) => ({ ...p, desiredMarginPercent: e.target.value }))}
-                      className="w-full rounded-xl border-2 border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-[var(--color-master-500)] focus:ring-4 focus:ring-[var(--color-master-500)]/10 focus:outline-none"
+                      className="w-full rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
                     />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-bold text-[var(--color-text-muted)]">%</span>
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-bold text-slate-500">%</span>
                   </div>
-                  <p className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-1">
-                    <Info className="h-3 w-3" />
+                  <p className="text-xs text-slate-600 flex items-center gap-1">
+                    <Info className="h-3 w-3 text-blue-500" />
                     Porcentaje de ganancia sobre el precio de venta final
                   </p>
                 </div>
 
                 {/* Unidades */}
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                    <Package className="h-3.5 w-3.5" />
+                  <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                    <Package className="h-3.5 w-3.5 text-[var(--color-info-600)]" />
                     Unidades Mensuales Estimadas
                   </label>
                   <div className="relative">
@@ -810,69 +810,69 @@ export function ExpenseManager() {
                       step="1"
                       value={configForm.estimatedMonthlyUnits}
                       onChange={(e) => setConfigForm((p) => ({ ...p, estimatedMonthlyUnits: e.target.value }))}
-                      className="w-full rounded-xl border-2 border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-[var(--color-master-500)] focus:ring-4 focus:ring-[var(--color-master-500)]/10 focus:outline-none"
+                      className="w-full rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
                     />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-medium text-[var(--color-text-muted)]">/ mes</span>
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-500">/ mes</span>
                   </div>
-                  <p className="text-[11px] text-[var(--color-text-muted)] flex items-center gap-1">
-                    <Info className="h-3 w-3" />
+                  <p className="text-xs text-slate-600 flex items-center gap-1">
+                    <Info className="h-3 w-3 text-blue-500" />
                     Total de productos distintos vendidos al mes en esta sucursal
                   </p>
                 </div>
 
                 {/* Método de prorrateo */}
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                    <PieChart className="h-3.5 w-3.5" />
+                  <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                    <PieChart className="h-3.5 w-3.5 text-[var(--color-info-600)]" />
                     Método de Prorrateo
                   </label>
                   <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-info-50)] dark:bg-indigo-900/20 border border-[var(--color-info-300)] dark:border-indigo-800 px-3 py-2 text-xs font-semibold text-[var(--color-master-700)] dark:text-indigo-300">
+                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-blue-100 border border-blue-300 px-3 py-2 text-xs font-bold text-blue-800">
                       <Zap className="h-3 w-3" />
                       Por cantidad (MVP)
                     </span>
                   </div>
-                  <p className="text-[11px] text-[var(--color-text-muted)]">
+                  <p className="text-xs text-slate-600">
                     Gastos se dividen equitativamente entre unidades vendidas
                   </p>
                 </div>
 
                 {/* Resumen rápido de gastos */}
                 {summary && (
-                  <div className="rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/10 dark:to-orange-900/10 border border-[var(--color-warning-200)] dark:border-amber-800/50 p-4">
+                  <div className="rounded-xl bg-amber-50 border-2 border-amber-300 p-4">
                     <div className="flex items-center gap-2 mb-2">
-                      <Receipt className="h-3.5 w-3.5 text-[var(--color-warning-700)]" />
-                      <span className="text-xs font-semibold text-[var(--color-warning-700)] dark:text-amber-300">Gastos Operativos Mensuales</span>
+                      <Receipt className="h-4 w-4 text-amber-700" />
+                      <span className="text-sm font-bold text-amber-800">Gastos Operativos Mensuales</span>
                     </div>
-                    <p className="text-xl font-bold text-[var(--color-warning-700)] dark:text-amber-400">{formatC(summary.grandTotal)}</p>
-                    <p className="text-[11px] text-[var(--color-warning-700)] dark:text-amber-500 mt-1">
+                    <p className="text-2xl font-extrabold text-amber-700">{formatC(summary.grandTotal)}</p>
+                    <p className="text-xs font-medium text-amber-700 mt-1">
                       Prorrateado: {formatC(summary.grandTotal / Math.max(Number(configForm.estimatedMonthlyUnits) || 1, 1))} por unidad
                     </p>
                   </div>
                 )}
 
-                <Button
-                  variant="primary"
-                  className="w-full !rounded-xl !py-3"
+                <button
+                  type="button"
                   onClick={handleSaveConfig}
-                  icon={<Save className="h-4 w-4" />}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-3.5 px-6 shadow-lg shadow-blue-600/30 hover:shadow-blue-600/40 transition-all duration-200"
                 >
+                  <Save className="h-4 w-4" />
                   Guardar Configuración
-                </Button>
+                </button>
               </div>
             </div>
 
             {/* ── COLUMNA DERECHA: Calculadora ── */}
-            <div className="relative overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-sm">
-              {/* Header con gradiente */}
-              <div className="border-b border-[var(--color-border)] bg-gradient-to-r from-emerald-50 to-teal-50/50 dark:from-emerald-900/30 dark:to-teal-900/20 px-6 py-4">
+            <div className="relative overflow-hidden rounded-2xl border border-[var(--color-success-200)] bg-[var(--color-surface)] shadow-md">
+              {/* Header verde vibrante */}
+              <div className="hm-card-header-green px-6 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--color-success-50)] dark:bg-emerald-900/30">
-                    <Calculator className="h-4 w-4 text-[var(--color-success-700)] dark:text-emerald-400" />
+                  <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-white/20">
+                    <Calculator className="h-5 w-5 text-white" />
                   </div>
                   <div>
-                    <h4 className="text-sm font-semibold text-[var(--color-text)]">Calculadora de Precio</h4>
-                    <p className="text-[11px] text-[var(--color-text-muted)]">Ingresa el costo y obtén el precio sugerido</p>
+                    <h4 className="text-sm font-bold text-white">Calculadora de Precio</h4>
+                    <p className="text-xs text-emerald-100">Ingresa el costo y obtén el precio sugerido</p>
                   </div>
                 </div>
               </div>
@@ -880,12 +880,12 @@ export function ExpenseManager() {
               <div className="p-6 space-y-5">
                 {/* Costo base */}
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                    <DollarSign className="h-3.5 w-3.5" />
+                  <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                    <DollarSign className="h-3.5 w-3.5 text-emerald-600" />
                     Costo Base sin IVA
                   </label>
                   <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-bold text-[var(--color-text-muted)]">C$</span>
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-bold text-slate-500">C$</span>
                     <input
                       type="number"
                       min="0"
@@ -894,15 +894,15 @@ export function ExpenseManager() {
                       value={calcCost}
                       onChange={(e) => setCalcCost(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleCalculate()}
-                      className="w-full rounded-xl border-2 border-[var(--color-border)] bg-[var(--color-surface)] pl-12 pr-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 focus:outline-none"
+                      className="w-full rounded-xl border-2 border-slate-300 bg-white pl-12 pr-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15 focus:outline-none"
                     />
                   </div>
                 </div>
 
                 {/* IVA */}
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                    <ShieldCheck className="h-3.5 w-3.5" />
+                  <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
                     IVA sobre el costo de compra
                   </label>
                   <div className="flex items-center gap-3">
@@ -915,21 +915,21 @@ export function ExpenseManager() {
                         placeholder="15"
                         value={ivaPercent}
                         onChange={(e) => setIvaPercent(e.target.value)}
-                        className="w-full rounded-xl border-2 border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 focus:outline-none"
+                        className="w-full rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15 focus:outline-none"
                       />
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-bold text-[var(--color-text-muted)]">%</span>
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-bold text-slate-500">%</span>
                     </div>
                     {/* Quick-set buttons */}
-                    <div className="flex gap-1">
+                    <div className="flex gap-1.5">
                       {[0, 15].map((v) => (
                         <button
                           key={v}
                           type="button"
                           onClick={() => setIvaPercent(String(v))}
-                          className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all ${
+                          className={`rounded-lg px-4 py-2.5 text-sm font-bold transition-all ${
                             Number(ivaPercent) === v
-                              ? "bg-[var(--color-success-50)] text-[var(--color-success-700)] dark:bg-emerald-900/30 dark:text-emerald-300 border-2 border-emerald-300 dark:border-emerald-700"
-                              : "bg-[var(--color-neutral-100)] text-[var(--color-text-muted)] border-2 border-transparent hover:bg-[var(--color-neutral-200)]"
+                              ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30 border-2 border-emerald-600"
+                              : "bg-slate-100 text-slate-700 border-2 border-slate-300 hover:bg-slate-200"
                           }`}
                         >
                           {v === 0 ? "Sin IVA" : `${v}%`}
@@ -941,23 +941,23 @@ export function ExpenseManager() {
 
                 {/* Live preview del costo real */}
                 {calcCost && (
-                  <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 p-4 space-y-2">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Vista previa</p>
+                  <div className="rounded-xl bg-emerald-50 border-2 border-emerald-200 p-4 space-y-2">
+                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Vista previa</p>
                     <div className="flex items-center justify-between">
-                      <span className="text-xs text-[var(--color-text-muted)]">Costo base</span>
-                      <span className="text-sm font-semibold">{formatC(Number(calcCost) || 0)}</span>
+                      <span className="text-sm text-slate-700">Costo base</span>
+                      <span className="text-sm font-bold text-slate-900">{formatC(Number(calcCost) || 0)}</span>
                     </div>
                     {Number(ivaPercent) > 0 && (
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-[var(--color-warning-700)]">+ IVA ({ivaPercent}%)</span>
-                        <span className="text-sm font-semibold text-[var(--color-warning-700)]">
+                        <span className="text-sm text-amber-700 font-medium">+ IVA ({ivaPercent}%)</span>
+                        <span className="text-sm font-bold text-amber-700">
                           + {formatC((Number(calcCost) || 0) * (Number(ivaPercent) / 100))}
                         </span>
                       </div>
                     )}
-                    <div className="border-t border-slate-200 dark:border-slate-700 pt-2 flex items-center justify-between">
-                      <span className="text-xs font-semibold text-[var(--color-text)]">Costo real</span>
-                      <span className="text-sm font-bold text-[var(--color-text)]">
+                    <div className="border-t-2 border-emerald-300 pt-2 flex items-center justify-between">
+                      <span className="text-sm font-bold text-emerald-800">Costo real</span>
+                      <span className="text-lg font-extrabold text-emerald-800">
                         {formatC((Number(calcCost) || 0) * (1 + (Number(ivaPercent) || 0) / 100))}
                       </span>
                     </div>
@@ -968,9 +968,9 @@ export function ExpenseManager() {
                   type="button"
                   onClick={handleCalculate}
                   disabled={!calcCost}
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-semibold py-3.5 px-6 shadow-md shadow-emerald-500/25 hover:shadow-emerald-500/40 transition-all duration-200"
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-green-700 hover:from-emerald-700 hover:to-green-800 disabled:from-slate-300 disabled:to-slate-400 disabled:cursor-not-allowed text-white font-bold py-3.5 px-6 shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/40 transition-all duration-200 text-base"
                 >
-                  <Sparkles className="h-4 w-4" />
+                  <Sparkles className="h-5 w-5" />
                   Calcular Precio Sugerido
                 </button>
               </div>
@@ -991,9 +991,9 @@ export function ExpenseManager() {
               : "0.0";
 
             return (
-              <div className="relative overflow-hidden rounded-2xl border-2 border-[var(--color-success-200)] dark:border-emerald-800 bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-emerald-950/30 dark:via-[var(--color-surface)] dark:to-teal-950/20 shadow-xl shadow-emerald-500/10">
+              <div className="relative overflow-hidden rounded-2xl border-2 border-emerald-300 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-emerald-950/30 dark:via-[var(--color-surface)] dark:to-teal-950/20 shadow-xl shadow-emerald-500/10">
                 {/* Accent bar */}
-                <div className="h-1 bg-gradient-to-r from-emerald-400 via-teal-500 to-cyan-500" />
+                <div className="h-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
 
                 {!calcResult.configExists && (
                   <div className="mx-6 mt-5 flex items-start gap-2 rounded-xl bg-[var(--color-warning-50)] dark:bg-amber-900/20 border border-[var(--color-warning-200)] dark:border-amber-800 p-3">
@@ -1009,8 +1009,8 @@ export function ExpenseManager() {
 
                     {/* ── Desglose paso a paso ── */}
                     <div className="space-y-1">
-                      <h4 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-4 flex items-center gap-2">
-                        <Receipt className="h-3.5 w-3.5" />
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-4 flex items-center gap-2">
+                        <Receipt className="h-3.5 w-3.5 text-emerald-600" />
                         Desglose del Cálculo
                       </h4>
 
@@ -1103,20 +1103,20 @@ export function ExpenseManager() {
 
                       {/* KPIs debajo del precio */}
                       <div className="grid grid-cols-2 gap-3 mt-6 w-full max-w-xs">
-                        <div className="rounded-xl bg-[var(--color-surface)]/80 dark:bg-[var(--color-surface)]/5 border border-slate-200 dark:border-slate-700 p-3 text-center">
-                          <p className="text-[10px] font-semibold uppercase text-[var(--color-text-muted)]">Margen</p>
+                        <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
+                          <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Margen</p>
                           <p className="text-lg font-bold text-[var(--color-master-600)] dark:text-[var(--color-master-400)]">{calcResult.marginPercent}%</p>
                         </div>
-                        <div className="rounded-xl bg-[var(--color-surface)]/80 dark:bg-[var(--color-surface)]/5 border border-slate-200 dark:border-slate-700 p-3 text-center">
-                          <p className="text-[10px] font-semibold uppercase text-[var(--color-text-muted)]">Markup</p>
+                        <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
+                          <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Markup</p>
                           <p className="text-lg font-bold text-teal-600 dark:text-teal-400">{gananciaPercent}%</p>
                         </div>
-                        <div className="rounded-xl bg-[var(--color-surface)]/80 dark:bg-[var(--color-surface)]/5 border border-slate-200 dark:border-slate-700 p-3 text-center">
-                          <p className="text-[10px] font-semibold uppercase text-[var(--color-text-muted)]">Gastos/mes</p>
+                        <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
+                          <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Gastos/mes</p>
                           <p className="text-xs font-bold text-[var(--color-text)]">{formatC(calcResult.totalMonthlyExpenses)}</p>
                         </div>
-                        <div className="rounded-xl bg-[var(--color-surface)]/80 dark:bg-[var(--color-surface)]/5 border border-slate-200 dark:border-slate-700 p-3 text-center">
-                          <p className="text-[10px] font-semibold uppercase text-[var(--color-text-muted)]">Uds/mes</p>
+                        <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
+                          <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Uds/mes</p>
                           <p className="text-xs font-bold text-[var(--color-text)]">{calcResult.estimatedMonthlyUnits.toLocaleString()}</p>
                         </div>
                       </div>
