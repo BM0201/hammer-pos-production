@@ -6,7 +6,7 @@ import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail, validationFail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { executeUnifiedCatalogInventoryImport, previewUnifiedCatalogInventoryImport } from "@/modules/catalog-inventory/import-service";
+import { analyzeUnifiedImport, createMissingCategoriesForImport, executeUnifiedCatalogInventoryImport, previewUnifiedCatalogInventoryImport } from "@/modules/catalog-inventory/import-service";
 import type { SessionPayload } from "@/types/auth";
 
 export const maxDuration = 300;
@@ -43,6 +43,23 @@ const previewSchema = z.object({
   path: ["fileContent"],
 });
 
+const analyzeSchema = z.object({
+  mode: z.literal("analyze"),
+  importType: importTypeSchema,
+  fileContent: z.string().min(1).optional(),
+  fileBase64: z.string().min(1).optional(),
+  destinationMode: destinationModeSchema,
+  defaultCategoryId: z.string().cuid().optional(),
+}).refine((p) => Boolean(p.fileContent || p.fileBase64), {
+  message: "Debes enviar fileContent o fileBase64.",
+  path: ["fileContent"],
+});
+
+const createCategoriesSchema = z.object({
+  mode: z.literal("create-categories"),
+  categoryCodes: z.array(z.string().min(1)).min(1),
+});
+
 const executeSchema = z.object({
   mode: z.literal("execute"),
   batchId: z.string().cuid(),
@@ -65,6 +82,19 @@ export async function POST(request: Request) {
     await assertCanImportInventory(session);
 
     const payload = await request.json();
+
+    if (payload?.mode === "analyze") {
+      const parsed = analyzeSchema.safeParse(payload);
+      if (!parsed.success) return validationFail(parsed.error.issues);
+      return ok(await analyzeUnifiedImport(parsed.data));
+    }
+
+    if (payload?.mode === "create-categories") {
+      const parsed = createCategoriesSchema.safeParse(payload);
+      if (!parsed.success) return validationFail(parsed.error.issues);
+      return ok(await createMissingCategoriesForImport(parsed.data.categoryCodes, session.userId));
+    }
+
     if (payload?.mode === "preview") {
       const parsed = previewSchema.safeParse(payload);
       if (!parsed.success) return validationFail(parsed.error.issues);
@@ -77,7 +107,7 @@ export async function POST(request: Request) {
       return ok(await executeUnifiedCatalogInventoryImport({ ...parsed.data, actorUserId: session.userId }));
     }
 
-    return fail("VALIDATION_ERROR", "mode debe ser preview o execute.", 400);
+    return fail("VALIDATION_ERROR", "mode debe ser analyze, preview, create-categories o execute.", 400);
   } catch (error) {
     return toHttpErrorResponse(error);
   }
