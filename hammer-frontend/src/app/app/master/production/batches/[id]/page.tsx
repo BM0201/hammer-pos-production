@@ -266,7 +266,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           <h2 className="text-sm font-semibold text-[var(--color-text)]">Insumos del Lote</h2>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="hm-table w-full text-sm">
             <thead className="bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-xs uppercase tracking-wider">
               <tr>
                 <th className="px-4 py-2 text-left font-medium">Insumo</th>

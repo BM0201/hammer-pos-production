@@ -18,6 +18,8 @@ import {
   Sparkles,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import toast from "react-hot-toast";
+import { Save, Check } from "lucide-react";
 
 /* ── Types ── */
 type Discount = {
@@ -114,7 +116,7 @@ export default function DiscountsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
+  
   const [filterActive, setFilterActive] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [showModal, setShowModal] = useState(false);
@@ -132,9 +134,9 @@ export default function DiscountsPage() {
       const res = await fetch(`/api/master/discounts${params}`);
       const raw = await res.json();
       if (res.ok) { const d = unwrapApiData(raw); setDiscounts(Array.isArray(d) ? d : []); }
-      else setNotice(raw.error?.message ?? raw.message ?? "Error al cargar descuentos");
+      else toast.error(raw.error?.message ?? raw.message ?? "Error al cargar descuentos");
     } catch {
-      setNotice("Error de conexión");
+      toast.error("Error de conexión");
     }
     setLoading(false);
   }, [filterActive]);
@@ -166,7 +168,7 @@ export default function DiscountsPage() {
       setInsufficientSuggestions(data.insufficientData ?? []);
       setSuggestionsGeneratedAt(data.generatedAt ?? null);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "No se pudo cargar sugerencias del sistema");
+      toast.error(error instanceof Error ? error.message : "No se pudo cargar sugerencias del sistema");
     } finally {
       setSuggestionsLoading(false);
     }
@@ -218,7 +220,7 @@ export default function DiscountsPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name || !form.value) {
-      setNotice("Nombre y valor son requeridos");
+      toast.error("Nombre y valor son requeridos");
       return;
     }
     setBusy(true);
@@ -246,15 +248,15 @@ export default function DiscountsPage() {
       });
       if (res.ok) {
         setShowModal(false);
-        setNotice(editingId ? "Descuento actualizado" : "Descuento creado");
+        toast.success(editingId ? "Descuento actualizado" : "Descuento creado");
         loadDiscounts();
         loadSuggestions();
       } else {
         const errJson = await res.json();
-        setNotice(errJson.error?.message ?? errJson.message ?? "Error al guardar");
+        toast.error(errJson.error?.message ?? errJson.message ?? "Error al guardar");
       }
     } catch {
-      setNotice("Error de conexión");
+      toast.error("Error de conexión");
     }
     setBusy(false);
   }
@@ -265,15 +267,15 @@ export default function DiscountsPage() {
     try {
       const res = await apiFetch(`/api/master/discounts/${id}`, { method: "DELETE" });
       if (res.ok) {
-        setNotice("Descuento eliminado");
+        toast.success("Descuento eliminado");
         loadDiscounts();
         loadSuggestions();
       } else {
         const errJson = await res.json();
-        setNotice(errJson.error?.message ?? errJson.message ?? "Error al eliminar");
+        toast.error(errJson.error?.message ?? errJson.message ?? "Error al eliminar");
       }
     } catch {
-      setNotice("Error de conexión");
+      toast.error("Error de conexión");
     }
     setBusy(false);
   }
@@ -290,9 +292,9 @@ export default function DiscountsPage() {
         loadDiscounts();
         loadSuggestions();
       }
-      else setNotice("Error al cambiar estado");
+      else toast.error("Error al cambiar estado");
     } catch {
-      setNotice("Error de conexión");
+      toast.error("Error de conexión");
     }
     setBusy(false);
   }
@@ -433,15 +435,7 @@ export default function DiscountsPage() {
           )}
         </section>
 
-        {/* Notice */}
-        {notice && (
-          <div className="rounded-lg bg-[var(--color-info-50)] border border-[var(--color-info-300)] px-4 py-3 text-sm text-[var(--color-info-700)] flex items-center justify-between">
-            <span>{notice}</span>
-            <button onClick={() => setNotice("")} className="text-[var(--color-info-700)] hover:text-[var(--color-info-700)]">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        )}
+        {/* Notices via react-hot-toast */}
 
         {/* Controls */}
         <div className="flex flex-wrap items-center gap-4">
@@ -486,19 +480,24 @@ export default function DiscountsPage() {
             <p className="text-sm mt-1">Crea uno usando el botón superior</p>
           </div>
         ) : (
-          <div className="bg-[var(--color-surface)] rounded-xl shadow-sm border border-[var(--color-border)] overflow-hidden">
+          <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
+            <div className="hm-card-header-purple px-5 py-3 flex items-center gap-2">
+              <Tag className="h-4 w-4" />
+              <span className="text-sm font-bold">Descuentos registrados</span>
+              <span className="ml-auto rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-bold">{filtered.length}</span>
+            </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="hm-table w-full text-sm">
                 <thead>
-                  <tr className="bg-[var(--color-surface-alt)] border-b border-[var(--color-border)]">
-                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Nombre</th>
-                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Tipo</th>
-                    <th className="text-right px-4 py-3 font-semibold text-[var(--color-text)]">Valor</th>
-                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Criterios</th>
-                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Vigencia</th>
-                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Sucursal</th>
-                    <th className="text-center px-4 py-3 font-semibold text-[var(--color-text)]">Estado</th>
-                    <th className="text-right px-4 py-3 font-semibold text-[var(--color-text)]">Acciones</th>
+                  <tr>
+                    <th className="text-left">Nombre</th>
+                    <th className="text-left">Tipo</th>
+                    <th className="text-right">Valor</th>
+                    <th className="text-left">Criterios</th>
+                    <th className="text-left">Vigencia</th>
+                    <th className="text-left">Sucursal</th>
+                    <th className="text-center">Estado</th>
+                    <th className="text-right">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--color-border)]">
@@ -586,13 +585,14 @@ export default function DiscountsPage() {
       {/* ── Modal ── */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-[var(--color-surface)] rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)]">
-              <h2 className="text-lg font-bold text-[var(--color-text)]">
+          <div className="bg-[var(--color-surface)] rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto border border-[var(--color-border-strong)] overflow-hidden">
+            <div className="hm-card-header-purple px-6 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold flex items-center gap-2">
+                <Tag className="h-5 w-5" />
                 {editingId ? "Editar Descuento" : "Crear Descuento"}
               </h2>
-              <button onClick={() => setShowModal(false)} className="p-1 rounded-lg hover:bg-[var(--color-surface-alt)]">
-                <X className="h-5 w-5 text-[var(--color-text-muted)]" />
+              <button onClick={() => setShowModal(false)} className="text-white/80 hover:text-white transition-colors">
+                <X className="h-5 w-5" />
               </button>
             </div>
             <form onSubmit={handleSubmit} className="px-6 py-4 space-y-5">
@@ -776,17 +776,17 @@ export default function DiscountsPage() {
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 rounded-lg border border-[var(--color-border)] text-sm font-semibold text-[var(--color-text)] hover:bg-[var(--color-surface-alt)]"
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-lg border border-[var(--color-border)] text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] shadow-md hover:shadow-lg transition-all"
                 >
+                  <X className="h-4 w-4" />
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={busy}
-                  className="flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
-                  style={{ background: "var(--color-master-600)" }}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold text-white shadow-md hover:shadow-lg transition-all disabled:opacity-50 bg-[var(--color-master-600)] hover:bg-[var(--color-master-700)]"
                 >
-                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : editingId ? <Save className="h-4 w-4" /> : <Check className="h-4 w-4" />}
                   {editingId ? "Guardar Cambios" : "Crear Descuento"}
                 </button>
               </div>

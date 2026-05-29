@@ -456,7 +456,7 @@ export default function AbcXyzPage() {
           {view === "table" && (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1020px] text-sm">
+                <table className="hm-table w-full min-w-[1020px] text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]">
                     <th className="px-4 py-3 text-left font-semibold text-[var(--color-text-secondary)]">SKU</th>

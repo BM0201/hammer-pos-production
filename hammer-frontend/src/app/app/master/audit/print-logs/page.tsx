@@ -203,7 +203,7 @@ export default function PrintLogsAuditPage() {
           <div className="p-8 text-center text-sm text-[var(--color-text-muted)]">No se encontraron registros de impresión.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="hm-table w-full text-sm">
               <thead className="bg-[var(--color-surface-alt)]">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">Fecha</th>

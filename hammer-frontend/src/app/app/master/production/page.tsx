@@ -212,7 +212,7 @@ export default function ProductionDashboardPage() {
 
         {!loading && !error && batches.length > 0 && (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="hm-table w-full text-sm">
               <thead className="bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-xs uppercase tracking-wider">
                 <tr>
                   <th className="px-4 py-2.5 text-left font-medium">Lote</th>

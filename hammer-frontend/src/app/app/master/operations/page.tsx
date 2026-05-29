@@ -72,7 +72,7 @@ export default function MasterOperationsPage() {
       <Card className="p-4">
         <h2 className="text-sm font-semibold text-[var(--color-text)]">Días recientes</h2>
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <table className="hm-table w-full text-left text-sm">
             <thead className="text-xs uppercase text-[var(--color-text-muted)]">
               <tr><th className="py-2">Sucursal</th><th>Fecha</th><th>Estado</th><th>Ventas</th><th>Alertas</th></tr>
             </thead>

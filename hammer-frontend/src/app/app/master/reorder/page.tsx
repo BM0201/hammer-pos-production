@@ -17,6 +17,7 @@ import {
   Building2,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import toast from "react-hot-toast";
 
 /* ════════════════════════════════════════════════════════════════
  *  Types
@@ -152,8 +153,7 @@ function BatchStatusBadge({ status }: { status: ReorderBatch["status"] }) {
 
 export default function ReorderPage() {
   const [activeTab, setActiveTab] = useState<Tab>("alerts");
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  
 
   /* Shared state */
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -217,7 +217,7 @@ export default function ReorderPage() {
       const alertsData = unwrapApiData(raw);
       setAlerts(Array.isArray(alertsData) ? alertsData : []);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al cargar alertas"));
+      toast.error(getErrorMessage(error, "Error al cargar alertas"));
     } finally {
       setAlertsLoading(false);
     }
@@ -234,7 +234,7 @@ export default function ReorderPage() {
       const batchesData = unwrapApiData(raw);
       setBatches(Array.isArray(batchesData) ? batchesData : []);
     } catch (error) {
-      setError(getErrorMessage(error, "Error al cargar lotes"));
+      toast.error(getErrorMessage(error, "Error al cargar lotes"));
     } finally {
       setBatchesLoading(false);
     }
@@ -252,7 +252,7 @@ export default function ReorderPage() {
       setPolicies(Array.isArray(policiesData) ? policiesData : []);
       setPolicyEdits({});
     } catch (error) {
-      setError(getErrorMessage(error, "Error al cargar políticas"));
+      toast.error(getErrorMessage(error, "Error al cargar políticas"));
     } finally {
       setPoliciesLoading(false);
     }
@@ -274,12 +274,7 @@ export default function ReorderPage() {
     if (activeTab === "policies") fetchPolicies();
   }, [activeTab, fetchPolicies]);
 
-  /* ── Helper: show success toast ── */
-
-  const showSuccess = (msg: string) => {
-    setSuccess(msg);
-    setTimeout(() => setSuccess(null), 3500);
-  };
+  /* ── Feedback via react-hot-toast ── */
 
   /* ── Alert actions ── */
 
@@ -287,7 +282,7 @@ export default function ReorderPage() {
     if (!confirm("¿Ejecutar evaluación de reposición ahora? Se analizarán todas las políticas activas y se generarán alertas/lotes nuevos.")) return;
     try {
       setEvaluating(true);
-      setError(null);
+      
       const res = await apiFetch("/api/master/reorder/evaluate", {
         method: "POST",
         body: JSON.stringify({}),
@@ -296,13 +291,13 @@ export default function ReorderPage() {
       if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al evaluar");
       const json = unwrapApiData(raw);
       const { alertsCreated, batchesCreated, skippedDuplicates } = json;
-      showSuccess(
+      toast.success(
         `Evaluación completada: ${alertsCreated} alertas creadas, ${batchesCreated} lotes generados, ${skippedDuplicates} omitidos (duplicados).`,
       );
       fetchAlerts();
       fetchBatches();
     } catch (error) {
-      setError(getErrorMessage(error, "Error al evaluar"));
+      toast.error(getErrorMessage(error, "Error al evaluar"));
     } finally {
       setEvaluating(false);
     }
@@ -312,17 +307,17 @@ export default function ReorderPage() {
     if (!confirm("¿Convertir esta alerta en un Pedido de Compra (PO) en estado borrador?")) return;
     try {
       setAlertActionLoading(alertId);
-      setError(null);
+      
       const res = await apiFetch(`/api/master/reorder/alerts/${alertId}/convert-purchase-order`, {
         method: "POST",
       });
       const raw = await res.json();
       if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al convertir alerta");
       const json = unwrapApiData(raw);
-      showSuccess(`Alerta convertida a PO ${json?.purchaseOrder?.orderNumber ?? ""}`);
+      toast.success(`Alerta convertida a PO ${json?.purchaseOrder?.orderNumber ?? ""}`);
       fetchAlerts();
     } catch (error) {
-      setError(getErrorMessage(error, "Error al convertir alerta"));
+      toast.error(getErrorMessage(error, "Error al convertir alerta"));
     } finally {
       setAlertActionLoading(null);
     }
@@ -332,17 +327,17 @@ export default function ReorderPage() {
     if (!confirm("¿Convertir esta alerta en una Transferencia interna entre sucursales?")) return;
     try {
       setAlertActionLoading(alertId);
-      setError(null);
+      
       const res = await apiFetch(`/api/master/reorder/alerts/${alertId}/convert-transfer`, {
         method: "POST",
       });
       const raw = await res.json();
       if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al convertir alerta");
       const json = unwrapApiData(raw);
-      showSuccess(`Alerta convertida a Transferencia ${json?.transfer?.transferNumber ?? ""}`);
+      toast.success(`Alerta convertida a Transferencia ${json?.transfer?.transferNumber ?? ""}`);
       fetchAlerts();
     } catch (error) {
-      setError(getErrorMessage(error, "Error al convertir alerta"));
+      toast.error(getErrorMessage(error, "Error al convertir alerta"));
     } finally {
       setAlertActionLoading(null);
     }
@@ -352,15 +347,15 @@ export default function ReorderPage() {
     if (!confirm("¿Descartar esta alerta? No se generará pedido ni transferencia.")) return;
     try {
       setAlertActionLoading(alertId);
-      setError(null);
+      
       const res = await apiFetch(`/api/master/reorder/alerts/${alertId}/dismiss`, {
         method: "POST",
       });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al descartar alerta"); }
-      showSuccess("Alerta descartada");
+      toast.success("Alerta descartada");
       fetchAlerts();
     } catch (error) {
-      setError(getErrorMessage(error, "Error al descartar alerta"));
+      toast.error(getErrorMessage(error, "Error al descartar alerta"));
     } finally {
       setAlertActionLoading(null);
     }
@@ -373,7 +368,7 @@ export default function ReorderPage() {
     if (!confirm(`¿Convertir todo el lote (${batch.lines.length} líneas) en un ${tipo}? Las alertas vinculadas se marcarán como resueltas.`)) return;
     try {
       setBatchActionLoading(batch.id);
-      setError(null);
+      
       const res = await apiFetch(`/api/master/reorder/batches/${batch.id}/convert`, {
         method: "POST",
       });
@@ -383,10 +378,10 @@ export default function ReorderPage() {
       const ref = batch.suggestionType === "PURCHASE"
         ? json?.purchaseOrder?.orderNumber
         : json?.transfer?.transferNumber;
-      showSuccess(`Lote convertido a ${tipo} ${ref ?? ""}`);
+      toast.success(`Lote convertido a ${tipo} ${ref ?? ""}`);
       fetchBatches();
     } catch (error) {
-      setError(getErrorMessage(error, "Error al convertir lote"));
+      toast.error(getErrorMessage(error, "Error al convertir lote"));
     } finally {
       setBatchActionLoading(null);
     }
@@ -419,20 +414,20 @@ export default function ReorderPage() {
     };
 
     if (merged.targetQuantity <= merged.reorderPoint) {
-      setError("La cantidad objetivo debe ser mayor que el punto de reorden");
+      toast.error("La cantidad objetivo debe ser mayor que el punto de reorden");
       return;
     }
 
     try {
       setPolicySaving(policy.id);
-      setError(null);
+      
       const res = await apiFetch("/api/master/reorder/policies", {
         method: "POST",
         body: JSON.stringify(merged),
       });
       const rawPol = await res.json();
       if (!res.ok) throw new Error(rawPol.error?.message ?? rawPol.message ?? "Error al guardar política");
-      showSuccess(`Política actualizada — ${policy.product.name}`);
+      toast.success(`Política actualizada — ${policy.product.name}`);
       // Clear edit for this row
       setPolicyEdits((prev) => {
         const next = { ...prev };
@@ -441,7 +436,7 @@ export default function ReorderPage() {
       });
       fetchPolicies();
     } catch (error) {
-      setError(getErrorMessage(error, "Error al guardar política"));
+      toast.error(getErrorMessage(error, "Error al guardar política"));
     } finally {
       setPolicySaving(null);
     }
@@ -450,7 +445,7 @@ export default function ReorderPage() {
   const handleBulkSavePolicies = async () => {
     const editedIds = Object.keys(policyEdits);
     if (editedIds.length === 0) {
-      setError("No hay cambios pendientes para guardar");
+      toast.error("No hay cambios pendientes para guardar");
       return;
     }
     if (!confirm(`¿Guardar ${editedIds.length} política(s) modificada(s) en bloque?`)) return;
@@ -473,7 +468,7 @@ export default function ReorderPage() {
         isActive: edit.isActive ?? policy.isActive,
       };
       if (merged.targetQuantity <= merged.reorderPoint) {
-        setError(`Política inválida (${policy.product.name}): cantidad objetivo debe ser > punto de reorden`);
+        toast.error(`Política inválida (${policy.product.name}): cantidad objetivo debe ser > punto de reorden`);
         return;
       }
       payload.push(merged);
@@ -481,7 +476,7 @@ export default function ReorderPage() {
 
     try {
       setBulkSaving(true);
-      setError(null);
+      
       const res = await apiFetch("/api/master/reorder/policies", {
         method: "PATCH",
         body: JSON.stringify({ policies: payload }),
@@ -489,10 +484,10 @@ export default function ReorderPage() {
       const rawBulk = await res.json();
       if (!res.ok) throw new Error(rawBulk.error?.message ?? rawBulk.message ?? "Error al guardar políticas");
       const bulkResult = unwrapApiData(rawBulk);
-      showSuccess(`${bulkResult?.count ?? payload.length} política(s) guardada(s) en bloque`);
+      toast.success(`${bulkResult?.count ?? payload.length} política(s) guardada(s) en bloque`);
       fetchPolicies();
     } catch (error) {
-      setError(getErrorMessage(error, "Error al guardar políticas"));
+      toast.error(getErrorMessage(error, "Error al guardar políticas"));
     } finally {
       setBulkSaving(false);
     }
@@ -500,18 +495,18 @@ export default function ReorderPage() {
 
   const handleCreatePolicy = async () => {
     if (!newPolicyBranch || !newPolicyProduct) {
-      setError("Selecciona sucursal y producto");
+      toast.error("Selecciona sucursal y producto");
       return;
     }
     const rp = Number(newPolicyReorderPoint);
     const tq = Number(newPolicyTarget);
     if (!(tq > rp)) {
-      setError("La cantidad objetivo debe ser mayor que el punto de reorden");
+      toast.error("La cantidad objetivo debe ser mayor que el punto de reorden");
       return;
     }
     try {
       setPolicySaving("__new__");
-      setError(null);
+      
       const res = await apiFetch("/api/master/reorder/policies", {
         method: "POST",
         body: JSON.stringify({
@@ -527,7 +522,7 @@ export default function ReorderPage() {
       });
       const rawCreate = await res.json();
       if (!res.ok) throw new Error(rawCreate.error?.message ?? rawCreate.message ?? "Error al crear política");
-      showSuccess("Política creada");
+      toast.success("Política creada");
       setNewPolicyBranch("");
       setNewPolicyProduct("");
       setNewPolicyReorderPoint("");
@@ -537,7 +532,7 @@ export default function ReorderPage() {
       setNewPolicyLeadTime("0");
       fetchPolicies();
     } catch (error) {
-      setError(getErrorMessage(error, "Error al crear política"));
+      toast.error(getErrorMessage(error, "Error al crear política"));
     } finally {
       setPolicySaving(null);
     }
@@ -594,18 +589,7 @@ export default function ReorderPage() {
         </button>
       </div>
 
-      {/* Messages */}
-      {error && (
-        <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-4 py-3 text-sm text-[var(--color-danger-700)] flex items-center gap-2">
-          <AlertTriangle className="h-4 w-4 flex-shrink-0" /> {error}
-          <button onClick={() => setError(null)} className="ml-auto text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]">✕</button>
-        </div>
-      )}
-      {success && (
-        <div className="rounded-lg border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-4 py-3 text-sm text-[var(--color-success-700)] flex items-center gap-2">
-          <CheckCircle className="h-4 w-4 flex-shrink-0" /> {success}
-        </div>
-      )}
+      {/* Feedback via react-hot-toast */}
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-1 border-b border-[var(--color-border)]">
@@ -721,7 +705,7 @@ export default function ReorderPage() {
                     {group.items.length} alerta{group.items.length === 1 ? "" : "s"}
                   </span>
                 </div>
-                <table className="w-full text-sm">
+                <table className="hm-table w-full text-sm">
                   <thead>
                     <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]/40">
                       <th className="px-4 py-2 text-left font-semibold text-[var(--color-text-secondary)]">Producto</th>
@@ -903,7 +887,7 @@ export default function ReorderPage() {
                   </div>
 
                   <div className="px-4 py-3 max-h-64 overflow-y-auto">
-                    <table className="w-full text-xs">
+                    <table className="hm-table w-full text-xs">
                       <thead>
                         <tr className="border-b border-[var(--color-border)]">
                           <th className="py-1.5 text-left font-semibold text-[var(--color-text-muted)]">Producto</th>
@@ -1088,7 +1072,7 @@ export default function ReorderPage() {
             </div>
           ) : (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
-              <table className="w-full text-sm">
+              <table className="hm-table w-full text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]">
                     <th className="px-3 py-2 text-left font-semibold text-[var(--color-text-secondary)]">Sucursal</th>

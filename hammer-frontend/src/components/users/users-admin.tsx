@@ -23,6 +23,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
+import toast from "react-hot-toast";
 
 /** Contraseña inicial universal — igual para todos los usuarios */
 const INITIAL_PASSWORD = "ElChele1234!";
@@ -52,8 +53,6 @@ type UserRow = {
   mustChangePassword?: boolean;
   userBranchRoles: MembershipRow[];
 };
-
-type FeedbackTone = "success" | "error" | "info";
 
 const ROLE_LABEL: Record<string, string> = {
   BRANCH_ADMIN: "Administrador sucursal",
@@ -291,7 +290,7 @@ export function UsersAdmin() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [branches, setBranches] = useState<BranchOption[]>([]);
   const [selectedUserId, setSelectedUserId] = useState("");
-  const [feedback, setFeedback] = useState<{ tone: FeedbackTone; text: string } | null>(null);
+  
   const [searchQuery, setSearchQuery] = useState("");
 
   const [initialLoading, setInitialLoading] = useState(true);
@@ -356,8 +355,7 @@ export function UsersAdmin() {
     );
   }, [users, searchQuery]);
 
-  async function load(keepFeedback = true) {
-    if (!keepFeedback) setFeedback(null);
+  async function load(_keepFeedback = true) {
 
     const response = await fetch("/api/master/users", { cache: "no-store" });
     const json = (await response.json()) as {
@@ -408,40 +406,35 @@ export function UsersAdmin() {
   useEffect(() => {
     setInitialLoading(true);
     load()
-      .catch((error) => setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo inicializar usuarios." }))
+      .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo inicializar usuarios."))
       .finally(() => setInitialLoading(false));
   }, []);
 
-  // Auto-dismiss feedback after 5 seconds
-  useEffect(() => {
-    if (!feedback) return;
-    const timer = setTimeout(() => setFeedback(null), 5000);
-    return () => clearTimeout(timer);
-  }, [feedback]);
+  /* Feedback now handled by react-hot-toast */
 
   async function createUser(event: React.FormEvent) {
     event.preventDefault();
 
     // Client-side validation
     if (createForm.username.trim().length < 3) {
-      setFeedback({ tone: "error", text: "El nombre de usuario debe tener al menos 3 caracteres." });
+      toast.error("El nombre de usuario debe tener al menos 3 caracteres.");
       return;
     }
     if (createForm.fullName.trim().length < 2) {
-      setFeedback({ tone: "error", text: "El nombre completo es obligatorio." });
+      toast.error("El nombre completo es obligatorio.");
       return;
     }
     if (createForm.globalRole !== "MASTER" && !createForm.branchId) {
-      setFeedback({ tone: "error", text: "Selecciona una sucursal para el rol operativo del usuario." });
+      toast.error("Selecciona una sucursal para el rol operativo del usuario.");
       return;
     }
     if (createForm.globalRole !== "MASTER" && !arePresetRolesAvailable(selectedCreateBranch, selectedCreatePreset)) {
-      setFeedback({ tone: "error", text: "Ese perfil tiene roles deshabilitados en la sucursal seleccionada." });
+      toast.error("Ese perfil tiene roles deshabilitados en la sucursal seleccionada.");
       return;
     }
 
     setCreatingUser(true);
-    setFeedback({ tone: "info", text: "Creando usuario..." });
+    toast("Creando usuario...");
 
     try {
       const response = await apiFetch("/api/master/users", {
@@ -463,9 +456,9 @@ export function UsersAdmin() {
 
       setCreateForm((prev) => ({ username: "", fullName: "", email: "", globalRole: "", branchId: prev.branchId, rolePreset: "SALES" }));
       await load(false);
-      setFeedback({ tone: "success", text: `✅ Usuario creado. Contraseña inicial: ${INITIAL_PASSWORD} — Deberá cambiarla en su primer login.` });
+      toast.success(`✅ Usuario creado. Contraseña inicial: ${INITIAL_PASSWORD} — Deberá cambiarla en su primer login.`);
     } catch (error) {
-      setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo crear el usuario." });
+      toast.error(error instanceof Error ? error.message : "No se pudo crear el usuario.");
     } finally {
       setCreatingUser(false);
     }
@@ -487,14 +480,11 @@ export function UsersAdmin() {
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo actualizar el usuario."));
 
       await load(false);
-      setFeedback({
-        tone: "success",
-        text: mode === "toggle"
-          ? `✅ Usuario ${updates.isActive ? "activado" : "desactivado"} correctamente.`
-          : `✅ Contraseña restablecida a ${INITIAL_PASSWORD}. El usuario deberá cambiarla en su próximo login.`,
-      });
+      toast.success(mode === "toggle"
+          ? `Usuario ${updates.isActive ? "activado" : "desactivado"} correctamente.`
+          : `Contraseña restablecida a ${INITIAL_PASSWORD}. El usuario deberá cambiarla en su próximo login.`);
     } catch (error) {
-      setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo actualizar el usuario." });
+      toast.error(error instanceof Error ? error.message : "No se pudo actualizar el usuario.");
     } finally {
       setSavingUser(false);
       if (mode === "toggle") setTogglingActiveState(false);
@@ -516,13 +506,10 @@ export function UsersAdmin() {
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo resetear la contraseña."));
 
       await load(false);
-      setFeedback({
-        tone: "success",
-        text: `✅ Contraseña restablecida a ${INITIAL_PASSWORD}. El usuario deberá cambiarla en su próximo login.`,
-      });
+      toast.success(`Contraseña restablecida a ${INITIAL_PASSWORD}. El usuario deberá cambiarla en su próximo login.`);
       setResetModalOpen(false);
     } catch (error) {
-      setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo resetear la contraseña." });
+      toast.error(error instanceof Error ? error.message : "No se pudo resetear la contraseña.");
     } finally {
       setResetModalLoading(false);
     }
@@ -530,7 +517,7 @@ export function UsersAdmin() {
 
   async function deactivateUser(user: UserRow) {
     setDeletingUser(true);
-    setFeedback({ tone: "info", text: "Desactivando usuario..." });
+    toast("Desactivando usuario...");
 
     try {
       const response = await apiFetch(`/api/master/users/${user.id}`, { method: "DELETE" });
@@ -539,9 +526,9 @@ export function UsersAdmin() {
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo desactivar el usuario."));
 
       await load(false);
-      setFeedback({ tone: "success", text: "Usuario desactivado correctamente. Sus roles se conservan para reactivarlo despues." });
+      toast.success("Usuario desactivado correctamente. Sus roles se conservan para reactivarlo despues.");
     } catch (error) {
-      setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo desactivar el usuario." });
+      toast.error(error instanceof Error ? error.message : "No se pudo desactivar el usuario.");
     } finally {
       setDeletingUser(false);
     }
@@ -552,7 +539,7 @@ export function UsersAdmin() {
     if (!selectedUser) return;
 
     setAssigningMembership(true);
-    setFeedback({ tone: "info", text: "Asignando membresía..." });
+    toast("Asignando membresía...");
 
     try {
       const response = await apiFetch(`/api/master/users/${selectedUser.id}/memberships`, {
@@ -565,9 +552,9 @@ export function UsersAdmin() {
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo asignar la membresía."));
 
       await load(false);
-      setFeedback({ tone: "success", text: "✅ Membresía asignada correctamente." });
+      toast.success("✅ Membresía asignada correctamente.");
     } catch (error) {
-      setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo asignar la membresía." });
+      toast.error(error instanceof Error ? error.message : "No se pudo asignar la membresía.");
     } finally {
       setAssigningMembership(false);
     }
@@ -579,12 +566,12 @@ export function UsersAdmin() {
     event.preventDefault();
     if (!selectedUser) return;
     if (!arePresetRolesAvailable(selectedMembershipBranch, selectedMembershipPreset)) {
-      setFeedback({ tone: "error", text: "Ese perfil tiene roles deshabilitados en la sucursal seleccionada." });
+      toast.error("Ese perfil tiene roles deshabilitados en la sucursal seleccionada.");
       return;
     }
 
     setAssigningMembership(true);
-    setFeedback({ tone: "info", text: "Asignando membresias..." });
+    toast("Asignando membresias...");
 
     try {
       for (const roleCode of selectedMembershipPreset.roles) {
@@ -598,9 +585,9 @@ export function UsersAdmin() {
       }
 
       await load(false);
-      setFeedback({ tone: "success", text: "Membresia asignada correctamente." });
+      toast.success("Membresia asignada correctamente.");
     } catch (error) {
-      setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo asignar la membresia." });
+      toast.error(error instanceof Error ? error.message : "No se pudo asignar la membresia.");
     } finally {
       setAssigningMembership(false);
     }
@@ -620,9 +607,9 @@ export function UsersAdmin() {
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo editar la membresía."));
 
       await load(false);
-      setFeedback({ tone: "success", text: `✅ Membresía ${isActive ? "activada" : "desactivada"}.` });
+      toast.success(`✅ Membresía ${isActive ? "activada" : "desactivada"}.`);
     } catch (error) {
-      setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo editar la membresía." });
+      toast.error(error instanceof Error ? error.message : "No se pudo editar la membresía.");
     } finally {
       setUpdatingMembership((prev) => ({ ...prev, [membershipId]: false }));
     }
@@ -638,9 +625,9 @@ export function UsersAdmin() {
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo remover la membresía."));
 
       await load(false);
-      setFeedback({ tone: "success", text: "✅ Membresía removida." });
+      toast.success("✅ Membresía removida.");
     } catch (error) {
-      setFeedback({ tone: "error", text: error instanceof Error ? error.message : "No se pudo remover la membresía." });
+      toast.error(error instanceof Error ? error.message : "No se pudo remover la membresía.");
     } finally {
       setRemovingMembership((prev) => ({ ...prev, [membershipId]: false }));
     }
@@ -760,33 +747,7 @@ export function UsersAdmin() {
         </form>
       </Card>
 
-      {/* Feedback */}
-      {feedback ? (
-        <Card
-          className={`p-3 text-sm flex items-center justify-between ${
-            feedback.tone === "error"
-              ? "border-[var(--color-danger-300)] bg-[var(--color-danger-50)] text-[var(--color-danger-700)]"
-              : ""
-          } ${
-            feedback.tone === "success"
-              ? "border-[var(--color-success-300)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"
-              : ""
-          } ${
-            feedback.tone === "info"
-              ? "border-[var(--color-info-300)] bg-[var(--color-info-50)] text-[var(--color-info-700)]"
-              : ""
-          }`}
-        >
-          <span>{feedback.text}</span>
-          <button
-            type="button"
-            onClick={() => setFeedback(null)}
-            className="ml-2 text-current opacity-60 hover:opacity-100 transition-opacity"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </Card>
-      ) : null}
+      {/* Feedback via react-hot-toast */}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
         {/* Users list */}
@@ -964,15 +925,20 @@ export function UsersAdmin() {
               </Card>
 
               {/* Memberships table */}
-              <Card noPadding>
+              <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
+                <div className="hm-card-header-teal px-5 py-3 flex items-center gap-2">
+                  <Link2 className="h-4 w-4" />
+                  <span className="text-sm font-bold">Membresías asignadas</span>
+                  <span className="ml-auto rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-bold">{sortedMemberships.length}</span>
+                </div>
                 <div className="overflow-x-auto">
-                  <table className="min-w-[720px] w-full border-collapse text-sm">
+                  <table className="hm-table min-w-[720px] w-full text-sm">
                     <thead>
-                      <tr className="border-b border-[var(--color-border)] text-left text-xs font-bold uppercase tracking-wide text-[var(--color-text-secondary)]">
-                        <th className="px-3 py-3">Sucursal</th>
-                        <th className="px-3 py-3">Rol</th>
-                        <th className="px-3 py-3">Estado</th>
-                        <th className="px-3 py-3 text-right">Acciones</th>
+                      <tr>
+                        <th className="text-left">Sucursal</th>
+                        <th className="text-left">Rol</th>
+                        <th className="text-left">Estado</th>
+                        <th className="text-right">Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1032,7 +998,7 @@ export function UsersAdmin() {
                     </tbody>
                   </table>
                 </div>
-              </Card>
+              </div>
 
               {/* Password Reset Modal */}
               {resetModalOpen && selectedUser && (

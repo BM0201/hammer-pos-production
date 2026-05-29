@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { unwrapApiData } from "@/lib/client/api";
 import { money, fmtDate } from "@/lib/format";
+import toast from "react-hot-toast";
 import {
   BarChart3,
   AlertTriangle,
@@ -212,7 +213,7 @@ export default function CashClosureReportsPage() {
   const [closures, setClosures] = useState<ClosureReport[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  
 
   // Filters
   const [selectedBranch, setSelectedBranch] = useState("");
@@ -235,7 +236,7 @@ export default function CashClosureReportsPage() {
 
   const fetchClosures = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    
     try {
       const params = new URLSearchParams();
       if (selectedBranch) params.set("branchId", selectedBranch);
@@ -250,7 +251,7 @@ export default function CashClosureReportsPage() {
       setClosures(data.closures ?? []);
       setTotal(data.total ?? 0);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error desconocido");
+      toast.error(err instanceof Error ? err.message : "Error desconocido");
     } finally {
       setLoading(false);
     }
@@ -397,11 +398,6 @@ export default function CashClosureReportsPage() {
         <div className="text-center py-8 text-[var(--color-text-muted)]">
           <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2" />
           Cargando reportes...
-        </div>
-      ) : error ? (
-        <div className="text-center py-8 text-[var(--color-danger-600)]">
-          <AlertTriangle className="h-6 w-6 mx-auto mb-2" />
-          {error}
         </div>
       ) : closures.length === 0 ? (
         <div className="text-center py-8 text-[var(--color-text-soft)]">
