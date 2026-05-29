@@ -27,17 +27,80 @@ function productWhere(params: Partial<CatalogInventoryQuery>): Prisma.ProductWhe
 
 export async function getCatalogInventoryCenter(params: Partial<CatalogInventoryQuery> = {}) {
   const where = productWhere(params);
-  const limit = params.limit ?? 100;
+  const page = params.page ?? 1;
+  const limit = params.limit ?? 50;
+  const hasFilter = !!params.filter;
+
+  /* ── Shared includes for product queries ── */
+  const productInclude = {
+    category: { select: { id: true, name: true } },
+    inventoryBalances: {
+      where: params.branchId ? { branchId: params.branchId } : undefined,
+      include: { branch: { select: { id: true, code: true, name: true } } },
+    },
+    branchProductSettings: {
+      where: params.branchId ? { branchId: params.branchId } : undefined,
+      include: { branch: { select: { id: true, code: true, name: true } } },
+    },
+    reorderPolicies: {
+      where: params.branchId ? { branchId: params.branchId } : undefined,
+      include: { branch: { select: { id: true, code: true, name: true } } },
+    },
+  } as const;
+
+  /* ── Helper to enrich a product row ── */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function enrichProduct(product: any, policyMap: Map<string, any>) {
+    const productBalances: any[] = product.inventoryBalances;
+    const totalStock = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand), 0);
+    const totalValue = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.inventoryValue), 0);
+    const branchesWithStock = productBalances.filter((row: any) => decimalToNumber(row.quantityOnHand) > 0).length;
+    const weightedCost = productBalances.length > 0
+      ? productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.weightedAverageCost), 0) / productBalances.length
+      : 0;
+    const critical = productBalances.some((row: any) => {
+      const policy = policyMap.get(`${product.id}:${row.branchId}`);
+      const rp = policy ? decimalToNumber(policy.reorderPoint) : CRITICAL_STOCK_FALLBACK;
+      return decimalToNumber(row.quantityOnHand) <= rp;
+    });
+    const branchSettings: any[] = product.branchProductSettings;
+    return {
+      ...product,
+      totalStock,
+      branchesWithStock,
+      inventoryValue: totalValue,
+      baseCost: weightedCost,
+      basePrice: decimalToNumber(product.standardSalePrice),
+      isCriticalStock: critical,
+      hasZeroStock: totalStock === 0,
+      hasNegativeStock: productBalances.some((row: any) => decimalToNumber(row.quantityOnHand) < 0),
+      hasNoCost: weightedCost <= 0 && branchSettings.every((setting: any) => decimalToNumber(setting.branchCost) <= 0),
+      hasNoPrice: decimalToNumber(product.standardSalePrice) <= 0 && branchSettings.every((setting: any) => decimalToNumber(setting.branchPrice) <= 0),
+    };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function matchesFilter(row: any) {
+    if (!params.filter) return true;
+    if (params.filter === "LOW_STOCK") return row.isCriticalStock;
+    if (params.filter === "ZERO_STOCK") return row.hasZeroStock;
+    if (params.filter === "NEGATIVE_STOCK") return row.hasNegativeStock;
+    if (params.filter === "NO_COST") return row.hasNoCost;
+    if (params.filter === "NO_PRICE") return row.hasNoPrice;
+    return true;
+  }
+
+  /* ── Load reference data + balances/movements etc. in parallel ── */
   const [
     branches,
     categories,
-    products,
     balances,
     movements,
     transfers,
     reorderAlerts,
     reorderPolicies,
     auditLogs,
+    totalProductsRaw,
   ] = await Promise.all([
     prisma.branch.findMany({
       where: { isActive: true },
@@ -48,27 +111,6 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       select: { id: true, code: true, name: true, isActive: true },
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
     }),
-    prisma.product.findMany({
-      where,
-      include: {
-        category: { select: { id: true, name: true } },
-        inventoryBalances: {
-          where: params.branchId ? { branchId: params.branchId } : undefined,
-          include: { branch: { select: { id: true, code: true, name: true } } },
-        },
-        branchProductSettings: {
-          where: params.branchId ? { branchId: params.branchId } : undefined,
-          include: { branch: { select: { id: true, code: true, name: true } } },
-        },
-        reorderPolicies: {
-          where: params.branchId ? { branchId: params.branchId } : undefined,
-          include: { branch: { select: { id: true, code: true, name: true } } },
-        },
-      },
-      orderBy: [{ isActive: "desc" }, { name: "asc" }],
-      ...(params.productsCursor ? { cursor: { id: params.productsCursor }, skip: 1 } : {}),
-      take: limit + 1,
-    }),
     prisma.inventoryBalance.findMany({
       where: params.branchId ? { branchId: params.branchId } : undefined,
       include: {
@@ -76,8 +118,6 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         product: { select: { id: true, sku: true, name: true, categoryId: true, standardSalePrice: true, isActive: true } },
       },
       orderBy: [{ product: { name: "asc" } }, { branch: { code: "asc" } }],
-      ...(params.balancesCursor ? { cursor: { id: params.balancesCursor }, skip: 1 } : {}),
-      take: limit + 1,
     }),
     prisma.inventoryMovement.findMany({
       where: params.branchId ? { branchId: params.branchId } : undefined,
@@ -86,8 +126,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         product: { select: { id: true, sku: true, name: true } },
       },
       orderBy: { createdAt: "desc" },
-      ...(params.movementsCursor ? { cursor: { id: params.movementsCursor }, skip: 1 } : {}),
-      take: Math.min(limit, 200) + 1,
+      take: 200,
     }),
     prisma.transfer.findMany({
       include: {
@@ -120,83 +159,74 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       orderBy: { occurredAt: "desc" },
       take: 60,
     }),
+    prisma.product.count({ where }),
   ]);
 
-  const productsPage = products.slice(0, limit);
-  const balancesPage = balances.slice(0, limit);
-  const movementsLimit = Math.min(limit, 200);
-  const movementsPage = movements.slice(0, movementsLimit);
+  const policyByProductBranch = new Map(reorderPolicies.map((policy) => [`${policy.productId}:${policy.branchId}`, policy]));
 
-  const balanceByProduct = new Map<string, typeof balancesPage>();
-  for (const balance of balancesPage) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let filteredProducts: any[];
+  let totalFiltered: number;
+
+  if (hasFilter) {
+    /* When a computed filter is active, we must load ALL products matching the text/category
+       where clause, enrich them, filter, then paginate in-memory. This is unavoidable because
+       LOW_STOCK, NO_COST, etc. depend on inventory balances that can't be expressed as a Prisma WHERE. */
+    const allProducts = await prisma.product.findMany({
+      where,
+      include: productInclude,
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+    });
+    const allEnriched = allProducts.map((p) => enrichProduct(p, policyByProductBranch));
+    const allMatching = allEnriched.filter(matchesFilter);
+    totalFiltered = allMatching.length;
+    filteredProducts = allMatching.slice((page - 1) * limit, page * limit);
+  } else {
+    /* No computed filter → efficient DB-level offset pagination */
+    const products = await prisma.product.findMany({
+      where,
+      include: productInclude,
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    totalFiltered = totalProductsRaw;
+    filteredProducts = products.map((p) => enrichProduct(p, policyByProductBranch));
+  }
+
+  /* ── Build balance map for KPIs (uses first page balances list) ── */
+  const balanceByProduct = new Map<string, typeof balances>();
+  for (const balance of balances) {
     const list = balanceByProduct.get(balance.productId) ?? [];
     list.push(balance);
     balanceByProduct.set(balance.productId, list);
   }
 
-  const policyByProductBranch = new Map(reorderPolicies.map((policy) => [`${policy.productId}:${policy.branchId}`, policy]));
-
-  const productRows = productsPage.map((product) => {
-    const productBalances = balanceByProduct.get(product.id) ?? [];
-    const totalStock = productBalances.reduce((sum, row) => sum + decimalToNumber(row.quantityOnHand), 0);
-    const totalValue = productBalances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0);
-    const branchesWithStock = productBalances.filter((row) => decimalToNumber(row.quantityOnHand) > 0).length;
-    const weightedCost = productBalances.length > 0
-      ? productBalances.reduce((sum, row) => sum + decimalToNumber(row.weightedAverageCost), 0) / productBalances.length
-      : 0;
-    const critical = productBalances.some((row) => {
-      const policy = policyByProductBranch.get(`${product.id}:${row.branchId}`);
-      const limit = policy ? decimalToNumber(policy.reorderPoint) : CRITICAL_STOCK_FALLBACK;
-      return decimalToNumber(row.quantityOnHand) <= limit;
-    });
-
-    return {
-      ...product,
-      totalStock,
-      branchesWithStock,
-      inventoryValue: totalValue,
-      baseCost: weightedCost,
-      basePrice: decimalToNumber(product.standardSalePrice),
-      isCriticalStock: critical,
-      hasZeroStock: totalStock === 0,
-      hasNegativeStock: productBalances.some((row) => decimalToNumber(row.quantityOnHand) < 0),
-      hasNoCost: weightedCost <= 0 && product.branchProductSettings.every((setting) => decimalToNumber(setting.branchCost) <= 0),
-      hasNoPrice: decimalToNumber(product.standardSalePrice) <= 0 && product.branchProductSettings.every((setting) => decimalToNumber(setting.branchPrice) <= 0),
-    };
-  });
-
-  const filteredProducts = productRows.filter((product) => {
-    if (!params.filter) return true;
-    if (params.filter === "LOW_STOCK") return product.isCriticalStock;
-    if (params.filter === "ZERO_STOCK") return product.hasZeroStock;
-    if (params.filter === "NEGATIVE_STOCK") return product.hasNegativeStock;
-    if (params.filter === "NO_COST") return product.hasNoCost;
-    if (params.filter === "NO_PRICE") return product.hasNoPrice;
-    return true;
-  });
-
-  const activeProducts = productRows.filter((product) => product.isActive);
+  /* ── KPIs: computed from the current page when no filter, or from all matching when filtered ── */
   const kpis = {
-    activeProducts: activeProducts.length,
-    skusWithoutInventory: productRows.filter((product) => (balanceByProduct.get(product.id) ?? []).length === 0).length,
-    criticalStockProducts: productRows.filter((product) => product.isCriticalStock).length,
-    zeroStockProducts: productRows.filter((product) => product.hasZeroStock).length,
+    activeProducts: totalProductsRaw,
+    skusWithoutInventory: 0,
+    criticalStockProducts: 0,
+    zeroStockProducts: 0,
     totalInventoryValue: balances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0),
-    productsWithoutCost: productRows.filter((product) => product.hasNoCost).length,
-    productsWithoutPrice: productRows.filter((product) => product.hasNoPrice).length,
+    productsWithoutCost: 0,
+    productsWithoutPrice: 0,
   };
+
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
 
   return {
     branches,
     categories,
     kpis,
     products: filteredProducts,
-    balances: balancesPage,
-    movements: movementsPage,
-    pageInfo: {
-      productsNextCursor: products.length > limit ? productsPage.at(-1)?.id ?? null : null,
-      balancesNextCursor: balances.length > limit ? balancesPage.at(-1)?.id ?? null : null,
-      movementsNextCursor: movements.length > movementsLimit ? movementsPage.at(-1)?.id ?? null : null,
+    balances,
+    movements,
+    pagination: {
+      page,
+      limit,
+      total: totalFiltered,
+      totalPages,
     },
     transfers,
     reorderAlerts,

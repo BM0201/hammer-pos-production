@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronUp, DollarSign,
+  AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, DollarSign,
   Download, FileSpreadsheet, FileUp, History, Info, Loader2, Package, Pencil,
   Plus, RefreshCcw, Save, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
@@ -82,6 +82,12 @@ type ImportSummary = {
   priceUpdates?: number;
   costUpdates?: number;
 };
+type Pagination = {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+};
 type CenterData = {
   branches: Branch[];
   categories: Category[];
@@ -100,6 +106,7 @@ type CenterData = {
   transfers: Transfer[];
   reorderAlerts: ReorderAlert[];
   auditLogs: AuditRow[];
+  pagination?: Pagination;
 };
 
 type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "transfers" | "reorder" | "audit";
@@ -134,6 +141,74 @@ function statusFor(total: number) {
   return { label: "OK", variant: "success" as const };
 }
 
+/* ── Pagination Bar ── */
+function PaginationBar({ pagination, onPageChange }: { pagination: Pagination; onPageChange: (p: number) => void }) {
+  const { page, totalPages, total } = pagination;
+  if (totalPages <= 1) return null;
+
+  const MAX_VISIBLE = 5;
+  let start = Math.max(1, page - Math.floor(MAX_VISIBLE / 2));
+  const end = Math.min(totalPages, start + MAX_VISIBLE - 1);
+  if (end - start + 1 < MAX_VISIBLE) start = Math.max(1, end - MAX_VISIBLE + 1);
+
+  const pages: number[] = [];
+  for (let i = start; i <= end; i++) pages.push(i);
+
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-4 py-3">
+      <span className="text-xs text-[var(--color-text-muted)]">
+        {total} producto{total !== 1 ? "s" : ""} · Página {page} de {totalPages}
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-white px-2 py-1.5 text-xs font-medium transition hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+          <span className="sr-only">Anterior</span>
+        </button>
+        {start > 1 && (
+          <>
+            <button type="button" onClick={() => onPageChange(1)} className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs font-medium transition hover:bg-gray-50">1</button>
+            {start > 2 && <span className="px-1 text-xs text-[var(--color-text-muted)]">…</span>}
+          </>
+        )}
+        {pages.map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => onPageChange(p)}
+            className={`inline-flex items-center justify-center rounded-md border px-2.5 py-1.5 text-xs font-medium transition ${
+              p === page
+                ? "border-[var(--color-master-600)] bg-[var(--color-master-600)] text-white"
+                : "border-[var(--color-border)] bg-white hover:bg-gray-50"
+            }`}
+          >
+            {p}
+          </button>
+        ))}
+        {end < totalPages && (
+          <>
+            {end < totalPages - 1 && <span className="px-1 text-xs text-[var(--color-text-muted)]">…</span>}
+            <button type="button" onClick={() => onPageChange(totalPages)} className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs font-medium transition hover:bg-gray-50">{totalPages}</button>
+          </>
+        )}
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+          className="inline-flex items-center justify-center rounded-md border border-[var(--color-border)] bg-white px-2 py-1.5 text-xs font-medium transition hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+          <span className="sr-only">Siguiente</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════ */
@@ -145,6 +220,7 @@ export function CatalogInventoryAdmin() {
   const [branchId, setBranchId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [filter, setFilter] = useState("");
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
 
   /* ── Inline edit state for product rows ── */
@@ -159,12 +235,14 @@ export function CatalogInventoryAdmin() {
     if (branchId) params.set("branchId", branchId);
     if (categoryId) params.set("categoryId", categoryId);
     if (filter) params.set("filter", filter);
-    const response = await fetch(`/api/master/catalog-inventory${params.toString() ? `?${params}` : ""}`, { cache: "no-store" });
+    params.set("page", String(page));
+    params.set("limit", "50");
+    const response = await fetch(`/api/master/catalog-inventory?${params}`, { cache: "no-store" });
     const raw = await response.json();
     if (!response.ok) throw new Error(raw.message ?? "No se pudo cargar Catalogo e Inventario.");
     setData(unwrapApiData(raw));
     setLoading(false);
-  }, [branchId, categoryId, filter, q]);
+  }, [branchId, categoryId, filter, q, page]);
 
   useEffect(() => {
     load().catch((error) => {
@@ -383,12 +461,12 @@ export function CatalogInventoryAdmin() {
         </div>
         <div className="p-4 sm:p-5">
           <div className="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(220px,1.5fr)_minmax(180px,1fr)_minmax(180px,1fr)_auto]">
-            <Input className="h-10" placeholder="🔍 Buscar SKU o producto" value={q} onChange={(event) => setQ(event.target.value)} />
-            <select className="hm-input h-10" value={branchId} onChange={(event) => setBranchId(event.target.value)}>
+            <Input className="h-10" placeholder="🔍 Buscar SKU o producto" value={q} onChange={(event) => { setQ(event.target.value); setPage(1); }} />
+            <select className="hm-input h-10" value={branchId} onChange={(event) => { setBranchId(event.target.value); setPage(1); }}>
               <option value="">Todas las sucursales</option>
               {data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
             </select>
-            <select className="hm-input h-10" value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+            <select className="hm-input h-10" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
               <option value="">Todas las categorias</option>
               {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
             </select>
@@ -642,6 +720,7 @@ export function CatalogInventoryAdmin() {
               </tbody>
             </table>
           </div>
+          {data.pagination && <PaginationBar pagination={data.pagination} onPageChange={setPage} />}
         </Card>
         </>
       ) : null}
@@ -658,7 +737,7 @@ export function CatalogInventoryAdmin() {
           </div>
           <div className="p-4 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <select className="hm-input" value={filter} onChange={(event) => setFilter(event.target.value)}>
+              <select className="hm-input" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }}>
                 {FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
               <Button variant="ghost" onClick={() => load().catch((e) => toast.error(e.message))} icon={<RefreshCcw className="h-4 w-4" />}>Refrescar</Button>
@@ -680,7 +759,12 @@ export function CatalogInventoryAdmin() {
       ) : null}
 
       {data && tab === "movements" ? <MovementsPanel branches={data.branches} products={data.products} movements={data.movements} onDone={load} /> : null}
-      {data && tab === "pricing" ? <PricingPanel branches={data.branches} products={data.products} onSave={updateBranchPrice} /> : null}
+      {data && tab === "pricing" ? (
+        <>
+          <PricingPanel branches={data.branches} products={data.products} onSave={updateBranchPrice} />
+          {data.pagination && <PaginationBar pagination={data.pagination} onPageChange={setPage} />}
+        </>
+      ) : null}
       {data && tab === "transfers" ? <TransfersPanel transfers={data.transfers} /> : null}
       {data && tab === "reorder" ? <ReorderPanel alerts={data.reorderAlerts} /> : null}
       {data && tab === "audit" ? <AuditPanel logs={data.auditLogs} /> : null}
