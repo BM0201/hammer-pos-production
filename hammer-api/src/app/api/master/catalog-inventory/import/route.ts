@@ -9,6 +9,8 @@ import { prisma } from "@/lib/prisma";
 import { executeUnifiedCatalogInventoryImport, previewUnifiedCatalogInventoryImport } from "@/modules/catalog-inventory/import-service";
 import type { SessionPayload } from "@/types/auth";
 
+export const maxDuration = 300;
+
 const importTypeSchema = z.enum([
   "CATALOG_ONLY",
   "CATALOG_WITH_INITIAL_STOCK",

@@ -137,6 +137,16 @@ export function toHttpErrorResponse(error: unknown) {
     if ("code" in error && (error as Record<string, unknown>).code === "P2002") {
       return errJson("CONFLICT", "Ya existe un registro con esos datos", 409);
     }
+
+    // Prisma interactive transaction timeout (P2028)
+    if ("code" in error && (error as Record<string, unknown>).code === "P2028") {
+      return errJson("TIMEOUT", "La operacion excedio el tiempo limite de la transaccion. Intenta con menos registros o reintenta.", 504);
+    }
+
+    // Prisma transaction write conflict / deadlock (P2034)
+    if ("code" in error && (error as Record<string, unknown>).code === "P2034") {
+      return errJson("CONFLICT", "Conflicto de escritura en la transaccion. Reintenta la operacion.", 409);
+    }
   }
 
   console.error("[HTTP_ERROR]", error);
