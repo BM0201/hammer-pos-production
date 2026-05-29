@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money, qty } from "@/lib/format";
 
 type Branch = { id: string; code: string; name: string };
 type Category = { id: string; code: string; name: string; isActive: boolean };
@@ -118,15 +119,6 @@ const FILTERS = [
   { value: "NO_PRICE", label: "Sin precio" },
 ];
 
-function money(value: number | string | null | undefined) {
-  const num = Number(value ?? 0);
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO", maximumFractionDigits: 2 }).format(Number.isFinite(num) ? num : 0);
-}
-
-function qty(value: number | string | null | undefined) {
-  const num = Number(value ?? 0);
-  return new Intl.NumberFormat("es-NI", { maximumFractionDigits: 4 }).format(Number.isFinite(num) ? num : 0);
-}
 
 function statusFor(total: number) {
   if (total < 0) return { label: "Negativo", variant: "danger" as const };

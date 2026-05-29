@@ -1,5 +1,7 @@
 "use client";
 
+import { money } from "@/lib/format";
+
 export type BrainKpis = {
   openCritical: number;
   highRisk?: number;
@@ -10,10 +12,6 @@ export type BrainKpis = {
   lateDispatches?: number;
   manualReview?: number;
 };
-
-function money(value: string | number | null | undefined) {
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
-}
 
 export function BrainSummary({ kpis }: { kpis: BrainKpis }) {
   const cards = [
