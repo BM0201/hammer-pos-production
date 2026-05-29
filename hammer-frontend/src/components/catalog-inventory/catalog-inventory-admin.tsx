@@ -1387,7 +1387,7 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
           </thead>
           <tbody>
             {products.map((p) => {
-              const margin = p.baseCost > 0 ? (((p.basePrice - p.baseCost) / p.baseCost) * 100).toFixed(1) + "%" : "N/D";
+              const margin = p.basePrice > 0 ? (((p.basePrice - p.baseCost) / p.basePrice) * 100).toFixed(1) + "%" : "N/D";
               const hasDirty = branches.some((b) => draft[p.id]?.[b.id]?.dirty);
               return (
                 <tr key={p.id}>
@@ -1395,7 +1395,7 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
                   <td>{money(p.baseCost)}</td>
                   <td>{money(p.basePrice)}</td>
                   <td>
-                    <Badge variant={p.baseCost > 0 && p.basePrice > p.baseCost ? "success" : "warning"}>{margin}</Badge>
+                    <Badge variant={p.basePrice > 0 && p.baseCost > 0 && p.basePrice > p.baseCost ? "success" : p.basePrice <= 0 || p.baseCost <= 0 ? "neutral" : "danger"}>{margin}</Badge>
                   </td>
                   {branches.map((b) => {
                     const cell = draft[p.id]?.[b.id] ?? { cost: "", price: "", dirty: false };
