@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
-import type { CatalogInventoryQuery, UpdateBranchProductSettingInput } from "./validators";
+import type { CatalogInventoryQuery, UpdateBranchProductSettingInput, MassDeleteProductsInput } from "./validators";
 
 const CRITICAL_STOCK_FALLBACK = 1;
 
@@ -300,4 +300,47 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
   });
 
   return setting;
+}
+
+export async function massDeleteAllProducts(input: MassDeleteProductsInput, actorUserId: string) {
+  const totalProducts = await prisma.product.count();
+
+  /* ── Safety: verify the confirmation phrase matches ── */
+  const expectedPhrase = `Borrar los ${totalProducts} productos`;
+  if (input.confirmation !== expectedPhrase) {
+    throw new Error("INVALID_INPUT: La frase de confirmación no coincide.");
+  }
+  if (input.expectedCount !== totalProducts) {
+    throw new Error("INVALID_INPUT: La cantidad esperada no coincide con el total actual de productos.");
+  }
+
+  /* ── Delete all related records then products in a transaction ── */
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.brainDecision.deleteMany({});
+    await tx.productAnalytics.deleteMany({});
+    await tx.productPricing.deleteMany({});
+    await tx.reorderSuggestionLine.deleteMany({});
+    await tx.reorderAlert.deleteMany({});
+    await tx.stockReorderPolicy.deleteMany({});
+    await tx.branchProductSetting.deleteMany({});
+    await tx.inventoryMovement.deleteMany({});
+    await tx.inventoryBalance.deleteMany({});
+    await tx.transferLine.deleteMany({});
+    await tx.transfer.deleteMany({});
+    await tx.saleOrderLine.deleteMany({});
+    await tx.saleOrder.deleteMany({});
+    const deleted = await tx.product.deleteMany({});
+    return deleted.count;
+  });
+
+  await logAuditEvent({
+    actorUserId,
+    module: "catalog-inventory",
+    action: "MASS_DELETE_ALL_PRODUCTS",
+    entityType: "Product",
+    entityId: "ALL",
+    metadataJson: { deletedCount: result, confirmation: input.confirmation },
+  });
+
+  return { deleted: result };
 }

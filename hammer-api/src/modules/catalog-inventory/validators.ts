@@ -22,5 +22,11 @@ export const updateBranchProductSettingSchema = z.object({
   message: "Debes enviar al menos un campo configurable.",
 });
 
+export const massDeleteProductsSchema = z.object({
+  confirmation: z.string(),
+  expectedCount: z.coerce.number().int().min(1),
+});
+
 export type CatalogInventoryQuery = z.infer<typeof catalogInventoryQuerySchema>;
 export type UpdateBranchProductSettingInput = z.infer<typeof updateBranchProductSettingSchema>;
+export type MassDeleteProductsInput = z.infer<typeof massDeleteProductsSchema>;

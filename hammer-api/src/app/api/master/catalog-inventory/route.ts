@@ -3,8 +3,8 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { ok, fail } from "@/lib/api/response";
 import { requireCsrf } from "@/modules/security/csrf";
-import { catalogInventoryQuerySchema, updateBranchProductSettingSchema } from "@/modules/catalog-inventory/validators";
-import { getCatalogInventoryCenter, upsertBranchProductSetting } from "@/modules/catalog-inventory/service";
+import { catalogInventoryQuerySchema, updateBranchProductSettingSchema, massDeleteProductsSchema } from "@/modules/catalog-inventory/validators";
+import { getCatalogInventoryCenter, upsertBranchProductSetting, massDeleteAllProducts } from "@/modules/catalog-inventory/service";
 
 export async function GET(request: Request) {
   try {
@@ -40,6 +40,22 @@ export async function PATCH(request: Request) {
     if (!parsed.success) return fail("VALIDATION_ERROR", "Payload invalido.", 400);
 
     return ok(await upsertBranchProductSetting(parsed.data, session.userId));
+  } catch (error) {
+    return toHttpErrorResponse(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const session = await getCurrentSession();
+    assertAuthenticated(session);
+    await requireCsrf(request, session);
+    assertMaster(session);
+
+    const parsed = massDeleteProductsSchema.safeParse(await request.json());
+    if (!parsed.success) return fail("VALIDATION_ERROR", "Payload invalido.", 400);
+
+    return ok(await massDeleteAllProducts(parsed.data, session.userId));
   } catch (error) {
     return toHttpErrorResponse(error);
   }

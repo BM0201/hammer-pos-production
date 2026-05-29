@@ -443,6 +443,42 @@ export function CatalogInventoryAdmin() {
     }
   }
 
+  /* ── Borrado masivo de productos ── */
+  const [showMassDeleteDialog, setShowMassDeleteDialog] = useState(false);
+  const [massDeleteConfirmation, setMassDeleteConfirmation] = useState("");
+  const [massDeleting, setMassDeleting] = useState(false);
+  const totalProductCount = data?.pagination?.total ?? data?.products.length ?? 0;
+  const massDeletePhrase = `Borrar los ${totalProductCount} productos`;
+
+  async function handleMassDelete() {
+    if (massDeleteConfirmation !== massDeletePhrase) {
+      toast.error("La frase de confirmación no coincide.");
+      return;
+    }
+    setMassDeleting(true);
+    try {
+      const response = await apiFetch("/api/master/catalog-inventory", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: massDeleteConfirmation, expectedCount: totalProductCount }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error?.message ?? "No se pudo ejecutar el borrado masivo.");
+      }
+      const result = unwrapApiData(await response.json());
+      toast.success(`${result.deleted} productos eliminados exitosamente.`, { duration: 5000 });
+      setShowMassDeleteDialog(false);
+      setMassDeleteConfirmation("");
+      setPage(1);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Error al borrar productos.");
+    } finally {
+      setMassDeleting(false);
+    }
+  }
+
   const matrix = useMemo(() => {
     const branches = data?.branches ?? [];
     return (data?.products ?? []).map((product) => {
@@ -651,9 +687,66 @@ export function CatalogInventoryAdmin() {
         </Card>
 
         <Card noPadding>
-          <div className="hm-card-header-blue">
-            <h2 className="text-sm font-semibold flex items-center gap-2"><Package className="h-4 w-4" /> Productos ({data.products.length})</h2>
+          <div className="hm-card-header-blue flex items-center justify-between">
+            <h2 className="text-sm font-semibold flex items-center gap-2"><Package className="h-4 w-4" /> Productos ({data.pagination?.total ?? data.products.length})</h2>
+            {totalProductCount > 0 && (
+              <Button variant="danger" size="sm" onClick={() => { setMassDeleteConfirmation(""); setShowMassDeleteDialog(true); }} icon={<Trash2 className="h-3.5 w-3.5" />}>
+                Borrar todos
+              </Button>
+            )}
           </div>
+
+          {/* ── Diálogo de confirmación de borrado masivo ── */}
+          {showMassDeleteDialog && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+                <div className="bg-red-600 px-5 py-3">
+                  <h3 className="text-white font-bold flex items-center gap-2"><AlertTriangle className="h-5 w-5" /> Borrado masivo de productos</h3>
+                </div>
+                <div className="p-5 space-y-4">
+                  <p className="text-sm text-gray-700">
+                    Esta acción eliminará <strong className="text-red-600">{totalProductCount} productos</strong> y todos sus datos asociados (inventario, movimientos, ventas, configuraciones).
+                  </p>
+                  <p className="text-sm text-gray-700 font-semibold">
+                    Esta acción es irreversible.
+                  </p>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-600 mb-1.5">
+                      Para confirmar, escriba exactamente:
+                    </label>
+                    <p className="mb-2 rounded bg-red-50 border border-red-200 px-3 py-2 text-sm font-mono text-red-700 select-all">
+                      {massDeletePhrase}
+                    </p>
+                    <Input
+                      value={massDeleteConfirmation}
+                      onChange={(e) => setMassDeleteConfirmation(e.target.value)}
+                      placeholder="Escriba la frase de confirmación..."
+                      className="w-full"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => { setShowMassDeleteDialog(false); setMassDeleteConfirmation(""); }}
+                      disabled={massDeleting}
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      variant="danger"
+                      onClick={handleMassDelete}
+                      disabled={massDeleteConfirmation !== massDeletePhrase || massDeleting}
+                      loading={massDeleting}
+                      icon={<Trash2 className="h-4 w-4" />}
+                    >
+                      {massDeleting ? "Borrando..." : "Borrar todos los productos"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="hm-table min-w-[1100px] w-full">
               <thead>
