@@ -120,7 +120,7 @@ function normalizeImportType(importType: UnifiedImportType, destinationMode?: De
 }
 
 function normalizeHeader(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function toNumber(value: string | undefined) {
@@ -144,7 +144,7 @@ async function readRows(input: Pick<PreviewInput, "fileContent" | "fileBase64">)
     sku: normalizeManualSku(pick(cells, ["sku", "codigo", "code", "itemcode"])),
     name: pick(cells, ["nombre", "producto", "name", "descripcion"]),
     categoryCode: pick(cells, ["categoria", "category", "grupodeproductos"]) || undefined,
-    unit: pick(cells, ["unidad", "unit", "uom"]) || undefined,
+    unit: (pick(cells, ["unidad", "unit", "uom", "um"]).trim().toUpperCase()) || undefined,
     branchCode: pick(cells, ["sucursal", "branch", "branchcode"]).toUpperCase() || undefined,
     quantity: toNumber(pick(cells, ["cantidad", "qty", "quantity", "conteo"])),
     cost: toNumber(pick(cells, ["costo", "cost", "costounitario", "unitcost", "costprice"])),
@@ -222,14 +222,18 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
   const skuByRowNumber = new Map<number, string>();
 
   for (const row of rows) {
-    const categoryName = row.categoryCode ? categoryByCode.get(row.categoryCode.toUpperCase())?.name ?? row.categoryCode : defaultCategory?.name ?? null;
-    const sku = row.name.trim() || row.sku
-      ? await generateSkuForProduct(prisma, {
-          productName: row.name,
-          categoryName,
-          sku: row.sku,
-        }, reservedSkus)
-      : "";
+    let sku = "";
+    if (row.sku) {
+      // Manual SKU already normalized at read time — skip DB call
+      sku = row.sku;
+    } else if (row.name.trim()) {
+      const categoryName = row.categoryCode ? categoryByCode.get(row.categoryCode.toUpperCase())?.name ?? row.categoryCode : defaultCategory?.name ?? null;
+      sku = await generateSkuForProduct(prisma, {
+        productName: row.name,
+        categoryName,
+        sku: row.sku,
+      }, reservedSkus);
+    }
     reservedSkus.add(sku);
     skuByRowNumber.set(row.rowNumber, sku);
   }
@@ -500,6 +504,10 @@ type ImportResult = {
   costUpdates: number;
 };
 
+const IMPORT_CHUNK_SIZE = 50;
+const IMPORT_TX_TIMEOUT = 30_000;
+const IMPORT_TX_MAX_WAIT = 10_000;
+
 export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) {
   const now = new Date();
   const result: ImportResult = {
@@ -514,7 +522,8 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
   };
 
   try {
-    const executed = await prisma.$transaction(async (tx) => {
+    // Phase 1: Lock batch and load lines in a short transaction
+    const { batch, lines } = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`
         SELECT id
         FROM "InventoryImportBatch"
@@ -522,179 +531,192 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
         FOR UPDATE
       `;
 
-      const batch = await tx.inventoryImportBatch.findUnique({
+      const b = await tx.inventoryImportBatch.findUnique({
         where: { id: input.batchId },
         include: { lines: { where: { status: INVENTORY_IMPORT_LINE_STATUS.READY }, orderBy: { rowNumber: "asc" } } },
       });
-      if (!batch) throw new Error("NOT_FOUND: preview de importacion no encontrado");
-      if (batch.status === INVENTORY_IMPORT_BATCH_STATUS.EXECUTED) throw new Error("VALIDATION_ERROR: este batch ya fue ejecutado");
-      if (batch.status === INVENTORY_IMPORT_BATCH_STATUS.EXECUTING) throw new Error("VALIDATION_ERROR: este batch ya esta en ejecucion");
-      if (batch.status !== INVENTORY_IMPORT_BATCH_STATUS.PREVIEWED) throw new Error("VALIDATION_ERROR: solo se pueden ejecutar batches PREVIEWED");
-      if (batch.lines.length === 0) throw new Error("VALIDATION_ERROR: no hay lineas READY para ejecutar");
+      if (!b) throw new Error("NOT_FOUND: preview de importacion no encontrado");
+      if (b.status === INVENTORY_IMPORT_BATCH_STATUS.EXECUTED) throw new Error("VALIDATION_ERROR: este batch ya fue ejecutado");
+      if (b.status === INVENTORY_IMPORT_BATCH_STATUS.EXECUTING) throw new Error("VALIDATION_ERROR: este batch ya esta en ejecucion");
+      if (b.status !== INVENTORY_IMPORT_BATCH_STATUS.PREVIEWED) throw new Error("VALIDATION_ERROR: solo se pueden ejecutar batches PREVIEWED");
+      if (b.lines.length === 0) throw new Error("VALIDATION_ERROR: no hay lineas READY para ejecutar");
 
       await tx.inventoryImportBatch.update({
-        where: { id: batch.id },
+        where: { id: b.id },
         data: { status: INVENTORY_IMPORT_BATCH_STATUS.EXECUTING, executedByUserId: input.actorUserId },
       });
 
-      const categories = await tx.category.findMany({ select: { id: true, code: true, isActive: true } });
-      const categoryByCode = new Map(categories.map((category) => [category.code.toUpperCase(), category]));
-      const importType = normalizeImportType(batch.importType as UnifiedImportType, batch.destinationMode as DestinationMode);
+      return { batch: b, lines: b.lines };
+    }, { timeout: IMPORT_TX_TIMEOUT, maxWait: IMPORT_TX_MAX_WAIT });
 
-      for (const line of batch.lines) {
-        const quantity = line.quantity === null ? null : Number(line.quantity);
-        const unitCost = line.unitCost === null ? null : Number(line.unitCost);
-        const standardSalePrice = line.standardSalePrice === null ? null : Number(line.standardSalePrice);
-        assertPositiveQuantity(quantity, line);
-        assertNonNegative(unitCost, "Costo", line);
-        assertNonNegative(standardSalePrice, "Precio", line);
+    // Pre-load shared data once (outside transactions)
+    const categories = await prisma.category.findMany({ select: { id: true, code: true, isActive: true } });
+    const categoryByCode = new Map(categories.map((category) => [category.code.toUpperCase(), category]));
+    const importType = normalizeImportType(batch.importType as UnifiedImportType, batch.destinationMode as DestinationMode);
 
-        let product = await tx.product.findUnique({ where: { sku: normalizeManualSku(line.sku) }, select: { id: true, sku: true } });
-        const needsProduct = importType !== "CATALOG_ONLY" || line.productStatus === "EXISTING";
-        if (!product && (needsProduct || batch.createMissingProducts)) {
-          product = await productForLineTx(tx, line, batch, input.actorUserId, result);
-        }
-        if (!product) throw new ImportLineExecutionError("Producto no encontrado.", line.id, line.rowNumber);
+    // Phase 2: Process lines in chunks
+    const chunks: typeof lines[] = [];
+    for (let i = 0; i < lines.length; i += IMPORT_CHUNK_SIZE) {
+      chunks.push(lines.slice(i, i + IMPORT_CHUNK_SIZE));
+    }
 
-        if (importType === "CATALOG_ONLY" || importType === "CATALOG_WITH_INITIAL_STOCK") {
-          const category = line.categoryCode ? categoryByCode.get(line.categoryCode.toUpperCase()) : null;
-          await tx.product.update({
-            where: { id: product.id },
-            data: {
-              name: line.name.trim() || undefined,
-              unit: line.unit?.trim() || undefined,
-              categoryId: category?.isActive ? category.id : undefined,
-              standardSalePrice: standardSalePrice === null ? undefined : new Prisma.Decimal(standardSalePrice),
-            },
-          });
-          await tx.auditLog.create({
-            data: {
-              actorUserId: input.actorUserId,
-              module: "catalog",
-              action: "PRODUCT_UPDATE",
-              entityType: "Product",
-              entityId: product.id,
-              metadataJson: { source: "IMPORT_BATCH", batchId: batch.id, rowNumber: line.rowNumber },
-            },
-          });
-          result.updatedProducts += 1;
-          if (standardSalePrice !== null) result.priceUpdates += 1;
-        }
+    for (const chunk of chunks) {
+      await prisma.$transaction(async (tx) => {
+        for (const line of chunk) {
+          const quantity = line.quantity === null ? null : Number(line.quantity);
+          const unitCost = line.unitCost === null ? null : Number(line.unitCost);
+          const standardSalePrice = line.standardSalePrice === null ? null : Number(line.standardSalePrice);
+          assertPositiveQuantity(quantity, line);
+          assertNonNegative(unitCost, "Costo", line);
+          assertNonNegative(standardSalePrice, "Precio", line);
 
-        if ((importType === "GLOBAL_PRICES_COSTS" || importType === "BRANCH_PRICES_COSTS") && standardSalePrice !== null && !line.targetBranchId) {
-          await tx.product.update({ where: { id: product.id }, data: { standardSalePrice: new Prisma.Decimal(standardSalePrice) } });
-          await tx.auditLog.create({
-            data: {
-              actorUserId: input.actorUserId,
-              module: "catalog",
-              action: "PRODUCT_UPDATE",
-              entityType: "Product",
-              entityId: product.id,
-              metadataJson: { source: "IMPORT_BATCH", batchId: batch.id, standardSalePrice },
-            },
-          });
-          result.priceUpdates += 1;
-        }
+          let product = await tx.product.findUnique({ where: { sku: normalizeManualSku(line.sku) }, select: { id: true, sku: true } });
+          const needsProduct = importType !== "CATALOG_ONLY" || line.productStatus === "EXISTING";
+          if (!product && (needsProduct || batch.createMissingProducts)) {
+            product = await productForLineTx(tx, line, batch, input.actorUserId, result);
+          }
+          if (!product) throw new ImportLineExecutionError("Producto no encontrado.", line.id, line.rowNumber);
 
-        if ((importType === "BRANCH_PRICES_COSTS" || importType === "GLOBAL_PRICES_COSTS") && line.targetBranchId && (unitCost !== null || standardSalePrice !== null)) {
-          await upsertBranchSettingTx(tx, {
-            branchId: line.targetBranchId,
-            productId: product.id,
-            branchCost: unitCost,
-            branchPrice: standardSalePrice,
-            actorUserId: input.actorUserId,
-          });
-          if (unitCost !== null) result.costUpdates += 1;
-          if (standardSalePrice !== null) result.priceUpdates += 1;
-        }
-
-        if (changesInventory(importType)) {
-          if (!line.targetBranchId) throw new ImportLineExecutionError("Sucursal requerida para movimiento de inventario.", line.id, line.rowNumber);
-          if (quantity === null) throw new ImportLineExecutionError("Cantidad requerida para inventario.", line.id, line.rowNumber);
-
-          let movementQuantity = quantity;
-          let movementType: InventoryMovementType = InventoryMovementType.ADJUSTMENT_IN;
-          if (importType === "INVENTORY_SET_STOCK" || importType === "PHYSICAL_COUNT_ADJUSTMENT") {
-            const balance = await tx.inventoryBalance.findUnique({
-              where: { branchId_productId: { branchId: line.targetBranchId, productId: product.id } },
+          if (importType === "CATALOG_ONLY" || importType === "CATALOG_WITH_INITIAL_STOCK") {
+            const category = line.categoryCode ? categoryByCode.get(line.categoryCode.toUpperCase()) : null;
+            await tx.product.update({
+              where: { id: product.id },
+              data: {
+                name: line.name.trim() || undefined,
+                unit: line.unit?.trim() || undefined,
+                categoryId: category?.isActive ? category.id : undefined,
+                standardSalePrice: standardSalePrice === null ? undefined : new Prisma.Decimal(standardSalePrice),
+              },
             });
-            const current = Number(balance?.quantityOnHand ?? 0);
-            const delta = quantity - current;
-            if (delta === 0) {
-              await tx.inventoryImportLine.update({
-                where: { id: line.id },
-                data: { status: INVENTORY_IMPORT_LINE_STATUS.SKIPPED, executionStatus: INVENTORY_IMPORT_LINE_STATUS.SKIPPED, executionMessage: "Stock sin cambios.", executedAt: now, updatedProductId: product.id },
-              });
-              result.skippedLines += 1;
-              continue;
-            }
-            movementType = delta > 0 ? InventoryMovementType.ADJUSTMENT_IN : InventoryMovementType.ADJUSTMENT_OUT;
-            movementQuantity = Math.abs(delta);
+            await tx.auditLog.create({
+              data: {
+                actorUserId: input.actorUserId,
+                module: "catalog",
+                action: "PRODUCT_UPDATE",
+                entityType: "Product",
+                entityId: product.id,
+                metadataJson: { source: "IMPORT_BATCH", batchId: batch.id, rowNumber: line.rowNumber },
+              },
+            });
+            result.updatedProducts += 1;
+            if (standardSalePrice !== null) result.priceUpdates += 1;
           }
 
-          const movementResult = await createInventoryMovementTx(tx, {
-            actorUserId: input.actorUserId,
-            branchId: line.targetBranchId,
-            productId: product.id,
-            movementType,
-            quantity: movementQuantity,
-            unitCost: unitCost ?? 0,
-            referenceType: "IMPORT_BATCH",
-            referenceId: batch.id,
-            notes: `Importacion Catalogo e Inventario batch ${batch.id} fila ${line.rowNumber}`,
-          });
-          await tx.auditLog.create({
-            data: {
+          if ((importType === "GLOBAL_PRICES_COSTS" || importType === "BRANCH_PRICES_COSTS") && standardSalePrice !== null && !line.targetBranchId) {
+            await tx.product.update({ where: { id: product.id }, data: { standardSalePrice: new Prisma.Decimal(standardSalePrice) } });
+            await tx.auditLog.create({
+              data: {
+                actorUserId: input.actorUserId,
+                module: "catalog",
+                action: "PRODUCT_UPDATE",
+                entityType: "Product",
+                entityId: product.id,
+                metadataJson: { source: "IMPORT_BATCH", batchId: batch.id, standardSalePrice },
+              },
+            });
+            result.priceUpdates += 1;
+          }
+
+          if ((importType === "BRANCH_PRICES_COSTS" || importType === "GLOBAL_PRICES_COSTS") && line.targetBranchId && (unitCost !== null || standardSalePrice !== null)) {
+            await upsertBranchSettingTx(tx, {
+              branchId: line.targetBranchId,
+              productId: product.id,
+              branchCost: unitCost,
+              branchPrice: standardSalePrice,
+              actorUserId: input.actorUserId,
+            });
+            if (unitCost !== null) result.costUpdates += 1;
+            if (standardSalePrice !== null) result.priceUpdates += 1;
+          }
+
+          if (changesInventory(importType)) {
+            if (!line.targetBranchId) throw new ImportLineExecutionError("Sucursal requerida para movimiento de inventario.", line.id, line.rowNumber);
+            if (quantity === null) throw new ImportLineExecutionError("Cantidad requerida para inventario.", line.id, line.rowNumber);
+
+            let movementQuantity = quantity;
+            let movementType: InventoryMovementType = InventoryMovementType.ADJUSTMENT_IN;
+            if (importType === "INVENTORY_SET_STOCK" || importType === "PHYSICAL_COUNT_ADJUSTMENT") {
+              const balance = await tx.inventoryBalance.findUnique({
+                where: { branchId_productId: { branchId: line.targetBranchId, productId: product.id } },
+              });
+              const current = Number(balance?.quantityOnHand ?? 0);
+              const delta = quantity - current;
+              if (delta === 0) {
+                await tx.inventoryImportLine.update({
+                  where: { id: line.id },
+                  data: { status: INVENTORY_IMPORT_LINE_STATUS.SKIPPED, executionStatus: INVENTORY_IMPORT_LINE_STATUS.SKIPPED, executionMessage: "Stock sin cambios.", executedAt: now, updatedProductId: product.id },
+                });
+                result.skippedLines += 1;
+                continue;
+              }
+              movementType = delta > 0 ? InventoryMovementType.ADJUSTMENT_IN : InventoryMovementType.ADJUSTMENT_OUT;
+              movementQuantity = Math.abs(delta);
+            }
+
+            const movementResult = await createInventoryMovementTx(tx, {
               actorUserId: input.actorUserId,
               branchId: line.targetBranchId,
-              module: "catalog-inventory",
-              action: "INVENTORY_IMPORT_LINE_EXECUTED",
-              entityType: "InventoryImportLine",
-              entityId: line.id,
-              metadataJson: {
-                batchId: batch.id,
-                movementId: movementResult.movement.id,
-                balanceAfter: movementResult.balance.quantityOnHand.toString(),
+              productId: product.id,
+              movementType,
+              quantity: movementQuantity,
+              unitCost: unitCost ?? 0,
+              referenceType: "IMPORT_BATCH",
+              referenceId: batch.id,
+              notes: `Importacion Catalogo e Inventario batch ${batch.id} fila ${line.rowNumber}`,
+            });
+            await tx.auditLog.create({
+              data: {
+                actorUserId: input.actorUserId,
+                branchId: line.targetBranchId,
+                module: "catalog-inventory",
+                action: "INVENTORY_IMPORT_LINE_EXECUTED",
+                entityType: "InventoryImportLine",
+                entityId: line.id,
+                metadataJson: {
+                  batchId: batch.id,
+                  movementId: movementResult.movement.id,
+                  balanceAfter: movementResult.balance.quantityOnHand.toString(),
+                },
               },
+            });
+            result.inventoryMovements += 1;
+          }
+
+          await tx.inventoryImportLine.update({
+            where: { id: line.id },
+            data: {
+              status: INVENTORY_IMPORT_LINE_STATUS.EXECUTED,
+              executionStatus: INVENTORY_IMPORT_LINE_STATUS.EXECUTED,
+              updatedProductId: product.id,
+              executedAt: now,
             },
           });
-          result.inventoryMovements += 1;
+          result.executedLines += 1;
         }
+      }, { timeout: IMPORT_TX_TIMEOUT, maxWait: IMPORT_TX_MAX_WAIT });
+    }
 
-        await tx.inventoryImportLine.update({
-          where: { id: line.id },
-          data: {
-            status: INVENTORY_IMPORT_LINE_STATUS.EXECUTED,
-            executionStatus: INVENTORY_IMPORT_LINE_STATUS.EXECUTED,
-            updatedProductId: product.id,
-            executedAt: now,
-          },
-        });
-        result.executedLines += 1;
-      }
-
-      const finalSummary = { ...result, status: INVENTORY_IMPORT_BATCH_STATUS.EXECUTED };
-      const updatedBatch = await tx.inventoryImportBatch.update({
-        where: { id: batch.id },
-        data: {
-          status: INVENTORY_IMPORT_BATCH_STATUS.EXECUTED,
-          executedByUserId: input.actorUserId,
-          executedAt: now,
-          summaryJson: rawJson(finalSummary),
-          resultJson: rawJson(finalSummary),
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          module: "catalog-inventory",
-          action: "INVENTORY_IMPORT_EXECUTED",
-          entityType: "InventoryImportBatch",
-          entityId: batch.id,
-          metadataJson: rawJson(finalSummary),
-        },
-      });
-      return updatedBatch;
+    // Phase 3: Finalize batch
+    const finalSummary = { ...result, status: INVENTORY_IMPORT_BATCH_STATUS.EXECUTED };
+    const executed = await prisma.inventoryImportBatch.update({
+      where: { id: batch.id },
+      data: {
+        status: INVENTORY_IMPORT_BATCH_STATUS.EXECUTED,
+        executedByUserId: input.actorUserId,
+        executedAt: now,
+        summaryJson: rawJson(finalSummary),
+        resultJson: rawJson(finalSummary),
+      },
+    });
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        module: "catalog-inventory",
+        action: "INVENTORY_IMPORT_EXECUTED",
+        entityType: "InventoryImportBatch",
+        entityId: batch.id,
+        metadataJson: rawJson(finalSummary),
+      },
     });
 
     return { ...result, batchId: executed.id, status: executed.status, errorCsv: "" };
