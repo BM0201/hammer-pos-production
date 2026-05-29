@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
-import { generateSkuForProduct } from "@/modules/catalog/sku-generator";
+import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 
 export async function listCategories() {
   return prisma.category.findMany({
@@ -83,6 +83,40 @@ export async function listProducts(params: { q?: string; isActive?: boolean }) {
   });
 }
 
+/**
+ * Check if a SKU is available (not taken by another product).
+ * Returns { available, normalizedSku, existingProductId? }
+ */
+export async function checkSkuAvailable(sku: string, excludeProductId?: string) {
+  const normalized = normalizeManualSku(sku);
+  if (!normalized) return { available: true, normalizedSku: "", existingProductId: null };
+
+  const existing = await prisma.product.findUnique({
+    where: { sku: normalized },
+    select: { id: true, sku: true, name: true },
+  });
+
+  if (!existing) return { available: true, normalizedSku: normalized, existingProductId: null };
+  if (excludeProductId && existing.id === excludeProductId) return { available: true, normalizedSku: normalized, existingProductId: null };
+
+  return { available: false, normalizedSku: normalized, existingProductId: existing.id, existingProductName: existing.name };
+}
+
+/**
+ * Preview auto-generated SKU for a product name + category.
+ */
+export async function previewAutoSku(input: { productName: string; categoryId: string }) {
+  const category = await prisma.category.findUnique({
+    where: { id: input.categoryId },
+    select: { name: true },
+  });
+  const sku = await generateSkuForProduct(prisma, {
+    productName: input.productName,
+    categoryName: category?.name ?? null,
+  });
+  return { sku };
+}
+
 export async function createProduct(input: {
   sku?: string | null;
   barcode?: string | null;
@@ -100,6 +134,14 @@ export async function createProduct(input: {
     select: { id: true, name: true, isActive: true },
   });
   if (!category?.isActive) throw new Error("VALIDATION_ERROR: categoria invalida o inactiva.");
+
+  // Validate manual SKU uniqueness before generation
+  if (input.sku?.trim()) {
+    const check = await checkSkuAvailable(input.sku);
+    if (!check.available) {
+      throw new Error(`VALIDATION_ERROR: El SKU "${check.normalizedSku}" ya existe (producto: ${check.existingProductName}).`);
+    }
+  }
 
   const sku = await generateSkuForProduct(prisma, {
     productName: input.name,
@@ -171,6 +213,81 @@ export async function updateProduct(productId: string, input: {
 }
 
 
+
+/**
+ * Delete product if it has no sales/movements, otherwise deactivate it.
+ * Returns { action: "DELETED" | "DEACTIVATED", reason: string }
+ */
+export async function deleteOrDeactivateProduct(productId: string, actorUserId: string) {
+  const product = await prisma.product.findUnique({
+    where: { id: productId },
+    select: { id: true, sku: true, name: true, isActive: true },
+  });
+  if (!product) throw new Error("NOT_FOUND");
+
+  // Check for sales
+  const salesCount = await prisma.saleOrderLine.count({ where: { productId } });
+  // Check for inventory movements
+  const movementsCount = await prisma.inventoryMovement.count({ where: { productId } });
+  // Check for transfer lines
+  const transfersCount = await prisma.transferLine.count({ where: { productId } });
+
+  const hasDependencies = salesCount > 0 || movementsCount > 0 || transfersCount > 0;
+
+  if (hasDependencies) {
+    // Deactivate instead of deleting
+    await prisma.product.update({
+      where: { id: productId },
+      data: { isActive: false },
+    });
+
+    const reasons: string[] = [];
+    if (salesCount > 0) reasons.push(`${salesCount} venta(s)`);
+    if (movementsCount > 0) reasons.push(`${movementsCount} movimiento(s)`);
+    if (transfersCount > 0) reasons.push(`${transfersCount} transferencia(s)`);
+
+    await logAuditEvent({
+      actorUserId,
+      module: "catalog",
+      action: "PRODUCT_DEACTIVATE",
+      entityType: "Product",
+      entityId: productId,
+      metadataJson: { reason: "has_dependencies", salesCount, movementsCount, transfersCount },
+    });
+
+    return {
+      action: "DEACTIVATED" as const,
+      reason: `Producto desactivado porque tiene ${reasons.join(", ")} asociadas. No se puede eliminar.`,
+    };
+  }
+
+  // Safe to hard delete — clean up related records first
+  await prisma.$transaction(async (tx) => {
+    await tx.branchProductSetting.deleteMany({ where: { productId } });
+    await tx.inventoryBalance.deleteMany({ where: { productId } });
+    await tx.stockReorderPolicy.deleteMany({ where: { productId } });
+    await tx.reorderAlert.deleteMany({ where: { productId } });
+    await tx.reorderSuggestionLine.deleteMany({ where: { productId } });
+    await tx.productPricing.deleteMany({ where: { productId } });
+    await tx.productAnalytics.deleteMany({ where: { productId } });
+    await tx.brainDecision.deleteMany({ where: { productId } });
+    await tx.product.delete({ where: { id: productId } });
+  });
+
+  await logAuditEvent({
+    actorUserId,
+    module: "catalog",
+    action: "PRODUCT_DELETE",
+    entityType: "Product",
+    entityId: productId,
+    metadataJson: { sku: product.sku, name: product.name },
+  });
+
+  return {
+    action: "DELETED" as const,
+    reason: "Producto eliminado permanentemente (sin ventas ni movimientos).",
+  };
+}
 
 export async function getTopSellingProducts(params: { limit?: number; isActive?: boolean }) {
   const limit = params.limit ?? 5;
