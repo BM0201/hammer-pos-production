@@ -207,6 +207,80 @@ export function buildImportPreviewCsv(items: UnifiedImportItem[]) {
   return rows.map((row) => row.map(toCsvValue).join(",")).join("\n");
 }
 
+/* ── Analyze: detect missing categories and new products before preview ── */
+export async function analyzeUnifiedImport(input: Pick<PreviewInput, "fileContent" | "fileBase64" | "importType" | "destinationMode" | "defaultCategoryId">) {
+  const [rows, categories] = await Promise.all([
+    readRows(input),
+    prisma.category.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true } }),
+  ]);
+  const categoryByCode = new Map(categories.map((c) => [c.code.toUpperCase(), c]));
+  const defaultCategory = input.defaultCategoryId ? categories.find((c) => c.id === input.defaultCategoryId) : null;
+
+  // Collect unique category codes from file
+  const fileCategoryCodes = new Set<string>();
+  for (const row of rows) {
+    if (row.categoryCode?.trim()) fileCategoryCodes.add(row.categoryCode.trim().toUpperCase());
+  }
+
+  // Detect which are missing
+  const missingCategories: string[] = [];
+  for (const code of fileCategoryCodes) {
+    if (!categoryByCode.has(code)) missingCategories.push(code);
+  }
+
+  // Detect SKUs that don't exist → new products
+  const skuList = rows.filter((r) => r.sku).map((r) => r.sku);
+  const existingProducts = skuList.length > 0
+    ? await prisma.product.findMany({ where: { sku: { in: skuList } }, select: { sku: true } })
+    : [];
+  const existingSkuSet = new Set(existingProducts.map((p) => p.sku.toUpperCase()));
+
+  let newProductCount = 0;
+  let autoSkuCount = 0;
+  for (const row of rows) {
+    if (row.sku) {
+      if (!existingSkuSet.has(row.sku.toUpperCase())) newProductCount++;
+    } else if (row.name?.trim()) {
+      newProductCount++;
+      autoSkuCount++;
+    }
+  }
+
+  return {
+    totalRows: rows.length,
+    missingCategories, // category codes not found in system
+    newProductCount,
+    autoSkuCount,     // products without SKU that will get auto-generated SKU
+    defaultCategoryName: defaultCategory?.name ?? null,
+    existingCategories: categories.map((c) => ({ code: c.code, name: c.name })),
+  };
+}
+
+/* ── Bulk-create missing categories (called before preview if user confirms) ── */
+export async function createMissingCategoriesForImport(categoryCodes: string[], actorUserId: string) {
+  const existing = await prisma.category.findMany({ select: { code: true } });
+  const existingCodes = new Set(existing.map((c) => c.code.toUpperCase()));
+  const toCreate = categoryCodes.filter((code) => !existingCodes.has(code.toUpperCase()));
+  const created: Array<{ id: string; code: string; name: string }> = [];
+  for (const code of toCreate) {
+    const cat = await prisma.category.create({
+      data: { code: code.toUpperCase(), name: code },
+    });
+    await prisma.auditLog.create({
+      data: {
+        actorUserId,
+        module: "catalog",
+        action: "CATEGORY_CREATE",
+        entityType: "Category",
+        entityId: cat.id,
+        metadataJson: { source: "IMPORT_AUTO_CREATE", code: cat.code },
+      },
+    });
+    created.push({ id: cat.id, code: cat.code, name: cat.name });
+  }
+  return { created };
+}
+
 export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) {
   const importType = normalizeImportType(input.importType, input.destinationMode);
   const [rows, branches, categories] = await Promise.all([

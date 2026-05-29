@@ -835,6 +835,14 @@ const IMPORT_TYPE_LABELS: Record<string, { label: string; desc: string; color: s
   PHYSICAL_COUNT: { label: "Conteo Físico", desc: "Ajustar stock por conteo real (requiere SKU).", color: "text-red-600" },
 };
 
+type AnalysisResult = {
+  totalRows: number;
+  missingCategories: string[];
+  newProductCount: number;
+  autoSkuCount: number;
+  defaultCategoryName: string | null;
+};
+
 function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch[]; categories: Category[]; onDone: () => Promise<void> }) {
   const [step, setStep] = useState<"config" | "preview" | "done">("config");
   const [importType, setImportType] = useState("CATALOG_WITH_INITIAL_INVENTORY");
@@ -850,6 +858,8 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
   const [defaultCategoryId, setDefaultCategoryId] = useState(categories[0]?.id ?? "");
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [showAnalysisDialog, setShowAnalysisDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isCatalogType = importType === "CATALOG_ONLY" || importType === "CATALOG_WITH_INITIAL_INVENTORY";
@@ -862,6 +872,8 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
     setSummary(null);
     setPreviewCsv("");
     setErrorCsv("");
+    setAnalysis(null);
+    setShowAnalysisDialog(false);
     setStep("config");
   }
 
@@ -880,7 +892,60 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
     setStep("config");
   }
 
-  async function preview() {
+  async function analyzeFile() {
+    setLoading(true);
+    try {
+      const response = await apiFetch("/api/master/catalog-inventory/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "analyze",
+          importType,
+          destinationMode,
+          defaultCategoryId: defaultCategoryId || undefined,
+          ...filePayload,
+        }),
+      });
+      const raw = await response.json();
+      if (!response.ok) throw new Error(raw.message ?? "No se pudo analizar el archivo.");
+      const result = unwrapApiData(raw) as AnalysisResult;
+      // If there are missing categories or new products → show dialog
+      if (result.missingCategories.length > 0 || result.autoSkuCount > 0) {
+        setAnalysis(result);
+        setShowAnalysisDialog(true);
+      } else {
+        // Nothing special → go straight to preview
+        await runPreview();
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createCategoriesAndPreview() {
+    setShowAnalysisDialog(false);
+    setLoading(true);
+    try {
+      // Create missing categories if any
+      if (analysis && analysis.missingCategories.length > 0) {
+        const response = await apiFetch("/api/master/catalog-inventory/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "create-categories", categoryCodes: analysis.missingCategories }),
+        });
+        const raw = await response.json();
+        if (!response.ok) throw new Error(raw.message ?? "No se pudo crear las categorías.");
+        const result = unwrapApiData(raw);
+        toast.success(`${result.created?.length ?? 0} categoría(s) creada(s) automáticamente`);
+      }
+      // Then run preview
+      await runPreview();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runPreview() {
     setLoading(true);
     try {
       const response = await apiFetch("/api/master/catalog-inventory/import", {
@@ -906,6 +971,7 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
       setSummary(result.summary ?? null);
       setPreviewCsv(result.previewCsv ?? "");
       setErrorCsv("");
+      setAnalysis(null);
       setStep("preview");
       toast.success(`Preview generado — ${result.summary?.readyRows ?? result.summary?.ready ?? 0} filas listas`);
     } finally {
@@ -1109,7 +1175,7 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
           <div className="flex items-center gap-3 pt-2 border-t border-gray-200">
             <Button
               variant="secondary"
-              onClick={() => preview().catch((e) => toast.error(e.message))}
+              onClick={() => analyzeFile().catch((e) => toast.error(e.message))}
               disabled={!hasFile || loading}
               icon={loading && step === "config" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             >
@@ -1131,6 +1197,90 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
           </div>
         </div>
       </Card>
+
+      {/* ── Analysis Dialog (pre-import confirmation) ── */}
+      {showAnalysisDialog && analysis ? (
+        <Card noPadding>
+          <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-5 py-4 text-white rounded-t-lg">
+            <h2 className="text-base font-bold flex items-center gap-2"><AlertTriangle className="h-5 w-5" /> Análisis pre-importación</h2>
+            <p className="text-amber-100 text-xs mt-1">Se detectaron situaciones que requieren tu confirmación antes de continuar.</p>
+          </div>
+          <div className="p-5 space-y-4">
+            {/* Missing categories */}
+            {analysis.missingCategories.length > 0 ? (
+              <div className="rounded-lg border-2 border-orange-300 bg-orange-50 p-4 space-y-2">
+                <div className="flex items-center gap-2 text-orange-800">
+                  <Tags className="h-5 w-5" />
+                  <h3 className="text-sm font-bold">Categorías no encontradas ({analysis.missingCategories.length})</h3>
+                </div>
+                <p className="text-xs text-orange-700">
+                  Las siguientes categorías del archivo <strong>no existen</strong> en el sistema. Si confirmas, se crearán automáticamente:
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {analysis.missingCategories.map((code) => (
+                    <span key={code} className="inline-flex items-center rounded-full bg-orange-200 px-2.5 py-1 text-xs font-semibold text-orange-900">
+                      {code}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {/* New products with auto-SKU */}
+            {analysis.autoSkuCount > 0 ? (
+              <div className="rounded-lg border-2 border-blue-300 bg-blue-50 p-4 space-y-2">
+                <div className="flex items-center gap-2 text-blue-800">
+                  <Wand2 className="h-5 w-5" />
+                  <h3 className="text-sm font-bold">Productos nuevos con SKU automático ({analysis.autoSkuCount})</h3>
+                </div>
+                <p className="text-xs text-blue-700">
+                  Hay <strong>{analysis.autoSkuCount} producto{analysis.autoSkuCount !== 1 ? "s" : ""}</strong> sin SKU que se crearán con un código generado automáticamente basado en su categoría y nombre.
+                </p>
+                <p className="text-xs text-blue-600 flex items-center gap-1">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Ejemplo: <code className="bg-blue-100 px-1.5 py-0.5 rounded font-mono text-[11px]">ALM-CEM-425KG-0001</code>
+                </p>
+              </div>
+            ) : null}
+
+            {/* New products total (with manual SKU) */}
+            {analysis.newProductCount > analysis.autoSkuCount ? (
+              <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4">
+                <div className="flex items-center gap-2 text-emerald-800">
+                  <Package className="h-5 w-5" />
+                  <h3 className="text-sm font-bold">{analysis.newProductCount - analysis.autoSkuCount} producto{analysis.newProductCount - analysis.autoSkuCount !== 1 ? "s" : ""} nuevos con SKU manual</h3>
+                </div>
+                <p className="text-xs text-emerald-700 mt-1">
+                  Estos productos tienen SKU en el archivo y se crearán con ese código.
+                </p>
+              </div>
+            ) : null}
+
+            {/* Summary */}
+            <div className="flex items-center gap-3 rounded-lg bg-gray-50 border border-gray-200 p-3">
+              <Info className="h-4 w-4 text-gray-500 flex-shrink-0" />
+              <p className="text-xs text-gray-600">
+                Total de filas: <strong>{analysis.totalRows}</strong> · Productos nuevos: <strong>{analysis.newProductCount}</strong> · Categorías por crear: <strong>{analysis.missingCategories.length}</strong>
+              </p>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex items-center gap-3 pt-3 border-t border-gray-200">
+              <Button
+                variant="success"
+                onClick={() => createCategoriesAndPreview().catch((e) => toast.error(e.message))}
+                disabled={loading}
+                icon={loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              >
+                {loading ? "Procesando..." : analysis.missingCategories.length > 0 ? "Crear categorías y continuar" : "Continuar con preview"}
+              </Button>
+              <Button variant="ghost" onClick={() => { setShowAnalysisDialog(false); setAnalysis(null); }} icon={<X className="h-4 w-4" />}>
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
 
       {/* ── Preview Results ── */}
       {summary ? (
