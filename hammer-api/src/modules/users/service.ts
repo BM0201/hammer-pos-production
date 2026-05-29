@@ -284,6 +284,7 @@ export async function updateUser(
   userId: string,
   actorUserId: string,
   input: {
+    username?: string;
     email?: string;
     fullName?: string;
     password?: string;
@@ -299,9 +300,11 @@ export async function updateUser(
   const requiresSessionRevocation =
     typeof input.password === "string" ||       // Password reset by admin
     typeof input.isActive === "boolean" ||       // Activation/deactivation
+    typeof input.username === "string" ||        // Username change
     input.globalRole !== undefined;               // Global role change
 
   const data: Prisma.UserUpdateInput = {};
+  if (typeof input.username === "string") data.username = normalizeUsername(input.username);
   if (typeof input.email === "string") data.email = input.email;
   if (typeof input.fullName === "string") data.fullName = input.fullName;
   if (typeof input.isActive === "boolean") data.isActive = input.isActive;
@@ -315,9 +318,20 @@ export async function updateUser(
   const result = await prisma.$transaction(async (tx) => {
     const current = await tx.user.findUnique({
       where: { id: userId },
-      select: { id: true, globalRole: true },
+      select: { id: true, globalRole: true, username: true },
     });
     if (!current) throw new Error("NOT_FOUND: usuario no encontrado");
+
+    // If changing username, check uniqueness
+    if (typeof input.username === "string" && normalizeUsername(input.username) !== current.username) {
+      const existing = await tx.user.findUnique({
+        where: { username: normalizeUsername(input.username) },
+        select: { id: true },
+      });
+      if (existing && existing.id !== userId) {
+        throw new Error("VALIDATION_ERROR: ese nombre de usuario ya está en uso");
+      }
+    }
 
     if (userId === actorUserId) {
       if (input.isActive === false) {

@@ -21,6 +21,8 @@ import {
   AlertTriangle,
   Info,
   Trash2,
+  Pencil,
+  Save,
 } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
 import toast from "react-hot-toast";
@@ -307,6 +309,11 @@ export function UsersAdmin() {
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [resetModalLoading, setResetModalLoading] = useState(false);
 
+  // Username editing
+  const [editingUsername, setEditingUsername] = useState(false);
+  const [newUsername, setNewUsername] = useState("");
+  const [savingUsername, setSavingUsername] = useState(false);
+
   const [createForm, setCreateForm] = useState({
     username: "",
     fullName: "",
@@ -512,6 +519,31 @@ export function UsersAdmin() {
       toast.error(error instanceof Error ? error.message : "No se pudo resetear la contraseña.");
     } finally {
       setResetModalLoading(false);
+    }
+  }
+
+  async function handleSaveUsername() {
+    if (!selectedUser || !newUsername.trim()) return;
+    const trimmed = newUsername.trim().toLowerCase();
+    if (trimmed.length < 3) { toast.error("El nombre de usuario debe tener al menos 3 caracteres."); return; }
+    if (!/^[a-z0-9._-]+$/.test(trimmed)) { toast.error("Use solo letras, números, punto, guión o guión bajo."); return; }
+    if (trimmed === selectedUser.username) { setEditingUsername(false); return; }
+    setSavingUsername(true);
+    try {
+      const response = await apiFetch(`/api/master/users/${selectedUser.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: trimmed }),
+      });
+      const json = (await response.json()) as { message?: string; reason?: string; error?: string };
+      if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo cambiar el nombre de usuario."));
+      await load(false);
+      toast.success(`Nombre de usuario cambiado a "${trimmed}".`);
+      setEditingUsername(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo cambiar el nombre de usuario.");
+    } finally {
+      setSavingUsername(false);
     }
   }
 
@@ -789,7 +821,7 @@ export function UsersAdmin() {
                         ? "border-[var(--color-success-600)] bg-[var(--color-success-50)] shadow-sm"
                         : "border-[var(--color-border)] hover:bg-[var(--color-surface-alt)] hover:shadow-sm"
                     }`}
-                    onClick={() => setSelectedUserId(user.id)}
+                    onClick={() => { setSelectedUserId(user.id); setEditingUsername(false); }}
                     type="button"
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -821,9 +853,51 @@ export function UsersAdmin() {
             <>
               {/* User info card */}
               <Card className="border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
-                <div className="grid gap-1 sm:grid-cols-2">
-                  <div>
-                    <strong>Usuario:</strong> {selectedUser.username}
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="flex items-center gap-2">
+                    <strong>Usuario:</strong>
+                    {editingUsername ? (
+                      <div className="flex items-center gap-1.5 flex-1">
+                        <Input
+                          className="h-7 text-sm flex-1 max-w-[200px]"
+                          value={newUsername}
+                          onChange={(e) => setNewUsername(e.target.value.toLowerCase())}
+                          placeholder="nuevo usuario..."
+                          disabled={savingUsername}
+                        />
+                        <Button
+                          variant="success"
+                          size="sm"
+                          onClick={handleSaveUsername}
+                          loading={savingUsername}
+                          disabled={savingUsername || !newUsername.trim()}
+                          icon={<Save className="h-3 w-3" />}
+                        >
+                          Guardar
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setEditingUsername(false)}
+                          disabled={savingUsername}
+                          icon={<X className="h-3 w-3" />}
+                        >
+                          Cancelar
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        <span>{selectedUser.username}</span>
+                        <button
+                          type="button"
+                          title="Cambiar nombre de usuario"
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                          onClick={() => { setNewUsername(selectedUser.username); setEditingUsername(true); }}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </>
+                    )}
                   </div>
                   <div>
                     <strong>Nombre:</strong> {selectedUser.fullName}

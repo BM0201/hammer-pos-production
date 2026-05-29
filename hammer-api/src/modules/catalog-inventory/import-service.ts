@@ -143,7 +143,7 @@ async function readRows(input: Pick<PreviewInput, "fileContent" | "fileBase64">)
     rowNumber: idx + 2,
     sku: normalizeManualSku(pick(cells, ["sku", "codigo", "code", "itemcode"])),
     name: pick(cells, ["nombre", "producto", "name", "descripcion"]),
-    categoryCode: pick(cells, ["categoria", "category", "grupodeproductos"]) || undefined,
+    categoryCode: pick(cells, ["categoria", "categorias", "category", "categories", "grupodeproductos", "grupo"]) || undefined,
     unit: (pick(cells, ["unidad", "unit", "uom", "um"]).trim().toUpperCase()) || undefined,
     branchCode: pick(cells, ["sucursal", "branch", "branchcode"]).toUpperCase() || undefined,
     quantity: toNumber(pick(cells, ["cantidad", "qty", "quantity", "conteo"])),
