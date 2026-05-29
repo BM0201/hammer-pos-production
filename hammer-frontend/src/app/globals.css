@@ -444,29 +444,34 @@ select.hm-input {
 .hm-input::placeholder { color: var(--color-text-soft); }
 
 /* ── Vibrant Card Headers — high contrast, visible gradients ── */
+.hm-card-header-blue,
+.hm-card-header-green,
+.hm-card-header-amber,
+.hm-card-header-purple,
+.hm-card-header-red,
+.hm-card-header-teal {
+  padding: 0.875rem 1.25rem;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  color: #ffffff;
+  letter-spacing: 0.01em;
+}
 .hm-card-header-blue {
   background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-  color: #ffffff;
 }
 .hm-card-header-green {
   background: linear-gradient(135deg, #059669 0%, #047857 100%);
-  color: #ffffff;
 }
 .hm-card-header-amber {
   background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
-  color: #ffffff;
 }
 .hm-card-header-purple {
   background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
-  color: #ffffff;
 }
 .hm-card-header-red {
   background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
-  color: #ffffff;
 }
 .hm-card-header-teal {
   background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
-  color: #ffffff;
 }
 
 /* Gradient accent bars for card tops */
@@ -900,6 +905,42 @@ aside[class*="bg-[var(--color-sidebar)]"] {
   pointer-events: auto;
 }
 
+
+/* ── Enhanced UI polish ── */
+/* Smoother modal backdrop */
+.fixed.inset-0.bg-black\/50 {
+  backdrop-filter: blur(4px);
+}
+
+/* Better number inputs (hide arrows for cleaner look) */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* Refined table zebra striping */
+.hm-table tbody tr:nth-child(even) {
+  background-color: color-mix(in srgb, var(--color-surface-alt) 50%, transparent);
+}
+.hm-table tbody tr:nth-child(even):hover {
+  background-color: color-mix(in srgb, var(--color-info-50) 45%, transparent);
+}
+
+/* Better select/filter controls */
+select.hm-input,
+.hm-input {
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+}
+
+/* Smooth card content transitions */
+.space-y-4 > *,
+.space-y-5 > * {
+  transition: opacity 0.15s ease;
+}
 
 /* Hide browser-native password reveal controls to avoid duplicated eye icon */
 input[type="password"]::-ms-reveal,

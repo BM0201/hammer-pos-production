@@ -698,9 +698,9 @@ export function CatalogInventoryAdmin() {
 
           {/* ── Diálogo de confirmación de borrado masivo ── */}
           {showMassDeleteDialog && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-              <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-                <div className="bg-red-600 px-5 py-3">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fade-in">
+              <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden animate-scale-in">
+                <div className="bg-gradient-to-r from-red-600 to-red-700 px-5 py-3.5">
                   <h3 className="text-white font-bold flex items-center gap-2"><AlertTriangle className="h-5 w-5" /> Borrado masivo de productos</h3>
                 </div>
                 <div className="p-5 space-y-4">
@@ -1304,10 +1304,10 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
               <div className="rounded-lg border-2 border-orange-300 bg-orange-50 p-4 space-y-2">
                 <div className="flex items-center gap-2 text-orange-800">
                   <Tags className="h-5 w-5" />
-                  <h3 className="text-sm font-bold">Categorías no encontradas ({analysis.missingCategories.length})</h3>
+                  <h3 className="text-sm font-bold">Hay categorías que no están creadas para el SKU. ¿Crearlas?</h3>
                 </div>
                 <p className="text-xs text-orange-700">
-                  Las siguientes categorías del archivo <strong>no existen</strong> en el sistema. Si confirmas, se crearán automáticamente:
+                  Se detectaron <strong>{analysis.missingCategories.length}</strong> categoría(s) que no existen en el sistema. Si confirmas, se crearán automáticamente:
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-1">
                   {analysis.missingCategories.map((code) => (
@@ -1324,10 +1324,10 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
               <div className="rounded-lg border-2 border-blue-300 bg-blue-50 p-4 space-y-2">
                 <div className="flex items-center gap-2 text-blue-800">
                   <Wand2 className="h-5 w-5" />
-                  <h3 className="text-sm font-bold">Productos nuevos con SKU automático ({analysis.autoSkuCount})</h3>
+                  <h3 className="text-sm font-bold">Hay productos que serán creados y tendrán su SKU basado en su categoría</h3>
                 </div>
                 <p className="text-xs text-blue-700">
-                  Hay <strong>{analysis.autoSkuCount} producto{analysis.autoSkuCount !== 1 ? "s" : ""}</strong> sin SKU que se crearán con un código generado automáticamente basado en su categoría y nombre.
+                  Se detectaron <strong>{analysis.autoSkuCount} producto{analysis.autoSkuCount !== 1 ? "s" : ""}</strong> sin SKU que se crearán con un código generado automáticamente basado en su categoría y nombre.
                 </p>
                 <p className="text-xs text-blue-600 flex items-center gap-1">
                   <Sparkles className="h-3.5 w-3.5" />
@@ -1531,6 +1531,7 @@ function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingD
 function PricingPanel({ branches, products, onSave }: { branches: Branch[]; products: ProductRow[]; onSave: (product: ProductRow, branch: Branch, field: "branchPrice" | "branchCost", value: string) => Promise<void> }) {
   const [draft, setDraft] = useState<PricingDraft>(() => buildPricingDraft(products, branches));
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [ivaPercent, setIvaPercent] = useState(15);
   const productsRef = useRef(products);
 
   // Re-sync draft when products reference changes (after external load)
@@ -1611,12 +1612,44 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
         </h2>
         <p className="mt-0.5 text-xs opacity-90">Edite los valores y presione el botón 💾 para guardar cada celda, o &quot;Guardar fila&quot; para guardar todos los cambios de un producto.</p>
       </div>
+      {/* IVA config for margin calculation */}
+      <div className="flex items-center gap-3 px-4 pt-3">
+        <label className="text-xs font-semibold text-gray-600 whitespace-nowrap">IVA para margen:</label>
+        <div className="flex items-center gap-1.5">
+          {[0, 15].map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setIvaPercent(v)}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
+                ivaPercent === v
+                  ? "bg-emerald-600 text-white shadow-sm"
+                  : "border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              {v === 0 ? "Sin IVA" : `${v}%`}
+            </button>
+          ))}
+          <input
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            value={ivaPercent}
+            onChange={(e) => setIvaPercent(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+            className="h-7 w-16 rounded-md border border-gray-300 px-2 text-xs text-center"
+          />
+          <span className="text-xs text-gray-500">%</span>
+        </div>
+        <span className="text-[10px] text-gray-400">Margen = ((Precio Venta − Costo Real) / Precio Venta) × 100 · Costo Real = Costo Base × (1 + IVA%)</span>
+      </div>
       <div className="overflow-x-auto p-4">
         <table className="hm-table min-w-[1100px] w-full">
           <thead>
             <tr>
               <th className="min-w-[200px]">Producto</th>
               <th>Costo base</th>
+              <th>Costo real</th>
               <th>Precio base</th>
               <th>Margen</th>
               {branches.map((b) => (
@@ -1630,15 +1663,17 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
           </thead>
           <tbody>
             {products.map((p) => {
-              const margin = p.basePrice > 0 ? (((p.basePrice - p.baseCost) / p.basePrice) * 100).toFixed(1) + "%" : "N/D";
+              const costoReal = p.baseCost * (1 + ivaPercent / 100);
+              const margin = p.basePrice > 0 ? (((p.basePrice - costoReal) / p.basePrice) * 100).toFixed(1) + "%" : "N/D";
               const hasDirty = branches.some((b) => draft[p.id]?.[b.id]?.dirty);
               return (
                 <tr key={p.id}>
                   <td className="font-medium">{p.sku} · {p.name}</td>
                   <td>{money(p.baseCost)}</td>
+                  <td className="text-amber-700 font-medium">{money(costoReal)}</td>
                   <td>{money(p.basePrice)}</td>
                   <td>
-                    <Badge variant={p.basePrice > 0 && p.baseCost > 0 && p.basePrice > p.baseCost ? "success" : p.basePrice <= 0 || p.baseCost <= 0 ? "neutral" : "danger"}>{margin}</Badge>
+                    <Badge variant={p.basePrice > 0 && p.baseCost > 0 && p.basePrice > costoReal ? "success" : p.basePrice <= 0 || p.baseCost <= 0 ? "neutral" : "danger"}>{margin}</Badge>
                   </td>
                   {branches.map((b) => {
                     const cell = draft[p.id]?.[b.id] ?? { cost: "", price: "", dirty: false };

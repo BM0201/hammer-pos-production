@@ -16,6 +16,7 @@ export const createUserSchema = z.object({
 });
 
 export const updateUserSchema = z.object({
+  username: z.string().trim().toLowerCase().min(3).regex(/^[a-z0-9._-]+$/, "Usuario invalido. Use letras, numeros, punto, guion o guion bajo.").optional(),
   email: z.string().trim().toLowerCase().email().optional(),
   fullName: z.string().trim().min(2).optional(),
   password: z.string().min(1).optional(),
