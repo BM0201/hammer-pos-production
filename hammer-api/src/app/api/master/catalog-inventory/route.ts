@@ -18,9 +18,7 @@ export async function GET(request: Request) {
       branchId: searchParams.get("branchId") ?? undefined,
       categoryId: searchParams.get("categoryId") ?? undefined,
       filter: searchParams.get("filter") ?? undefined,
-      productsCursor: searchParams.get("productsCursor") ?? undefined,
-      balancesCursor: searchParams.get("balancesCursor") ?? undefined,
-      movementsCursor: searchParams.get("movementsCursor") ?? undefined,
+      page: searchParams.get("page") ?? undefined,
       limit: searchParams.get("limit") ?? undefined,
     });
     if (!parsed.success) return fail("VALIDATION_ERROR", "Filtros invalidos.", 400);
