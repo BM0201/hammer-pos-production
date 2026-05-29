@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch } from "@/lib/client/api";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { resolveRoleHome } from "@/modules/rbac/role-routing";
 
 export default function AppIndexPage() {
@@ -18,9 +18,9 @@ export default function AppIndexPage() {
         }
         return r.json();
       })
-      .then((payload) => {
-        if (cancelled || !payload) return;
-        // /api/auth/session returns { authenticated: boolean, user: {...} }
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        const payload = unwrapApiData(raw);
         if (!payload.authenticated || !payload.user) {
           router.replace("/login");
           return;

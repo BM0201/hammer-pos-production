@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoginForm } from "@/components/login-form";
-import { apiFetch } from "@/lib/client/api";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { resolveRoleHome } from "@/modules/rbac/role-routing";
 import { Hammer, Shield, Zap, BarChart3 } from "lucide-react";
 
@@ -18,9 +18,9 @@ export default function LoginPage() {
         if (!r.ok) return null;
         return r.json();
       })
-      .then((payload) => {
-        if (cancelled || !payload) return;
-        // /api/auth/session returns { authenticated: boolean, user: {...} }
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        const payload = unwrapApiData(raw);
         if (payload.authenticated && payload.user) {
           router.replace(resolveRoleHome(payload.user.roleCode, payload.user.globalRoles ?? []));
         }
