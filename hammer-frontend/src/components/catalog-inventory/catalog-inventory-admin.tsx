@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Boxes, FileUp, History, Package, RefreshCcw, Search, Settings2, Shuffle, Tags, TrendingUp } from "lucide-react";
+import { BarChart3, Boxes, ChevronDown, ChevronUp, FileUp, History, Package, Plus, RefreshCcw, Search, Settings2, Shuffle, Tags, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -195,6 +195,54 @@ export function CatalogInventoryAdmin() {
     await load();
   }
 
+  /* ── Estado para creación manual de producto ── */
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newProduct, setNewProduct] = useState({
+    name: "",
+    sku: "",
+    categoryId: "",
+    unit: "UN",
+    standardSalePrice: "",
+    description: "",
+    allowsFraction: false,
+  });
+  const [creating, setCreating] = useState(false);
+
+  async function handleCreateProduct() {
+    if (!newProduct.name.trim() || !newProduct.categoryId || !newProduct.standardSalePrice) {
+      setFeedback("Nombre, categoría y precio son obligatorios.");
+      return;
+    }
+    setCreating(true);
+    try {
+      const response = await apiFetch("/api/catalog/products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newProduct.name.trim(),
+          sku: newProduct.sku.trim() || undefined,
+          categoryId: newProduct.categoryId,
+          unit: newProduct.unit || "UN",
+          standardSalePrice: Number(newProduct.standardSalePrice),
+          description: newProduct.description.trim() || undefined,
+          allowsFraction: newProduct.allowsFraction,
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.message ?? "No se pudo crear el producto.");
+      }
+      setFeedback("Producto creado exitosamente.");
+      setNewProduct({ name: "", sku: "", categoryId: "", unit: "UN", standardSalePrice: "", description: "", allowsFraction: false });
+      setShowCreateForm(false);
+      await load();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Error al crear producto.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   const matrix = useMemo(() => {
     const branches = data?.branches ?? [];
     return (data?.products ?? []).map((product) => {
@@ -277,6 +325,107 @@ export function CatalogInventoryAdmin() {
       ) : null}
 
       {data && tab === "products" ? (
+        <>
+        {/* ── Panel para crear producto manual ── */}
+        <Card className="p-4">
+          <button
+            type="button"
+            className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)] w-full"
+            onClick={() => setShowCreateForm(!showCreateForm)}
+          >
+            <Plus className="h-4 w-4" />
+            Crear producto manualmente
+            {showCreateForm ? <ChevronUp className="h-4 w-4 ml-auto" /> : <ChevronDown className="h-4 w-4 ml-auto" />}
+          </button>
+          {showCreateForm && (
+            <div className="mt-4 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <Input
+                  label="Nombre del producto *"
+                  value={newProduct.name}
+                  onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+                  placeholder="Ej: Cemento Canal 42.5 kg"
+                />
+                <Input
+                  label="SKU (opcional, se genera automáticamente)"
+                  value={newProduct.sku}
+                  onChange={(e) => setNewProduct({ ...newProduct, sku: e.target.value })}
+                  placeholder="Ej: CEM-001"
+                />
+                <div>
+                  <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Categoría *</label>
+                  <select
+                    className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+                    value={newProduct.categoryId}
+                    onChange={(e) => setNewProduct({ ...newProduct, categoryId: e.target.value })}
+                  >
+                    <option value="">Seleccionar categoría</option>
+                    {(data.categories ?? []).map((cat) => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Unidad</label>
+                  <select
+                    className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+                    value={newProduct.unit}
+                    onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })}
+                  >
+                    <option value="UN">UN — Unidad</option>
+                    <option value="KG">KG — Kilogramo</option>
+                    <option value="LB">LB — Libra</option>
+                    <option value="M">M — Metro</option>
+                    <option value="M2">M2 — Metro cuadrado</option>
+                    <option value="M3">M3 — Metro cúbico</option>
+                    <option value="L">L — Litro</option>
+                    <option value="GAL">GAL — Galón</option>
+                    <option value="BOLSA">BOLSA</option>
+                    <option value="SACO">SACO</option>
+                    <option value="ROLLO">ROLLO</option>
+                    <option value="CAJA">CAJA</option>
+                    <option value="PAR">PAR</option>
+                    <option value="JUEGO">JUEGO</option>
+                  </select>
+                </div>
+                <Input
+                  label="Precio de venta (C$) *"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={newProduct.standardSalePrice}
+                  onChange={(e) => setNewProduct({ ...newProduct, standardSalePrice: e.target.value })}
+                  placeholder="Ej: 350.00"
+                />
+                <Input
+                  label="Descripción (opcional)"
+                  value={newProduct.description}
+                  onChange={(e) => setNewProduct({ ...newProduct, description: e.target.value })}
+                  placeholder="Descripción breve del producto"
+                />
+              </div>
+              <div className="flex items-center gap-4">
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={newProduct.allowsFraction}
+                    onChange={(e) => setNewProduct({ ...newProduct, allowsFraction: e.target.checked })}
+                  />
+                  Permite fracciones (venta por peso/medida)
+                </label>
+              </div>
+              <div className="flex gap-3">
+                <Button variant="success" onClick={handleCreateProduct} disabled={creating}>
+                  {creating ? "Creando…" : "Crear producto"}
+                </Button>
+                <Button variant="ghost" onClick={() => setShowCreateForm(false)}>
+                  Cancelar
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+
         <Card noPadding>
           <div className="overflow-x-auto">
             <table className="min-w-[1100px] w-full text-sm">
@@ -312,6 +461,7 @@ export function CatalogInventoryAdmin() {
             </table>
           </div>
         </Card>
+        </>
       ) : null}
 
       {data && tab === "import" ? <UnifiedImportPanel branches={data.branches} categories={data.categories} onDone={load} /> : null}
