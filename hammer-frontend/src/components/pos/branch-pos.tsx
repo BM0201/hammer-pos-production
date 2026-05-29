@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import toast from "react-hot-toast";
+import { Check, Minus, Plus, Search, ShoppingCart, Trash2, X } from "lucide-react";
 import { measurePosMetric } from "@/lib/telemetry";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -577,6 +579,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
           ? "Venta completada y marcada como entregada automáticamente. ✓"
           : "Venta completada. Pendiente de despacho. ✓";
         setNoticeTimed(completionMsg);
+        toast.success(completionMsg);
 
         // FASE 3: Mostrar modal de impresión post-pago
         if (order) {
@@ -772,10 +775,10 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
               <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" data-testid="pos-ticket-lines">
                 <div className="overflow-x-auto">
-                  <table className="min-w-[34rem] w-full text-sm">
+                  <table className="hm-table min-w-[34rem] w-full">
                     <thead>
-                      <tr className="border-b text-left text-xs text-[var(--color-text-muted)]">
-                        <th className="py-2">Producto</th>
+                      <tr>
+                        <th>Producto</th>
                         <th>Precio</th>
                         <th>Cant.</th>
                         <th>Subtotal</th>
@@ -836,6 +839,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                                   disabled={lineUpdatingId === line.id || isSubmittingPayment}
                                   onClick={() => commitLineQuantity(line)}
                                   data-testid={`pos-line-apply-${line.id}`}
+                                  icon={<Check className="h-3.5 w-3.5" />}
                                 >
                                   Aplicar
                                 </Button>
@@ -845,11 +849,12 @@ export function BranchPos({ branchId }: { branchId: string }) {
                             <td className="font-medium">C$ {Number(line.lineSubtotal).toFixed(2)}</td>
                             <td>
                               <Button
-                                variant="secondary"
+                                variant="danger"
                                 size="sm"
                                 disabled={lineUpdatingId === line.id || isSubmittingPayment}
                                 data-testid={`pos-line-remove-${line.id}`}
                                 onClick={() => removeLine(line.id)}
+                                icon={<Trash2 className="h-3.5 w-3.5" />}
                               >
                                 Quitar
                               </Button>
@@ -978,6 +983,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   onClick={sendToPayment}
                   disabled={isBusy || !order || !hasTicketLines || Boolean(includeTransport && transportValidationError)}
                   data-testid="pos-send-to-payment"
+                  icon={<ShoppingCart className="h-5 w-5" />}
+                  loading={isSubmittingPayment}
                 >
                   {isSubmittingPayment
                     ? (branchConfig?.enableCashier === false ? "Registrando..." : "Enviando...")
