@@ -35,14 +35,25 @@ export async function createCategory(input: {
 }
 
 export async function updateCategory(categoryId: string, input: {
+  code?: string;
   name?: string;
   parentId?: string | null;
   isActive?: boolean;
   actorUserId: string;
 }) {
+  // Validate code uniqueness if changing
+  if (input.code?.trim()) {
+    const normalizedCode = input.code.trim().toUpperCase();
+    const existing = await prisma.category.findUnique({ where: { code: normalizedCode } });
+    if (existing && existing.id !== categoryId) {
+      throw new Error("VALIDATION_ERROR: El código de categoría ya existe.");
+    }
+  }
+
   const category = await prisma.category.update({
     where: { id: categoryId },
     data: {
+      code: input.code?.trim().toUpperCase(),
       name: input.name?.trim(),
       parentId: input.parentId,
       isActive: input.isActive,
@@ -286,6 +297,60 @@ export async function deleteOrDeactivateProduct(productId: string, actorUserId: 
   return {
     action: "DELETED" as const,
     reason: "Producto eliminado permanentemente (sin ventas ni movimientos).",
+  };
+}
+
+/**
+ * Delete category if it has no products/movements, otherwise deactivate it.
+ * Returns { action: "DELETED" | "DEACTIVATED", reason: string }
+ */
+export async function deleteOrDeactivateCategory(categoryId: string, actorUserId: string) {
+  const category = await prisma.category.findUnique({
+    where: { id: categoryId },
+    select: { id: true, code: true, name: true, isActive: true },
+  });
+  if (!category) throw new Error("NOT_FOUND");
+
+  // Check for products in this category
+  const productsCount = await prisma.product.count({ where: { categoryId } });
+
+  if (productsCount > 0) {
+    // Deactivate instead of deleting
+    await prisma.category.update({
+      where: { id: categoryId },
+      data: { isActive: false },
+    });
+
+    await logAuditEvent({
+      actorUserId,
+      module: "catalog",
+      action: "CATEGORY_DEACTIVATE",
+      entityType: "Category",
+      entityId: categoryId,
+      metadataJson: { reason: "has_products", productsCount },
+    });
+
+    return {
+      action: "DEACTIVATED" as const,
+      reason: `Categoría desactivada porque tiene ${productsCount} producto(s) asociado(s). No se puede eliminar.`,
+    };
+  }
+
+  // Safe to hard delete
+  await prisma.category.delete({ where: { id: categoryId } });
+
+  await logAuditEvent({
+    actorUserId,
+    module: "catalog",
+    action: "CATEGORY_DELETE",
+    entityType: "Category",
+    entityId: categoryId,
+    metadataJson: { code: category.code, name: category.name },
+  });
+
+  return {
+    action: "DELETED" as const,
+    reason: "Categoría eliminada permanentemente (sin productos asociados).",
   };
 }
 
