@@ -138,7 +138,7 @@ export default function MasterPage() {
 
       {/* ── Store Pill Filter ── */}
       <div>
-        <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Filtrar sucursales</h3>
+        <h3 className="text-xs font-bold text-[var(--color-text-secondary)] uppercase tracking-wider mb-2">Filtrar sucursales</h3>
         <StorePillFilter branches={summary.byBranch.map((b) => ({ branchCode: b.branchCode, branchName: b.branchName }))} />
       </div>
 
@@ -184,7 +184,7 @@ export default function MasterPage() {
 
       {/* ── Branch Performance Table ── */}
       <Card noPadding>
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--color-border)]">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b-2 border-[var(--color-border-strong)]">
           <div className="flex items-center gap-2.5">
             <div className="hm-section-icon hm-section-icon-master">
               <Building2 className="h-4 w-4" />

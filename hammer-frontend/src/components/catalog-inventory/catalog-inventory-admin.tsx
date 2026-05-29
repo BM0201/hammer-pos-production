@@ -422,7 +422,7 @@ export function CatalogInventoryAdmin() {
         <Card noPadding>
           <div className="overflow-x-auto">
             <table className="min-w-[1100px] w-full text-sm">
-              <thead className="text-left text-xs uppercase text-[var(--color-text-soft)]">
+              <thead className="text-left text-xs font-bold uppercase text-[var(--color-text-secondary)]">
                 <tr className="border-b border-[var(--color-border)]">
                   <th className="px-3 py-3">SKU</th><th>Producto</th><th>Categoria</th><th>Unidad</th><th>Stock total</th><th>Suc.</th><th>Costo base</th><th>Precio base</th><th>Estado</th><th className="text-right pr-3">Acciones</th>
                 </tr>
@@ -471,7 +471,7 @@ export function CatalogInventoryAdmin() {
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-[900px] w-full text-sm">
-              <thead><tr className="border-b border-[var(--color-border)] text-left text-xs uppercase text-[var(--color-text-soft)]"><th className="py-2">Producto</th>{data.branches.map((branch) => <th key={branch.id}>{branch.code}</th>)}<th>Total</th><th>Estado</th></tr></thead>
+              <thead><tr className="border-b border-[var(--color-border)] text-left text-xs font-bold uppercase text-[var(--color-text-secondary)]"><th className="py-2">Producto</th>{data.branches.map((branch) => <th key={branch.id}>{branch.code}</th>)}<th>Total</th><th>Estado</th></tr></thead>
               <tbody>
                 {matrix.map((row) => {
                   const total = row.branches.reduce((sum, item) => sum + item.quantity, 0);
@@ -715,7 +715,7 @@ function CategoriesPanel({ categories, onDone }: { categories: Category[]; onDon
       <Card noPadding>
         <div className="overflow-x-auto">
           <table className="min-w-[600px] w-full text-sm">
-            <thead className="text-left text-xs uppercase text-[var(--color-text-soft)]">
+            <thead className="text-left text-xs font-bold uppercase text-[var(--color-text-secondary)]">
               <tr className="border-b border-[var(--color-border)]">
                 <th className="px-3 py-3">Código</th>
                 <th>Nombre</th>

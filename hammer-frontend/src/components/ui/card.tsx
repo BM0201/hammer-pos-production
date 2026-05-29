@@ -20,9 +20,9 @@ export function Card({ variant = "base", noPadding, children, className = "", ..
 }
 
 export function CardHeader({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`border-b border-[var(--color-border)] pb-4 mb-4 ${className}`}>{children}</div>;
+  return <div className={`border-b border-[var(--color-border-strong)] pb-4 mb-4 ${className}`}>{children}</div>;
 }
 
 export function CardFooter({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`border-t border-[var(--color-border)] pt-4 mt-4 ${className}`}>{children}</div>;
+  return <div className={`border-t border-[var(--color-border-strong)] pt-4 mt-4 ${className}`}>{children}</div>;
 }
