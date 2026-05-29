@@ -512,9 +512,9 @@ export function CatalogInventoryAdmin() {
       </Card>
 
       {/* ── Tabs ── */}
-      <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)]">
+      <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-xs)]">
         <div className="overflow-x-auto">
-          <div className="flex min-w-max gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1.5">
+          <div className="flex min-w-max gap-0.5 bg-[var(--color-surface-alt)] p-1.5">
         {TABS.map((item) => {
           const Icon = item.icon;
           const isActive = tab === item.id;
@@ -523,13 +523,13 @@ export function CatalogInventoryAdmin() {
               key={item.id}
               type="button"
               onClick={() => setTab(item.id)}
-              className={`inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg px-3 text-sm font-medium transition-colors ${
+              className={`inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg px-3.5 text-[0.8125rem] font-medium transition-all duration-200 ${
                 isActive
-                  ? "bg-[var(--color-master-600)] text-white shadow-sm"
-                  : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
+                  ? "bg-[var(--color-master-600)] text-white shadow-md shadow-blue-900/20"
+                  : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] hover:shadow-sm"
               }`}
             >
-              <Icon className="h-4 w-4 shrink-0" />
+              <Icon className="h-3.5 w-3.5 shrink-0" />
               <span>{item.label}</span>
             </button>
           );
@@ -542,8 +542,8 @@ export function CatalogInventoryAdmin() {
 
       {/* ════════════ TAB: RESUMEN ════════════ */}
       {data && tab === "summary" ? (
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="space-y-5">
+          <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4 stagger-children">
             <Kpi label="Productos activos" value={data.kpis.activeProducts} />
             <Kpi label="SKUs sin inventario" value={data.kpis.skusWithoutInventory} />
             <Kpi label="Stock critico" value={data.kpis.criticalStockProducts} />
@@ -699,9 +699,9 @@ export function CatalogInventoryAdmin() {
           {/* ── Diálogo de confirmación de borrado masivo ── */}
           {showMassDeleteDialog && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-fade-in">
-              <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden animate-scale-in">
-                <div className="bg-gradient-to-r from-red-600 to-red-700 px-5 py-3.5">
-                  <h3 className="text-white font-bold flex items-center gap-2"><AlertTriangle className="h-5 w-5" /> Borrado masivo de productos</h3>
+              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden animate-scale-in">
+                <div className="hm-card-header-red px-5 py-3.5">
+                  <h3 className="text-white font-bold flex items-center gap-2 relative z-10"><AlertTriangle className="h-5 w-5" /> Borrado masivo de productos</h3>
                 </div>
                 <div className="p-5 space-y-4">
                   <p className="text-sm text-gray-700">
@@ -869,15 +869,20 @@ export function CatalogInventoryAdmin() {
    KPI card
    ═══════════════════════════════════════════════════════════ */
 function Kpi({ label, value }: { label: string; value: string | number }) {
-  return <Card className="min-h-[104px] p-4"><p className="text-xs font-medium text-[var(--color-text-muted)]">{label}</p><p className="mt-3 break-words text-2xl font-bold leading-tight text-[var(--color-text)]">{value}</p></Card>;
+  return (
+    <Card className="min-h-[104px] p-4 hover:shadow-lg transition-shadow">
+      <p className="text-[0.6875rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">{label}</p>
+      <p className="mt-2.5 break-words text-2xl font-bold leading-tight text-[var(--color-text)]">{value}</p>
+    </Card>
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════
    Compact movements list
    ═══════════════════════════════════════════════════════════ */
 function CompactMovements({ movements }: { movements: Movement[] }) {
-  if (!movements.length) return <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-5"><p className="text-sm text-[var(--color-text-muted)]">Sin movimientos recientes.</p></div>;
-  return <div className="space-y-2">{movements.map((item) => <div key={item.id} className="grid gap-2 rounded border border-[var(--color-border)] p-2 text-xs md:grid-cols-6"><span>{new Date(item.createdAt).toLocaleString("es-NI")}</span><span>{item.product.sku}</span><span className="md:col-span-2">{item.product.name}</span><span>{item.branch.code}</span><span>{item.movementType} · {qty(item.quantity)}</span></div>)}</div>;
+  if (!movements.length) return <div className="rounded-xl border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-4 py-6 text-center"><p className="text-sm text-[var(--color-text-muted)]">Sin movimientos recientes.</p></div>;
+  return <div className="space-y-1.5">{movements.map((item) => <div key={item.id} className="grid gap-2 rounded-lg border border-[var(--color-border)] p-2.5 text-xs md:grid-cols-6 hover:bg-[var(--color-surface-alt)] transition-colors"><span className="text-[var(--color-text-soft)]">{new Date(item.createdAt).toLocaleString("es-NI")}</span><span className="font-mono font-medium text-[var(--color-info-700)]">{item.product.sku}</span><span className="md:col-span-2 font-medium">{item.product.name}</span><span className="text-[var(--color-text-muted)]">{item.branch.code}</span><span className="font-medium">{item.movementType} · {qty(item.quantity)}</span></div>)}</div>;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1130,9 +1135,9 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
     <div className="space-y-4">
       {/* ── Step 1: Info Banner ── */}
       <Card noPadding>
-        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-5 py-4 text-white rounded-t-lg">
+        <div className="hm-card-header-blue px-5 py-4">
           <h2 className="text-base font-bold flex items-center gap-2"><Zap className="h-5 w-5" /> Importación Simplificada</h2>
-          <p className="text-blue-100 text-xs mt-1">Solo necesitas <strong>Nombre</strong> y <strong>Categoría</strong>. El SKU se genera automáticamente.</p>
+          <p className="text-white/85 text-xs mt-1 relative z-10">Solo necesitas <strong>Nombre</strong> y <strong>Categoría</strong>. El SKU se genera automáticamente.</p>
         </div>
         <div className="p-4 space-y-4">
 
@@ -1294,9 +1299,9 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
       {/* ── Analysis Dialog (pre-import confirmation) ── */}
       {showAnalysisDialog && analysis ? (
         <Card noPadding>
-          <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-5 py-4 text-white rounded-t-lg">
+          <div className="hm-card-header-amber px-5 py-4">
             <h2 className="text-base font-bold flex items-center gap-2"><AlertTriangle className="h-5 w-5" /> Análisis pre-importación</h2>
-            <p className="text-amber-100 text-xs mt-1">Se detectaron situaciones que requieren tu confirmación antes de continuar.</p>
+            <p className="text-white/85 text-xs mt-1 relative z-10">Se detectaron situaciones que requieren tu confirmación antes de continuar.</p>
           </div>
           <div className="p-5 space-y-4">
             {/* Missing categories */}
@@ -1378,7 +1383,7 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
       {/* ── Preview Results ── */}
       {summary ? (
         <Card noPadding>
-          <div className={`px-5 py-3 rounded-t-lg ${step === "done" ? "bg-gradient-to-r from-emerald-600 to-emerald-700" : "bg-gradient-to-r from-amber-500 to-amber-600"} text-white`}>
+          <div className={`px-5 py-3 ${step === "done" ? "hm-card-header-green" : "hm-card-header-amber"}`}>
             <h3 className="text-sm font-bold flex items-center gap-2">
               {step === "done" ? <><Check className="h-4 w-4" /> Importación Completada</> : <><Search className="h-4 w-4" /> Resultado del Preview</>}
             </h3>
