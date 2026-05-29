@@ -160,21 +160,21 @@ function ResetPasswordModal({
       />
 
       {/* Modal */}
-      <div className="relative z-10 w-full max-w-md bg-white rounded-xl shadow-2xl border border-gray-200 animate-fade-in overflow-hidden">
+      <div className="relative z-10 w-full max-w-md bg-[var(--color-surface)] rounded-xl shadow-2xl border border-[var(--color-border)] animate-fade-in overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100">
-              <KeyRound className="h-5 w-5 text-amber-600" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-warning-100)]">
+              <KeyRound className="h-5 w-5 text-[var(--color-warning-700)]" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-gray-900">Resetear Contraseña</h3>
-              <p className="text-xs text-gray-500">Usuario: {user.username}</p>
+              <h3 className="text-base font-bold text-[var(--color-text)]">Resetear Contraseña</h3>
+              <p className="text-xs text-[var(--color-text-muted)]">Usuario: {user.username}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors"
+            className="rounded-lg p-1.5 text-[var(--color-text-soft)] hover:text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)] transition-colors"
             aria-label="Cerrar"
           >
             <X className="h-5 w-5" />
@@ -183,13 +183,13 @@ function ResetPasswordModal({
 
         {/* Body */}
         <div className="px-6 py-5 space-y-4">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
+          <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)] flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
             <p>Se restablecerá la contraseña a la contraseña universal. El usuario deberá cambiarla en su próximo inicio de sesión.</p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-[var(--color-text)] mb-2">
               Contraseña se restablecerá a:
             </label>
             <div className="flex items-center gap-2">
@@ -198,13 +198,13 @@ function ResetPasswordModal({
                   type={showPassword ? "text" : "password"}
                   value={INITIAL_PASSWORD}
                   readOnly
-                  className="w-full rounded-lg border border-gray-300 bg-gray-50 px-3 py-2.5 pr-10 text-sm font-mono tracking-wider select-all focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2.5 pr-10 text-sm font-mono tracking-wider select-all focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
                   onClick={(e) => (e.target as HTMLInputElement).select()}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors p-1"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-soft)] hover:text-[var(--color-text-muted)] transition-colors p-1"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -216,8 +216,8 @@ function ResetPasswordModal({
                 onClick={copyToClipboard}
                 className={`flex items-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
                   copied
-                    ? "bg-green-100 text-green-700 border border-green-300"
-                    : "bg-indigo-600 text-white hover:bg-indigo-700"
+                    ? "bg-[var(--color-success-50)] text-[var(--color-success-700)] border border-green-300"
+                    : "bg-[var(--color-master-600)] text-white hover:bg-[var(--color-master-700)]"
                 }`}
                 title="Copiar al portapapeles"
               >
@@ -236,19 +236,19 @@ function ResetPasswordModal({
             </div>
           </div>
 
-          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800 flex items-start gap-2">
+          <div className="rounded-lg border border-[var(--color-info-300)] bg-[var(--color-info-50)] p-3 text-sm text-[var(--color-info-700)] flex items-start gap-2">
             <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
             <p>Comparte esta contraseña con el usuario. Al iniciar sesión, será obligado a crear una contraseña nueva y personal.</p>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50">
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
           <button
             type="button"
             onClick={onClose}
             disabled={loading}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50"
+            className="rounded-lg px-4 py-2 text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] transition-colors disabled:opacity-50"
           >
             Cancelar
           </button>
@@ -256,7 +256,7 @@ function ResetPasswordModal({
             type="button"
             onClick={() => onConfirm()}
             disabled={loading}
-            className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg bg-[var(--color-warning-600)] px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 transition-colors disabled:opacity-50"
           >
             {loading ? (
               <>
@@ -739,13 +739,13 @@ export function UsersAdmin() {
               </div>
             </div>
           ) : (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
               MASTER es un rol global. Si tambiÃ©n necesita operar en una sucursal concreta, podrÃ¡s agregarle membresÃ­as desde el panel de ediciÃ³n.
             </div>
           )}
 
           {/* Info banner about universal password */}
-          <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+          <div className="flex items-start gap-2 rounded-lg border border-[var(--color-info-300)] bg-[var(--color-info-50)] p-3 text-sm text-[var(--color-info-700)]">
             <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
             <p>
               La contraseña inicial será: <strong className="font-mono">{INITIAL_PASSWORD}</strong>

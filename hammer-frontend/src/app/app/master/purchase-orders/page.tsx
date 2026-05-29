@@ -59,13 +59,13 @@ function getErrorMessage(error: unknown, fallback: string) {
 /* ── Status Badge ── */
 function StatusBadge({ status }: { status: string }) {
   const cfg: Record<string, { bg: string; text: string; label: string }> = {
-    DRAFT: { bg: "bg-yellow-100", text: "text-yellow-800", label: "Borrador" },
+    DRAFT: { bg: "bg-[var(--color-warning-100)]", text: "text-[var(--color-warning-700)]", label: "Borrador" },
     PENDING: { bg: "bg-orange-100", text: "text-orange-800", label: "Pendiente" },
-    APPROVED: { bg: "bg-green-100", text: "text-green-800", label: "Aprobado" },
-    RECEIVED: { bg: "bg-blue-100", text: "text-blue-800", label: "Recibido" },
-    CANCELLED: { bg: "bg-red-100", text: "text-red-800", label: "Cancelado" },
+    APPROVED: { bg: "bg-[var(--color-success-50)]", text: "text-[var(--color-success-700)]", label: "Aprobado" },
+    RECEIVED: { bg: "bg-[var(--color-info-50)]", text: "text-[var(--color-info-700)]", label: "Recibido" },
+    CANCELLED: { bg: "bg-[var(--color-danger-50)]", text: "text-[var(--color-danger-700)]", label: "Cancelado" },
   };
-  const c = cfg[status] || { bg: "bg-gray-100", text: "text-gray-800", label: status };
+  const c = cfg[status] || { bg: "bg-[var(--color-surface-alt)]", text: "text-[var(--color-text)]", label: status };
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${c.bg} ${c.text}`}>
       {c.label}
@@ -288,13 +288,13 @@ export default function PurchaseOrdersPage() {
 
       {/* Messages */}
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center gap-2">
+        <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-4 py-3 text-sm text-[var(--color-danger-700)] flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 flex-shrink-0" /> {error}
-          <button onClick={() => setError(null)} className="ml-auto text-red-500 hover:text-red-700">✕</button>
+          <button onClick={() => setError(null)} className="ml-auto text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]">✕</button>
         </div>
       )}
       {success && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 flex items-center gap-2">
+        <div className="rounded-lg border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-4 py-3 text-sm text-[var(--color-success-700)] flex items-center gap-2">
           <CheckCircle className="h-4 w-4 flex-shrink-0" /> {success}
         </div>
       )}
@@ -366,14 +366,14 @@ export default function PurchaseOrdersPage() {
                         <button
                           onClick={(e) => { e.stopPropagation(); handleApprove(order.id); }}
                           disabled={actionLoading === order.id}
-                          className="rounded bg-green-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                          className="rounded bg-[var(--color-success-600)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-success-700)] disabled:opacity-50"
                         >
                           {actionLoading === order.id ? "..." : "Aprobar"}
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleCancel(order.id); }}
                           disabled={actionLoading === order.id}
-                          className="rounded bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                          className="rounded bg-[var(--color-danger-600)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-danger-700)] disabled:opacity-50"
                         >
                           Cancelar
                         </button>
@@ -383,7 +383,7 @@ export default function PurchaseOrdersPage() {
                       <button
                         onClick={(e) => { e.stopPropagation(); handleReceive(order.id); }}
                         disabled={actionLoading === order.id}
-                        className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                        className="rounded bg-[var(--color-info-700)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-info-800)] disabled:opacity-50"
                       >
                         {actionLoading === order.id ? "..." : "Recibir inventario"}
                       </button>
@@ -466,14 +466,14 @@ export default function PurchaseOrdersPage() {
               <button
                 onClick={() => handleApprove(selectedOrder.id)}
                 disabled={!!actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] disabled:opacity-50"
               >
                 <CheckCircle className="h-4 w-4" /> Aprobar Pedido
               </button>
               <button
                 onClick={() => handleCancel(selectedOrder.id)}
                 disabled={!!actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] disabled:opacity-50"
               >
                 <XCircle className="h-4 w-4" /> Cancelar Pedido
               </button>
@@ -484,7 +484,7 @@ export default function PurchaseOrdersPage() {
               <button
                 onClick={() => handleReceive(selectedOrder.id)}
                 disabled={!!actionLoading}
-                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] disabled:opacity-50"
               >
                 <Package className="h-4 w-4" /> Recibir inventario
               </button>
@@ -636,7 +636,7 @@ export default function PurchaseOrdersPage() {
                   </div>
                   <div className="col-span-1 text-center">
                     {formLines.length > 1 && (
-                      <button onClick={() => removeLine(idx)} className="text-red-500 hover:text-red-700 text-lg">✕</button>
+                      <button onClick={() => removeLine(idx)} className="text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)] text-lg">✕</button>
                     )}
                   </div>
                 </div>
