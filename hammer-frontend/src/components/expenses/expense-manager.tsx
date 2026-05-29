@@ -288,10 +288,6 @@ export function ExpenseManager() {
 
   const handleCreateExpense = async () => {
     if (!newExpense.description || !newExpense.amount || !selectedBranchId) return;
-    if (newExpense.category === "PAYROLL") {
-      showToast("error", "Los gastos de nómina deben sincronizarse desde Personal & Nómina para evitar doble conteo.");
-      return;
-    }
     try {
       const res = await apiFetch("/api/expenses", {
         method: "POST",
@@ -587,11 +583,6 @@ export function ExpenseManager() {
                   </option>
                 ))}
               </select>
-              {newExpense.category === "PAYROLL" && (
-                <div className="sm:col-span-4 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
-                  La nómina se recomienda sincronizar desde Personal & Nómina para evitar doble conteo.
-                </div>
-              )}
               <Input
                 placeholder="Descripción"
                 value={newExpense.description}
@@ -608,7 +599,7 @@ export function ExpenseManager() {
               <Button
                 variant="primary"
                 onClick={handleCreateExpense}
-                disabled={!newExpense.description || !newExpense.amount || newExpense.category === "PAYROLL"}
+                disabled={!newExpense.description || !newExpense.amount}
                 icon={<Plus className="h-4 w-4" />}
               >
                 Agregar
