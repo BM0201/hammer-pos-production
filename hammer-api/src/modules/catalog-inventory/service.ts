@@ -45,9 +45,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       orderBy: { code: "asc" },
     }),
     prisma.category.findMany({
-      where: { isActive: true },
-      select: { id: true, code: true, name: true },
-      orderBy: { name: "asc" },
+      select: { id: true, code: true, name: true, isActive: true },
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
     }),
     prisma.product.findMany({
       where,

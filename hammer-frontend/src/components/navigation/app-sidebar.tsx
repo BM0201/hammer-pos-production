@@ -11,7 +11,7 @@ import type { SessionPayload } from "@/types/auth";
 import {
   LayoutDashboard,
   Users,
-  Tags,
+
   Package,
   Boxes,
   ShoppingCart,
@@ -71,7 +71,6 @@ function buildNavSections(
         title: "ADMINISTRACION",
         items: [
           { href: "/app/master/catalog-inventory", label: "Catalogo e Inventario", icon: Boxes },
-          { href: "/app/master/catalog/categories", label: "Categorias", icon: Tags },
           { href: "/app/master/discounts", label: "Descuentos", icon: Tag },
           { href: "/app/master/expenses", label: "Gastos & Precios", icon: Receipt },
         ],
@@ -129,7 +128,6 @@ function buildNavSections(
         title: "ADMINISTRACION",
         items: [
           { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes },
-          { href: "/app/master/catalog/categories", label: "Categorías", icon: Tags },
           { href: "/app/master/discounts", label: "Descuentos", icon: Tag },
           { href: "/app/master/expenses", label: "Gastos & Precios", icon: Receipt },
         ],
@@ -179,7 +177,6 @@ function buildNavSections(
         title: "ADMINISTRACION",
         items: [
           { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes },
-          { href: "/app/master/catalog/categories", label: "Categorías", icon: Tags },
           { href: "/app/master/discounts", label: "Descuentos", icon: Tag },
           { href: "/app/master/expenses", label: "Gastos & Precios", icon: Receipt },
         ],
