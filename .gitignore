@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel
+.abacus.donotdelete
+
+# TypeScript
+*.tsbuildinfo
+
+# Prisma
+*.db
+*.db-journal
+local-pgdata/
+local-pg.log
+local-pg-*.log
+pg_pw.txt
+.edge-test-profile/
+dev-server*.log
+
+# Documentation / generated report artifacts
+*.md
+*.pdf
+*.docx
+*.txt
+!docs/
+!docs/*.md
+!hammer-api/OPERATIONS.md
+hammer-frontend/tests/e2e/.e2e-state.json
+
+# Keep deploy environment templates versioned
+!.env.example
+!**/.env.example
