@@ -26,7 +26,7 @@ const PUBLIC_PATHS = new Set([
   "/health",
 ]);
 
-const SESSION_COOKIE = "hammer_session";
+const SESSION_COOKIE = "__Host-hammer_session";
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
