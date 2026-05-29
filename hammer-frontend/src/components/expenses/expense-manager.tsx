@@ -344,8 +344,13 @@ export function ExpenseManager() {
   const handleCalculate = async () => {
     if (!selectedBranchId || !calcCost) return;
     try {
+      // IVA se aplica al COSTO DE COMPRA, no al precio de venta
+      const costoBase = Number(calcCost);
+      const iva = Number(ivaPercent) || 0;
+      const costoReal = iva > 0 ? costoBase * (1 + iva / 100) : costoBase;
+
       const res = await fetch(
-        `/api/pricing/suggested?branchId=${selectedBranchId}&purchaseCostPerUnit=${calcCost}`,
+        `/api/pricing/suggested?branchId=${selectedBranchId}&purchaseCostPerUnit=${costoReal}`,
       );
       if (!res.ok) throw new Error("Failed");
       const data = unwrapApiData(await res.json());
@@ -789,7 +794,7 @@ export function ExpenseManager() {
             <div className="flex flex-wrap items-end gap-3">
               <div>
                 <Input
-                  label="Costo de Compra (C$)"
+                  label="Costo Base sin IVA (C$)"
                   type="number"
                   min="0"
                   step="0.01"
@@ -843,19 +848,35 @@ export function ExpenseManager() {
                 </div>
               )}
 
-              {/* Price breakdown */}
+              {/* Price breakdown — IVA aplicado al COSTO, no al precio */}
               {(() => {
                 const iva = Number(ivaPercent) || 0;
-                const ivaAmount = iva > 0 ? calcResult.suggestedPrice * (iva / 100) : 0;
-                const priceWithIva = calcResult.suggestedPrice + ivaAmount;
+                const costoBase = Number(calcCost) || 0;
+                const ivaAmount = iva > 0 ? costoBase * (iva / 100) : 0;
+                const costoConIva = costoBase + ivaAmount;
+                // calcResult.purchaseCost ya incluye IVA (se envió costoReal al API)
                 return (
                   <>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-3">
                         <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
-                          <span className="text-xs text-[var(--color-text-muted)]">Costo de Compra</span>
-                          <span className="text-sm font-semibold">{formatC(calcResult.purchaseCost)}</span>
+                          <span className="text-xs text-[var(--color-text-muted)]">Costo Base (sin IVA)</span>
+                          <span className="text-sm font-semibold">{formatC(costoBase)}</span>
                         </div>
+                        {iva > 0 && (
+                          <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
+                            <span className="text-xs text-[var(--color-text-muted)]">IVA ({iva}%) sobre costo</span>
+                            <span className="text-sm font-semibold text-[var(--color-warning-600)]">
+                              + {formatC(ivaAmount)}
+                            </span>
+                          </div>
+                        )}
+                        {iva > 0 && (
+                          <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
+                            <span className="text-xs text-[var(--color-text-muted)]">Costo Real (con IVA)</span>
+                            <span className="text-sm font-bold">{formatC(costoConIva)}</span>
+                          </div>
+                        )}
                         <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
                           <span className="text-xs text-[var(--color-text-muted)]">Gasto Operativo / Unidad</span>
                           <span className="text-sm font-semibold text-[var(--color-danger-600)]">
@@ -872,41 +893,21 @@ export function ExpenseManager() {
                             {calcResult.marginPercent}%
                           </span>
                         </div>
-                        {iva > 0 && (
-                          <div className="flex justify-between items-center py-2 border-b border-[var(--color-success-100)]">
-                            <span className="text-xs text-[var(--color-text-muted)]">IVA ({iva}%)</span>
-                            <span className="text-sm font-semibold text-[var(--color-warning-600)]">
-                              + {formatC(ivaAmount)}
-                            </span>
-                          </div>
-                        )}
                       </div>
 
                       <div className="flex flex-col items-center justify-center bg-[var(--color-success-100)]/50 rounded-xl p-6">
-                        {iva > 0 ? (
-                          <>
-                            <p className="text-xs text-[var(--color-text-muted)] font-medium mb-0.5">PRECIO SIN IVA</p>
-                            <p className="text-lg font-bold text-[var(--color-text-secondary)]">
-                              {formatC(calcResult.suggestedPrice)}
-                            </p>
-                            <div className="w-full border-t border-[var(--color-success-200)] my-2" />
-                            <p className="text-xs text-[var(--color-success-700)] font-medium mb-0.5">PRECIO CON IVA ({iva}%)</p>
-                            <p className="text-3xl font-bold text-[var(--color-success-700)]">
-                              {formatC(priceWithIva)}
-                            </p>
-                          </>
-                        ) : (
-                          <>
-                            <p className="text-xs text-[var(--color-success-700)] font-medium mb-1">PRECIO SUGERIDO</p>
-                            <p className="text-3xl font-bold text-[var(--color-success-700)]">
-                              {formatC(calcResult.suggestedPrice)}
-                            </p>
-                          </>
-                        )}
+                        <p className="text-xs text-[var(--color-success-700)] font-medium mb-1">PRECIO SUGERIDO DE VENTA</p>
+                        <p className="text-3xl font-bold text-[var(--color-success-700)]">
+                          {formatC(calcResult.suggestedPrice)}
+                        </p>
                         <p className="text-xs text-[var(--color-success-600)] mt-2">
                           Ganancia: {formatC(calcResult.suggestedPrice - calcResult.totalCostPerUnit)} por unidad
-                          {iva > 0 ? " (antes de IVA)" : ""}
                         </p>
+                        {iva > 0 && (
+                          <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+                            IVA ya incluido en el costo de compra
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -933,21 +934,20 @@ export function ExpenseManager() {
             </h5>
             <div className="space-y-2 text-xs text-[var(--color-info-700)]">
               <div className="font-mono bg-[var(--color-surface)]/60 rounded-lg p-3 space-y-1">
-                <p><strong>1.</strong> Gasto por Unidad = Gastos Mensuales Totales ÷ Unidades Estimadas</p>
-                <p><strong>2.</strong> Costo Total = Costo de Compra + Gasto por Unidad</p>
-                <p><strong>3.</strong> Precio Sugerido = Costo Total ÷ (1 − Margen/100)</p>
-                <p><strong>4.</strong> Precio con IVA = Precio Sugerido × (1 + IVA/100)</p>
+                <p><strong>1.</strong> Costo Real = Costo Base × (1 + IVA/100) &nbsp;← IVA sobre el costo</p>
+                <p><strong>2.</strong> Gasto por Unidad = Gastos Mensuales Totales ÷ Unidades Estimadas</p>
+                <p><strong>3.</strong> Costo Total = Costo Real + Gasto por Unidad</p>
+                <p><strong>4.</strong> Precio Sugerido = Costo Total ÷ (1 − Margen/100)</p>
               </div>
               <div className="mt-3 bg-[var(--color-surface)]/60 rounded-lg p-3">
                 <p className="font-semibold mb-1">Ejemplo:</p>
+                <p>Costo base del cemento = C$400 · IVA = 15%</p>
+                <p>Costo real = C$400 × 1.15 = <strong>C$460.00</strong></p>
                 <p>Gastos mensuales = C$50,000 · Unidades estimadas = 1,000</p>
                 <p>Gasto por unidad = C$50,000 ÷ 1,000 = <strong>C$50.00</strong></p>
-                <p>Costo de compra del cemento = C$400</p>
-                <p>Costo total = C$400 + C$50 = <strong>C$450.00</strong></p>
+                <p>Costo total = C$460 + C$50 = <strong>C$510.00</strong></p>
                 <p>Margen deseado = 7%</p>
-                <p>Precio sugerido = C$450 ÷ (1 − 0.07) = <strong>C$483.87</strong></p>
-                <p>IVA 15% = C$483.87 × 0.15 = <strong>C$72.58</strong></p>
-                <p>Precio con IVA = C$483.87 + C$72.58 = <strong>C$556.45</strong></p>
+                <p>Precio sugerido = C$510 ÷ (1 − 0.07) = <strong>C$548.39</strong></p>
               </div>
             </div>
           </Card>
