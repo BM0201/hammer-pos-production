@@ -104,12 +104,12 @@ function getErrorMessage(error: unknown, fallback: string) {
 
 function AlertStatusBadge({ status }: { status: ReorderAlert["status"] }) {
   const cfg: Record<string, { bg: string; text: string; label: string }> = {
-    OPEN: { bg: "bg-yellow-100", text: "text-yellow-800", label: "Abierta" },
-    DISMISSED: { bg: "bg-gray-100", text: "text-gray-700", label: "Descartada" },
-    CONVERTED_TO_PURCHASE_ORDER: { bg: "bg-blue-100", text: "text-blue-800", label: "Convertida a PO" },
-    CONVERTED_TO_TRANSFER: { bg: "bg-green-100", text: "text-green-800", label: "Convertida a Transfer" },
+    OPEN: { bg: "bg-[var(--color-warning-100)]", text: "text-[var(--color-warning-700)]", label: "Abierta" },
+    DISMISSED: { bg: "bg-[var(--color-surface-alt)]", text: "text-[var(--color-text)]", label: "Descartada" },
+    CONVERTED_TO_PURCHASE_ORDER: { bg: "bg-[var(--color-info-50)]", text: "text-[var(--color-info-700)]", label: "Convertida a PO" },
+    CONVERTED_TO_TRANSFER: { bg: "bg-[var(--color-success-50)]", text: "text-[var(--color-success-700)]", label: "Convertida a Transfer" },
   };
-  const c = cfg[status] || { bg: "bg-gray-100", text: "text-gray-800", label: status };
+  const c = cfg[status] || { bg: "bg-[var(--color-surface-alt)]", text: "text-[var(--color-text)]", label: status };
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold ${c.bg} ${c.text}`}>
       {c.label}
@@ -119,11 +119,11 @@ function AlertStatusBadge({ status }: { status: ReorderAlert["status"] }) {
 
 function AlertTypeBadge({ alertType }: { alertType: ReorderAlert["alertType"] }) {
   const cfg: Record<string, { bg: string; text: string; label: string }> = {
-    PURCHASE: { bg: "bg-purple-100", text: "text-purple-800", label: "Compra" },
+    PURCHASE: { bg: "bg-[var(--color-info-50)]", text: "text-purple-800", label: "Compra" },
     TRANSFER: { bg: "bg-cyan-100", text: "text-cyan-800", label: "Transferencia" },
-    BOTH: { bg: "bg-amber-100", text: "text-amber-800", label: "Compra + Transfer" },
+    BOTH: { bg: "bg-[var(--color-warning-100)]", text: "text-[var(--color-warning-700)]", label: "Compra + Transfer" },
   };
-  const c = cfg[alertType] || { bg: "bg-gray-100", text: "text-gray-800", label: alertType };
+  const c = cfg[alertType] || { bg: "bg-[var(--color-surface-alt)]", text: "text-[var(--color-text)]", label: alertType };
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold ${c.bg} ${c.text}`}>
       {c.label}
@@ -133,12 +133,12 @@ function AlertTypeBadge({ alertType }: { alertType: ReorderAlert["alertType"] })
 
 function BatchStatusBadge({ status }: { status: ReorderBatch["status"] }) {
   const cfg: Record<string, { bg: string; text: string; label: string }> = {
-    DRAFT: { bg: "bg-yellow-100", text: "text-yellow-800", label: "Borrador" },
-    REVIEWED: { bg: "bg-blue-100", text: "text-blue-800", label: "Revisado" },
-    CONVERTED: { bg: "bg-green-100", text: "text-green-800", label: "Convertido" },
-    DISCARDED: { bg: "bg-gray-100", text: "text-gray-700", label: "Descartado" },
+    DRAFT: { bg: "bg-[var(--color-warning-100)]", text: "text-[var(--color-warning-700)]", label: "Borrador" },
+    REVIEWED: { bg: "bg-[var(--color-info-50)]", text: "text-[var(--color-info-700)]", label: "Revisado" },
+    CONVERTED: { bg: "bg-[var(--color-success-50)]", text: "text-[var(--color-success-700)]", label: "Convertido" },
+    DISCARDED: { bg: "bg-[var(--color-surface-alt)]", text: "text-[var(--color-text)]", label: "Descartado" },
   };
-  const c = cfg[status] || { bg: "bg-gray-100", text: "text-gray-800", label: status };
+  const c = cfg[status] || { bg: "bg-[var(--color-surface-alt)]", text: "text-[var(--color-text)]", label: status };
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold ${c.bg} ${c.text}`}>
       {c.label}
@@ -596,13 +596,13 @@ export default function ReorderPage() {
 
       {/* Messages */}
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center gap-2">
+        <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-4 py-3 text-sm text-[var(--color-danger-700)] flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 flex-shrink-0" /> {error}
-          <button onClick={() => setError(null)} className="ml-auto text-red-500 hover:text-red-700">✕</button>
+          <button onClick={() => setError(null)} className="ml-auto text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]">✕</button>
         </div>
       )}
       {success && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700 flex items-center gap-2">
+        <div className="rounded-lg border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-4 py-3 text-sm text-[var(--color-success-700)] flex items-center gap-2">
           <CheckCircle className="h-4 w-4 flex-shrink-0" /> {success}
         </div>
       )}
@@ -620,7 +620,7 @@ export default function ReorderPage() {
           <AlertTriangle className="h-4 w-4" />
           Alertas
           {activeTab === "alerts" && openAlertCount > 0 && (
-            <span className="ml-1 rounded-full bg-red-100 text-red-700 px-2 py-0.5 text-[0.6875rem] font-bold">
+            <span className="ml-1 rounded-full bg-[var(--color-danger-50)] text-[var(--color-danger-700)] px-2 py-0.5 text-[0.6875rem] font-bold">
               {openAlertCount}
             </span>
           )}
@@ -777,7 +777,7 @@ export default function ReorderPage() {
                                 <button
                                   onClick={() => handleConvertAlertToPO(a.id)}
                                   disabled={alertActionLoading === a.id}
-                                  className="flex items-center gap-1 rounded bg-purple-600 px-2 py-1 text-[0.6875rem] font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
+                                  className="flex items-center gap-1 rounded bg-[var(--color-master-600)] px-2 py-1 text-[0.6875rem] font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
                                   title="Convertir a Pedido de Compra"
                                 >
                                   <ShoppingCart className="h-3 w-3" /> PO
@@ -862,7 +862,7 @@ export default function ReorderPage() {
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         {batch.suggestionType === "PURCHASE" ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-800 px-2 py-0.5 text-[0.6875rem] font-bold">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-info-50)] text-purple-800 px-2 py-0.5 text-[0.6875rem] font-bold">
                             <ShoppingCart className="h-3 w-3" />
                             COMPRA
                           </span>
@@ -937,7 +937,7 @@ export default function ReorderPage() {
                         disabled={batchActionLoading === batch.id}
                         className={`flex items-center gap-2 rounded-lg px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50 transition-colors ${
                           batch.suggestionType === "PURCHASE"
-                            ? "bg-purple-600 hover:bg-purple-700"
+                            ? "bg-[var(--color-master-600)] hover:bg-purple-700"
                             : "bg-cyan-600 hover:bg-cyan-700"
                         }`}
                       >
@@ -979,7 +979,7 @@ export default function ReorderPage() {
             </div>
             <div className="ml-auto flex items-center gap-2">
               {Object.keys(policyEdits).length > 0 && (
-                <span className="text-xs text-amber-700 font-medium">
+                <span className="text-xs text-[var(--color-warning-700)] font-medium">
                   {Object.keys(policyEdits).length} cambio(s) pendiente(s)
                 </span>
               )}
@@ -1109,7 +1109,7 @@ export default function ReorderPage() {
                     return (
                       <tr
                         key={p.id}
-                        className={`border-b border-[var(--color-border)] ${hasChanges ? "bg-amber-50/50" : "hover:bg-[var(--color-surface-alt)]/30"}`}
+                        className={`border-b border-[var(--color-border)] ${hasChanges ? "bg-[var(--color-warning-50)]/50" : "hover:bg-[var(--color-surface-alt)]/30"}`}
                       >
                         <td className="px-3 py-2">
                           <span className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-[var(--color-master-50)] text-[var(--color-master-700)] text-[0.6875rem] font-bold">

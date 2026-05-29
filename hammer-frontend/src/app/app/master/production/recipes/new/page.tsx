@@ -128,54 +128,54 @@ export default function NewRecipePage() {
             className="h-8 w-1 rounded-full"
             style={{ background: "linear-gradient(to bottom, var(--color-master-400), var(--color-master-600))" }}
           />
-          <h1 className="text-2xl font-bold text-gray-900">Nueva Receta de Material</h1>
+          <h1 className="text-2xl font-bold text-[var(--color-text)]">Nueva Receta de Material</h1>
         </div>
-        <p className="text-sm text-gray-500 ml-4">Selecciona el producto terminado y sus insumos desde catalogo.</p>
+        <p className="text-sm text-[var(--color-text-muted)] ml-4">Selecciona el producto terminado y sus insumos desde catalogo.</p>
       </div>
 
-      <Link href="/app/master/production/recipes" className="text-sm text-indigo-600 hover:underline">
+      <Link href="/app/master/production/recipes" className="text-sm text-[var(--color-master-600)] hover:underline">
         ← Volver a recetas
       </Link>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+        <div className="bg-[var(--color-danger-50)] border border-[var(--color-danger-200)] rounded-lg p-3 text-sm text-[var(--color-danger-700)]">
           {error}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6 bg-white rounded-xl border p-6 shadow-sm">
+      <form onSubmit={handleSubmit} className="space-y-6 bg-[var(--color-surface)] rounded-xl border p-6 shadow-sm">
         {/* Basic info */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Nombre *</label>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Nombre *</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
               placeholder="Bloque 10x20x40 Estándar"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Código *</label>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Código *</label>
             <input
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value)}
               required
-              className="w-full border rounded-lg px-3 py-2 text-sm font-mono uppercase focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full border rounded-lg px-3 py-2 text-sm font-mono uppercase focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
               placeholder="BLOQUE-10X20X40-STD"
             />
           </div>
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Descripción</label>
+          <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Descripción</label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
             rows={2}
             placeholder="Descripción opcional..."
           />
@@ -183,12 +183,12 @@ export default function NewRecipePage() {
 
         {/* Finished product */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Producto Terminado *</label>
+          <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Producto Terminado *</label>
           <select
             value={finishedProductId}
             onChange={(e) => setFinishedProductId(e.target.value)}
             required
-            className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
           >
             <option value="">Seleccionar producto...</option>
             {products.map((p) => (
@@ -197,12 +197,12 @@ export default function NewRecipePage() {
               </option>
             ))}
           </select>
-          {loadingProducts && <p className="text-xs text-gray-400 mt-1">Cargando productos...</p>}
+          {loadingProducts && <p className="text-xs text-[var(--color-text-soft)] mt-1">Cargando productos...</p>}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad Esperada *</label>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Cantidad Esperada *</label>
             <input
               type="number"
               value={expectedQuantity}
@@ -210,23 +210,23 @@ export default function NewRecipePage() {
               required
               min="0.01"
               step="any"
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
               placeholder="1000"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Unidad *</label>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Unidad *</label>
             <input
               type="text"
               value={expectedUnit}
               onChange={(e) => setExpectedUnit(e.target.value)}
               required
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
               placeholder="unidad"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Margen Objetivo (%)</label>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Margen Objetivo (%)</label>
             <input
               type="number"
               value={targetMarginPct}
@@ -234,7 +234,7 @@ export default function NewRecipePage() {
               min="0"
               max="100"
               step="any"
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
               placeholder="30"
             />
           </div>
@@ -243,11 +243,11 @@ export default function NewRecipePage() {
         {/* Inputs / Insumos */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-gray-700">Insumos</h3>
+            <h3 className="text-sm font-semibold text-[var(--color-text)]">Insumos</h3>
             <button
               type="button"
               onClick={addInput}
-              className="text-xs text-indigo-600 hover:underline"
+              className="text-xs text-[var(--color-master-600)] hover:underline"
             >
               + Agregar insumo
             </button>
@@ -257,7 +257,7 @@ export default function NewRecipePage() {
             {inputs.map((row, idx) => (
               <div key={idx} className="flex gap-2 items-end">
                 <div className="flex-1">
-                  {idx === 0 && <label className="block text-xs text-gray-500 mb-1">Producto</label>}
+                  {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Producto</label>}
                   <select
                     value={row.inputProductId}
                     onChange={(e) => updateInput(idx, "inputProductId", e.target.value)}
@@ -273,7 +273,7 @@ export default function NewRecipePage() {
                   </select>
                 </div>
                 <div className="w-24">
-                  {idx === 0 && <label className="block text-xs text-gray-500 mb-1">Cantidad</label>}
+                  {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Cantidad</label>}
                   <input
                     type="number"
                     value={row.quantity}
@@ -286,7 +286,7 @@ export default function NewRecipePage() {
                   />
                 </div>
                 <div className="w-24">
-                  {idx === 0 && <label className="block text-xs text-gray-500 mb-1">Unidad</label>}
+                  {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Unidad</label>}
                   <input
                     type="text"
                     value={row.unit}
@@ -299,7 +299,7 @@ export default function NewRecipePage() {
                   <button
                     type="button"
                     onClick={() => removeInput(idx)}
-                    className="text-red-400 hover:text-red-600 text-xs pb-1"
+                    className="text-red-400 hover:text-[var(--color-danger-600)] text-xs pb-1"
                   >
                     ✕
                   </button>
@@ -313,13 +313,13 @@ export default function NewRecipePage() {
           <button
             type="submit"
             disabled={saving}
-            className="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition"
+            className="px-6 py-2 bg-[var(--color-master-600)] text-white rounded-lg text-sm font-medium hover:bg-[var(--color-master-700)] disabled:opacity-50 transition"
           >
             {saving ? "Guardando..." : "Crear Receta"}
           </button>
           <Link
             href="/app/master/production/recipes"
-            className="px-6 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition"
+            className="px-6 py-2 bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text)] rounded-lg text-sm font-medium hover:bg-[var(--color-surface-alt)] transition"
           >
             Cancelar
           </Link>

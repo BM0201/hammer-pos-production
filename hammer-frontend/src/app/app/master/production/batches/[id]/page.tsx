@@ -47,11 +47,11 @@ type Batch = {
 };
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  DRAFT: { label: "Borrador", color: "bg-gray-100 text-gray-700" },
-  PLANNED: { label: "Planificado", color: "bg-blue-100 text-blue-700" },
-  IN_PROGRESS: { label: "En Proceso", color: "bg-yellow-100 text-yellow-700" },
-  COMPLETED: { label: "Completado", color: "bg-green-100 text-green-700" },
-  CANCELLED: { label: "Cancelado", color: "bg-red-100 text-red-700" },
+  DRAFT: { label: "Borrador", color: "bg-[var(--color-surface-alt)] text-[var(--color-text)]" },
+  PLANNED: { label: "Planificado", color: "bg-[var(--color-info-50)] text-[var(--color-info-700)]" },
+  IN_PROGRESS: { label: "En Proceso", color: "bg-[var(--color-warning-100)] text-[var(--color-warning-700)]" },
+  COMPLETED: { label: "Completado", color: "bg-[var(--color-success-50)] text-[var(--color-success-700)]" },
+  CANCELLED: { label: "Cancelado", color: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]" },
 };
 
 type InputActualRow = {
@@ -183,11 +183,11 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     setInputActuals((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
   };
 
-  if (loading) return <p className="text-center py-12 text-sm text-gray-400">Cargando lote...</p>;
-  if (error) return <p className="text-center py-12 text-sm text-red-500">{error}</p>;
-  if (!batch) return <p className="text-center py-12 text-sm text-gray-400">Lote no encontrado</p>;
+  if (loading) return <p className="text-center py-12 text-sm text-[var(--color-text-soft)]">Cargando lote...</p>;
+  if (error) return <p className="text-center py-12 text-sm text-[var(--color-danger-600)]">{error}</p>;
+  if (!batch) return <p className="text-center py-12 text-sm text-[var(--color-text-soft)]">Lote no encontrado</p>;
 
-  const st = STATUS_LABELS[batch.status] ?? { label: batch.status, color: "bg-gray-100 text-gray-600" };
+  const st = STATUS_LABELS[batch.status] ?? { label: batch.status, color: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]" };
   const canStart = batch.status === "DRAFT" || batch.status === "PLANNED";
   const canComplete = batch.status === "IN_PROGRESS" || batch.status === "DRAFT" || batch.status === "PLANNED";
   const isFinished = batch.status === "COMPLETED" || batch.status === "CANCELLED";
@@ -200,32 +200,32 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
             className="h-8 w-1 rounded-full"
             style={{ background: "linear-gradient(to bottom, var(--color-master-400), var(--color-master-600))" }}
           />
-          <h1 className="text-2xl font-bold text-gray-900">Lote {batch.batchNumber}</h1>
+          <h1 className="text-2xl font-bold text-[var(--color-text)]">Lote {batch.batchNumber}</h1>
           <span className={`ml-2 inline-block px-2.5 py-0.5 rounded-full text-xs font-medium ${st.color}`}>
             {st.label}
           </span>
         </div>
       </div>
 
-      <Link href="/app/master/production/batches" className="text-sm text-indigo-600 hover:underline">
+      <Link href="/app/master/production/batches" className="text-sm text-[var(--color-master-600)] hover:underline">
         ← Volver a lotes
       </Link>
 
       {actionError && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{actionError}</div>
+        <div className="bg-[var(--color-danger-50)] border border-[var(--color-danger-200)] rounded-lg p-3 text-sm text-[var(--color-danger-700)]">{actionError}</div>
       )}
 
       {/* Batch info */}
-      <div className="bg-white rounded-xl border p-5 shadow-sm grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-        <div><span className="text-gray-500">Receta:</span> <span className="font-medium text-gray-800">{batch.recipe.name}</span></div>
-        <div><span className="text-gray-500">Código:</span> <span className="font-mono text-gray-700">{batch.recipe.code}</span></div>
-        <div><span className="text-gray-500">Producto Final:</span> <span className="text-gray-800">{batch.recipe.finishedProduct.name}</span></div>
-        <div><span className="text-gray-500">Sucursal:</span> <span className="text-gray-800">{batch.branch.name}</span></div>
-        <div><span className="text-gray-500">Cantidad Planeada:</span> <span className="font-medium text-gray-800">{batch.plannedQuantity.toLocaleString()}</span></div>
-        <div><span className="text-gray-500">Creado por:</span> <span className="text-gray-800">{batch.createdBy.fullName}</span></div>
-        {batch.startedAt && <div><span className="text-gray-500">Iniciado:</span> <span className="text-gray-800">{new Date(batch.startedAt).toLocaleString("es-NI")}</span></div>}
-        {batch.completedAt && <div><span className="text-gray-500">Completado:</span> <span className="text-gray-800">{new Date(batch.completedAt).toLocaleString("es-NI")}</span></div>}
-        {batch.notes && <div className="sm:col-span-2"><span className="text-gray-500">Notas:</span> <span className="text-gray-700">{batch.notes}</span></div>}
+      <div className="bg-[var(--color-surface)] rounded-xl border p-5 shadow-sm grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+        <div><span className="text-[var(--color-text-muted)]">Receta:</span> <span className="font-medium text-[var(--color-text)]">{batch.recipe.name}</span></div>
+        <div><span className="text-[var(--color-text-muted)]">Código:</span> <span className="font-mono text-[var(--color-text)]">{batch.recipe.code}</span></div>
+        <div><span className="text-[var(--color-text-muted)]">Producto Final:</span> <span className="text-[var(--color-text)]">{batch.recipe.finishedProduct.name}</span></div>
+        <div><span className="text-[var(--color-text-muted)]">Sucursal:</span> <span className="text-[var(--color-text)]">{batch.branch.name}</span></div>
+        <div><span className="text-[var(--color-text-muted)]">Cantidad Planeada:</span> <span className="font-medium text-[var(--color-text)]">{batch.plannedQuantity.toLocaleString()}</span></div>
+        <div><span className="text-[var(--color-text-muted)]">Creado por:</span> <span className="text-[var(--color-text)]">{batch.createdBy.fullName}</span></div>
+        {batch.startedAt && <div><span className="text-[var(--color-text-muted)]">Iniciado:</span> <span className="text-[var(--color-text)]">{new Date(batch.startedAt).toLocaleString("es-NI")}</span></div>}
+        {batch.completedAt && <div><span className="text-[var(--color-text-muted)]">Completado:</span> <span className="text-[var(--color-text)]">{new Date(batch.completedAt).toLocaleString("es-NI")}</span></div>}
+        {batch.notes && <div className="sm:col-span-2"><span className="text-[var(--color-text-muted)]">Notas:</span> <span className="text-[var(--color-text)]">{batch.notes}</span></div>}
       </div>
 
       {/* Status-specific actions */}
@@ -241,7 +241,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           <button
             onClick={() => changeStatus("CANCELLED")}
             disabled={actionLoading}
-            className="px-4 py-2 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200 disabled:opacity-50 transition"
+            className="px-4 py-2 bg-[var(--color-danger-50)] text-[var(--color-danger-700)] rounded-lg text-sm font-medium hover:bg-red-200 disabled:opacity-50 transition"
           >
             Cancelar Lote
           </button>
@@ -253,7 +253,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           <button
             onClick={() => changeStatus("CANCELLED")}
             disabled={actionLoading}
-            className="px-4 py-2 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200 disabled:opacity-50 transition"
+            className="px-4 py-2 bg-[var(--color-danger-50)] text-[var(--color-danger-700)] rounded-lg text-sm font-medium hover:bg-red-200 disabled:opacity-50 transition"
           >
             Cancelar Lote
           </button>
@@ -261,13 +261,13 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       )}
 
       {/* Planned inputs */}
-      <div className="bg-white rounded-xl border shadow-sm">
+      <div className="bg-[var(--color-surface)] rounded-xl border shadow-sm">
         <div className="px-4 py-3 border-b">
-          <h2 className="text-sm font-semibold text-gray-700">Insumos del Lote</h2>
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">Insumos del Lote</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+            <thead className="bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-xs uppercase tracking-wider">
               <tr>
                 <th className="px-4 py-2 text-left font-medium">Insumo</th>
                 <th className="px-4 py-2 text-right font-medium">Planeado</th>
@@ -277,19 +277,19 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                 <th className="px-4 py-2 text-right font-medium">Costo Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-[var(--color-border)]">
               {batch.inputs.map((bi) => (
                 <tr key={bi.id}>
-                  <td className="px-4 py-2 text-gray-700">{bi.inputProduct.name}</td>
-                  <td className="px-4 py-2 text-right text-gray-600">{bi.plannedQuantity}</td>
-                  <td className="px-4 py-2 text-right text-gray-700 font-medium">
+                  <td className="px-4 py-2 text-[var(--color-text)]">{bi.inputProduct.name}</td>
+                  <td className="px-4 py-2 text-right text-[var(--color-text-muted)]">{bi.plannedQuantity}</td>
+                  <td className="px-4 py-2 text-right text-[var(--color-text)] font-medium">
                     {bi.actualQuantity != null ? bi.actualQuantity : "—"}
                   </td>
-                  <td className="px-4 py-2 text-gray-500">{bi.unit}</td>
-                  <td className="px-4 py-2 text-right text-gray-600">
+                  <td className="px-4 py-2 text-[var(--color-text-muted)]">{bi.unit}</td>
+                  <td className="px-4 py-2 text-right text-[var(--color-text-muted)]">
                     {bi.unitCost != null ? `C$${bi.unitCost.toFixed(2)}` : "—"}
                   </td>
-                  <td className="px-4 py-2 text-right text-gray-700">
+                  <td className="px-4 py-2 text-right text-[var(--color-text)]">
                     {bi.totalCost != null ? `C$${bi.totalCost.toFixed(2)}` : "—"}
                   </td>
                 </tr>
@@ -301,35 +301,35 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
       {/* Completed summary */}
       {batch.status === "COMPLETED" && (
-        <div className="bg-green-50 border border-green-200 rounded-xl p-5 space-y-2">
-          <h2 className="text-sm font-bold text-green-800">Resumen de Producción</h2>
+        <div className="bg-[var(--color-success-50)] border border-[var(--color-success-200)] rounded-xl p-5 space-y-2">
+          <h2 className="text-sm font-bold text-[var(--color-success-700)]">Resumen de Producción</h2>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
             <div>
-              <p className="text-green-600 text-xs">Unidades Buenas</p>
+              <p className="text-[var(--color-success-700)] text-xs">Unidades Buenas</p>
               <p className="font-bold text-green-900">{batch.producedGoodQuantity?.toLocaleString()}</p>
             </div>
             <div>
-              <p className="text-green-600 text-xs">Unidades Rechazadas</p>
+              <p className="text-[var(--color-success-700)] text-xs">Unidades Rechazadas</p>
               <p className="font-bold text-green-900">{batch.producedBadQuantity ?? 0}</p>
             </div>
             <div>
-              <p className="text-green-600 text-xs">Costo Total</p>
+              <p className="text-[var(--color-success-700)] text-xs">Costo Total</p>
               <p className="font-bold text-green-900">C${batch.totalCost?.toFixed(2)}</p>
             </div>
             <div>
-              <p className="text-green-600 text-xs">Costo Unitario</p>
+              <p className="text-[var(--color-success-700)] text-xs">Costo Unitario</p>
               <p className="font-bold text-green-900">C${batch.unitCost?.toFixed(2)}</p>
             </div>
           </div>
           {batch.suggestedPrice != null && (
-            <div className="pt-2 border-t border-green-200 mt-2">
-              <p className="text-xs text-green-600">
+            <div className="pt-2 border-t border-[var(--color-success-200)] mt-2">
+              <p className="text-xs text-[var(--color-success-700)]">
                 Precio Sugerido (margen {((batch.recipe.targetMarginPct ?? 0) * 100).toFixed(0)}%):
                 <span className="font-bold text-green-900 ml-1">C${batch.suggestedPrice.toFixed(2)}</span>
               </p>
             </div>
           )}
-          <div className="grid grid-cols-3 gap-3 text-xs text-green-700 pt-1">
+          <div className="grid grid-cols-3 gap-3 text-xs text-[var(--color-success-700)] pt-1">
             <div>Materiales: C${batch.materialsCost?.toFixed(2)}</div>
             <div>Mano de obra: C${batch.laborCost?.toFixed(2)}</div>
             <div>Indirectos: C${batch.overheadCost?.toFixed(2)}</div>
@@ -339,12 +339,12 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
       {/* Completion form */}
       {canComplete && !isFinished && (
-        <form onSubmit={handleComplete} className="bg-white rounded-xl border p-5 shadow-sm space-y-5">
-          <h2 className="text-sm font-bold text-gray-800">Completar Lote</h2>
+        <form onSubmit={handleComplete} className="bg-[var(--color-surface)] rounded-xl border p-5 shadow-sm space-y-5">
+          <h2 className="text-sm font-bold text-[var(--color-text)]">Completar Lote</h2>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Unidades Buenas Producidas *</label>
+              <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Unidades Buenas Producidas *</label>
               <input
                 type="number"
                 value={producedGood}
@@ -356,7 +356,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Unidades Rechazadas</label>
+              <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Unidades Rechazadas</label>
               <input
                 type="number"
                 value={producedBad}
@@ -370,7 +370,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Mano de Obra (C$)</label>
+              <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Mano de Obra (C$)</label>
               <input
                 type="number"
                 value={laborCost}
@@ -381,7 +381,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Costos Indirectos (C$)</label>
+              <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Costos Indirectos (C$)</label>
               <input
                 type="number"
                 value={overheadCost}
@@ -395,14 +395,14 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
           {/* Input actuals */}
           <div>
-            <h3 className="text-xs font-semibold text-gray-700 mb-2">Consumo Real de Insumos</h3>
+            <h3 className="text-xs font-semibold text-[var(--color-text)] mb-2">Consumo Real de Insumos</h3>
             <div className="space-y-2">
               {inputActuals.map((ia, idx) => {
                 const batchInput = batch.inputs[idx];
                 if (!batchInput) return null;
                 return (
                   <div key={idx} className="flex gap-2 items-center">
-                    <span className="text-sm text-gray-700 min-w-[160px] truncate">{batchInput.inputProduct.name}</span>
+                    <span className="text-sm text-[var(--color-text)] min-w-[160px] truncate">{batchInput.inputProduct.name}</span>
                     <div className="flex-1">
                       <input
                         type="number"
@@ -415,7 +415,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                         placeholder="Cantidad real"
                       />
                     </div>
-                    <span className="text-xs text-gray-400 w-12">{batchInput.unit}</span>
+                    <span className="text-xs text-[var(--color-text-soft)] w-12">{batchInput.unit}</span>
                     <div className="w-28">
                       <input
                         type="number"
@@ -438,7 +438,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
             <button
               type="submit"
               disabled={actionLoading}
-              className="px-6 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition"
+              className="px-6 py-2 bg-[var(--color-success-600)] text-white rounded-lg text-sm font-medium hover:bg-[var(--color-success-700)] disabled:opacity-50 transition"
             >
               {actionLoading ? "Completando..." : "✓ Completar Lote"}
             </button>

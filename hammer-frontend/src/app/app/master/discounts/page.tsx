@@ -97,11 +97,11 @@ const XYZ_OPTIONS = ["X", "Y", "Z"];
 
 function TypeBadge({ type }: { type: string }) {
   return type === "PERCENTAGE" ? (
-    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold bg-blue-100 text-blue-800">
+    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold bg-[var(--color-info-50)] text-[var(--color-info-700)]">
       <Percent className="h-3 w-3" /> Porcentaje
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold bg-purple-100 text-purple-800">
+    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold bg-[var(--color-info-50)] text-purple-800">
       C$ Monto Fijo
     </span>
   );
@@ -347,7 +347,7 @@ export default function DiscountsPage() {
             <button
               type="button"
               onClick={loadSuggestions}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--color-master-200)] bg-white px-2.5 py-1.5 text-xs font-semibold text-[var(--color-master-700)]"
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--color-master-200)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs font-semibold text-[var(--color-master-700)]"
             >
               <Sparkles className="h-3.5 w-3.5" />
               Recalcular
@@ -360,11 +360,11 @@ export default function DiscountsPage() {
               Evaluando productos con ABC-XYZ y señales de rotación/stock...
             </div>
           ) : suggestions.length === 0 ? (
-            <div className="mt-4 rounded-lg border border-[var(--color-master-200)] bg-white px-4 py-3 text-sm text-[var(--color-master-700)]">
+            <div className="mt-4 rounded-lg border border-[var(--color-master-200)] bg-[var(--color-surface)] px-4 py-3 text-sm text-[var(--color-master-700)]">
               No hay sugerencias activas por ahora (productos con descuento vigente o sin patrón de incentivo recomendado).
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-lg border border-[var(--color-master-100)] bg-white">
+            <div className="mt-4 overflow-x-auto rounded-lg border border-[var(--color-master-100)] bg-[var(--color-surface)]">
               <table className="w-full min-w-[820px] text-sm">
                 <thead>
                   <tr className="border-b border-[var(--color-master-100)] bg-[var(--color-master-50)]">
@@ -381,8 +381,8 @@ export default function DiscountsPage() {
                   {suggestions.map((suggestion) => (
                     <tr key={suggestion.productId} className="border-b border-[var(--color-master-100)] last:border-0">
                       <td className="px-3 py-2">
-                        <p className="font-medium text-gray-900">{suggestion.name}</p>
-                        <p className="text-xs text-gray-500">{suggestion.sku}</p>
+                        <p className="font-medium text-[var(--color-text)]">{suggestion.name}</p>
+                        <p className="text-xs text-[var(--color-text-muted)]">{suggestion.sku}</p>
                       </td>
                       <td className="px-3 py-2 text-center">
                         <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-bold text-orange-700">
@@ -397,9 +397,9 @@ export default function DiscountsPage() {
                       <td className="px-3 py-2 text-right font-semibold text-[var(--color-master-800)]">
                         {suggestion.recommendedType === "PERCENTAGE" ? `${suggestion.recommendedValue}%` : suggestion.recommendedValue}
                       </td>
-                      <td className="px-3 py-2 text-xs text-gray-600">{suggestion.reason}</td>
+                      <td className="px-3 py-2 text-xs text-[var(--color-text-muted)]">{suggestion.reason}</td>
                       <td className="px-3 py-2 text-center">
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                        <span className="rounded-full bg-[var(--color-warning-100)] px-2 py-0.5 text-xs font-semibold text-[var(--color-warning-700)]">
                           Sugerido / no aplicado
                         </span>
                       </td>
@@ -420,9 +420,9 @@ export default function DiscountsPage() {
           )}
 
           {!suggestionsLoading && insufficientSuggestions.length > 0 && (
-            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-              <p className="text-xs font-semibold text-amber-800">Sin data suficiente (muestra):</p>
-              <ul className="mt-1 space-y-1 text-xs text-amber-700">
+            <div className="mt-3 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2">
+              <p className="text-xs font-semibold text-[var(--color-warning-700)]">Sin data suficiente (muestra):</p>
+              <ul className="mt-1 space-y-1 text-xs text-[var(--color-warning-700)]">
                 {insufficientSuggestions.slice(0, 5).map((item) => (
                   <li key={item.productId}>
                     {item.sku} — {item.name}: {item.reason}
@@ -435,9 +435,9 @@ export default function DiscountsPage() {
 
         {/* Notice */}
         {notice && (
-          <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800 flex items-center justify-between">
+          <div className="rounded-lg bg-[var(--color-info-50)] border border-[var(--color-info-300)] px-4 py-3 text-sm text-[var(--color-info-700)] flex items-center justify-between">
             <span>{notice}</span>
-            <button onClick={() => setNotice("")} className="text-blue-600 hover:text-blue-800">
+            <button onClick={() => setNotice("")} className="text-[var(--color-info-700)] hover:text-[var(--color-info-700)]">
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -446,19 +446,19 @@ export default function DiscountsPage() {
         {/* Controls */}
         <div className="flex flex-wrap items-center gap-4">
           <div className="relative flex-1 min-w-[200px] max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--color-text-soft)]" />
             <input
               type="text"
               placeholder="Buscar descuento..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 rounded-lg border border-[var(--color-border)] bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-master-500)]"
+              className="w-full pl-10 pr-4 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-master-500)]"
             />
           </div>
           <select
             value={filterActive}
             onChange={(e) => setFilterActive(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-[var(--color-border)] bg-white text-sm"
+            className="px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm"
           >
             <option value="all">Todos</option>
             <option value="true">Activos</option>
@@ -477,36 +477,36 @@ export default function DiscountsPage() {
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="h-6 w-6 animate-spin text-[var(--color-master-500)]" />
-            <span className="ml-2 text-sm text-gray-500">Cargando...</span>
+            <span className="ml-2 text-sm text-[var(--color-text-muted)]">Cargando...</span>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="text-center py-16 text-gray-500">
-            <Tag className="h-12 w-12 mx-auto mb-3 text-gray-300" />
+          <div className="text-center py-16 text-[var(--color-text-muted)]">
+            <Tag className="h-12 w-12 mx-auto mb-3 text-[var(--color-text-soft)]" />
             <p className="font-semibold">No hay descuentos</p>
             <p className="text-sm mt-1">Crea uno usando el botón superior</p>
           </div>
         ) : (
-          <div className="bg-white rounded-xl shadow-sm border border-[var(--color-border)] overflow-hidden">
+          <div className="bg-[var(--color-surface)] rounded-xl shadow-sm border border-[var(--color-border)] overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-gray-50 border-b border-[var(--color-border)]">
-                    <th className="text-left px-4 py-3 font-semibold text-gray-700">Nombre</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-700">Tipo</th>
-                    <th className="text-right px-4 py-3 font-semibold text-gray-700">Valor</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-700">Criterios</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-700">Vigencia</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-700">Sucursal</th>
-                    <th className="text-center px-4 py-3 font-semibold text-gray-700">Estado</th>
-                    <th className="text-right px-4 py-3 font-semibold text-gray-700">Acciones</th>
+                  <tr className="bg-[var(--color-surface-alt)] border-b border-[var(--color-border)]">
+                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Nombre</th>
+                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Tipo</th>
+                    <th className="text-right px-4 py-3 font-semibold text-[var(--color-text)]">Valor</th>
+                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Criterios</th>
+                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Vigencia</th>
+                    <th className="text-left px-4 py-3 font-semibold text-[var(--color-text)]">Sucursal</th>
+                    <th className="text-center px-4 py-3 font-semibold text-[var(--color-text)]">Estado</th>
+                    <th className="text-right px-4 py-3 font-semibold text-[var(--color-text)]">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--color-border)]">
                   {filtered.map((d) => (
-                    <tr key={d.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={d.id} className="hover:bg-[var(--color-surface-alt)] transition-colors">
                       <td className="px-4 py-3">
-                        <div className="font-medium text-gray-900">{d.name}</div>
-                        {d.description && <div className="text-xs text-gray-500 mt-0.5">{d.description}</div>}
+                        <div className="font-medium text-[var(--color-text)]">{d.name}</div>
+                        {d.description && <div className="text-xs text-[var(--color-text-muted)] mt-0.5">{d.description}</div>}
                       </td>
                       <td className="px-4 py-3"><TypeBadge type={d.type} /></td>
                       <td className="px-4 py-3 text-right font-semibold">
@@ -514,13 +514,13 @@ export default function DiscountsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
-                          {d.productIds && <span className="text-xs bg-gray-100 rounded px-1.5 py-0.5">{d.productIds.split(",").length} productos</span>}
+                          {d.productIds && <span className="text-xs bg-[var(--color-surface-alt)] rounded px-1.5 py-0.5">{d.productIds.split(",").length} productos</span>}
                           {d.abcCategories && <span className="text-xs bg-orange-100 text-orange-700 rounded px-1.5 py-0.5">ABC: {d.abcCategories}</span>}
                           {d.xyzCategories && <span className="text-xs bg-teal-100 text-teal-700 rounded px-1.5 py-0.5">XYZ: {d.xyzCategories}</span>}
-                          {!d.productIds && !d.abcCategories && !d.xyzCategories && <span className="text-xs text-gray-400">Todos</span>}
+                          {!d.productIds && !d.abcCategories && !d.xyzCategories && <span className="text-xs text-[var(--color-text-soft)]">Todos</span>}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-600">
+                      <td className="px-4 py-3 text-xs text-[var(--color-text-muted)]">
                         {d.startDate || d.endDate ? (
                           <div className="flex items-center gap-1">
                             <Calendar className="h-3 w-3" />
@@ -529,7 +529,7 @@ export default function DiscountsPage() {
                             {d.endDate ? new Date(d.endDate).toLocaleDateString() : "∞"}
                           </div>
                         ) : (
-                          <span className="text-gray-400">Sin límite</span>
+                          <span className="text-[var(--color-text-soft)]">Sin límite</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-xs">
@@ -538,7 +538,7 @@ export default function DiscountsPage() {
                             <Building2 className="h-3 w-3" /> {d.branch.name}
                           </span>
                         ) : (
-                          <span className="text-gray-400">Todas</span>
+                          <span className="text-[var(--color-text-soft)]">Todas</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
@@ -549,9 +549,9 @@ export default function DiscountsPage() {
                           title={d.active ? "Desactivar" : "Activar"}
                         >
                           {d.active ? (
-                            <ToggleRight className="h-6 w-6 text-green-600" />
+                            <ToggleRight className="h-6 w-6 text-[var(--color-success-700)]" />
                           ) : (
-                            <ToggleLeft className="h-6 w-6 text-gray-400" />
+                            <ToggleLeft className="h-6 w-6 text-[var(--color-text-soft)]" />
                           )}
                         </button>
                       </td>
@@ -559,7 +559,7 @@ export default function DiscountsPage() {
                         <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={() => openEdit(d)}
-                            className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600"
+                            className="p-1.5 rounded-lg hover:bg-[var(--color-info-50)] text-[var(--color-info-700)]"
                             title="Editar"
                           >
                             <Edit2 className="h-4 w-4" />
@@ -567,7 +567,7 @@ export default function DiscountsPage() {
                           <button
                             onClick={() => handleDelete(d.id)}
                             disabled={busy}
-                            className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"
+                            className="p-1.5 rounded-lg hover:bg-[var(--color-danger-50)] text-[var(--color-danger-600)]"
                             title="Eliminar"
                           >
                             <Trash2 className="h-4 w-4" />
@@ -586,20 +586,20 @@ export default function DiscountsPage() {
       {/* ── Modal ── */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-[var(--color-surface)] rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)]">
-              <h2 className="text-lg font-bold text-gray-900">
+              <h2 className="text-lg font-bold text-[var(--color-text)]">
                 {editingId ? "Editar Descuento" : "Crear Descuento"}
               </h2>
-              <button onClick={() => setShowModal(false)} className="p-1 rounded-lg hover:bg-gray-100">
-                <X className="h-5 w-5 text-gray-500" />
+              <button onClick={() => setShowModal(false)} className="p-1 rounded-lg hover:bg-[var(--color-surface-alt)]">
+                <X className="h-5 w-5 text-[var(--color-text-muted)]" />
               </button>
             </div>
             <form onSubmit={handleSubmit} className="px-6 py-4 space-y-5">
               {/* Name & Description */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Nombre *</label>
+                  <label className="block text-sm font-medium text-[var(--color-text)] mb-1">Nombre *</label>
                   <input
                     type="text"
                     value={form.name}
@@ -610,7 +610,7 @@ export default function DiscountsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Descripción</label>
+                  <label className="block text-sm font-medium text-[var(--color-text)] mb-1">Descripción</label>
                   <input
                     type="text"
                     value={form.description}
@@ -624,7 +624,7 @@ export default function DiscountsPage() {
               {/* Type & Value */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Tipo *</label>
+                  <label className="block text-sm font-medium text-[var(--color-text)] mb-1">Tipo *</label>
                   <select
                     value={form.type}
                     onChange={(e) => setForm({ ...form, type: e.target.value as "PERCENTAGE" | "FIXED_AMOUNT" })}
@@ -635,7 +635,7 @@ export default function DiscountsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-[var(--color-text)] mb-1">
                     Valor * {form.type === "PERCENTAGE" ? "(% descuento)" : "(C$ descuento)"}
                   </label>
                   <input
@@ -650,7 +650,7 @@ export default function DiscountsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Sucursal</label>
+                  <label className="block text-sm font-medium text-[var(--color-text)] mb-1">Sucursal</label>
                   <select
                     value={form.branchId}
                     onChange={(e) => setForm({ ...form, branchId: e.target.value })}
@@ -667,7 +667,7 @@ export default function DiscountsPage() {
               {/* Dates */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Fecha inicio</label>
+                  <label className="block text-sm font-medium text-[var(--color-text)] mb-1">Fecha inicio</label>
                   <input
                     type="date"
                     value={form.startDate}
@@ -676,7 +676,7 @@ export default function DiscountsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Fecha fin</label>
+                  <label className="block text-sm font-medium text-[var(--color-text)] mb-1">Fecha fin</label>
                   <input
                     type="date"
                     value={form.endDate}
@@ -688,7 +688,7 @@ export default function DiscountsPage() {
 
               {/* ABC Categories */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Categorías ABC (opcional)</label>
+                <label className="block text-sm font-medium text-[var(--color-text)] mb-2">Categorías ABC (opcional)</label>
                 <div className="flex gap-2">
                   {ABC_OPTIONS.map((cat) => (
                     <button
@@ -698,7 +698,7 @@ export default function DiscountsPage() {
                       className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-colors ${
                         form.abcCategories.includes(cat)
                           ? "bg-orange-100 text-orange-800 border-orange-300"
-                          : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                          : "bg-[var(--color-surface)] text-[var(--color-text-muted)] border-[var(--color-border)] hover:bg-[var(--color-surface-alt)]"
                       }`}
                     >
                       {cat}
@@ -709,7 +709,7 @@ export default function DiscountsPage() {
 
               {/* XYZ Categories */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Categorías XYZ (opcional)</label>
+                <label className="block text-sm font-medium text-[var(--color-text)] mb-2">Categorías XYZ (opcional)</label>
                 <div className="flex gap-2">
                   {XYZ_OPTIONS.map((cat) => (
                     <button
@@ -719,7 +719,7 @@ export default function DiscountsPage() {
                       className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-colors ${
                         form.xyzCategories.includes(cat)
                           ? "bg-teal-100 text-teal-800 border-teal-300"
-                          : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                          : "bg-[var(--color-surface)] text-[var(--color-text-muted)] border-[var(--color-border)] hover:bg-[var(--color-surface-alt)]"
                       }`}
                     >
                       {cat}
@@ -730,7 +730,7 @@ export default function DiscountsPage() {
 
               {/* Product selection (simplified) */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-[var(--color-text)] mb-2">
                   Productos específicos (opcional)
                 </label>
                 <select
@@ -748,7 +748,7 @@ export default function DiscountsPage() {
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
                   Ctrl+Click para seleccionar múltiples. Dejar vacío = todos los productos.
                 </p>
               </div>
@@ -761,11 +761,11 @@ export default function DiscountsPage() {
                   className="flex items-center gap-2"
                 >
                   {form.active ? (
-                    <ToggleRight className="h-6 w-6 text-green-600" />
+                    <ToggleRight className="h-6 w-6 text-[var(--color-success-700)]" />
                   ) : (
-                    <ToggleLeft className="h-6 w-6 text-gray-400" />
+                    <ToggleLeft className="h-6 w-6 text-[var(--color-text-soft)]" />
                   )}
-                  <span className="text-sm font-medium text-gray-700">
+                  <span className="text-sm font-medium text-[var(--color-text)]">
                     {form.active ? "Activo" : "Inactivo"}
                   </span>
                 </button>
@@ -776,7 +776,7 @@ export default function DiscountsPage() {
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 rounded-lg border border-[var(--color-border)] text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                  className="px-4 py-2 rounded-lg border border-[var(--color-border)] text-sm font-semibold text-[var(--color-text)] hover:bg-[var(--color-surface-alt)]"
                 >
                   Cancelar
                 </button>

@@ -146,7 +146,7 @@ export function BranchModuleConfigPanel() {
       {/* Feedback */}
       {feedback && (
         <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${
-          feedback.type === "success" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"
+          feedback.type === "success" ? "bg-[var(--color-success-50)] text-[var(--color-success-700)]" : "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]"
         }`}>
           {feedback.type === "success" ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
           {feedback.text}
@@ -195,7 +195,7 @@ export function BranchModuleConfigPanel() {
               type="checkbox"
               checked={selectedBranches.size === (configs?.length ?? 0) && (configs?.length ?? 0) > 0}
               onChange={selectAll}
-              className="h-4 w-4 rounded border-gray-300"
+              className="h-4 w-4 rounded border-[var(--color-border)]"
             />
             <span className="text-xs text-[var(--color-text-muted)]">Seleccionar todas</span>
           </div>
@@ -215,7 +215,7 @@ export function BranchModuleConfigPanel() {
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => toggleSelect(cfg?.branchId ?? "")}
-                        className="h-4 w-4 rounded border-gray-300"
+                        className="h-4 w-4 rounded border-[var(--color-border)]"
                       />
                       <div className="p-2 rounded-lg bg-[var(--color-owner-100)]">
                         <Building2 className="h-5 w-5" style={{ color: "var(--color-owner-600)" }} />
@@ -243,11 +243,11 @@ export function BranchModuleConfigPanel() {
                       onClick={() => toggleModule(cfg?.branchId ?? "", "enableCashier")}
                       className={`flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${
                         cfg?.enableCashier
-                          ? "border-green-200 bg-green-50 hover:bg-green-100"
-                          : "border-gray-200 bg-gray-50 hover:bg-gray-100"
+                          ? "border-[var(--color-success-200)] bg-[var(--color-success-50)] hover:bg-[var(--color-success-50)]"
+                          : "border-[var(--color-border)] bg-[var(--color-surface-alt)] hover:bg-[var(--color-surface-alt)]"
                       }`}
                     >
-                      <CreditCard className={`h-5 w-5 ${cfg?.enableCashier ? "text-green-600" : "text-gray-400"}`} />
+                      <CreditCard className={`h-5 w-5 ${cfg?.enableCashier ? "text-[var(--color-success-700)]" : "text-[var(--color-text-soft)]"}`} />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-[var(--color-text)]">Modulo de Caja</p>
                         <p className="text-xs text-[var(--color-text-muted)]">
@@ -264,11 +264,11 @@ export function BranchModuleConfigPanel() {
                       onClick={() => toggleModule(cfg?.branchId ?? "", "enableDispatch")}
                       className={`flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${
                         cfg?.enableDispatch
-                          ? "border-green-200 bg-green-50 hover:bg-green-100"
-                          : "border-gray-200 bg-gray-50 hover:bg-gray-100"
+                          ? "border-[var(--color-success-200)] bg-[var(--color-success-50)] hover:bg-[var(--color-success-50)]"
+                          : "border-[var(--color-border)] bg-[var(--color-surface-alt)] hover:bg-[var(--color-surface-alt)]"
                       }`}
                     >
-                      <Package className={`h-5 w-5 ${cfg?.enableDispatch ? "text-green-600" : "text-gray-400"}`} />
+                      <Package className={`h-5 w-5 ${cfg?.enableDispatch ? "text-[var(--color-success-700)]" : "text-[var(--color-text-soft)]"}`} />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-[var(--color-text)]">Modulo de Despacho</p>
                         <p className="text-xs text-[var(--color-text-muted)]">

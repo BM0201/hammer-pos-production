@@ -82,12 +82,12 @@ function formatTime(dateStr: string): string {
 
 function ClosureTypeBadge({ type }: { type: string }) {
   const colors: Record<string, string> = {
-    AUTO: "bg-blue-100 text-blue-800",
-    MANUAL: "bg-green-100 text-green-800",
-    PERMANENT: "bg-red-100 text-red-800",
+    AUTO: "bg-[var(--color-info-50)] text-[var(--color-info-700)]",
+    MANUAL: "bg-[var(--color-success-50)] text-[var(--color-success-700)]",
+    PERMANENT: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]",
   };
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold ${colors[type] ?? "bg-gray-100 text-gray-800"}`}>
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold ${colors[type] ?? "bg-[var(--color-surface-alt)] text-[var(--color-text)]"}`}>
       {type === "PERMANENT" && <Lock className="h-3 w-3" />}
       {type}
     </span>
@@ -98,16 +98,16 @@ function ClosureDetail({ closure }: { closure: ClosureReport }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+    <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg shadow-sm overflow-hidden">
       {/* Header */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-[var(--color-surface-alt)] transition-colors"
       >
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-start">
-            <span className="text-sm font-bold text-gray-900">{closure.branchName}</span>
-            <span className="text-xs text-gray-500">{closure.branchCode}</span>
+            <span className="text-sm font-bold text-[var(--color-text)]">{closure.branchName}</span>
+            <span className="text-xs text-[var(--color-text-muted)]">{closure.branchCode}</span>
           </div>
           <ClosureTypeBadge type={closure.closureType} />
           {closure.legacy && (
@@ -116,13 +116,13 @@ function ClosureDetail({ closure }: { closure: ClosureReport }) {
             </span>
           )}
           {closure.isReopened && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-[var(--color-warning-100)] text-[var(--color-warning-700)]">
               <AlertTriangle className="h-3 w-3" />
               Reabierta ({closure.reopenCount}x)
             </span>
           )}
           {closure.isPermanentlyClosed && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-red-100 text-red-800">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-[var(--color-danger-50)] text-[var(--color-danger-700)]">
               <Lock className="h-3 w-3" />
               Cierre Permanente
             </span>
@@ -130,33 +130,33 @@ function ClosureDetail({ closure }: { closure: ClosureReport }) {
         </div>
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <p className="text-sm font-bold text-gray-900">{formatCurrency(closure.totalSales)}</p>
-            <p className="text-xs text-gray-500">{closure.transactionCount} transacciones</p>
+            <p className="text-sm font-bold text-[var(--color-text)]">{formatCurrency(closure.totalSales)}</p>
+            <p className="text-xs text-[var(--color-text-muted)]">{closure.transactionCount} transacciones</p>
           </div>
           <div className="text-right">
-            <p className="text-xs text-gray-500">{formatDate(closure.closureDate)}</p>
-            <p className="text-xs text-gray-400">{formatTime(closure.closedAt)}</p>
+            <p className="text-xs text-[var(--color-text-muted)]">{formatDate(closure.closureDate)}</p>
+            <p className="text-xs text-[var(--color-text-soft)]">{formatTime(closure.closedAt)}</p>
           </div>
-          {expanded ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
+          {expanded ? <ChevronUp className="h-4 w-4 text-[var(--color-text-soft)]" /> : <ChevronDown className="h-4 w-4 text-[var(--color-text-soft)]" />}
         </div>
       </button>
 
       {/* Expanded Detail */}
       {expanded && (
-        <div className="border-t border-gray-200 px-4 py-4 space-y-4">
+        <div className="border-t border-[var(--color-border)] px-4 py-4 space-y-4">
           {/* Payment method breakdown */}
           <div>
-            <h5 className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Métodos de Pago</h5>
+            <h5 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Métodos de Pago</h5>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
               {[
-                { label: "Efectivo", value: closure.cashTotal, color: "text-green-700" },
-                { label: "Tarjeta", value: closure.cardTotal, color: "text-blue-700" },
-                { label: "Transferencia", value: closure.transferTotal, color: "text-purple-700" },
+                { label: "Efectivo", value: closure.cashTotal, color: "text-[var(--color-success-700)]" },
+                { label: "Tarjeta", value: closure.cardTotal, color: "text-[var(--color-info-700)]" },
+                { label: "Transferencia", value: closure.transferTotal, color: "text-[var(--color-master-700)]" },
                 { label: "Crédito", value: closure.creditTotal, color: "text-orange-700" },
-                { label: "Mixto", value: closure.mixedTotal, color: "text-gray-700" },
+                { label: "Mixto", value: closure.mixedTotal, color: "text-[var(--color-text)]" },
               ].map(({ label, value, color }) => (
-                <div key={label} className="bg-gray-50 rounded p-2">
-                  <p className="text-xs text-gray-500">{label}</p>
+                <div key={label} className="bg-[var(--color-surface-alt)] rounded p-2">
+                  <p className="text-xs text-[var(--color-text-muted)]">{label}</p>
                   <p className={`text-sm font-semibold ${color}`}>{formatCurrency(value)}</p>
                 </div>
               ))}
@@ -165,21 +165,21 @@ function ClosureDetail({ closure }: { closure: ClosureReport }) {
 
           {/* Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <div className="bg-gray-50 rounded p-2">
-              <p className="text-xs text-gray-500">Productos vendidos</p>
+            <div className="bg-[var(--color-surface-alt)] rounded p-2">
+              <p className="text-xs text-[var(--color-text-muted)]">Productos vendidos</p>
               <p className="text-sm font-semibold">{closure.productsSold}</p>
             </div>
             {closure.isReopened && (
               <>
-                <div className="bg-amber-50 rounded p-2">
-                  <p className="text-xs text-amber-600">Ventas de emergencia</p>
-                  <p className="text-sm font-semibold text-amber-800">
+                <div className="bg-[var(--color-warning-50)] rounded p-2">
+                  <p className="text-xs text-[var(--color-warning-700)]">Ventas de emergencia</p>
+                  <p className="text-sm font-semibold text-[var(--color-warning-700)]">
                     {closure.emergencySalesCount} / {closure.maxEmergencySales}
                   </p>
                 </div>
-                <div className="bg-amber-50 rounded p-2">
-                  <p className="text-xs text-amber-600">Reaperturas</p>
-                  <p className="text-sm font-semibold text-amber-800">{closure.reopenCount}</p>
+                <div className="bg-[var(--color-warning-50)] rounded p-2">
+                  <p className="text-xs text-[var(--color-warning-700)]">Reaperturas</p>
+                  <p className="text-sm font-semibold text-[var(--color-warning-700)]">{closure.reopenCount}</p>
                 </div>
               </>
             )}
@@ -188,17 +188,17 @@ function ClosureDetail({ closure }: { closure: ClosureReport }) {
           {/* Logs */}
           {closure.logs.length > 0 && (
             <div>
-              <h5 className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Historial de Eventos</h5>
+              <h5 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Historial de Eventos</h5>
               <div className="space-y-1">
                 {closure.logs.map((log) => (
                   <div key={log.id} className="flex items-center gap-2 text-xs">
-                    <span className="text-gray-400">{formatTime(log.createdAt)}</span>
+                    <span className="text-[var(--color-text-soft)]">{formatTime(log.createdAt)}</span>
                     <span className={`font-semibold ${
-                      log.action === "AUTO_CLOSE" ? "text-blue-700" :
-                      log.action === "REOPEN" ? "text-amber-700" :
+                      log.action === "AUTO_CLOSE" ? "text-[var(--color-info-700)]" :
+                      log.action === "REOPEN" ? "text-[var(--color-warning-700)]" :
                       log.action === "EMERGENCY_SALE" ? "text-orange-700" :
-                      log.action === "PERMANENT_CLOSE" ? "text-red-700" :
-                      "text-gray-700"
+                      log.action === "PERMANENT_CLOSE" ? "text-[var(--color-danger-700)]" :
+                      "text-[var(--color-text)]"
                     }`}>
                       {log.action === "AUTO_CLOSE" && "Cierre Automatico"}
                       {log.action === "REOPEN" && "Reapertura de Emergencia"}
@@ -206,7 +206,7 @@ function ClosureDetail({ closure }: { closure: ClosureReport }) {
                       {log.action === "PERMANENT_CLOSE" && "Cierre Permanente"}
                     </span>
                     {log.performedByUserId && (
-                      <span className="text-gray-400">por {log.performedByUserId}</span>
+                      <span className="text-[var(--color-text-soft)]">por {log.performedByUserId}</span>
                     )}
                   </div>
                 ))}
@@ -284,17 +284,17 @@ export default function CashClosureReportsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-            <BarChart3 className="h-6 w-6 text-indigo-600" />
+          <h3 className="text-xl font-bold text-[var(--color-text)] flex items-center gap-2">
+            <BarChart3 className="h-6 w-6 text-[var(--color-master-600)]" />
             Reportes de Cierre de Caja
           </h3>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-sm text-[var(--color-text-muted)] mt-1">
             Historico legacy de CashClosure. La operacion diaria actual se controla desde Dia Operativo 360 y sesiones de caja.
           </p>
         </div>
         <button
           onClick={fetchClosures}
-          className="flex items-center gap-2 px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          className="flex items-center gap-2 px-3 py-2 text-sm bg-[var(--color-master-600)] text-white rounded-lg hover:bg-[var(--color-master-700)] transition-colors"
         >
           <RefreshCw className="h-4 w-4" />
           Actualizar
@@ -303,16 +303,16 @@ export default function CashClosureReportsPage() {
 
       {/* Alerts */}
       {reopenAlerts.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+        <div className="bg-[var(--color-warning-50)] border border-[var(--color-warning-200)] rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="h-5 w-5 text-amber-600" />
-            <h4 className="font-semibold text-amber-800">
+            <AlertTriangle className="h-5 w-5 text-[var(--color-warning-700)]" />
+            <h4 className="font-semibold text-[var(--color-warning-700)]">
               Alertas de Reapertura ({reopenAlerts.length})
             </h4>
           </div>
           <div className="space-y-1">
             {reopenAlerts.map((c) => (
-              <p key={c.id} className="text-sm text-amber-700">
+              <p key={c.id} className="text-sm text-[var(--color-warning-700)]">
                 <span className="font-semibold">{c.branchName}</span> — {formatDate(c.closureDate)}
                 {" "} ({c.emergencySalesCount} ventas de emergencia, {c.reopenCount} reaperturas)
                 {c.isPermanentlyClosed && " — Cierre permanente ejecutado"}
@@ -324,49 +324,49 @@ export default function CashClosureReportsPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-gray-500 mb-1">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+          <div className="flex items-center gap-2 text-[var(--color-text-muted)] mb-1">
             <DollarSign className="h-4 w-4" />
             <span className="text-xs uppercase tracking-wider font-semibold">Ventas Totales</span>
           </div>
-          <p className="text-xl font-bold text-gray-900">{formatCurrency(String(totalSalesSum))}</p>
+          <p className="text-xl font-bold text-[var(--color-text)]">{formatCurrency(String(totalSalesSum))}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-gray-500 mb-1">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+          <div className="flex items-center gap-2 text-[var(--color-text-muted)] mb-1">
             <ShoppingCart className="h-4 w-4" />
             <span className="text-xs uppercase tracking-wider font-semibold">Transacciones</span>
           </div>
-          <p className="text-xl font-bold text-gray-900">{totalTransactions}</p>
+          <p className="text-xl font-bold text-[var(--color-text)]">{totalTransactions}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-gray-500 mb-1">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
+          <div className="flex items-center gap-2 text-[var(--color-text-muted)] mb-1">
             <Clock className="h-4 w-4" />
             <span className="text-xs uppercase tracking-wider font-semibold">Cierres</span>
           </div>
-          <p className="text-xl font-bold text-gray-900">{total}</p>
+          <p className="text-xl font-bold text-[var(--color-text)]">{total}</p>
         </div>
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
+        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
           <div className="flex items-center gap-2 text-amber-500 mb-1">
             <Unlock className="h-4 w-4" />
             <span className="text-xs uppercase tracking-wider font-semibold">Reaperturas</span>
           </div>
-          <p className="text-xl font-bold text-amber-700">{reopenAlerts.length}</p>
+          <p className="text-xl font-bold text-[var(--color-warning-700)]">{reopenAlerts.length}</p>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
         <div className="flex items-center gap-2 mb-3">
-          <Filter className="h-4 w-4 text-gray-500" />
-          <h4 className="text-sm font-semibold text-gray-700">Filtros</h4>
+          <Filter className="h-4 w-4 text-[var(--color-text-muted)]" />
+          <h4 className="text-sm font-semibold text-[var(--color-text)]">Filtros</h4>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Sucursal</label>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Sucursal</label>
             <select
               value={selectedBranch}
               onChange={(e) => { setSelectedBranch(e.target.value); setPage(1); }}
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+              className="w-full border border-[var(--color-border)] rounded px-3 py-1.5 text-sm"
             >
               <option value="">Todas las sucursales</option>
               {branches.map((b) => (
@@ -375,27 +375,27 @@ export default function CashClosureReportsPage() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Desde</label>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Desde</label>
             <input
               type="date"
               value={startDate}
               onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+              className="w-full border border-[var(--color-border)] rounded px-3 py-1.5 text-sm"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Hasta</label>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Hasta</label>
             <input
               type="date"
               value={endDate}
               onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+              className="w-full border border-[var(--color-border)] rounded px-3 py-1.5 text-sm"
             />
           </div>
           <div className="flex items-end">
             <button
               onClick={() => { setSelectedBranch(""); setStartDate(""); setEndDate(""); setPage(1); }}
-              className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50"
+              className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] border border-[var(--color-border)] rounded hover:bg-[var(--color-surface-alt)]"
             >
               Limpiar filtros
             </button>
@@ -405,17 +405,17 @@ export default function CashClosureReportsPage() {
 
       {/* Results */}
       {loading ? (
-        <div className="text-center py-8 text-gray-500">
+        <div className="text-center py-8 text-[var(--color-text-muted)]">
           <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2" />
           Cargando reportes...
         </div>
       ) : error ? (
-        <div className="text-center py-8 text-red-500">
+        <div className="text-center py-8 text-[var(--color-danger-600)]">
           <AlertTriangle className="h-6 w-6 mx-auto mb-2" />
           {error}
         </div>
       ) : closures.length === 0 ? (
-        <div className="text-center py-8 text-gray-400">
+        <div className="text-center py-8 text-[var(--color-text-soft)]">
           No se encontraron cierres de caja con los filtros seleccionados
         </div>
       ) : (
@@ -432,17 +432,17 @@ export default function CashClosureReportsPage() {
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded disabled:opacity-50"
+            className="px-3 py-1.5 text-sm border border-[var(--color-border)] rounded disabled:opacity-50"
           >
             Anterior
           </button>
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-[var(--color-text-muted)]">
             Página {page} de {Math.ceil(total / 20)}
           </span>
           <button
             onClick={() => setPage((p) => p + 1)}
             disabled={page >= Math.ceil(total / 20)}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded disabled:opacity-50"
+            className="px-3 py-1.5 text-sm border border-[var(--color-border)] rounded disabled:opacity-50"
           >
             Siguiente
           </button>
