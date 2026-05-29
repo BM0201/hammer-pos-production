@@ -74,7 +74,7 @@ export function RoleSummary({
 
       {/* Alerts */}
       {alerts.length > 0 ? (
-        <div className="flex items-start gap-3 p-4 rounded-lg border-l-4 border-[var(--color-warning-500)] bg-[var(--color-warning-50)] text-[var(--color-warning-700)]">
+        <div className="flex items-start gap-3 p-4 rounded-xl border-l-4 border-[var(--color-warning-500)] bg-[var(--color-warning-50)] text-[var(--color-warning-700)]">
           <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <div>
             <p className="text-sm font-semibold mb-1">Alertas operativas</p>
@@ -86,7 +86,7 @@ export function RoleSummary({
           </div>
         </div>
       ) : (
-        <div className="flex items-start gap-3 p-4 rounded-lg border-l-4 border-[var(--color-success-500)] bg-[var(--color-success-50)] text-[var(--color-success-700)]">
+        <div className="flex items-start gap-3 p-4 rounded-xl border-l-4 border-[var(--color-success-500)] bg-[var(--color-success-50)] text-[var(--color-success-700)]">
           <CheckCircle2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <p className="text-sm font-medium">Sin alertas operativas críticas.</p>
         </div>
@@ -102,7 +102,7 @@ export function RoleSummary({
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {quickLinks.map((link) => (
               <Link key={link.href} href={link.href as Route}>
-                <div className="group flex items-center gap-3 p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] hover:shadow-md hover:border-[var(--color-border-strong)] transition-all duration-200 cursor-pointer">
+                <div className="group flex items-center gap-3 p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] hover:shadow-lg hover:border-[var(--color-border-strong)] hover:-translate-y-0.5 transition-all duration-200 cursor-pointer">
                   {link.icon && (
                     <div
                       className="flex items-center justify-center w-10 h-10 rounded-xl flex-shrink-0 transition-colors"
