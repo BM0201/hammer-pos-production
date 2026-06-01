@@ -69,6 +69,9 @@ export function mapPosErrorToSpanish(input: {
   }
 
   const reasonKey = normalizeErrorKey(payload?.reason ?? payload?.error?.code);
+  if (reasonKey === "BELOW_COST_NOT_ALLOWED") return "No se puede vender por debajo del costo efectivo.";
+  if (reasonKey === "BELOW_COST_OVERRIDE_REASON_REQUIRED") return "No se puede vender por debajo del costo efectivo sin una razon autorizada.";
+  if (reasonKey === "DISCOUNT_LIMIT_EXCEEDED") return "Este rol no puede aplicar ese descuento.";
   if (reasonKey && ERROR_MESSAGES_ES[reasonKey]) {
     return ERROR_MESSAGES_ES[reasonKey];
   }

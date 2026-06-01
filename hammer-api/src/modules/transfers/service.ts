@@ -1,18 +1,37 @@
-import { TransferStatus, Prisma } from "@prisma/client";
+import { Prisma, TransferStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 
-/* ── Helpers ── */
-// FIX BUG-011: Use crypto-random bytes instead of Math.random() to prevent collisions
 function generateTransferNumber(): string {
   const ts = Date.now().toString(36).toUpperCase();
   const rand = randomBytes(4).toString("hex").toUpperCase();
   return `TR-${ts}-${rand}`;
 }
 
-/* ── List ── */
+type CreateTransferInput = {
+  userId: string;
+  fromBranchId: string;
+  toBranchId: string;
+  notes?: string;
+  lines: { productId: string; quantity: number }[];
+};
+
+type ReceiveTransferInput = {
+  items?: {
+    productId: string;
+    transferLineId?: string;
+    quantityReceived: number;
+    allocatedTransferFreightPerUnit?: number;
+    notes?: string;
+  }[];
+  transferFreightAmount?: number;
+  updateBranchCost?: boolean;
+  notes?: string;
+};
+type ReceiveTransferItem = NonNullable<ReceiveTransferInput["items"]>[number];
+
 export async function listTransfers(params?: { status?: TransferStatus }) {
   return prisma.transfer.findMany({
     where: params?.status ? { status: params.status } : undefined,
@@ -27,9 +46,8 @@ export async function listTransfers(params?: { status?: TransferStatus }) {
   });
 }
 
-/* ── Get by ID ── */
 export async function getTransfer(id: string) {
-  const t = await prisma.transfer.findUnique({
+  const transfer = await prisma.transfer.findUnique({
     where: { id },
     include: {
       fromBranch: true,
@@ -39,50 +57,26 @@ export async function getTransfer(id: string) {
       lines: { include: { product: { select: { id: true, sku: true, name: true, unit: true } } } },
     },
   });
-  if (!t) throw new Error("NOT_FOUND");
-  return t;
+  if (!transfer) throw new Error("NOT_FOUND");
+  return transfer;
 }
 
-/* ── Create ── */
-type CreateTransferInput = {
-  userId: string;
-  fromBranchId: string;
-  toBranchId: string;
-  notes?: string;
-  lines: { productId: string; quantity: number }[];
-};
-
 export async function createTransfer(input: CreateTransferInput) {
-  if (!input.lines.length) throw new Error("INVALID_INPUT: Debe agregar al menos una línea");
+  if (!input.lines.length) throw new Error("INVALID_INPUT: Debe agregar al menos una linea");
   if (!input.fromBranchId) throw new Error("INVALID_INPUT: fromBranchId es requerido");
   if (!input.toBranchId) throw new Error("INVALID_INPUT: toBranchId es requerido");
   if (!input.userId) throw new Error("INVALID_INPUT: userId es requerido");
   if (input.fromBranchId === input.toBranchId) throw new Error("INVALID_INPUT: Sucursal origen y destino no pueden ser iguales");
 
-  // Validate each line
-  for (const l of input.lines) {
-    if (!l.productId) throw new Error("INVALID_INPUT: productId es requerido en cada línea");
-    if (typeof l.quantity !== "number" || l.quantity <= 0) throw new Error("INVALID_INPUT: Cantidad debe ser un número positivo");
+  for (const line of input.lines) {
+    if (!line.productId) throw new Error("INVALID_INPUT: productId es requerido en cada linea");
+    if (typeof line.quantity !== "number" || line.quantity <= 0) throw new Error("INVALID_INPUT: Cantidad debe ser positiva");
   }
 
-  // Get unit costs from current inventory balances
   const balances = await prisma.inventoryBalance.findMany({
-    where: {
-      branchId: input.fromBranchId,
-      productId: { in: input.lines.map((l) => l.productId) },
-    },
+    where: { branchId: input.fromBranchId, productId: { in: input.lines.map((line) => line.productId) } },
   });
-  const balanceMap = new Map(balances.map((b) => [b.productId, b]));
-
-  const lines = input.lines.map((l) => {
-    const bal = balanceMap.get(l.productId);
-    const unitCost = bal ? Number(bal.weightedAverageCost) : 0;
-    return {
-      productId: l.productId,
-      quantityRequested: new Prisma.Decimal(l.quantity),
-      unitCostSnapshot: new Prisma.Decimal(unitCost),
-    };
-  });
+  const balanceMap = new Map(balances.map((balance) => [balance.productId, balance]));
 
   const transfer = await prisma.transfer.create({
     data: {
@@ -93,10 +87,10 @@ export async function createTransfer(input: CreateTransferInput) {
       notes: input.notes || null,
       status: "DRAFT",
       lines: {
-        create: lines.map((l) => ({
-          productId: l.productId,
-          quantityRequested: l.quantityRequested,
-          unitCostSnapshot: l.unitCostSnapshot,
+        create: input.lines.map((line) => ({
+          productId: line.productId,
+          quantityRequested: new Prisma.Decimal(line.quantity),
+          unitCostSnapshot: balanceMap.get(line.productId)?.weightedAverageCost ?? new Prisma.Decimal(0),
         })),
       },
     },
@@ -118,92 +112,24 @@ export async function createTransfer(input: CreateTransferInput) {
       transferNumber: transfer.transferNumber,
       fromBranch: input.fromBranchId,
       toBranch: input.toBranchId,
-      linesCount: lines.length,
+      linesCount: transfer.lines.length,
     },
   });
 
   return transfer;
 }
 
-/* ── Approve (moves inventory) ── */
 export async function approveTransfer(id: string, userId: string) {
   const transfer = await prisma.transfer.findUnique({
     where: { id },
-    include: { lines: { include: { product: true } }, fromBranch: true, toBranch: true },
+    include: { lines: true, fromBranch: true, toBranch: true },
   });
-
   if (!transfer) throw new Error("NOT_FOUND");
-  if (transfer.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden aprobar envíos en estado BORRADOR");
+  if (transfer.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden aprobar traslados en DRAFT");
 
-  const result = await prisma.$transaction(async (tx) => {
-    // Check stock availability INSIDE the transaction to avoid race conditions
-    for (const line of transfer.lines) {
-      const balance = await tx.inventoryBalance.findUnique({
-        where: { branchId_productId: { branchId: transfer.fromBranchId, productId: line.productId } },
-      });
-      const available = balance ? Number(balance.quantityOnHand) : 0;
-      if (available < Number(line.quantityRequested)) {
-        throw new Error(`INVALID_INPUT: Stock insuficiente para ${line.product.name}. Disponible: ${available}, Solicitado: ${Number(line.quantityRequested)}`);
-      }
-    }
-
-    const updated = await tx.transfer.update({
-      where: { id },
-      data: {
-        status: "IN_TRANSIT",
-        approvedByUserId: userId,
-        approvedAt: new Date(),
-        dispatchedAt: new Date(),
-      },
-    });
-
-    for (const line of transfer.lines) {
-      const qty = Number(line.quantityRequested);
-      const cost = Number(line.unitCostSnapshot);
-
-      // Subtract from origin
-      await createInventoryMovementTx(tx, {
-        actorUserId: userId,
-        branchId: transfer.fromBranchId,
-        productId: line.productId,
-        movementType: "TRANSFER_OUT",
-        quantity: qty,
-        unitCost: cost,
-        referenceType: "Transfer",
-        referenceId: transfer.id,
-        notes: `Envío ${transfer.transferNumber} → ${transfer.toBranch.code}`,
-      });
-
-      // Add to destination
-      await createInventoryMovementTx(tx, {
-        actorUserId: userId,
-        branchId: transfer.toBranchId,
-        productId: line.productId,
-        movementType: "TRANSFER_IN",
-        quantity: qty,
-        unitCost: cost,
-        referenceType: "Transfer",
-        referenceId: transfer.id,
-        notes: `Envío ${transfer.transferNumber} ← ${transfer.fromBranch.code}`,
-      });
-
-      // Update dispatched/received quantities
-      await tx.transferLine.update({
-        where: { id: line.id },
-        data: {
-          quantityDispatched: line.quantityRequested,
-          quantityReceived: line.quantityRequested,
-        },
-      });
-    }
-
-    // Mark as received immediately (MVP simplification)
-    const received = await tx.transfer.update({
-      where: { id },
-      data: { status: "RECEIVED", receivedAt: new Date() },
-    });
-
-    return received;
+  const result = await prisma.transfer.update({
+    where: { id },
+    data: { status: "APPROVED", approvedByUserId: userId, approvedAt: new Date() },
   });
 
   await logAuditEvent({
@@ -215,18 +141,182 @@ export async function approveTransfer(id: string, userId: string) {
     entityId: transfer.id,
     metadataJson: {
       transferNumber: transfer.transferNumber,
+      previousStatus: transfer.status,
+      newStatus: "APPROVED",
+      linesCount: transfer.lines.length,
       fromBranch: transfer.fromBranch.code,
       toBranch: transfer.toBranch.code,
-      linesCount: transfer.lines.length,
     },
   });
 
   return result;
 }
 
-/* ── Cancel ── */
+export async function dispatchTransfer(id: string, userId: string) {
+  const transfer = await prisma.transfer.findUnique({
+    where: { id },
+    include: { lines: { include: { product: true } }, fromBranch: true, toBranch: true },
+  });
+  if (!transfer) throw new Error("NOT_FOUND");
+  if (transfer.status !== "APPROVED") throw new Error("INVALID_INPUT: Solo se pueden despachar traslados aprobados");
+
+  const result = await prisma.$transaction(async (tx) => {
+    for (const line of transfer.lines) {
+      const pendingDispatch = Number(line.quantityRequested) - Number(line.quantityDispatched);
+      if (pendingDispatch <= 0) continue;
+      const balance = await tx.inventoryBalance.findUnique({
+        where: { branchId_productId: { branchId: transfer.fromBranchId, productId: line.productId } },
+      });
+      const available = Number(balance?.quantityOnHand ?? 0);
+      if (available < pendingDispatch) {
+        throw new Error(`INVALID_INPUT: Stock insuficiente para ${line.product.name}. Disponible: ${available}, Solicitado: ${pendingDispatch}`);
+      }
+      if (Number(line.unitCostSnapshot) <= 0) {
+        throw new Error(`INVALID_INPUT: ${line.product.name} no tiene costo de origen para traslado`);
+      }
+    }
+
+    for (const line of transfer.lines) {
+      const qty = Number(line.quantityRequested) - Number(line.quantityDispatched);
+      if (qty <= 0) continue;
+      await createInventoryMovementTx(tx, {
+        actorUserId: userId,
+        branchId: transfer.fromBranchId,
+        productId: line.productId,
+        movementType: "TRANSFER_OUT",
+        quantity: qty,
+        unitCost: Number(line.unitCostSnapshot),
+        referenceType: "Transfer",
+        referenceId: transfer.id,
+        notes: `Despacho ${transfer.transferNumber} -> ${transfer.toBranch.code}`,
+      });
+      await tx.transferLine.update({
+        where: { id: line.id },
+        data: { quantityDispatched: line.quantityRequested },
+      });
+    }
+
+    return tx.transfer.update({
+      where: { id },
+      data: { status: "IN_TRANSIT", dispatchedAt: new Date() },
+    });
+  });
+
+  await logAuditEvent({
+    actorUserId: userId,
+    branchId: transfer.fromBranchId,
+    module: "transfers",
+    action: "TRANSFER_DISPATCHED",
+    entityType: "Transfer",
+    entityId: transfer.id,
+    metadataJson: { transferNumber: transfer.transferNumber, previousStatus: transfer.status, newStatus: "IN_TRANSIT" },
+  });
+
+  return result;
+}
+
+export async function receiveTransfer(id: string, userId: string, input: ReceiveTransferInput = {}) {
+  const transfer = await prisma.transfer.findUnique({
+    where: { id },
+    include: { lines: { include: { product: true } }, fromBranch: true, toBranch: true },
+  });
+  if (!transfer) throw new Error("NOT_FOUND");
+  if (!["IN_TRANSIT", "PARTIALLY_RECEIVED"].includes(transfer.status)) {
+    throw new Error("INVALID_INPUT: Solo se pueden recibir traslados en transito");
+  }
+
+  const defaultItems: ReceiveTransferItem[] = transfer.lines
+    .map((line) => ({
+      productId: line.productId,
+      transferLineId: line.id,
+      quantityReceived: Number(line.quantityDispatched) - Number(line.quantityReceived),
+    }))
+    .filter((item) => item.quantityReceived > 0);
+  const items: ReceiveTransferItem[] = input.items?.length ? input.items : defaultItems;
+  if (items.length === 0) throw new Error("INVALID_INPUT: No hay cantidades pendientes por recibir");
+  const totalReceiveQty = items.reduce((sum, item) => sum + Math.max(0, Number(item.quantityReceived)), 0);
+  const freightPerUnit = totalReceiveQty > 0 ? Math.max(0, Number(input.transferFreightAmount ?? 0)) / totalReceiveQty : 0;
+  const receivedLines: Array<Record<string, unknown>> = [];
+  const warnings: string[] = [];
+
+  const result = await prisma.$transaction(async (tx) => {
+    for (const item of items) {
+      const line = transfer.lines.find((candidate) => candidate.productId === item.productId || candidate.id === item.transferLineId);
+      if (!line) throw new Error(`INVALID_INPUT: Producto ${item.productId} no pertenece al traslado`);
+      const qty = Number(item.quantityReceived);
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error("INVALID_INPUT: quantityReceived debe ser mayor que 0");
+      const pending = Number(line.quantityDispatched) - Number(line.quantityReceived);
+      if (pending <= 0) throw new Error(`INVALID_INPUT: ${line.product.name} no tiene cantidad pendiente por recibir`);
+      if (qty > pending) throw new Error(`INVALID_INPUT: No se puede recibir mas de lo despachado para ${line.product.name}. Pendiente: ${pending}`);
+
+      const previousBalance = await tx.inventoryBalance.findUnique({
+        where: { branchId_productId: { branchId: transfer.toBranchId, productId: line.productId } },
+      });
+      const previousStock = Number(previousBalance?.quantityOnHand ?? 0);
+      const previousWac = previousBalance ? Number(previousBalance.weightedAverageCost) : null;
+      const finalUnitCost = Math.round((Number(line.unitCostSnapshot) + (item.allocatedTransferFreightPerUnit ?? freightPerUnit)) * 10000) / 10000;
+      if (finalUnitCost <= 0) throw new Error(`INVALID_INPUT: ${line.product.name} no tiene costo final valido para recepcion`);
+
+      const movementResult = await createInventoryMovementTx(tx, {
+        actorUserId: userId,
+        branchId: transfer.toBranchId,
+        productId: line.productId,
+        movementType: "TRANSFER_IN",
+        quantity: qty,
+        unitCost: finalUnitCost,
+        referenceType: "Transfer",
+        referenceId: transfer.id,
+        notes: item.notes ?? input.notes ?? `Recepcion ${transfer.transferNumber} <- ${transfer.fromBranch.code}`,
+      });
+
+      await tx.transferLine.update({
+        where: { id: line.id },
+        data: { quantityReceived: line.quantityReceived.add(qty) },
+      });
+
+      if (input.updateBranchCost) {
+        await tx.branchProductSetting.upsert({
+          where: { branchId_productId: { branchId: transfer.toBranchId, productId: line.productId } },
+          create: { branchId: transfer.toBranchId, productId: line.productId, branchCost: movementResult.balance.weightedAverageCost },
+          update: { branchCost: movementResult.balance.weightedAverageCost },
+        });
+      }
+
+      receivedLines.push({
+        productId: line.productId,
+        quantityReceived: qty,
+        finalUnitCost,
+        previousStock,
+        newStock: Number(movementResult.balance.quantityOnHand),
+        previousWeightedAverageCost: previousWac,
+        newWeightedAverageCost: Number(movementResult.balance.weightedAverageCost),
+        warnings: [],
+      });
+    }
+
+    const freshLines = await tx.transferLine.findMany({ where: { transferId: transfer.id } });
+    const fullyReceived = freshLines.every((line) => line.quantityReceived.gte(line.quantityDispatched));
+    return tx.transfer.update({
+      where: { id },
+      data: { status: fullyReceived ? "RECEIVED" : "PARTIALLY_RECEIVED", receivedAt: fullyReceived ? new Date() : transfer.receivedAt },
+    });
+  });
+
+  await logAuditEvent({
+    actorUserId: userId,
+    branchId: transfer.toBranchId,
+    module: "transfers",
+    action: "TRANSFER_RECEIVED",
+    entityType: "Transfer",
+    entityId: transfer.id,
+    metadataJson: { transferNumber: transfer.transferNumber, statusAfter: result.status, receivedLines, warnings },
+  });
+
+  return { ok: true, transferId: transfer.id, statusAfter: result.status, receivedLines, warnings };
+}
+
 export async function cancelTransfer(id: string, userId: string) {
-  const t = await prisma.transfer.findUnique({
+  const transfer = await prisma.transfer.findUnique({
     where: { id },
     include: {
       fromBranch: { select: { id: true, code: true, name: true } },
@@ -234,8 +324,13 @@ export async function cancelTransfer(id: string, userId: string) {
       lines: true,
     },
   });
-  if (!t) throw new Error("NOT_FOUND");
-  if (t.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden cancelar envíos en estado BORRADOR");
+  if (!transfer) throw new Error("NOT_FOUND");
+  if (transfer.status === "IN_TRANSIT" || transfer.status === "PARTIALLY_RECEIVED") {
+    throw new Error("INVALID_INPUT: No se puede cancelar un traslado en transito; requiere flujo de retorno");
+  }
+  if (!["DRAFT", "APPROVED"].includes(transfer.status)) {
+    throw new Error("INVALID_INPUT: Solo se pueden cancelar traslados en borrador o aprobados");
+  }
 
   const result = await prisma.transfer.update({
     where: { id },
@@ -244,18 +339,20 @@ export async function cancelTransfer(id: string, userId: string) {
 
   await logAuditEvent({
     actorUserId: userId,
-    branchId: t.fromBranchId,
+    branchId: transfer.fromBranchId,
     module: "transfers",
     action: "TRANSFER_CANCELLED",
     entityType: "Transfer",
-    entityId: t.id,
+    entityId: transfer.id,
     metadataJson: {
-      transferNumber: t.transferNumber,
-      branchId: t.fromBranchId,
-      fromBranchCode: t.fromBranch.code,
-      toBranchCode: t.toBranch.code,
-      linesCount: t.lines.length,
+      transferNumber: transfer.transferNumber,
+      branchId: transfer.fromBranchId,
+      fromBranchCode: transfer.fromBranch.code,
+      toBranchCode: transfer.toBranch.code,
+      linesCount: transfer.lines.length,
       cancelledByUserId: userId,
+      previousStatus: transfer.status,
+      newStatus: "CANCELLED",
     },
   });
 

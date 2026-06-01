@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { Check, Minus, Plus, Search, ShoppingCart, Trash2, X } from "lucide-react";
+import { Check, ShoppingCart, Trash2 } from "lucide-react";
 import { measurePosMetric } from "@/lib/telemetry";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,9 @@ type ProductRow = {
   barcode: string | null;
   name: string;
   standardSalePrice: string;
+  branchPrice?: string | null;
+  effectivePrice?: string;
+  priceSource?: "BRANCH" | "STANDARD";
   unit: string;
 };
 
@@ -194,7 +197,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   const loadTopSelling = useCallback(async () => {
     try {
-      const params = new URLSearchParams({ isActive: "true", topSelling: "true", limit: "5" });
+      const params = new URLSearchParams({ isActive: "true", topSelling: "true", limit: "5", branchId });
       const response = await fetch(`/api/catalog/products?${params.toString()}`);
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
@@ -213,7 +216,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
       console.error("[POS][loadTopSelling]", error);
       setNoticeTimed(resolveApiMessage({ fallback: "No se pudieron cargar los productos más vendidos.", thrownError: error }), 10000);
     }
-  }, [resolveApiMessage, setNoticeTimed, search]);
+  }, [branchId, resolveApiMessage, setNoticeTimed, search]);
 
   const loadProducts = useCallback(async (query: string) => {
     if (!query.trim()) {
@@ -230,7 +233,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     setLoadingProducts(true);
 
     try {
-      const params = new URLSearchParams({ q: query, isActive: "true" });
+      const params = new URLSearchParams({ q: query, isActive: "true", branchId });
       const response = await fetch(`/api/catalog/products?${params.toString()}`);
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
@@ -269,7 +272,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     } finally {
       setLoadingProducts(false);
     }
-  }, [resolveApiMessage, setNoticeTimed, topProducts]);
+  }, [branchId, resolveApiMessage, setNoticeTimed, topProducts]);
 
   // Load branch config (enableCashier / enableDispatch)
   useEffect(() => {
@@ -731,6 +734,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                 {visibleProducts.map((product, localIndex) => {
                   const index = startIndex + localIndex;
                   const selected = index === activeProductIndex;
+                  const displayPrice = product.effectivePrice ?? product.standardSalePrice;
 
                   return (
                     <button
@@ -752,7 +756,14 @@ export function BranchPos({ branchId }: { branchId: string }) {
                     >
                       <div className="font-medium">{product.name}</div>
                       <div className="text-xs text-[var(--color-text-muted)]">SKU: {product.sku} {product.barcode ? `· BAR: ${product.barcode}` : ""}</div>
-                      <div className="text-xs font-semibold text-[var(--color-text)]">C$ {Number(product.standardSalePrice).toFixed(2)}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-[var(--color-text)]">C$ {Number(displayPrice).toFixed(2)}</span>
+                        {product.priceSource === "BRANCH" ? (
+                          <span className="rounded border border-[var(--color-info-200)] px-1.5 py-0.5 text-[0.62rem] font-medium text-[var(--color-info-700)]">
+                            Sucursal
+                          </span>
+                        ) : null}
+                      </div>
                     </button>
                   );
                 })}

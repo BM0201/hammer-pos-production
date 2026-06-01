@@ -12,6 +12,13 @@ import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rba
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
 
+function salePolicyError(error: unknown) {
+  if (!(error instanceof Error)) return null;
+  if (!["BELOW_COST_NOT_ALLOWED", "BELOW_COST_OVERRIDE_REASON_REQUIRED", "DISCOUNT_LIMIT_EXCEEDED"].includes(error.message)) return null;
+  const details = (error as any).details;
+  return fail(error.message, error.message === "DISCOUNT_LIMIT_EXCEEDED" ? "Este rol no puede aplicar ese descuento." : "El precio neto queda por debajo del costo efectivo del producto.", 409, details);
+}
+
 async function checkBranch(
   session: NonNullable<Awaited<ReturnType<typeof getCurrentSession>>>,
   orderId: string,
@@ -68,9 +75,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return fail("FORBIDDEN", "Forbidden", 403);
     }
 
-    const data = await updateSaleOrderLine({ saleOrderId: id, lineId, actorUserId: session.userId, ...parsed.data });
+    const data = await updateSaleOrderLine({ saleOrderId: id, lineId, actorUserId: session.userId, actorRole: session.roleCode, ...parsed.data });
     return ok(data);
   } catch (error) {
+    const policyResponse = salePolicyError(error);
+    if (policyResponse) return policyResponse;
     return toHttpErrorResponse(error);
   }
 }

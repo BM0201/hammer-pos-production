@@ -6,16 +6,13 @@ import {
   Truck,
   Plus,
   CheckCircle,
-  XCircle,
   Loader2,
   AlertTriangle,
   ArrowRight,
   X,
-  Save,
   Package,
   Building2,
   FileText,
-  Trash2,
   Eye,
   Send,
   Ban,
@@ -61,6 +58,7 @@ function StatusBadge({ status }: { status: string }) {
     REQUESTED: { bg: "bg-orange-100", text: "text-orange-800", label: "Solicitado" },
     APPROVED: { bg: "bg-[var(--color-success-50)]", text: "text-[var(--color-success-700)]", label: "Aprobado" },
     IN_TRANSIT: { bg: "bg-[var(--color-info-50)]", text: "text-[var(--color-info-700)]", label: "En Tránsito" },
+    PARTIALLY_RECEIVED: { bg: "bg-blue-50", text: "text-blue-800", label: "Parcial" },
     RECEIVED: { bg: "bg-[var(--color-success-50)]", text: "text-emerald-800", label: "Recibido" },
     CANCELLED: { bg: "bg-[var(--color-danger-50)]", text: "text-[var(--color-danger-700)]", label: "Cancelado" },
     REJECTED: { bg: "bg-[var(--color-danger-50)]", text: "text-[var(--color-danger-700)]", label: "Rechazado" },
@@ -173,17 +171,56 @@ export default function TransfersPage() {
   };
 
   const handleApprove = async (id: string) => {
-    if (!confirm("¿Aprobar este envío? El inventario se moverá entre sucursales.")) return;
+    if (!confirm("¿Aprobar este envío? El inventario se descontará al despacharlo.")) return;
     try {
       setActionLoading(id);
       setError(null);
       const res = await apiFetch(`/api/master/transfers/${id}/approve`, { method: "POST" });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al aprobar"); }
-      toast.success("✅ Envío aprobado e inventario actualizado");
+      toast.success("Envío aprobado");
       fetchTransfers();
       setSelectedTransfer(null);
     } catch (error) {
       toast.error(getErrorMessage(error, "Error al aprobar"));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDispatch = async (id: string) => {
+    if (!confirm("¿Despachar este envío? Se descontará stock de la sucursal origen.")) return;
+    try {
+      setActionLoading(id);
+      setError(null);
+      const res = await apiFetch(`/api/master/transfers/${id}/dispatch`, { method: "POST" });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al despachar"); }
+      toast.success("Envío despachado");
+      fetchTransfers();
+      setSelectedTransfer(null);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al despachar"));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleReceive = async (id: string) => {
+    if (!confirm("¿Recibir este envío? Se ingresará stock a la sucursal destino.")) return;
+    try {
+      setActionLoading(id);
+      setError(null);
+      const res = await apiFetch(`/api/master/transfers/${id}/receive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updateBranchCost: true }),
+      });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al recibir");
+      toast.success("Envío recibido");
+      fetchTransfers();
+      setSelectedTransfer(null);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al recibir"));
     } finally {
       setActionLoading(null);
     }
@@ -252,7 +289,7 @@ export default function TransfersPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 text-sm">
-        {["", "DRAFT", "IN_TRANSIT", "RECEIVED", "CANCELLED"].map((s) => (
+        {["", "DRAFT", "APPROVED", "IN_TRANSIT", "PARTIALLY_RECEIVED", "RECEIVED", "CANCELLED"].map((s) => (
           <button
             key={s}
             onClick={() => setFilterStatus(s)}
@@ -262,7 +299,7 @@ export default function TransfersPage() {
                 : "bg-[var(--color-surface)] text-[var(--color-text-secondary)] border-[var(--color-border)] hover:bg-[var(--color-surface-alt)]"
             }`}
           >
-            {s === "" ? "Todos" : s === "DRAFT" ? "Borradores" : s === "IN_TRANSIT" ? "En Tránsito" : s === "RECEIVED" ? "Recibidos" : "Cancelados"}
+            {s === "" ? "Todos" : s === "DRAFT" ? "Borradores" : s === "APPROVED" ? "Aprobados" : s === "IN_TRANSIT" ? "En Tránsito" : s === "PARTIALLY_RECEIVED" ? "Parciales" : s === "RECEIVED" ? "Recibidos" : "Cancelados"}
           </button>
         ))}
       </div>
@@ -351,6 +388,36 @@ export default function TransfersPage() {
                           </button>
                         </>
                       )}
+                      {t.status === "APPROVED" && (
+                        <>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDispatch(t.id); }}
+                            disabled={actionLoading === t.id}
+                            className="rounded-lg p-1.5 text-[var(--color-info-700)] hover:bg-[var(--color-info-50)] transition-colors disabled:opacity-50"
+                            title="Despachar envío"
+                          >
+                            {actionLoading === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleCancel(t.id); }}
+                            disabled={actionLoading === t.id}
+                            className="rounded-lg p-1.5 text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)] transition-colors disabled:opacity-50"
+                            title="Cancelar envío"
+                          >
+                            <Ban className="h-4 w-4" />
+                          </button>
+                        </>
+                      )}
+                      {(t.status === "IN_TRANSIT" || t.status === "PARTIALLY_RECEIVED") && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleReceive(t.id); }}
+                          disabled={actionLoading === t.id}
+                          className="rounded-lg p-1.5 text-emerald-700 hover:bg-emerald-50 transition-colors disabled:opacity-50"
+                          title="Recibir envío"
+                        >
+                          {actionLoading === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="h-4 w-4" />}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -423,23 +490,56 @@ export default function TransfersPage() {
             </table>
 
             {/* Action buttons */}
-            {selectedTransfer.status === "DRAFT" && (
+            {(selectedTransfer.status === "DRAFT" || selectedTransfer.status === "APPROVED" || selectedTransfer.status === "IN_TRANSIT" || selectedTransfer.status === "PARTIALLY_RECEIVED") && (
               <div className="flex gap-3 pt-2 border-t border-[var(--color-border)]">
-                <button
-                  onClick={() => handleApprove(selectedTransfer.id)}
-                  disabled={!!actionLoading}
-                  className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-                >
-                  {actionLoading === selectedTransfer.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                  Aprobar Envío
-                </button>
-                <button
-                  onClick={() => handleCancel(selectedTransfer.id)}
-                  disabled={!!actionLoading}
-                  className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-                >
-                  <Ban className="h-4 w-4" /> Cancelar Envío
-                </button>
+                {selectedTransfer.status === "DRAFT" && (
+                  <>
+                    <button
+                      onClick={() => handleApprove(selectedTransfer.id)}
+                      disabled={!!actionLoading}
+                      className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                    >
+                      {actionLoading === selectedTransfer.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                      Aprobar Envío
+                    </button>
+                    <button
+                      onClick={() => handleCancel(selectedTransfer.id)}
+                      disabled={!!actionLoading}
+                      className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                    >
+                      <Ban className="h-4 w-4" /> Cancelar Envío
+                    </button>
+                  </>
+                )}
+                {selectedTransfer.status === "APPROVED" && (
+                  <>
+                    <button
+                      onClick={() => handleDispatch(selectedTransfer.id)}
+                      disabled={!!actionLoading}
+                      className="flex items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                    >
+                      {actionLoading === selectedTransfer.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                      Despachar Envío
+                    </button>
+                    <button
+                      onClick={() => handleCancel(selectedTransfer.id)}
+                      disabled={!!actionLoading}
+                      className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                    >
+                      <Ban className="h-4 w-4" /> Cancelar Envío
+                    </button>
+                  </>
+                )}
+                {(selectedTransfer.status === "IN_TRANSIT" || selectedTransfer.status === "PARTIALLY_RECEIVED") && (
+                  <button
+                    onClick={() => handleReceive(selectedTransfer.id)}
+                    disabled={!!actionLoading}
+                    className="flex items-center gap-2 rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                  >
+                    {actionLoading === selectedTransfer.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="h-4 w-4" />}
+                    Recibir Envío
+                  </button>
+                )}
               </div>
             )}
           </div>

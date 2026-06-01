@@ -3,10 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import toast from "react-hot-toast";
 import {
-  Package,
   Plus,
   CheckCircle,
-  XCircle,
   Loader2,
   FileText,
   AlertTriangle,
@@ -95,6 +93,8 @@ export default function PurchaseOrdersPage() {
   const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [receiveUpdateBranchCost, setReceiveUpdateBranchCost] = useState(true);
+  const [receiveCreatePriceReviewAlerts, setReceiveCreatePriceReviewAlerts] = useState(true);
 
   // Form state
   const [formBranchId, setFormBranchId] = useState("");
@@ -215,13 +215,24 @@ export default function PurchaseOrdersPage() {
   };
 
   const handleReceive = async (id: string) => {
-    if (!confirm("¿Recibir inventario de este pedido?")) return;
+    if (!confirm("¿Recibir inventario pendiente de este pedido? Esta acción actualizará existencias y costo promedio.")) return;
     try {
       setActionLoading(id);
       setError(null);
-      const res = await apiFetch(`/api/master/purchase-orders/${id}/receive`, { method: "POST" });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al recibir inventario"); }
-      toast.success("✅ Inventario recibido");
+      const res = await apiFetch(`/api/master/purchase-orders/${id}/receive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId: selectedOrder?.branch.id,
+          updateBranchCost: receiveUpdateBranchCost,
+          createPriceReviewAlerts: receiveCreatePriceReviewAlerts,
+        }),
+      });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al recibir inventario");
+      const data = unwrapApiData(raw);
+      const warningCount = Array.isArray(data?.warnings) ? data.warnings.length : 0;
+      toast.success(warningCount ? `Inventario recibido con ${warningCount} alerta(s) de precio` : "Inventario recibido");
       fetchOrders();
       setSelectedOrder(null);
     } catch (error) {
@@ -521,14 +532,36 @@ export default function PurchaseOrdersPage() {
                   </>
                 )}
                 {selectedOrder.status === "APPROVED" && (
-                  <button
-                    onClick={() => handleReceive(selectedOrder.id)}
-                    disabled={!!actionLoading}
-                    className="flex items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-                  >
-                    {actionLoading === selectedOrder.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
-                    Recibir Inventario
-                  </button>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-wrap gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+                      <label className="inline-flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={receiveUpdateBranchCost}
+                          onChange={(e) => setReceiveUpdateBranchCost(e.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        Actualizar costo de sucursal con WAC recibido
+                      </label>
+                      <label className="inline-flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={receiveCreatePriceReviewAlerts}
+                          onChange={(e) => setReceiveCreatePriceReviewAlerts(e.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        Revisar precio vs costo al recibir
+                      </label>
+                    </div>
+                    <button
+                      onClick={() => handleReceive(selectedOrder.id)}
+                      disabled={!!actionLoading}
+                      className="flex w-fit items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                    >
+                      {actionLoading === selectedOrder.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+                      Recibir Inventario Pendiente
+                    </button>
+                  </div>
                 )}
               </div>
             )}

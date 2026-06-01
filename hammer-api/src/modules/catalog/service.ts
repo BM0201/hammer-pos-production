@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
+import { mapProductWithEffectivePricing } from "@/modules/catalog/effective-pricing";
 
 export async function listCategories() {
   return prisma.category.findMany({
@@ -72,7 +73,7 @@ export async function updateCategory(categoryId: string, input: {
   return category;
 }
 
-export async function listProducts(params: { q?: string; isActive?: boolean }) {
+export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string }) {
   const where: Prisma.ProductWhereInput = {
     isActive: params.isActive,
     ...(params.q
@@ -86,12 +87,28 @@ export async function listProducts(params: { q?: string; isActive?: boolean }) {
       : {}),
   };
 
-  return prisma.product.findMany({
+  const products = await prisma.product.findMany({
     where,
-    include: { category: true },
+    include: {
+      category: true,
+      ...(params.branchId
+        ? {
+            branchProductSettings: {
+              where: { branchId: params.branchId },
+              select: { branchId: true, branchPrice: true, branchCost: true },
+            },
+            inventoryBalances: {
+              where: { branchId: params.branchId },
+              select: { branchId: true, weightedAverageCost: true },
+            },
+          }
+        : {}),
+    },
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
     take: 1000,
   });
+
+  return params.branchId ? products.map((product) => mapProductWithEffectivePricing(product, params.branchId)) : products;
 }
 
 /**
@@ -354,8 +371,23 @@ export async function deleteOrDeactivateCategory(categoryId: string, actorUserId
   };
 }
 
-export async function getTopSellingProducts(params: { limit?: number; isActive?: boolean }) {
+export async function getTopSellingProducts(params: { limit?: number; isActive?: boolean; branchId?: string }) {
   const limit = params.limit ?? 5;
+  const include = {
+    category: true,
+    ...(params.branchId
+      ? {
+          branchProductSettings: {
+            where: { branchId: params.branchId },
+            select: { branchId: true, branchPrice: true, branchCost: true },
+          },
+          inventoryBalances: {
+            where: { branchId: params.branchId },
+            select: { branchId: true, weightedAverageCost: true },
+          },
+        }
+      : {}),
+  };
 
   // Get the top-selling product IDs by aggregating sale order lines
   const topLines = await prisma.saleOrderLine.groupBy({
@@ -367,12 +399,13 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
 
   if (topLines.length === 0) {
     // Fallback: return first N active products if no sales yet
-    return prisma.product.findMany({
+    const fallbackProducts = await prisma.product.findMany({
       where: { isActive: params.isActive },
-      include: { category: true },
+      include,
       orderBy: { name: "asc" },
       take: limit,
     });
+    return params.branchId ? fallbackProducts.map((product) => mapProductWithEffectivePricing(product, params.branchId)) : fallbackProducts;
   }
 
   const productIds = topLines.map((line) => line.productId);
@@ -381,12 +414,12 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
       id: { in: productIds },
       ...(params.isActive !== undefined ? { isActive: params.isActive } : {}),
     },
-    include: { category: true },
+    include,
   });
 
   // Sort by sales volume (same order as topLines)
   const idOrder = new Map(productIds.map((id, idx) => [id, idx]));
   products.sort((a, b) => (idOrder.get(a.id) ?? 99) - (idOrder.get(b.id) ?? 99));
 
-  return products;
+  return params.branchId ? products.map((product) => mapProductWithEffectivePricing(product, params.branchId)) : products;
 }

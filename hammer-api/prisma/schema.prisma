@@ -218,6 +218,7 @@ model Branch {
   operatingExpenses           OperatingExpense[]
   pricingConfig               PricingConfig?
   productPricings             ProductPricing[]
+  categoryPricingPolicies     BranchCategoryPricingPolicy[]
   branchProductSettings       BranchProductSetting[]
   employees                   Employee[]
   employeeLoans               EmployeeLoan[]
@@ -458,6 +459,34 @@ model Category {
   parent   Category?  @relation("CategoryToCategory", fields: [parentId], references: [id])
   children Category[] @relation("CategoryToCategory")
   products Product[]
+  categoryPricingPolicies BranchCategoryPricingPolicy[]
+}
+
+model BranchCategoryPricingPolicy {
+  id                         String   @id @default(cuid())
+  branchId                   String
+  categoryId                 String
+  minMarginPercent           Decimal  @default(15)
+  targetMarginPercent        Decimal  @default(30)
+  minProfitAmount            Decimal  @default(0)
+  maxDiscountPercent         Decimal  @default(0)
+  estimatedMonthlyUnits      Decimal  @default(1)
+  estimatedMonthlySalesValue Decimal?
+  monthlyExpenseAllocation   Decimal  @default(0)
+  stockPolicy                String   @default("NORMAL")
+  priceMode                  String   @default("CATEGORY")
+  roundingRule               String   @default("NEAREST_1")
+  isActive                   Boolean  @default(true)
+  notes                      String?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  branch   Branch   @relation(fields: [branchId], references: [id])
+  category Category @relation(fields: [categoryId], references: [id])
+
+  @@unique([branchId, categoryId])
+  @@index([branchId, isActive])
+  @@index([categoryId])
 }
 
 model Product {

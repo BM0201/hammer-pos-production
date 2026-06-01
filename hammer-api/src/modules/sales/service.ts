@@ -8,6 +8,10 @@ import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
+import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
+import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 
 // FIX BUG-010: Use crypto-random suffix instead of Date.now() to prevent collisions
 function makeOrderNumber(branchCode: string) {
@@ -101,6 +105,17 @@ async function recalcOrderTotalsTx(tx: Prisma.TransactionClient, saleOrderId: st
   });
 }
 
+function effectiveDiscountLimitForAudit(input: {
+  role?: string | null;
+  categoryMaxDiscountPercent?: number | null;
+  commercialRecommendedMaxDiscountPercent?: number | null;
+}) {
+  const limits = [getMaxDiscountPercentForRole(input.role)];
+  if (input.categoryMaxDiscountPercent && input.categoryMaxDiscountPercent > 0) limits.push(input.categoryMaxDiscountPercent);
+  if (input.commercialRecommendedMaxDiscountPercent !== null && input.commercialRecommendedMaxDiscountPercent !== undefined) limits.push(input.commercialRecommendedMaxDiscountPercent);
+  return Math.min(...limits);
+}
+
 export async function addSaleOrderLine(input: {
   saleOrderId: string;
   productId: string;
@@ -108,6 +123,8 @@ export async function addSaleOrderLine(input: {
   unitPrice?: number;
   discountAmount: number;
   actorUserId: string;
+  actorRole?: string;
+  overrideReason?: string | null;
 }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
@@ -116,9 +133,72 @@ export async function addSaleOrderLine(input: {
     const product = await tx.product.findUniqueOrThrow({ where: { id: input.productId } });
     if (!product.isActive) throw new Error("PRODUCT_INACTIVE");
 
+    const pricing = await getEffectiveProductPricing(tx, { branchId: order.branchId, productId: input.productId });
+    const categoryPolicy = await resolvePolicyForProduct({ branchId: order.branchId, productId: input.productId });
+    const commercialIntelligence = await buildCommercialIntelligenceForProduct({ branchId: order.branchId, productId: input.productId });
+    const priceSource = input.unitPrice === undefined ? pricing.priceSource : "MANUAL";
     const quantity = new Prisma.Decimal(input.quantity);
-    const unitPrice = new Prisma.Decimal(input.unitPrice ?? product.standardSalePrice);
+    const unitPrice = input.unitPrice === undefined ? pricing.effectivePrice : new Prisma.Decimal(input.unitPrice);
     const discountAmount = new Prisma.Decimal(input.discountAmount);
+    const discountPerUnit = discountAmount.div(quantity);
+    const netUnitPriceAfterDiscount = unitPrice.sub(discountPerUnit);
+    const discountPercent = unitPrice.gt(0) ? discountPerUnit.div(unitPrice).mul(100) : new Prisma.Decimal(0);
+    const policy = validateDiscountForRole({
+      role: input.actorRole,
+      discountPercent,
+      effectiveCost: pricing.effectiveCost,
+      netUnitPriceAfterDiscount,
+      overrideReason: input.overrideReason,
+      categoryId: categoryPolicy.categoryId,
+      categoryName: categoryPolicy.categoryName,
+      categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+      commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+      combinedClass: commercialIntelligence.combinedClass,
+      riskLevel: commercialIntelligence.riskLevel,
+    });
+
+    if (!policy.allowed) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "sales",
+          action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
+          entityType: "SaleOrder",
+          entityId: input.saleOrderId,
+          metadataJson: {
+            reason: policy.code,
+            productId: input.productId,
+            effectiveCost: pricing.effectiveCost?.toString() ?? null,
+            netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
+            userRole: input.actorRole ?? null,
+            overrideReason: input.overrideReason ?? null,
+            priceSource: pricing.priceSource,
+            costSource: pricing.costSource,
+            discountPercent: discountPercent.toString(),
+            roleMaxDiscountPercent: getMaxDiscountPercentForRole(input.actorRole),
+            categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+            commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+            effectiveMaxDiscountPercent: effectiveDiscountLimitForAudit({
+              role: input.actorRole,
+              categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+              commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+            }),
+            combinedClass: commercialIntelligence.combinedClass,
+            riskLevel: commercialIntelligence.riskLevel,
+            categoryId: categoryPolicy.categoryId,
+            categoryName: categoryPolicy.categoryName,
+          },
+        },
+      });
+      const error = new Error(policy.code);
+      (error as any).details = {
+        effectiveCost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost),
+        netUnitPriceAfterDiscount: Number(netUnitPriceAfterDiscount),
+      };
+      throw error;
+    }
+
     const lineSubtotal = calculateLineSubtotal(quantity, unitPrice, discountAmount);
 
     const line = await tx.saleOrderLine.create({
@@ -142,6 +222,25 @@ export async function addSaleOrderLine(input: {
         action: SALE_AUDIT_EVENTS.ORDER_LINE_ADDED,
         entityType: "SaleOrderLine",
         entityId: line.id,
+        metadataJson: {
+          saleOrderId: input.saleOrderId,
+          productId: input.productId,
+          priceSource,
+          standardSalePrice: pricing.standardSalePrice.toString(),
+          branchPrice: pricing.branchPrice?.toString() ?? null,
+          effectivePrice: pricing.effectivePrice.toString(),
+          effectiveCost: pricing.effectiveCost?.toString() ?? null,
+          costSource: pricing.costSource,
+          netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
+          discountPercent: discountPercent.toString(),
+          overrideReason: input.overrideReason ?? null,
+          policyWarnings: policy.warnings,
+          commercialIntelligence: {
+            combinedClass: commercialIntelligence.combinedClass,
+            riskLevel: commercialIntelligence.riskLevel,
+            recommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+          },
+        },
       },
     });
 
@@ -156,6 +255,8 @@ export async function updateSaleOrderLine(input: {
   unitPrice?: number;
   discountAmount?: number;
   actorUserId: string;
+  actorRole?: string;
+  overrideReason?: string | null;
 }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
@@ -186,6 +287,65 @@ export async function updateSaleOrderLine(input: {
     const quantity = new Prisma.Decimal(input.quantity ?? existing.quantity);
     const unitPrice = new Prisma.Decimal(input.unitPrice ?? existing.unitPrice);
     const discountAmount = new Prisma.Decimal(input.discountAmount ?? existing.discountAmount);
+    const pricing = await getEffectiveProductPricing(tx, { branchId: order.branchId, productId: existing.productId });
+    const categoryPolicy = await resolvePolicyForProduct({ branchId: order.branchId, productId: existing.productId });
+    const commercialIntelligence = await buildCommercialIntelligenceForProduct({ branchId: order.branchId, productId: existing.productId });
+    const discountPerUnit = discountAmount.div(quantity);
+    const netUnitPriceAfterDiscount = unitPrice.sub(discountPerUnit);
+    const discountPercent = unitPrice.gt(0) ? discountPerUnit.div(unitPrice).mul(100) : new Prisma.Decimal(0);
+    const policy = validateDiscountForRole({
+      role: input.actorRole,
+      discountPercent,
+      effectiveCost: pricing.effectiveCost,
+      netUnitPriceAfterDiscount,
+      overrideReason: input.overrideReason,
+      categoryId: categoryPolicy.categoryId,
+      categoryName: categoryPolicy.categoryName,
+      categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+      commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+      combinedClass: commercialIntelligence.combinedClass,
+      riskLevel: commercialIntelligence.riskLevel,
+    });
+    if (!policy.allowed) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "sales",
+          action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
+          entityType: "SaleOrderLine",
+          entityId: input.lineId,
+          metadataJson: {
+            reason: policy.code,
+            effectiveCost: pricing.effectiveCost?.toString() ?? null,
+            netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
+            userRole: input.actorRole ?? null,
+            overrideReason: input.overrideReason ?? null,
+            priceSource: pricing.priceSource,
+            costSource: pricing.costSource,
+            discountPercent: discountPercent.toString(),
+            roleMaxDiscountPercent: getMaxDiscountPercentForRole(input.actorRole),
+            categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+            commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+            effectiveMaxDiscountPercent: effectiveDiscountLimitForAudit({
+              role: input.actorRole,
+              categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+              commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+            }),
+            combinedClass: commercialIntelligence.combinedClass,
+            riskLevel: commercialIntelligence.riskLevel,
+            categoryId: categoryPolicy.categoryId,
+            categoryName: categoryPolicy.categoryName,
+          },
+        },
+      });
+      const error = new Error(policy.code);
+      (error as any).details = {
+        effectiveCost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost),
+        netUnitPriceAfterDiscount: Number(netUnitPriceAfterDiscount),
+      };
+      throw error;
+    }
 
     const lineSubtotal = calculateLineSubtotal(quantity, unitPrice, discountAmount);
 
