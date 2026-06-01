@@ -1,8 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
-import { calculateSuggestedPrice, type SuggestedPriceResult } from "./calculator";
-import type { CreateExpenseInput, UpdateExpenseInput, UpsertPricingConfigInput } from "./validators";
+import { calculatePricingSuggestion, calculateSuggestedPrice, type PricingSuggestionInput, type SuggestedPriceResult } from "./calculator";
+import type { ApplyPricingInput, CreateExpenseInput, UpdateExpenseInput, UpsertPricingConfigInput } from "./validators";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
+import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 
 /* ══════════════════════════════════════════════════════
  *  OPERATING EXPENSES
@@ -244,10 +247,210 @@ export async function calculateSuggestedPriceForProduct(params: {
   return { ...result, configExists: !!config };
 }
 
+export async function calculatePricingSuggestionForBranch(params: PricingSuggestionInput & {
+  branchId?: string;
+  productId?: string;
+  actorUserId?: string;
+  useCategoryPolicy?: boolean;
+  forcePolicyValues?: boolean;
+  useCommercialIntelligence?: boolean;
+  forceCommercialValues?: boolean;
+}) {
+  let configExists = false;
+  let monthlyOperatingExpenses = params.monthlyOperatingExpenses;
+  let estimatedMonthlyUnits = params.estimatedMonthlyUnits;
+  let marginPercent = params.marginPercent;
+  let prorateMethod = params.prorateMethod;
+  let policyApplied = false;
+  let policySource: "CATEGORY" | "VIRTUAL_DEFAULT" | undefined;
+  let categoryPolicySnapshot: Awaited<ReturnType<typeof resolvePolicyForProduct>>["categoryPolicy"] | undefined;
+  let commercialIntelligenceApplied = false;
+  let commercialIntelligenceSnapshot: Awaited<ReturnType<typeof buildCommercialIntelligenceForProduct>> | undefined;
+
+  if (params.useCategoryPolicy && params.branchId && params.productId) {
+    const resolved = await resolvePolicyForProduct({ branchId: params.branchId, productId: params.productId });
+    categoryPolicySnapshot = resolved.categoryPolicy;
+    policyApplied = true;
+    policySource = categoryPolicySnapshot.isVirtualDefault ? "VIRTUAL_DEFAULT" : "CATEGORY";
+    const force = params.forcePolicyValues === true;
+    if (force || marginPercent === undefined) marginPercent = categoryPolicySnapshot.targetMarginPercent;
+    if (force || params.minProfitAmount === undefined) params.minProfitAmount = categoryPolicySnapshot.minProfitAmount;
+    if (force || monthlyOperatingExpenses === undefined) monthlyOperatingExpenses = categoryPolicySnapshot.monthlyExpenseAllocation;
+    if (force || estimatedMonthlyUnits === undefined) estimatedMonthlyUnits = categoryPolicySnapshot.estimatedMonthlyUnits;
+    if (force || params.estimatedMonthlySalesValue === undefined) params.estimatedMonthlySalesValue = categoryPolicySnapshot.estimatedMonthlySalesValue ?? undefined;
+    if (force || params.roundingRule === undefined) params.roundingRule = categoryPolicySnapshot.roundingRule as any;
+  }
+
+  if (params.branchId) {
+    const config = await getPricingConfig(params.branchId);
+    configExists = Boolean(config);
+    monthlyOperatingExpenses ??= await getMonthlyExpensesByBranch(params.branchId);
+    estimatedMonthlyUnits ??= config?.estimatedMonthlyUnits ?? new Prisma.Decimal(1000);
+    marginPercent ??= config?.desiredMarginPercent ?? new Prisma.Decimal(30);
+    prorateMethod ??= (config?.prorationMethod as "BY_QUANTITY" | "BY_VALUE" | undefined) ?? "BY_QUANTITY";
+  }
+
+  if (params.useCommercialIntelligence && params.branchId && params.productId) {
+    commercialIntelligenceSnapshot = await buildCommercialIntelligenceForProduct({
+      branchId: params.branchId,
+      productId: params.productId,
+    });
+    commercialIntelligenceApplied = true;
+    const force = params.forceCommercialValues === true;
+    if (force || params.marginPercent === undefined) marginPercent = commercialIntelligenceSnapshot.recommendedMarginPercent;
+    if (force || params.minProfitAmount === undefined) params.minProfitAmount = commercialIntelligenceSnapshot.recommendedMinProfitAmount;
+  }
+
+  const result = calculatePricingSuggestion({
+    ...params,
+    monthlyOperatingExpenses: monthlyOperatingExpenses ?? 0,
+    estimatedMonthlyUnits: estimatedMonthlyUnits ?? 1,
+    marginPercent,
+    prorateMethod,
+  });
+
+  if (params.branchId && params.productId) {
+    await prisma.productPricing.create({
+      data: {
+        productId: params.productId,
+        branchId: params.branchId,
+        purchaseCost: result.baseCost,
+        operatingExpensePerUnit: result.operatingExpensePerUnit,
+        totalCostPerUnit: result.totalInternalCost,
+        marginPercent: result.marginPercent,
+        suggestedPrice: result.suggestedPrice,
+        totalMonthlyExpenses: result.monthlyOperatingExpenses,
+        estimatedMonthlyUnits: result.estimatedMonthlyUnits,
+        calculatedByUserId: params.actorUserId,
+      },
+    });
+  }
+
+  return {
+    ...result,
+    configExists,
+    policyApplied,
+    policySource,
+    categoryPolicySnapshot,
+    commercialIntelligenceApplied,
+    commercialIntelligenceSnapshot,
+  };
+}
+
 export async function getProductPricingHistory(productId: string, branchId: string, limit = 20) {
   return prisma.productPricing.findMany({
     where: { productId, branchId },
     orderBy: { calculatedAt: "desc" },
     take: limit,
   });
+}
+
+export async function getProductPricingContext(input: { productId: string; branchId: string }) {
+  const product = await prisma.product.findUniqueOrThrow({
+    where: { id: input.productId },
+    select: { id: true, sku: true, name: true, categoryId: true, category: { select: { name: true } } },
+  });
+  const pricing = await getEffectiveProductPricing(prisma, input);
+  const policy = await resolvePolicyForProduct(input);
+  const commercialIntelligence = await buildCommercialIntelligenceForProduct(input);
+
+  return {
+    productId: product.id,
+    branchId: input.branchId,
+    sku: product.sku,
+    name: product.name,
+    categoryId: product.categoryId,
+    categoryName: product.category.name,
+    standardSalePrice: Number(pricing.standardSalePrice),
+    branchPrice: pricing.branchPrice === null ? null : Number(pricing.branchPrice),
+    effectivePrice: Number(pricing.effectivePrice),
+    priceSource: pricing.priceSource,
+    branchCost: pricing.branchCost === null ? null : Number(pricing.branchCost),
+    weightedAverageCost: pricing.weightedAverageCost === null ? null : Number(pricing.weightedAverageCost),
+    effectiveCost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost),
+    costSource: pricing.costSource,
+    categoryPolicy: policy.categoryPolicy,
+    commercialIntelligence,
+  };
+}
+
+export async function applySuggestedPrice(input: ApplyPricingInput & { actorUserId: string }) {
+  const warnings: string[] = [];
+  if (input.maxPrice !== undefined && input.maxPrice !== null && input.suggestedPrice > input.maxPrice) {
+    warnings.push("El precio sugerido supera el precio maximo de mercado indicado.");
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const product = await tx.product.findUniqueOrThrow({
+      where: { id: input.productId },
+      select: { id: true, standardSalePrice: true },
+    });
+
+    let previousPrice: Prisma.Decimal | null = null;
+    let priceSourceAfter: "BRANCH" | "STANDARD";
+    const newPrice = new Prisma.Decimal(input.suggestedPrice);
+
+    if (input.applyScope === "BRANCH") {
+      const branchId = input.branchId!;
+      const existing = await tx.branchProductSetting.findUnique({
+        where: { branchId_productId: { branchId, productId: input.productId } },
+        select: { branchPrice: true },
+      });
+      previousPrice = existing?.branchPrice ?? null;
+      await tx.branchProductSetting.upsert({
+        where: { branchId_productId: { branchId, productId: input.productId } },
+        create: { branchId, productId: input.productId, branchPrice: newPrice },
+        update: { branchPrice: newPrice },
+      });
+      priceSourceAfter = "BRANCH";
+    } else {
+      previousPrice = product.standardSalePrice;
+      await tx.product.update({
+        where: { id: input.productId },
+        data: { standardSalePrice: newPrice },
+      });
+      priceSourceAfter = "STANDARD";
+    }
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: input.applyScope === "BRANCH" ? input.branchId : undefined,
+        module: "pricing",
+        action: "PRICE_APPLIED",
+        entityType: "Product",
+        entityId: input.productId,
+        metadataJson: {
+          productId: input.productId,
+          branchId: input.branchId ?? null,
+          applyScope: input.applyScope,
+          previousPrice: previousPrice?.toString() ?? null,
+          newPrice: newPrice.toString(),
+          minPrice: input.minPrice ?? null,
+          maxPrice: input.maxPrice ?? null,
+          totalInternalCost: input.totalInternalCost ?? null,
+          effectiveCost: input.effectiveCost ?? null,
+          marginPercent: input.marginPercent ?? null,
+          grossMarginPercent: input.grossMarginPercent ?? null,
+          markupPercent: input.markupPercent ?? null,
+          roundingRule: input.roundingRule ?? null,
+          reason: input.reason ?? null,
+          warnings,
+          calculationSnapshot: input.calculationSnapshot ?? null,
+        } as Prisma.InputJsonValue,
+      },
+    });
+
+    return {
+      productId: input.productId,
+      branchId: input.branchId,
+      applyScope: input.applyScope,
+      previousPrice: previousPrice === null ? null : Number(previousPrice),
+      newPrice: Number(newPrice),
+      priceSourceAfter,
+      warnings,
+    };
+  });
+
+  return result;
 }

@@ -19,6 +19,7 @@ export const addSaleOrderLineSchema = z.object({
   unitPrice: positiveMoneySchema.optional(),
   discountAmount: nonNegativeMoneySchema.default(0),
   discountPercent: percentageSchema.optional(),
+  overrideReason: z.string().max(500).optional(),
 });
 
 export const updateSaleOrderLineSchema = z.object({
@@ -26,6 +27,7 @@ export const updateSaleOrderLineSchema = z.object({
   unitPrice: positiveMoneySchema.optional(),
   discountAmount: nonNegativeMoneySchema.optional(),
   discountPercent: percentageSchema.optional(),
+  overrideReason: z.string().max(500).optional(),
 });
 
 export const saleOrderTransportSchema = z.object({

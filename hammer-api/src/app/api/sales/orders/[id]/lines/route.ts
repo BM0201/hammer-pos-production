@@ -12,6 +12,14 @@ import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rba
 import { getActiveDiscountsForBranch, calculateDiscountForProduct } from "@/modules/discounts/service";
 import { requireCsrf } from "@/modules/security/csrf";
 import { created, fail } from "@/lib/api/response";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+
+function salePolicyError(error: unknown) {
+  if (!(error instanceof Error)) return null;
+  if (!["BELOW_COST_NOT_ALLOWED", "BELOW_COST_OVERRIDE_REASON_REQUIRED", "DISCOUNT_LIMIT_EXCEEDED"].includes(error.message)) return null;
+  const details = (error as any).details;
+  return fail(error.message, error.message === "DISCOUNT_LIMIT_EXCEEDED" ? "Este rol no puede aplicar ese descuento." : "El precio neto queda por debajo del costo efectivo del producto.", 409, details);
+}
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -63,7 +71,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         });
         if (product) {
           const activeDiscounts = await getActiveDiscountsForBranch(order.branchId);
-          const unitPrice = parsed.data.unitPrice ?? Number(product.standardSalePrice);
+          const pricing = await getEffectiveProductPricing(prisma, { branchId: order.branchId, productId: parsed.data.productId });
+          const unitPrice = parsed.data.unitPrice ?? Number(pricing.effectivePrice);
           discountAmount = calculateDiscountForProduct(product, unitPrice, activeDiscounts);
         }
       } catch {
@@ -76,9 +85,13 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       discountAmount,
       saleOrderId: id,
       actorUserId: session.userId,
+      actorRole: session.roleCode,
+      overrideReason: parsed.data.overrideReason,
     });
     return created(data);
   } catch (error) {
+    const policyResponse = salePolicyError(error);
+    if (policyResponse) return policyResponse;
     return toHttpErrorResponse(error);
   }
 }

@@ -2,6 +2,8 @@ import { PurchaseOrderStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 
 /* ── Helpers ── */
 function generateOrderNumber(): string {
@@ -12,6 +14,27 @@ function generateOrderNumber(): string {
 
 type PurchaseTaxTreatment = "INCLUDE_IN_COST" | "SEPARATE_CREDIT";
 
+type ReceivePurchaseOrderInput = {
+  branchId?: string;
+  receivedAt?: string;
+  items?: {
+    productId: string;
+    purchaseOrderLineId?: string;
+    quantityReceived: number;
+    unitCost?: number;
+    allocatedFreightPerUnit?: number;
+    allocatedOtherChargesPerUnit?: number;
+    notes?: string;
+  }[];
+  freightAmount?: number;
+  otherChargesAmount?: number;
+  updateBranchCost?: boolean;
+  createPriceReviewAlerts?: boolean;
+  allowOverReceive?: boolean;
+  notes?: string;
+};
+type ReceivePurchaseOrderItem = NonNullable<ReceivePurchaseOrderInput["items"]>[number];
+
 function money(value: number) {
   return Math.round(value * 10000) / 10000;
 }
@@ -19,6 +42,16 @@ function money(value: number) {
 function nonNegative(value: unknown, fallback = 0) {
   const n = Number(value ?? fallback);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function positive(value: unknown, fallback = 0) {
+  const n = Number(value ?? fallback);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function marginPercent(price: number | null, cost: number | null) {
+  if (price === null || cost === null || price <= 0) return null;
+  return ((price - cost) / price) * 100;
 }
 
 function normalizeTaxTreatment(value: unknown): PurchaseTaxTreatment {
@@ -234,52 +267,164 @@ export async function approvePurchaseOrder(id: string, userId: string) {
       total: po.total.toString(),
       linesCount: po.lines.length,
       branchCode: po.branch.code,
+      previousStatus: po.status,
+      newStatus: "APPROVED",
+      approvedAt: new Date().toISOString(),
     },
   });
 
   return result;
 }
 
-export async function receivePurchaseOrder(id: string, userId: string) {
+export async function receivePurchaseOrder(id: string, userId: string, input: ReceivePurchaseOrderInput = {}) {
   const po = await prisma.purchaseOrder.findUnique({
     where: { id },
     include: { lines: { include: { product: true } }, branch: true },
   });
 
   if (!po) throw new Error("NOT_FOUND");
-  if (po.status === "RECEIVED") return po;
+  if (po.status === "RECEIVED") throw new Error("INVALID_INPUT: Este pedido ya fue recibido completamente");
   if (po.status !== "APPROVED") throw new Error("INVALID_INPUT: Solo se pueden recibir pedidos en estado APROBADO");
+  if (input.branchId && input.branchId !== po.branchId) throw new Error("INVALID_INPUT: La sucursal de recepcion no coincide con el pedido");
+
+  const previousMovements = await prisma.inventoryMovement.groupBy({
+    by: ["productId"],
+    where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN" },
+    _sum: { quantity: true },
+  });
+  const receivedByProduct = new Map(previousMovements.map((row) => [row.productId, Number(row._sum.quantity ?? 0)]));
+  const requestedByProduct = new Map(po.lines.map((line) => [line.productId, Number(line.quantity)]));
+  const pendingByProduct = new Map(po.lines.map((line) => [line.productId, Number(line.quantity) - (receivedByProduct.get(line.productId) ?? 0)]));
+  const defaultItems: ReceivePurchaseOrderItem[] = po.lines
+    .map((line) => ({ productId: line.productId, purchaseOrderLineId: line.id, quantityReceived: pendingByProduct.get(line.productId) ?? 0 }))
+    .filter((item) => item.quantityReceived > 0);
+  const requestedItems: ReceivePurchaseOrderItem[] = input.items?.length ? input.items : defaultItems;
+  if (requestedItems.length === 0) throw new Error("INVALID_INPUT: No hay cantidades pendientes por recibir");
+
+  const totalReceiveQty = requestedItems.reduce((sum, item) => sum + positive(item.quantityReceived), 0);
+  const freightPerUnit = totalReceiveQty > 0 ? nonNegative(input.freightAmount) / totalReceiveQty : 0;
+  const otherPerUnit = totalReceiveQty > 0 ? nonNegative(input.otherChargesAmount) / totalReceiveQty : 0;
+  const warnings: string[] = [];
 
   const result = await prisma.$transaction(async (tx) => {
-    const existingMovements = await tx.inventoryMovement.count({
-      where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN" },
-    });
+    const receivedLines = [];
 
-    const updated = await tx.purchaseOrder.updateMany({
-      where: { id, status: "APPROVED" },
-      data: { status: "RECEIVED" },
-    });
-    if (updated.count === 0) {
-      throw new Error("INVALID_INPUT: El pedido ya no esta en estado APROBADO");
-    }
+    for (const item of requestedItems) {
+      const line = po.lines.find((candidate) => candidate.productId === item.productId || candidate.id === item.purchaseOrderLineId);
+      if (!line) throw new Error(`INVALID_INPUT: Producto ${item.productId} no pertenece al pedido`);
+      const qtyReceived = positive(item.quantityReceived);
+      if (qtyReceived <= 0) throw new Error("INVALID_INPUT: quantityReceived debe ser mayor que 0");
+      const pendingQty = pendingByProduct.get(line.productId) ?? 0;
+      if (pendingQty <= 0) throw new Error(`INVALID_INPUT: ${line.product.name} no tiene cantidad pendiente por recibir`);
+      if (qtyReceived > pendingQty && !input.allowOverReceive) {
+        throw new Error(`INVALID_INPUT: No se puede recibir mas de lo pendiente para ${line.product.name}. Pendiente: ${pendingQty}`);
+      }
 
-    if (existingMovements === 0) {
-      for (const line of po.lines) {
-        await createInventoryMovementTx(tx, {
-          actorUserId: userId,
-          branchId: po.branchId,
-          productId: line.productId,
-          movementType: "PURCHASE_IN",
-          quantity: Number(line.quantity),
-          unitCost: Number(line.unitCost),
-          referenceType: "PurchaseOrder",
-          referenceId: po.id,
-          notes: `Pedido de compra ${po.orderNumber}`,
+      const previousBalance = await tx.inventoryBalance.findUnique({
+        where: { branchId_productId: { branchId: po.branchId, productId: line.productId } },
+      });
+      const previousStock = Number(previousBalance?.quantityOnHand ?? 0);
+      const previousWac = previousBalance ? Number(previousBalance.weightedAverageCost) : null;
+      const baseUnitCost = item.unitCost ?? Number(line.unitCostBeforeTax ?? line.unitCost);
+      const finalUnitCost = money(baseUnitCost + (item.allocatedFreightPerUnit ?? freightPerUnit) + (item.allocatedOtherChargesPerUnit ?? otherPerUnit));
+      const lineWarnings: string[] = [];
+
+      const movementResult = await createInventoryMovementTx(tx, {
+        actorUserId: userId,
+        branchId: po.branchId,
+        productId: line.productId,
+        movementType: "PURCHASE_IN",
+        quantity: qtyReceived,
+        unitCost: finalUnitCost,
+        referenceType: "PurchaseOrder",
+        referenceId: po.id,
+        notes: item.notes ?? input.notes ?? `Recepcion pedido de compra ${po.orderNumber}`,
+      });
+
+      if (input.updateBranchCost) {
+        await tx.branchProductSetting.upsert({
+          where: { branchId_productId: { branchId: po.branchId, productId: line.productId } },
+          create: { branchId: po.branchId, productId: line.productId, branchCost: movementResult.balance.weightedAverageCost },
+          update: { branchCost: movementResult.balance.weightedAverageCost },
         });
       }
+
+      const pricing = await getEffectiveProductPricing(tx, { branchId: po.branchId, productId: line.productId });
+      const policy = await resolvePolicyForProduct({ branchId: po.branchId, productId: line.productId });
+      const effectivePrice = Number(pricing.effectivePrice);
+      const effectiveCost = pricing.effectiveCost === null ? null : Number(pricing.effectiveCost);
+      const margin = marginPercent(effectivePrice, effectiveCost);
+      let priceReviewRequired = false;
+      const oldCost = previousWac ?? 0;
+      const costIncreasePercent = oldCost > 0 ? ((finalUnitCost - oldCost) / oldCost) * 100 : 0;
+      if (effectiveCost !== null && effectivePrice < effectiveCost) {
+        priceReviewRequired = true;
+        lineWarnings.push("Precio efectivo debajo del costo efectivo; revisar precio de venta.");
+      }
+      if (margin !== null && margin < policy.categoryPolicy.minMarginPercent) {
+        priceReviewRequired = true;
+        lineWarnings.push("Margen real debajo del minimo de categoria; revisar precio de venta.");
+      }
+      if (costIncreasePercent > 10) {
+        priceReviewRequired = true;
+        lineWarnings.push(`El costo recibido subio ${costIncreasePercent.toFixed(1)}%. Revisar precio de venta antes de vender.`);
+      }
+      warnings.push(...lineWarnings);
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: userId,
+          branchId: po.branchId,
+          module: "purchase-orders",
+          action: "PURCHASE_ORDER_LINE_RECEIVED",
+          entityType: "PurchaseOrderLine",
+          entityId: line.id,
+          metadataJson: {
+            productId: line.productId,
+            oldQty: previousStock,
+            receivedQty: qtyReceived,
+            newQty: movementResult.balance.quantityOnHand.toString(),
+            oldWac: previousWac,
+            finalUnitCost,
+            newWac: movementResult.balance.weightedAverageCost.toString(),
+            priceReviewRequired,
+            warnings: lineWarnings,
+          },
+        },
+      });
+
+      receivedLines.push({
+        productId: line.productId,
+        quantityReceived: qtyReceived,
+        finalUnitCost,
+        previousStock,
+        newStock: Number(movementResult.balance.quantityOnHand),
+        previousWeightedAverageCost: previousWac,
+        newWeightedAverageCost: Number(movementResult.balance.weightedAverageCost),
+        priceReviewRequired,
+        warnings: lineWarnings,
+      });
     }
 
-    return tx.purchaseOrder.findUniqueOrThrow({ where: { id } });
+    const movementTotals = await tx.inventoryMovement.groupBy({
+      by: ["productId"],
+      where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN" },
+      _sum: { quantity: true },
+    });
+    const totalReceivedByProduct = new Map(movementTotals.map((row) => [row.productId, Number(row._sum.quantity ?? 0)]));
+    const fullyReceived = po.lines.every((line) => (totalReceivedByProduct.get(line.productId) ?? 0) >= Number(line.quantity));
+    await tx.purchaseOrder.update({
+      where: { id },
+      data: { status: fullyReceived ? "RECEIVED" : "APPROVED" },
+    });
+
+    return {
+      ok: true,
+      purchaseOrderId: po.id,
+      statusAfter: fullyReceived ? "RECEIVED" : "PARTIALLY_RECEIVED",
+      receivedLines,
+      warnings,
+    };
   });
 
   await logAuditEvent({
@@ -292,8 +437,10 @@ export async function receivePurchaseOrder(id: string, userId: string) {
     metadataJson: {
       orderNumber: po.orderNumber,
       total: po.total.toString(),
-      linesCount: po.lines.length,
+      linesCount: result.receivedLines.length,
       branchCode: po.branch.code,
+      statusAfter: result.statusAfter,
+      warnings: result.warnings,
     },
   });
 
@@ -310,7 +457,10 @@ export async function cancelPurchaseOrder(id: string, userId: string) {
     },
   });
   if (!po) throw new Error("NOT_FOUND");
-  if (po.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden cancelar pedidos en estado BORRADOR");
+  if (!["DRAFT", "APPROVED"].includes(po.status)) throw new Error("INVALID_INPUT: Solo se pueden cancelar pedidos en borrador o aprobados");
+  const receivedMovements = await prisma.inventoryMovement.count({
+    where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN" },
+  });
 
   const result = await prisma.purchaseOrder.update({
     where: { id },
@@ -332,6 +482,10 @@ export async function cancelPurchaseOrder(id: string, userId: string) {
       total: po.total.toString(),
       linesCount: po.lines.length,
       cancelledByUserId: userId,
+      previousStatus: po.status,
+      newStatus: "CANCELLED",
+      receivedMovements,
+      warning: receivedMovements > 0 ? "Pedido con recepciones parciales; se cancela solo el pendiente." : null,
     },
   });
 

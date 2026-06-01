@@ -23,7 +23,6 @@ import {
   Info,
   BadgeDollarSign,
   ShieldCheck,
-  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -63,12 +62,120 @@ type PricingConfig = {
   branch?: Branch;
 };
 
+type ProductOption = {
+  id: string;
+  sku: string;
+  name: string;
+};
+
+type PricingProductContext = {
+  productId: string;
+  branchId: string;
+  sku: string;
+  name: string;
+  standardSalePrice: number;
+  branchPrice: number | null;
+  effectivePrice: number;
+  priceSource: "BRANCH" | "STANDARD";
+  branchCost: number | null;
+  weightedAverageCost: number | null;
+  effectiveCost: number | null;
+  costSource: "BRANCH" | "WAC" | "NONE";
+  categoryId: string;
+  categoryName: string;
+  categoryPolicy: CategoryPolicyRow;
+  commercialIntelligence?: CommercialIntelligence;
+};
+
+type CommercialIntelligence = {
+  abcClass: "A" | "B" | "C";
+  xyzClass: "X" | "Y" | "Z";
+  combinedClass: string;
+  recommendedMarginPercent: number;
+  recommendedMinProfitAmount: number;
+  recommendedMaxDiscountPercent: number;
+  recommendedStockPolicy: string;
+  riskLevel: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  warnings: string[];
+  recommendedActions: string[];
+};
+
+type CommercialAlert = {
+  productId: string;
+  sku: string;
+  name: string;
+  categoryName: string;
+  combinedClass: string;
+  riskLevel: string;
+  effectivePrice: number;
+  effectiveCost: number | null;
+  grossMarginPercent: number | null;
+  stockOnHand: number;
+  daysInStock: number | null;
+  message: string;
+  recommendedAction: string;
+  severity: "INFO" | "WARNING" | "DANGER";
+};
+
+type CategoryPolicyRow = {
+  id: string | null;
+  branchId: string;
+  categoryId: string;
+  categoryCode: string;
+  categoryName: string;
+  minMarginPercent: number;
+  targetMarginPercent: number;
+  minProfitAmount: number;
+  maxDiscountPercent: number;
+  estimatedMonthlyUnits: number;
+  estimatedMonthlySalesValue: number | null;
+  monthlyExpenseAllocation: number;
+  stockPolicy: string;
+  priceMode: string;
+  roundingRule: string;
+  isActive: boolean;
+  notes: string | null;
+  isVirtualDefault: boolean;
+};
+
 type SuggestedPriceResult = {
+  mode: "SIMPLE" | "ADVANCED";
+  baseCost: number;
+  taxPercent: number;
+  taxAmount: number;
+  includeTaxInCost: boolean;
+  purchaseFreightPerUnit: number;
+  otherCostPerUnit: number;
+  shrinkagePercent: number;
+  shrinkageAmount: number;
+  landedCost: number;
+  monthlyOperatingExpenses: number;
+  prorateMethod: "BY_QUANTITY" | "BY_VALUE";
   purchaseCost: number;
   operatingExpensePerUnit: number;
+  totalInternalCost: number;
   totalCostPerUnit: number;
   marginPercent: number;
+  markupPercent: number;
+  minProfitAmount: number;
+  rawSuggestedPrice: number;
   suggestedPrice: number;
+  minPrice: number;
+  maxPrice: number | null;
+  grossProfit: number;
+  grossMarginPercent: number;
+  priceFloorReason: "MARGIN" | "MIN_PROFIT" | "MARKET_MIN" | "NONE";
+  roundingRule: string;
+  warnings: string[];
+  policyApplied?: boolean;
+  policySource?: "CATEGORY" | "VIRTUAL_DEFAULT";
+  categoryPolicySnapshot?: CategoryPolicyRow;
+  commercialIntelligenceApplied?: boolean;
+  commercialIntelligenceSnapshot?: CommercialIntelligence;
+  fallbackApplied?: boolean;
+  fallbackMethod?: "BY_QUANTITY";
+  expenseAllocationRatio?: number;
+  allocatedMonthlyExpense?: number;
   totalMonthlyExpenses: number;
   estimatedMonthlyUnits: number;
   configExists: boolean;
@@ -176,7 +283,7 @@ export function ExpenseManager() {
   const [summary, setSummary] = useState<ExpenseSummary | null>(null);
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"expenses" | "pricing" | "freight">("expenses");
+  const [activeTab, setActiveTab] = useState<"expenses" | "pricing" | "policies" | "freight">("expenses");
 
   /* Form state */
   const [newExpense, setNewExpense] = useState({
@@ -196,6 +303,29 @@ export function ExpenseManager() {
   const [calcCost, setCalcCost] = useState("");
   const [calcResult, setCalcResult] = useState<SuggestedPriceResult | null>(null);
   const [ivaPercent, setIvaPercent] = useState("15");
+  const [calcMode, setCalcMode] = useState<"SIMPLE" | "ADVANCED">("SIMPLE");
+  const [includeTaxInCost, setIncludeTaxInCost] = useState(true);
+  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [productContext, setProductContext] = useState<PricingProductContext | null>(null);
+  const [calcCostTouched, setCalcCostTouched] = useState(false);
+  const [useCategoryPolicy, setUseCategoryPolicy] = useState(false);
+  const [useCommercialIntelligence, setUseCommercialIntelligence] = useState(false);
+  const [commercialAlerts, setCommercialAlerts] = useState<CommercialAlert[]>([]);
+  const [categoryPolicies, setCategoryPolicies] = useState<CategoryPolicyRow[]>([]);
+  const [policyDrafts, setPolicyDrafts] = useState<Record<string, CategoryPolicyRow>>({});
+  const [advancedCalc, setAdvancedCalc] = useState({
+    purchaseFreightPerUnit: "",
+    otherCostPerUnit: "",
+    shrinkagePercent: "",
+    minProfitAmount: "",
+    marketMinPrice: "",
+    marketMaxPrice: "",
+    roundingRule: "NONE",
+    estimatedMonthlySalesValue: "",
+    productMonthlySalesValue: "",
+    estimatedMonthlyUnitsForThisProduct: "",
+  });
 
   /* Internal freight */
   const [freightRoutes, setFreightRoutes] = useState<InternalFreightRoute[]>([]);
@@ -240,12 +370,14 @@ export function ExpenseManager() {
       setExpenses(expData);
       setSummary(sumData);
       setPricingConfig(cfgData);
+      setProductContext(null);
+      setCommercialAlerts([]);
 
       if (cfgData && cfgData.id) {
         setConfigForm({
           desiredMarginPercent: String(cfgData.desiredMarginPercent),
           estimatedMonthlyUnits: String(cfgData.estimatedMonthlyUnits),
-          prorationMethod: cfgData.prorationMethod === "BY_VALUE" ? "BY_QUANTITY" : (cfgData.prorationMethod || "BY_QUANTITY"),
+          prorationMethod: cfgData.prorationMethod || "BY_QUANTITY",
         });
       }
     } catch (e) {
@@ -254,6 +386,35 @@ export function ExpenseManager() {
       setLoading(false);
     }
   }, [selectedBranchId]);
+
+  useEffect(() => {
+    if (!selectedBranchId || activeTab !== "pricing") return;
+    fetch(`/api/catalog/products?isActive=true&branchId=${selectedBranchId}`)
+      .then((res) => res.json())
+      .then((raw) => {
+        const data = unwrapApiData(raw);
+        setProductOptions(Array.isArray(data) ? data.map((item: ProductOption) => ({ id: item.id, sku: item.sku, name: item.name })) : []);
+      })
+      .catch(() => setProductOptions([]));
+  }, [activeTab, selectedBranchId]);
+
+  const loadCategoryPolicies = useCallback(async () => {
+    if (!selectedBranchId) return;
+    try {
+      const res = await fetch(`/api/pricing/category-policies?branchId=${selectedBranchId}`);
+      const data = unwrapApiData(await res.json()) as { policies?: CategoryPolicyRow[] };
+      const policies = data.policies ?? [];
+      setCategoryPolicies(policies);
+      setPolicyDrafts(Object.fromEntries(policies.map((policy) => [policy.categoryId, policy])));
+    } catch (e) {
+      showToast("error", "No se pudieron cargar politicas por categoria");
+      console.error(e);
+    }
+  }, [selectedBranchId]);
+
+  useEffect(() => {
+    if (activeTab === "policies") loadCategoryPolicies();
+  }, [activeTab, loadCategoryPolicies]);
 
   useEffect(() => {
     loadBranchData();
@@ -349,19 +510,179 @@ export function ExpenseManager() {
   const handleCalculate = async () => {
     if (!selectedBranchId || !calcCost) return;
     try {
-      // IVA se aplica al COSTO DE COMPRA, no al precio de venta
-      const costoBase = Number(calcCost);
-      const iva = Number(ivaPercent) || 0;
-      const costoReal = iva > 0 ? costoBase * (1 + iva / 100) : costoBase;
+      const payload = {
+        branchId: selectedBranchId,
+        productId: selectedProductId || undefined,
+        mode: calcMode,
+        baseCost: calcCost,
+        taxPercent: ivaPercent,
+        includeTaxInCost,
+        monthlyOperatingExpenses: useCategoryPolicy && productContext ? productContext.categoryPolicy.monthlyExpenseAllocation : (summary?.grandTotal ?? 0),
+        estimatedMonthlyUnits: configForm.estimatedMonthlyUnits,
+        prorateMethod: configForm.prorationMethod,
+        marginPercent: configForm.desiredMarginPercent,
+        useCategoryPolicy,
+        useCommercialIntelligence,
+        ...(calcMode === "ADVANCED" ? advancedCalc : {}),
+      };
 
-      const res = await fetch(
-        `/api/pricing/suggested?branchId=${selectedBranchId}&purchaseCostPerUnit=${costoReal}`,
-      );
+      const res = await apiFetch("/api/pricing/suggested", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
       if (!res.ok) throw new Error("Failed");
       const data = unwrapApiData(await res.json());
       setCalcResult(data);
     } catch (e) {
       showToast("error", "Error al calcular precio");
+      console.error(e);
+    }
+  };
+
+  const handleLoadProductContext = async () => {
+    if (!selectedBranchId || !selectedProductId) return;
+    try {
+      const res = await fetch(`/api/pricing/product-context?branchId=${selectedBranchId}&productId=${selectedProductId}`);
+      if (!res.ok) throw new Error("Failed");
+      const data = unwrapApiData(await res.json()) as PricingProductContext;
+      setProductContext(data);
+      setUseCategoryPolicy(false);
+      setUseCommercialIntelligence(false);
+      if (data.effectiveCost !== null && (!calcCost || !calcCostTouched || confirm("El costo base ya tiene un valor. ¿Quieres reemplazarlo con el costo efectivo del producto?"))) {
+        setCalcCost(String(data.effectiveCost));
+        setCalcCostTouched(false);
+      }
+      showToast("success", "Datos del producto cargados");
+    } catch (e) {
+      showToast("error", "No se pudieron cargar los datos del producto");
+      console.error(e);
+    }
+  };
+
+  const applyPolicyToCalculator = (policy: CategoryPolicyRow) => {
+    setConfigForm((prev) => ({
+      ...prev,
+      desiredMarginPercent: String(policy.targetMarginPercent),
+      estimatedMonthlyUnits: String(policy.estimatedMonthlyUnits),
+    }));
+    setAdvancedCalc((prev) => ({
+      ...prev,
+      minProfitAmount: String(policy.minProfitAmount),
+      estimatedMonthlySalesValue: policy.estimatedMonthlySalesValue === null ? prev.estimatedMonthlySalesValue : String(policy.estimatedMonthlySalesValue),
+      roundingRule: policy.roundingRule,
+    }));
+  };
+
+  const handleUseCategoryPolicyToggle = (checked: boolean) => {
+    setUseCategoryPolicy(checked);
+    if (checked && productContext?.categoryPolicy) {
+      applyPolicyToCalculator(productContext.categoryPolicy);
+      setConfigForm((prev) => ({ ...prev, estimatedMonthlyUnits: String(productContext.categoryPolicy.estimatedMonthlyUnits) }));
+      if (productContext.categoryPolicy.monthlyExpenseAllocation > 0) {
+        setAdvancedCalc((prev) => ({ ...prev }));
+      }
+      showToast("success", "Politica de categoria precargada");
+    }
+  };
+
+  const handleUseCommercialIntelligenceToggle = (checked: boolean) => {
+    setUseCommercialIntelligence(checked);
+    const intelligence = productContext?.commercialIntelligence;
+    if (checked && intelligence) {
+      setConfigForm((prev) => ({ ...prev, desiredMarginPercent: String(intelligence.recommendedMarginPercent) }));
+      setAdvancedCalc((prev) => ({
+        ...prev,
+        minProfitAmount: String(intelligence.recommendedMinProfitAmount),
+      }));
+      showToast("success", "Inteligencia ABC-XYZ precargada");
+    }
+  };
+
+  const loadCommercialAlerts = async () => {
+    if (!selectedBranchId) return;
+    try {
+      const res = await fetch(`/api/pricing/commercial-alerts?branchId=${selectedBranchId}`);
+      if (!res.ok) throw new Error("Failed");
+      const data = unwrapApiData(await res.json()) as { alerts?: CommercialAlert[] };
+      setCommercialAlerts(data.alerts ?? []);
+    } catch (e) {
+      showToast("error", "No se pudieron cargar las alertas comerciales");
+      console.error(e);
+    }
+  };
+
+  const handleBootstrapPolicies = async () => {
+    if (!selectedBranchId) return;
+    const res = await apiFetch("/api/pricing/category-policies/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ branchId: selectedBranchId }),
+    });
+    if (!res.ok) {
+      showToast("error", "No se pudieron crear politicas default");
+      return;
+    }
+    const data = unwrapApiData(await res.json());
+    showToast("success", `Politicas default: ${data.created} creadas, ${data.skipped} existentes`);
+    loadCategoryPolicies();
+  };
+
+  const handleSavePolicy = async (categoryId: string) => {
+    const draft = policyDrafts[categoryId];
+    if (!draft) return;
+    const res = await apiFetch("/api/pricing/category-policies", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(draft),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      showToast("error", body?.error?.message ?? "No se pudo guardar la politica");
+      return;
+    }
+    showToast("success", "Politica guardada");
+    loadCategoryPolicies();
+  };
+
+  const handleApplySuggestedPrice = async (applyScope: "BRANCH" | "GLOBAL") => {
+    if (!calcResult || !productContext) return;
+    const previousPrice = applyScope === "BRANCH" ? productContext.branchPrice : productContext.standardSalePrice;
+    const diff = calcResult.suggestedPrice - (previousPrice ?? productContext.effectivePrice);
+    const target = applyScope === "BRANCH" ? `la sucursal ${selectedBranch?.name ?? ""}` : "el precio global";
+    const ok = confirm(
+      `Vas a cambiar el precio de venta de este producto. Esta accion afectara el precio usado por el POS.\n\nProducto: ${productContext.sku} - ${productContext.name}\nDestino: ${target}\nPrecio anterior: ${formatC(previousPrice ?? productContext.effectivePrice)}\nPrecio nuevo: ${formatC(calcResult.suggestedPrice)}\nDiferencia: ${formatC(diff)}\nMargen estimado: ${calcResult.grossMarginPercent.toFixed(1)}%\n\n${calcResult.warnings.join("\n")}`,
+    );
+    if (!ok) return;
+
+    try {
+      const res = await apiFetch("/api/pricing/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: productContext.productId,
+          branchId: applyScope === "BRANCH" ? selectedBranchId : undefined,
+          applyScope,
+          suggestedPrice: calcResult.suggestedPrice,
+          minPrice: calcResult.minPrice,
+          maxPrice: calcResult.maxPrice,
+          totalInternalCost: calcResult.totalInternalCost,
+          effectiveCost: productContext.effectiveCost,
+          marginPercent: calcResult.marginPercent,
+          grossMarginPercent: calcResult.grossMarginPercent,
+          markupPercent: calcResult.markupPercent,
+          roundingRule: calcResult.roundingRule,
+          reason: "Aplicado desde calculadora de precios",
+          calculationSnapshot: calcResult,
+        }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar el precio");
+      const applied = unwrapApiData(raw);
+      showToast("success", `Precio aplicado. Fuente actual: ${applied.priceSourceAfter === "BRANCH" ? "Sucursal" : "Base"}`);
+      await handleLoadProductContext();
+    } catch (e) {
+      showToast("error", e instanceof Error ? e.message : "No se pudo aplicar el precio");
       console.error(e);
     }
   };
@@ -530,10 +851,11 @@ export function ExpenseManager() {
 
       {/* ── Tabs ── */}
       <div className="flex gap-1 bg-[var(--color-surface-raised)] rounded-lg p-1 overflow-x-auto">
-        {(["expenses", "pricing", "freight"] as const).map((tab) => {
+        {(["expenses", "pricing", "policies", "freight"] as const).map((tab) => {
           const labels = {
             expenses: { label: "Gastos Operativos", icon: DollarSign },
             pricing: { label: "Precios", icon: Calculator },
+            policies: { label: "Politicas por categoria", icon: Settings },
             freight: { label: "Flete interno", icon: TrendingUp },
           };
           const { label, icon: Icon } = labels[tab];
@@ -792,7 +1114,7 @@ export function ExpenseManager() {
                 <div className="space-y-2">
                   <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
                     <Package className="h-3.5 w-3.5 text-[var(--color-info-600)]" />
-                    Unidades Mensuales Estimadas
+                    Unidades vendidas estimadas al mes en esta sucursal
                   </label>
                   <div className="relative">
                     <input
@@ -807,7 +1129,7 @@ export function ExpenseManager() {
                   </div>
                   <p className="text-xs text-slate-600 flex items-center gap-1">
                     <Info className="h-3 w-3 text-blue-500" />
-                    Total de productos distintos vendidos al mes en esta sucursal
+                    Cantidad total aproximada de unidades fisicas vendidas al mes. No significa SKUs distintos.
                   </p>
                 </div>
 
@@ -817,14 +1139,18 @@ export function ExpenseManager() {
                     <PieChart className="h-3.5 w-3.5 text-[var(--color-info-600)]" />
                     Método de Prorrateo
                   </label>
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-blue-100 border border-blue-300 px-3 py-2 text-xs font-bold text-blue-800">
-                      <Zap className="h-3 w-3" />
-                      Por cantidad (MVP)
-                    </span>
-                  </div>
+                  <select
+                    className="w-full rounded-xl border-2 border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-[var(--color-text)] transition-all focus:border-blue-500 focus:ring-4 focus:ring-blue-500/15 focus:outline-none"
+                    value={configForm.prorationMethod}
+                    onChange={(e) => setConfigForm((p) => ({ ...p, prorationMethod: e.target.value }))}
+                  >
+                    <option value="BY_QUANTITY">Por cantidad (unidades)</option>
+                    <option value="BY_VALUE">Por valor (C$)</option>
+                  </select>
                   <p className="text-xs text-slate-600">
-                    Gastos se dividen equitativamente entre unidades vendidas
+                    {configForm.prorationMethod === "BY_VALUE"
+                      ? "Gastos se reparten segun participacion economica del producto o lote."
+                      : "Gastos se dividen equitativamente entre unidades vendidas."}
                   </p>
                 </div>
 
@@ -869,6 +1195,21 @@ export function ExpenseManager() {
               </div>
 
               <div className="p-6 space-y-5">
+                <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+                  {(["SIMPLE", "ADVANCED"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setCalcMode(mode)}
+                      className={`rounded-lg px-3 py-2 text-sm font-bold transition ${
+                        calcMode === mode ? "bg-white text-emerald-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      {mode === "SIMPLE" ? "Simple" : "Avanzado"}
+                    </button>
+                  ))}
+                </div>
+
                 {/* Costo base */}
                 <div className="space-y-2">
                   <label className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
@@ -883,7 +1224,10 @@ export function ExpenseManager() {
                       step="0.01"
                       placeholder="0.00"
                       value={calcCost}
-                      onChange={(e) => setCalcCost(e.target.value)}
+                      onChange={(e) => {
+                        setCalcCost(e.target.value);
+                        setCalcCostTouched(true);
+                      }}
                       onKeyDown={(e) => e.key === "Enter" && handleCalculate()}
                       className="w-full rounded-xl border-2 border-slate-300 bg-white pl-12 pr-4 py-3 text-2xl font-bold text-[var(--color-text)] transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/15 focus:outline-none"
                     />
@@ -928,7 +1272,152 @@ export function ExpenseManager() {
                       ))}
                     </div>
                   </div>
+                  <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={includeTaxInCost}
+                      onChange={(e) => setIncludeTaxInCost(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300"
+                    />
+                    Incluir IVA en el costo interno
+                  </label>
                 </div>
+
+                {calcMode === "ADVANCED" && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+                    <label className="space-y-1 text-xs font-semibold text-slate-700 sm:col-span-2">
+                      Producto
+                      <select
+                        value={selectedProductId}
+                        onChange={(e) => {
+                          setSelectedProductId(e.target.value);
+                          setProductContext(null);
+                        }}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="">Seleccionar producto...</option>
+                        {productOptions.map((product) => (
+                          <option key={product.id} value={product.id}>{product.sku} - {product.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <Button
+                      variant="secondary"
+                      className="sm:col-span-2"
+                      onClick={handleLoadProductContext}
+                      disabled={!selectedProductId}
+                    >
+                      Cargar datos del producto
+                    </Button>
+                    {productContext ? (
+                      <div className="sm:col-span-2 grid gap-2 rounded-lg border border-emerald-200 bg-white p-3 text-xs">
+                        <div className="flex justify-between"><span>Producto</span><strong>{productContext.sku} - {productContext.name}</strong></div>
+                        <div className="flex justify-between"><span>Categoria</span><strong>{productContext.categoryName}</strong></div>
+                        <div className="flex justify-between"><span>Precio global</span><strong>{formatC(productContext.standardSalePrice)}</strong></div>
+                        <div className="flex justify-between"><span>Precio sucursal</span><strong>{productContext.branchPrice === null ? "Sin precio" : formatC(productContext.branchPrice)}</strong></div>
+                        <div className="flex justify-between"><span>Precio efectivo</span><strong>{formatC(productContext.effectivePrice)} ({productContext.priceSource === "BRANCH" ? "Sucursal" : "Base"})</strong></div>
+                        <div className="flex justify-between"><span>Costo efectivo</span><strong>{productContext.effectiveCost === null ? "Sin costo" : `${formatC(productContext.effectiveCost)} (${productContext.costSource})`}</strong></div>
+                        <div className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-800">
+                          Politica: margen {productContext.categoryPolicy.targetMarginPercent}% · utilidad {formatC(productContext.categoryPolicy.minProfitAmount)} · gasto {formatC(productContext.categoryPolicy.monthlyExpenseAllocation)} · redondeo {productContext.categoryPolicy.roundingRule}
+                          {productContext.categoryPolicy.isVirtualDefault ? " · default virtual" : ""}
+                        </div>
+                        <label className="flex items-center gap-2 text-xs font-semibold">
+                          <input type="checkbox" checked={useCategoryPolicy} onChange={(e) => handleUseCategoryPolicyToggle(e.target.checked)} />
+                          Usar politica de categoria
+                        </label>
+                        {useCategoryPolicy ? <div className="text-[11px] text-slate-600">Los valores pueden editarse manualmente antes de calcular.</div> : null}
+                        {productContext.commercialIntelligence ? (
+                          <div className="rounded border border-sky-200 bg-sky-50 p-2 text-sky-900">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <strong>ABC-XYZ {productContext.commercialIntelligence.combinedClass}</strong>
+                              <span>Riesgo {productContext.commercialIntelligence.riskLevel}</span>
+                            </div>
+                            <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                              <span>Margen recomendado: {productContext.commercialIntelligence.recommendedMarginPercent}%</span>
+                              <span>Stock: {productContext.commercialIntelligence.recommendedStockPolicy}</span>
+                              <span>Descuento max: {productContext.commercialIntelligence.recommendedMaxDiscountPercent}%</span>
+                              <span>Utilidad minima: {formatC(productContext.commercialIntelligence.recommendedMinProfitAmount)}</span>
+                            </div>
+                            {productContext.commercialIntelligence.recommendedActions.length > 0 ? (
+                              <div className="mt-1 text-[11px]">{productContext.commercialIntelligence.recommendedActions.join(" ")}</div>
+                            ) : null}
+                            {productContext.commercialIntelligence.warnings.length > 0 ? (
+                              <div className="mt-1 space-y-1">
+                                {productContext.commercialIntelligence.warnings.map((warning) => (
+                                  <div key={warning} className="flex items-start gap-1 text-[11px] text-amber-700">
+                                    <AlertTriangle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                                    <span>{warning}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                            <label className="mt-2 flex items-center gap-2 text-xs font-semibold">
+                              <input type="checkbox" checked={useCommercialIntelligence} onChange={(e) => handleUseCommercialIntelligenceToggle(e.target.checked)} />
+                              Usar inteligencia ABC-XYZ
+                            </label>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {[
+                      ["purchaseFreightPerUnit", "Flete de compra por unidad", "C$"],
+                      ["otherCostPerUnit", "Otros cargos por unidad", "C$"],
+                      ["shrinkagePercent", "Merma", "%"],
+                      ["minProfitAmount", "Utilidad minima", "C$"],
+                      ["marketMinPrice", "Precio minimo mercado", "C$"],
+                      ["marketMaxPrice", "Precio maximo mercado", "C$"],
+                    ].map(([key, label, suffix]) => (
+                      <label key={key} className="space-y-1 text-xs font-semibold text-slate-700">
+                        {label}
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={advancedCalc[key as keyof typeof advancedCalc]}
+                            onChange={(e) => setAdvancedCalc((p) => ({ ...p, [key]: e.target.value }))}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-10 text-sm"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-slate-500">{suffix}</span>
+                        </div>
+                      </label>
+                    ))}
+                    <label className="space-y-1 text-xs font-semibold text-slate-700 sm:col-span-2">
+                      Redondeo comercial
+                      <select
+                        value={advancedCalc.roundingRule}
+                        onChange={(e) => setAdvancedCalc((p) => ({ ...p, roundingRule: e.target.value }))}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="NONE">Sin redondeo</option>
+                        <option value="NEAREST_1">Entero mas cercano</option>
+                        <option value="NEAREST_5">Multiplo de 5</option>
+                        <option value="NEAREST_10">Multiplo de 10</option>
+                        <option value="NEAREST_50">Multiplo de 50</option>
+                        <option value="NEAREST_100">Multiplo de 100</option>
+                        <option value="ENDING_9">Terminado en 9</option>
+                        <option value="ENDING_90">Terminado en 90</option>
+                        <option value="ENDING_99">Terminado en 99</option>
+                      </select>
+                    </label>
+                    {configForm.prorationMethod === "BY_VALUE" && (
+                      <>
+                        <label className="space-y-1 text-xs font-semibold text-slate-700">
+                          Venta mensual estimada total
+                          <Input type="number" min="0" step="0.01" value={advancedCalc.estimatedMonthlySalesValue} onChange={(e) => setAdvancedCalc((p) => ({ ...p, estimatedMonthlySalesValue: e.target.value }))} />
+                        </label>
+                        <label className="space-y-1 text-xs font-semibold text-slate-700">
+                          Valor mensual del producto
+                          <Input type="number" min="0" step="0.01" value={advancedCalc.productMonthlySalesValue} onChange={(e) => setAdvancedCalc((p) => ({ ...p, productMonthlySalesValue: e.target.value }))} />
+                        </label>
+                        <label className="space-y-1 text-xs font-semibold text-slate-700 sm:col-span-2">
+                          Unidades mensuales del producto
+                          <Input type="number" min="0" step="0.01" value={advancedCalc.estimatedMonthlyUnitsForThisProduct} onChange={(e) => setAdvancedCalc((p) => ({ ...p, estimatedMonthlyUnitsForThisProduct: e.target.value }))} />
+                        </label>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {/* Live preview del costo real */}
                 {calcCost && (
@@ -938,7 +1427,7 @@ export function ExpenseManager() {
                       <span className="text-sm text-slate-700">Costo base</span>
                       <span className="text-sm font-bold text-slate-900">{formatC(Number(calcCost) || 0)}</span>
                     </div>
-                    {Number(ivaPercent) > 0 && (
+                    {includeTaxInCost && Number(ivaPercent) > 0 && (
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-amber-700 font-medium">+ IVA ({ivaPercent}%)</span>
                         <span className="text-sm font-bold text-amber-700">
@@ -949,9 +1438,15 @@ export function ExpenseManager() {
                     <div className="border-t-2 border-emerald-300 pt-2 flex items-center justify-between">
                       <span className="text-sm font-bold text-emerald-800">Costo real</span>
                       <span className="text-lg font-extrabold text-emerald-800">
-                        {formatC((Number(calcCost) || 0) * (1 + (Number(ivaPercent) || 0) / 100))}
+                        {formatC((Number(calcCost) || 0) * (includeTaxInCost ? (1 + (Number(ivaPercent) || 0) / 100) : 1))}
                       </span>
                     </div>
+                    {!includeTaxInCost && Number(ivaPercent) > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-slate-600">IVA de referencia</span>
+                        <span className="text-sm font-bold text-slate-700">No se suma al costo interno</span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -972,14 +1467,11 @@ export function ExpenseManager() {
           {/* ── RESULTADO DEL CÁLCULO — Card prominente full width ── */}
           {/* ══════════════════════════════════════════════════════════ */}
           {calcResult && (() => {
-            const iva = Number(ivaPercent) || 0;
-            const costoBase = Number(calcCost) || 0;
-            const ivaAmount = iva > 0 ? costoBase * (iva / 100) : 0;
-            const costoConIva = costoBase + ivaAmount;
-            const ganancia = calcResult.suggestedPrice - calcResult.totalCostPerUnit;
-            const gananciaPercent = calcResult.totalCostPerUnit > 0
-              ? ((ganancia / calcResult.totalCostPerUnit) * 100).toFixed(1)
-              : "0.0";
+            const iva = calcResult.taxPercent;
+            const costoBase = calcResult.baseCost;
+            const ivaAmount = calcResult.taxAmount;
+            const ganancia = calcResult.grossProfit;
+            const gananciaPercent = calcResult.markupPercent.toFixed(1);
 
             return (
               <div className="relative overflow-hidden rounded-2xl border-2 border-emerald-300 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-emerald-950/30 dark:via-[var(--color-surface)] dark:to-teal-950/20 shadow-xl shadow-emerald-500/10">
@@ -1013,7 +1505,18 @@ export function ExpenseManager() {
                       </div>
 
                       {/* Step 2: IVA */}
-                      {iva > 0 && (
+                      {calcResult.warnings.length > 0 && (
+                        <div className="mb-4 space-y-2">
+                          {calcResult.warnings.map((warning) => (
+                            <div key={warning} className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                              <span>{warning}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {calcResult.includeTaxInCost && iva > 0 && (
                         <div className="flex items-center gap-3 rounded-xl bg-[var(--color-warning-50)]/80 dark:bg-amber-900/10 px-4 py-3">
                           <div className="flex items-center justify-center w-6 h-6 rounded-full bg-amber-200 dark:bg-amber-800 text-[10px] font-bold text-[var(--color-warning-700)] dark:text-amber-300">2</div>
                           <span className="flex-1 text-sm text-[var(--color-warning-700)] dark:text-amber-400">+ IVA ({iva}%)</span>
@@ -1022,17 +1525,30 @@ export function ExpenseManager() {
                       )}
 
                       {/* Step 3: Costo Real */}
-                      {iva > 0 && (
+                      {calcResult.includeTaxInCost && iva > 0 && (
                         <div className="flex items-center gap-3 rounded-xl bg-slate-100/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 px-4 py-3">
                           <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-300 dark:bg-slate-600 text-[10px] font-bold text-slate-700 dark:text-slate-200">=</div>
-                          <span className="flex-1 text-sm font-semibold text-[var(--color-text)]">Costo Real</span>
-                          <span className="text-sm font-bold tabular-nums">{formatC(costoConIva)}</span>
+                          <span className="flex-1 text-sm font-semibold text-[var(--color-text)]">Costo con IVA</span>
+                          <span className="text-sm font-bold tabular-nums">{formatC(calcResult.baseCost + calcResult.taxAmount)}</span>
                         </div>
                       )}
 
+                      {[
+                        ["Flete por unidad", calcResult.purchaseFreightPerUnit],
+                        ["Otros cargos", calcResult.otherCostPerUnit],
+                        ["Merma", calcResult.shrinkageAmount],
+                        ["Costo puesto en tienda", calcResult.landedCost],
+                      ].map(([label, value]) => (
+                        <div key={label} className="flex items-center gap-3 rounded-xl bg-white/70 px-4 py-3">
+                          <div className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-700">+</div>
+                          <span className="flex-1 text-sm text-[var(--color-text-muted)]">{label}</span>
+                          <span className="text-sm font-semibold tabular-nums">{formatC(Number(value))}</span>
+                        </div>
+                      ))}
+
                       {/* Step 4: Gasto operativo */}
                       <div className="flex items-center gap-3 rounded-xl bg-rose-50/60 dark:bg-rose-900/10 px-4 py-3">
-                        <div className="flex items-center justify-center w-6 h-6 rounded-full bg-rose-200 dark:bg-rose-800 text-[10px] font-bold text-rose-700 dark:text-rose-300">{iva > 0 ? "3" : "2"}</div>
+                        <div className="flex items-center justify-center w-6 h-6 rounded-full bg-rose-200 dark:bg-rose-800 text-[10px] font-bold text-rose-700 dark:text-rose-300">{calcResult.prorateMethod === "BY_VALUE" ? "$" : "#"}</div>
                         <div className="flex-1">
                           <span className="text-sm text-rose-700 dark:text-rose-400">+ Gasto Operativo</span>
                           <span className="text-[10px] text-rose-500 dark:text-rose-500 ml-1">/ unidad</span>
@@ -1046,8 +1562,19 @@ export function ExpenseManager() {
                       {/* Step 5: Costo total */}
                       <div className="flex items-center gap-3 rounded-xl bg-slate-100/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 px-4 py-3">
                         <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-300 dark:bg-slate-600 text-[10px] font-bold text-slate-700 dark:text-slate-200">=</div>
-                        <span className="flex-1 text-sm font-semibold text-[var(--color-text)]">Costo Total / Unidad</span>
-                        <span className="text-sm font-bold tabular-nums">{formatC(calcResult.totalCostPerUnit)}</span>
+                        <span className="flex-1 text-sm font-semibold text-[var(--color-text)]">Costo Total Interno</span>
+                        <span className="text-sm font-bold tabular-nums">{formatC(calcResult.totalInternalCost)}</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 pt-2">
+                        <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
+                          <p className="text-[10px] font-bold uppercase text-slate-500">Precio minimo</p>
+                          <p className="text-sm font-bold text-slate-900">{formatC(calcResult.minPrice)}</p>
+                        </div>
+                        <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
+                          <p className="text-[10px] font-bold uppercase text-slate-500">Max mercado</p>
+                          <p className="text-sm font-bold text-slate-900">{calcResult.maxPrice === null ? "Sin limite" : formatC(calcResult.maxPrice)}</p>
+                        </div>
                       </div>
 
                       {/* Step 6: Margen */}
@@ -1095,8 +1622,8 @@ export function ExpenseManager() {
                       {/* KPIs debajo del precio */}
                       <div className="grid grid-cols-2 gap-3 mt-6 w-full max-w-xs">
                         <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
-                          <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Margen</p>
-                          <p className="text-lg font-bold text-[var(--color-master-600)] dark:text-[var(--color-master-400)]">{calcResult.marginPercent}%</p>
+                          <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Margen real</p>
+                          <p className="text-lg font-bold text-[var(--color-master-600)] dark:text-[var(--color-master-400)]">{calcResult.grossMarginPercent.toFixed(1)}%</p>
                         </div>
                         <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
                           <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Markup</p>
@@ -1112,12 +1639,36 @@ export function ExpenseManager() {
                         </div>
                       </div>
 
-                      {iva > 0 && (
+                      <div className="mt-4 w-full max-w-xs rounded-xl border border-slate-200 bg-white/80 p-3 text-left text-xs text-slate-700">
+                        <div className="flex justify-between"><span>Precio minimo crudo</span><strong>{formatC(calcResult.rawSuggestedPrice)}</strong></div>
+                        <div className="flex justify-between"><span>Redondeo</span><strong>{calcResult.roundingRule}</strong></div>
+                        <div className="flex justify-between"><span>Piso aplicado</span><strong>{calcResult.priceFloorReason}</strong></div>
+                        {calcResult.expenseAllocationRatio !== undefined ? (
+                          <div className="flex justify-between"><span>Participacion valor</span><strong>{(calcResult.expenseAllocationRatio * 100).toFixed(1)}%</strong></div>
+                        ) : null}
+                      </div>
+
+                      {calcResult.includeTaxInCost && iva > 0 && (
                         <p className="mt-4 text-[10px] text-[var(--color-text-muted)] flex items-center gap-1">
                           <ShieldCheck className="h-3 w-3" />
                           IVA ({iva}%) incluido en el costo de compra
                         </p>
                       )}
+
+                      {productContext ? (
+                        <div className="mt-5 w-full max-w-xs space-y-2">
+                          <Button className="w-full" variant="success" onClick={() => handleApplySuggestedPrice("BRANCH")}>
+                            Aplicar a sucursal
+                          </Button>
+                          <Button className="w-full" variant="secondary" onClick={() => handleApplySuggestedPrice("GLOBAL")}>
+                            Aplicar global
+                          </Button>
+                        </div>
+                      ) : calcMode === "ADVANCED" ? (
+                        <p className="mt-5 max-w-xs text-xs text-[var(--color-text-muted)]">
+                          Carga un producto para aplicar este precio al catalogo real.
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -1126,6 +1677,58 @@ export function ExpenseManager() {
           })()}
 
           {/* ── Fórmula de cálculo — Rediseño colapsable ── */}
+          <Card className="p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold text-[var(--color-text)]">Alertas comerciales</h4>
+                <p className="text-xs text-[var(--color-text-muted)]">Pricing, costo, margen, stock y riesgo ABC-XYZ por sucursal.</p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={loadCommercialAlerts} icon={<AlertTriangle className="h-4 w-4" />}>
+                Cargar alertas
+              </Button>
+            </div>
+            {commercialAlerts.length > 0 ? (
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-500">
+                      <th className="py-2 pr-3">Producto</th>
+                      <th className="py-2 pr-3">Clase</th>
+                      <th className="py-2 pr-3">Margen</th>
+                      <th className="py-2 pr-3">Stock</th>
+                      <th className="py-2 pr-3">Alerta</th>
+                      <th className="py-2 pr-3">Accion</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {commercialAlerts.map((alert, index) => (
+                      <tr key={`${alert.productId}-${alert.message}-${index}`} className="border-b border-slate-100 align-top">
+                        <td className="py-2 pr-3">
+                          <div className="font-semibold text-slate-900">{alert.sku}</div>
+                          <div className="text-slate-600">{alert.name}</div>
+                        </td>
+                        <td className="py-2 pr-3">
+                          <span className={`rounded px-2 py-1 font-bold ${
+                            alert.severity === "DANGER" ? "bg-red-100 text-red-700" : alert.severity === "WARNING" ? "bg-amber-100 text-amber-700" : "bg-sky-100 text-sky-700"
+                          }`}>
+                            {alert.combinedClass}
+                          </span>
+                          <div className="mt-1 text-slate-500">{alert.riskLevel}</div>
+                        </td>
+                        <td className="py-2 pr-3">{alert.grossMarginPercent === null ? "N/A" : `${alert.grossMarginPercent.toFixed(1)}%`}</td>
+                        <td className="py-2 pr-3">{alert.stockOnHand.toLocaleString()}</td>
+                        <td className="py-2 pr-3">{alert.message}</td>
+                        <td className="py-2 pr-3">{alert.recommendedAction}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-[var(--color-text-muted)]">Sin alertas cargadas.</p>
+            )}
+          </Card>
+
           <details className="group rounded-2xl border border-slate-200 dark:border-slate-700 bg-[var(--color-surface)] overflow-hidden">
             <summary className="flex items-center gap-3 cursor-pointer px-6 py-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors select-none">
               <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--color-info-50)] dark:bg-blue-900/30">
@@ -1184,6 +1787,114 @@ export function ExpenseManager() {
               </div>
             </div>
           </details>
+        </div>
+      )}
+
+      {activeTab === "policies" && selectedBranchId && !loading && (
+        <div className="space-y-4">
+          <Card className="p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-[var(--color-text)]">Politicas por categoria</h3>
+                <p className="text-xs text-[var(--color-text-muted)]">Margenes, utilidad minima, descuento y redondeo por familia en {selectedBranch?.name}.</p>
+              </div>
+              <Button onClick={handleBootstrapPolicies} variant="secondary">Crear defaults</Button>
+            </div>
+          </Card>
+
+          <Card className="p-4">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[76rem] text-xs">
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="py-2">Categoria</th>
+                    <th>Min %</th>
+                    <th>Objetivo %</th>
+                    <th>Utilidad C$</th>
+                    <th>Desc. max %</th>
+                    <th>Unid/mes</th>
+                    <th>Valor/mes</th>
+                    <th>Gasto asignado</th>
+                    <th>Stock</th>
+                    <th>Modo</th>
+                    <th>Redondeo</th>
+                    <th>Notas</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {categoryPolicies.map((policy) => {
+                    const draft = policyDrafts[policy.categoryId] ?? policy;
+                    const updateDraft = (patch: Partial<CategoryPolicyRow>) => {
+                      setPolicyDrafts((prev) => ({ ...prev, [policy.categoryId]: { ...draft, ...patch } }));
+                    };
+                    const numberInput = (key: keyof CategoryPolicyRow) => (
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="w-24 rounded border border-slate-300 px-2 py-1"
+                        value={draft[key] === null ? "" : String(draft[key])}
+                        onChange={(e) => updateDraft({ [key]: e.target.value === "" ? null : Number(e.target.value) } as Partial<CategoryPolicyRow>)}
+                      />
+                    );
+                    return (
+                      <tr key={policy.categoryId} className="border-b align-top">
+                        <td className="py-2">
+                          <div className="font-semibold">{policy.categoryCode} - {policy.categoryName}</div>
+                          {policy.isVirtualDefault ? <div className="text-[10px] text-amber-600">Default virtual</div> : null}
+                        </td>
+                        <td>{numberInput("minMarginPercent")}</td>
+                        <td>{numberInput("targetMarginPercent")}</td>
+                        <td>{numberInput("minProfitAmount")}</td>
+                        <td>{numberInput("maxDiscountPercent")}</td>
+                        <td>{numberInput("estimatedMonthlyUnits")}</td>
+                        <td>{numberInput("estimatedMonthlySalesValue")}</td>
+                        <td>{numberInput("monthlyExpenseAllocation")}</td>
+                        <td>
+                          <select className="rounded border px-2 py-1" value={draft.stockPolicy} onChange={(e) => updateDraft({ stockPolicy: e.target.value })}>
+                            <option value="HIGH_STOCK">HIGH_STOCK</option>
+                            <option value="NORMAL">NORMAL</option>
+                            <option value="LOW_STOCK">LOW_STOCK</option>
+                            <option value="ON_DEMAND">ON_DEMAND</option>
+                          </select>
+                        </td>
+                        <td>
+                          <select className="rounded border px-2 py-1" value={draft.priceMode} onChange={(e) => updateDraft({ priceMode: e.target.value })}>
+                            <option value="CATEGORY">CATEGORY</option>
+                            <option value="MANUAL">MANUAL</option>
+                            <option value="ABC_XYZ_READY">ABC_XYZ_READY</option>
+                          </select>
+                        </td>
+                        <td>
+                          <select className="rounded border px-2 py-1" value={draft.roundingRule} onChange={(e) => updateDraft({ roundingRule: e.target.value })}>
+                            <option value="NONE">NONE</option>
+                            <option value="NEAREST_1">NEAREST_1</option>
+                            <option value="NEAREST_5">NEAREST_5</option>
+                            <option value="NEAREST_10">NEAREST_10</option>
+                            <option value="NEAREST_50">NEAREST_50</option>
+                            <option value="NEAREST_100">NEAREST_100</option>
+                            <option value="ENDING_9">ENDING_9</option>
+                            <option value="ENDING_90">ENDING_90</option>
+                            <option value="ENDING_99">ENDING_99</option>
+                          </select>
+                        </td>
+                        <td>
+                          <input className="w-40 rounded border px-2 py-1" value={draft.notes ?? ""} onChange={(e) => updateDraft({ notes: e.target.value })} />
+                        </td>
+                        <td>
+                          <Button size="sm" onClick={() => handleSavePolicy(policy.categoryId)}>Guardar</Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!categoryPolicies.length ? (
+                    <tr><td colSpan={13} className="py-8 text-center text-[var(--color-text-muted)]">No hay categorias activas para mostrar.</td></tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </div>
       )}
 
