@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
 import { apiFetch } from "@/lib/client/api";
 import { PrintModal } from "@/components/print/print-modal";
+import { openPrintableDocument, recordPrintAudit } from "@/lib/printing";
 import "@/styles/responsive.css";
 
 type ProductRow = {
@@ -97,6 +98,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
   // ── Print Modal (FASE 3) ──
   const [printModalOrderId, setPrintModalOrderId] = useState<string | null>(null);
   const [printModalOrderNumber, setPrintModalOrderNumber] = useState<string>("");
+  const [printSettings, setPrintSettings] = useState<{ autoPrintTicket?: boolean; autoPrintDelivery?: boolean } | null>(null);
 
   // ── Responsive (FASE 4) ──
   const isBusy = isMutatingOrder || isSubmittingPayment;
@@ -110,6 +112,18 @@ export function BranchPos({ branchId }: { branchId: string }) {
     for (const line of ticketLines) map.set(line.productId, line);
     return map;
   }, [ticketLines]);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch(`/api/printing/settings?branchId=${branchId}`)
+      .then(async (response) => {
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (!cancelled) setPrintSettings(payload.data ?? null);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [branchId]);
 
   const transportAmountNumber = Number(transportAmount);
   const transportAmountValue = includeTransport && Number.isFinite(transportAmountNumber) && transportAmountNumber > 0
@@ -136,6 +150,22 @@ export function BranchPos({ branchId }: { branchId: string }) {
       noticeTimerRef.current = setTimeout(() => setNotice(""), ms);
     }
   }, []);
+
+  const autoPrintCompletedOrder = useCallback(async (completedOrder: TicketOrder) => {
+    if (!printSettings?.autoPrintTicket && !printSettings?.autoPrintDelivery) return;
+    try {
+      if (printSettings.autoPrintTicket) {
+        await openPrintableDocument(`/api/printing/sales/${completedOrder.id}/ticket?format=HTML`);
+        await recordPrintAudit({ branchId, saleOrderId: completedOrder.id, entityType: "SaleOrder", entityId: completedOrder.id, documentType: "PURCHASE_TICKET" });
+      }
+      if (printSettings.autoPrintDelivery) {
+        await openPrintableDocument(`/api/printing/sales/${completedOrder.id}/delivery-order?format=HTML`);
+        await recordPrintAudit({ branchId, saleOrderId: completedOrder.id, entityType: "SaleOrder", entityId: completedOrder.id, documentType: "DELIVERY_ORDER" });
+      }
+    } catch {
+      setNoticeTimed("La venta fue completada, pero no se pudo abrir la impresion automatica.", 10000);
+    }
+  }, [branchId, printSettings, setNoticeTimed]);
 
   useEffect(() => {
     return () => { if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current); };
@@ -583,8 +613,9 @@ export function BranchPos({ branchId }: { branchId: string }) {
           : "Venta completada. Pendiente de despacho. ✓";
         setNoticeTimed(completionMsg);
         toast.success(completionMsg);
+        await autoPrintCompletedOrder(order);
 
-        // FASE 3: Mostrar modal de impresión post-pago
+        // Mostrar modal de impresion post-pago
         if (order) {
           setPrintModalOrderId(order.id);
           setPrintModalOrderNumber(order.orderNumber);
