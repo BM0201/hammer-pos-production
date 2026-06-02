@@ -150,6 +150,11 @@ type SuggestedPriceResult = {
   shrinkageAmount: number;
   landedCost: number;
   monthlyOperatingExpenses: number;
+  expenseAllocationScope: "BRANCH" | "CATEGORY" | "PRODUCT" | "MANUAL";
+  expenseScopeLabel: string;
+  unitsUsedForProration: number;
+  operatingExpenseSource: string;
+  scopeWarnings: string[];
   prorateMethod: "BY_QUANTITY" | "BY_VALUE";
   purchaseCost: number;
   operatingExpensePerUnit: number;
@@ -162,6 +167,16 @@ type SuggestedPriceResult = {
   suggestedPrice: number;
   minPrice: number;
   maxPrice: number | null;
+  marketConflict?: {
+    hasConflict: boolean;
+    type: "MARKET_MAX_BELOW_MIN_PRICE" | null;
+    minPrice: number;
+    marketMaxPrice: number | null;
+    gapAmount: number | null;
+    recommendation: string | null;
+  };
+  canApplyPrice: boolean;
+  applyBlockReason?: string | null;
   grossProfit: number;
   grossMarginPercent: number;
   priceFloorReason: "MARGIN" | "MIN_PROFIT" | "MARKET_MIN" | "NONE";
@@ -325,6 +340,11 @@ export function ExpenseManager() {
     estimatedMonthlySalesValue: "",
     productMonthlySalesValue: "",
     estimatedMonthlyUnitsForThisProduct: "",
+    expenseAllocationScope: "BRANCH" as "BRANCH" | "CATEGORY" | "PRODUCT" | "MANUAL",
+    manualOperatingExpensePerUnit: "",
+    branchMonthlyUnits: "",
+    categoryMonthlyUnits: "",
+    productMonthlyUnits: "",
   });
 
   /* Internal freight */
@@ -519,6 +539,11 @@ export function ExpenseManager() {
         includeTaxInCost,
         monthlyOperatingExpenses: useCategoryPolicy && productContext ? productContext.categoryPolicy.monthlyExpenseAllocation : (summary?.grandTotal ?? 0),
         estimatedMonthlyUnits: configForm.estimatedMonthlyUnits,
+        expenseAllocationScope: advancedCalc.expenseAllocationScope,
+        manualOperatingExpensePerUnit: advancedCalc.manualOperatingExpensePerUnit,
+        branchMonthlyUnits: advancedCalc.branchMonthlyUnits,
+        categoryMonthlyUnits: advancedCalc.categoryMonthlyUnits,
+        productMonthlyUnits: advancedCalc.productMonthlyUnits,
         prorateMethod: configForm.prorationMethod,
         marginPercent: configForm.desiredMarginPercent,
         useCategoryPolicy,
@@ -570,6 +595,8 @@ export function ExpenseManager() {
       ...prev,
       minProfitAmount: String(policy.minProfitAmount),
       estimatedMonthlySalesValue: policy.estimatedMonthlySalesValue === null ? prev.estimatedMonthlySalesValue : String(policy.estimatedMonthlySalesValue),
+      expenseAllocationScope: "CATEGORY",
+      categoryMonthlyUnits: String(policy.estimatedMonthlyUnits),
       roundingRule: policy.roundingRule,
     }));
   };
@@ -582,7 +609,7 @@ export function ExpenseManager() {
       if (productContext.categoryPolicy.monthlyExpenseAllocation > 0) {
         setAdvancedCalc((prev) => ({ ...prev }));
       }
-      showToast("success", "Politica de categoria precargada");
+      showToast("success", "Politica de categoria precargada: usando gasto asignado a categoria");
     }
   };
 
@@ -647,6 +674,10 @@ export function ExpenseManager() {
 
   const handleApplySuggestedPrice = async (applyScope: "BRANCH" | "GLOBAL") => {
     if (!calcResult || !productContext) return;
+    if (calcResult.canApplyPrice === false || calcResult.marketConflict?.hasConflict) {
+      showToast("warning", "Corrige costos, ambito de prorrateo o precio maximo de mercado antes de aplicar.");
+      return;
+    }
     const previousPrice = applyScope === "BRANCH" ? productContext.branchPrice : productContext.standardSalePrice;
     const diff = calcResult.suggestedPrice - (previousPrice ?? productContext.effectivePrice);
     const target = applyScope === "BRANCH" ? `la sucursal ${selectedBranch?.name ?? ""}` : "el precio global";
@@ -1400,6 +1431,52 @@ export function ExpenseManager() {
                         <option value="ENDING_99">Terminado en 99</option>
                       </select>
                     </label>
+                    <div className="sm:col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <label className="space-y-1 text-xs font-semibold text-amber-900">
+                        Ambito del prorrateo
+                        <select
+                          value={advancedCalc.expenseAllocationScope}
+                          onChange={(e) => setAdvancedCalc((p) => ({ ...p, expenseAllocationScope: e.target.value as typeof p.expenseAllocationScope }))}
+                          className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                        >
+                          <option value="BRANCH">Sucursal completa</option>
+                          <option value="CATEGORY">Categoria/familia</option>
+                          <option value="PRODUCT">Producto especifico</option>
+                          <option value="MANUAL">Manual por unidad</option>
+                        </select>
+                      </label>
+                      {advancedCalc.expenseAllocationScope === "MANUAL" ? (
+                        <label className="mt-3 block space-y-1 text-xs font-semibold text-amber-900">
+                          Gasto operativo manual por unidad
+                          <Input type="number" min="0" step="0.01" value={advancedCalc.manualOperatingExpensePerUnit} onChange={(e) => setAdvancedCalc((p) => ({ ...p, manualOperatingExpensePerUnit: e.target.value }))} />
+                        </label>
+                      ) : (
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <label className="space-y-1 text-xs font-semibold text-amber-900">
+                            {advancedCalc.expenseAllocationScope === "CATEGORY" ? "Unidades vendidas al mes en esta categoria" : advancedCalc.expenseAllocationScope === "PRODUCT" ? "Unidades vendidas al mes de este producto" : "Unidades totales vendidas al mes en la sucursal"}
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={advancedCalc.expenseAllocationScope === "CATEGORY" ? advancedCalc.categoryMonthlyUnits : advancedCalc.expenseAllocationScope === "PRODUCT" ? advancedCalc.productMonthlyUnits : advancedCalc.branchMonthlyUnits}
+                              onChange={(e) => {
+                                const key = advancedCalc.expenseAllocationScope === "CATEGORY" ? "categoryMonthlyUnits" : advancedCalc.expenseAllocationScope === "PRODUCT" ? "productMonthlyUnits" : "branchMonthlyUnits";
+                                setAdvancedCalc((p) => ({ ...p, [key]: e.target.value }));
+                              }}
+                              placeholder={configForm.estimatedMonthlyUnits}
+                            />
+                          </label>
+                          <div className="rounded border border-amber-200 bg-white p-2 text-[11px] text-amber-800">
+                            {advancedCalc.expenseAllocationScope === "CATEGORY"
+                              ? "Gasto mensual asignado a la categoria. No uses gasto total de sucursal aqui."
+                              : advancedCalc.expenseAllocationScope === "PRODUCT"
+                                ? "Gasto mensual asignado solo a este producto. Cuidado con mezclar gasto global."
+                                : "Gastos operativos mensuales de la sucursal completa."}
+                          </div>
+                        </div>
+                      )}
+                      {useCategoryPolicy ? <p className="mt-2 text-[11px] font-semibold text-amber-800">Usando gasto asignado a categoria, no gasto total de sucursal.</p> : null}
+                    </div>
                     {configForm.prorationMethod === "BY_VALUE" && (
                       <>
                         <label className="space-y-1 text-xs font-semibold text-slate-700">
@@ -1472,11 +1549,16 @@ export function ExpenseManager() {
             const ivaAmount = calcResult.taxAmount;
             const ganancia = calcResult.grossProfit;
             const gananciaPercent = calcResult.markupPercent.toFixed(1);
+            const hasMarketConflict = calcResult.marketConflict?.hasConflict === true;
+            const cannotApplyPrice = hasMarketConflict || calcResult.canApplyPrice === false;
+            const resultTone = hasMarketConflict
+              ? "border-red-300 dark:border-red-800 bg-gradient-to-br from-red-50 via-white to-amber-50 dark:from-red-950/30 dark:via-[var(--color-surface)] dark:to-amber-950/20 shadow-xl shadow-red-500/10"
+              : "border-emerald-300 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-emerald-950/30 dark:via-[var(--color-surface)] dark:to-teal-950/20 shadow-xl shadow-emerald-500/10";
 
             return (
-              <div className="relative overflow-hidden rounded-2xl border-2 border-emerald-300 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 via-white to-teal-50 dark:from-emerald-950/30 dark:via-[var(--color-surface)] dark:to-teal-950/20 shadow-xl shadow-emerald-500/10">
+              <div className={`relative overflow-hidden rounded-2xl border-2 ${resultTone}`}>
                 {/* Accent bar */}
-                <div className="h-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
+                <div className={`h-1.5 ${hasMarketConflict ? "bg-gradient-to-r from-red-600 via-amber-500 to-orange-500" : "bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500"}`} />
 
                 {!calcResult.configExists && (
                   <div className="mx-6 mt-5 flex items-start gap-2 rounded-xl bg-[var(--color-warning-50)] dark:bg-amber-900/20 border border-[var(--color-warning-200)] dark:border-amber-800 p-3">
@@ -1488,6 +1570,24 @@ export function ExpenseManager() {
                 )}
 
                 <div className="p-6 lg:p-8">
+                  {hasMarketConflict && (
+                    <div className="mb-5 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                        <div>
+                          <p className="font-bold uppercase">NO RENTABLE / REVISAR COSTOS</p>
+                          <p className="mt-1 text-xs">
+                            El precio maximo de mercado queda por debajo del precio minimo rentable. Revisa costo, gasto operativo o ambito de prorrateo antes de aplicar.
+                          </p>
+                          {calcResult.marketConflict ? (
+                            <p className="mt-2 text-xs font-semibold">
+                              Minimo rentable: {formatC(calcResult.marketConflict.minPrice)} | Max mercado: {calcResult.marketConflict.marketMaxPrice === null ? "Sin limite" : formatC(calcResult.marketConflict.marketMaxPrice)}
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] gap-6 lg:gap-8 items-start">
 
                     {/* ── Desglose paso a paso ── */}
@@ -1568,11 +1668,11 @@ export function ExpenseManager() {
 
                       <div className="grid grid-cols-2 gap-2 pt-2">
                         <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
-                          <p className="text-[10px] font-bold uppercase text-slate-500">Precio minimo</p>
+                          <p className="text-[10px] font-bold uppercase text-slate-500">Precio minimo rentable</p>
                           <p className="text-sm font-bold text-slate-900">{formatC(calcResult.minPrice)}</p>
                         </div>
                         <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
-                          <p className="text-[10px] font-bold uppercase text-slate-500">Max mercado</p>
+                          <p className="text-[10px] font-bold uppercase text-slate-500">Precio maximo de mercado</p>
                           <p className="text-sm font-bold text-slate-900">{calcResult.maxPrice === null ? "Sin limite" : formatC(calcResult.maxPrice)}</p>
                         </div>
                       </div>
@@ -1643,6 +1743,9 @@ export function ExpenseManager() {
                         <div className="flex justify-between"><span>Precio minimo crudo</span><strong>{formatC(calcResult.rawSuggestedPrice)}</strong></div>
                         <div className="flex justify-between"><span>Redondeo</span><strong>{calcResult.roundingRule}</strong></div>
                         <div className="flex justify-between"><span>Piso aplicado</span><strong>{calcResult.priceFloorReason}</strong></div>
+                        <div className="flex justify-between"><span>Ambito gasto</span><strong>{calcResult.expenseScopeLabel}</strong></div>
+                        <div className="flex justify-between"><span>Unidades usadas</span><strong>{calcResult.unitsUsedForProration.toLocaleString()}</strong></div>
+                        <div className="flex justify-between"><span>Fuente gasto</span><strong>{calcResult.operatingExpenseSource}</strong></div>
                         {calcResult.expenseAllocationRatio !== undefined ? (
                           <div className="flex justify-between"><span>Participacion valor</span><strong>{(calcResult.expenseAllocationRatio * 100).toFixed(1)}%</strong></div>
                         ) : null}
@@ -1657,12 +1760,17 @@ export function ExpenseManager() {
 
                       {productContext ? (
                         <div className="mt-5 w-full max-w-xs space-y-2">
-                          <Button className="w-full" variant="success" onClick={() => handleApplySuggestedPrice("BRANCH")}>
+                          <Button className="w-full disabled:cursor-not-allowed disabled:opacity-50" variant="success" disabled={cannotApplyPrice} onClick={() => handleApplySuggestedPrice("BRANCH")}>
                             Aplicar a sucursal
                           </Button>
-                          <Button className="w-full" variant="secondary" onClick={() => handleApplySuggestedPrice("GLOBAL")}>
+                          <Button className="w-full disabled:cursor-not-allowed disabled:opacity-50" variant="secondary" disabled={cannotApplyPrice} onClick={() => handleApplySuggestedPrice("GLOBAL")}>
                             Aplicar global
                           </Button>
+                          {cannotApplyPrice && (
+                            <p className="text-xs text-red-700">
+                              Aplicacion bloqueada: {calcResult.applyBlockReason ?? "revisa costos, ambito de prorrateo o mercado"}.
+                            </p>
+                          )}
                         </div>
                       ) : calcMode === "ADVANCED" ? (
                         <p className="mt-5 max-w-xs text-xs text-[var(--color-text-muted)]">

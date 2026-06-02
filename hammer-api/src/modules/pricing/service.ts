@@ -261,6 +261,11 @@ export async function calculatePricingSuggestionForBranch(params: PricingSuggest
   let estimatedMonthlyUnits = params.estimatedMonthlyUnits;
   let marginPercent = params.marginPercent;
   let prorateMethod = params.prorateMethod;
+  let expenseAllocationScope = params.expenseAllocationScope;
+  let branchMonthlyUnits = params.branchMonthlyUnits;
+  let categoryMonthlyUnits = params.categoryMonthlyUnits;
+  let productMonthlyUnits = params.productMonthlyUnits;
+  const serviceWarnings: string[] = [];
   let policyApplied = false;
   let policySource: "CATEGORY" | "VIRTUAL_DEFAULT" | undefined;
   let categoryPolicySnapshot: Awaited<ReturnType<typeof resolvePolicyForProduct>>["categoryPolicy"] | undefined;
@@ -273,12 +278,15 @@ export async function calculatePricingSuggestionForBranch(params: PricingSuggest
     policyApplied = true;
     policySource = categoryPolicySnapshot.isVirtualDefault ? "VIRTUAL_DEFAULT" : "CATEGORY";
     const force = params.forcePolicyValues === true;
+    if (force || expenseAllocationScope === undefined) expenseAllocationScope = "CATEGORY";
     if (force || marginPercent === undefined) marginPercent = categoryPolicySnapshot.targetMarginPercent;
     if (force || params.minProfitAmount === undefined) params.minProfitAmount = categoryPolicySnapshot.minProfitAmount;
     if (force || monthlyOperatingExpenses === undefined) monthlyOperatingExpenses = categoryPolicySnapshot.monthlyExpenseAllocation;
+    if (force || categoryMonthlyUnits === undefined) categoryMonthlyUnits = categoryPolicySnapshot.estimatedMonthlyUnits;
     if (force || estimatedMonthlyUnits === undefined) estimatedMonthlyUnits = categoryPolicySnapshot.estimatedMonthlyUnits;
     if (force || params.estimatedMonthlySalesValue === undefined) params.estimatedMonthlySalesValue = categoryPolicySnapshot.estimatedMonthlySalesValue ?? undefined;
     if (force || params.roundingRule === undefined) params.roundingRule = categoryPolicySnapshot.roundingRule as any;
+    serviceWarnings.push("La politica de categoria usa gasto asignado a categoria, no gasto total de sucursal.");
   }
 
   if (params.branchId) {
@@ -299,15 +307,27 @@ export async function calculatePricingSuggestionForBranch(params: PricingSuggest
     const force = params.forceCommercialValues === true;
     if (force || params.marginPercent === undefined) marginPercent = commercialIntelligenceSnapshot.recommendedMarginPercent;
     if (force || params.minProfitAmount === undefined) params.minProfitAmount = commercialIntelligenceSnapshot.recommendedMinProfitAmount;
+    if (!expenseAllocationScope) {
+      expenseAllocationScope = ["CZ", "BZ", "CY"].includes(commercialIntelligenceSnapshot.combinedClass) ? "CATEGORY" : "BRANCH";
+    }
+    if (commercialIntelligenceSnapshot.combinedClass === "CZ" && expenseAllocationScope === "PRODUCT") {
+      serviceWarnings.push("Producto CZ: evita prorratear como stock normal con gasto global; considera categoria, manual por unidad o bajo pedido.");
+    }
   }
 
   const result = calculatePricingSuggestion({
     ...params,
     monthlyOperatingExpenses: monthlyOperatingExpenses ?? 0,
     estimatedMonthlyUnits: estimatedMonthlyUnits ?? 1,
+    branchMonthlyUnits,
+    categoryMonthlyUnits,
+    productMonthlyUnits,
+    expenseAllocationScope,
     marginPercent,
     prorateMethod,
   });
+  result.warnings.push(...serviceWarnings);
+  result.scopeWarnings.push(...serviceWarnings);
 
   if (params.branchId && params.productId) {
     await prisma.productPricing.create({
