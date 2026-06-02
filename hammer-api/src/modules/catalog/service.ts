@@ -2,7 +2,48 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
-import { mapProductWithEffectivePricing } from "@/modules/catalog/effective-pricing";
+import { getEffectiveProductPricing, mapProductWithEffectivePricing } from "@/modules/catalog/effective-pricing";
+import { formatDualStock, getProductStockConversion, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
+
+type CatalogProductWithBranchPricing = {
+  id: string;
+  standardSalePrice: Prisma.Decimal;
+  branchProductSettings?: Array<{ branchId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null }>;
+  inventoryBalances?: Array<{ branchId: string; weightedAverageCost: Prisma.Decimal }>;
+};
+
+async function mapProductWithBranchInventory<TProduct extends CatalogProductWithBranchPricing>(product: TProduct, branchId: string) {
+  const mapped = mapProductWithEffectivePricing(product, branchId);
+  const [conversion, shared, effective] = await Promise.all([
+    getProductStockConversion(prisma, product.id),
+    getSharedInventoryBalance(prisma, { branchId, productId: product.id }),
+    getEffectiveProductPricing(prisma, { branchId, productId: product.id }),
+  ]);
+  const dualStock = conversion && shared.balance
+    ? formatDualStock({
+        baseQuantity: shared.balance.quantityOnHand,
+        conversionFactor: conversion.conversionFactor,
+        baseUnit: conversion.baseUnit,
+        saleUnit: conversion.saleUnit,
+      })
+    : null;
+
+  return {
+    ...mapped,
+    effectiveCost: effective.effectiveCost,
+    weightedAverageCost: effective.weightedAverageCost,
+    stockConversion: conversion ? {
+      stockGroupId: conversion.stockGroupId,
+      stockGroupCode: conversion.stockGroupCode,
+      stockGroupName: conversion.stockGroupName,
+      baseUnit: conversion.baseUnit,
+      saleUnit: conversion.saleUnit,
+      conversionFactor: conversion.conversionFactor,
+      isCanonical: conversion.isCanonical,
+    } : null,
+    sharedStock: dualStock,
+  };
+}
 
 export async function listCategories() {
   return prisma.category.findMany({
@@ -108,7 +149,9 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
     take: 1000,
   });
 
-  return params.branchId ? products.map((product) => mapProductWithEffectivePricing(product, params.branchId)) : products;
+  if (!params.branchId) return products;
+
+  return Promise.all(products.map((product) => mapProductWithBranchInventory(product, params.branchId!)));
 }
 
 /**
@@ -405,7 +448,7 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
       orderBy: { name: "asc" },
       take: limit,
     });
-    return params.branchId ? fallbackProducts.map((product) => mapProductWithEffectivePricing(product, params.branchId)) : fallbackProducts;
+    return params.branchId ? Promise.all(fallbackProducts.map((product) => mapProductWithBranchInventory(product, params.branchId!))) : fallbackProducts;
   }
 
   const productIds = topLines.map((line) => line.productId);
@@ -421,5 +464,5 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
   const idOrder = new Map(productIds.map((id, idx) => [id, idx]));
   products.sort((a, b) => (idOrder.get(a.id) ?? 99) - (idOrder.get(b.id) ?? 99));
 
-  return params.branchId ? products.map((product) => mapProductWithEffectivePricing(product, params.branchId)) : products;
+  return params.branchId ? Promise.all(products.map((product) => mapProductWithBranchInventory(product, params.branchId!))) : products;
 }

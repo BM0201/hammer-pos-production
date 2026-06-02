@@ -3,6 +3,11 @@ import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
+import {
+  convertBaseUnitCostToSaleUnitCost,
+  convertSaleQtyToBaseQty,
+  getSharedInventoryBalance,
+} from "@/modules/inventory/unit-conversion";
 
 function generateTransferNumber(): string {
   const ts = Date.now().toString(36).toUpperCase();
@@ -73,10 +78,16 @@ export async function createTransfer(input: CreateTransferInput) {
     if (typeof line.quantity !== "number" || line.quantity <= 0) throw new Error("INVALID_INPUT: Cantidad debe ser positiva");
   }
 
-  const balances = await prisma.inventoryBalance.findMany({
-    where: { branchId: input.fromBranchId, productId: { in: input.lines.map((line) => line.productId) } },
-  });
-  const balanceMap = new Map(balances.map((balance) => [balance.productId, balance]));
+  const balanceRows = await Promise.all(input.lines.map(async (line) => {
+    const shared = await getSharedInventoryBalance(prisma, { branchId: input.fromBranchId, productId: line.productId });
+    const unitCostSnapshot = shared.balance
+      ? (shared.conversion
+          ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: shared.balance.weightedAverageCost, conversionFactor: shared.conversion.conversionFactor })
+          : shared.balance.weightedAverageCost)
+      : new Prisma.Decimal(0);
+    return [line.productId, unitCostSnapshot] as const;
+  }));
+  const unitCostByProductId = new Map(balanceRows);
 
   const transfer = await prisma.transfer.create({
     data: {
@@ -90,7 +101,7 @@ export async function createTransfer(input: CreateTransferInput) {
         create: input.lines.map((line) => ({
           productId: line.productId,
           quantityRequested: new Prisma.Decimal(line.quantity),
-          unitCostSnapshot: balanceMap.get(line.productId)?.weightedAverageCost ?? new Prisma.Decimal(0),
+          unitCostSnapshot: unitCostByProductId.get(line.productId) ?? new Prisma.Decimal(0),
         })),
       },
     },
@@ -164,12 +175,13 @@ export async function dispatchTransfer(id: string, userId: string) {
     for (const line of transfer.lines) {
       const pendingDispatch = Number(line.quantityRequested) - Number(line.quantityDispatched);
       if (pendingDispatch <= 0) continue;
-      const balance = await tx.inventoryBalance.findUnique({
-        where: { branchId_productId: { branchId: transfer.fromBranchId, productId: line.productId } },
-      });
-      const available = Number(balance?.quantityOnHand ?? 0);
-      if (available < pendingDispatch) {
-        throw new Error(`INVALID_INPUT: Stock insuficiente para ${line.product.name}. Disponible: ${available}, Solicitado: ${pendingDispatch}`);
+      const shared = await getSharedInventoryBalance(tx, { branchId: transfer.fromBranchId, productId: line.productId });
+      const available = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
+      const required = shared.conversion
+        ? convertSaleQtyToBaseQty({ quantity: pendingDispatch, conversionFactor: shared.conversion.conversionFactor })
+        : new Prisma.Decimal(pendingDispatch);
+      if (available.lt(required)) {
+        throw new Error(`INVALID_INPUT: Stock insuficiente para ${line.product.name}. Disponible: ${available.toString()} ${shared.conversion?.baseUnit ?? ""}, Solicitado: ${required.toString()} ${shared.conversion?.baseUnit ?? ""}`);
       }
       if (Number(line.unitCostSnapshot) <= 0) {
         throw new Error(`INVALID_INPUT: ${line.product.name} no tiene costo de origen para traslado`);
@@ -249,11 +261,14 @@ export async function receiveTransfer(id: string, userId: string, input: Receive
       if (pending <= 0) throw new Error(`INVALID_INPUT: ${line.product.name} no tiene cantidad pendiente por recibir`);
       if (qty > pending) throw new Error(`INVALID_INPUT: No se puede recibir mas de lo despachado para ${line.product.name}. Pendiente: ${pending}`);
 
-      const previousBalance = await tx.inventoryBalance.findUnique({
-        where: { branchId_productId: { branchId: transfer.toBranchId, productId: line.productId } },
-      });
+      const shared = await getSharedInventoryBalance(tx, { branchId: transfer.toBranchId, productId: line.productId });
+      const previousBalance = shared.balance;
       const previousStock = Number(previousBalance?.quantityOnHand ?? 0);
-      const previousWac = previousBalance ? Number(previousBalance.weightedAverageCost) : null;
+      const previousWac = previousBalance
+        ? Number(shared.conversion
+          ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: previousBalance.weightedAverageCost, conversionFactor: shared.conversion.conversionFactor })
+          : previousBalance.weightedAverageCost)
+        : null;
       const finalUnitCost = Math.round((Number(line.unitCostSnapshot) + (item.allocatedTransferFreightPerUnit ?? freightPerUnit)) * 10000) / 10000;
       if (finalUnitCost <= 0) throw new Error(`INVALID_INPUT: ${line.product.name} no tiene costo final valido para recepcion`);
 
@@ -275,15 +290,19 @@ export async function receiveTransfer(id: string, userId: string, input: Receive
       });
 
       if (input.updateBranchCost) {
+        const branchCost = shared.conversion
+          ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: movementResult.balance.weightedAverageCost, conversionFactor: shared.conversion.conversionFactor })
+          : movementResult.balance.weightedAverageCost;
         await tx.branchProductSetting.upsert({
           where: { branchId_productId: { branchId: transfer.toBranchId, productId: line.productId } },
-          create: { branchId: transfer.toBranchId, productId: line.productId, branchCost: movementResult.balance.weightedAverageCost },
-          update: { branchCost: movementResult.balance.weightedAverageCost },
+          create: { branchId: transfer.toBranchId, productId: line.productId, branchCost },
+          update: { branchCost },
         });
       }
 
       receivedLines.push({
         productId: line.productId,
+        inventoryProductId: shared.inventoryProductId,
         quantityReceived: qty,
         finalUnitCost,
         previousStock,

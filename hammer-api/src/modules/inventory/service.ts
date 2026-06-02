@@ -4,14 +4,18 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
 import { isInboundMovement, recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
+import { convertSaleQtyToBaseQty, convertSaleUnitCostToBaseUnitCost, resolveInventoryProductForMovement } from "@/modules/inventory/unit-conversion";
 
 export const INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD = 25;
 
 export async function listInventoryBalances(params: { branchId: string; productId?: string }) {
+  const resolved = params.productId
+    ? await resolveInventoryProductForMovement(prisma, params.productId)
+    : null;
   return prisma.inventoryBalance.findMany({
     where: {
       branchId: params.branchId,
-      ...(params.productId ? { productId: params.productId } : {}),
+      ...(params.productId ? { productId: resolved?.inventoryProductId ?? params.productId } : {}),
     },
     include: { product: true, branch: true },
     orderBy: { product: { name: "asc" } },
@@ -56,15 +60,23 @@ export async function createInventoryMovementTx(
   const movementQty = new Prisma.Decimal(input.quantity);
   const movementUnitCost = new Prisma.Decimal(input.unitCost);
   const inbound = isInboundMovement(input.movementType);
+  const resolved = await resolveInventoryProductForMovement(tx, input.productId);
+  const inventoryProductId = resolved.inventoryProductId;
+  const baseMovementQty = resolved.conversion
+    ? convertSaleQtyToBaseQty({ quantity: movementQty, conversionFactor: resolved.conversion.conversionFactor })
+    : movementQty;
+  const baseMovementUnitCost = resolved.conversion
+    ? convertSaleUnitCostToBaseUnitCost({ saleUnitCost: movementUnitCost, conversionFactor: resolved.conversion.conversionFactor })
+    : movementUnitCost;
 
   // ── WAC pre-validation (fail fast before touching the DB) ─────────
-  if (movementQty.lte(new Prisma.Decimal(0))) {
+  if (baseMovementQty.lte(new Prisma.Decimal(0))) {
     throw new WacValidationError("INVALID_MOVEMENT_QUANTITY", "Quantity must be positive.");
   }
-  if (movementUnitCost.lt(new Prisma.Decimal(0))) {
+  if (baseMovementUnitCost.lt(new Prisma.Decimal(0))) {
     throw new WacValidationError("NEGATIVE_UNIT_COST", "Unit cost cannot be negative.");
   }
-  if (inbound && movementUnitCost.eq(new Prisma.Decimal(0))) {
+  if (inbound && baseMovementUnitCost.eq(new Prisma.Decimal(0))) {
     throw new WacValidationError("ZERO_COST_INBOUND", "Inbound movements require a positive unit cost.");
   }
 
@@ -73,12 +85,12 @@ export async function createInventoryMovementTx(
     where: {
       branchId_productId: {
         branchId: input.branchId,
-        productId: input.productId,
+        productId: inventoryProductId,
       },
     },
     create: {
       branchId: input.branchId,
-      productId: input.productId,
+      productId: inventoryProductId,
       quantityOnHand: 0,
       weightedAverageCost: 0,
       inventoryValue: 0,
@@ -91,7 +103,7 @@ export async function createInventoryMovementTx(
     SELECT id
     FROM "InventoryBalance"
     WHERE "branchId" = ${input.branchId}
-      AND "productId" = ${input.productId}
+      AND "productId" = ${inventoryProductId}
     FOR UPDATE
   `;
 
@@ -100,7 +112,7 @@ export async function createInventoryMovementTx(
     where: {
       branchId_productId: {
         branchId: input.branchId,
-        productId: input.productId,
+        productId: inventoryProductId,
       },
     },
   });
@@ -112,18 +124,18 @@ export async function createInventoryMovementTx(
   const next = recalculateWeightedAverage({
     currentQty: balance.quantityOnHand,
     currentWac: balance.weightedAverageCost,
-    movementQty,
-    movementUnitCost,
+    movementQty: baseMovementQty,
+    movementUnitCost: baseMovementUnitCost,
     inbound,
   });
 
   const movement = await tx.inventoryMovement.create({
     data: {
       branchId: input.branchId,
-      productId: input.productId,
+      productId: inventoryProductId,
       movementType: input.movementType,
-      quantity: movementQty,
-      unitCost: movementUnitCost,
+      quantity: baseMovementQty,
+      unitCost: baseMovementUnitCost,
       referenceType: input.referenceType,
       referenceId: input.referenceId,
       notes: input.notes,
@@ -151,6 +163,19 @@ export async function createInventoryMovementTx(
         movementType: input.movementType,
         quantity: input.quantity,
         unitCost: input.unitCost,
+        originalProductId: input.productId,
+        inventoryProductId,
+        unitConversion: resolved.conversion ? {
+          stockGroupId: resolved.conversion.stockGroupId,
+          stockGroupCode: resolved.conversion.stockGroupCode,
+          saleUnit: resolved.conversion.saleUnit,
+          baseUnit: resolved.conversion.baseUnit,
+          saleQuantity: movementQty.toString(),
+          baseQuantity: baseMovementQty.toString(),
+          conversionFactor: resolved.conversion.conversionFactor.toString(),
+          saleUnitCost: movementUnitCost.toString(),
+          baseUnitCost: baseMovementUnitCost.toString(),
+        } : null,
         balanceQty: updatedBalance.quantityOnHand.toString(),
         balanceWac: updatedBalance.weightedAverageCost.toString(),
       },

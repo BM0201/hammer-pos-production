@@ -23,6 +23,21 @@ type ProductRow = {
   effectivePrice?: string;
   priceSource?: "BRANCH" | "STANDARD";
   unit: string;
+  stockConversion?: {
+    stockGroupId: string;
+    stockGroupCode: string;
+    stockGroupName: string;
+    baseUnit: string;
+    saleUnit: string;
+    conversionFactor: string | number;
+    isCanonical: boolean;
+  } | null;
+  sharedStock?: {
+    baseQuantity: number;
+    saleQuantity: number;
+    baseUnit: string;
+    saleUnit: string;
+  } | null;
 };
 
 type TicketLine = {
@@ -52,7 +67,7 @@ type InventoryBalanceRow = {
   quantityOnHand: string;
 };
 
-const ROW_HEIGHT = 82;
+const ROW_HEIGHT = 96;
 const OVERSCAN = 8;
 const MAX_REASONABLE_QUANTITY = 9999;
 const STATUS_LABELS: Record<string, string> = {
@@ -129,6 +144,18 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const transportAmountValue = includeTransport && Number.isFinite(transportAmountNumber) && transportAmountNumber > 0
     ? transportAmountNumber
     : 0;
+
+  const seedSharedStock = useCallback((rows: ProductRow[]) => {
+    const next: Record<string, number> = {};
+    for (const row of rows) {
+      if (row.sharedStock && Number.isFinite(row.sharedStock.saleQuantity)) {
+        next[row.id] = row.sharedStock.saleQuantity;
+      }
+    }
+    if (Object.keys(next).length > 0) {
+      setStockByProductId((prev) => ({ ...prev, ...next }));
+    }
+  }, []);
 
   const transportValidationError = useMemo(() => {
     if (!includeTransport) return null;
@@ -237,6 +264,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
       }
 
       const rows = json.data ?? [];
+      seedSharedStock(rows);
       setTopProducts(rows);
       if (!search.trim()) {
         setProducts(rows);
@@ -246,7 +274,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
       console.error("[POS][loadTopSelling]", error);
       setNoticeTimed(resolveApiMessage({ fallback: "No se pudieron cargar los productos más vendidos.", thrownError: error }), 10000);
     }
-  }, [branchId, resolveApiMessage, setNoticeTimed, search]);
+  }, [branchId, resolveApiMessage, seedSharedStock, setNoticeTimed, search]);
 
   const loadProducts = useCallback(async (query: string) => {
     if (!query.trim()) {
@@ -274,6 +302,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
       }
 
       const rows = json.data ?? [];
+      seedSharedStock(rows);
       const q = query.trim().toLowerCase();
       const rank = (item: ProductRow) => {
         if (!q) return 99;
@@ -302,7 +331,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     } finally {
       setLoadingProducts(false);
     }
-  }, [branchId, resolveApiMessage, setNoticeTimed, topProducts]);
+  }, [branchId, resolveApiMessage, seedSharedStock, setNoticeTimed, topProducts]);
 
   // Load branch config (enableCashier / enableDispatch)
   useEffect(() => {
@@ -766,6 +795,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   const index = startIndex + localIndex;
                   const selected = index === activeProductIndex;
                   const displayPrice = product.effectivePrice ?? product.standardSalePrice;
+                  const conversionFactor = Number(product.stockConversion?.conversionFactor ?? 0);
+                  const sharedStock = product.sharedStock;
 
                   return (
                     <button
@@ -795,6 +826,12 @@ export function BranchPos({ branchId }: { branchId: string }) {
                           </span>
                         ) : null}
                       </div>
+                      {product.stockConversion && sharedStock ? (
+                        <div className="mt-1 text-[0.65rem] text-[var(--color-text-muted)]">
+                          Stock compartido: {sharedStock.saleQuantity.toFixed(2)} {sharedStock.saleUnit} / {sharedStock.baseQuantity.toFixed(2)} {sharedStock.baseUnit}
+                          {conversionFactor > 1 ? ` - 1 ${sharedStock.saleUnit} = ${conversionFactor} ${sharedStock.baseUnit}` : ""}
+                        </div>
+                      ) : null}
                     </button>
                   );
                 })}

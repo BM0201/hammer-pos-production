@@ -4,6 +4,13 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
+import {
+  convertBaseQtyToSaleQty,
+  convertBaseUnitCostToSaleUnitCost,
+  convertSaleQtyToBaseQty,
+  getSharedInventoryBalance,
+  resolveInventoryProductForMovement,
+} from "@/modules/inventory/unit-conversion";
 
 /* ── Helpers ── */
 function generateOrderNumber(): string {
@@ -287,14 +294,37 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
   if (po.status !== "APPROVED") throw new Error("INVALID_INPUT: Solo se pueden recibir pedidos en estado APROBADO");
   if (input.branchId && input.branchId !== po.branchId) throw new Error("INVALID_INPUT: La sucursal de recepcion no coincide con el pedido");
 
+  const lineStockResolutions = await Promise.all(po.lines.map(async (line) => ({
+    lineId: line.id,
+    productId: line.productId,
+    ...(await resolveInventoryProductForMovement(prisma, line.productId)),
+  })));
+  const stockResolutionByProductId = new Map(lineStockResolutions.map((row) => [row.productId, row]));
+  const stockResolutionByLineId = new Map(lineStockResolutions.map((row) => [row.lineId, row]));
+  const inventoryProductIds = Array.from(new Set(lineStockResolutions.map((row) => row.inventoryProductId)));
+
   const previousMovements = await prisma.inventoryMovement.groupBy({
     by: ["productId"],
-    where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN" },
+    where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN", productId: { in: inventoryProductIds } },
     _sum: { quantity: true },
   });
   const receivedByProduct = new Map(previousMovements.map((row) => [row.productId, Number(row._sum.quantity ?? 0)]));
-  const requestedByProduct = new Map(po.lines.map((line) => [line.productId, Number(line.quantity)]));
-  const pendingByProduct = new Map(po.lines.map((line) => [line.productId, Number(line.quantity) - (receivedByProduct.get(line.productId) ?? 0)]));
+  const requestedByProduct = new Map(po.lines.map((line) => {
+    const resolution = stockResolutionByLineId.get(line.id);
+    const requestedBaseQty = resolution?.conversion
+      ? Number(convertSaleQtyToBaseQty({ quantity: line.quantity, conversionFactor: resolution.conversion.conversionFactor }))
+      : Number(line.quantity);
+    return [line.productId, requestedBaseQty];
+  }));
+  const pendingByProduct = new Map(po.lines.map((line) => {
+    const resolution = stockResolutionByLineId.get(line.id);
+    const receivedBaseQty = receivedByProduct.get(resolution?.inventoryProductId ?? line.productId) ?? 0;
+    const pendingBaseQty = (requestedByProduct.get(line.productId) ?? 0) - receivedBaseQty;
+    const pendingSaleQty = resolution?.conversion
+      ? Number(convertBaseQtyToSaleQty({ baseQuantity: pendingBaseQty, conversionFactor: resolution.conversion.conversionFactor }))
+      : pendingBaseQty;
+    return [line.productId, pendingSaleQty];
+  }));
   const defaultItems: ReceivePurchaseOrderItem[] = po.lines
     .map((line) => ({ productId: line.productId, purchaseOrderLineId: line.id, quantityReceived: pendingByProduct.get(line.productId) ?? 0 }))
     .filter((item) => item.quantityReceived > 0);
@@ -320,11 +350,14 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
         throw new Error(`INVALID_INPUT: No se puede recibir mas de lo pendiente para ${line.product.name}. Pendiente: ${pendingQty}`);
       }
 
-      const previousBalance = await tx.inventoryBalance.findUnique({
-        where: { branchId_productId: { branchId: po.branchId, productId: line.productId } },
-      });
+      const shared = await getSharedInventoryBalance(tx, { branchId: po.branchId, productId: line.productId });
+      const previousBalance = shared.balance;
       const previousStock = Number(previousBalance?.quantityOnHand ?? 0);
-      const previousWac = previousBalance ? Number(previousBalance.weightedAverageCost) : null;
+      const previousWac = previousBalance
+        ? Number(shared.conversion
+          ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: previousBalance.weightedAverageCost, conversionFactor: shared.conversion.conversionFactor })
+          : previousBalance.weightedAverageCost)
+        : null;
       const baseUnitCost = item.unitCost ?? Number(line.unitCostBeforeTax ?? line.unitCost);
       const finalUnitCost = money(baseUnitCost + (item.allocatedFreightPerUnit ?? freightPerUnit) + (item.allocatedOtherChargesPerUnit ?? otherPerUnit));
       const lineWarnings: string[] = [];
@@ -342,10 +375,16 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
       });
 
       if (input.updateBranchCost) {
+        const branchCost = stockResolutionByProductId.get(line.productId)?.conversion
+          ? convertBaseUnitCostToSaleUnitCost({
+              baseUnitCost: movementResult.balance.weightedAverageCost,
+              conversionFactor: stockResolutionByProductId.get(line.productId)!.conversion!.conversionFactor,
+            })
+          : movementResult.balance.weightedAverageCost;
         await tx.branchProductSetting.upsert({
           where: { branchId_productId: { branchId: po.branchId, productId: line.productId } },
-          create: { branchId: po.branchId, productId: line.productId, branchCost: movementResult.balance.weightedAverageCost },
-          update: { branchCost: movementResult.balance.weightedAverageCost },
+          create: { branchId: po.branchId, productId: line.productId, branchCost },
+          update: { branchCost },
         });
       }
 
@@ -381,6 +420,7 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
           entityId: line.id,
           metadataJson: {
             productId: line.productId,
+            inventoryProductId: stockResolutionByProductId.get(line.productId)?.inventoryProductId ?? line.productId,
             oldQty: previousStock,
             receivedQty: qtyReceived,
             newQty: movementResult.balance.quantityOnHand.toString(),
@@ -408,11 +448,15 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
 
     const movementTotals = await tx.inventoryMovement.groupBy({
       by: ["productId"],
-      where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN" },
+      where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN", productId: { in: inventoryProductIds } },
       _sum: { quantity: true },
     });
     const totalReceivedByProduct = new Map(movementTotals.map((row) => [row.productId, Number(row._sum.quantity ?? 0)]));
-    const fullyReceived = po.lines.every((line) => (totalReceivedByProduct.get(line.productId) ?? 0) >= Number(line.quantity));
+    const fullyReceived = po.lines.every((line) => {
+      const resolution = stockResolutionByLineId.get(line.id);
+      const requestedBaseQty = requestedByProduct.get(line.productId) ?? Number(line.quantity);
+      return (totalReceivedByProduct.get(resolution?.inventoryProductId ?? line.productId) ?? 0) >= requestedBaseQty;
+    });
     await tx.purchaseOrder.update({
       where: { id },
       data: { status: fullyReceived ? "RECEIVED" : "APPROVED" },

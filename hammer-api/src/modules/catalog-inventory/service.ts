@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
+import { formatDualStock, getProductStockConversion, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import type { CatalogInventoryQuery, UpdateBranchProductSettingInput, MassDeleteProductsInput } from "./validators";
 
 const CRITICAL_STOCK_FALLBACK = 1;
@@ -192,6 +193,36 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     });
     totalFiltered = totalProductsRaw;
     filteredProducts = products.map((p) => enrichProduct(p, policyByProductBranch));
+  }
+
+  if (params.branchId) {
+    filteredProducts = await Promise.all(filteredProducts.map(async (product) => {
+      const [conversion, shared] = await Promise.all([
+        getProductStockConversion(prisma, product.id),
+        getSharedInventoryBalance(prisma, { branchId: params.branchId!, productId: product.id }),
+      ]);
+      const sharedStock = conversion && shared.balance
+        ? formatDualStock({
+            baseQuantity: shared.balance.quantityOnHand,
+            conversionFactor: conversion.conversionFactor,
+            baseUnit: conversion.baseUnit,
+            saleUnit: conversion.saleUnit,
+          })
+        : null;
+      return {
+        ...product,
+        stockConversion: conversion ? {
+          stockGroupId: conversion.stockGroupId,
+          stockGroupCode: conversion.stockGroupCode,
+          stockGroupName: conversion.stockGroupName,
+          baseUnit: conversion.baseUnit,
+          saleUnit: conversion.saleUnit,
+          conversionFactor: conversion.conversionFactor,
+          isCanonical: conversion.isCanonical,
+        } : null,
+        sharedStock,
+      };
+    }));
   }
 
   /* ── Build balance map for KPIs (uses first page balances list) ── */
