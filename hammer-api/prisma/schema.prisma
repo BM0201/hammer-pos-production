@@ -1973,6 +1973,8 @@ model UserPermission {
 model PrintSettings {
   id          String      @id @default(cuid())
   branchId    String      @unique
+  cashRegisterId String?
+  name        String      @default("Configuracion principal")
   printerName String? /// Nombre de la impresora (para QZ Tray / network)
   printerMode PrinterMode @default(BROWSER_PRINT)
   paperWidth  PaperWidth  @default(W80MM)
@@ -1980,14 +1982,32 @@ model PrintSettings {
   logoUrl     String? /// URL del logo para encabezado
   footerText  String? /// Texto de pie de página personalizado
   autoPrint   Boolean     @default(false) /// Imprimir automáticamente al pagar
+  autoPrintDelivery Boolean @default(false)
   copies      Int         @default(1)
+  copiesDeliveryOrder Int @default(1)
   cutPaper    Boolean     @default(true) /// Enviar comando de corte (térmica)
   openDrawer  Boolean     @default(false) /// Abrir cajón al imprimir
   showQr      Boolean     @default(false) /// Incluir QR en documentos
+  businessName      String?
+  businessLegalName String?
+  taxId             String?
+  address           String?
+  phone             String?
+  showPricesOnDeliveryOrder Boolean @default(false)
+  showCostData              Boolean @default(false)
+  showCashierName           Boolean @default(true)
+  showCustomerData          Boolean @default(true)
+  ticketTemplate       String?
+  deliveryTemplate     String?
+  receiptTemplate      String?
+  isDefault            Boolean @default(false)
+  isActive             Boolean @default(true)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
   branch Branch @relation(fields: [branchId], references: [id])
+
+  @@index([branchId, isActive])
 }
 
 /// Plantillas de documentos comerciales

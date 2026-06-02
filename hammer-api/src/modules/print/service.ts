@@ -3,6 +3,7 @@
  */
 import { prisma } from "@/lib/prisma";
 import type { PrinterMode, PaperWidth, DocumentType, Prisma } from "@prisma/client";
+import { logAuditEvent } from "@/modules/audit/service";
 
 // ─── PrintSettings ──────────────────────────────────────────────────────────
 
@@ -19,6 +20,8 @@ export async function getAllPrintSettings() {
 
 export type UpsertPrintSettingsInput = {
   branchId: string;
+  cashRegisterId?: string | null;
+  name?: string;
   printerName?: string | null;
   printerMode?: PrinterMode;
   paperWidth?: PaperWidth;
@@ -26,19 +29,49 @@ export type UpsertPrintSettingsInput = {
   logoUrl?: string | null;
   footerText?: string | null;
   autoPrint?: boolean;
+  autoPrintDelivery?: boolean;
   copies?: number;
+  copiesDeliveryOrder?: number;
   cutPaper?: boolean;
   openDrawer?: boolean;
   showQr?: boolean;
+  businessName?: string | null;
+  businessLegalName?: string | null;
+  taxId?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  showPricesOnDeliveryOrder?: boolean;
+  showCostData?: boolean;
+  showCashierName?: boolean;
+  showCustomerData?: boolean;
+  ticketTemplate?: string | null;
+  deliveryTemplate?: string | null;
+  receiptTemplate?: string | null;
+  isDefault?: boolean;
+  isActive?: boolean;
+  actorUserId?: string;
 };
 
 export async function upsertPrintSettings(input: UpsertPrintSettingsInput) {
-  const { branchId, ...data } = input;
-  return prisma.printSettings.upsert({
+  const { branchId, actorUserId, ...data } = input;
+  const previous = await prisma.printSettings.findUnique({ where: { branchId } });
+  const result = await prisma.printSettings.upsert({
     where: { branchId },
     create: { branchId, ...data },
     update: data,
   });
+
+  await logAuditEvent({
+    actorUserId,
+    branchId,
+    module: "printing",
+    action: previous ? "PRINT_SETTINGS_UPDATED" : "PRINT_SETTINGS_CREATED",
+    entityType: "PrintSettings",
+    entityId: result.id,
+    metadataJson: { previous, next: result },
+  });
+
+  return result;
 }
 
 // ─── DocumentTemplate ───────────────────────────────────────────────────────
