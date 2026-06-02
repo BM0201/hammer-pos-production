@@ -14,6 +14,7 @@ import { PAYMENT_AUDIT_EVENTS } from "@/modules/payments/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
+import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 
 export async function listPendingPaymentOrders(params: { branchId: string; includeAllBranches: boolean }) {
   return prisma.saleOrder.findMany({
@@ -309,15 +310,13 @@ export async function postSaleOrderPayment(input: {
         `;
       }
 
-      const balances = await tx.inventoryBalance.findMany({
-        where: { branchId: order.branchId, productId: { in: uniqueProductIds } },
-      });
-      const balanceByProductId = new Map(balances.map((balance) => [balance.productId, balance]));
-
       for (const line of order.lines) {
-        const balance = balanceByProductId.get(line.productId);
-        const available = balance?.quantityOnHand ?? new Prisma.Decimal(0);
-        if (available.lt(line.quantity)) {
+        const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
+        const available = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
+        const required = shared.conversion
+          ? convertSaleQtyToBaseQty({ quantity: line.quantity, conversionFactor: shared.conversion.conversionFactor })
+          : line.quantity;
+        if (available.lt(required)) {
           await tx.auditLog.create({
             data: {
               actorUserId: input.actorUserId,
@@ -329,8 +328,10 @@ export async function postSaleOrderPayment(input: {
               metadataJson: {
                 reason: "INSUFFICIENT_STOCK_AT_PAYMENT",
                 productId: line.productId,
+                inventoryProductId: shared.inventoryProductId,
                 available: available.toString(),
                 requested: line.quantity.toString(),
+                requiredBaseQty: required.toString(),
               },
             },
           });
@@ -341,8 +342,8 @@ export async function postSaleOrderPayment(input: {
       const inventoryDeductions: string[] = [];
       try {
         for (const line of order.lines) {
-          const balance = balanceByProductId.get(line.productId);
-          const currentWac = balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+          const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
+          const currentWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
 
           const movementResult = await createInventoryMovementTx(tx, {
             actorUserId: input.actorUserId,

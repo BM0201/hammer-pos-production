@@ -12,6 +12,7 @@ import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing"
 import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
+import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 
 // FIX BUG-010: Use crypto-random suffix instead of Date.now() to prevent collisions
 function makeOrderNumber(branchCode: string) {
@@ -472,9 +473,12 @@ export async function submitSaleOrderToPendingPayment(input: {
     }
 
     for (const line of lines) {
-      const balance = await tx.inventoryBalance.findUnique({ where: { branchId_productId: { branchId: order.branchId, productId: line.productId } } });
-      const available = balance?.quantityOnHand ?? new Prisma.Decimal(0);
-      if (available.lt(line.quantity)) {
+      const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
+      const available = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
+      const required = shared.conversion
+        ? convertSaleQtyToBaseQty({ quantity: line.quantity, conversionFactor: shared.conversion.conversionFactor })
+        : line.quantity;
+      if (available.lt(required)) {
         await tx.auditLog.create({
           data: {
             actorUserId: input.actorUserId,
@@ -483,7 +487,7 @@ export async function submitSaleOrderToPendingPayment(input: {
             action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
             entityType: "SaleOrder",
             entityId: order.id,
-            metadataJson: { reason: "INSUFFICIENT_STOCK", productId: line.productId },
+            metadataJson: { reason: "INSUFFICIENT_STOCK", productId: line.productId, inventoryProductId: shared.inventoryProductId, requiredBaseQty: required.toString(), availableBaseQty: available.toString() },
           },
         });
         throw new Error("INSUFFICIENT_STOCK");
@@ -582,16 +586,14 @@ export async function submitDirectSale(input: {
       `;
     }
 
-    const balances = await tx.inventoryBalance.findMany({
-      where: { branchId: order.branchId, productId: { in: uniqueProductIds } },
-    });
-    const balanceByProductId = new Map(balances.map((balance) => [balance.productId, balance]));
-
     // Verify stock (locked balances)
     for (const line of order.lines) {
-      const balance = balanceByProductId.get(line.productId);
-      const available = balance?.quantityOnHand ?? new Prisma.Decimal(0);
-      if (available.lt(line.quantity)) throw new Error("INSUFFICIENT_STOCK");
+      const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
+      const available = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
+      const required = shared.conversion
+        ? convertSaleQtyToBaseQty({ quantity: line.quantity, conversionFactor: shared.conversion.conversionFactor })
+        : line.quantity;
+      if (available.lt(required)) throw new Error("INSUFFICIENT_STOCK");
     }
 
     // Calculate totals
@@ -657,8 +659,8 @@ export async function submitDirectSale(input: {
 
     // Deduct inventory (same locked balances)
     for (const line of order.lines) {
-      const balance = balanceByProductId.get(line.productId);
-      const currentWac = balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+      const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
+      const currentWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
       await createInventoryMovementTx(tx, {
         actorUserId: input.actorUserId,
         branchId: order.branchId,

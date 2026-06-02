@@ -2,6 +2,11 @@ import { CashSessionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { riskScoreFor } from "@/modules/brain/scoring";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
+import {
+  detectIronSaleUnit,
+  getIronBarsPerQuintal,
+  ironStockGroupCode,
+} from "@/modules/inventory/unit-conversion";
 
 export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
@@ -126,6 +131,95 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
       },
       sourceJson: { detector: "system-detector" },
       fingerprintParts: ["system", "operational-day-not-closed", day.branchId, day.businessDate.toISOString()],
+    });
+  }
+
+  const ironProducts = await prisma.product.findMany({
+    where: { isActive: true, name: { contains: "HIERRO" } },
+    select: {
+      id: true,
+      sku: true,
+      name: true,
+      inventoryBalances: {
+        where: ctx.branchId ? { branchId: ctx.branchId } : undefined,
+        select: { branchId: true, quantityOnHand: true },
+      },
+      orderLines: {
+        where: {
+          createdAt: { gte: ctx.since },
+          ...(ctx.branchId ? { saleOrder: { branchId: ctx.branchId } } : {}),
+        },
+        select: { id: true, quantity: true },
+        take: 20,
+      },
+      stockGroupMemberships: {
+        where: { isActive: true, stockGroup: { isActive: true } },
+        select: { stockGroupId: true },
+      },
+    },
+    take: 200,
+  });
+
+  const ironGroups = new Map<string, typeof ironProducts>();
+  for (const product of ironProducts) {
+    const groupCode = ironStockGroupCode(product.name);
+    const saleUnit = detectIronSaleUnit(product.name);
+    if (!groupCode || !saleUnit || !getIronBarsPerQuintal(product.name)) continue;
+    const rows = ironGroups.get(groupCode) ?? [];
+    rows.push(product);
+    ironGroups.set(groupCode, rows);
+  }
+
+  for (const [groupCode, products] of ironGroups.entries()) {
+    const varilla = products.find((product) => detectIronSaleUnit(product.name) === "VARILLA");
+    const quintal = products.find((product) => detectIronSaleUnit(product.name) === "QUINTAL");
+    const barsPerQuintal = getIronBarsPerQuintal(products[0]?.name ?? "") ?? 0;
+    if (!varilla || !quintal || barsPerQuintal <= 0) continue;
+
+    const varillaGroupIds = new Set(varilla.stockGroupMemberships.map((item) => item.stockGroupId));
+    const sharedGroupAlreadyExists = quintal.stockGroupMemberships.some((item) => varillaGroupIds.has(item.stockGroupId));
+    if (sharedGroupAlreadyExists) continue;
+
+    const productsWithStock = products.filter((product) => product.inventoryBalances.some((balance) => Number(balance.quantityOnHand) > 0));
+    const recentSalesCount = products.reduce((sum, product) => sum + product.orderLines.length, 0);
+    const severity = productsWithStock.length >= 2 || recentSalesCount >= 2 ? "CRITICAL" : "HIGH";
+
+    decisions.push({
+      category: "INVENTORY",
+      severity,
+      title: `Hierro sin stock compartido: ${groupCode}`,
+      description: `${varilla.name} y ${quintal.name} representan el mismo inventario fisico, pero no comparten ProductStockGroup.`,
+      recommendation: `Crear grupo de stock con base VARILLA y factor 1 QUINTAL = ${barsPerQuintal} VARILLA. Usar /api/catalog/stock-groups/bootstrap-iron con apply=true tras revisar el dry-run.`,
+      branchId: ctx.branchId ?? null,
+      productId: varilla.id,
+      confidenceScore: 96,
+      riskScore: riskScoreFor(severity, 96),
+      proposedActionType: "IRON_UNIT_CONVERSION_REQUIRED",
+      proposedActionJson: {
+        endpoint: "/api/catalog/stock-groups/bootstrap-iron",
+        method: "POST",
+        dryRunPayload: { apply: false },
+        applyPayload: { apply: true },
+      },
+      evidenceJson: {
+        groupCode,
+        baseUnit: "VARILLA",
+        barsPerQuintal,
+        products: products.map((product) => ({
+          id: product.id,
+          sku: product.sku,
+          name: product.name,
+          saleUnit: detectIronSaleUnit(product.name),
+          stockGroupIds: product.stockGroupMemberships.map((item) => item.stockGroupId),
+          stockOnHand: product.inventoryBalances.map((balance) => ({
+            branchId: balance.branchId,
+            quantityOnHand: balance.quantityOnHand.toString(),
+          })),
+          recentSalesLines: product.orderLines.length,
+        })),
+      },
+      sourceJson: { detector: "system-detector", rule: "iron-unit-conversion" },
+      fingerprintParts: ["system", "iron-unit-conversion-required", ctx.branchId ?? "all", groupCode],
     });
   }
 

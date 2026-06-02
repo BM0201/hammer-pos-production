@@ -35,6 +35,21 @@ type ProductRow = {
   category?: { name: string };
   inventoryBalances: Array<{ id: string; branchId: string; quantityOnHand: string; weightedAverageCost: string; branch: Branch }>;
   branchProductSettings: Array<{ branchId: string; branchCost?: string | null; branchPrice?: string | null; isAvailable: boolean; branch: Branch }>;
+  stockConversion?: {
+    stockGroupId: string;
+    stockGroupCode: string;
+    stockGroupName: string;
+    baseUnit: string;
+    saleUnit: string;
+    conversionFactor: string | number;
+    isCanonical: boolean;
+  } | null;
+  sharedStock?: {
+    baseQuantity: number;
+    saleQuantity: number;
+    baseUnit: string;
+    saleUnit: string;
+  } | null;
 };
 type Movement = {
   id: string;
@@ -828,7 +843,14 @@ export function CatalogInventoryAdmin() {
                     </td>
                     <td>{product.category?.name ?? "Sin categoria"}</td>
                     <td>{product.unit}</td>
-                    <td>{qty(product.totalStock)}</td>
+                    <td>
+                      <div>{qty(product.totalStock)}</div>
+                      {product.stockConversion && product.sharedStock ? (
+                        <div className="text-[0.65rem] text-[var(--color-text-muted)]">
+                          Compartido: {qty(product.sharedStock.saleQuantity)} {product.sharedStock.saleUnit} / {qty(product.sharedStock.baseQuantity)} {product.sharedStock.baseUnit}
+                        </div>
+                      ) : null}
+                    </td>
                     <td>{product.branchesWithStock}</td>
                     <td>{money(product.baseCost)}</td>
                     <td>

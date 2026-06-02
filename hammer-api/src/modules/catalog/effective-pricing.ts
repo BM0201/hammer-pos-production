@@ -1,4 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
+import { convertBaseUnitCostToSaleUnitCost, resolveInventoryProductForMovement } from "@/modules/inventory/unit-conversion";
 
 type PricingClient = PrismaClient | Prisma.TransactionClient;
 
@@ -37,23 +38,27 @@ export async function getEffectiveProductPricing(
     select: { id: true, standardSalePrice: true },
   });
 
+  const stockResolution = await resolveInventoryProductForMovement(txOrPrisma, input.productId);
   const [branchSetting, inventoryBalance] = await Promise.all([
     txOrPrisma.branchProductSetting.findUnique({
       where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
       select: { branchPrice: true, branchCost: true },
     }),
     txOrPrisma.inventoryBalance.findUnique({
-      where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+      where: { branchId_productId: { branchId: input.branchId, productId: stockResolution.inventoryProductId } },
       select: { weightedAverageCost: true },
     }),
   ]);
+  const saleUnitWac = inventoryBalance?.weightedAverageCost && stockResolution.conversion
+    ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: inventoryBalance.weightedAverageCost, conversionFactor: stockResolution.conversion.conversionFactor })
+    : inventoryBalance?.weightedAverageCost ?? null;
 
   return resolveEffectivePricing({
     productId: product.id,
     standardSalePrice: product.standardSalePrice,
     branchPrice: branchSetting?.branchPrice ?? null,
     branchCost: branchSetting?.branchCost ?? null,
-    weightedAverageCost: inventoryBalance?.weightedAverageCost ?? null,
+    weightedAverageCost: saleUnitWac,
   });
 }
 

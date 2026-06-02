@@ -460,6 +460,7 @@ model Category {
   children Category[] @relation("CategoryToCategory")
   products Product[]
   categoryPricingPolicies BranchCategoryPricingPolicy[]
+  productStockGroups ProductStockGroup[]
 }
 
 model BranchCategoryPricingPolicy {
@@ -527,6 +528,7 @@ model Product {
   reorderPolicies        StockReorderPolicy[]
   reorderAlerts          ReorderAlert[]
   reorderSuggestionLines ReorderSuggestionLine[]
+  stockGroupMemberships  ProductStockGroupMember[]
   recipesAsOutput        ProductionRecipe[]        @relation("RecipeOutput")
   recipesAsInput         ProductionRecipeInput[]   @relation("RecipeInput")
   batchInputs            ProductionBatchInput[]    @relation("BatchInput")
@@ -534,6 +536,42 @@ model Product {
 
   @@index([abcClassification])
   @@index([rotationIndex])
+}
+
+model ProductStockGroup {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  baseUnit   String
+  categoryId String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  category Category?                 @relation(fields: [categoryId], references: [id])
+  products ProductStockGroupMember[]
+
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+model ProductStockGroupMember {
+  id               String  @id @default(cuid())
+  stockGroupId     String
+  productId        String
+  saleUnit         String
+  conversionFactor Decimal
+  isCanonical      Boolean @default(false)
+  isActive         Boolean @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  stockGroup ProductStockGroup @relation(fields: [stockGroupId], references: [id])
+  product    Product           @relation(fields: [productId], references: [id])
+
+  @@unique([stockGroupId, productId])
+  @@index([productId])
+  @@index([stockGroupId, isActive])
 }
 
 /// Timber product dimensions and pre-calculated pricing.
