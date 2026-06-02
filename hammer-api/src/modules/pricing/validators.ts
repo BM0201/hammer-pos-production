@@ -31,6 +31,7 @@ export const PRORATION_METHOD_LABELS: Record<string, string> = {
 };
 
 export const PRICING_MODES = ["SIMPLE", "ADVANCED"] as const;
+export const EXPENSE_ALLOCATION_SCOPES = ["BRANCH", "CATEGORY", "PRODUCT", "MANUAL"] as const;
 export const ROUNDING_RULES = ["NONE", "NEAREST_1", "NEAREST_5", "NEAREST_10", "NEAREST_50", "NEAREST_100", "ENDING_9", "ENDING_90", "ENDING_99"] as const;
 export const STOCK_POLICIES = ["HIGH_STOCK", "NORMAL", "LOW_STOCK", "ON_DEMAND"] as const;
 export const PRICE_MODES = ["CATEGORY", "MANUAL", "ABC_XYZ_READY"] as const;
@@ -92,6 +93,12 @@ export const pricingSuggestionPayloadSchema = z.object({
   monthlyOperatingExpenses: nonNegativeNumericInput.optional(),
   totalMonthlyExpenses: nonNegativeNumericInput.optional(),
   estimatedMonthlyUnits: nonNegativeNumericInput.optional(),
+  expenseAllocationScope: z.enum(EXPENSE_ALLOCATION_SCOPES).optional(),
+  manualOperatingExpensePerUnit: nonNegativeNumericInput.optional(),
+  branchMonthlyUnits: nonNegativeNumericInput.optional(),
+  categoryMonthlyUnits: nonNegativeNumericInput.optional(),
+  productMonthlyUnits: nonNegativeNumericInput.optional(),
+  expenseScopeLabel: z.string().max(120).optional(),
   prorateMethod: z.enum(PRORATION_METHODS).optional(),
   prorationMethod: z.enum(PRORATION_METHODS).optional(),
   estimatedMonthlySalesValue: nonNegativeNumericInput.optional(),

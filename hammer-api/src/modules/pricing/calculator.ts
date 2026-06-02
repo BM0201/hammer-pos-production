@@ -2,6 +2,13 @@ import { Prisma } from "@prisma/client";
 
 export type PricingMode = "SIMPLE" | "ADVANCED";
 export type ProrateMethod = "BY_QUANTITY" | "BY_VALUE";
+export type ExpenseAllocationScope = "BRANCH" | "CATEGORY" | "PRODUCT" | "MANUAL";
+export type OperatingExpenseSource =
+  | "BRANCH_TOTAL"
+  | "CATEGORY_ALLOCATION"
+  | "PRODUCT_ALLOCATION"
+  | "MANUAL_PER_UNIT"
+  | "LEGACY_ESTIMATED_UNITS";
 export type RoundingRule =
   | "NONE"
   | "NEAREST_1"
@@ -23,6 +30,12 @@ export type PricingSuggestionInput = {
   shrinkagePercent?: number | string | Prisma.Decimal;
   monthlyOperatingExpenses?: number | string | Prisma.Decimal;
   estimatedMonthlyUnits?: number | string | Prisma.Decimal;
+  expenseAllocationScope?: ExpenseAllocationScope;
+  manualOperatingExpensePerUnit?: number | string | Prisma.Decimal;
+  branchMonthlyUnits?: number | string | Prisma.Decimal;
+  categoryMonthlyUnits?: number | string | Prisma.Decimal;
+  productMonthlyUnits?: number | string | Prisma.Decimal;
+  expenseScopeLabel?: string;
   prorateMethod?: ProrateMethod;
   estimatedMonthlySalesValue?: number | string | Prisma.Decimal;
   productMonthlySalesValue?: number | string | Prisma.Decimal;
@@ -47,6 +60,11 @@ export type PricingSuggestionResult = {
   landedCost: number;
   monthlyOperatingExpenses: number;
   estimatedMonthlyUnits: number;
+  expenseAllocationScope: ExpenseAllocationScope;
+  expenseScopeLabel: string;
+  unitsUsedForProration: number;
+  operatingExpenseSource: OperatingExpenseSource;
+  scopeWarnings: string[];
   prorateMethod: ProrateMethod;
   operatingExpensePerUnit: number;
   totalInternalCost: number;
@@ -57,6 +75,16 @@ export type PricingSuggestionResult = {
   suggestedPrice: number;
   minPrice: number;
   maxPrice: number | null;
+  marketConflict?: {
+    hasConflict: boolean;
+    type: "MARKET_MAX_BELOW_MIN_PRICE" | null;
+    minPrice: number;
+    marketMaxPrice: number | null;
+    gapAmount: number | null;
+    recommendation: "REVIEW_COSTS" | "ON_DEMAND" | "DO_NOT_STOCK" | "NEGOTIATE_SUPPLIER" | null;
+  };
+  canApplyPrice: boolean;
+  applyBlockReason?: string | null;
   grossProfit: number;
   grossMarginPercent: number;
   priceFloorReason: "MARGIN" | "MIN_PROFIT" | "MARKET_MIN" | "NONE";
@@ -113,6 +141,29 @@ function roundEnding(value: Prisma.Decimal, ending: 9 | 90 | 99) {
   let candidate = Math.floor(min / scale) * scale + ending;
   if (candidate < min) candidate += scale;
   return new Prisma.Decimal(candidate);
+}
+
+function scopeLabel(scope: ExpenseAllocationScope, custom?: string) {
+  if (custom?.trim()) return custom.trim();
+  if (scope === "CATEGORY") return "Categoria/familia";
+  if (scope === "PRODUCT") return "Producto especifico";
+  if (scope === "MANUAL") return "Manual por unidad";
+  return "Sucursal completa";
+}
+
+function sourceForScope(scope: ExpenseAllocationScope, legacy: boolean): OperatingExpenseSource {
+  if (legacy) return "LEGACY_ESTIMATED_UNITS";
+  if (scope === "CATEGORY") return "CATEGORY_ALLOCATION";
+  if (scope === "PRODUCT") return "PRODUCT_ALLOCATION";
+  if (scope === "MANUAL") return "MANUAL_PER_UNIT";
+  return "BRANCH_TOTAL";
+}
+
+function unitsForScope(input: PricingSuggestionInput, scope: ExpenseAllocationScope, legacyUnits: Prisma.Decimal) {
+  if (scope === "CATEGORY") return decimal(input.categoryMonthlyUnits, legacyUnits);
+  if (scope === "PRODUCT") return decimal(input.productMonthlyUnits, legacyUnits);
+  if (scope === "BRANCH") return decimal(input.branchMonthlyUnits, legacyUnits);
+  return ONE;
 }
 
 export function applyRounding(value: Prisma.Decimal, rule: RoundingRule): Prisma.Decimal {
@@ -186,8 +237,26 @@ export function calculatePricingSuggestion(input: PricingSuggestionInput): Prici
   let fallbackMethod: "BY_QUANTITY" | undefined;
   let expenseAllocationRatio: Prisma.Decimal | undefined;
   let allocatedMonthlyExpense: Prisma.Decimal | undefined;
+  const scopeWarnings: string[] = [];
+  const legacyScope = input.expenseAllocationScope === undefined;
+  const expenseAllocationScope: ExpenseAllocationScope = input.expenseAllocationScope ?? "BRANCH";
+  const expenseScopeLabel = scopeLabel(expenseAllocationScope, input.expenseScopeLabel);
+  let operatingExpenseSource = sourceForScope(expenseAllocationScope, legacyScope);
+  let unitsUsedForProration = unitsForScope(input, expenseAllocationScope, estimatedMonthlyUnits);
 
-  if (prorateMethod === "BY_VALUE") {
+  if (legacyScope) {
+    scopeWarnings.push("No se especifico ambito de prorrateo; se uso compatibilidad legacy.");
+  }
+
+  if (expenseAllocationScope === "MANUAL") {
+    const manualOperatingExpensePerUnit = decimal(input.manualOperatingExpensePerUnit);
+    if (input.manualOperatingExpensePerUnit === undefined || input.manualOperatingExpensePerUnit === "") {
+      scopeWarnings.push("No se indico gasto operativo manual por unidad; se uso 0.");
+    }
+    unitsUsedForProration = ONE;
+    operatingExpenseSource = "MANUAL_PER_UNIT";
+    operatingExpensePerUnit = manualOperatingExpensePerUnit;
+  } else if (prorateMethod === "BY_VALUE") {
     const estimatedMonthlySalesValue = decimal(input.estimatedMonthlySalesValue);
     const estimatedMonthlyUnitsForThisProduct = decimal(input.estimatedMonthlyUnitsForThisProduct);
     const productMonthlySalesValue = input.productMonthlySalesValue !== undefined && input.productMonthlySalesValue !== ""
@@ -202,17 +271,37 @@ export function calculatePricingSuggestion(input: PricingSuggestionInput): Prici
       expenseAllocationRatio = productMonthlySalesValue.div(estimatedMonthlySalesValue);
       allocatedMonthlyExpense = monthlyOperatingExpenses.mul(expenseAllocationRatio);
       operatingExpensePerUnit = allocatedMonthlyExpense.div(estimatedMonthlyUnitsForThisProduct);
+      unitsUsedForProration = estimatedMonthlyUnitsForThisProduct;
     } else {
       warnings.push("Para prorratear por valor se requiere venta mensual estimada total y valor mensual estimado del producto.");
       warnings.push("Se aplico fallback a prorrateo por cantidad.");
       fallbackApplied = true;
       fallbackMethod = "BY_QUANTITY";
       effectiveProrateMethod = "BY_VALUE";
-      operatingExpensePerUnit = monthlyOperatingExpenses.div(estimatedMonthlyUnits);
+      if (unitsUsedForProration.lte(ZERO)) unitsUsedForProration = ONE;
+      operatingExpensePerUnit = monthlyOperatingExpenses.div(unitsUsedForProration);
     }
   } else {
-    operatingExpensePerUnit = monthlyOperatingExpenses.div(estimatedMonthlyUnits);
+    if (unitsUsedForProration.lte(ZERO)) {
+      unitsUsedForProration = ONE;
+      scopeWarnings.push("Las unidades del ambito de prorrateo deben ser mayores que cero; se uso 1 como minimo tecnico.");
+    }
+    operatingExpensePerUnit = monthlyOperatingExpenses.div(unitsUsedForProration);
   }
+
+  if (expenseAllocationScope === "BRANCH" && unitsUsedForProration.lt(100)) {
+    scopeWarnings.push("Las unidades de sucursal parecen muy bajas; verifica que no estes usando unidades de producto.");
+  }
+  if (expenseAllocationScope === "CATEGORY" && monthlyOperatingExpenses.gte(5000) && unitsUsedForProration.lt(50)) {
+    scopeWarnings.push("El gasto asignado a categoria parece alto para pocas unidades; verifica que no sea gasto total de sucursal.");
+  }
+  if (expenseAllocationScope === "PRODUCT") {
+    scopeWarnings.push("Estas prorrateando gastos sobre un producto especifico; asegurate de que el gasto mensual pertenezca solo a este producto.");
+    if (monthlyOperatingExpenses.gte(5000) && unitsUsedForProration.lt(50)) {
+      scopeWarnings.push("Posible mezcla de gasto global con unidades de producto. El precio puede quedar inflado.");
+    }
+  }
+  warnings.push(...scopeWarnings);
 
   const totalInternalCost = landedCost.add(operatingExpensePerUnit);
   const marginFraction = marginPercent.div(HUNDRED);
@@ -238,8 +327,33 @@ export function calculatePricingSuggestion(input: PricingSuggestionInput): Prici
   const rounded = applyRounding(rawSuggestedPrice, roundingRule);
   const suggestedPrice = rounded.lt(minPrice) ? minPrice : rounded;
   const maxPrice = marketMaxPrice;
+  let marketConflict: PricingSuggestionResult["marketConflict"] = {
+    hasConflict: false,
+    type: null,
+    minPrice: money(minPrice),
+    marketMaxPrice: maxPrice ? money(maxPrice) : null,
+    gapAmount: null,
+    recommendation: null,
+  };
+  let canApplyPrice = true;
+  let applyBlockReason: string | null = null;
 
-  if (maxPrice && suggestedPrice.gt(maxPrice)) {
+  if (maxPrice && maxPrice.lt(minPrice)) {
+    const gap = minPrice.sub(maxPrice);
+    marketConflict = {
+      hasConflict: true,
+      type: "MARKET_MAX_BELOW_MIN_PRICE",
+      minPrice: money(minPrice),
+      marketMaxPrice: money(maxPrice),
+      gapAmount: money(gap),
+      recommendation: expenseAllocationScope === "PRODUCT" ? "REVIEW_COSTS" : "NEGOTIATE_SUPPLIER",
+    };
+    canApplyPrice = false;
+    applyBlockReason = "MARKET_MAX_BELOW_MIN_PRICE";
+    warnings.push("El precio minimo rentable supera el precio maximo de mercado.");
+    warnings.push("Este producto no es rentable con la estructura de costos actual.");
+    warnings.push("Revisa gasto asignado, ambito de prorrateo, proveedor o considera vender bajo pedido/no stockear.");
+  } else if (maxPrice && suggestedPrice.gt(maxPrice)) {
     warnings.push("El precio sugerido supera el precio maximo de mercado indicado.");
   }
 
@@ -260,6 +374,11 @@ export function calculatePricingSuggestion(input: PricingSuggestionInput): Prici
     landedCost: money(landedCost),
     monthlyOperatingExpenses: money(monthlyOperatingExpenses),
     estimatedMonthlyUnits: toNumber(estimatedMonthlyUnits),
+    expenseAllocationScope,
+    expenseScopeLabel,
+    unitsUsedForProration: toNumber(unitsUsedForProration),
+    operatingExpenseSource,
+    scopeWarnings,
     prorateMethod: effectiveProrateMethod,
     operatingExpensePerUnit: money(operatingExpensePerUnit),
     totalInternalCost: money(totalInternalCost),
@@ -270,6 +389,9 @@ export function calculatePricingSuggestion(input: PricingSuggestionInput): Prici
     suggestedPrice: money(suggestedPrice),
     minPrice: money(minPrice),
     maxPrice: maxPrice ? money(maxPrice) : null,
+    marketConflict,
+    canApplyPrice,
+    applyBlockReason,
     grossProfit: money(grossProfit),
     grossMarginPercent: toNumber(grossMarginPercent),
     priceFloorReason,
