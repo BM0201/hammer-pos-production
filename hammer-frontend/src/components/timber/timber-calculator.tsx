@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Calculator, TreePine, DollarSign, Ruler, Settings2 } from "lucide-react";
+import { Calculator, TreePine, DollarSign, Ruler, Settings2, PackagePlus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,10 @@ import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 
 type PriceGroup = "TABLA" | "TABLILLA" | "CUADRO";
+type WoodSubtype = "TABLA" | "REGLA" | "CUARTON" | "CUADRO" | "LISTON" | "VIGA" | "OTRO";
+type Category = { id: string; code?: string; name: string; isActive: boolean };
+type Branch = { id: string; code: string; name: string };
+type TimberCatalogProduct = { catalogProductId?: string; product: { id: string; sku: string; name: string } };
 interface Pricing {
   costPerFoot: number;
   pricePerInchTabla: number;
@@ -81,6 +85,15 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
   const [length, setLength] = useState(16);
   const [quantity, setQuantity] = useState(1);
   const [showPricing, setShowPricing] = useState(false);
+  const [woodSubtype, setWoodSubtype] = useState<WoodSubtype>("CUARTON");
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [woodProducts, setWoodProducts] = useState<TimberCatalogProduct[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [selectedBranchId, setSelectedBranchId] = useState("");
+  const [skuPreview, setSkuPreview] = useState("");
+  const [creatingProduct, setCreatingProduct] = useState(false);
+  const [applyingPrice, setApplyingPrice] = useState(false);
 
   const [pricing, setPricing] = useState<Pricing>({
     costPerFoot: 20,
@@ -100,6 +113,55 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
   }, []);
 
   const calc = useMemo(() => calcPiece(thickness, width, length, pricing), [thickness, width, length, pricing]);
+  const maderaCategory = useMemo(() => categories.find((category) => {
+    const code = (category.code ?? "").toUpperCase();
+    const name = category.name.toUpperCase();
+    return category.isActive && (code.startsWith("MAD") || name.includes("MADERA"));
+  }) ?? null, [categories]);
+  const suggestedName = useMemo(() => `${woodSubtype} ${thickness}X${width}X${VARA_MAP[length] || length}`, [length, thickness, width, woodSubtype]);
+
+  useEffect(() => {
+    fetch("/api/catalog/categories")
+      .then((response) => response.ok ? response.json() : null)
+      .then((raw) => {
+        if (raw) setCategories(unwrapApiData(raw));
+      })
+      .catch(() => setCategories([]));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/branches")
+      .then((response) => response.ok ? response.json() : null)
+      .then((raw) => {
+        if (raw) setBranches(unwrapApiData(raw));
+      })
+      .catch(() => setBranches([]));
+    fetch("/api/timber?limit=1000")
+      .then((response) => response.ok ? response.json() : null)
+      .then((raw) => {
+        if (raw) setWoodProducts(unwrapApiData(raw).items ?? []);
+      })
+      .catch(() => setWoodProducts([]));
+  }, []);
+
+  useEffect(() => {
+    if (!maderaCategory || !suggestedName.trim()) {
+      setSkuPreview("");
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/catalog/products?previewSku=true&productName=${encodeURIComponent(suggestedName)}&categoryId=${encodeURIComponent(maderaCategory.id)}`);
+        if (!response.ok) return;
+        const raw = await response.json();
+        const result = unwrapApiData(raw);
+        setSkuPreview(result.sku ?? "");
+      } catch {
+        setSkuPreview("");
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [maderaCategory, suggestedName]);
 
   const savePricing = useCallback(async () => {
     try {
@@ -115,6 +177,81 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
       showToast("error", "Error al guardar precios");
     }
   }, [pricing]);
+
+  const createProductFromCalculation = useCallback(async () => {
+    if (!maderaCategory) {
+      showToast("error", "No existe una categoria activa de Madera.");
+      return;
+    }
+    setCreatingProduct(true);
+    try {
+      const duplicateResponse = await fetch(`/api/catalog/products?q=${encodeURIComponent(suggestedName)}&isActive=true`);
+      if (duplicateResponse.ok) {
+        const raw = await duplicateResponse.json();
+        const existing = unwrapApiData(raw) as Array<{ id: string; name: string; sku: string }>;
+        const duplicate = existing.find((product) => product.name.trim().toUpperCase() === suggestedName.trim().toUpperCase());
+        if (duplicate) {
+          const confirmed = window.confirm(`Ya existe un producto similar: ${duplicate.sku} - ${duplicate.name}. Deseas crear otro de todos modos?`);
+          if (!confirmed) return;
+        }
+      }
+      const response = await apiFetch("/api/timber", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: suggestedName,
+          sku: skuPreview || undefined,
+          categoryId: maderaCategory.id,
+          thickness,
+          width,
+          length,
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error?.message ?? body?.message ?? "No se pudo crear el producto de madera.");
+      }
+      showToast("success", "Producto de madera creado en el catalogo.");
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "Error al crear producto.");
+    } finally {
+      setCreatingProduct(false);
+    }
+  }, [maderaCategory, length, skuPreview, suggestedName, thickness, width]);
+
+  const applyBranchPrice = useCallback(async () => {
+    if (!selectedProductId || !selectedBranchId) {
+      showToast("error", "Selecciona producto y sucursal.");
+      return;
+    }
+    setApplyingPrice(true);
+    try {
+      const response = await apiFetch("/api/pricing/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: selectedProductId,
+          branchId: selectedBranchId,
+          applyScope: "BRANCH",
+          suggestedPrice: calc.sellingPrice,
+          totalInternalCost: calc.baseCost,
+          effectiveCost: calc.baseCost,
+          grossMarginPercent: calc.marginPercent * 100,
+          reason: "Precio aplicado desde calculadora de madera",
+          calculationSnapshot: { thickness, width, length, quantity, woodSubtype, calc },
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error?.message ?? body?.message ?? "No se pudo aplicar el precio.");
+      }
+      showToast("success", "Precio aplicado a la sucursal seleccionada.");
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "Error al aplicar precio.");
+    } finally {
+      setApplyingPrice(false);
+    }
+  }, [calc, length, quantity, selectedBranchId, selectedProductId, thickness, width, woodSubtype]);
 
   return (
     <div className="space-y-5">
@@ -191,7 +328,23 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
 
       {/* Dimension Inputs */}
       <Card className="p-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-[var(--color-text)] mb-1.5">Subtipo</label>
+            <select
+              value={woodSubtype}
+              onChange={(e) => setWoodSubtype(e.target.value as WoodSubtype)}
+              className="w-full border border-[var(--color-border-strong)] rounded-lg px-3 py-2.5 text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-info-500)] focus:border-[var(--color-info-500)] transition-colors min-h-[44px] text-sm"
+            >
+              <option value="TABLA">Tabla</option>
+              <option value="REGLA">Regla</option>
+              <option value="CUARTON">Cuarton</option>
+              <option value="CUADRO">Cuadro</option>
+              <option value="LISTON">Liston</option>
+              <option value="VIGA">Viga</option>
+              <option value="OTRO">Pieza especial</option>
+            </select>
+          </div>
           <div>
             <label className="block text-xs font-medium text-[var(--color-text)] mb-1.5">
               <Ruler className="inline h-3.5 w-3.5 mr-1" />Grosor (pulg)
@@ -272,6 +425,62 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
             <span>P/Pulgada: C${calc.pricePerInch.toFixed(2)}</span>
             <span>Costo/Pie: C${pricing.costPerFoot.toFixed(2)}</span>
             <span>Piezas: {quantity}</span>
+          </div>
+          <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-raised)] p-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-xs font-semibold text-[var(--color-text)] flex items-center gap-1.5">
+                  <Sparkles className="h-3.5 w-3.5 text-[var(--color-master-600)]" />
+                  Crear producto desde calculo
+                </p>
+                <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                  Nombre sugerido: <strong className="text-[var(--color-text)]">{suggestedName}</strong>
+                  {skuPreview ? <> · SKU: <code className="rounded bg-white px-1.5 py-0.5 font-mono text-[var(--color-master-700)]">{skuPreview}</code></> : null}
+                </p>
+                {!maderaCategory ? <p className="mt-1 text-xs text-amber-700">No se encontro una categoria activa Madera.</p> : null}
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={createProductFromCalculation}
+                disabled={!maderaCategory || creatingProduct}
+                loading={creatingProduct}
+                icon={<PackagePlus className="h-4 w-4" />}
+              >
+                Crear producto
+              </Button>
+            </div>
+            <div className="mt-3 grid gap-2 border-t border-[var(--color-border)] pt-3 md:grid-cols-[1fr_1fr_auto]">
+              <select
+                className="hm-input h-9 text-xs"
+                value={selectedProductId}
+                onChange={(event) => setSelectedProductId(event.target.value)}
+              >
+                <option value="">Producto existente de madera</option>
+                {woodProducts.map((item) => {
+                  const productId = item.catalogProductId ?? item.product.id;
+                  return <option key={productId} value={productId}>{item.product.sku} - {item.product.name}</option>;
+                })}
+              </select>
+              <select
+                className="hm-input h-9 text-xs"
+                value={selectedBranchId}
+                onChange={(event) => setSelectedBranchId(event.target.value)}
+              >
+                <option value="">Sucursal para precio</option>
+                {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} - {branch.name}</option>)}
+              </select>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={applyBranchPrice}
+                disabled={!selectedProductId || !selectedBranchId || applyingPrice}
+                loading={applyingPrice}
+                icon={<DollarSign className="h-4 w-4" />}
+              >
+                Aplicar precio
+              </Button>
+            </div>
           </div>
         </div>
       </Card>

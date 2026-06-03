@@ -21,14 +21,23 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 
 type TimberItem = {
   id: string;
+  catalogProductId?: string;
+  isCatalogOnly?: boolean;
   timberType: string;
-  thickness: { toString(): string };
-  width: { toString(): string };
-  length: { toString(): string };
+  woodSubtype?: string;
+  thickness: string | number | { toString(): string };
+  width: string | number | { toString(): string };
+  length: string | number | { toString(): string };
   varaLength?: number;
-  boardFeet: { toString(): string };
-  baseCost: { toString(): string };
-  sellingPrice: { toString(): string };
+  boardFeet: string | number | { toString(): string };
+  baseCost: string | number | { toString(): string };
+  sellingPrice: string | number | { toString(): string };
+  stockOnHand?: number;
+  effectiveCost?: number | null;
+  effectivePrice?: number | null;
+  priceSource?: "BRANCH" | "STANDARD";
+  costSource?: "BRANCH" | "WAC" | "NONE";
+  warnings?: string[];
   product: {
     id: string;
     name: string;
@@ -113,8 +122,8 @@ export function TimberList() {
   };
 
   const timberBadgeVariant = (type: string): "success" | "info" | "warning" => {
-    if (type === "TABLA") return "success";
-    if (type === "TABLILLA") return "info";
+    if (type === "TABLA" || type === "REGLA") return "success";
+    if (type === "TABLILLA" || type === "LISTON") return "info";
     return "warning";
   };
 
@@ -147,8 +156,13 @@ export function TimberList() {
           >
             <option value="">Todos los tipos</option>
             <option value="TABLA">Tabla</option>
+            <option value="REGLA">Regla</option>
+            <option value="CUARTON">Cuarton</option>
             <option value="TABLILLA">Tablilla</option>
             <option value="CUADRO">Cuadro</option>
+            <option value="LISTON">Liston</option>
+            <option value="VIGA">Viga</option>
+            <option value="OTRO">Pieza especial</option>
           </select>
         </div>
 
@@ -183,6 +197,7 @@ export function TimberList() {
                   <TH>Producto</TH>
                   <TH>Tipo</TH>
                   <TH className="text-center">Dimensiones</TH>
+                  <TH className="text-right">Stock</TH>
                   <TH className="text-right">Pies</TH>
                   <TH className="text-right">Costo Base</TH>
                   <TH className="text-right">Precio Venta</TH>
@@ -191,7 +206,12 @@ export function TimberList() {
                 </TR>
               </THead>
               <TBody>
-                {data.items.map((item) => (
+                {data.items.map((item) => {
+                  const timberType = item.woodSubtype ?? item.timberType;
+                  const baseCost = item.effectiveCost ?? parseFloat(item.baseCost.toString());
+                  const sellingPrice = item.effectivePrice ?? parseFloat(item.sellingPrice.toString());
+                  const canEditTimber = !item.isCatalogOnly;
+                  return (
                   <TR key={item.id}>
                     <TD>
                       <div className="flex items-center gap-2.5">
@@ -200,13 +220,17 @@ export function TimberList() {
                         </span>
                         <div className="min-w-0">
                           <p className="font-medium text-[var(--color-text)] truncate">{item.product.name}</p>
-                          <p className="text-[0.65rem] text-[var(--color-text-soft)]">{item.product.sku}</p>
+                          <p className="text-[0.65rem] text-[var(--color-text-soft)]">
+                            {item.product.sku}
+                            {item.isCatalogOnly ? <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">Catalogo real</span> : null}
+                          </p>
+                          {item.warnings?.[0] ? <p className="mt-1 text-[0.65rem] text-amber-700">{item.warnings[0]}</p> : null}
                         </div>
                       </div>
                     </TD>
                     <TD>
-                      <Badge variant={timberBadgeVariant(item.timberType)}>
-                        {item.timberType}
+                      <Badge variant={timberBadgeVariant(timberType)}>
+                        {timberType}
                       </Badge>
                     </TD>
                     <TD className="text-center">
@@ -214,19 +238,24 @@ export function TimberList() {
                         {item.thickness.toString()}&quot;×{item.width.toString()}&quot;×{item.varaLength ?? VARA_TO_PIES[parseInt(item.length.toString())] ?? item.length.toString()} pies
                       </span>
                     </TD>
+                    <TD className="text-right font-mono">{item.stockOnHand !== undefined ? item.stockOnHand.toFixed(2) : "N/D"}</TD>
                     <TD className="text-right font-mono">{parseFloat(item.boardFeet.toString()).toFixed(2)}</TD>
-                    <TD className="text-right font-mono">C${parseFloat(item.baseCost.toString()).toFixed(2)}</TD>
+                    <TD className="text-right font-mono">
+                      {baseCost > 0 ? `C$${baseCost.toFixed(2)}` : "N/D"}
+                      {item.costSource ? <div className="text-[0.6rem] text-[var(--color-text-soft)]">{item.costSource}</div> : null}
+                    </TD>
                     <TD className="text-right font-mono font-semibold text-[var(--color-warehouse-700)]">
-                      C${parseFloat(item.sellingPrice.toString()).toFixed(2)}
+                      C${sellingPrice.toFixed(2)}
+                      {item.priceSource ? <div className="text-[0.6rem] text-[var(--color-text-soft)]">{item.priceSource === "BRANCH" ? "Sucursal" : "Base"}</div> : null}
                     </TD>
                     <TD className="text-right">
                       <Badge variant="success">
-                        {calcMargin(item.baseCost.toString(), item.sellingPrice.toString())}%
+                        {calcMargin(String(baseCost), String(sellingPrice))}%
                       </Badge>
                     </TD>
                     <TD>
                       <div className="flex items-center justify-center gap-1">
-                        <Link href={`/app/master/timber/${item.id}/edit`}>
+                        <Link href={canEditTimber ? `/app/master/timber/${item.id}/edit` : `/app/master/catalog-inventory?tab=products&q=${encodeURIComponent(item.product.sku)}`}>
                           <Button variant="ghost" size="sm" title="Editar">
                             <Edit2 className="h-3.5 w-3.5" />
                           </Button>
@@ -237,7 +266,7 @@ export function TimberList() {
                           className="text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)]"
                           title="Eliminar"
                           onClick={() => handleDelete(item.id)}
-                          disabled={deletingId === item.id}
+                          disabled={!canEditTimber || deletingId === item.id}
                         >
                           {deletingId === item.id ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -248,7 +277,7 @@ export function TimberList() {
                       </div>
                     </TD>
                   </TR>
-                ))}
+                );})}
               </TBody>
             </Table>
 

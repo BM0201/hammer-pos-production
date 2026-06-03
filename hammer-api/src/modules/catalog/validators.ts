@@ -26,6 +26,9 @@ export const createProductSchema = z.object({
 });
 
 export const updateProductSchema = z.object({
+  sku: z.string().max(64).optional(),
+  skuUpdateMode: z.enum(["KEEP_CURRENT", "USE_SUGGESTED"]).optional(),
+  suggestedSku: z.string().max(64).optional(),
   barcode: z.string().max(64).optional().nullable(),
   name: z.string().min(2).max(160).optional(),
   description: z.string().max(500).optional().nullable(),

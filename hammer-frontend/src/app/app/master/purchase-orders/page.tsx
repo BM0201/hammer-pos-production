@@ -170,6 +170,9 @@ export default function PurchaseOrdersPage() {
       if (!formBranchId) throw new Error("Seleccione una sucursal");
       if (!lines.length) throw new Error("Agregue al menos una línea");
 
+      const invalidLineIndex = lines.findIndex((line) => line.quantity <= 0 || line.unitCostBeforeTax < 0);
+      if (invalidLineIndex >= 0) throw new Error(`Revise cantidad y costo de la linea ${invalidLineIndex + 1}.`);
+
       const res = await apiFetch("/api/master/purchase-orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -571,13 +574,19 @@ export default function PurchaseOrdersPage() {
 
       {/* Create Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-[var(--color-surface)] border border-[var(--color-border-strong)] shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-6xl max-h-[92vh] overflow-y-auto rounded-xl bg-[var(--color-surface)] border border-[var(--color-border-strong)] shadow-2xl overflow-hidden">
             <div className="hm-card-header-green px-6 py-4 flex items-center justify-between">
-              <h2 className="text-lg font-bold flex items-center gap-2"><ShoppingCart className="h-5 w-5" /> Crear Pedido de Compra</h2>
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2"><ShoppingCart className="h-5 w-5" /> Crear pedido de compra</h2>
+                <p className="text-xs opacity-90">Compra a proveedor para recepcion futura de inventario.</p>
+              </div>
               <button onClick={() => setShowModal(false)} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
             </div>
             <div className="p-6 space-y-5">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+              Para inventario existente inicial, usa Existencias / Carga inicial. No crees pedidos falsos.
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -616,6 +625,9 @@ export default function PurchaseOrdersPage() {
             </div>
 
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                <DollarSign className="h-4 w-4" /> Configuracion de costos
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <label className="text-sm font-medium text-[var(--color-text-secondary)] md:col-span-2">
                   Modo IVA
@@ -642,8 +654,17 @@ export default function PurchaseOrdersPage() {
                 </label>
               </div>
               <p className="text-xs text-[var(--color-text-muted)]">
-                Para cuota fija, el modo por defecto incluye el IVA de compra en el costo real del producto.
+                El flete y otros cargos se distribuyen entre lineas para calcular costo aterrizado. El modo por defecto incluye el IVA de compra en el costo real del producto.
               </p>
+            </div>
+
+            <div className="sticky top-0 z-10 grid gap-2 rounded-xl border border-[var(--color-border-strong)] bg-white/95 p-3 shadow-sm backdrop-blur md:grid-cols-6">
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Lineas</span><p className="font-bold">{formLines.filter((line) => line.productId).length}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Subtotal</span><p className="font-bold">{money(formSubtotalBeforeTax)}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">IVA</span><p className="font-bold">{money(formTaxAmount)}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Cargos</span><p className="font-bold">{money((parseFloat(freightAmount) || 0) + (parseFloat(otherChargesAmount) || 0))}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Descuento</span><p className="font-bold text-red-600">{money(parseFloat(globalDiscountAmount) || 0)}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Total estimado</span><p className="text-base font-extrabold">{money(formTotalPaid)}</p></div>
             </div>
 
             {/* Lines */}

@@ -9,7 +9,8 @@ type CatalogProductWithBranchPricing = {
   id: string;
   standardSalePrice: Prisma.Decimal;
   branchProductSettings?: Array<{ branchId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null }>;
-  inventoryBalances?: Array<{ branchId: string; weightedAverageCost: Prisma.Decimal }>;
+  inventoryBalances?: Array<{ branchId: string; quantityOnHand?: Prisma.Decimal; weightedAverageCost: Prisma.Decimal }>;
+  category?: { id: string; code?: string; name: string } | null;
 };
 
 async function mapProductWithBranchInventory<TProduct extends CatalogProductWithBranchPricing>(product: TProduct, branchId: string) {
@@ -30,8 +31,11 @@ async function mapProductWithBranchInventory<TProduct extends CatalogProductWith
 
   return {
     ...mapped,
+    categoryName: product.category?.name ?? null,
     effectiveCost: effective.effectiveCost,
     weightedAverageCost: effective.weightedAverageCost,
+    stockOnHand: shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
+    availableStock: shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
     stockConversion: conversion ? {
       stockGroupId: conversion.stockGroupId,
       stockGroupCode: conversion.stockGroupCode,
@@ -114,15 +118,17 @@ export async function updateCategory(categoryId: string, input: {
   return category;
 }
 
-export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string }) {
+export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string; limit?: number }) {
   const where: Prisma.ProductWhereInput = {
     isActive: params.isActive,
     ...(params.q
       ? {
           OR: [
-            { sku: { contains: params.q } },
-            { name: { contains: params.q } },
-            { barcode: { contains: params.q } },
+            { sku: { contains: params.q, mode: "insensitive" } },
+            { name: { contains: params.q, mode: "insensitive" } },
+            { barcode: { contains: params.q, mode: "insensitive" } },
+            { category: { name: { contains: params.q, mode: "insensitive" } } },
+            { category: { code: { contains: params.q, mode: "insensitive" } } },
           ],
         }
       : {}),
@@ -140,13 +146,13 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
             },
             inventoryBalances: {
               where: { branchId: params.branchId },
-              select: { branchId: true, weightedAverageCost: true },
+              select: { branchId: true, quantityOnHand: true, weightedAverageCost: true },
             },
           }
         : {}),
     },
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
-    take: 1000,
+    take: params.limit ?? 1000,
   });
 
   if (!params.branchId) return products;
@@ -179,13 +185,34 @@ export async function checkSkuAvailable(sku: string, excludeProductId?: string) 
 export async function previewAutoSku(input: { productName: string; categoryId: string }) {
   const category = await prisma.category.findUnique({
     where: { id: input.categoryId },
-    select: { name: true },
+    select: { code: true, name: true },
   });
   const sku = await generateSkuForProduct(prisma, {
     productName: input.productName,
     categoryName: category?.name ?? null,
   });
   return { sku };
+}
+
+export async function suggestProductSku(input: { productName: string; categoryId: string; productId?: string }) {
+  const category = await prisma.category.findUnique({
+    where: { id: input.categoryId },
+    select: { code: true, name: true, isActive: true },
+  });
+  if (!category?.isActive) throw new Error("VALIDATION_ERROR: categoria invalida o inactiva.");
+
+  const suggestedSku = await generateSkuForProduct(prisma, {
+    productName: input.productName,
+    categoryName: category.name,
+  });
+  const availability = await checkSkuAvailable(suggestedSku, input.productId);
+
+  return {
+    suggestedSku,
+    categoryCode: category.code,
+    reason: `SKU sugerido por categoria ${category.name} y nombre del producto.`,
+    isAvailable: availability.available,
+  };
 }
 
 export async function createProduct(input: {
@@ -247,6 +274,9 @@ export async function createProduct(input: {
 }
 
 export async function updateProduct(productId: string, input: {
+  sku?: string;
+  skuUpdateMode?: "KEEP_CURRENT" | "USE_SUGGESTED";
+  suggestedSku?: string;
   barcode?: string | null;
   name?: string;
   description?: string | null;
@@ -257,9 +287,37 @@ export async function updateProduct(productId: string, input: {
   isActive?: boolean;
   actorUserId: string;
 }) {
+  const previous = await prisma.product.findUnique({
+    where: { id: productId },
+    select: { id: true, sku: true, categoryId: true, category: { select: { name: true } } },
+  });
+  if (!previous) throw new Error("NOT_FOUND");
+
+  let nextCategory: { id: string; name: string; isActive: boolean } | null = null;
+  if (input.categoryId) {
+    nextCategory = await prisma.category.findUnique({
+      where: { id: input.categoryId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!nextCategory?.isActive) throw new Error("VALIDATION_ERROR: categoria invalida o inactiva.");
+  }
+
+  let nextSku: string | undefined;
+  const requestedSku = input.skuUpdateMode === "USE_SUGGESTED" ? input.suggestedSku : input.sku;
+  if (requestedSku !== undefined && input.skuUpdateMode !== "KEEP_CURRENT") {
+    const normalizedSku = normalizeManualSku(requestedSku);
+    if (!normalizedSku) throw new Error("VALIDATION_ERROR: SKU invalido.");
+    const check = await checkSkuAvailable(normalizedSku, productId);
+    if (!check.available) {
+      throw new Error(`VALIDATION_ERROR: El SKU "${check.normalizedSku}" ya existe (producto: ${check.existingProductName}).`);
+    }
+    nextSku = normalizedSku;
+  }
+
   const product = await prisma.product.update({
     where: { id: productId },
     data: {
+      sku: nextSku,
       barcode: input.barcode,
       name: input.name?.trim(),
       description: input.description,
@@ -274,10 +332,27 @@ export async function updateProduct(productId: string, input: {
   await logAuditEvent({
     actorUserId: input.actorUserId,
     module: "catalog",
-    action: "PRODUCT_UPDATE",
+    action: previous.categoryId !== product.categoryId && previous.sku !== product.sku
+      ? "PRODUCT_CATEGORY_AND_SKU_CHANGED"
+      : previous.categoryId !== product.categoryId
+        ? "PRODUCT_CATEGORY_CHANGED"
+        : previous.sku !== product.sku
+          ? "PRODUCT_SKU_CHANGED"
+          : "PRODUCT_UPDATE",
     entityType: "Product",
     entityId: product.id,
-    metadataJson: { isActive: product.isActive },
+    metadataJson: {
+      isActive: product.isActive,
+      oldSku: previous.sku,
+      newSku: product.sku,
+      oldCategoryId: previous.categoryId,
+      newCategoryId: product.categoryId,
+      oldCategoryName: previous.category?.name ?? null,
+      newCategoryName: nextCategory?.name ?? previous.category?.name ?? null,
+      skuChanged: previous.sku !== product.sku,
+      categoryChanged: previous.categoryId !== product.categoryId,
+      skuUpdateMode: input.skuUpdateMode ?? "KEEP_CURRENT",
+    },
   });
 
   return product;
@@ -426,7 +501,7 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
           },
           inventoryBalances: {
             where: { branchId: params.branchId },
-            select: { branchId: true, weightedAverageCost: true },
+            select: { branchId: true, quantityOnHand: true, weightedAverageCost: true },
           },
         }
       : {}),

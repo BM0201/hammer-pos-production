@@ -42,7 +42,7 @@ export async function GET(request: Request) {
       return ok(products);
     }
 
-    const products = await listProducts({ q, isActive, branchId });
+    const products = await listProducts({ q, isActive, branchId, limit });
     return ok(products);
   } catch (error) {
     return toHttpErrorResponse(error);

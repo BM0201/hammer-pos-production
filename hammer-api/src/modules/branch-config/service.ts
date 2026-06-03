@@ -12,13 +12,13 @@ export type BranchModuleConfigRow = {
 
 /**
  * Get module config for a single branch.
- * Returns defaults (both enabled) if no config row exists.
+ * Returns direct-sale defaults if no config row exists.
  */
 export async function getBranchModuleConfig(branchId: string): Promise<{ enableCashier: boolean; enableDispatch: boolean }> {
   const config = await prisma.branchModuleConfig.findUnique({ where: { branchId } });
   return {
-    enableCashier: config?.enableCashier ?? true,
-    enableDispatch: config?.enableDispatch ?? true,
+    enableCashier: config?.enableCashier ?? false,
+    enableDispatch: config?.enableDispatch ?? false,
   };
 }
 
@@ -33,8 +33,8 @@ export async function listBranchModuleConfigs(): Promise<BranchModuleConfigRow[]
   return branches.map((branch: any) => ({
     id: branch.moduleConfig?.id ?? "",
     branchId: branch.id,
-    enableCashier: branch.moduleConfig?.enableCashier ?? true,
-    enableDispatch: branch.moduleConfig?.enableDispatch ?? true,
+    enableCashier: branch.moduleConfig?.enableCashier ?? false,
+    enableDispatch: branch.moduleConfig?.enableDispatch ?? false,
     updatedAt: branch.moduleConfig?.updatedAt ?? branch.updatedAt,
     branch: { id: branch.id, code: branch.code, name: branch.name, isActive: branch.isActive },
   }));

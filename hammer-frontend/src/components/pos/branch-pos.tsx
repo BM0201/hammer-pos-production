@@ -18,11 +18,14 @@ type ProductRow = {
   sku: string;
   barcode: string | null;
   name: string;
+  categoryName?: string | null;
   standardSalePrice: string;
   branchPrice?: string | null;
   effectivePrice?: string;
   priceSource?: "BRANCH" | "STANDARD";
   unit: string;
+  stockOnHand?: number;
+  availableStock?: number;
   stockConversion?: {
     stockGroupId: string;
     stockGroupCode: string;
@@ -291,7 +294,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     setLoadingProducts(true);
 
     try {
-      const params = new URLSearchParams({ q: query, isActive: "true", branchId });
+      const params = new URLSearchParams({ q: query, isActive: "true", branchId, limit: "20" });
       const response = await fetch(`/api/catalog/products?${params.toString()}`);
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
@@ -307,9 +310,10 @@ export function BranchPos({ branchId }: { branchId: string }) {
       const rank = (item: ProductRow) => {
         if (!q) return 99;
         if (item.name.toLowerCase().startsWith(q)) return 0;
-        if (item.name.toLowerCase().includes(q)) return 1;
-        if (item.sku.toLowerCase().startsWith(q)) return 2;
-        if ((item.barcode ?? "").toLowerCase().startsWith(q)) return 3;
+        if (item.sku.toLowerCase().startsWith(q)) return 1;
+        if ((item.barcode ?? "").toLowerCase().startsWith(q)) return 2;
+        if (item.name.toLowerCase().includes(q)) return 3;
+        if ((item.categoryName ?? "").toLowerCase().includes(q)) return 4;
         return 9;
       };
 
@@ -341,11 +345,11 @@ export function BranchPos({ branchId }: { branchId: string }) {
         const json = await res.json();
         const data = json?.data ?? json;
         setBranchConfig({
-          enableCashier: data?.enableCashier ?? true,
-          enableDispatch: data?.enableDispatch ?? true,
+          enableCashier: data?.enableCashier ?? false,
+          enableDispatch: data?.enableDispatch ?? false,
         });
       } catch {
-        setBranchConfig({ enableCashier: true, enableDispatch: true });
+        setBranchConfig({ enableCashier: false, enableDispatch: false });
       }
     }
     loadBranchConfig();
@@ -384,7 +388,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
   useEffect(() => {
     const handler = setTimeout(() => {
       loadProducts(search);
-    }, 120);
+    }, 300);
 
     return () => clearTimeout(handler);
   }, [search, loadProducts]);
@@ -452,6 +456,11 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   async function addProduct(product: ProductRow) {
     if (!order || isBusy) return;
+    const knownAvailableStock = product.availableStock ?? product.sharedStock?.saleQuantity ?? stockByProductId[product.id];
+    if (typeof knownAvailableStock === "number" && knownAvailableStock <= 0) {
+      setNoticeTimed(`Sin stock en esta sucursal: ${product.name}.`, 8000);
+      return;
+    }
     const stopMetric = measurePosMetric("add_to_ticket_latency", { productId: product.id });
     let success = false;
     setIsMutatingOrder(true);
@@ -757,9 +766,9 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   return (
     <section className="space-y-3" data-testid="pos-root">
-      <section className="h-[calc(100vh-10.5rem)] min-h-[34rem] overflow-hidden">
-        <div className="grid h-full gap-4 grid-cols-1 lg:grid-cols-[1.05fr_1.4fr]">
-          <Card className="flex h-full flex-col overflow-hidden rounded-lg" data-testid="pos-catalog-zone">
+      <section className="h-[calc(100vh-8rem)] min-h-[34rem] overflow-hidden">
+        <div className="grid h-full grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+          <Card className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm" data-testid="pos-catalog-zone">
             <div className="px-4 pt-4 pb-3">
               <div className="mb-1 flex items-center justify-between">
                 <h2 className="text-sm font-semibold">Catálogo rápido</h2>
@@ -797,6 +806,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   const displayPrice = product.effectivePrice ?? product.standardSalePrice;
                   const conversionFactor = Number(product.stockConversion?.conversionFactor ?? 0);
                   const sharedStock = product.sharedStock;
+                  const availableStock = product.availableStock ?? sharedStock?.saleQuantity ?? stockByProductId[product.id] ?? 0;
+                  const hasNoStock = availableStock <= 0;
 
                   return (
                     <button
@@ -808,16 +819,20 @@ export function BranchPos({ branchId }: { branchId: string }) {
                         right: 0,
                         height: `${ROW_HEIGHT - 6}px`,
                       }}
-                      className={`rounded-lg border p-2.5 text-left text-sm transition-all hover:bg-[var(--color-surface-muted)] ${selected ? "border-[var(--color-info-400)] bg-[var(--color-info-50)] shadow-sm" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`}
+                      className={`rounded-lg border p-2.5 text-left text-sm transition-all hover:bg-[var(--color-surface-muted)] ${selected ? "border-[var(--color-info-400)] bg-[var(--color-info-50)] shadow-sm" : "border-[var(--color-border)] bg-[var(--color-surface)]"} ${hasNoStock ? "opacity-80" : ""}`}
                       onClick={() => {
                         setActiveProductIndex(index);
                         addProduct(product);
                       }}
-                      disabled={isBusy}
+                      disabled={isBusy || hasNoStock}
                       data-testid={`pos-product-${product.id}`}
                     >
-                      <div className="font-medium">{product.name}</div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="font-medium">{product.name}</div>
+                        {hasNoStock ? <span className="rounded border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-1.5 py-0.5 text-[0.62rem] font-semibold text-[var(--color-warning-700)]">Sin stock</span> : null}
+                      </div>
                       <div className="text-xs text-[var(--color-text-muted)]">SKU: {product.sku} {product.barcode ? `· BAR: ${product.barcode}` : ""}</div>
+                      {product.categoryName ? <div className="text-[0.65rem] text-[var(--color-text-soft)]">{product.categoryName}</div> : null}
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-semibold text-[var(--color-text)]">C$ {Number(displayPrice).toFixed(2)}</span>
                         {product.priceSource === "BRANCH" ? (
@@ -825,6 +840,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                             Sucursal
                           </span>
                         ) : null}
+                        <span className="text-[0.65rem] text-[var(--color-text-muted)]">Stock: {availableStock.toFixed(2)} {product.unit}</span>
                       </div>
                       {product.stockConversion && sharedStock ? (
                         <div className="mt-1 text-[0.65rem] text-[var(--color-text-muted)]">
@@ -846,7 +862,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
             className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-strong)]"
             data-testid="pos-ticket-zone"
           >
-            <Card className="flex h-full flex-col overflow-hidden rounded-lg">
+            <Card className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm">
               <div className="px-4 pt-4 pb-3">
                 <h2 className="text-sm font-semibold">Ticket actual</h2>
                 <p className="text-xs text-[var(--color-text-muted)]">Orden: {order?.orderNumber ?? "preparando..."} - Estado: {orderStatusLabel}</p>
@@ -1068,9 +1084,9 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   {isSubmittingPayment
                     ? (branchConfig?.enableCashier === false ? "Registrando..." : "Enviando...")
                     : !hasTicketLines
-                      ? "Agrega productos para enviar a caja"
+                      ? (branchConfig?.enableCashier === false ? "Agrega productos para cobrar" : "Agrega productos para enviar a caja")
                       : branchConfig?.enableCashier === false
-                        ? `Registrar venta directa - C$ ${totalAmount.toFixed(2)}`
+                        ? `Cobrar e imprimir - C$ ${totalAmount.toFixed(2)}`
                         : `Enviar a caja - C$ ${totalAmount.toFixed(2)}`}
                 </Button>
               </div>
