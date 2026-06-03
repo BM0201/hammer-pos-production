@@ -17,6 +17,8 @@ import type {
   UpdateTimberPricingConfigInput,
 } from "./validators";
 import { Decimal } from "@prisma/client/runtime/library";
+import { parseWoodDimensions } from "@/modules/catalog/sku-generator";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 
 /* ══════════════════════════════════════════════════════════
    Pricing Config
@@ -176,6 +178,7 @@ export async function getTimberProduct(id: string) {
 export async function listTimberProducts(filters?: {
   timberType?: string;
   search?: string;
+  branchId?: string;
   page?: number;
   limit?: number;
 }) {
@@ -194,7 +197,7 @@ export async function listTimberProducts(filters?: {
     };
   }
 
-  const [items, total] = await Promise.all([
+  const [timberItems, timberTotal] = await Promise.all([
     prisma.timberProduct.findMany({
       where,
       include: { product: { include: { category: true } } },
@@ -205,7 +208,110 @@ export async function listTimberProducts(filters?: {
     prisma.timberProduct.count({ where }),
   ]);
 
-  return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
+  const timberProductIds = timberItems.map((item) => item.productId);
+  const catalogWhere = {
+    isActive: true,
+    ...(timberProductIds.length > 0 ? { id: { notIn: timberProductIds } } : {}),
+    category: {
+      OR: [
+        { code: { startsWith: "MAD" } },
+        { name: { contains: "Madera" } },
+        { name: { contains: "madera" } },
+      ],
+    },
+    ...(filters?.search
+      ? {
+          OR: [
+            { name: { contains: filters.search } },
+            { sku: { contains: filters.search } },
+          ],
+        }
+      : {}),
+  };
+
+  const catalogProducts = await prisma.product.findMany({
+    where: catalogWhere,
+    include: {
+      category: true,
+      inventoryBalances: filters?.branchId
+        ? { where: { branchId: filters.branchId }, select: { quantityOnHand: true, weightedAverageCost: true } }
+        : { select: { quantityOnHand: true, weightedAverageCost: true } },
+    },
+    orderBy: { name: "asc" },
+    take: 1000,
+  });
+
+  const mappedTimber = timberItems.map((item) => ({
+    id: item.id,
+    catalogProductId: item.productId,
+    isCatalogOnly: false,
+    timberType: item.timberType,
+    woodSubtype: item.timberType,
+    thickness: item.thickness.toString(),
+    width: item.width.toString(),
+    length: item.length.toString(),
+    varaLength: item.varaLength,
+    boardFeet: item.boardFeet.toString(),
+    baseCost: item.baseCost.toString(),
+    sellingPrice: item.sellingPrice.toString(),
+    product: item.product,
+    detectedDimensions: {
+      thicknessInches: item.thickness.toNumber(),
+      widthInches: item.width.toNumber(),
+      lengthFeet: item.length.toNumber(),
+      subtype: item.timberType,
+    },
+  }));
+
+  const mappedCatalog = await Promise.all(catalogProducts.map(async (product) => {
+    const detected = parseWoodDimensions(product.name);
+    if (filters?.timberType && detected.subtype !== filters.timberType) return null;
+    const effective = filters?.branchId
+      ? await getEffectiveProductPricing(prisma, { branchId: filters.branchId, productId: product.id })
+      : null;
+    const stockOnHand = product.inventoryBalances.reduce((sum, balance) => sum + balance.quantityOnHand.toNumber(), 0);
+    const weightedCost = product.inventoryBalances.find((balance) => balance.weightedAverageCost.toNumber() > 0)?.weightedAverageCost.toNumber() ?? null;
+    const effectiveCost = effective?.effectiveCost === null || effective?.effectiveCost === undefined
+      ? weightedCost
+      : Number(effective.effectiveCost);
+    const effectivePrice = effective ? Number(effective.effectivePrice) : product.standardSalePrice.toNumber();
+    const thickness = detected.thicknessInches ?? 0;
+    const width = detected.widthInches ?? 0;
+    const length = detected.lengthFeet ?? 0;
+    const boardFeet = thickness > 0 && width > 0 && length > 0 ? (thickness * width * length) / 12 : 0;
+    return {
+      id: `catalog:${product.id}`,
+      catalogProductId: product.id,
+      isCatalogOnly: true,
+      timberType: detected.subtype ?? "OTRO",
+      woodSubtype: detected.subtype ?? "OTRO",
+      thickness: String(thickness),
+      width: String(width),
+      length: String(length),
+      varaLength: length,
+      boardFeet: String(boardFeet),
+      baseCost: String(effectiveCost ?? 0),
+      sellingPrice: String(effectivePrice),
+      stockOnHand,
+      effectiveCost,
+      effectivePrice,
+      priceSource: effective?.priceSource ?? "STANDARD",
+      costSource: effective?.costSource ?? (weightedCost !== null ? "WAC" : "NONE"),
+      product,
+      detectedDimensions: detected,
+      warnings: [
+        ...(effectiveCost === null ? ["Producto de madera sin costo efectivo."] : []),
+        ...(effectivePrice <= 0 ? ["Producto de madera sin precio de venta."] : []),
+        ...(boardFeet <= 0 ? ["No se pudieron inferir dimensiones desde el nombre."] : []),
+      ],
+    };
+  }));
+
+  const items = [...mappedTimber, ...mappedCatalog.filter((item): item is NonNullable<typeof item> => item !== null)];
+  const total = timberTotal + mappedCatalog.filter((item) => item !== null).length;
+  const pageItems = items.slice(0, limit);
+
+  return { items: pageItems, total, page, limit, totalPages: Math.ceil(total / limit) };
 }
 
 export async function deleteTimberProduct(id: string) {

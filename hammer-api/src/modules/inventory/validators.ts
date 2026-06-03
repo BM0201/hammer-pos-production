@@ -59,3 +59,22 @@ export const manualInventoryAdjustmentSchema = z.object({
   reason: z.string().min(5, "El motivo es obligatorio.").max(300),
   notes: z.string().max(500).optional().nullable(),
 });
+
+export const openingBalanceSchema = z.object({
+  branchId: z.string().cuid(),
+  productId: z.string().cuid(),
+  quantity: z.coerce.number().positive("La cantidad inicial debe ser mayor que cero."),
+  unit: z.string().min(1).max(32).optional(),
+  unitCost: z.coerce.number().nonnegative("El costo inicial no puede ser negativo.").optional().nullable(),
+  costMode: z.enum(["SET_WAC", "SET_BRANCH_COST", "QUANTITY_ONLY"]).default("SET_WAC"),
+  reason: z.string().min(5, "El motivo es obligatorio.").max(300),
+  notes: z.string().max(500).optional().nullable(),
+}).superRefine((data, ctx) => {
+  if ((data.costMode === "SET_WAC" || data.costMode === "SET_BRANCH_COST") && (!data.unitCost || data.unitCost <= 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["unitCost"],
+      message: "Este modo de costo requiere un costo inicial mayor que cero.",
+    });
+  }
+});

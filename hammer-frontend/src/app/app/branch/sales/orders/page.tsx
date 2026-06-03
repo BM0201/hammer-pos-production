@@ -1,6 +1,7 @@
 "use client";
 
 import { BranchPos } from "@/components/pos/branch-pos";
+import { PosShellWrapper } from "@/components/pos/PosShellWrapper";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 
@@ -20,8 +21,15 @@ export default function BranchSalesOrdersPage() {
   }
 
   return (
-    <section>
+    <PosShellWrapper
+      username={sessionState.session.username}
+      roleCode={sessionState.session.roleCode}
+      branchId={branchId}
+      branchName={`Sucursal ${branchId.slice(0, 6)}`}
+      mode="sales"
+      integrated
+    >
       <BranchPos branchId={branchId} />
-    </section>
+    </PosShellWrapper>
   );
 }

@@ -37,6 +37,8 @@ function cleanText(value?: string | null): string {
 }
 
 const CATEGORY_CODES: Array<{ code: string; patterns: RegExp[] }> = [
+  { code: "MAD", patterns: [/MADERA/, /TIMBER/, /TABLA/, /REGLA/, /CUARTON/, /CUARTON/, /CUADRO/, /LISTON/, /VIGA/] },
+  { code: "MET", patterns: [/METAL/, /METALICO/, /METALICOS/, /HIERRO/, /ACERO/, /VARILLA/] },
   { code: "ALM", patterns: [/ALAMBRE/, /PUAS?/, /GALVANIZADO/] },
   { code: "CEM", patterns: [/CEMENTO/, /MORTERO/, /CONCRETO/] },
   { code: "AGG", patterns: [/ARENA/, /PIEDRA/, /GRAVA/, /SELECTO/, /BALASTRO/, /AGREGADO/] },
@@ -53,6 +55,12 @@ const CATEGORY_CODES: Array<{ code: string; patterns: RegExp[] }> = [
 ];
 
 const FAMILY_CODES: Array<{ code: string; patterns: RegExp[] }> = [
+  { code: "CUA", patterns: [/CUARTON/, /CUARTON/, /CUADRO/] },
+  { code: "TAB", patterns: [/TABLA/] },
+  { code: "REG", patterns: [/REGLA/] },
+  { code: "LIS", patterns: [/LISTON/] },
+  { code: "VIG", patterns: [/VIGA/] },
+  { code: "HIE", patterns: [/HIERRO/] },
   { code: "AMR", patterns: [/AMARRE/] },
   { code: "PUA", patterns: [/PUAS?/] },
   { code: "GAL", patterns: [/GALVANIZADO/] },
@@ -152,8 +160,41 @@ function compactVariant(raw: string): string {
     .slice(0, 10);
 }
 
+export function parseWoodDimensions(productName: string): {
+  thicknessInches?: number;
+  widthInches?: number;
+  lengthFeet?: number;
+  subtype?: "TABLA" | "REGLA" | "CUARTON" | "CUADRO" | "LISTON" | "VIGA" | "OTRO";
+} {
+  const text = cleanText(productName);
+  const subtype =
+    /\bCUARTON\b/.test(text) ? "CUARTON" :
+    /\bTABLA\b/.test(text) ? "TABLA" :
+    /\bREGLA\b/.test(text) ? "REGLA" :
+    /\bCUADRO\b/.test(text) ? "CUADRO" :
+    /\bLISTON\b/.test(text) ? "LISTON" :
+    /\bVIGA\b/.test(text) ? "VIGA" :
+    "OTRO";
+  const dimensionMatch = text.match(/\b(\d+(?:\.\d+)?)\s*[Xx]\s*(\d+(?:\.\d+)?)\s*[Xx]\s*(\d+(?:\.\d+)?)\b/);
+  if (!dimensionMatch) return { subtype };
+  return {
+    subtype,
+    thicknessInches: Number(dimensionMatch[1]),
+    widthInches: Number(dimensionMatch[2]),
+    lengthFeet: Number(dimensionMatch[3]),
+  };
+}
+
 export function detectVariant(productName: string): string {
   const text = cleanText(productName);
+  const woodDimensions = parseWoodDimensions(productName);
+  if (
+    woodDimensions.thicknessInches !== undefined &&
+    woodDimensions.widthInches !== undefined &&
+    woodDimensions.lengthFeet !== undefined
+  ) {
+    return `${woodDimensions.thicknessInches}${woodDimensions.widthInches}${woodDimensions.lengthFeet}`.replace(/[^0-9]/g, "").slice(0, 10);
+  }
   const patterns: RegExp[] = [
     /#\s*(\d+[A-Z]?)/,
     /\b(\d+(?:\.\d+)?)\s*(KG|KILO|KILOS|KILOGRAMO|KILOGRAMOS)\b/,

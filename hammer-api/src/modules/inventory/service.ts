@@ -4,9 +4,9 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
 import { isInboundMovement, recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
-import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import {
   convertBaseQtyToSaleQty,
+  convertBaseUnitCostToSaleUnitCost,
   convertSaleQtyToBaseQty,
   convertSaleUnitCostToBaseUnitCost,
   formatDualStock,
@@ -68,6 +68,18 @@ type ManualAdjustmentInput = {
   adjustmentType: "ADJUSTMENT_IN" | "ADJUSTMENT_OUT" | "PHYSICAL_COUNT" | "DAMAGE" | "RETURN" | "OTHER";
   quantity: number;
   unit?: string;
+  reason: string;
+  notes?: string | null;
+};
+
+type OpeningBalanceInput = {
+  actorUserId: string;
+  branchId: string;
+  productId: string;
+  quantity: number;
+  unit?: string;
+  unitCost?: number | null;
+  costMode: "SET_WAC" | "SET_BRANCH_COST" | "QUANTITY_ONLY";
   reason: string;
   notes?: string | null;
 };
@@ -272,8 +284,10 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
       throw new Error("INSUFFICIENT_STOCK");
     }
 
-    const pricing = await getEffectiveProductPricing(tx, { branchId: input.branchId, productId: input.productId });
-    const saleUnitCost = pricing.effectiveCost ?? pricing.weightedAverageCost ?? shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+    const baseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+    const saleUnitCost = conversion && !isBaseUnitAdjustment
+      ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: baseWac, conversionFactor: conversion.conversionFactor })
+      : baseWac;
     const unitCost = isBaseUnitAdjustment && conversion
       ? convertSaleUnitCostToBaseUnitCost({ saleUnitCost, conversionFactor: conversion.conversionFactor })
       : saleUnitCost;
@@ -337,6 +351,160 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
       newStock: Number(newSaleQty),
       previousBaseStock: Number(currentBaseQty),
       newBaseStock: Number(newBaseQty),
+      sharedStock: conversion ? formatDualStock({
+        baseQuantity: newBaseQty,
+        conversionFactor: conversion.conversionFactor,
+        baseUnit: conversion.baseUnit,
+        saleUnit: conversion.saleUnit,
+      }) : null,
+    };
+  });
+}
+
+export async function createOpeningBalance(input: OpeningBalanceInput) {
+  return prisma.$transaction(async (tx) => {
+    const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
+    const conversion = shared.conversion;
+    const selectedUnit = (input.unit ?? conversion?.saleUnit ?? "").toUpperCase();
+    const isBaseUnit = !!conversion && selectedUnit === conversion.baseUnit.toUpperCase();
+    const currentBaseQty = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
+    const requestedQty = new Prisma.Decimal(input.quantity);
+    const movementProductId = isBaseUnit && conversion ? conversion.canonicalProductId : input.productId;
+    const movementQty = isBaseUnit && conversion
+      ? requestedQty
+      : requestedQty;
+    const baseQuantity = conversion && !isBaseUnit
+      ? convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor })
+      : requestedQty;
+
+    let unitCost = new Prisma.Decimal(shared.balance?.weightedAverageCost ?? 0);
+    if (input.costMode === "SET_WAC" || input.costMode === "SET_BRANCH_COST") {
+      unitCost = new Prisma.Decimal(input.unitCost ?? 0);
+    }
+    if (input.costMode === "QUANTITY_ONLY" && unitCost.lte(0)) {
+      unitCost = new Prisma.Decimal(0);
+    }
+
+    let movementResult: Awaited<ReturnType<typeof createInventoryMovementTx>> | null = null;
+    if (input.costMode === "SET_WAC") {
+      movementResult = await createInventoryMovementTx(tx, {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        productId: movementProductId,
+        movementType: "ADJUSTMENT_IN",
+        quantity: Number(movementQty),
+        unitCost: Number(unitCost),
+        referenceType: "OPENING_BALANCE",
+        referenceId: `OPENING-${Date.now()}`,
+        notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+      });
+    } else {
+      const inventoryProductId = shared.inventoryProductId;
+      await tx.inventoryBalance.upsert({
+        where: { branchId_productId: { branchId: input.branchId, productId: inventoryProductId } },
+        create: {
+          branchId: input.branchId,
+          productId: inventoryProductId,
+          quantityOnHand: 0,
+          weightedAverageCost: shared.balance?.weightedAverageCost ?? 0,
+          inventoryValue: 0,
+        },
+        update: {},
+      });
+      await tx.$queryRaw`
+        SELECT id
+        FROM "InventoryBalance"
+        WHERE "branchId" = ${input.branchId}
+          AND "productId" = ${inventoryProductId}
+        FOR UPDATE
+      `;
+      const balance = await tx.inventoryBalance.findUnique({
+        where: { branchId_productId: { branchId: input.branchId, productId: inventoryProductId } },
+      });
+      if (!balance) throw new Error("INVENTORY_BALANCE_NOT_FOUND");
+      const nextQty = balance.quantityOnHand.plus(baseQuantity);
+      const nextWac = balance.weightedAverageCost;
+      const movement = await tx.inventoryMovement.create({
+        data: {
+          branchId: input.branchId,
+          productId: inventoryProductId,
+          movementType: "ADJUSTMENT_IN",
+          quantity: baseQuantity,
+          unitCost: nextWac,
+          referenceType: "OPENING_BALANCE",
+          referenceId: `OPENING-${Date.now()}`,
+          notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+        },
+      });
+      const updatedBalance = await tx.inventoryBalance.update({
+        where: { id: balance.id },
+        data: {
+          quantityOnHand: nextQty,
+          inventoryValue: nextQty.mul(nextWac),
+        },
+      });
+      movementResult = { movement, balance: updatedBalance };
+    }
+
+    if (input.costMode === "SET_BRANCH_COST") {
+      await tx.branchProductSetting.upsert({
+        where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+        create: {
+          branchId: input.branchId,
+          productId: input.productId,
+          branchCost: unitCost,
+        },
+        update: { branchCost: unitCost },
+      });
+    }
+
+    const newBaseQty = movementResult.balance.quantityOnHand;
+    const newSaleQty = conversion
+      ? convertBaseQtyToSaleQty({ baseQuantity: newBaseQty, conversionFactor: conversion.conversionFactor })
+      : newBaseQty;
+
+    await logAuditEvent({
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "inventory",
+      action: "OPENING_BALANCE_CREATE",
+      entityType: "Product",
+      entityId: input.productId,
+      metadataJson: {
+        productId: input.productId,
+        inventoryProductId: shared.inventoryProductId,
+        movementId: movementResult.movement.id,
+        quantity: input.quantity,
+        unit: input.unit ?? null,
+        baseQuantity: baseQuantity.toString(),
+        costMode: input.costMode,
+        unitCost: input.unitCost ?? null,
+        previousBaseStock: currentBaseQty.toString(),
+        newBaseStock: newBaseQty.toString(),
+        reason: input.reason,
+        notes: input.notes ?? null,
+        stockConversion: conversion ? {
+          stockGroupId: conversion.stockGroupId,
+          stockGroupCode: conversion.stockGroupCode,
+          baseUnit: conversion.baseUnit,
+          saleUnit: conversion.saleUnit,
+          conversionFactor: conversion.conversionFactor.toString(),
+        } : null,
+      },
+    });
+
+    return {
+      ok: true,
+      movementId: movementResult.movement.id,
+      productId: input.productId,
+      branchId: input.branchId,
+      movementType: "ADJUSTMENT_IN",
+      referenceType: "OPENING_BALANCE",
+      costMode: input.costMode,
+      previousBaseStock: Number(currentBaseQty),
+      newBaseStock: Number(newBaseQty),
+      newStock: Number(newSaleQty),
+      weightedAverageCost: movementResult.balance.weightedAverageCost.toString(),
       sharedStock: conversion ? formatDualStock({
         baseQuantity: newBaseQty,
         conversionFactor: conversion.conversionFactor,

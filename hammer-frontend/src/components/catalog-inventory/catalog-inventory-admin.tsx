@@ -32,7 +32,7 @@ type ProductRow = {
   totalStock: number;
   branchesWithStock: number;
   inventoryValue: number;
-  category?: { name: string };
+  category?: { id?: string; name: string };
   inventoryBalances: Array<{ id: string; branchId: string; quantityOnHand: string; weightedAverageCost: string; branch: Branch }>;
   branchProductSettings: Array<{ branchId: string; branchCost?: string | null; branchPrice?: string | null; isAvailable: boolean; branch: Branch }>;
   stockConversion?: {
@@ -405,9 +405,11 @@ export function CatalogInventoryAdmin() {
 
   /* ── Inline edit state for product rows ── */
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ name: "" });
+  const [editDraft, setEditDraft] = useState({ name: "", categoryId: "", sku: "", applySuggestedSku: false });
+  const [editSkuPreview, setEditSkuPreview] = useState("");
   const [savingProduct, setSavingProduct] = useState(false);
   const [focusedPricingProductId, setFocusedPricingProductId] = useState<string | null>(null);
+  const [movementDialog, setMovementDialog] = useState<"adjustment" | "opening" | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -465,11 +467,13 @@ export function CatalogInventoryAdmin() {
   /* ── Inline product edit handlers ── */
   function startEditing(product: ProductRow) {
     setEditingProductId(product.id);
-    setEditDraft({ name: product.name });
+    setEditDraft({ name: product.name, categoryId: product.category?.id ?? "", sku: product.sku, applySuggestedSku: false });
+    setEditSkuPreview("");
   }
   function cancelEditing() {
     setEditingProductId(null);
-    setEditDraft({ name: "" });
+    setEditDraft({ name: "", categoryId: "", sku: "", applySuggestedSku: false });
+    setEditSkuPreview("");
   }
   async function saveProductEdit(product: ProductRow) {
     if (!editDraft.name.trim()) { toast.error("El nombre es obligatorio."); return; }
@@ -477,6 +481,21 @@ export function CatalogInventoryAdmin() {
     try {
       const body: Record<string, unknown> = {};
       if (editDraft.name.trim() !== product.name) body.name = editDraft.name.trim();
+      if (editDraft.categoryId && editDraft.categoryId !== product.category?.id) body.categoryId = editDraft.categoryId;
+      if (editDraft.applySuggestedSku && editSkuPreview) {
+        const hasHistory = product.totalStock !== 0 || product.inventoryBalances.length > 0;
+        if (hasHistory) {
+          const confirmed = window.confirm("Este producto ya tiene historial o inventario. Cambiar el SKU no borra movimientos, pero puede afectar reportes externos. Deseas actualizar el SKU?");
+          if (!confirmed) {
+            setSavingProduct(false);
+            return;
+          }
+        }
+        body.skuUpdateMode = "USE_SUGGESTED";
+        body.suggestedSku = editSkuPreview;
+      } else if (editDraft.categoryId && editDraft.categoryId !== product.category?.id) {
+        body.skuUpdateMode = "KEEP_CURRENT";
+      }
       if (Object.keys(body).length === 0) { cancelEditing(); return; }
       const response = await apiFetch(`/api/catalog/products/${product.id}`, {
         method: "PATCH",
@@ -512,6 +531,32 @@ export function CatalogInventoryAdmin() {
   const [skuPreview, setSkuPreview] = useState("");
   const [skuStatus, setSkuStatus] = useState<"idle" | "checking" | "available" | "taken">("idle");
   const skuCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!editingProductId || !editDraft.name.trim() || !editDraft.categoryId) {
+      setEditSkuPreview("");
+      return;
+    }
+    const currentProduct = data?.products.find((product) => product.id === editingProductId);
+    const categoryChanged = Boolean(currentProduct && editDraft.categoryId !== currentProduct.category?.id);
+    const nameChanged = Boolean(currentProduct && editDraft.name.trim() !== currentProduct.name);
+    if (!categoryChanged && !nameChanged) {
+      setEditSkuPreview("");
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/catalog/products/sku-suggestion?name=${encodeURIComponent(editDraft.name.trim())}&categoryId=${encodeURIComponent(editDraft.categoryId)}&productId=${encodeURIComponent(editingProductId)}`);
+        if (!response.ok) return;
+        const raw = await response.json();
+        const result = unwrapApiData(raw);
+        setEditSkuPreview(result.suggestedSku ?? "");
+      } catch {
+        setEditSkuPreview("");
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [data?.products, editDraft.categoryId, editDraft.name, editingProductId]);
 
   // Auto-preview SKU when name + category change
   useEffect(() => {
@@ -942,10 +987,43 @@ export function CatalogInventoryAdmin() {
                     <td className="font-semibold">{product.sku}</td>
                     <td>
                       {isEditing ? (
-                        <Input className="h-8 min-w-[200px]" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} />
+                        <div className="space-y-2">
+                          <Input className="h-8 min-w-[220px]" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value, applySuggestedSku: false })} />
+                          {editSkuPreview ? (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[0.68rem] text-amber-800">
+                              <div>La categoria cambio. El SKU actual puede no corresponder a la nueva categoria.</div>
+                              <div className="mt-1">
+                                Categoria: <strong>{product.category?.name ?? "Sin categoria"}</strong> a{" "}
+                                <strong>{data.categories.find((category) => category.id === editDraft.categoryId)?.name ?? "Sin categoria"}</strong>
+                              </div>
+                              <div>SKU actual: <strong className="font-mono">{product.sku}</strong></div>
+                              <label className="mt-1 flex items-center gap-1.5">
+                                <input
+                                  type="checkbox"
+                                  checked={editDraft.applySuggestedSku}
+                                  onChange={(event) => setEditDraft({ ...editDraft, applySuggestedSku: event.target.checked })}
+                                />
+                                Actualizar SKU a <strong className="font-mono">{editSkuPreview}</strong>
+                              </label>
+                            </div>
+                          ) : null}
+                        </div>
                       ) : product.name}
                     </td>
-                    <td>{product.category?.name ?? "Sin categoria"}</td>
+                    <td>
+                      {isEditing ? (
+                        <select
+                          className="hm-input h-8 min-w-[180px] text-xs"
+                          value={editDraft.categoryId}
+                          onChange={(event) => setEditDraft({ ...editDraft, categoryId: event.target.value, applySuggestedSku: false })}
+                        >
+                          <option value="">Sin categoria</option>
+                          {data.categories.filter((category) => category.isActive).map((category) => (
+                            <option key={category.id} value={category.id}>{category.name}</option>
+                          ))}
+                        </select>
+                      ) : product.category?.name ?? "Sin categoria"}
+                    </td>
                     <td>{product.stockConversion?.saleUnit ?? product.unit}</td>
                     <td>
                       <div>{sharedStock?.primary ?? qty(product.totalStock)}</div>
@@ -1024,6 +1102,8 @@ export function CatalogInventoryAdmin() {
               <select className="hm-input" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }}>
                 {FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
+              <Button variant="primary" onClick={() => { setMovementDialog("adjustment"); setTab("movements"); }} icon={<Plus className="h-4 w-4" />}>Ajuste manual</Button>
+              <Button variant="success" onClick={() => { setMovementDialog("opening"); setTab("movements"); }} icon={<Package className="h-4 w-4" />}>Carga inicial</Button>
               <Button variant="ghost" onClick={() => load().catch((e) => toast.error(e.message))} icon={<RefreshCcw className="h-4 w-4" />}>Refrescar</Button>
             </div>
             <div className="overflow-x-auto">
@@ -1042,7 +1122,7 @@ export function CatalogInventoryAdmin() {
         </Card>
       ) : null}
 
-      {data && tab === "movements" ? <MovementsPanel branches={data.branches} products={data.products} movements={data.movements} selectedBranchId={branchId} onSelectBranch={setBranchId} onDone={load} /> : null}
+      {data && tab === "movements" ? <MovementsPanel branches={data.branches} products={data.products} movements={data.movements} selectedBranchId={branchId} initialDialog={movementDialog} onInitialDialogHandled={() => setMovementDialog(null)} onSelectBranch={setBranchId} onDone={load} /> : null}
       {data && tab === "pricing" ? (
         <>
           <PricingPanel
@@ -1745,6 +1825,8 @@ function MovementsPanel({
   products,
   movements,
   selectedBranchId,
+  initialDialog,
+  onInitialDialogHandled,
   onSelectBranch,
   onDone,
 }: {
@@ -1752,12 +1834,15 @@ function MovementsPanel({
   products: ProductRow[];
   movements: Movement[];
   selectedBranchId?: string;
+  initialDialog?: "adjustment" | "opening" | null;
+  onInitialDialogHandled?: () => void;
   onSelectBranch: (branchId: string) => void;
   onDone: () => Promise<void>;
 }) {
   const [productId, setProductId] = useState("");
   const [movementType, setMovementType] = useState("");
   const [showAdjustment, setShowAdjustment] = useState(false);
+  const [showOpening, setShowOpening] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const activeBranchId = selectedBranchId || branches[0]?.id || "";
   const firstProduct = products[0];
@@ -1769,6 +1854,21 @@ function MovementsPanel({
     reason: "",
     notes: "",
   });
+  const [opening, setOpening] = useState({
+    productId: firstProduct?.id ?? "",
+    quantity: "1",
+    unit: firstProduct?.stockConversion?.saleUnit ?? firstProduct?.unit ?? "UN",
+    unitCost: "",
+    costMode: "SET_WAC",
+    reason: "Carga inicial de inventario",
+    notes: "",
+  });
+
+  useEffect(() => {
+    if (initialDialog === "adjustment") setShowAdjustment(true);
+    if (initialDialog === "opening") setShowOpening(true);
+    if (initialDialog) onInitialDialogHandled?.();
+  }, [initialDialog, onInitialDialogHandled]);
 
   const filteredMovements = movements.filter((movement) => {
     if (activeBranchId && movement.branch.id !== activeBranchId) return false;
@@ -1777,15 +1877,24 @@ function MovementsPanel({
     return true;
   });
   const adjustmentProduct = products.find((product) => product.id === adjustment.productId);
+  const openingProduct = products.find((product) => product.id === opening.productId);
   const adjustmentQty = Number(adjustment.quantity);
+  const openingQty = Number(opening.quantity);
   const adjustmentFactor = adjustmentProduct ? ironQuintalFactor(adjustmentProduct) : null;
+  const openingFactor = openingProduct ? ironQuintalFactor(openingProduct) : null;
   const isBaseUnit = !!adjustmentProduct?.stockConversion && adjustment.unit === adjustmentProduct.stockConversion.baseUnit;
+  const openingIsBaseUnit = !!openingProduct?.stockConversion && opening.unit === openingProduct.stockConversion.baseUnit;
   const currentBaseStock = adjustmentProduct?.sharedStock?.baseQuantity ?? adjustmentProduct?.totalStock ?? 0;
+  const openingCurrentBaseStock = openingProduct?.sharedStock?.baseQuantity ?? openingProduct?.totalStock ?? 0;
   const changeBaseQty = Number.isFinite(adjustmentQty)
     ? (adjustmentProduct?.stockConversion && !isBaseUnit ? adjustmentQty * Number(adjustmentProduct.stockConversion.conversionFactor || 1) : adjustmentQty)
     : 0;
+  const openingBaseQty = Number.isFinite(openingQty)
+    ? (openingProduct?.stockConversion && !openingIsBaseUnit ? openingQty * Number(openingProduct.stockConversion.conversionFactor || 1) : openingQty)
+    : 0;
   const direction = ["ADJUSTMENT_OUT", "DAMAGE"].includes(adjustment.adjustmentType) ? -1 : 1;
   const previewFinalBase = adjustment.adjustmentType === "PHYSICAL_COUNT" ? changeBaseQty : currentBaseStock + (direction * changeBaseQty);
+  const openingPreviewFinalBase = openingCurrentBaseStock + openingBaseQty;
 
   async function submitAdjustment(event: React.FormEvent) {
     event.preventDefault();
@@ -1819,17 +1928,57 @@ function MovementsPanel({
       setSubmitting(false);
     }
   }
+
+  async function submitOpeningBalance(event: React.FormEvent) {
+    event.preventDefault();
+    if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
+    if (!opening.productId) { toast.error("Selecciona un producto."); return; }
+    if (!opening.reason.trim()) { toast.error("El motivo es obligatorio."); return; }
+    if (!Number.isFinite(openingQty) || openingQty <= 0) { toast.error("La cantidad inicial debe ser mayor que cero."); return; }
+    if (opening.costMode !== "QUANTITY_ONLY" && (!Number.isFinite(Number(opening.unitCost)) || Number(opening.unitCost) <= 0)) {
+      toast.error("Este modo requiere un costo inicial mayor que cero.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await apiFetch("/api/inventory/opening-balance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId: activeBranchId,
+          productId: opening.productId,
+          quantity: openingQty,
+          unit: opening.unit,
+          unitCost: opening.unitCost ? Number(opening.unitCost) : null,
+          costMode: opening.costMode,
+          reason: opening.reason.trim(),
+          notes: opening.notes.trim() || undefined,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar carga inicial.");
+      toast.success("Carga inicial registrada.");
+      setShowOpening(false);
+      setOpening((prev) => ({ ...prev, quantity: "1", unitCost: "", notes: "" }));
+      await onDone();
+    } finally {
+      setSubmitting(false);
+    }
+  }
   return (
     <Card noPadding>
       <div className="hm-card-header-purple flex items-center justify-between">
         <h2 className="text-sm font-semibold flex items-center gap-2"><History className="h-4 w-4" /> Movimientos / Kardex</h2>
-        <Button variant="primary" size="sm" onClick={() => setShowAdjustment(true)} icon={<Plus className="h-4 w-4" />}>Registrar ajuste manual</Button>
+        <div className="flex gap-2">
+          <Button variant="primary" size="sm" onClick={() => setShowAdjustment(true)} icon={<Plus className="h-4 w-4" />}>Ajuste manual</Button>
+          <Button variant="success" size="sm" onClick={() => setShowOpening(true)} icon={<Package className="h-4 w-4" />}>Carga inicial</Button>
+        </div>
       </div>
       <div className="p-4 space-y-4">
         <div className="grid gap-2 md:grid-cols-4">
           <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
           <select className="hm-input" value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">Todos los productos</option>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
-          <select className="hm-input" value={movementType} onChange={(e) => setMovementType(e.target.value)}><option value="">Todos los tipos</option><option value="PURCHASE_IN">Compra / entrada</option><option value="SALE_OUT">Venta / salida</option><option value="ADJUSTMENT_IN">Ajuste entrada</option><option value="ADJUSTMENT_OUT">Ajuste salida</option><option value="RETURN_IN">Devolucion entrada</option><option value="RETURN_OUT">Devolucion salida</option><option value="TRANSFER_IN">Traslado entrada</option><option value="TRANSFER_OUT">Traslado salida</option></select>
+          <select className="hm-input" value={movementType} onChange={(e) => setMovementType(e.target.value)}><option value="">Todos los tipos</option><option value="PURCHASE_IN">Compra / entrada</option><option value="SALE_OUT">Venta / salida</option><option value="ADJUSTMENT_IN">Ajuste entrada / carga inicial</option><option value="ADJUSTMENT_OUT">Ajuste salida</option><option value="RETURN_IN">Devolucion entrada</option><option value="RETURN_OUT">Devolucion salida</option><option value="TRANSFER_IN">Traslado entrada</option><option value="TRANSFER_OUT">Traslado salida</option></select>
           <div className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">Los costos se ajustan desde Precios y costos, no desde Kardex.</div>
         </div>
         <div className="overflow-x-auto">
@@ -1839,7 +1988,8 @@ function MovementsPanel({
               {filteredMovements.map((item) => {
                 const quantity = Number(item.quantity);
                 const isIn = ["PURCHASE_IN", "RETURN_IN", "ADJUSTMENT_IN", "TRANSFER_IN", "TIMBER_INTAKE_IN"].includes(item.movementType);
-                return <tr key={item.id}><td>{new Date(item.createdAt).toLocaleString("es-NI")}</td><td className="font-medium">{item.product.name}</td><td className="font-mono text-xs">{item.product.sku}</td><td>{item.branch.code}</td><td>{item.movementType}</td><td>{isIn ? qty(quantity) : "-"}</td><td>{!isIn ? qty(quantity) : "-"}</td><td className="text-[var(--color-text-muted)]">-</td><td>Unidad</td><td className="text-[var(--color-text-muted)]">-</td><td>{item.referenceType} / {item.referenceId}</td><td>{item.notes ?? "-"}</td></tr>;
+                const visibleType = item.referenceType === "OPENING_BALANCE" ? "Carga inicial" : item.referenceType === "MANUAL_ADJUSTMENT" ? "Ajuste manual" : item.movementType;
+                return <tr key={item.id}><td>{new Date(item.createdAt).toLocaleString("es-NI")}</td><td className="font-medium">{item.product.name}</td><td className="font-mono text-xs">{item.product.sku}</td><td>{item.branch.code}</td><td>{visibleType}</td><td>{isIn ? qty(quantity) : "-"}</td><td>{!isIn ? qty(quantity) : "-"}</td><td className="text-[var(--color-text-muted)]">-</td><td>Unidad</td><td className="text-[var(--color-text-muted)]">-</td><td>{item.referenceType} / {item.referenceId}</td><td>{item.notes ?? "-"}</td></tr>;
               })}
               {filteredMovements.length === 0 ? <tr><td colSpan={12} className="py-8 text-center text-sm text-[var(--color-text-muted)]">Sin movimientos recientes para los filtros seleccionados.</td></tr> : null}
             </tbody>
@@ -1897,6 +2047,64 @@ function MovementsPanel({
             <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
               <Button type="button" variant="ghost" onClick={() => setShowAdjustment(false)}>Cancelar</Button>
               <Button type="submit" variant="success" loading={submitting} icon={<Check className="h-4 w-4" />}>Confirmar ajuste</Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+      {showOpening ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <form className="w-full max-w-3xl rounded-xl bg-white shadow-2xl" onSubmit={(event) => submitOpeningBalance(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar carga inicial."))}>
+            <div className="border-b border-[var(--color-border)] px-5 py-4">
+              <h3 className="text-sm font-semibold">Carga inicial de inventario</h3>
+              <p className="text-xs text-[var(--color-text-muted)]">Registra existencias fisicas iniciales sin crear una compra falsa.</p>
+            </div>
+            <div className="grid gap-3 p-5 md:grid-cols-2">
+              <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
+              <select className="hm-input" value={opening.productId} onChange={(e) => {
+                const nextProduct = products.find((p) => p.id === e.target.value);
+                setOpening({ ...opening, productId: e.target.value, unit: nextProduct?.stockConversion?.saleUnit ?? nextProduct?.unit ?? "UN" });
+              }}>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
+              <div className="grid grid-cols-[1fr_140px] gap-2">
+                <Input type="number" min="0.0001" step="0.0001" value={opening.quantity} onChange={(e) => setOpening({ ...opening, quantity: e.target.value })} placeholder="Cantidad inicial" />
+                <select className="hm-input" value={opening.unit} onChange={(e) => setOpening({ ...opening, unit: e.target.value })}>
+                  {openingProduct?.stockConversion ? (
+                    <>
+                      <option value={openingProduct.stockConversion.saleUnit}>{openingProduct.stockConversion.saleUnit}</option>
+                      <option value={openingProduct.stockConversion.baseUnit}>{openingProduct.stockConversion.baseUnit}</option>
+                    </>
+                  ) : <option value={openingProduct?.unit ?? "UN"}>{openingProduct?.unit ?? "UN"}</option>}
+                </select>
+              </div>
+              <select className="hm-input" value={opening.costMode} onChange={(e) => setOpening({ ...opening, costMode: e.target.value })}>
+                <option value="SET_WAC">Establecer WAC inicial</option>
+                <option value="SET_BRANCH_COST">Establecer costo sucursal</option>
+                <option value="QUANTITY_ONLY">Solo cantidad sin costo</option>
+              </select>
+              <Input type="number" min="0" step="0.01" value={opening.unitCost} onChange={(e) => setOpening({ ...opening, unitCost: e.target.value })} placeholder={opening.costMode === "QUANTITY_ONLY" ? "Costo opcional" : "Costo inicial unitario"} disabled={opening.costMode === "QUANTITY_ONLY"} />
+              <Input className="md:col-span-2" value={opening.reason} onChange={(e) => setOpening({ ...opening, reason: e.target.value })} placeholder="Motivo obligatorio" />
+              <Input className="md:col-span-2" value={opening.notes} onChange={(e) => setOpening({ ...opening, notes: e.target.value })} placeholder="Nota opcional" />
+              <div className="md:col-span-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
+                <div className="font-semibold">Vista previa</div>
+                <div className="mt-1 grid gap-1 text-xs text-[var(--color-text-muted)] sm:grid-cols-3">
+                  <span>Stock actual: {qty(openingCurrentBaseStock)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
+                  <span>Carga base: {qty(openingBaseQty)}</span>
+                  <span>Stock final: {qty(openingPreviewFinalBase)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
+                </div>
+                {openingProduct?.stockConversion ? (
+                  <div className="mt-2 text-xs text-[var(--color-text-muted)]">
+                    {openingProduct.stockConversion.baseUnit} / {openingProduct.stockConversion.saleUnit} · factor {String(openingProduct.stockConversion.conversionFactor)}
+                    <br />
+                    Equivalente final: {qty(openingPreviewFinalBase)} varillas{openingFactor ? ` / ${qty(openingPreviewFinalBase / openingFactor)} quintales` : ""}
+                  </div>
+                ) : null}
+                {opening.costMode === "QUANTITY_ONLY" ? (
+                  <div className="mt-2 text-xs text-amber-700">Esta carga no cambia costo. Si queda stock sin costo, Brain podra pedir revision de precio/costo.</div>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
+              <Button type="button" variant="ghost" onClick={() => setShowOpening(false)}>Cancelar</Button>
+              <Button type="submit" variant="success" loading={submitting} icon={<Check className="h-4 w-4" />}>Confirmar carga inicial</Button>
             </div>
           </form>
         </div>
