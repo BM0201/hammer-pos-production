@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { Boxes, History, Plus, RefreshCcw, Search } from "lucide-react";
+import { Boxes, History, Plus, RefreshCcw } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";

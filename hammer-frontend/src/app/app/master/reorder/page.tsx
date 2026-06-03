@@ -5,7 +5,6 @@ import {
   PackageSearch,
   Loader2,
   AlertTriangle,
-  CheckCircle,
   RefreshCw,
   ShoppingCart,
   ArrowLeftRight,

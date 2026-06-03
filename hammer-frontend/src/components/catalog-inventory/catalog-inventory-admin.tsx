@@ -50,6 +50,12 @@ type ProductRow = {
     baseUnit: string;
     saleUnit: string;
   } | null;
+  allSharedInventoryBalances?: Array<{
+    branchId: string;
+    inventoryProductId: string;
+    quantityOnHand: string | null;
+    weightedAverageCost: string | null;
+  }>;
 };
 type Movement = {
   id: string;
@@ -186,6 +192,23 @@ type CenterData = {
   pagination?: Pagination;
 };
 
+type BranchPricingCostRow = {
+  standardSalePrice: number;
+  branchPrice: number | null;
+  effectivePrice: number;
+  priceSource: "GLOBAL" | "BRANCH";
+  baseWeightedAverageCost: number | null;
+  weightedAverageCost: number | null;
+  branchCost: number | null;
+  effectiveCost: number | null;
+  costSource: "WAC" | "BRANCH" | "NONE";
+  effectiveMarginPercent: number | null;
+  isConvertibleStock: boolean;
+  baseUnit?: string | null;
+  conversionFactor?: number | null;
+  warnings: string[];
+};
+
 type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "transfers" | "reorder" | "audit";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
@@ -236,6 +259,66 @@ function renderSharedStock(product: ProductRow) {
     ? `${qty(shared.baseQuantity / factor)} quintales`
     : `${qty(shared.baseQuantity)} ${shared.baseUnit.toLowerCase()}`;
   return { primary, secondary, chip: factor ? `1 quintal = ${factor} varillas` : "Stock compartido" };
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatMoneyOrNd(value: number | null) {
+  return value === null ? "N/D" : money(value);
+}
+
+function formatMarginOrNd(value: number | null) {
+  return value === null ? "N/D" : `${value.toFixed(1)}%`;
+}
+
+function marginBadgeVariant(value: number | null) {
+  if (value === null) return "neutral" as const;
+  if (value < 0) return "danger" as const;
+  if (value < 20) return "warning" as const;
+  return "success" as const;
+}
+
+function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchPricingCostRow {
+  const setting = product.branchProductSettings.find((item) => item.branchId === branch.id);
+  const branchPrice = numberOrNull(setting?.branchPrice);
+  const branchCost = numberOrNull(setting?.branchCost);
+  const standardSalePrice = Number(product.basePrice) || 0;
+  const effectivePrice = branchPrice ?? standardSalePrice;
+  const sharedWac = numberOrNull(product.allSharedInventoryBalances?.find((item) => item.branchId === branch.id)?.weightedAverageCost);
+  const directWac = numberOrNull(product.inventoryBalances.find((item) => item.branchId === branch.id)?.weightedAverageCost);
+  const baseWeightedAverageCost = sharedWac ?? directWac;
+  const conversionFactor = numberOrNull(product.stockConversion?.conversionFactor) ?? 1;
+  const weightedAverageCost = baseWeightedAverageCost === null
+    ? null
+    : baseWeightedAverageCost * (product.stockConversion ? conversionFactor : 1);
+  const effectiveCost = branchCost ?? weightedAverageCost;
+  const effectiveMarginPercent = effectivePrice > 0 && effectiveCost !== null && effectiveCost > 0
+    ? ((effectivePrice - effectiveCost) / effectivePrice) * 100
+    : null;
+  const warnings: string[] = [];
+  if (effectiveCost === null) warnings.push("No se puede calcular margen sin costo efectivo.");
+  if (effectiveCost !== null && effectivePrice < effectiveCost) warnings.push("Precio bajo costo.");
+
+  return {
+    standardSalePrice,
+    branchPrice,
+    effectivePrice,
+    priceSource: branchPrice !== null ? "BRANCH" : "GLOBAL",
+    baseWeightedAverageCost,
+    weightedAverageCost,
+    branchCost,
+    effectiveCost,
+    costSource: branchCost !== null ? "BRANCH" : weightedAverageCost !== null ? "WAC" : "NONE",
+    effectiveMarginPercent,
+    isConvertibleStock: Boolean(product.stockConversion),
+    baseUnit: product.stockConversion?.baseUnit ?? null,
+    conversionFactor,
+    warnings,
+  };
 }
 
 /* ── Pagination Bar ── */
@@ -1863,20 +1946,22 @@ function PricingPanel({
 }) {
   const [draft, setDraft] = useState<PricingDraft>(() => buildPricingDraft(products, branches));
   const [savingKey, setSavingKey] = useState<string | null>(null);
-  const [ivaPercent, setIvaPercent] = useState(15);
   const [comparisonMode, setComparisonMode] = useState(false);
   const [productFilter, setProductFilter] = useState("");
   const productsRef = useRef(products);
-  const activeBranch = branches.find((branch) => branch.id === selectedBranchId) ?? branches[0];
-  const pricingBranches = activeBranch ? [activeBranch] : [];
-  const filteredProducts = products.filter((product) => {
+  const activeBranch = useMemo(
+    () => branches.find((branch) => branch.id === selectedBranchId) ?? branches[0],
+    [branches, selectedBranchId],
+  );
+  const pricingBranches = useMemo(() => activeBranch ? [activeBranch] : [], [activeBranch]);
+  const filteredProducts = useMemo(() => products.filter((product) => {
     if (focusedProductId && product.id !== focusedProductId) return false;
     const term = productFilter.trim().toLowerCase();
     if (!term) return true;
     return product.name.toLowerCase().includes(term)
       || product.sku.toLowerCase().includes(term)
       || (product.category?.name ?? "").toLowerCase().includes(term);
-  });
+  }), [focusedProductId, productFilter, products]);
 
   // Re-sync draft when products reference changes (after external load)
   useEffect(() => {
@@ -1954,9 +2039,9 @@ function PricingPanel({
         <h2 className="text-sm font-semibold flex items-center gap-2">
           <DollarSign className="h-4 w-4" /> Precios y costos por sucursal
         </h2>
-        <p className="mt-0.5 text-xs opacity-90">Edite los valores y presione el botón 💾 para guardar cada celda, o &quot;Guardar fila&quot; para guardar todos los cambios de un producto.</p>
+        <p className="mt-0.5 text-xs opacity-90">Edita solo la sucursal seleccionada. Los margenes usan precio efectivo y costo efectivo reales.</p>
       </div>
-      {/* IVA config for margin calculation */}
+      {/* Branch pricing filters */}
       <div className="grid gap-2 px-4 pt-3 md:grid-cols-[240px_1fr_auto_auto]">
         <select className="hm-input" value={activeBranch?.id ?? ""} onChange={(event) => onSelectBranch(event.target.value)}>
           {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} - {branch.name}</option>)}
@@ -1975,8 +2060,14 @@ function PricingPanel({
                   <td className="font-medium">{product.sku} - {product.name}</td>
                   <td>{money(product.basePrice)}</td>
                   {branches.map((branch) => {
-                    const setting = product.branchProductSettings.find((item) => item.branchId === branch.id);
-                    return <td key={branch.id}>{setting?.branchPrice ? money(Number(setting.branchPrice)) : "Global"} / {setting?.branchCost ? money(Number(setting.branchCost)) : "WAC"}</td>;
+                    const row = buildBranchPricingCostRow(product, branch);
+                    return (
+                      <td key={branch.id} className="text-xs">
+                        <div>Precio: {formatMoneyOrNd(row.effectivePrice)} ({row.priceSource === "BRANCH" ? "Sucursal" : "Global"})</div>
+                        <div>Costo: {formatMoneyOrNd(row.effectiveCost)} ({row.costSource === "BRANCH" ? "Sucursal" : row.costSource === "WAC" ? "WAC" : "Sin costo"})</div>
+                        <div>Margen: {formatMarginOrNd(row.effectiveMarginPercent)}</div>
+                      </td>
+                    );
                   })}
                   <td className="text-xs text-[var(--color-text-muted)]">Solo lectura</td>
                 </tr>
@@ -1985,138 +2076,83 @@ function PricingPanel({
           </table>
         </div>
       ) : null}
-      <div className="flex items-center gap-3 px-4 pt-3">
-        <label className="text-xs font-semibold text-gray-600 whitespace-nowrap">IVA para margen:</label>
-        <div className="flex items-center gap-1.5">
-          {[0, 15].map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setIvaPercent(v)}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
-                ivaPercent === v
-                  ? "bg-emerald-600 text-white shadow-sm"
-                  : "border border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
-              }`}
-            >
-              {v === 0 ? "Sin IVA" : `${v}%`}
-            </button>
-          ))}
-          <input
-            type="number"
-            min="0"
-            max="100"
-            step="1"
-            value={ivaPercent}
-            onChange={(e) => setIvaPercent(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
-            className="h-7 w-16 rounded-md border border-gray-300 px-2 text-xs text-center"
-          />
-          <span className="text-xs text-gray-500">%</span>
-        </div>
-        <span className="text-[10px] text-gray-400">Margen = ((Precio Venta − Costo Real) / Precio Venta) × 100 · Costo Real = Costo Base × (1 + IVA%)</span>
-      </div>
       <div className="overflow-x-auto p-4">
-        <table className="hm-table min-w-[1100px] w-full">
+        <table className="hm-table min-w-[1200px] w-full">
           <thead>
             <tr>
-              <th className="min-w-[200px]">Producto</th>
-              <th>Costo base</th>
-              <th>Costo real</th>
-              <th>Precio base</th>
-              <th>Margen</th>
-              {pricingBranches.map((b) => (
-                <th key={b.id} className="min-w-[180px] text-center">
-                  <span className="block">{b.code}</span>
-                  <span className="block text-[10px] font-normal opacity-70">Costo / Precio</span>
-                </th>
-              ))}
+              <th className="min-w-[220px]">Producto</th>
+              <th>Precio global</th>
+              <th>Precio sucursal</th>
+              <th>Precio efectivo</th>
+              <th>Costo WAC</th>
+              <th>Costo sucursal</th>
+              <th>Costo efectivo</th>
+              <th>Margen efectivo</th>
+              <th>Fuente</th>
+              <th>Alertas</th>
               <th className="min-w-[100px]">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {filteredProducts.map((p) => {
-              const costoReal = p.baseCost * (1 + ivaPercent / 100);
-              const margin = p.basePrice > 0 ? (((p.basePrice - costoReal) / p.basePrice) * 100).toFixed(1) + "%" : "N/D";
-              const hasDirty = pricingBranches.some((b) => draft[p.id]?.[b.id]?.dirty);
+              if (!activeBranch) return null;
+              const row = buildBranchPricingCostRow(p, activeBranch);
+              const cell = draft[p.id]?.[activeBranch.id] ?? { cost: "", price: "", dirty: false };
+              const costKey = `${p.id}-${activeBranch.id}-cost`;
+              const priceKey = `${p.id}-${activeBranch.id}-price`;
+              const hasDirty = Boolean(cell.dirty);
               return (
                 <tr key={p.id}>
-                  <td className="font-medium">{p.sku} · {p.name}</td>
-                  <td>{money(p.baseCost)}</td>
-                  <td className="text-amber-700 font-medium">{money(costoReal)}</td>
-                  <td>{money(p.basePrice)}</td>
-                  <td>
-                    <Badge variant={p.basePrice > 0 && p.baseCost > 0 && p.basePrice > costoReal ? "success" : p.basePrice <= 0 || p.baseCost <= 0 ? "neutral" : "danger"}>{margin}</Badge>
+                  <td className="font-medium">
+                    <div>{p.sku} - {p.name}</div>
+                    {row.isConvertibleStock ? (
+                      <div className="mt-1 flex flex-wrap gap-1 text-[0.65rem]">
+                        <span className="rounded border border-[var(--color-border)] px-1.5 py-0.5">Stock compartido</span>
+                        {row.conversionFactor && row.conversionFactor > 1 ? <span className="rounded border border-[var(--color-border)] px-1.5 py-0.5">WAC convertido x {row.conversionFactor}</span> : null}
+                      </div>
+                    ) : null}
                   </td>
-                  {pricingBranches.map((b) => {
-                    const cell = draft[p.id]?.[b.id] ?? { cost: "", price: "", dirty: false };
-                    const costKey = `${p.id}-${b.id}-cost`;
-                    const priceKey = `${p.id}-${b.id}-price`;
-                    return (
-                      <td key={b.id} className="py-2">
-                        <div className="flex flex-col gap-1.5">
-                          <div className="flex items-center gap-1">
-                            <Input
-                              className={`h-7 text-xs flex-1 ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`}
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              placeholder="Costo"
-                              value={cell.cost}
-                              onChange={(e) => updateCell(p.id, b.id, "cost", e.target.value)}
-                            />
-                            <button
-                              type="button"
-                              title="Guardar costo"
-                              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${
-                                savingKey === costKey ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm hover:shadow"
-                              }`}
-                              disabled={savingKey === costKey}
-                              onClick={() => saveCell(p, b, "cost")}
-                            >
-                              {savingKey === costKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                            </button>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Input
-                              className={`h-7 text-xs flex-1 ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`}
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              placeholder="Precio"
-                              value={cell.price}
-                              onChange={(e) => updateCell(p.id, b.id, "price", e.target.value)}
-                            />
-                            <button
-                              type="button"
-                              title="Guardar precio"
-                              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${
-                                savingKey === priceKey ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700 shadow-sm hover:shadow"
-                              }`}
-                              disabled={savingKey === priceKey}
-                              onClick={() => saveCell(p, b, "price")}
-                            >
-                              {savingKey === priceKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                            </button>
-                          </div>
-                        </div>
-                      </td>
-                    );
-                  })}
+                  <td>{formatMoneyOrNd(row.standardSalePrice)}</td>
+                  <td className="py-2">
+                    <div className="flex items-center gap-1">
+                      <Input className={`h-7 text-xs flex-1 ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`} type="number" min="0" step="0.01" placeholder="Precio" value={cell.price} onChange={(e) => updateCell(p.id, activeBranch.id, "price", e.target.value)} />
+                      <button type="button" title="Guardar precio" className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === priceKey ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700 shadow-sm hover:shadow"}`} disabled={savingKey === priceKey} onClick={() => saveCell(p, activeBranch, "price")}>
+                        {savingKey === priceKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                      </button>
+                    </div>
+                  </td>
+                  <td>{formatMoneyOrNd(row.effectivePrice)}</td>
                   <td>
-                    <Button
-                      variant={hasDirty ? "success" : "ghost"}
-                      size="sm"
-                      onClick={() => saveAllDirty(p)}
-                      icon={<Save className="h-3.5 w-3.5" />}
-                    >
-                      Guardar fila
-                    </Button>
+                    <div>{formatMoneyOrNd(row.weightedAverageCost)}</div>
+                    {row.isConvertibleStock ? <div className="text-[0.65rem] text-[var(--color-text-muted)]">Base: {formatMoneyOrNd(row.baseWeightedAverageCost)} / {row.baseUnit}</div> : null}
+                  </td>
+                  <td className="py-2">
+                    <div className="flex items-center gap-1">
+                      <Input className={`h-7 text-xs flex-1 ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`} type="number" min="0" step="0.01" placeholder="Costo" value={cell.cost} onChange={(e) => updateCell(p.id, activeBranch.id, "cost", e.target.value)} />
+                      <button type="button" title="Guardar costo" className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === costKey ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm hover:shadow"}`} disabled={savingKey === costKey} onClick={() => saveCell(p, activeBranch, "cost")}>
+                        {savingKey === costKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                      </button>
+                    </div>
+                  </td>
+                  <td>{formatMoneyOrNd(row.effectiveCost)}</td>
+                  <td><Badge variant={marginBadgeVariant(row.effectiveMarginPercent)}>{formatMarginOrNd(row.effectiveMarginPercent)}</Badge></td>
+                  <td className="text-xs">
+                    <div>Precio: {row.priceSource === "BRANCH" ? "Sucursal" : "Global"}</div>
+                    <div>Costo: {row.costSource === "BRANCH" ? "Sucursal" : row.costSource === "WAC" ? "WAC" : "Sin costo"}</div>
+                  </td>
+                  <td>
+                    <div className="flex flex-col gap-1 text-xs">
+                      {row.warnings.length === 0 ? <span className="text-[var(--color-text-muted)]">OK</span> : row.warnings.map((warning) => <Badge key={warning} variant={warning.includes("bajo costo") ? "danger" : "warning"}>{warning}</Badge>)}
+                    </div>
+                  </td>
+                  <td>
+                    <Button variant={hasDirty ? "success" : "ghost"} size="sm" onClick={() => saveAllDirty(p)} icon={<Save className="h-3.5 w-3.5" />}>Guardar fila</Button>
                   </td>
                 </tr>
               );
             })}
             {filteredProducts.length === 0 ? (
-              <tr><td colSpan={4 + branches.length + 1} className="py-6 text-center text-[var(--color-text-muted)]">No hay productos.</td></tr>
+              <tr><td colSpan={11} className="py-6 text-center text-[var(--color-text-muted)]">No hay productos.</td></tr>
             ) : null}
           </tbody>
         </table>

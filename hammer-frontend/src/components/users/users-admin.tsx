@@ -362,7 +362,7 @@ export function UsersAdmin() {
     );
   }, [users, searchQuery]);
 
-  async function load(_keepFeedback = true) {
+  async function load() {
 
     const response = await fetch("/api/master/users", { cache: "no-store" });
     const json = (await response.json()) as {
@@ -462,7 +462,7 @@ export function UsersAdmin() {
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo crear el usuario."));
 
       setCreateForm((prev) => ({ username: "", fullName: "", email: "", globalRole: "", branchId: prev.branchId, rolePreset: "SALES" }));
-      await load(false);
+      await load();
       toast.success(`✅ Usuario creado. Contraseña inicial: ${INITIAL_PASSWORD} — Deberá cambiarla en su primer login.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear el usuario.");
@@ -486,7 +486,7 @@ export function UsersAdmin() {
 
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo actualizar el usuario."));
 
-      await load(false);
+      await load();
       toast.success(mode === "toggle"
           ? `Usuario ${updates.isActive ? "activado" : "desactivado"} correctamente.`
           : `Contraseña restablecida a ${INITIAL_PASSWORD}. El usuario deberá cambiarla en su próximo login.`);
@@ -512,7 +512,7 @@ export function UsersAdmin() {
       const json = (await response.json()) as { message?: string; reason?: string; error?: string };
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo resetear la contraseña."));
 
-      await load(false);
+      await load();
       toast.success(`Contraseña restablecida a ${INITIAL_PASSWORD}. El usuario deberá cambiarla en su próximo login.`);
       setResetModalOpen(false);
     } catch (error) {
@@ -537,7 +537,7 @@ export function UsersAdmin() {
       });
       const json = (await response.json()) as { message?: string; reason?: string; error?: string };
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo cambiar el nombre de usuario."));
-      await load(false);
+      await load();
       toast.success(`Nombre de usuario cambiado a "${trimmed}".`);
       setEditingUsername(false);
     } catch (error) {
@@ -557,7 +557,7 @@ export function UsersAdmin() {
 
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo desactivar el usuario."));
 
-      await load(false);
+      await load();
       toast.success("Usuario desactivado correctamente. Sus roles se conservan para reactivarlo despues.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo desactivar el usuario.");
@@ -583,7 +583,7 @@ export function UsersAdmin() {
 
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo asignar la membresía."));
 
-      await load(false);
+      await load();
       toast.success("✅ Membresía asignada correctamente.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo asignar la membresía.");
@@ -616,7 +616,7 @@ export function UsersAdmin() {
         if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo asignar la membresia."));
       }
 
-      await load(false);
+      await load();
       toast.success("Membresia asignada correctamente.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo asignar la membresia.");
@@ -638,7 +638,7 @@ export function UsersAdmin() {
 
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo editar la membresía."));
 
-      await load(false);
+      await load();
       toast.success(`✅ Membresía ${isActive ? "activada" : "desactivada"}.`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo editar la membresía.");
@@ -656,7 +656,7 @@ export function UsersAdmin() {
 
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo remover la membresía."));
 
-      await load(false);
+      await load();
       toast.success("✅ Membresía removida.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo remover la membresía.");
