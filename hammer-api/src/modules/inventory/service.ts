@@ -4,7 +4,15 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
 import { isInboundMovement, recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
-import { convertSaleQtyToBaseQty, convertSaleUnitCostToBaseUnitCost, resolveInventoryProductForMovement } from "@/modules/inventory/unit-conversion";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import {
+  convertBaseQtyToSaleQty,
+  convertSaleQtyToBaseQty,
+  convertSaleUnitCostToBaseUnitCost,
+  formatDualStock,
+  getSharedInventoryBalance,
+  resolveInventoryProductForMovement,
+} from "@/modules/inventory/unit-conversion";
 
 export const INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD = 25;
 
@@ -50,6 +58,17 @@ type InventoryMovementInput = {
   unitCost: number;
   referenceType: string;
   referenceId: string;
+  notes?: string | null;
+};
+
+type ManualAdjustmentInput = {
+  actorUserId: string;
+  branchId: string;
+  productId: string;
+  adjustmentType: "ADJUSTMENT_IN" | "ADJUSTMENT_OUT" | "PHYSICAL_COUNT" | "DAMAGE" | "RETURN" | "OTHER";
+  quantity: number;
+  unit?: string;
+  reason: string;
   notes?: string | null;
 };
 
@@ -187,6 +206,145 @@ export async function createInventoryMovementTx(
 
 export async function createInventoryMovement(input: InventoryMovementInput) {
   return prisma.$transaction((tx) => createInventoryMovementTx(tx, input));
+}
+
+export async function createManualInventoryAdjustment(input: ManualAdjustmentInput) {
+  return prisma.$transaction(async (tx) => {
+    const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
+    const conversion = shared.conversion;
+    const selectedUnit = (input.unit ?? conversion?.saleUnit ?? "").toUpperCase();
+    const isBaseUnitAdjustment = !!conversion && selectedUnit === conversion.baseUnit.toUpperCase();
+    const currentBaseQty = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
+    const currentSaleQty = conversion
+      ? convertBaseQtyToSaleQty({ baseQuantity: currentBaseQty, conversionFactor: conversion.conversionFactor })
+      : currentBaseQty;
+    const requestedQty = new Prisma.Decimal(input.quantity);
+    const requestedBaseQty = conversion && !isBaseUnitAdjustment
+      ? convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor })
+      : requestedQty;
+
+    let movementType: InventoryMovementType = "ADJUSTMENT_IN";
+    let movementQty = requestedQty;
+    let movementProductId = input.productId;
+
+    if (input.adjustmentType === "ADJUSTMENT_OUT" || input.adjustmentType === "DAMAGE") {
+      movementType = "ADJUSTMENT_OUT";
+    } else if (input.adjustmentType === "RETURN") {
+      movementType = "RETURN_IN";
+    } else if (input.adjustmentType === "OTHER") {
+      movementType = "ADJUSTMENT_IN";
+    } else if (input.adjustmentType === "PHYSICAL_COUNT") {
+      const desiredBaseQty = requestedBaseQty;
+      const deltaBaseQty = desiredBaseQty.minus(currentBaseQty);
+      if (deltaBaseQty.eq(0)) {
+        return {
+          ok: true,
+          skipped: true,
+          message: "El conteo coincide con el stock actual.",
+          productId: input.productId,
+          branchId: input.branchId,
+          previousStock: Number(currentSaleQty),
+          newStock: Number(currentSaleQty),
+          sharedStock: conversion ? formatDualStock({
+            baseQuantity: currentBaseQty,
+            conversionFactor: conversion.conversionFactor,
+            baseUnit: conversion.baseUnit,
+            saleUnit: conversion.saleUnit,
+          }) : null,
+        };
+      }
+      movementType = deltaBaseQty.gt(0) ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT";
+      const deltaAbsBaseQty = deltaBaseQty.abs();
+      movementQty = conversion && !isBaseUnitAdjustment
+        ? convertBaseQtyToSaleQty({ baseQuantity: deltaAbsBaseQty, conversionFactor: conversion.conversionFactor })
+        : deltaAbsBaseQty;
+    }
+
+    if (isBaseUnitAdjustment && conversion) {
+      movementProductId = conversion.canonicalProductId;
+      movementQty = input.adjustmentType === "PHYSICAL_COUNT" ? movementQty : requestedBaseQty;
+    }
+
+    const outboundBaseQty = movementType === "ADJUSTMENT_OUT"
+      ? (isBaseUnitAdjustment ? movementQty : (conversion ? convertSaleQtyToBaseQty({ quantity: movementQty, conversionFactor: conversion.conversionFactor }) : movementQty))
+      : new Prisma.Decimal(0);
+    if (outboundBaseQty.gt(currentBaseQty)) {
+      throw new Error("INSUFFICIENT_STOCK");
+    }
+
+    const pricing = await getEffectiveProductPricing(tx, { branchId: input.branchId, productId: input.productId });
+    const saleUnitCost = pricing.effectiveCost ?? pricing.weightedAverageCost ?? shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+    const unitCost = isBaseUnitAdjustment && conversion
+      ? convertSaleUnitCostToBaseUnitCost({ saleUnitCost, conversionFactor: conversion.conversionFactor })
+      : saleUnitCost;
+    if (isInboundMovement(movementType) && unitCost.lte(0)) {
+      throw new Error("NO_EFFECTIVE_COST_FOR_MANUAL_ADJUSTMENT");
+    }
+
+    const movementResult = await createInventoryMovementTx(tx, {
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      productId: movementProductId,
+      movementType,
+      quantity: Number(movementQty),
+      unitCost: Number(unitCost),
+      referenceType: "MANUAL_ADJUSTMENT",
+      referenceId: `MANUAL-${Date.now()}`,
+      notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+    });
+
+    const newBaseQty = movementResult.balance.quantityOnHand;
+    const newSaleQty = conversion
+      ? convertBaseQtyToSaleQty({ baseQuantity: newBaseQty, conversionFactor: conversion.conversionFactor })
+      : newBaseQty;
+
+    await logAuditEvent({
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "inventory",
+      action: "MANUAL_INVENTORY_ADJUSTMENT",
+      entityType: "Product",
+      entityId: input.productId,
+      metadataJson: {
+        productId: input.productId,
+        movementProductId,
+        adjustmentType: input.adjustmentType,
+        movementType,
+        requestedQuantity: input.quantity,
+        requestedUnit: input.unit ?? null,
+        movementQuantity: movementQty.toString(),
+        reason: input.reason,
+        notes: input.notes ?? null,
+        previousBaseStock: currentBaseQty.toString(),
+        newBaseStock: newBaseQty.toString(),
+        stockConversion: conversion ? {
+          stockGroupId: conversion.stockGroupId,
+          stockGroupCode: conversion.stockGroupCode,
+          baseUnit: conversion.baseUnit,
+          saleUnit: conversion.saleUnit,
+          conversionFactor: conversion.conversionFactor.toString(),
+        } : null,
+      },
+    });
+
+    return {
+      ok: true,
+      movementId: movementResult.movement.id,
+      productId: input.productId,
+      branchId: input.branchId,
+      movementType,
+      previousStock: Number(currentSaleQty),
+      newStock: Number(newSaleQty),
+      previousBaseStock: Number(currentBaseQty),
+      newBaseStock: Number(newBaseQty),
+      sharedStock: conversion ? formatDualStock({
+        baseQuantity: newBaseQty,
+        conversionFactor: conversion.conversionFactor,
+        baseUnit: conversion.baseUnit,
+        saleUnit: conversion.saleUnit,
+      }) : null,
+    };
+  });
 }
 
 export async function requestStockAdjustment(input: {
