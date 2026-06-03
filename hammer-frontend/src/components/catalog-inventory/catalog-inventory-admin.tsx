@@ -59,6 +59,7 @@ type Movement = {
   unitCost: string;
   referenceType: string;
   referenceId: string;
+  notes?: string | null;
   product: { id: string; sku: string; name: string };
   branch: Branch;
 };
@@ -217,6 +218,26 @@ function statusFor(total: number) {
   return { label: "OK", variant: "success" as const };
 }
 
+function ironQuintalFactor(product: ProductRow) {
+  const code = product.stockConversion?.stockGroupCode ?? "";
+  if (code.includes("1_2")) return 8;
+  if (code.includes("3_8")) return 14;
+  if (code.includes("1_4")) return 30;
+  return Number(product.stockConversion?.conversionFactor ?? 0) > 1 ? Number(product.stockConversion?.conversionFactor) : null;
+}
+
+function renderSharedStock(product: ProductRow) {
+  const shared = product.sharedStock;
+  const conversion = product.stockConversion;
+  if (!shared || !conversion) return null;
+  const factor = ironQuintalFactor(product);
+  const primary = `${qty(shared.saleQuantity)} ${shared.saleUnit.toLowerCase()}`;
+  const secondary = conversion.saleUnit === shared.baseUnit && factor
+    ? `${qty(shared.baseQuantity / factor)} quintales`
+    : `${qty(shared.baseQuantity)} ${shared.baseUnit.toLowerCase()}`;
+  return { primary, secondary, chip: factor ? `1 quintal = ${factor} varillas` : "Stock compartido" };
+}
+
 /* ── Pagination Bar ── */
 function PaginationBar({ pagination, onPageChange }: { pagination: Pagination; onPageChange: (p: number) => void }) {
   const { page, totalPages, total } = pagination;
@@ -301,8 +322,9 @@ export function CatalogInventoryAdmin() {
 
   /* ── Inline edit state for product rows ── */
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ name: "", standardSalePrice: "" });
+  const [editDraft, setEditDraft] = useState({ name: "" });
   const [savingProduct, setSavingProduct] = useState(false);
+  const [focusedPricingProductId, setFocusedPricingProductId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -360,11 +382,11 @@ export function CatalogInventoryAdmin() {
   /* ── Inline product edit handlers ── */
   function startEditing(product: ProductRow) {
     setEditingProductId(product.id);
-    setEditDraft({ name: product.name, standardSalePrice: String(product.basePrice || "") });
+    setEditDraft({ name: product.name });
   }
   function cancelEditing() {
     setEditingProductId(null);
-    setEditDraft({ name: "", standardSalePrice: "" });
+    setEditDraft({ name: "" });
   }
   async function saveProductEdit(product: ProductRow) {
     if (!editDraft.name.trim()) { toast.error("El nombre es obligatorio."); return; }
@@ -372,8 +394,6 @@ export function CatalogInventoryAdmin() {
     try {
       const body: Record<string, unknown> = {};
       if (editDraft.name.trim() !== product.name) body.name = editDraft.name.trim();
-      const newPrice = Number(editDraft.standardSalePrice);
-      if (editDraft.standardSalePrice && newPrice !== product.basePrice) body.standardSalePrice = newPrice;
       if (Object.keys(body).length === 0) { cancelEditing(); return; }
       const response = await apiFetch(`/api/catalog/products/${product.id}`, {
         method: "PATCH",
@@ -827,12 +847,13 @@ export function CatalogInventoryAdmin() {
             <table className="hm-table min-w-[1100px] w-full">
               <thead>
                 <tr>
-                  <th>SKU</th><th>Producto</th><th>Categoria</th><th>Unidad</th><th>Stock total</th><th>Suc.</th><th>Costo base</th><th>Precio base</th><th>Estado</th><th className="text-right">Acciones</th>
+                  <th>SKU</th><th>Producto</th><th>Categoria</th><th>Unidad principal</th><th>Stock resumen</th><th>Estado</th><th className="text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {data.products.map((product) => {
                   const isEditing = editingProductId === product.id;
+                  const sharedStock = renderSharedStock(product);
                   return (
                   <tr key={product.id}>
                     <td className="font-semibold">{product.sku}</td>
@@ -842,21 +863,15 @@ export function CatalogInventoryAdmin() {
                       ) : product.name}
                     </td>
                     <td>{product.category?.name ?? "Sin categoria"}</td>
-                    <td>{product.unit}</td>
+                    <td>{product.stockConversion?.saleUnit ?? product.unit}</td>
                     <td>
-                      <div>{qty(product.totalStock)}</div>
-                      {product.stockConversion && product.sharedStock ? (
-                        <div className="text-[0.65rem] text-[var(--color-text-muted)]">
-                          Compartido: {qty(product.sharedStock.saleQuantity)} {product.sharedStock.saleUnit} / {qty(product.sharedStock.baseQuantity)} {product.sharedStock.baseUnit}
+                      <div>{sharedStock?.primary ?? qty(product.totalStock)}</div>
+                      {sharedStock ? (
+                        <div className="mt-1 space-y-1 text-[0.65rem] text-[var(--color-text-muted)]">
+                          <div>Equivale a {sharedStock.secondary}</div>
+                          <div className="inline-flex rounded border border-[var(--color-border)] px-1.5 py-0.5 font-medium">Stock compartido - {sharedStock.chip}</div>
                         </div>
                       ) : null}
-                    </td>
-                    <td>{product.branchesWithStock}</td>
-                    <td>{money(product.baseCost)}</td>
-                    <td>
-                      {isEditing ? (
-                        <Input className="h-8 w-28" type="number" min="0" step="0.01" value={editDraft.standardSalePrice} onChange={(e) => setEditDraft({ ...editDraft, standardSalePrice: e.target.value })} />
-                      ) : money(product.basePrice)}
                     </td>
                     <td><Badge variant={product.isActive ? "success" : "warning"}>{product.isActive ? "Activo" : "Inactivo"}</Badge></td>
                     <td>
@@ -872,7 +887,17 @@ export function CatalogInventoryAdmin() {
                             <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 text-xs font-medium hover:bg-[var(--color-surface-alt)]">
                               <Search className="h-3 w-3" /> Ver
                             </Link>
-                            <Button variant="ghost" size="sm" onClick={() => setTab("pricing")} icon={<DollarSign className="h-3.5 w-3.5" />}>Precio</Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setFocusedPricingProductId(product.id);
+                                setTab("pricing");
+                              }}
+                              icon={<DollarSign className="h-3.5 w-3.5" />}
+                            >
+                              Precio
+                            </Button>
                             <Button variant={product.isActive ? "danger" : "success"} size="sm" onClick={() => toggleProduct(product).catch((error) => toast.error(error.message))}>
                               {product.isActive ? "Desactivar" : "Activar"}
                             </Button>
@@ -892,7 +917,7 @@ export function CatalogInventoryAdmin() {
                   </tr>
                   );
                 })}
-                {data.products.length === 0 ? <tr><td colSpan={10} className="text-center py-6 text-[var(--color-text-muted)]">No hay productos que coincidan con los filtros.</td></tr> : null}
+                {data.products.length === 0 ? <tr><td colSpan={7} className="text-center py-6 text-[var(--color-text-muted)]">No hay productos que coincidan con los filtros.</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -934,10 +959,17 @@ export function CatalogInventoryAdmin() {
         </Card>
       ) : null}
 
-      {data && tab === "movements" ? <MovementsPanel branches={data.branches} products={data.products} movements={data.movements} onDone={load} /> : null}
+      {data && tab === "movements" ? <MovementsPanel branches={data.branches} products={data.products} movements={data.movements} selectedBranchId={branchId} onSelectBranch={setBranchId} onDone={load} /> : null}
       {data && tab === "pricing" ? (
         <>
-          <PricingPanel branches={data.branches} products={data.products} onSave={updateBranchPrice} />
+          <PricingPanel
+            branches={data.branches}
+            products={data.products}
+            selectedBranchId={branchId}
+            focusedProductId={focusedPricingProductId}
+            onSelectBranch={(nextBranchId) => { setBranchId(nextBranchId); setPage(1); }}
+            onSave={updateBranchPrice}
+          />
           {data.pagination && <PaginationBar pagination={data.pagination} onPageChange={setPage} />}
         </>
       ) : null}
@@ -1625,31 +1657,167 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
 /* ═══════════════════════════════════════════════════════════
    MOVEMENTS PANEL
    ═══════════════════════════════════════════════════════════ */
-function MovementsPanel({ branches, products, movements, onDone }: { branches: Branch[]; products: ProductRow[]; movements: Movement[]; onDone: () => Promise<void> }) {
-  const [form, setForm] = useState({ branchId: branches[0]?.id ?? "", productId: products[0]?.id ?? "", movementType: "ADJUSTMENT_IN", quantity: "1", unitCost: "1", referenceType: "MASTER_ADJUSTMENT", referenceId: "MANUAL" });
-  async function submit(event: React.FormEvent) {
+function MovementsPanel({
+  branches,
+  products,
+  movements,
+  selectedBranchId,
+  onSelectBranch,
+  onDone,
+}: {
+  branches: Branch[];
+  products: ProductRow[];
+  movements: Movement[];
+  selectedBranchId?: string;
+  onSelectBranch: (branchId: string) => void;
+  onDone: () => Promise<void>;
+}) {
+  const [productId, setProductId] = useState("");
+  const [movementType, setMovementType] = useState("");
+  const [showAdjustment, setShowAdjustment] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const activeBranchId = selectedBranchId || branches[0]?.id || "";
+  const firstProduct = products[0];
+  const [adjustment, setAdjustment] = useState({
+    productId: firstProduct?.id ?? "",
+    adjustmentType: "ADJUSTMENT_IN",
+    quantity: "1",
+    unit: firstProduct?.stockConversion?.saleUnit ?? firstProduct?.unit ?? "UN",
+    reason: "",
+    notes: "",
+  });
+
+  const filteredMovements = movements.filter((movement) => {
+    if (activeBranchId && movement.branch.id !== activeBranchId) return false;
+    if (productId && movement.product.id !== productId) return false;
+    if (movementType && movement.movementType !== movementType) return false;
+    return true;
+  });
+  const adjustmentProduct = products.find((product) => product.id === adjustment.productId);
+  const adjustmentQty = Number(adjustment.quantity);
+  const adjustmentFactor = adjustmentProduct ? ironQuintalFactor(adjustmentProduct) : null;
+  const isBaseUnit = !!adjustmentProduct?.stockConversion && adjustment.unit === adjustmentProduct.stockConversion.baseUnit;
+  const currentBaseStock = adjustmentProduct?.sharedStock?.baseQuantity ?? adjustmentProduct?.totalStock ?? 0;
+  const changeBaseQty = Number.isFinite(adjustmentQty)
+    ? (adjustmentProduct?.stockConversion && !isBaseUnit ? adjustmentQty * Number(adjustmentProduct.stockConversion.conversionFactor || 1) : adjustmentQty)
+    : 0;
+  const direction = ["ADJUSTMENT_OUT", "DAMAGE"].includes(adjustment.adjustmentType) ? -1 : 1;
+  const previewFinalBase = adjustment.adjustmentType === "PHYSICAL_COUNT" ? changeBaseQty : currentBaseStock + (direction * changeBaseQty);
+
+  async function submitAdjustment(event: React.FormEvent) {
     event.preventDefault();
-    const response = await apiFetch("/api/inventory/movements", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, quantity: Number(form.quantity), unitCost: Number(form.unitCost) }) });
-    if (!response.ok) throw new Error("No se pudo registrar el movimiento.");
-    toast.success("Movimiento registrado");
-    await onDone();
+    if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
+    if (!adjustment.productId) { toast.error("Selecciona un producto."); return; }
+    if (!adjustment.reason.trim()) { toast.error("El motivo es obligatorio."); return; }
+    if (!Number.isFinite(adjustmentQty) || adjustmentQty <= 0) { toast.error("La cantidad debe ser mayor que cero."); return; }
+    if (previewFinalBase < 0) { toast.error("La salida supera el stock disponible."); return; }
+    setSubmitting(true);
+    try {
+      const response = await apiFetch("/api/inventory/manual-adjustment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId: activeBranchId,
+          productId: adjustment.productId,
+          adjustmentType: adjustment.adjustmentType,
+          quantity: adjustmentQty,
+          unit: adjustment.unit,
+          reason: adjustment.reason.trim(),
+          notes: adjustment.notes.trim() || undefined,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar el ajuste.");
+      toast.success("Ajuste manual registrado.");
+      setShowAdjustment(false);
+      setAdjustment((prev) => ({ ...prev, quantity: "1", reason: "", notes: "" }));
+      await onDone();
+    } finally {
+      setSubmitting(false);
+    }
   }
   return (
     <Card noPadding>
-      <div className="hm-card-header-purple">
+      <div className="hm-card-header-purple flex items-center justify-between">
         <h2 className="text-sm font-semibold flex items-center gap-2"><History className="h-4 w-4" /> Movimientos / Kardex</h2>
+        <Button variant="primary" size="sm" onClick={() => setShowAdjustment(true)} icon={<Plus className="h-4 w-4" />}>Registrar ajuste manual</Button>
       </div>
       <div className="p-4 space-y-4">
-        <form className="grid gap-2 md:grid-cols-6" onSubmit={(event) => submit(event).catch((e) => toast.error(e.message))}>
-          <select className="hm-input" value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code}</option>)}</select>
-          <select className="hm-input" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} · {p.name}</option>)}</select>
-          <select className="hm-input" value={form.movementType} onChange={(e) => setForm({ ...form, movementType: e.target.value })}><option>ADJUSTMENT_IN</option><option>ADJUSTMENT_OUT</option><option>PURCHASE_IN</option><option>RETURN_IN</option><option>RETURN_OUT</option></select>
-          <Input type="number" min="0.0001" step="0.0001" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-          <Input type="number" min="0" step="0.0001" value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value })} />
-          <Button type="submit" icon={<Plus className="h-4 w-4" />}>Registrar</Button>
-        </form>
-        <CompactMovements movements={movements} />
+        <div className="grid gap-2 md:grid-cols-4">
+          <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
+          <select className="hm-input" value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">Todos los productos</option>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
+          <select className="hm-input" value={movementType} onChange={(e) => setMovementType(e.target.value)}><option value="">Todos los tipos</option><option value="PURCHASE_IN">Compra / entrada</option><option value="SALE_OUT">Venta / salida</option><option value="ADJUSTMENT_IN">Ajuste entrada</option><option value="ADJUSTMENT_OUT">Ajuste salida</option><option value="RETURN_IN">Devolucion entrada</option><option value="RETURN_OUT">Devolucion salida</option><option value="TRANSFER_IN">Traslado entrada</option><option value="TRANSFER_OUT">Traslado salida</option></select>
+          <div className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">Los costos se ajustan desde Precios y costos, no desde Kardex.</div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="hm-table min-w-[980px] w-full">
+            <thead><tr><th>Fecha</th><th>Producto</th><th>SKU</th><th>Sucursal</th><th>Tipo</th><th>Entrada</th><th>Salida</th><th>Saldo final</th><th>Unidad</th><th>Usuario</th><th>Referencia</th><th>Motivo / nota</th></tr></thead>
+            <tbody>
+              {filteredMovements.map((item) => {
+                const quantity = Number(item.quantity);
+                const isIn = ["PURCHASE_IN", "RETURN_IN", "ADJUSTMENT_IN", "TRANSFER_IN", "TIMBER_INTAKE_IN"].includes(item.movementType);
+                return <tr key={item.id}><td>{new Date(item.createdAt).toLocaleString("es-NI")}</td><td className="font-medium">{item.product.name}</td><td className="font-mono text-xs">{item.product.sku}</td><td>{item.branch.code}</td><td>{item.movementType}</td><td>{isIn ? qty(quantity) : "-"}</td><td>{!isIn ? qty(quantity) : "-"}</td><td className="text-[var(--color-text-muted)]">-</td><td>Unidad</td><td className="text-[var(--color-text-muted)]">-</td><td>{item.referenceType} / {item.referenceId}</td><td>{item.notes ?? "-"}</td></tr>;
+              })}
+              {filteredMovements.length === 0 ? <tr><td colSpan={12} className="py-8 text-center text-sm text-[var(--color-text-muted)]">Sin movimientos recientes para los filtros seleccionados.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
       </div>
+      {showAdjustment ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <form className="w-full max-w-2xl rounded-xl bg-white shadow-2xl" onSubmit={(event) => submitAdjustment(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar ajuste."))}>
+            <div className="border-b border-[var(--color-border)] px-5 py-4">
+              <h3 className="text-sm font-semibold">Registrar ajuste manual</h3>
+              <p className="text-xs text-[var(--color-text-muted)]">Solo modifica cantidad/volumen. No se edita costo desde Kardex.</p>
+            </div>
+            <div className="grid gap-3 p-5 md:grid-cols-2">
+              <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
+              <select className="hm-input" value={adjustment.productId} onChange={(e) => {
+                const nextProduct = products.find((p) => p.id === e.target.value);
+                setAdjustment({ ...adjustment, productId: e.target.value, unit: nextProduct?.stockConversion?.saleUnit ?? nextProduct?.unit ?? "UN" });
+              }}>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
+              <select className="hm-input" value={adjustment.adjustmentType} onChange={(e) => setAdjustment({ ...adjustment, adjustmentType: e.target.value })}>
+                <option value="ADJUSTMENT_IN">Entrada manual</option>
+                <option value="ADJUSTMENT_OUT">Salida manual</option>
+                <option value="PHYSICAL_COUNT">Correccion por conteo fisico</option>
+                <option value="DAMAGE">Merma / dano</option>
+                <option value="RETURN">Devolucion</option>
+                <option value="OTHER">Otro</option>
+              </select>
+              <div className="grid grid-cols-[1fr_140px] gap-2">
+                <Input type="number" min="0.0001" step="0.0001" value={adjustment.quantity} onChange={(e) => setAdjustment({ ...adjustment, quantity: e.target.value })} placeholder="Cantidad" />
+                <select className="hm-input" value={adjustment.unit} onChange={(e) => setAdjustment({ ...adjustment, unit: e.target.value })}>
+                  {adjustmentProduct?.stockConversion ? (
+                    <>
+                      <option value={adjustmentProduct.stockConversion.saleUnit}>{adjustmentProduct.stockConversion.saleUnit}</option>
+                      <option value={adjustmentProduct.stockConversion.baseUnit}>{adjustmentProduct.stockConversion.baseUnit}</option>
+                    </>
+                  ) : <option value={adjustmentProduct?.unit ?? "UN"}>{adjustmentProduct?.unit ?? "UN"}</option>}
+                </select>
+              </div>
+              <Input className="md:col-span-2" value={adjustment.reason} onChange={(e) => setAdjustment({ ...adjustment, reason: e.target.value })} placeholder="Motivo obligatorio" />
+              <Input className="md:col-span-2" value={adjustment.notes} onChange={(e) => setAdjustment({ ...adjustment, notes: e.target.value })} placeholder="Observacion opcional" />
+              <div className="md:col-span-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
+                <div className="font-semibold">Vista previa</div>
+                <div className="mt-1 grid gap-1 text-xs text-[var(--color-text-muted)] sm:grid-cols-3">
+                  <span>Actual: {qty(currentBaseStock)} {adjustmentProduct?.stockConversion?.baseUnit ?? adjustmentProduct?.unit ?? ""}</span>
+                  <span>Cambio base: {qty(direction * changeBaseQty)}</span>
+                  <span>Final: {qty(previewFinalBase)} {adjustmentProduct?.stockConversion?.baseUnit ?? adjustmentProduct?.unit ?? ""}</span>
+                </div>
+                {adjustmentProduct?.stockConversion ? (
+                  <div className="mt-2 text-xs text-[var(--color-text-muted)]">
+                    Stock final convertible: {qty(previewFinalBase)} varillas{adjustmentFactor ? ` / ${qty(previewFinalBase / adjustmentFactor)} quintales` : ""}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
+              <Button type="button" variant="ghost" onClick={() => setShowAdjustment(false)}>Cancelar</Button>
+              <Button type="submit" variant="success" loading={submitting} icon={<Check className="h-4 w-4" />}>Confirmar ajuste</Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -1678,11 +1846,37 @@ function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingD
   return draft;
 }
 
-function PricingPanel({ branches, products, onSave }: { branches: Branch[]; products: ProductRow[]; onSave: (product: ProductRow, branch: Branch, field: "branchPrice" | "branchCost", value: string) => Promise<void> }) {
+function PricingPanel({
+  branches,
+  products,
+  selectedBranchId,
+  focusedProductId,
+  onSelectBranch,
+  onSave,
+}: {
+  branches: Branch[];
+  products: ProductRow[];
+  selectedBranchId?: string;
+  focusedProductId?: string | null;
+  onSelectBranch: (branchId: string) => void;
+  onSave: (product: ProductRow, branch: Branch, field: "branchPrice" | "branchCost", value: string) => Promise<void>;
+}) {
   const [draft, setDraft] = useState<PricingDraft>(() => buildPricingDraft(products, branches));
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [ivaPercent, setIvaPercent] = useState(15);
+  const [comparisonMode, setComparisonMode] = useState(false);
+  const [productFilter, setProductFilter] = useState("");
   const productsRef = useRef(products);
+  const activeBranch = branches.find((branch) => branch.id === selectedBranchId) ?? branches[0];
+  const pricingBranches = activeBranch ? [activeBranch] : [];
+  const filteredProducts = products.filter((product) => {
+    if (focusedProductId && product.id !== focusedProductId) return false;
+    const term = productFilter.trim().toLowerCase();
+    if (!term) return true;
+    return product.name.toLowerCase().includes(term)
+      || product.sku.toLowerCase().includes(term)
+      || (product.category?.name ?? "").toLowerCase().includes(term);
+  });
 
   // Re-sync draft when products reference changes (after external load)
   useEffect(() => {
@@ -1727,7 +1921,7 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
     const cells = draft[product.id];
     if (!cells) return;
     let saved = 0;
-    for (const branch of branches) {
+    for (const branch of pricingBranches) {
       const cell = cells[branch.id];
       if (!cell?.dirty) continue;
       const origSetting = product.branchProductSettings.find((s) => s.branchId === branch.id);
@@ -1744,7 +1938,7 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
       // Mark all cells for this product as not dirty
       setDraft((prev) => {
         const updated = { ...prev[product.id] };
-        for (const branch of branches) {
+        for (const branch of pricingBranches) {
           if (updated[branch.id]) updated[branch.id] = { ...updated[branch.id], dirty: false };
         }
         return { ...prev, [product.id]: updated };
@@ -1763,6 +1957,34 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
         <p className="mt-0.5 text-xs opacity-90">Edite los valores y presione el botón 💾 para guardar cada celda, o &quot;Guardar fila&quot; para guardar todos los cambios de un producto.</p>
       </div>
       {/* IVA config for margin calculation */}
+      <div className="grid gap-2 px-4 pt-3 md:grid-cols-[240px_1fr_auto_auto]">
+        <select className="hm-input" value={activeBranch?.id ?? ""} onChange={(event) => onSelectBranch(event.target.value)}>
+          {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} - {branch.name}</option>)}
+        </select>
+        <Input value={productFilter} onChange={(event) => setProductFilter(event.target.value)} placeholder="Buscar producto, SKU o categoria" />
+        <Button variant={comparisonMode ? "secondary" : "ghost"} onClick={() => setComparisonMode((value) => !value)}>Vista comparativa</Button>
+        <Button variant="ghost" onClick={() => setProductFilter("")}>Limpiar</Button>
+      </div>
+      {comparisonMode ? (
+        <div className="overflow-x-auto p-4">
+          <table className="hm-table min-w-[900px] w-full">
+            <thead><tr><th>Producto</th><th>Precio global</th>{branches.map((branch) => <th key={branch.id}>{branch.code} precio / costo</th>)}<th>Modo</th></tr></thead>
+            <tbody>
+              {filteredProducts.map((product) => (
+                <tr key={product.id}>
+                  <td className="font-medium">{product.sku} - {product.name}</td>
+                  <td>{money(product.basePrice)}</td>
+                  {branches.map((branch) => {
+                    const setting = product.branchProductSettings.find((item) => item.branchId === branch.id);
+                    return <td key={branch.id}>{setting?.branchPrice ? money(Number(setting.branchPrice)) : "Global"} / {setting?.branchCost ? money(Number(setting.branchCost)) : "WAC"}</td>;
+                  })}
+                  <td className="text-xs text-[var(--color-text-muted)]">Solo lectura</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
       <div className="flex items-center gap-3 px-4 pt-3">
         <label className="text-xs font-semibold text-gray-600 whitespace-nowrap">IVA para margen:</label>
         <div className="flex items-center gap-1.5">
@@ -1802,7 +2024,7 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
               <th>Costo real</th>
               <th>Precio base</th>
               <th>Margen</th>
-              {branches.map((b) => (
+              {pricingBranches.map((b) => (
                 <th key={b.id} className="min-w-[180px] text-center">
                   <span className="block">{b.code}</span>
                   <span className="block text-[10px] font-normal opacity-70">Costo / Precio</span>
@@ -1812,10 +2034,10 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
             </tr>
           </thead>
           <tbody>
-            {products.map((p) => {
+            {filteredProducts.map((p) => {
               const costoReal = p.baseCost * (1 + ivaPercent / 100);
               const margin = p.basePrice > 0 ? (((p.basePrice - costoReal) / p.basePrice) * 100).toFixed(1) + "%" : "N/D";
-              const hasDirty = branches.some((b) => draft[p.id]?.[b.id]?.dirty);
+              const hasDirty = pricingBranches.some((b) => draft[p.id]?.[b.id]?.dirty);
               return (
                 <tr key={p.id}>
                   <td className="font-medium">{p.sku} · {p.name}</td>
@@ -1825,7 +2047,7 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
                   <td>
                     <Badge variant={p.basePrice > 0 && p.baseCost > 0 && p.basePrice > costoReal ? "success" : p.basePrice <= 0 || p.baseCost <= 0 ? "neutral" : "danger"}>{margin}</Badge>
                   </td>
-                  {branches.map((b) => {
+                  {pricingBranches.map((b) => {
                     const cell = draft[p.id]?.[b.id] ?? { cost: "", price: "", dirty: false };
                     const costKey = `${p.id}-${b.id}-cost`;
                     const priceKey = `${p.id}-${b.id}-price`;
@@ -1893,7 +2115,7 @@ function PricingPanel({ branches, products, onSave }: { branches: Branch[]; prod
                 </tr>
               );
             })}
-            {products.length === 0 ? (
+            {filteredProducts.length === 0 ? (
               <tr><td colSpan={4 + branches.length + 1} className="py-6 text-center text-[var(--color-text-muted)]">No hay productos.</td></tr>
             ) : null}
           </tbody>

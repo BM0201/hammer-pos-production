@@ -49,3 +49,13 @@ export const stockAdjustmentSchema = z.object({
   desiredQuantity: z.coerce.number().nonnegative(),
   reason: z.string().min(5).max(500),
 });
+
+export const manualInventoryAdjustmentSchema = z.object({
+  branchId: z.string().cuid(),
+  productId: z.string().cuid(),
+  adjustmentType: z.enum(["ADJUSTMENT_IN", "ADJUSTMENT_OUT", "PHYSICAL_COUNT", "DAMAGE", "RETURN", "OTHER"]),
+  quantity: z.coerce.number().positive("La cantidad debe ser mayor que cero."),
+  unit: z.string().min(1).max(32).optional(),
+  reason: z.string().min(5, "El motivo es obligatorio.").max(300),
+  notes: z.string().max(500).optional().nullable(),
+});
