@@ -23,11 +23,9 @@ import {
   ChevronDown,
   ChevronUp,
   AlertTriangle,
-  CheckCircle2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { money, qty, fmtDateTime } from "@/lib/format";
 
 /* ── Types ── */

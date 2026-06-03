@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
-import { formatDualStock, getProductStockConversion, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
+import { formatDualStock } from "@/modules/inventory/unit-conversion";
 import type { CatalogInventoryQuery, UpdateBranchProductSettingInput, MassDeleteProductsInput } from "./validators";
 
 const CRITICAL_STOCK_FALLBACK = 1;
@@ -10,6 +10,17 @@ function decimalToNumber(value: Prisma.Decimal | number | string | null | undefi
   if (value === null || value === undefined) return 0;
   return Number(value);
 }
+
+type CatalogStockConversion = {
+  stockGroupId: string;
+  stockGroupCode: string;
+  stockGroupName: string;
+  baseUnit: string;
+  saleUnit: string;
+  conversionFactor: Prisma.Decimal;
+  canonicalProductId: string;
+  isCanonical: boolean;
+};
 
 function productWhere(params: Partial<CatalogInventoryQuery>): Prisma.ProductWhereInput {
   return {
@@ -40,7 +51,6 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       include: { branch: { select: { id: true, code: true, name: true } } },
     },
     branchProductSettings: {
-      where: params.branchId ? { branchId: params.branchId } : undefined,
       include: { branch: { select: { id: true, code: true, name: true } } },
     },
     reorderPolicies: {
@@ -195,35 +205,90 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     filteredProducts = products.map((p) => enrichProduct(p, policyByProductBranch));
   }
 
-  if (params.branchId) {
-    filteredProducts = await Promise.all(filteredProducts.map(async (product) => {
-      const [conversion, shared] = await Promise.all([
-        getProductStockConversion(prisma, product.id),
-        getSharedInventoryBalance(prisma, { branchId: params.branchId!, productId: product.id }),
-      ]);
-      const sharedStock = conversion && shared.balance
+  const filteredProductIds = filteredProducts.map((product) => product.id);
+  const stockGroupMembers = filteredProductIds.length > 0
+    ? await prisma.productStockGroupMember.findMany({
+        where: { productId: { in: filteredProductIds }, isActive: true, stockGroup: { isActive: true } },
+        include: {
+          stockGroup: {
+            include: {
+              products: {
+                where: { isActive: true },
+                select: { productId: true, isCanonical: true, conversionFactor: true },
+                orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
+              },
+            },
+          },
+        },
+      })
+    : [];
+  const conversionByProductId = new Map<string, CatalogStockConversion>();
+  for (const member of stockGroupMembers) {
+    const canonical = member.stockGroup.products.find((item) => item.isCanonical)
+      ?? member.stockGroup.products.find((item) => new Prisma.Decimal(item.conversionFactor).eq(1))
+      ?? member;
+    conversionByProductId.set(member.productId, {
+      stockGroupId: member.stockGroupId,
+      stockGroupCode: member.stockGroup.code,
+      stockGroupName: member.stockGroup.name,
+      baseUnit: member.stockGroup.baseUnit,
+      saleUnit: member.saleUnit,
+      conversionFactor: member.conversionFactor,
+      canonicalProductId: canonical.productId,
+      isCanonical: member.isCanonical,
+    });
+  }
+  const inventoryProductIds = Array.from(new Set(filteredProducts.map((product) => conversionByProductId.get(product.id)?.canonicalProductId ?? product.id)));
+  const branchIds = branches.map((branch) => branch.id);
+  const sharedInventoryBalances = inventoryProductIds.length > 0 && branchIds.length > 0
+    ? await prisma.inventoryBalance.findMany({
+        where: { productId: { in: inventoryProductIds }, branchId: { in: branchIds } },
+        select: { branchId: true, productId: true, quantityOnHand: true, weightedAverageCost: true },
+      })
+    : [];
+  const sharedBalanceByBranchProduct = new Map(sharedInventoryBalances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]));
+
+  filteredProducts = filteredProducts.map((product) => {
+    const conversion = conversionByProductId.get(product.id) ?? null;
+    const inventoryProductId = conversion?.canonicalProductId ?? product.id;
+    const sharedBalances = branches.map((branch) => {
+      const balance = sharedBalanceByBranchProduct.get(`${branch.id}:${inventoryProductId}`);
+      return {
+        branchId: branch.id,
+        inventoryProductId,
+        quantityOnHand: balance?.quantityOnHand ?? null,
+        weightedAverageCost: balance?.weightedAverageCost ?? null,
+      };
+    });
+    const selectedShared = params.branchId ? sharedBalances.find((balance) => balance.branchId === params.branchId) : null;
+    const sharedStock = conversion && selectedShared?.quantityOnHand
         ? formatDualStock({
-            baseQuantity: shared.balance.quantityOnHand,
+            baseQuantity: selectedShared.quantityOnHand,
             conversionFactor: conversion.conversionFactor,
             baseUnit: conversion.baseUnit,
             saleUnit: conversion.saleUnit,
           })
         : null;
-      return {
-        ...product,
-        stockConversion: conversion ? {
-          stockGroupId: conversion.stockGroupId,
-          stockGroupCode: conversion.stockGroupCode,
-          stockGroupName: conversion.stockGroupName,
-          baseUnit: conversion.baseUnit,
-          saleUnit: conversion.saleUnit,
-          conversionFactor: conversion.conversionFactor,
-          isCanonical: conversion.isCanonical,
-        } : null,
-        sharedStock,
-      };
-    }));
-  }
+    return {
+      ...product,
+      stockConversion: conversion ? {
+        stockGroupId: conversion.stockGroupId,
+        stockGroupCode: conversion.stockGroupCode,
+        stockGroupName: conversion.stockGroupName,
+        baseUnit: conversion.baseUnit,
+        saleUnit: conversion.saleUnit,
+        conversionFactor: conversion.conversionFactor,
+        isCanonical: conversion.isCanonical,
+      } : null,
+      sharedStock,
+      allSharedInventoryBalances: sharedBalances.map((balance) => ({
+        branchId: balance.branchId,
+        inventoryProductId: balance.inventoryProductId,
+        quantityOnHand: balance.quantityOnHand?.toString() ?? null,
+        weightedAverageCost: balance.weightedAverageCost?.toString() ?? null,
+      })),
+    };
+  });
 
   /* ── Build balance map for KPIs (uses first page balances list) ── */
   const balanceByProduct = new Map<string, typeof balances>();

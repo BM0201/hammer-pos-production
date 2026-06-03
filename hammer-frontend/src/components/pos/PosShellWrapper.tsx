@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState, type ReactNode } from "react";
+import type { Route } from "next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeftCircle, CreditCard, LogOut, ShoppingCart } from "lucide-react";
@@ -25,7 +26,7 @@ export function PosShellWrapper({
   roleCode: string;
   mode?: "sales" | "cashier";
   integrated?: boolean;
-  exitHref?: string;
+  exitHref?: Route;
 }) {
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
@@ -61,7 +62,7 @@ export function PosShellWrapper({
 
           <div className="flex items-center gap-3">
             <Link
-              href={exitHref as any}
+              href={exitHref}
               className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[var(--color-text-soft)] transition-colors hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)]"
               title="Volver a módulos"
             >
