@@ -31,6 +31,7 @@ function productWhere(params: Partial<CatalogInventoryQuery>): Prisma.ProductWhe
             { sku: { contains: params.q, mode: "insensitive" } },
             { name: { contains: params.q, mode: "insensitive" } },
             { barcode: { contains: params.q, mode: "insensitive" } },
+            { category: { name: { contains: params.q, mode: "insensitive" } } },
           ],
         }
       : {}),
@@ -66,9 +67,12 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     const totalStock = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand), 0);
     const totalValue = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.inventoryValue), 0);
     const branchesWithStock = productBalances.filter((row: any) => decimalToNumber(row.quantityOnHand) > 0).length;
-    const weightedCost = productBalances.length > 0
-      ? productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.weightedAverageCost), 0) / productBalances.length
-      : 0;
+    const positiveCostBalances = productBalances.filter((row: any) => decimalToNumber(row.weightedAverageCost) > 0);
+    const weightedCost = totalStock > 0
+      ? totalValue / totalStock
+      : positiveCostBalances.length > 0
+        ? positiveCostBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.weightedAverageCost), 0) / positiveCostBalances.length
+        : 0;
     const critical = productBalances.some((row: any) => {
       const policy = policyMap.get(`${product.id}:${row.branchId}`);
       const rp = policy ? decimalToNumber(policy.reorderPoint) : CRITICAL_STOCK_FALLBACK;
@@ -174,6 +178,12 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   ]);
 
   const policyByProductBranch = new Map(reorderPolicies.map((policy) => [`${policy.productId}:${policy.branchId}`, policy]));
+  const allMetricProducts = await prisma.product.findMany({
+    where,
+    include: productInclude,
+    orderBy: [{ isActive: "desc" }, { name: "asc" }],
+  });
+  const allMetricRows = allMetricProducts.map((product) => enrichProduct(product, policyByProductBranch));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let filteredProducts: any[];
@@ -183,13 +193,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     /* When a computed filter is active, we must load ALL products matching the text/category
        where clause, enrich them, filter, then paginate in-memory. This is unavoidable because
        LOW_STOCK, NO_COST, etc. depend on inventory balances that can't be expressed as a Prisma WHERE. */
-    const allProducts = await prisma.product.findMany({
-      where,
-      include: productInclude,
-      orderBy: [{ isActive: "desc" }, { name: "asc" }],
-    });
-    const allEnriched = allProducts.map((p) => enrichProduct(p, policyByProductBranch));
-    const allMatching = allEnriched.filter(matchesFilter);
+    const allMatching = allMetricRows.filter(matchesFilter);
     totalFiltered = allMatching.length;
     filteredProducts = allMatching.slice((page - 1) * limit, page * limit);
   } else {
@@ -300,12 +304,12 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
 
   /* ── KPIs: computed from the current page when no filter, or from all matching when filtered ── */
   const kpis = {
-    activeProducts: totalProductsRaw,
-    skusWithoutInventory: 0,
-    criticalStockProducts: 0,
-    zeroStockProducts: 0,
+    activeProducts: allMetricRows.filter((row) => row.isActive).length,
+    skusWithoutInventory: allMetricRows.filter((row) => row.isActive && row.inventoryBalances.length === 0).length,
+    criticalStockProducts: allMetricRows.filter((row) => row.isActive && row.isCriticalStock).length,
+    zeroStockProducts: allMetricRows.filter((row) => row.isActive && row.hasZeroStock).length,
     totalInventoryValue: balances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0),
-    productsWithoutCost: 0,
+    productsWithoutCost: allMetricRows.filter((row) => row.isActive && row.hasNoCost).length,
     productsWithoutPrice: 0,
   };
 
@@ -440,3 +444,4 @@ export async function massDeleteAllProducts(input: MassDeleteProductsInput, acto
 
   return { deleted: result };
 }
+

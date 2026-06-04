@@ -24,6 +24,7 @@ type Category = { id: string; code: string; name: string; isActive: boolean };
 type ProductRow = {
   id: string;
   sku: string;
+  barcode?: string | null;
   name: string;
   unit: string;
   isActive: boolean;
@@ -75,6 +76,7 @@ type AuditRow = { id: string; occurredAt: string; module: string; action: string
 type ReplenishmentRecommendation = {
   productId: string;
   sku: string;
+  barcode?: string | null;
   name: string;
   categoryName?: string | null;
   branchId: string;
@@ -116,6 +118,7 @@ type ReplenishmentSummary = {
 type TransferOpportunity = {
   productId: string;
   sku: string;
+  barcode?: string | null;
   name: string;
   fromBranchId: string;
   fromBranchName: string;
@@ -136,6 +139,7 @@ type TransferOpportunity = {
 type ImportPreviewItem = {
   rowNumber: number;
   sku: string;
+  barcode?: string | null;
   name: string;
   action: string;
   targetBranchCode: string;
@@ -1860,15 +1864,60 @@ function MovementsPanel({
     unit: firstProduct?.stockConversion?.saleUnit ?? firstProduct?.unit ?? "UN",
     unitCost: "",
     costMode: "SET_WAC",
+    salePrice: "",
+    priceMode: "SET_BRANCH_PRICE",
     reason: "Carga inicial de inventario",
     notes: "",
   });
+  const [openingSearch, setOpeningSearch] = useState(firstProduct ? `${firstProduct.sku} ${firstProduct.name}` : "");
+  const [openingSearchResults, setOpeningSearchResults] = useState<ProductRow[]>(products.slice(0, 12));
+  const [openingSearchLoading, setOpeningSearchLoading] = useState(false);
+
 
   useEffect(() => {
     if (initialDialog === "adjustment") setShowAdjustment(true);
     if (initialDialog === "opening") setShowOpening(true);
     if (initialDialog) onInitialDialogHandled?.();
   }, [initialDialog, onInitialDialogHandled]);
+  useEffect(() => {
+    if (!showOpening) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      const params = new URLSearchParams();
+      const term = openingSearch.trim();
+      if (term) params.set("q", term);
+      if (activeBranchId) params.set("branchId", activeBranchId);
+      params.set("page", "1");
+      params.set("limit", "20");
+      setOpeningSearchLoading(true);
+      try {
+        const response = await fetch(`/api/master/catalog-inventory?${params}`, { cache: "no-store", signal: controller.signal });
+        const raw = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo buscar productos.");
+        const payload = unwrapApiData(raw) as CenterData;
+        setOpeningSearchResults(payload.products ?? []);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setOpeningSearchResults(products.slice(0, 12));
+        }
+      } finally {
+        setOpeningSearchLoading(false);
+      }
+    }, 280);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeBranchId, openingSearch, products, showOpening]);
+
+  function selectOpeningProduct(product: ProductRow) {
+    setOpening({
+      ...opening,
+      productId: product.id,
+      unit: product.stockConversion?.saleUnit ?? product.unit ?? "UN",
+    });
+    setOpeningSearch(`${product.sku} ${product.name}`);
+  }
 
   const filteredMovements = movements.filter((movement) => {
     if (activeBranchId && movement.branch.id !== activeBranchId) return false;
@@ -1895,6 +1944,23 @@ function MovementsPanel({
   const direction = ["ADJUSTMENT_OUT", "DAMAGE"].includes(adjustment.adjustmentType) ? -1 : 1;
   const previewFinalBase = adjustment.adjustmentType === "PHYSICAL_COUNT" ? changeBaseQty : currentBaseStock + (direction * changeBaseQty);
   const openingPreviewFinalBase = openingCurrentBaseStock + openingBaseQty;
+  const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
+  const openingPricing = openingProduct && activeBranch ? buildBranchPricingCostRow(openingProduct, activeBranch) : null;
+  const openingUnitCost = numberOrNull(opening.unitCost);
+  const openingSalePrice = numberOrNull(opening.salePrice);
+  const previewCost = opening.costMode === "QUANTITY_ONLY" ? openingPricing?.effectiveCost ?? null : openingUnitCost;
+  const previewPrice = opening.priceMode === "NO_PRICE_CHANGE" ? openingPricing?.effectivePrice ?? null : openingSalePrice;
+  const previewMargin = previewCost !== null && previewPrice !== null && previewPrice > 0
+    ? ((previewPrice - previewCost) / previewPrice) * 100
+    : null;
+  const priceBelowCost = previewCost !== null && previewPrice !== null && previewPrice < previewCost;
+  const lowMargin = previewMargin !== null && previewMargin >= 0 && previewMargin < 20;
+  const openingCurrentSaleStock = openingProduct?.stockConversion && openingFactor
+    ? openingCurrentBaseStock / openingFactor
+    : openingCurrentBaseStock;
+  const openingPreviewFinalSale = openingProduct?.stockConversion && openingFactor
+    ? openingPreviewFinalBase / openingFactor
+    : openingPreviewFinalBase;
 
   async function submitAdjustment(event: React.FormEvent) {
     event.preventDefault();
@@ -1939,6 +2005,13 @@ function MovementsPanel({
       toast.error("Este modo requiere un costo inicial mayor que cero.");
       return;
     }
+    if (opening.priceMode !== "NO_PRICE_CHANGE" && (!Number.isFinite(Number(opening.salePrice)) || Number(opening.salePrice) <= 0)) {
+      toast.error("Este modo requiere un precio de venta mayor que cero.");
+      return;
+    }
+    if (priceBelowCost && !window.confirm("El precio de venta queda por debajo del costo. Confirma explicitamente que deseas continuar.")) {
+      return;
+    }
     setSubmitting(true);
     try {
       const response = await apiFetch("/api/inventory/opening-balance", {
@@ -1951,15 +2024,17 @@ function MovementsPanel({
           unit: opening.unit,
           unitCost: opening.unitCost ? Number(opening.unitCost) : null,
           costMode: opening.costMode,
+          salePrice: opening.salePrice ? Number(opening.salePrice) : null,
+          priceMode: opening.priceMode,
           reason: opening.reason.trim(),
           notes: opening.notes.trim() || undefined,
         }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar carga inicial.");
-      toast.success("Carga inicial registrada.");
+      toast.success("Carga inicial registrada correctamente.");
       setShowOpening(false);
-      setOpening((prev) => ({ ...prev, quantity: "1", unitCost: "", notes: "" }));
+      setOpening((prev) => ({ ...prev, quantity: "1", unitCost: "", salePrice: "", notes: "" }));
       await onDone();
     } finally {
       setSubmitting(false);
@@ -2053,53 +2128,153 @@ function MovementsPanel({
       ) : null}
       {showOpening ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <form className="w-full max-w-3xl rounded-xl bg-white shadow-2xl" onSubmit={(event) => submitOpeningBalance(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar carga inicial."))}>
+          <form className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white shadow-2xl" onSubmit={(event) => submitOpeningBalance(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar carga inicial."))}>
             <div className="border-b border-[var(--color-border)] px-5 py-4">
               <h3 className="text-sm font-semibold">Carga inicial de inventario</h3>
-              <p className="text-xs text-[var(--color-text-muted)]">Registra existencias fisicas iniciales sin crear una compra falsa.</p>
+              <p className="text-xs text-[var(--color-text-muted)]">Usa este flujo para registrar inventario fisico inicial al comenzar a usar HAMMER. No crea una compra falsa.</p>
             </div>
-            <div className="grid gap-3 p-5 md:grid-cols-2">
-              <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
-              <select className="hm-input" value={opening.productId} onChange={(e) => {
-                const nextProduct = products.find((p) => p.id === e.target.value);
-                setOpening({ ...opening, productId: e.target.value, unit: nextProduct?.stockConversion?.saleUnit ?? nextProduct?.unit ?? "UN" });
-              }}>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
-              <div className="grid grid-cols-[1fr_140px] gap-2">
-                <Input type="number" min="0.0001" step="0.0001" value={opening.quantity} onChange={(e) => setOpening({ ...opening, quantity: e.target.value })} placeholder="Cantidad inicial" />
-                <select className="hm-input" value={opening.unit} onChange={(e) => setOpening({ ...opening, unit: e.target.value })}>
-                  {openingProduct?.stockConversion ? (
-                    <>
-                      <option value={openingProduct.stockConversion.saleUnit}>{openingProduct.stockConversion.saleUnit}</option>
-                      <option value={openingProduct.stockConversion.baseUnit}>{openingProduct.stockConversion.baseUnit}</option>
-                    </>
-                  ) : <option value={openingProduct?.unit ?? "UN"}>{openingProduct?.unit ?? "UN"}</option>}
+            <div className="grid gap-4 p-5 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-3">
+                <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
                 </select>
-              </div>
-              <select className="hm-input" value={opening.costMode} onChange={(e) => setOpening({ ...opening, costMode: e.target.value })}>
-                <option value="SET_WAC">Establecer WAC inicial</option>
-                <option value="SET_BRANCH_COST">Establecer costo sucursal</option>
-                <option value="QUANTITY_ONLY">Solo cantidad sin costo</option>
-              </select>
-              <Input type="number" min="0" step="0.01" value={opening.unitCost} onChange={(e) => setOpening({ ...opening, unitCost: e.target.value })} placeholder={opening.costMode === "QUANTITY_ONLY" ? "Costo opcional" : "Costo inicial unitario"} disabled={opening.costMode === "QUANTITY_ONLY"} />
-              <Input className="md:col-span-2" value={opening.reason} onChange={(e) => setOpening({ ...opening, reason: e.target.value })} placeholder="Motivo obligatorio" />
-              <Input className="md:col-span-2" value={opening.notes} onChange={(e) => setOpening({ ...opening, notes: e.target.value })} placeholder="Nota opcional" />
-              <div className="md:col-span-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
-                <div className="font-semibold">Vista previa</div>
-                <div className="mt-1 grid gap-1 text-xs text-[var(--color-text-muted)] sm:grid-cols-3">
-                  <span>Stock actual: {qty(openingCurrentBaseStock)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
-                  <span>Carga base: {qty(openingBaseQty)}</span>
-                  <span>Stock final: {qty(openingPreviewFinalBase)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
+
+                <div className="rounded-lg border border-[var(--color-border)] p-3">
+                  <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Producto</label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[var(--color-text-muted)]" />
+                    <Input className="pl-9" value={openingSearch} onChange={(e) => setOpeningSearch(e.target.value)} placeholder="Buscar producto por nombre, SKU o categoria" />
+                  </div>
+                  <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-white">
+                    {openingSearchLoading ? (
+                      <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando productos...</div>
+                    ) : openingSearchResults.length > 0 ? openingSearchResults.map((product) => {
+                      const row = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
+                      const branchStock = product.stockConversion
+                        ? product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand
+                        : product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand;
+                      const stock = branchStock === null || branchStock === undefined ? 0 : Number(branchStock);
+                      return (
+                        <button
+                          key={product.id}
+                          type="button"
+                          onClick={() => selectOpeningProduct(product)}
+                          className={`block w-full border-b border-[var(--color-border)] px-3 py-2 text-left text-xs transition hover:bg-amber-50 ${opening.productId === product.id ? "bg-amber-50" : "bg-white"}`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="font-semibold text-[var(--color-text)]">{product.name}</div>
+                              <div className="text-[var(--color-text-muted)]">SKU {product.sku}{product.barcode ? ` - Barra ${product.barcode}` : ""} - {product.category?.name ?? "Sin categoria"} - {product.unit}</div>
+                            </div>
+                            <div className="text-right text-[var(--color-text-muted)]">
+                              <div>Stock {qty(stock)}</div>
+                              <div>Precio {formatMoneyOrNd(row?.effectivePrice ?? null)}</div>
+                              <div>Costo {formatMoneyOrNd(row?.effectiveCost ?? null)}</div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    }) : (
+                      <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados para la busqueda.</div>
+                    )}
+                  </div>
                 </div>
-                {openingProduct?.stockConversion ? (
-                  <div className="mt-2 text-xs text-[var(--color-text-muted)]">
-                    {openingProduct.stockConversion.baseUnit} / {openingProduct.stockConversion.saleUnit} · factor {String(openingProduct.stockConversion.conversionFactor)}
-                    <br />
-                    Equivalente final: {qty(openingPreviewFinalBase)} varillas{openingFactor ? ` / ${qty(openingPreviewFinalBase / openingFactor)} quintales` : ""}
+
+                {openingProduct ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
+                    <div className="font-semibold text-amber-900">Producto seleccionado</div>
+                    <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                      <span>Producto: <strong>{openingProduct.name}</strong></span>
+                      <span>SKU: <strong>{openingProduct.sku}</strong></span>
+                      <span>Categoria: <strong>{openingProduct.category?.name ?? "Sin categoria"}</strong></span>
+                      <span>Unidad: <strong>{openingProduct.unit}</strong></span>
+                      <span>Sucursal: <strong>{activeBranch ? `${activeBranch.code} - ${activeBranch.name}` : "N/D"}</strong></span>
+                      <span>Stock actual: <strong>{qty(openingCurrentBaseStock)} {openingProduct.stockConversion?.baseUnit ?? openingProduct.unit}</strong></span>
+                      <span>Costo efectivo actual: <strong>{formatMoneyOrNd(openingPricing?.effectiveCost ?? null)}</strong></span>
+                      <span>Precio efectivo actual: <strong>{formatMoneyOrNd(openingPricing?.effectivePrice ?? null)}</strong></span>
+                    </div>
+                    {openingProduct.stockConversion ? (
+                      <div className="mt-2 rounded border border-amber-200 bg-white/70 p-2">
+                        Stock actual: {qty(openingCurrentBaseStock)} {openingProduct.stockConversion.baseUnit.toLowerCase()}{openingFactor ? ` / ${qty(openingCurrentSaleStock)} quintales` : ""}
+                        <br />
+                        Conversion: {openingFactor ? `1 quintal = ${openingFactor} varillas` : `${openingProduct.stockConversion.conversionFactor} ${openingProduct.stockConversion.baseUnit} por ${openingProduct.stockConversion.saleUnit}`}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
-                {opening.costMode === "QUANTITY_ONLY" ? (
-                  <div className="mt-2 text-xs text-amber-700">Esta carga no cambia costo. Si queda stock sin costo, Brain podra pedir revision de precio/costo.</div>
-                ) : null}
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid grid-cols-[1fr_150px] gap-2 md:col-span-2">
+                    <Input type="number" min="0.0001" step="0.0001" value={opening.quantity} onChange={(e) => setOpening({ ...opening, quantity: e.target.value })} placeholder="Cantidad inicial" />
+                    <select className="hm-input" value={opening.unit} onChange={(e) => setOpening({ ...opening, unit: e.target.value })}>
+                      {openingProduct?.stockConversion ? (
+                        <>
+                          <option value={openingProduct.stockConversion.saleUnit}>{openingProduct.stockConversion.saleUnit}</option>
+                          <option value={openingProduct.stockConversion.baseUnit}>{openingProduct.stockConversion.baseUnit}</option>
+                        </>
+                      ) : <option value={openingProduct?.unit ?? "UN"}>{openingProduct?.unit ?? "UN"}</option>}
+                    </select>
+                  </div>
+                  <select className="hm-input" value={opening.costMode} onChange={(e) => setOpening({ ...opening, costMode: e.target.value })}>
+                    <option value="SET_WAC">Establecer WAC inicial</option>
+                    <option value="SET_BRANCH_COST">Establecer costo sucursal</option>
+                    <option value="QUANTITY_ONLY">Solo cantidad sin costo</option>
+                  </select>
+                  <Input type="number" min="0" step="0.01" value={opening.unitCost} onChange={(e) => setOpening({ ...opening, unitCost: e.target.value })} placeholder={opening.costMode === "QUANTITY_ONLY" ? "Costo no se cambia" : "Costo inicial unitario"} disabled={opening.costMode === "QUANTITY_ONLY"} />
+                  <select className="hm-input" value={opening.priceMode} onChange={(e) => setOpening({ ...opening, priceMode: e.target.value })}>
+                    <option value="SET_BRANCH_PRICE">Aplicar precio a esta sucursal</option>
+                    <option value="SET_GLOBAL_PRICE">Aplicar precio global</option>
+                    <option value="NO_PRICE_CHANGE">No cambiar precio</option>
+                  </select>
+                  <Input type="number" min="0" step="0.01" value={opening.salePrice} onChange={(e) => setOpening({ ...opening, salePrice: e.target.value })} placeholder={opening.priceMode === "NO_PRICE_CHANGE" ? "Precio no se cambia" : "Precio de venta inicial"} disabled={opening.priceMode === "NO_PRICE_CHANGE"} />
+                  <Input className="md:col-span-2" value={opening.reason} onChange={(e) => setOpening({ ...opening, reason: e.target.value })} placeholder="Motivo obligatorio" />
+                  <Input className="md:col-span-2" value={opening.notes} onChange={(e) => setOpening({ ...opening, notes: e.target.value })} placeholder="Nota opcional" />
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 text-sm">
+                <div className="font-semibold">Vista previa</div>
+                <div className="space-y-2 text-xs text-[var(--color-text-muted)]">
+                  <div className="rounded bg-white p-3">
+                    <div className="font-semibold text-[var(--color-text)]">Stock</div>
+                    <div className="mt-1 grid gap-1">
+                      <span>Stock actual: {qty(openingCurrentBaseStock)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
+                      <span>Cantidad a cargar: {qty(openingQty || 0)} {opening.unit}</span>
+                      <span>Carga base: {qty(openingBaseQty)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
+                      <span>Stock final: {qty(openingPreviewFinalBase)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
+                    </div>
+                    {openingProduct?.stockConversion ? (
+                      <div className="mt-2 text-amber-700">
+                        Stock final convertible: {qty(openingPreviewFinalBase)} {openingProduct.stockConversion.baseUnit.toLowerCase()}{openingFactor ? ` / ${qty(openingPreviewFinalSale)} quintales` : ""}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="rounded bg-white p-3">
+                    <div className="font-semibold text-[var(--color-text)]">Costo</div>
+                    <div className="mt-1 grid gap-1">
+                      <span>Costo actual: {formatMoneyOrNd(openingPricing?.effectiveCost ?? null)}</span>
+                      <span>Costo nuevo: {formatMoneyOrNd(previewCost)}</span>
+                      <span>Fuente despues: {opening.costMode === "SET_WAC" ? "WAC" : opening.costMode === "SET_BRANCH_COST" ? "Costo sucursal" : "Sin cambio de costo"}</span>
+                    </div>
+                  </div>
+                  <div className="rounded bg-white p-3">
+                    <div className="font-semibold text-[var(--color-text)]">Precio</div>
+                    <div className="mt-1 grid gap-1">
+                      <span>Precio actual global: {formatMoneyOrNd(openingPricing?.standardSalePrice ?? null)}</span>
+                      <span>Precio actual sucursal: {formatMoneyOrNd(openingPricing?.branchPrice ?? null)}</span>
+                      <span>Precio efectivo actual: {formatMoneyOrNd(openingPricing?.effectivePrice ?? null)}</span>
+                      <span>Precio nuevo: {formatMoneyOrNd(previewPrice)}</span>
+                      <span>Fuente despues: {opening.priceMode === "SET_GLOBAL_PRICE" ? "Global" : opening.priceMode === "SET_BRANCH_PRICE" ? "Sucursal" : openingPricing?.priceSource === "BRANCH" ? "Sucursal" : "Global"}</span>
+                    </div>
+                  </div>
+                  <div className="rounded bg-white p-3">
+                    <div className="font-semibold text-[var(--color-text)]">Margen estimado</div>
+                    <Badge variant={marginBadgeVariant(previewMargin)}>{formatMarginOrNd(previewMargin)}</Badge>
+                  </div>
+                  {opening.costMode === "QUANTITY_ONLY" ? <div className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-800">Esta carga actualiza stock sin cambiar costo. Si queda stock sin costo, revisa Precios y costos.</div> : null}
+                  {priceBelowCost ? <div className="rounded border border-red-300 bg-red-50 p-2 text-red-700">Precio por debajo del costo. Se pedira confirmacion explicita.</div> : null}
+                  {lowMargin ? <div className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-800">Margen bajo. Revisa precio y costo antes de confirmar.</div> : null}
+                </div>
               </div>
             </div>
             <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
@@ -2108,8 +2283,7 @@ function MovementsPanel({
             </div>
           </form>
         </div>
-      ) : null}
-    </Card>
+      ) : null}    </Card>
   );
 }
 
@@ -2868,3 +3042,11 @@ function AuditPanel({ logs }: { logs: AuditRow[] }) {
     </Card>
   );
 }
+
+
+
+
+
+
+
+
