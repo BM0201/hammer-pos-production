@@ -6,7 +6,6 @@ import { Check, ShoppingCart, Trash2 } from "lucide-react";
 import { measurePosMetric } from "@/lib/telemetry";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
 import { apiFetch } from "@/lib/client/api";
 import { PrintModal } from "@/components/print/print-modal";
@@ -755,7 +754,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   if (isInitialLoading) {
     return (
-      <section className="flex h-[calc(100vh-10.5rem)] min-h-[34rem] items-center justify-center" data-testid="pos-root-loading">
+      <section className="flex h-[calc(100vh-12rem)] min-h-[34rem] items-center justify-center" data-testid="pos-root-loading">
         <div className="text-center space-y-2">
           <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-info-600)]" />
           <p className="text-sm text-[var(--color-text-muted)]">Preparando punto de venta...</p>
@@ -766,16 +765,19 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   return (
     <section className="space-y-3" data-testid="pos-root">
-      <section className="h-[calc(100vh-8rem)] min-h-[34rem] overflow-hidden">
+      <section className="h-[calc(100vh-12rem)] min-h-[34rem] overflow-hidden">
         <div className="grid h-full grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-          <Card className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm" data-testid="pos-catalog-zone">
-            <div className="px-4 pt-4 pb-3">
-              <div className="mb-1 flex items-center justify-between">
+          <Card noPadding className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm" data-testid="pos-catalog-zone">
+            <div className="hm-card-header-blue flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <ShoppingCart className="h-4 w-4" />
                 <h2 className="text-sm font-semibold">Catálogo rápido</h2>
-                {showingTopSelling && !search.trim() ? (
-                  <Badge variant="neutral" className="text-[0.6rem]">Top vendidos</Badge>
-                ) : null}
               </div>
+              {showingTopSelling && !search.trim() ? (
+                <span className="rounded-full bg-white/20 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide text-white">Top vendidos</span>
+              ) : null}
+            </div>
+            <div className="px-4 pt-3 pb-3">
               <p className="text-xs text-[var(--color-text-muted)]">Busca por nombre, SKU o código de barras.</p>
               <input
                 ref={searchInputRef}
@@ -862,10 +864,13 @@ export function BranchPos({ branchId }: { branchId: string }) {
             className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-strong)]"
             data-testid="pos-ticket-zone"
           >
-            <Card className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm">
-              <div className="px-4 pt-4 pb-3">
-                <h2 className="text-sm font-semibold">Ticket actual</h2>
-                <p className="text-xs text-[var(--color-text-muted)]">Orden: {order?.orderNumber ?? "preparando..."} - Estado: {orderStatusLabel}</p>
+            <Card noPadding className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm">
+              <div className="hm-card-header-green flex items-center gap-2.5">
+                <Check className="h-4 w-4" />
+                <div>
+                  <h2 className="text-sm font-semibold leading-tight">Ticket actual</h2>
+                  <p className="text-[0.7rem] text-white/85">Orden: {order?.orderNumber ?? "preparando..."} · Estado: {orderStatusLabel}</p>
+                </div>
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" data-testid="pos-ticket-lines">

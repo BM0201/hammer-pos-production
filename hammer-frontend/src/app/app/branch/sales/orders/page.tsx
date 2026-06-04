@@ -4,11 +4,9 @@ import { BranchPos } from "@/components/pos/branch-pos";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 
-// NOTE: This page intentionally does NOT render <PosShellWrapper>.
-// The POS shell (sidebar + topbar) is provided once by <AppShellRouter>
-// in app/layout.tsx for all POS routes (sales/orders, cashier/payments).
-// Rendering PosShellWrapper here too caused the "double sidebar" bug.
-// This mirrors the cashier/payments page, which also only renders content.
+// NOTE: This page only renders POS content. The unified app shell
+// (dark role-themed sidebar + header + breadcrumbs) is provided once by
+// <AppShellRouter> in app/layout.tsx for every route, including POS.
 export default function BranchSalesOrdersPage() {
   const sessionState = useSession();
 
