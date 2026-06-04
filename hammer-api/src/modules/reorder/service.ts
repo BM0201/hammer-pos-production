@@ -8,6 +8,7 @@
 import { Prisma, ReorderAlertStatus, ReorderAlertType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
+import { findProductionOpportunitiesForProduct } from "@/modules/production/production-recommendation-service";
 import { createPurchaseOrder } from "@/modules/purchase-orders/service";
 import { createTransfer } from "@/modules/transfers/service";
 import type { UpsertPolicyInput } from "@/modules/reorder/validators";
@@ -387,6 +388,18 @@ export async function evaluateReorderNeeds(params?: { branchId?: string }): Prom
       reason = `${prodName}: stock (${currentNum}) bajo punto de reorden (${reorderNum}). ${srcCode} tiene ${srcStock} uds. (parcial). Se requiere compra adicional.`;
     } else {
       reason = `${prodName}: stock (${currentNum}) bajo punto de reorden (${reorderNum}). No hay stock disponible en otras sucursales.`;
+    }
+
+    const productionOptions = await findProductionOpportunitiesForProduct({
+      branchId: policy.branchId,
+      productId: policy.productId,
+    });
+    const viableProduction = productionOptions.find((option) =>
+      option.recommendationType === "PRODUCE_FROM_EXCESS"
+      || option.recommendationType === "PRODUCE_FROM_AVAILABLE_STOCK",
+    );
+    if (viableProduction) {
+      reason += ` Producir antes de comprar: ${viableProduction.recipeName}, ${viableProduction.expectedOutputQty.toFixed(0)} uds sugeridas.`;
     }
 
     alertsToCreate.push({

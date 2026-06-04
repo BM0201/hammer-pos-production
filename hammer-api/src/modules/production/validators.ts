@@ -9,6 +9,25 @@ const recipeInputSchema = z.object({
   notes: z.string().max(500).optional().nullable(),
 });
 
+export const recipeTypeSchema = z.enum([
+  "MANUFACTURING",
+  "CONVERSION",
+  "CUTTING",
+  "MIXING",
+  "PACKAGING",
+  "REPACKAGING",
+]);
+
+export const recipeFamilySchema = z.enum([
+  "WOOD",
+  "CEMENT",
+  "STONE",
+  "METAL",
+  "BLOCKS",
+  "PAINT",
+  "GENERAL",
+]);
+
 export const createRecipeSchema = z.object({
   name: z.string().min(2, "Nombre muy corto").max(200),
   code: z.string().min(2).max(64).transform((v) => v.trim().toUpperCase()),
@@ -16,7 +35,13 @@ export const createRecipeSchema = z.object({
   finishedProductId: z.string().cuid(),
   expectedQuantity: z.number().positive("Cantidad esperada debe ser mayor a 0"),
   expectedUnit: z.string().min(1).max(32),
+  recipeType: recipeTypeSchema.default("MANUFACTURING"),
+  recipeFamily: recipeFamilySchema.default("GENERAL"),
   targetMarginPct: z.number().min(0).max(1).optional().nullable(),
+  yieldPercent: z.number().min(0).max(1).optional().nullable(),
+  wastePercent: z.number().min(0).max(1).optional().nullable(),
+  processingCostPerBatch: z.number().min(0).optional().nullable(),
+  laborCostPerBatch: z.number().min(0).optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
   inputs: z.array(recipeInputSchema).min(1, "Se requiere al menos un insumo"),
 });
@@ -26,7 +51,13 @@ export const updateRecipeSchema = z.object({
   description: z.string().max(500).optional().nullable(),
   expectedQuantity: z.number().positive().optional(),
   expectedUnit: z.string().min(1).max(32).optional(),
+  recipeType: recipeTypeSchema.optional(),
+  recipeFamily: recipeFamilySchema.optional(),
   targetMarginPct: z.number().min(0).max(1).optional().nullable(),
+  yieldPercent: z.number().min(0).max(1).optional().nullable(),
+  wastePercent: z.number().min(0).max(1).optional().nullable(),
+  processingCostPerBatch: z.number().min(0).optional().nullable(),
+  laborCostPerBatch: z.number().min(0).optional().nullable(),
   isActive: z.boolean().optional(),
   notes: z.string().max(1000).optional().nullable(),
   inputs: z.array(recipeInputSchema).min(1).optional(),

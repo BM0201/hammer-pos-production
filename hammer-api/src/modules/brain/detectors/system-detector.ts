@@ -7,6 +7,7 @@ import {
   getIronBarsPerQuintal,
   ironStockGroupCode,
 } from "@/modules/inventory/unit-conversion";
+import { getProductionRecommendationsForBranch } from "@/modules/production/production-recommendation-service";
 
 export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
@@ -70,6 +71,71 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
         evidenceJson: { branchId: branch.id },
         sourceJson: { detector: "system-detector" },
         fingerprintParts: ["system", "branch-no-print-settings", branch.id],
+      });
+    }
+  }
+
+  for (const branch of branches.slice(0, 20)) {
+    const production = await getProductionRecommendationsForBranch({ branchId: branch.id });
+    for (const recommendation of production.recommendations.slice(0, 10)) {
+      const severity = recommendation.priority === "URGENT"
+        ? "HIGH"
+        : recommendation.recommendationType === "NOT_ENOUGH_INPUTS" || recommendation.recommendationType === "REVIEW_RECIPE"
+          ? "MEDIUM"
+          : "LOW";
+      const firstInput = recommendation.inputSummary[0];
+      const proposedActionType = recommendation.recommendationType === "PRODUCE_FROM_EXCESS"
+        ? "PRODUCTION_OPPORTUNITY_FROM_EXCESS"
+        : recommendation.recommendationType === "NOT_ENOUGH_INPUTS"
+          ? "PRODUCTION_RECIPE_BLOCKED_BY_INPUTS"
+          : recommendation.recommendationType === "REVIEW_RECIPE"
+            ? "PRODUCTION_RECIPE_NEEDS_REVIEW"
+            : "EXCESS_INPUT_CAN_SUPPLY_SHORTAGE";
+
+      decisions.push({
+        category: "INVENTORY",
+        severity,
+        title: `Produccion sugerida: ${recommendation.targetSku}`,
+        description: recommendation.message,
+        recommendation: recommendation.recommendationType === "NOT_ENOUGH_INPUTS"
+          ? "Comprar insumos o revisar politica de reorden antes de producir."
+          : "Crear un lote borrador desde la recomendacion y confirmar produccion manualmente.",
+        branchId: recommendation.branchId,
+        productId: recommendation.targetProductId,
+        confidenceScore: 90,
+        riskScore: riskScoreFor(severity, 90),
+        proposedActionType,
+        proposedActionJson: {
+          nextBestAction: recommendation.recommendedActions.includes("CREATE_PRODUCTION_BATCH")
+            ? "CREATE_PRODUCTION_BATCH"
+            : recommendation.recommendedActions[0],
+          endpoint: "/api/master/production/recommendations/create-batch",
+          payload: {
+            branchId: recommendation.branchId,
+            recipeId: recommendation.recipeId,
+            suggestedBatches: recommendation.suggestedBatches,
+            targetProductId: recommendation.targetProductId,
+          },
+        },
+        evidenceJson: {
+          targetProductId: recommendation.targetProductId,
+          targetProductName: recommendation.targetProductName,
+          targetStockOnHand: recommendation.targetStockOnHand,
+          targetShortageQty: recommendation.targetShortageQty,
+          recipeId: recommendation.recipeId,
+          recipeName: recommendation.recipeName,
+          recipeType: recommendation.recipeType,
+          recipeFamily: recommendation.recipeFamily,
+          suggestedBatches: recommendation.suggestedBatches,
+          expectedOutputQty: recommendation.expectedOutputQty,
+          estimatedUnitCost: recommendation.estimatedUnitCost,
+          excessInputProductId: firstInput?.productId ?? null,
+          excessInputName: firstInput?.productName ?? null,
+          excessQty: firstInput?.excessQty ?? null,
+          warnings: recommendation.warnings,
+        },
+        sourceJson: { detector: "system-detector", rule: "production-recommendation" },
+        fingerprintParts: ["production", "recommendation", recommendation.branchId, recommendation.targetProductId, recommendation.recipeId],
       });
     }
   }
@@ -220,6 +286,109 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
       },
       sourceJson: { detector: "system-detector", rule: "iron-unit-conversion" },
       fingerprintParts: ["system", "iron-unit-conversion-required", ctx.branchId ?? "all", groupCode],
+    });
+  }
+
+  const recipesMissingInputs = await prisma.productionRecipe.findMany({
+    where: { isActive: true, inputs: { none: {} } },
+    select: { id: true, code: true, name: true, finishedProductId: true },
+    take: 50,
+  });
+
+  for (const recipe of recipesMissingInputs) {
+    decisions.push({
+      category: "INVENTORY",
+      severity: "HIGH",
+      title: `Receta sin insumos: ${recipe.code}`,
+      description: `${recipe.name} esta activa, pero no tiene insumos configurados.`,
+      recommendation: "Agregar insumos reales del catalogo o desactivar la receta.",
+      productId: recipe.finishedProductId,
+      confidenceScore: 98,
+      riskScore: riskScoreFor("HIGH", 98),
+      proposedActionType: "PRODUCTION_RECIPE_MISSING_COST",
+      evidenceJson: { recipeId: recipe.id, code: recipe.code },
+      sourceJson: { detector: "system-detector", rule: "production-recipe-missing-inputs" },
+      fingerprintParts: ["production", "recipe-missing-inputs", recipe.id],
+    });
+  }
+
+  const stuckSince = new Date(ctx.now.getTime() - 1000 * 60 * 60 * 24 * 3);
+  const stuckBatches = await prisma.productionBatch.findMany({
+    where: {
+      status: "IN_PROGRESS",
+      startedAt: { lt: stuckSince },
+      ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+    },
+    include: {
+      recipe: { select: { name: true, code: true } },
+      branch: { select: { code: true, name: true } },
+    },
+    take: 50,
+  });
+
+  for (const batch of stuckBatches) {
+    decisions.push({
+      category: "INVENTORY",
+      severity: "MEDIUM",
+      title: `Lote en proceso por revisar: ${batch.batchNumber}`,
+      description: `${batch.recipe.name} lleva mas de 3 dias en proceso en ${batch.branch.code}.`,
+      recommendation: "Confirmar avance, completar lote o cancelar si no se va a producir.",
+      branchId: batch.branchId,
+      confidenceScore: 92,
+      riskScore: riskScoreFor("MEDIUM", 92),
+      proposedActionType: "PRODUCTION_BATCH_STUCK",
+      evidenceJson: { batchId: batch.id, batchNumber: batch.batchNumber, startedAt: batch.startedAt },
+      sourceJson: { detector: "system-detector", rule: "production-batch-stuck" },
+      fingerprintParts: ["production", "batch-stuck", batch.id],
+    });
+  }
+
+  const belowCostBatches = await prisma.productionBatch.findMany({
+    where: {
+      status: "COMPLETED",
+      unitCost: { gt: 0 },
+      ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+    },
+    include: {
+      recipe: {
+        include: {
+          finishedProduct: {
+            select: {
+              id: true,
+              sku: true,
+              name: true,
+              standardSalePrice: true,
+              branchProductSettings: {
+                select: { branchId: true, branchPrice: true },
+              },
+            },
+          },
+        },
+      },
+    },
+    orderBy: { completedAt: "desc" },
+    take: 100,
+  });
+
+  for (const batch of belowCostBatches) {
+    const setting = batch.recipe.finishedProduct.branchProductSettings.find((item) => item.branchId === batch.branchId);
+    const effectivePrice = Number(setting?.branchPrice ?? batch.recipe.finishedProduct.standardSalePrice ?? 0);
+    const unitCost = Number(batch.unitCost ?? 0);
+    if (effectivePrice <= 0 || effectivePrice >= unitCost) continue;
+    decisions.push({
+      category: "INVENTORY",
+      severity: "HIGH",
+      title: `Producto terminado bajo costo: ${batch.recipe.finishedProduct.sku}`,
+      description: `${batch.recipe.finishedProduct.name} tiene precio C$ ${effectivePrice.toFixed(2)} contra costo producido C$ ${unitCost.toFixed(2)}.`,
+      recommendation: "Revisar precio con calculadora antes de vender el inventario producido.",
+      branchId: batch.branchId,
+      productId: batch.recipe.finishedProductId,
+      confidenceScore: 94,
+      riskScore: riskScoreFor("HIGH", 94),
+      proposedActionType: "PRODUCTION_OUTPUT_PRICE_BELOW_COST",
+      evidenceJson: { batchId: batch.id, batchNumber: batch.batchNumber, effectivePrice, unitCost },
+      sourceJson: { detector: "system-detector", rule: "production-output-price-below-cost" },
+      fingerprintParts: ["production", "output-price-below-cost", batch.branchId, batch.recipe.finishedProductId],
     });
   }
 

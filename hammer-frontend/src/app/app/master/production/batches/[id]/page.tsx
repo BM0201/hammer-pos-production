@@ -67,6 +67,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [completionWarnings, setCompletionWarnings] = useState<string[]>([]);
 
   // Completion form
   const [producedGood, setProducedGood] = useState("");
@@ -171,6 +172,8 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
         throw new Error(errData?.error?.message ?? errData?.message ?? "Error al completar lote");
       }
 
+      const completed = unwrapApiData(await res.json()) as { warnings?: string[] };
+      setCompletionWarnings(completed.warnings ?? []);
       await reloadBatchData();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Error");
@@ -213,6 +216,11 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
       {actionError && (
         <div className="bg-[var(--color-danger-50)] border border-[var(--color-danger-200)] rounded-lg p-3 text-sm text-[var(--color-danger-700)]">{actionError}</div>
+      )}
+      {completionWarnings.length > 0 && (
+        <div className="bg-[var(--color-warning-50)] border border-[var(--color-warning-200)] rounded-lg p-3 text-sm text-[var(--color-warning-700)]">
+          {completionWarnings.map((warning) => <p key={warning}>{warning}</p>)}
+        </div>
       )}
 
       {/* Batch info */}

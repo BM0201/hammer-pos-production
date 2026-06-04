@@ -16,10 +16,14 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const q = url.searchParams.get("q") ?? undefined;
     const isActive = url.searchParams.get("isActive");
+    const recipeType = url.searchParams.get("recipeType") ?? undefined;
+    const recipeFamily = url.searchParams.get("recipeFamily") ?? undefined;
 
     const recipes = await getRecipes({
       q,
       isActive: isActive === "true" ? true : isActive === "false" ? false : undefined,
+      recipeType,
+      recipeFamily,
     });
 
     return ok(recipes);
