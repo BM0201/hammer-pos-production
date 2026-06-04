@@ -1880,7 +1880,14 @@ model ProductionRecipe {
   expectedQuantity Float /// 1000 bloques
   expectedUnit     String /// "unidad"
 
+  recipeType   String @default("MANUFACTURING") /// MANUFACTURING, CONVERSION, CUTTING, MIXING, PACKAGING, REPACKAGING
+  recipeFamily String @default("GENERAL") /// WOOD, CEMENT, STONE, METAL, BLOCKS, PAINT, GENERAL
+
   targetMarginPct Float? /// 0.30 = 30%
+  yieldPercent    Float? /// rendimiento esperado; 1 = 100%
+  wastePercent    Float? /// merma esperada; 0.05 = 5%
+  processingCostPerBatch Float?
+  laborCostPerBatch      Float?
 
   isActive        Boolean  @default(true)
   notes           String?

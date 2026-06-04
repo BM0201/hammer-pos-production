@@ -2,6 +2,11 @@ import { Prisma, ProductionBatchStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
+import {
+  convertBaseQtyToSaleQty,
+  convertBaseUnitCostToSaleUnitCost,
+  getSharedInventoryBalance,
+} from "@/modules/inventory/unit-conversion";
 import { calculateBatchCosts, estimateMaterialCost } from "./calculations";
 import type {
   CreateRecipeInput,
@@ -16,9 +21,11 @@ import type {
 // RECIPES
 // ═══════════════════════════════════════════════════════════════════════════
 
-export async function getRecipes(params: { isActive?: boolean; q?: string }) {
+export async function getRecipes(params: { isActive?: boolean; q?: string; recipeType?: string; recipeFamily?: string }) {
   const where: Prisma.ProductionRecipeWhereInput = {};
   if (params.isActive !== undefined) where.isActive = params.isActive;
+  if (params.recipeType) where.recipeType = params.recipeType;
+  if (params.recipeFamily) where.recipeFamily = params.recipeFamily;
   if (params.q) {
     where.OR = [
       { name: { contains: params.q, mode: "insensitive" } },
@@ -96,7 +103,13 @@ export async function createRecipe(input: CreateRecipeInput & { actorUserId: str
       finishedProductId: input.finishedProductId,
       expectedQuantity: input.expectedQuantity,
       expectedUnit: input.expectedUnit.trim(),
+      recipeType: input.recipeType,
+      recipeFamily: input.recipeFamily,
       targetMarginPct: input.targetMarginPct ?? null,
+      yieldPercent: input.yieldPercent ?? null,
+      wastePercent: input.wastePercent ?? null,
+      processingCostPerBatch: input.processingCostPerBatch ?? null,
+      laborCostPerBatch: input.laborCostPerBatch ?? null,
       notes: input.notes ?? null,
       createdByUserId: input.actorUserId,
       inputs: {
@@ -158,7 +171,13 @@ export async function updateRecipe(
         description: input.description,
         expectedQuantity: input.expectedQuantity,
         expectedUnit: input.expectedUnit?.trim(),
+        recipeType: input.recipeType,
+        recipeFamily: input.recipeFamily,
         targetMarginPct: input.targetMarginPct,
+        yieldPercent: input.yieldPercent,
+        wastePercent: input.wastePercent,
+        processingCostPerBatch: input.processingCostPerBatch,
+        laborCostPerBatch: input.laborCostPerBatch,
         isActive: input.isActive,
         notes: input.notes,
       },
@@ -405,6 +424,13 @@ export async function completeBatch(
   if (batch.status !== "IN_PROGRESS" && batch.status !== "DRAFT" && batch.status !== "PLANNED") {
     throw new Error("INVALID_TRANSITION");
   }
+  if (input.inputs.length !== batch.inputs.length) {
+    throw new Error("INVALID_INPUT: Debes confirmar todos los insumos del lote.");
+  }
+  for (const batchInput of input.inputs) {
+    const existingInput = batch.inputs.find((bi) => bi.inputProductId === batchInput.inputProductId);
+    if (!existingInput) throw new Error("INVALID_INPUT: Insumo no pertenece al lote.");
+  }
 
   // Calculate costs
   const costInputs = input.inputs.map((i) => ({
@@ -419,8 +445,34 @@ export async function completeBatch(
     producedGoodQuantity: input.producedGoodQuantity,
     targetMarginPct: batch.recipe.targetMarginPct,
   });
+  if (costs.unitCost <= 0) {
+    throw new Error("INVALID_INPUT: El costo unitario producido debe ser mayor a 0.");
+  }
 
   const result = await prisma.$transaction(async (tx) => {
+    const warnings: string[] = [];
+    let inputsConsumed = 0;
+    let outputsCreated = 0;
+
+    for (const batchInput of input.inputs) {
+      const shared = await getSharedInventoryBalance(tx, {
+        branchId: batch.branchId,
+        productId: batchInput.inputProductId,
+      });
+      const availableSaleQty = shared.conversion && shared.balance
+        ? convertBaseQtyToSaleQty({
+            baseQuantity: shared.balance.quantityOnHand,
+            conversionFactor: shared.conversion.conversionFactor,
+          })
+        : (shared.balance?.quantityOnHand ?? new Prisma.Decimal(0));
+      if (availableSaleQty.lt(batchInput.actualQuantity)) {
+        throw new Error("INSUFFICIENT_STOCK");
+      }
+      if (batchInput.unitCost <= 0) {
+        warnings.push(`Insumo ${batchInput.inputProductId} sin costo unitario real.`);
+      }
+    }
+
     // 1. Update batch input actuals
     for (const batchInput of input.inputs) {
       const existingInput = batch.inputs.find(
@@ -451,6 +503,7 @@ export async function completeBatch(
         referenceId: batch.id,
         notes: `Consumo lote ${batch.batchNumber}`,
       });
+      inputsConsumed += 1;
     }
 
     // 3. Create PRODUCTION_OUTPUT movement (add finished product)
@@ -465,6 +518,43 @@ export async function completeBatch(
       referenceId: batch.id,
       notes: `Producción lote ${batch.batchNumber}`,
     });
+
+    outputsCreated += 1;
+
+    const finishedPricing = await tx.product.findUnique({
+      where: { id: batch.recipe.finishedProductId },
+      select: {
+        standardSalePrice: true,
+        branchProductSettings: {
+          where: { branchId: batch.branchId },
+          select: { branchPrice: true },
+          take: 1,
+        },
+      },
+    });
+    const effectivePrice = Number(
+      finishedPricing?.branchProductSettings[0]?.branchPrice ?? finishedPricing?.standardSalePrice ?? 0,
+    );
+    const finishedShared = await getSharedInventoryBalance(tx, {
+      branchId: batch.branchId,
+      productId: batch.recipe.finishedProductId,
+    });
+    const producedSaleUnitCost = finishedShared.conversion
+      ? Number(convertBaseUnitCostToSaleUnitCost({
+          baseUnitCost: costs.unitCost,
+          conversionFactor: finishedShared.conversion.conversionFactor,
+        }))
+      : costs.unitCost;
+    if (effectivePrice <= 0) {
+      warnings.push("Producto terminado sin precio efectivo.");
+    } else if (effectivePrice < producedSaleUnitCost) {
+      warnings.push("Precio actual por debajo del costo producido; revisar precio.");
+    } else if (batch.recipe.targetMarginPct != null && batch.recipe.targetMarginPct > 0) {
+      const margin = (effectivePrice - producedSaleUnitCost) / effectivePrice;
+      if (margin < batch.recipe.targetMarginPct) {
+        warnings.push("Margen estimado por debajo del margen objetivo de la receta.");
+      }
+    }
 
     // 4. If there's waste, log it (no inventory impact, just audit)
     if (input.producedBadQuantity > 0) {
@@ -512,7 +602,20 @@ export async function completeBatch(
       },
     });
 
-    return updatedBatch;
+    return {
+      ok: true,
+      batchId: updatedBatch.id,
+      statusAfter: updatedBatch.status,
+      producedQuantity: input.producedGoodQuantity,
+      totalInputCost: costs.materialsCost,
+      unitCost: costs.unitCost,
+      inventoryMovements: {
+        inputsConsumed,
+        outputsCreated,
+      },
+      warnings,
+      batch: updatedBatch,
+    };
   });
 
   await logAuditEvent({
@@ -549,15 +652,26 @@ export async function calculateCost(input: CalculateCostInput) {
   // Get current WAC for each input from the target branch
   const inputCosts = await Promise.all(
     recipe.inputs.map(async (ri) => {
-      const balance = await prisma.inventoryBalance.findUnique({
-        where: {
-          branchId_productId: { branchId: input.branchId, productId: ri.inputProductId },
-        },
-        select: { weightedAverageCost: true, quantityOnHand: true },
+      const shared = await getSharedInventoryBalance(prisma, {
+        branchId: input.branchId,
+        productId: ri.inputProductId,
       });
-
-      const wac = balance ? Number(balance.weightedAverageCost) : 0;
-      const stock = balance ? Number(balance.quantityOnHand) : 0;
+      const wac = shared.balance
+        ? Number(shared.conversion
+            ? convertBaseUnitCostToSaleUnitCost({
+                baseUnitCost: shared.balance.weightedAverageCost,
+                conversionFactor: shared.conversion.conversionFactor,
+              })
+            : shared.balance.weightedAverageCost)
+        : 0;
+      const stock = shared.balance
+        ? Number(shared.conversion
+            ? convertBaseQtyToSaleQty({
+                baseQuantity: shared.balance.quantityOnHand,
+                conversionFactor: shared.conversion.conversionFactor,
+              })
+            : shared.balance.quantityOnHand)
+        : 0;
       const neededQty = Math.round(ri.quantity * multiplier * 100) / 100;
 
       return {
@@ -569,6 +683,14 @@ export async function calculateCost(input: CalculateCostInput) {
         unit: ri.unit,
         currentWac: wac,
         currentStock: stock,
+        stockConversion: shared.conversion
+          ? {
+              stockGroupId: shared.conversion.stockGroupId,
+              baseUnit: shared.conversion.baseUnit,
+              saleUnit: shared.conversion.saleUnit,
+              conversionFactor: shared.conversion.conversionFactor.toString(),
+            }
+          : null,
         estimatedCost: Math.round(neededQty * wac * 100) / 100,
         hasEnoughStock: stock >= neededQty,
       };
