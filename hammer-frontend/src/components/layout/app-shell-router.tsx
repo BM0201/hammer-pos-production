@@ -108,21 +108,22 @@ export function AppShellRouter({
     }
   }, [router]);
 
+  // POS / Caja shell: the global AppSidebar is intentionally NOT rendered here.
+  // The PosShellWrapper provides its own dedicated POS sidebar + topbar with
+  // full branch navigation (incl. Caja), giving the cashier a focused layout.
+  // This prevents the "double sidebar" overlap bug on /app/branch/sales/orders.
   if (isPosShell) {
+    const posBranchId = session.primaryBranchId ?? session.branchIds?.[0];
     return (
-      <div className="flex min-h-screen bg-[var(--color-page-bg)]">
-        <AppSidebar
-          roleCode={session.roleCode}
-          globalRoles={session.globalRoles}
-          branchMemberships={session.branchMemberships}
-          username={session.username}
-        />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <PosShellWrapper username={session.username} roleCode={session.roleCode} mode={posMode} integrated exitHref="/app/branch">
-            {children}
-          </PosShellWrapper>
-        </div>
-      </div>
+      <PosShellWrapper
+        username={session.username}
+        roleCode={session.roleCode}
+        branchId={posBranchId}
+        mode={posMode}
+        exitHref="/app/branch"
+      >
+        {children}
+      </PosShellWrapper>
     );
   }
 

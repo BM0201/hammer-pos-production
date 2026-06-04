@@ -19,6 +19,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
+import { money } from "@/lib/format";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { useSession } from "@/lib/client/session";
 import type { SessionPayload } from "@/types/auth";
@@ -230,7 +231,7 @@ export default function BranchPage() {
           <>
             <KpiCard label="Borradores abiertos" value={summary.draftsOpen} tone={summary.draftsOpen > 0 ? "alert" : "ok"} roleAccent="SALES" />
             <KpiCard label="Enviadas a cobro" value={summary.sentToPayment} tone={summary.sentToPayment > 0 ? "alert" : "default"} roleAccent="SALES" />
-            <KpiCard label="Ventas del día" value={`$${summary.salesToday.toFixed(2)}`} tone="ok" roleAccent="SALES" />
+            <KpiCard label="Ventas del día" value={money(summary.salesToday)} tone="ok" roleAccent="SALES" />
           </>
         )}
         quickLinks={[
@@ -265,7 +266,7 @@ export default function BranchPage() {
             <KpiCard label="Órdenes por cobrar" value={summary.pendingPayments} tone={summary.pendingPayments > 0 ? "alert" : "ok"} roleAccent="CASHIER" />
             <KpiCard
               label="Último cobro"
-              value={summary.lastPayment ? `$${summary.lastPayment.amount.toFixed(2)}` : "—"}
+              value={summary.lastPayment ? money(summary.lastPayment.amount) : "—"}
               helper={summary.lastPayment ? `${summary.lastPayment.orderNumber}` : "Sin cobros recientes"}
               roleAccent="CASHIER"
             />
@@ -341,7 +342,7 @@ export default function BranchPage() {
         alerts={summary.alerts}
         kpis={(
           <>
-            <KpiCard label="Ventas del día" value={`$${summary.salesToday.toFixed(2)}`} tone="ok" roleAccent="BRANCH_ADMIN" />
+            <KpiCard label="Ventas del día" value={money(summary.salesToday)} tone="ok" roleAccent="BRANCH_ADMIN" />
             <KpiCard label="Cobros pendientes" value={summary.pendingPayments} tone={summary.pendingPayments > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
             <KpiCard label="Despachos pendientes" value={summary.pendingDispatches} tone={summary.pendingDispatches > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
             <KpiCard label="Aprobaciones pendientes" value={summary.pendingApprovals} tone={summary.pendingApprovals > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
