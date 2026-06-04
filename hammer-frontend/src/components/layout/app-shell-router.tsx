@@ -9,7 +9,6 @@ import { AppSidebar } from "@/components/navigation/app-sidebar";
 import { RoleBadge } from "@/components/ui/role-badge";
 import { Breadcrumbs } from "@/components/layout/breadcrumbs";
 import { AppFooter } from "@/components/layout/app-footer";
-import { PosShellWrapper } from "@/components/pos/PosShellWrapper";
 import { BranchSelector } from "@/components/branch-selector";
 import { Building2, ChevronLeft, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,17 +18,6 @@ type ShellSession = Pick<
   SessionPayload,
   "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId"
 >;
-
-const POS_SEGMENT_MATCHERS: ReadonlyArray<(segments: string[]) => boolean> = [
-  (segments) =>
-    segments[0] === "branch" &&
-    segments[1] === "sales" &&
-    segments[2] === "orders",
-  (segments) =>
-    segments[0] === "branch" &&
-    segments[1] === "cashier" &&
-    segments[2] === "payments",
-];
 
 const MODULE_META: Record<string, { title: string; subtitle: string }> = {
   master: {
@@ -68,16 +56,17 @@ const SECTION_META: Record<string, { title: string; subtitle: string }> = {
   "role-config": { title: "Roles y permisos", subtitle: "Matriz de acceso por perfil y modulo." },
 };
 
-function usesPosShell(segments: string[]): boolean {
-  return POS_SEGMENT_MATCHERS.some((matcher) => matcher(segments));
-}
-
-function resolvePosMode(segments: string[]): "sales" | "cashier" {
-  return segments[1] === "cashier" ? "cashier" : "sales";
-}
-
 function resolveHeaderMeta(segments: string[]) {
   const root = segments[0] ?? "master";
+
+  // ── Branch POS routes get focused, operation-specific headers ──
+  if (root === "branch" && segments[1] === "sales") {
+    return { title: "Punto de Venta", subtitle: "Captura de tickets y envio fluido a caja." };
+  }
+  if (root === "branch" && segments[1] === "cashier") {
+    return { title: "Caja & Cobros", subtitle: "Cobro operativo y control de caja en tiempo real." };
+  }
+
   const section = [...segments].reverse().find((segment) => SECTION_META[segment]);
   return section ? SECTION_META[section] : MODULE_META[root] ?? MODULE_META.master;
 }
@@ -91,8 +80,6 @@ export function AppShellRouter({
 }) {
   const router = useRouter();
   const segments = useSelectedLayoutSegments();
-  const isPosShell = useMemo(() => usesPosShell(segments), [segments]);
-  const posMode = useMemo(() => resolvePosMode(segments), [segments]);
   const headerMeta = useMemo(() => resolveHeaderMeta(segments), [segments]);
   const canReturnToModules = segments[0] !== "branch" && segments.length > 1;
   const [loggingOut, setLoggingOut] = useState(false);
@@ -108,25 +95,10 @@ export function AppShellRouter({
     }
   }, [router]);
 
-  // POS / Caja shell: the global AppSidebar is intentionally NOT rendered here.
-  // The PosShellWrapper provides its own dedicated POS sidebar + topbar with
-  // full branch navigation (incl. Caja), giving the cashier a focused layout.
-  // This prevents the "double sidebar" overlap bug on /app/branch/sales/orders.
-  if (isPosShell) {
-    const posBranchId = session.primaryBranchId ?? session.branchIds?.[0];
-    return (
-      <PosShellWrapper
-        username={session.username}
-        roleCode={session.roleCode}
-        branchId={posBranchId}
-        mode={posMode}
-        exitHref="/app/branch"
-      >
-        {children}
-      </PosShellWrapper>
-    );
-  }
-
+  // Single unified shell for ALL routes (master, owner, system-admin AND branch
+  // POS/Caja). POS routes previously rendered a separate light-themed sidebar
+  // (PosShellWrapper) which caused visual inconsistency; they now share the same
+  // dark, role-themed AppSidebar + header + breadcrumbs as the rest of the app.
   return (
     <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <AppSidebar
