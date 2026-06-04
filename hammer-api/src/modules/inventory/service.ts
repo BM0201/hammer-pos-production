@@ -80,6 +80,8 @@ type OpeningBalanceInput = {
   unit?: string;
   unitCost?: number | null;
   costMode: "SET_WAC" | "SET_BRANCH_COST" | "QUANTITY_ONLY";
+  salePrice?: number | null;
+  priceMode: "SET_BRANCH_PRICE" | "SET_GLOBAL_PRICE" | "NO_PRICE_CHANGE";
   reason: string;
   notes?: string | null;
 };
@@ -368,16 +370,32 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
     const selectedUnit = (input.unit ?? conversion?.saleUnit ?? "").toUpperCase();
     const isBaseUnit = !!conversion && selectedUnit === conversion.baseUnit.toUpperCase();
     const currentBaseQty = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
+    const previousBaseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
     const requestedQty = new Prisma.Decimal(input.quantity);
     const movementProductId = isBaseUnit && conversion ? conversion.canonicalProductId : input.productId;
-    const movementQty = isBaseUnit && conversion
-      ? requestedQty
-      : requestedQty;
+    const movementQty = requestedQty;
     const baseQuantity = conversion && !isBaseUnit
       ? convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor })
       : requestedQty;
 
-    let unitCost = new Prisma.Decimal(shared.balance?.weightedAverageCost ?? 0);
+    const [product, existingSetting] = await Promise.all([
+      tx.product.findUniqueOrThrow({
+        where: { id: input.productId },
+        select: { id: true, standardSalePrice: true },
+      }),
+      tx.branchProductSetting.findUnique({
+        where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+        select: { branchCost: true, branchPrice: true },
+      }),
+    ]);
+
+    const previousSaleUnitWac = conversion
+      ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: previousBaseWac, conversionFactor: conversion.conversionFactor })
+      : previousBaseWac;
+    const previousEffectiveCost = existingSetting?.branchCost ?? (previousSaleUnitWac.gt(0) ? previousSaleUnitWac : null);
+    const previousEffectivePrice = existingSetting?.branchPrice ?? product.standardSalePrice;
+
+    let unitCost = previousSaleUnitWac;
     if (input.costMode === "SET_WAC" || input.costMode === "SET_BRANCH_COST") {
       unitCost = new Prisma.Decimal(input.unitCost ?? 0);
     }
@@ -458,6 +476,41 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
       });
     }
 
+    const salePrice = input.salePrice === null || input.salePrice === undefined
+      ? null
+      : new Prisma.Decimal(input.salePrice);
+    if (input.priceMode === "SET_BRANCH_PRICE" && salePrice) {
+      await tx.branchProductSetting.upsert({
+        where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+        create: {
+          branchId: input.branchId,
+          productId: input.productId,
+          branchPrice: salePrice,
+        },
+        update: { branchPrice: salePrice },
+      });
+    }
+    if (input.priceMode === "SET_GLOBAL_PRICE" && salePrice) {
+      await tx.product.update({
+        where: { id: input.productId },
+        data: { standardSalePrice: salePrice },
+      });
+    }
+
+    const refreshedSetting = await tx.branchProductSetting.findUnique({
+      where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+      select: { branchCost: true, branchPrice: true },
+    });
+    const refreshedProduct = input.priceMode === "SET_GLOBAL_PRICE" && salePrice
+      ? { standardSalePrice: salePrice }
+      : product;
+    const newBaseWac = movementResult.balance.weightedAverageCost;
+    const newSaleUnitWac = conversion
+      ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: newBaseWac, conversionFactor: conversion.conversionFactor })
+      : newBaseWac;
+    const newEffectiveCost = refreshedSetting?.branchCost ?? (newSaleUnitWac.gt(0) ? newSaleUnitWac : null);
+    const newEffectivePrice = refreshedSetting?.branchPrice ?? refreshedProduct.standardSalePrice;
+
     const newBaseQty = movementResult.balance.quantityOnHand;
     const newSaleQty = conversion
       ? convertBaseQtyToSaleQty({ baseQuantity: newBaseQty, conversionFactor: conversion.conversionFactor })
@@ -472,15 +525,23 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
       entityId: input.productId,
       metadataJson: {
         productId: input.productId,
+        branchId: input.branchId,
         inventoryProductId: shared.inventoryProductId,
         movementId: movementResult.movement.id,
+        oldStock: currentBaseQty.toString(),
+        newStock: newBaseQty.toString(),
+        quantityBase: baseQuantity.toString(),
         quantity: input.quantity,
         unit: input.unit ?? null,
-        baseQuantity: baseQuantity.toString(),
+        oldCost: previousEffectiveCost?.toString() ?? null,
+        newCost: newEffectiveCost?.toString() ?? null,
+        oldWac: previousBaseWac.toString(),
+        newWac: newBaseWac.toString(),
         costMode: input.costMode,
-        unitCost: input.unitCost ?? null,
-        previousBaseStock: currentBaseQty.toString(),
-        newBaseStock: newBaseQty.toString(),
+        oldPrice: previousEffectivePrice.toString(),
+        newPrice: newEffectivePrice.toString(),
+        priceMode: input.priceMode,
+        salePrice: input.salePrice ?? null,
         reason: input.reason,
         notes: input.notes ?? null,
         stockConversion: conversion ? {
@@ -501,9 +562,15 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
       movementType: "ADJUSTMENT_IN",
       referenceType: "OPENING_BALANCE",
       costMode: input.costMode,
+      priceMode: input.priceMode,
       previousBaseStock: Number(currentBaseQty),
       newBaseStock: Number(newBaseQty),
+      quantityBase: Number(baseQuantity),
       newStock: Number(newSaleQty),
+      oldCost: previousEffectiveCost === null ? null : Number(previousEffectiveCost),
+      newCost: newEffectiveCost === null ? null : Number(newEffectiveCost),
+      oldPrice: Number(previousEffectivePrice),
+      newPrice: Number(newEffectivePrice),
       weightedAverageCost: movementResult.balance.weightedAverageCost.toString(),
       sharedStock: conversion ? formatDualStock({
         baseQuantity: newBaseQty,
@@ -514,7 +581,6 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
     };
   });
 }
-
 export async function requestStockAdjustment(input: {
   actorUserId: string;
   branchId: string;
@@ -562,3 +628,5 @@ export async function requestStockAdjustment(input: {
     created: result.created,
   } as const;
 }
+
+

@@ -67,6 +67,8 @@ export const openingBalanceSchema = z.object({
   unit: z.string().min(1).max(32).optional(),
   unitCost: z.coerce.number().nonnegative("El costo inicial no puede ser negativo.").optional().nullable(),
   costMode: z.enum(["SET_WAC", "SET_BRANCH_COST", "QUANTITY_ONLY"]).default("SET_WAC"),
+  salePrice: z.coerce.number().nonnegative("El precio inicial no puede ser negativo.").optional().nullable(),
+  priceMode: z.enum(["SET_BRANCH_PRICE", "SET_GLOBAL_PRICE", "NO_PRICE_CHANGE"]).default("SET_BRANCH_PRICE"),
   reason: z.string().min(5, "El motivo es obligatorio.").max(300),
   notes: z.string().max(500).optional().nullable(),
 }).superRefine((data, ctx) => {
@@ -77,4 +79,13 @@ export const openingBalanceSchema = z.object({
       message: "Este modo de costo requiere un costo inicial mayor que cero.",
     });
   }
+  if ((data.priceMode === "SET_BRANCH_PRICE" || data.priceMode === "SET_GLOBAL_PRICE") && (!data.salePrice || data.salePrice <= 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["salePrice"],
+      message: "Este modo de precio requiere un precio de venta mayor que cero.",
+    });
+  }
 });
+
+
