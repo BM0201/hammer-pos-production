@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { isMasterRole, isMasterOrAbove, isOwnerRole, isSystemAdminRole, resolveRoleHome } from "@/modules/rbac/role-routing";
 import { getRoleColor } from "@/lib/role-colors";
+import { getEffectiveCapabilitySet, hasEffectiveCapability } from "@/lib/navigation/visible-modules";
 import type { SessionPayload } from "@/types/auth";
 import {
   LayoutDashboard,
@@ -39,13 +40,14 @@ import {
   Brain,
   Printer,
   Factory,
+  Activity,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 /* ────────────────────────────────────────────────────────────── */
 
 type NavSection = { title: string; items: NavItem[] };
-type NavItem = { href: string; label: string; icon: LucideIcon };
+type NavItem = { href: string; label: string; icon: LucideIcon; capabilities?: readonly string[] };
 type SidebarRoleStyle = CSSProperties & {
   "--sidebar-role-active-bg": string;
   "--sidebar-role-active-text": string;
@@ -53,63 +55,75 @@ type SidebarRoleStyle = CSSProperties & {
 };
 
 function buildNavSections(
-  session: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships">,
+  session: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships" | "effectiveCapabilities">,
 ): NavSection[] {
   const { roleCode, globalRoles } = session;
+  const effectiveCapabilities = getEffectiveCapabilitySet(session);
+  const hasEffectiveSnapshot = effectiveCapabilities.size > 0;
+  const canSee = (item: NavItem) => {
+    if (!hasEffectiveSnapshot || !item.capabilities?.length) return true;
+    return hasEffectiveCapability(session, item.capabilities);
+  };
+  const hasAny = (...capabilities: string[]) => !hasEffectiveSnapshot || capabilities.some((capability) => effectiveCapabilities.has(capability));
+  const visibleSections = (sections: NavSection[]) =>
+    sections
+      .map((entry) => ({ ...entry, items: entry.items.filter(canSee) }))
+      .filter((entry) => entry.items.length > 0);
 
   /* ── OWNER gets a strategic owner nav ── */
   if (isOwnerRole(roleCode as string, globalRoles as unknown as string[])) {
-    return [
+    return visibleSections([
       {
         title: "GENERAL",
         items: [
-          { href: "/app/owner", label: "Panel Propietario", icon: LayoutDashboard },
-          { href: "/app/owner/module-config", label: "Config. Modulos", icon: Settings },
+          { href: "/app/owner", label: "Panel Propietario", icon: LayoutDashboard, capabilities: [CAPABILITIES.MASTER_DASHBOARD_VIEW, CAPABILITIES.MASTER_ACCESS] },
+          { href: "/app/owner/module-config", label: "Config. Modulos", icon: Settings, capabilities: [CAPABILITIES.SYSTEM_ADMIN_SETTINGS, CAPABILITIES.MASTER_ACCESS] },
         ],
       },
       {
         title: "ADMINISTRACION",
         items: [
-          { href: "/app/master/catalog-inventory", label: "Catalogo e Inventario", icon: Boxes },
-          { href: "/app/master/discounts", label: "Descuentos", icon: Tag },
-          { href: "/app/master/expenses", label: "Gastos & Precios", icon: Receipt },
+          { href: "/app/master/catalog-inventory", label: "Catalogo e Inventario", icon: Boxes, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE, CAPABILITIES.INVENTORY_VIEW] },
+          { href: "/app/master/discounts", label: "Descuentos", icon: Tag, capabilities: [CAPABILITIES.PRICING_VIEW, CAPABILITIES.PRICING_EDIT_GLOBAL] },
+          { href: "/app/master/expenses", label: "Gastos & Precios", icon: Receipt, capabilities: [CAPABILITIES.PRICING_VIEW] },
         ],
       },
       {
         title: "OPERACION",
         items: [
-          { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus },
-          { href: "/app/master/transfers", label: "Envios Sucursales", icon: ArrowLeftRight },
-          { href: "/app/master/sales/orders", label: "Ordenes", icon: ShoppingCart },
-          { href: "/app/master/operations", label: "Dia Operativo 360", icon: ClipboardList },
+          { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus, capabilities: [CAPABILITIES.PURCHASES_VIEW] },
+          { href: "/app/master/transfers", label: "Envios Sucursales", icon: ArrowLeftRight, capabilities: [CAPABILITIES.TRANSFERS_VIEW] },
+          { href: "/app/master/sales/orders", label: "Ordenes", icon: ShoppingCart, capabilities: [CAPABILITIES.MASTER_SALES_VIEW] },
+          { href: "/app/master/operations", label: "Dia Operativo 360", icon: ClipboardList, capabilities: [CAPABILITIES.MASTER_DASHBOARD_VIEW, CAPABILITIES.OPERATIONS_VIEW] },
           { href: "/app/master/timber", label: "Madera", icon: TreePine },
         ],
       },
       {
         title: "CONTROL",
         items: [
-          { href: "/app/master/users", label: "Personal & Roles", icon: Users },
-          { href: "/app/master/branches", label: "Sucursales", icon: Building2 },
-          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck },
-          { href: "/app/master/cash-boxes", label: "Cajas Fisicas", icon: Settings },
-          { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard },
-          { href: "/app/master/audit", label: "Auditoria", icon: ClipboardList },
-          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3 },
+          { href: "/app/master/users", label: "Personal & Roles", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
+          { href: "/app/master/users/activity", label: "Usuarios conectados", icon: Activity, capabilities: [CAPABILITIES.MASTER_SESSIONS_VIEW, CAPABILITIES.MASTER_CASH_MONITOR_VIEW] },
+          { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
+          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
+          { href: "/app/master/cash-boxes", label: "Cajas Fisicas", icon: Settings, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_SESSION_MANAGE] },
+          { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
+          { href: "/app/master/audit", label: "Auditoria", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
+          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
         ],
       },
       {
         title: "REPORTES",
         items: [
-          { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain },
-          { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart },
+          { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain, capabilities: [CAPABILITIES.BRAIN_VIEW] },
+          { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart, capabilities: [CAPABILITIES.MASTER_INVENTORY_VIEW] },
         ],
       },
-    ];
+    ]);
   }
 
   /* ── SYSTEM_ADMIN gets a super admin nav ── */
   if (isSystemAdminRole(roleCode as string, globalRoles as unknown as string[])) {
-    return [
+    return visibleSections([
       {
         title: "GENERAL",
         items: [
@@ -145,13 +159,14 @@ function buildNavSections(
       {
         title: "CONTROL",
         items: [
-          { href: "/app/master/users", label: "Personal & Roles", icon: Users },
-          { href: "/app/master/branches", label: "Sucursales", icon: Building2 },
-          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck },
-          { href: "/app/master/cash-boxes", label: "Cajas Físicas", icon: Settings },
-          { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard },
-          { href: "/app/master/audit", label: "Auditoría", icon: ClipboardList },
-          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3 },
+          { href: "/app/master/users", label: "Personal & Roles", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
+          { href: "/app/master/users/activity", label: "Usuarios conectados", icon: Activity, capabilities: [CAPABILITIES.MASTER_SESSIONS_VIEW, CAPABILITIES.MASTER_CASH_MONITOR_VIEW] },
+          { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
+          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
+          { href: "/app/master/cash-boxes", label: "Cajas Físicas", icon: Settings, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_SESSION_MANAGE] },
+          { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
+          { href: "/app/master/audit", label: "Auditoría", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
+          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
         ],
       },
       {
@@ -161,12 +176,12 @@ function buildNavSections(
           { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart },
         ],
       },
-    ];
+    ]);
   }
 
   /* ── MASTER gets a corporate/strategic nav ── */
   if (isMasterRole(roleCode as string, globalRoles as unknown as string[])) {
-    return [
+    return visibleSections([
       {
         title: "GENERAL",
         items: [
@@ -195,12 +210,13 @@ function buildNavSections(
       {
         title: "CONTROL",
         items: [
-          { href: "/app/master/users", label: "Personal & Roles", icon: Users },
-          { href: "/app/master/branches", label: "Sucursales", icon: Building2 },
-          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck },
-          { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard },
-          { href: "/app/master/audit", label: "Auditoría", icon: ClipboardList },
-          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3 },
+          { href: "/app/master/users", label: "Personal & Roles", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
+          { href: "/app/master/users/activity", label: "Usuarios conectados", icon: Activity, capabilities: [CAPABILITIES.MASTER_SESSIONS_VIEW, CAPABILITIES.MASTER_CASH_MONITOR_VIEW] },
+          { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
+          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
+          { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
+          { href: "/app/master/audit", label: "Auditoría", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
+          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
           { href: "/app/master/settings/print", label: "Impresión", icon: Printer },
         ],
       },
@@ -211,7 +227,7 @@ function buildNavSections(
           { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart },
         ],
       },
-    ];
+    ]);
   }
 
   /* ── Branch roles get an operational nav ── */
@@ -220,35 +236,35 @@ function buildNavSections(
   const operationItems: NavItem[] = [];
   const governanceItems: NavItem[] = [];
 
-  if (canInAnyAssignedBranch(session, CAPABILITIES.BRANCH_DASHBOARD_VIEW)) {
+  if (hasAny(CAPABILITIES.BRANCH_DASHBOARD_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.BRANCH_DASHBOARD_VIEW)) {
     overviewItems.push({ href: "/app/branch", label: "Mi Sucursal", icon: Store });
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.BRANCH_CATALOG_VIEW)) {
+  if (hasAny(CAPABILITIES.BRANCH_CATALOG_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.BRANCH_CATALOG_VIEW)) {
     overviewItems.push({ href: "/app/branch/catalog/products", label: "Productos", icon: Package });
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.BRANCH_INVENTORY_VIEW)) {
+  if (hasAny(CAPABILITIES.BRANCH_INVENTORY_VIEW, CAPABILITIES.INVENTORY_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.BRANCH_INVENTORY_VIEW)) {
     overviewItems.push({ href: "/app/branch/inventory", label: "Inventario", icon: Boxes });
   }
 
-  if (canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW)) {
+  if (hasAny(CAPABILITIES.SALES_VIEW, CAPABILITIES.POS_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW)) {
     operationItems.push({ href: "/app/branch/sales/orders", label: "Punto de Venta", icon: ShoppingCart });
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.OPERATIONS_VIEW)) {
+  if (hasAny(CAPABILITIES.OPERATIONS_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.OPERATIONS_VIEW)) {
     operationItems.push({ href: "/app/branch/operations", label: "Operacion de hoy", icon: ClipboardList });
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)) {
+  if (hasAny(CAPABILITIES.CASH_PAYMENTS_VIEW, CAPABILITIES.CASH_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)) {
     operationItems.push({ href: "/app/branch/cashier/payments", label: "Caja", icon: CreditCard });
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW)) {
+  if (hasAny(CAPABILITIES.DISPATCH_VIEW, CAPABILITIES.WAREHOUSE_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW)) {
     operationItems.push({ href: "/app/branch/warehouse/dispatch", label: "Despacho", icon: Truck });
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.APPROVAL_REQUEST_REVIEW)) {
+  if (hasAny(CAPABILITIES.APPROVAL_REQUEST_REVIEW) && canInAnyAssignedBranch(session, CAPABILITIES.APPROVAL_REQUEST_REVIEW)) {
     governanceItems.push({ href: "/app/branch/approvals", label: "Aprobaciones", icon: ShieldCheck });
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.AUDIT_VIEW)) {
+  if (hasAny(CAPABILITIES.AUDIT_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.AUDIT_VIEW)) {
     governanceItems.push({ href: "/app/branch/audit", label: "Bitácora", icon: ClipboardList });
   }
-  if (canInAnyAssignedBranch(session, CAPABILITIES.REPORTS_EXPORT)) {
+  if (hasAny(CAPABILITIES.REPORTS_EXPORT) && canInAnyAssignedBranch(session, CAPABILITIES.REPORTS_EXPORT)) {
     governanceItems.push({ href: "/app/branch/reports", label: "Reportes", icon: BarChart3 });
   }
 
@@ -265,10 +281,11 @@ export function AppSidebar({
   roleCode,
   globalRoles,
   branchMemberships,
+  effectiveCapabilities,
   username,
-}: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships"> & { username: string }) {
+}: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships" | "effectiveCapabilities"> & { username: string }) {
   const pathname = usePathname();
-  const sections = buildNavSections({ roleCode, globalRoles, branchMemberships });
+  const sections = buildNavSections({ roleCode, globalRoles, branchMemberships, effectiveCapabilities });
   const isMaster = isMasterOrAbove(roleCode as string, globalRoles as unknown as string[]);
   const roleCfg = getRoleColor(roleCode);
   const homeHref = resolveRoleHome(roleCode as string, globalRoles as unknown as string[]);

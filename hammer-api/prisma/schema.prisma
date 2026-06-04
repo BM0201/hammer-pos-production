@@ -237,6 +237,7 @@ model Branch {
   printSettings               PrintSettings?
   brainDecisions              BrainDecision[]
   operationalDays             OperationalDay[]
+  userPresences               UserPresence[]
 }
 
 model User {
@@ -287,8 +288,35 @@ model User {
   brainDecisionActionLogs    BrainDecisionActionLog[] @relation("BrainDecisionActionActor")
   legacyBrainDecisions       BrainDecision[]          @relation("BrainDecisionLegacyUser")
   targetedBrainDecisions     BrainDecision[]          @relation("BrainDecisionTargetUser")
+  presences                  UserPresence[]
 
   @@index([globalRole, isActive])
+}
+
+model UserPresence {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  sessionId      String?
+  branchId       String?
+  username       String?
+  roleCode       String?
+  status         String    @default("ONLINE")
+  currentPath    String?
+  currentModule  String?
+  lastSeenAt     DateTime  @default(now())
+  connectedAt    DateTime  @default(now())
+  disconnectedAt DateTime?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id])
+  branch Branch? @relation(fields: [branchId], references: [id])
+
+  @@index([branchId])
+  @@index([status])
+  @@index([lastSeenAt])
 }
 
 model UserBranchRole {

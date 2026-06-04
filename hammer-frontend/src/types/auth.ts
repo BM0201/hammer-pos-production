@@ -14,6 +14,37 @@ export type BranchMembership = {
   roleCode: RoleCode;
 };
 
+export type ModuleFlags = {
+  master?: boolean;
+  pos?: boolean;
+  cash?: boolean;
+  warehouse?: boolean;
+  dispatch?: boolean;
+  inventory?: boolean;
+  pricing?: boolean;
+  purchases?: boolean;
+  transfers?: boolean;
+  production?: boolean;
+  brain?: boolean;
+  users?: boolean;
+  sessionMonitor?: boolean;
+};
+
+export type SessionBranch = {
+  id: string;
+  name: string;
+  code?: string | null;
+  roles: RoleCode[];
+  capabilities: string[];
+  modules: ModuleFlags;
+  activeCashSession?: {
+    id: string;
+    openedAt: string;
+    openingAmount: number;
+    status: string;
+  } | null;
+};
+
 export type SessionPayload = {
   userId: string;
   username: string;
@@ -24,5 +55,9 @@ export type SessionPayload = {
   branchIds: string[];
   sessionVersion: number;
   mustChangePassword?: boolean;
+  effectiveCapabilities?: string[];
+  modules?: ModuleFlags;
+  activeBranchId?: string | null;
+  branches?: SessionBranch[];
   exp: number;
 };

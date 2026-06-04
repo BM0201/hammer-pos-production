@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import { useSelectedLayoutSegments, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useSelectedLayoutSegments, useRouter } from "next/navigation";
 import type { Route } from "next";
 import type { ReactNode } from "react";
 import type { SessionPayload } from "@/types/auth";
@@ -16,7 +16,7 @@ import { apiFetch } from "@/lib/client/api";
 
 type ShellSession = Pick<
   SessionPayload,
-  "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId"
+  "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId" | "effectiveCapabilities"
 >;
 
 const MODULE_META: Record<string, { title: string; subtitle: string }> = {
@@ -79,6 +79,7 @@ export function AppShellRouter({
   children: ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const segments = useSelectedLayoutSegments();
   const headerMeta = useMemo(() => resolveHeaderMeta(segments), [segments]);
   const canReturnToModules = segments[0] !== "branch" && segments.length > 1;
@@ -95,6 +96,38 @@ export function AppShellRouter({
     }
   }, [router]);
 
+  useEffect(() => {
+    let stopped = false;
+
+    const sendHeartbeat = async () => {
+      try {
+        const response = await apiFetch("/api/auth/heartbeat", {
+          method: "POST",
+          body: JSON.stringify({
+            branchId: session.primaryBranchId,
+            currentPath: pathname,
+            currentModule: segments[0] ?? "app",
+          }),
+        });
+        if (!stopped && response.status === 401) {
+          router.replace("/login");
+        }
+      } catch {
+        // Presence is best-effort; authorization still happens on every API call.
+      }
+    };
+
+    sendHeartbeat();
+    const interval = window.setInterval(sendHeartbeat, 60_000);
+    window.addEventListener("focus", sendHeartbeat);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", sendHeartbeat);
+    };
+  }, [pathname, router, segments, session.primaryBranchId]);
+
   // Single unified shell for ALL routes (master, owner, system-admin AND branch
   // POS/Caja). POS routes previously rendered a separate light-themed sidebar
   // (PosShellWrapper) which caused visual inconsistency; they now share the same
@@ -105,6 +138,7 @@ export function AppShellRouter({
         roleCode={session.roleCode}
         globalRoles={session.globalRoles}
         branchMemberships={session.branchMemberships}
+        effectiveCapabilities={session.effectiveCapabilities}
         username={session.username}
       />
 
