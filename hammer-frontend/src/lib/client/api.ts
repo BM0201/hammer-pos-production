@@ -156,5 +156,14 @@ export async function apiFetch(
     clearCsrfTokenCache();
   }
 
+  if (typeof window !== "undefined" && res.status === 401 && pathname !== "/api/auth/session" && pathname !== "/api/auth/login") {
+    clearCsrfTokenCache();
+    window.location.assign("/login");
+  }
+
+  if (typeof window !== "undefined" && res.status === 403) {
+    window.dispatchEvent(new CustomEvent("hammer:access-changed", { detail: { pathname } }));
+  }
+
   return res;
 }

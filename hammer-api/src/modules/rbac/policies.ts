@@ -2,6 +2,10 @@ import type { RoleCode } from "@prisma/client";
 import type { SessionPayload } from "@/types/auth";
 
 export const CAPABILITIES = {
+  MASTER_DASHBOARD_VIEW: "master.dashboard.view",
+  MASTER_USERS_VIEW: "master.users.view",
+  MASTER_SESSIONS_VIEW: "master.sessions.view",
+  MASTER_CASH_MONITOR_VIEW: "master.cash_monitor.view",
   SYSTEM_ADMIN_ACCESS: "system.admin.access",
   SYSTEM_ADMIN_ROLE_CONFIG: "system.admin.role.config",
   SYSTEM_ADMIN_SETTINGS: "system.admin.settings",
@@ -11,6 +15,35 @@ export const CAPABILITIES = {
   MASTER_INVENTORY_VIEW: "master.inventory.view",
   MASTER_SALES_VIEW: "master.sales.view",
   BRANCH_DASHBOARD_VIEW: "branch.dashboard.view",
+  POS_VIEW: "pos.view",
+  POS_SELL: "pos.sell",
+  POS_PRINT: "pos.print",
+  CASH_VIEW: "cash.view",
+  CASH_OPEN: "cash.open",
+  CASH_CHARGE: "cash.charge",
+  CASH_CLOSE: "cash.close",
+  CASH_SESSION_MANAGE: "cash.session.manage",
+  WAREHOUSE_VIEW: "warehouse.view",
+  INVENTORY_VIEW: "inventory.view",
+  INVENTORY_ADJUST: "inventory.adjust",
+  INVENTORY_OPENING_BALANCE: "inventory.opening_balance",
+  INVENTORY_IMPORT: "inventory.import",
+  PRICING_VIEW: "pricing.view",
+  PRICING_EDIT_BRANCH: "pricing.edit_branch",
+  PRICING_EDIT_GLOBAL: "pricing.edit_global",
+  PURCHASES_VIEW: "purchases.view",
+  PURCHASES_CREATE: "purchases.create",
+  PURCHASES_APPROVE: "purchases.approve",
+  PURCHASES_RECEIVE: "purchases.receive",
+  TRANSFERS_VIEW: "transfers.view",
+  TRANSFERS_CREATE: "transfers.create",
+  TRANSFERS_APPROVE: "transfers.approve",
+  TRANSFERS_DISPATCH: "transfers.dispatch",
+  TRANSFERS_RECEIVE: "transfers.receive",
+  PRODUCTION_VIEW: "production.view",
+  PRODUCTION_RECIPES_MANAGE: "production.recipes.manage",
+  BRAIN_VIEW: "brain.view",
+  BRAIN_ACTIONS_MANAGE: "brain.actions.manage",
   BRANCH_CATALOG_VIEW: "branch.catalog.view",
   BRANCH_INVENTORY_VIEW: "branch.inventory.view",
   INVENTORY_MOVEMENT_POST: "inventory.movement.post",
@@ -65,6 +98,18 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
   OWNER: ALL_CAPABILITIES.filter(c => c !== CAPABILITIES.SYSTEM_ADMIN_ACCESS && c !== CAPABILITIES.SYSTEM_ADMIN_ROLE_CONFIG && c !== CAPABILITIES.SYSTEM_ADMIN_SETTINGS && !c.startsWith("production.")),
   MASTER: ALL_CAPABILITIES.filter(c => c !== CAPABILITIES.SYSTEM_ADMIN_ACCESS && c !== CAPABILITIES.SYSTEM_ADMIN_ROLE_CONFIG && c !== CAPABILITIES.SYSTEM_ADMIN_SETTINGS),
   BRANCH_ADMIN: [
+    CAPABILITIES.POS_VIEW,
+    CAPABILITIES.POS_SELL,
+    CAPABILITIES.POS_PRINT,
+    CAPABILITIES.CASH_VIEW,
+    CAPABILITIES.CASH_OPEN,
+    CAPABILITIES.CASH_CHARGE,
+    CAPABILITIES.CASH_CLOSE,
+    CAPABILITIES.CASH_SESSION_MANAGE,
+    CAPABILITIES.WAREHOUSE_VIEW,
+    CAPABILITIES.DISPATCH_MARK,
+    CAPABILITIES.INVENTORY_VIEW,
+    CAPABILITIES.INVENTORY_ADJUST,
     // ── View capabilities ──
     CAPABILITIES.BRANCH_DASHBOARD_VIEW,
     CAPABILITIES.BRANCH_CATALOG_VIEW,
@@ -96,6 +141,9 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.SALES_HISTORY_VIEW,
   ],
   SALES: [
+    CAPABILITIES.POS_VIEW,
+    CAPABILITIES.POS_SELL,
+    CAPABILITIES.POS_PRINT,
     CAPABILITIES.BRANCH_DASHBOARD_VIEW,
     CAPABILITIES.BRANCH_CATALOG_VIEW,
     CAPABILITIES.SALES_VIEW,
@@ -108,6 +156,11 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.SALES_HISTORY_VIEW,
   ],
   CASHIER: [
+    CAPABILITIES.CASH_VIEW,
+    CAPABILITIES.CASH_OPEN,
+    CAPABILITIES.CASH_CHARGE,
+    CAPABILITIES.CASH_CLOSE,
+    CAPABILITIES.CASH_SESSION_MANAGE,
     CAPABILITIES.BRANCH_DASHBOARD_VIEW,
     CAPABILITIES.CASH_PAYMENTS_VIEW,
     CAPABILITIES.CASH_PAYMENTS_COLLECT,
@@ -121,6 +174,10 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.PRINT_LOG_VIEW,
   ],
   WAREHOUSE: [
+    CAPABILITIES.WAREHOUSE_VIEW,
+    CAPABILITIES.DISPATCH_MARK,
+    CAPABILITIES.INVENTORY_VIEW,
+    CAPABILITIES.INVENTORY_ADJUST,
     CAPABILITIES.BRANCH_DASHBOARD_VIEW,
     CAPABILITIES.BRANCH_INVENTORY_VIEW,
     CAPABILITIES.INVENTORY_MOVEMENT_POST,
@@ -136,6 +193,10 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
 
 export function can(roleCode: RoleCode, capability: Capability): boolean {
   return ROLE_CAPABILITIES[roleCode]?.includes(capability) ?? false;
+}
+
+export function getCapabilitiesForRole(roleCode: RoleCode): Capability[] {
+  return ROLE_CAPABILITIES[roleCode] ?? [];
 }
 
 /** Minimal session shape required for capability checks */

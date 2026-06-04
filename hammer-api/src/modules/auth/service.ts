@@ -22,7 +22,7 @@ export async function authenticate(
   username: string,
   password: string,
   auditContext: LoginAuditContext = {},
-): Promise<{ token: string; role: RoleCode; mustChangePassword: boolean } | null> {
+): Promise<{ token: string; role: RoleCode; mustChangePassword: boolean; session: SessionPayload } | null> {
   if (!envStatus.hasDatabaseUrl) {
     logRuntimeEnvWarnings();
     throw new MissingDatabaseUrlError();
@@ -124,7 +124,7 @@ export async function authenticate(
     userAgent: auditContext.userAgent,
   });
 
-  return { token, role: derivedRole, mustChangePassword: user.mustChangePassword };
+  return { token, role: derivedRole, mustChangePassword: user.mustChangePassword, session: payload };
 }
 
 export async function setSessionCookie(token: string): Promise<void> {

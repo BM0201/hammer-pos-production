@@ -6,6 +6,7 @@ import { makeSessionCookieName } from "@/modules/auth/session";
 import { cookies } from "next/headers";
 import { requireCsrf, isCsrfError } from "@/modules/security/csrf";
 import { fail } from "@/lib/api/response";
+import { markUserOffline } from "@/modules/auth/presence-service";
 
 export async function POST(request: Request) {
   try {
@@ -32,6 +33,12 @@ export async function POST(request: Request) {
         entityType: "User",
         entityId: session.userId,
       });
+
+      try {
+        await markUserOffline(session.userId);
+      } catch (presenceError) {
+        console.error("[auth/logout] No fue posible cerrar presencia", presenceError);
+      }
     }
   } catch (error) {
     // CSRF errors must surface as 403, never be swallowed

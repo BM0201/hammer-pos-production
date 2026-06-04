@@ -5,6 +5,22 @@ export type BranchMembership = {
   roleCode: RoleCode;
 };
 
+export type ModuleFlags = {
+  master?: boolean;
+  pos?: boolean;
+  cash?: boolean;
+  warehouse?: boolean;
+  dispatch?: boolean;
+  inventory?: boolean;
+  pricing?: boolean;
+  purchases?: boolean;
+  transfers?: boolean;
+  production?: boolean;
+  brain?: boolean;
+  users?: boolean;
+  sessionMonitor?: boolean;
+};
+
 export type SessionPayload = {
   userId: string;
   username: string;

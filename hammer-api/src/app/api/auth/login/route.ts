@@ -5,6 +5,7 @@ import { MissingDatabaseUrlError, isDatabaseConnectionError } from "@/lib/prisma
 import { getRoleAwareHome } from "@/modules/rbac/guards";
 import { checkRateLimit, recordLoginAttempt } from "@/modules/security/rate-limiter";
 import { ok, fail } from "@/lib/api/response";
+import { markUserOnline } from "@/modules/auth/presence-service";
 
 const loginSchema = z.object({
   username: z.string().trim().toLowerCase().min(1),
@@ -80,6 +81,17 @@ export async function POST(request: Request) {
 
     await recordLoginAttempt(rateLimitKey, true);
     await setSessionCookie(authResult.token);
+    try {
+      await markUserOnline({
+        session: authResult.session,
+        branchId: authResult.session.primaryBranchId,
+        currentModule: "login",
+        ipAddress: ip,
+        userAgent,
+      });
+    } catch (presenceError) {
+      console.error("[auth/login] No fue posible registrar presencia", presenceError);
+    }
 
     return ok({
       redirectTo: authResult.mustChangePassword ? "/app/change-password" : getRoleAwareHome(authResult.role),
