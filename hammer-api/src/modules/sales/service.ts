@@ -13,6 +13,15 @@ import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
+import { userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+
+type DirectSaleTenderInput = {
+  method: PaymentMethod;
+  amount: number;
+  receivedAmount?: number | null;
+  changeAmount?: number | null;
+  referenceNumber?: string | null;
+};
 
 // FIX BUG-010: Use crypto-random suffix instead of Date.now() to prevent collisions
 function makeOrderNumber(branchCode: string) {
@@ -579,9 +588,42 @@ export async function submitSaleOrderToPendingPayment(input: {
   });
 }
 
+function normalizeDirectSaleTenders(input: {
+  amount: number;
+  method: PaymentMethod;
+  referenceNumber?: string | null;
+  tenders?: DirectSaleTenderInput[];
+}) {
+  const tenders = input.tenders?.length
+    ? input.tenders
+    : [{ method: input.method, amount: input.amount, referenceNumber: input.referenceNumber ?? null }];
+  let total = new Prisma.Decimal(0);
+  for (const tender of tenders) {
+    const amount = new Prisma.Decimal(tender.amount);
+    if (amount.lte(0)) throw new Error("INVALID_TENDER_AMOUNT");
+    total = total.add(amount);
+    if (tender.method === PaymentMethod.CASH) {
+      const received = new Prisma.Decimal(tender.receivedAmount ?? tender.amount);
+      const change = new Prisma.Decimal(tender.changeAmount ?? 0);
+      if (received.lt(amount)) throw new Error("INVALID_CASH_RECEIVED_AMOUNT");
+      if (!received.sub(amount).eq(change)) throw new Error("INVALID_CASH_CHANGE_AMOUNT");
+    }
+    if ((tender.method === PaymentMethod.CARD || tender.method === PaymentMethod.TRANSFER) && !tender.referenceNumber) {
+      throw new Error("PAYMENT_REFERENCE_REQUIRED");
+    }
+  }
+
+  return {
+    tenders,
+    total,
+    method: tenders.length > 1 ? PaymentMethod.MIXED : tenders[0].method,
+    referenceNumber: tenders.length === 1 ? tenders[0].referenceNumber ?? input.referenceNumber ?? null : input.referenceNumber ?? null,
+  };
+}
+
 /**
- * Direct sale: when cashier module is disabled, the seller submits + pays in one step.
- * The system auto-processes payment using the branch's cash session and optionally auto-dispatches.
+ * Direct sale V2-compatible path: the seller submits and collects in one step
+ * when branch workflow and cash-session operator rules allow it.
  */
 export async function submitDirectSale(input: {
   saleOrderId: string;
@@ -591,14 +633,14 @@ export async function submitDirectSale(input: {
   requiresTransport?: boolean;
   transportAmount?: number;
   referenceNumber?: string | null;
+  tenders?: DirectSaleTenderInput[];
 }) {
   const branchConfig = await getBranchModuleConfig(
     (await prisma.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId }, select: { branchId: true } })).branchId,
   );
 
-  // If cashier is enabled, this function should not be used
-  if (branchConfig.enableCashier) {
-    throw new Error("CASHIER_MODULE_ENABLED");
+  if (branchConfig.paymentWorkflowMode === "QUEUE_ONLY" || !branchConfig.allowSellerDirectPayment) {
+    throw new Error("DIRECT_PAYMENT_DISABLED");
   }
 
   return prisma.$transaction(async (tx) => {
@@ -691,6 +733,13 @@ export async function submitDirectSale(input: {
     }
     if (!session.physicalCashBox?.isActive) throw new Error("CASH_BOX_INACTIVE");
     if (session.physicalCashBox.branchId !== order.branchId) throw new Error("CASH_BOX_BRANCH_MISMATCH");
+    if (!(await userCanOperateCashSessionTx(tx, {
+      cashSessionId: session.id,
+      userId: input.actorUserId,
+      branchId: order.branchId,
+    }))) {
+      throw new Error("CASH_SESSION_OPERATOR_REQUIRED");
+    }
 
     // Deduct inventory (same locked balances)
     for (const line of order.lines) {
@@ -723,19 +772,37 @@ export async function submitDirectSale(input: {
       },
     });
 
+    const tenderSummary = normalizeDirectSaleTenders({
+      amount: Number(grandTotal),
+      method: input.method,
+      referenceNumber: input.referenceNumber,
+      tenders: input.tenders,
+    });
+    if (!tenderSummary.total.eq(grandTotal)) throw new Error("INVALID_PAYMENT_AMOUNT");
+
     // Create payment
-    await tx.payment.create({
+    const payment = await tx.payment.create({
       data: {
         saleOrderId: order.id,
         cashSessionId: session.id,
         receivedByUserId: input.actorUserId,
-        method: input.method,
+        method: tenderSummary.method,
         status: PaymentStatus.POSTED,
         amount: grandTotal,
-        referenceNumber: input.referenceNumber ?? null,
+        referenceNumber: tenderSummary.referenceNumber,
         paidAt: now,
         createdAt: now,
       },
+    });
+    await tx.paymentTender.createMany({
+      data: tenderSummary.tenders.map((tender) => ({
+        paymentId: payment.id,
+        method: tender.method,
+        amount: new Prisma.Decimal(tender.amount),
+        receivedAmount: tender.receivedAmount === null || tender.receivedAmount === undefined ? null : new Prisma.Decimal(tender.receivedAmount),
+        changeAmount: tender.changeAmount === null || tender.changeAmount === undefined ? null : new Prisma.Decimal(tender.changeAmount),
+        referenceNumber: tender.referenceNumber ?? null,
+      })),
     });
 
     // Auto-dispatch if dispatch module is also disabled
@@ -781,6 +848,7 @@ export async function submitDirectSale(input: {
         entityId: order.id,
         metadataJson: {
           method: input.method,
+          tenders: tenderSummary.tenders,
           amount: grandTotal.toString(),
           autoDispatched: !branchConfig.enableDispatch,
         },

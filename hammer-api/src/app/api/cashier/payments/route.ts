@@ -36,6 +36,7 @@ export async function POST(request: Request) {
       method: parsed.data.method,
       actorUserId: session.userId,
       referenceNumber: parsed.data.referenceNumber,
+      tenders: parsed.data.tenders,
     });
 
     return created(data);

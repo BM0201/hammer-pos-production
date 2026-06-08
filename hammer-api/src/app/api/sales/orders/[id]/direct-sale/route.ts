@@ -6,7 +6,7 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { submitDirectSale } from "@/modules/sales/service";
 import { prisma } from "@/lib/prisma";
 import { CAPABILITIES } from "@/modules/rbac/policies";
-import { requireBranchCapability } from "@/modules/rbac/guards";
+import { canInBranch, requireBranchCapability } from "@/modules/rbac/guards";
 import { requireCsrf } from "@/modules/security/csrf";
 import { saleOrderDirectSaleSchema } from "@/modules/sales/validators";
 import { ok, validationFail, fail, notFound } from "@/lib/api/response";
@@ -43,10 +43,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       return fail("ORDER_NOT_DRAFT", "La orden no esta en estado editable.", 409);
     }
 
-    // RBAC checks
-    requireBranchCapability(session, order.branchId, CAPABILITIES.SALES_SUBMIT_PAYMENT);
+    // RBAC checks: direct collection is allowed either by explicit direct POS
+    // permission or by combined seller + cashier permissions in the branch.
+    const canDirectCollect = canInBranch(session, order.branchId, CAPABILITIES.POS_DIRECT_COLLECT);
+    const canSellAndCollect = canInBranch(session, order.branchId, CAPABILITIES.POS_SEND_TO_CASHIER)
+      && canInBranch(session, order.branchId, CAPABILITIES.PAYMENT_COLLECT_DIRECT);
+    if (!canDirectCollect && !canSellAndCollect) {
+      requireBranchCapability(session, order.branchId, CAPABILITIES.POS_DIRECT_COLLECT);
+    }
 
-    // Workflow guard: cashier must be DISABLED for direct sale
+    // Workflow guard: direct collection must be enabled for this branch.
     await assertBranchWorkflowAction(order.branchId, WORKFLOW_ACTIONS.DIRECT_SALE);
 
     const result = await submitDirectSale({
@@ -57,6 +63,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       requiresTransport: body.requiresTransport,
       transportAmount: body.transportAmount,
       referenceNumber: body.referenceNumber ?? null,
+      tenders: body.tenders,
     });
 
     return ok(result);

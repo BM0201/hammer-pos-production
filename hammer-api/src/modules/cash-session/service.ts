@@ -1,4 +1,4 @@
-import { CashSessionStatus, PaymentMethod, PaymentStatus, Prisma, SaleOrderStatus } from "@prisma/client";
+import { CashMovementType, CashSessionOperatorRole, CashSessionStatus, PaymentMethod, PaymentStatus, Prisma, RoleCode, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
@@ -13,35 +13,44 @@ export async function calculateExpectedCashForSessionTx(
   cashSessionId: string,
   openingAmount: Prisma.Decimal | number | string,
 ) {
-  const cashInAggregate = await tx.payment.aggregate({
+  const cashTenderAggregate = await tx.paymentTender.aggregate({
     where: {
-      cashSessionId,
-      status: PaymentStatus.POSTED,
       method: PaymentMethod.CASH,
-      amount: { gte: 0 },
+      payment: { cashSessionId, status: PaymentStatus.POSTED },
     },
     _sum: { amount: true },
   });
 
-  const cashOutAggregate = await tx.payment.aggregate({
+  const changeAggregate = await tx.paymentTender.aggregate({
     where: {
-      cashSessionId,
-      status: PaymentStatus.POSTED,
       method: PaymentMethod.CASH,
-      amount: { lt: 0 },
+      payment: { cashSessionId, status: PaymentStatus.POSTED },
     },
-    _sum: { amount: true },
+    _sum: { changeAmount: true },
+  });
+
+  const cashMovements = await tx.cashMovement.findMany({
+    where: { cashSessionId },
+    select: { type: true, amount: true },
   });
 
   const opening = Number(openingAmount);
-  const postedCashPayments = Number(cashInAggregate._sum.amount ?? 0);
-  const refundsOrWithdrawals = Math.abs(Number(cashOutAggregate._sum.amount ?? 0));
-  const expectedCash = opening + postedCashPayments - refundsOrWithdrawals;
+  const postedCashPayments = Number(cashTenderAggregate._sum.amount ?? 0);
+  const cashChange = Number(changeAggregate._sum.changeAmount ?? 0);
+  const movementNet = cashMovements.reduce((sum, movement) => {
+    const amount = Number(movement.amount);
+    if (["CASH_OUT", "BANK_DEPOSIT_OUT", "EXPENSE_OUT", "REFUND_OUT"].includes(movement.type)) return sum - amount;
+    return sum + amount;
+  }, 0);
+  const refundsOrWithdrawals = Math.abs(Math.min(0, movementNet)) + cashChange;
+  const expectedCash = opening + postedCashPayments + movementNet - cashChange;
 
   return {
     openingAmount: opening,
     postedCashPayments,
     refundsOrWithdrawals,
+    cashMovementsNet: movementNet,
+    cashChange,
     expectedCash,
   };
 }
@@ -98,6 +107,15 @@ export async function openCashSession(input: {
         include: { physicalCashBox: true },
       });
 
+      await tx.cashSessionOperator.create({
+        data: {
+          cashSessionId: session.id,
+          userId: input.actorUserId,
+          operatorRole: CashSessionOperatorRole.OWNER_OPERATOR,
+          assignedByUserId: input.actorUserId,
+        },
+      });
+
       await tx.auditLog.create({
         data: {
           actorUserId: input.actorUserId,
@@ -128,6 +146,162 @@ export async function openCashSession(input: {
     }
     throw error;
   }
+}
+
+export async function userCanOperateCashSessionTx(tx: Prisma.TransactionClient, input: {
+  cashSessionId: string;
+  userId: string;
+  branchId: string;
+}) {
+  const actor = await tx.user.findUnique({
+    where: { id: input.userId },
+    select: { globalRole: true, isActive: true },
+  });
+  if (!actor?.isActive) return false;
+  if (actor.globalRole === RoleCode.MASTER || actor.globalRole === RoleCode.OWNER || actor.globalRole === RoleCode.SYSTEM_ADMIN) return true;
+
+  const operator = await tx.cashSessionOperator.findFirst({
+    where: {
+      cashSessionId: input.cashSessionId,
+      userId: input.userId,
+      isActive: true,
+      revokedAt: null,
+    },
+  });
+  return Boolean(operator);
+}
+
+export async function assignCashSessionOperator(input: {
+  cashSessionId: string;
+  userId: string;
+  operatorRole: CashSessionOperatorRole;
+  assignedByUserId: string;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.cashSession.findUniqueOrThrow({
+      where: { id: input.cashSessionId },
+      include: { physicalCashBox: true },
+    });
+    if (session.status !== CashSessionStatus.OPEN) throw new Error("CASH_SESSION_NOT_OPEN");
+
+    const operator = await tx.cashSessionOperator.upsert({
+      where: { cashSessionId_userId: { cashSessionId: input.cashSessionId, userId: input.userId } },
+      update: {
+        operatorRole: input.operatorRole,
+        assignedByUserId: input.assignedByUserId,
+        assignedAt: new Date(),
+        revokedAt: null,
+        isActive: true,
+      },
+      create: {
+        cashSessionId: input.cashSessionId,
+        userId: input.userId,
+        operatorRole: input.operatorRole,
+        assignedByUserId: input.assignedByUserId,
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.assignedByUserId,
+        branchId: session.physicalCashBox.branchId,
+        module: "cash_session",
+        action: "CASH_SESSION_OPERATOR_ASSIGNED",
+        entityType: "CashSessionOperator",
+        entityId: operator.id,
+        metadataJson: {
+          cashSessionId: input.cashSessionId,
+          userId: input.userId,
+          operatorRole: input.operatorRole,
+        },
+      },
+    });
+
+    return operator;
+  });
+}
+
+export async function revokeCashSessionOperator(input: {
+  cashSessionId: string;
+  userId: string;
+  actorUserId: string;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.cashSession.findUniqueOrThrow({
+      where: { id: input.cashSessionId },
+      include: { physicalCashBox: true },
+    });
+    const operator = await tx.cashSessionOperator.update({
+      where: { cashSessionId_userId: { cashSessionId: input.cashSessionId, userId: input.userId } },
+      data: { isActive: false, revokedAt: new Date() },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: session.physicalCashBox.branchId,
+        module: "cash_session",
+        action: "CASH_SESSION_OPERATOR_REVOKED",
+        entityType: "CashSessionOperator",
+        entityId: operator.id,
+        metadataJson: { cashSessionId: input.cashSessionId, userId: input.userId },
+      },
+    });
+    return operator;
+  });
+}
+
+export async function createCashMovement(input: {
+  cashSessionId: string;
+  type: CashMovementType;
+  amount: number;
+  reason: string;
+  notes?: string | null;
+  actorUserId: string;
+  approvedByUserId?: string | null;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.cashSession.findUniqueOrThrow({
+      where: { id: input.cashSessionId },
+      include: { physicalCashBox: true },
+    });
+    if (session.status !== CashSessionStatus.OPEN) throw new Error("CASH_SESSION_NOT_OPEN");
+    if (!(await userCanOperateCashSessionTx(tx, {
+      cashSessionId: input.cashSessionId,
+      userId: input.actorUserId,
+      branchId: session.physicalCashBox.branchId,
+    }))) {
+      throw new Error("CASH_SESSION_OPERATOR_REQUIRED");
+    }
+
+    const movement = await tx.cashMovement.create({
+      data: {
+        cashSessionId: input.cashSessionId,
+        type: input.type,
+        amount: toDecimal(input.amount),
+        reason: input.reason,
+        notes: input.notes ?? null,
+        createdByUserId: input.actorUserId,
+        approvedByUserId: input.approvedByUserId ?? null,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: session.physicalCashBox.branchId,
+        module: "cash_session",
+        action: "CASH_MOVEMENT_CREATED",
+        entityType: "CashMovement",
+        entityId: movement.id,
+        metadataJson: {
+          cashSessionId: input.cashSessionId,
+          type: input.type,
+          amount: input.amount,
+          reason: input.reason,
+        },
+      },
+    });
+    return movement;
+  });
 }
 
 export async function requestCloseCashSession(input: {
