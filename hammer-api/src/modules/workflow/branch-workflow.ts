@@ -29,6 +29,11 @@ export type WorkflowAction = (typeof WORKFLOW_ACTIONS)[keyof typeof WORKFLOW_ACT
 export type BranchWorkflowConfig = {
   enableCashier: boolean;
   enableDispatch: boolean;
+  paymentWorkflowMode: "QUEUE_ONLY" | "DIRECT_ONLY" | "HYBRID";
+  dispatchWorkflowMode: "DISABLED" | "ENABLED";
+  requireOpenCashSessionForDirectSale: boolean;
+  allowSellerDirectPayment: boolean;
+  allowCashierQueue: boolean;
   allowedActions: WorkflowAction[];
   blockedActions: WorkflowAction[];
   workflowDescription: string;
@@ -43,34 +48,39 @@ export async function getBranchWorkflowConfig(branchId: string): Promise<BranchW
   const allowed: WorkflowAction[] = [WORKFLOW_ACTIONS.CREATE_DRAFT_ORDER];
   const blocked: WorkflowAction[] = [];
 
-  if (config.enableCashier) {
+  if (config.paymentWorkflowMode === "QUEUE_ONLY") {
     allowed.push(WORKFLOW_ACTIONS.SUBMIT_TO_CASHIER, WORKFLOW_ACTIONS.COLLECT_PAYMENT, WORKFLOW_ACTIONS.VIEW_CASHIER);
     blocked.push(WORKFLOW_ACTIONS.DIRECT_SALE);
-  } else {
+  } else if (config.paymentWorkflowMode === "DIRECT_ONLY") {
     allowed.push(WORKFLOW_ACTIONS.DIRECT_SALE);
     blocked.push(WORKFLOW_ACTIONS.SUBMIT_TO_CASHIER, WORKFLOW_ACTIONS.COLLECT_PAYMENT, WORKFLOW_ACTIONS.VIEW_CASHIER);
+  } else {
+    allowed.push(WORKFLOW_ACTIONS.SUBMIT_TO_CASHIER, WORKFLOW_ACTIONS.DIRECT_SALE, WORKFLOW_ACTIONS.COLLECT_PAYMENT, WORKFLOW_ACTIONS.VIEW_CASHIER);
   }
 
-  if (config.enableDispatch) {
+  if (config.dispatchWorkflowMode === "ENABLED") {
     allowed.push(WORKFLOW_ACTIONS.VIEW_DISPATCH, WORKFLOW_ACTIONS.MARK_DISPATCHED, WORKFLOW_ACTIONS.CREATE_TRANSPORT, WORKFLOW_ACTIONS.UPDATE_TRANSPORT_STATUS);
   } else {
     blocked.push(WORKFLOW_ACTIONS.MARK_DISPATCHED, WORKFLOW_ACTIONS.CREATE_TRANSPORT, WORKFLOW_ACTIONS.UPDATE_TRANSPORT_STATUS);
   }
 
-  let description: string;
-  if (config.enableCashier && config.enableDispatch) {
-    description = "Completo: Venta -> Caja -> Despacho";
-  } else if (config.enableCashier && !config.enableDispatch) {
-    description = "Sin despacho: Venta -> Caja -> Entregado";
-  } else if (!config.enableCashier && config.enableDispatch) {
-    description = "Sin caja: Venta+Cobro -> Despacho";
-  } else {
-    description = "Directo: Venta+Cobro+Entrega";
-  }
+  const paymentLabel = config.paymentWorkflowMode === "HYBRID"
+    ? "Hibrido: venta directa y cola de caja"
+    : config.paymentWorkflowMode === "QUEUE_ONLY"
+      ? "Solo cola de caja"
+      : "Solo cobro directo";
+  const description = config.dispatchWorkflowMode === "ENABLED"
+    ? `${paymentLabel} -> Despacho`
+    : `${paymentLabel} -> Entrega directa`;
 
   return {
     enableCashier: config.enableCashier,
     enableDispatch: config.enableDispatch,
+    paymentWorkflowMode: config.paymentWorkflowMode,
+    dispatchWorkflowMode: config.dispatchWorkflowMode,
+    requireOpenCashSessionForDirectSale: config.requireOpenCashSessionForDirectSale,
+    allowSellerDirectPayment: config.allowSellerDirectPayment,
+    allowCashierQueue: config.allowCashierQueue,
     allowedActions: allowed,
     blockedActions: blocked,
     workflowDescription: description,
@@ -89,23 +99,28 @@ export async function assertBranchWorkflowAction(
 
   switch (action) {
     case WORKFLOW_ACTIONS.SUBMIT_TO_CASHIER:
-    case WORKFLOW_ACTIONS.COLLECT_PAYMENT:
     case WORKFLOW_ACTIONS.VIEW_CASHIER:
-      if (!config.enableCashier) {
+      if (config.paymentWorkflowMode === "DIRECT_ONLY" || !config.allowCashierQueue) {
+        throw new Error("CASHIER_MODULE_DISABLED");
+      }
+      break;
+
+    case WORKFLOW_ACTIONS.COLLECT_PAYMENT:
+      if (config.paymentWorkflowMode === "DIRECT_ONLY" && !config.allowCashierQueue) {
         throw new Error("CASHIER_MODULE_DISABLED");
       }
       break;
 
     case WORKFLOW_ACTIONS.DIRECT_SALE:
-      if (config.enableCashier) {
-        throw new Error("CASHIER_MODULE_ENABLED");
+      if (config.paymentWorkflowMode === "QUEUE_ONLY" || !config.allowSellerDirectPayment) {
+        throw new Error("DIRECT_PAYMENT_DISABLED");
       }
       break;
 
     case WORKFLOW_ACTIONS.MARK_DISPATCHED:
     case WORKFLOW_ACTIONS.CREATE_TRANSPORT:
     case WORKFLOW_ACTIONS.UPDATE_TRANSPORT_STATUS:
-      if (!config.enableDispatch) {
+      if (config.dispatchWorkflowMode === "DISABLED") {
         throw new Error("DISPATCH_MODULE_DISABLED");
       }
       break;

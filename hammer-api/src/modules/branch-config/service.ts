@@ -6,6 +6,11 @@ export type BranchModuleConfigRow = {
   branchId: string;
   enableCashier: boolean;
   enableDispatch: boolean;
+  paymentWorkflowMode: "QUEUE_ONLY" | "DIRECT_ONLY" | "HYBRID";
+  dispatchWorkflowMode: "DISABLED" | "ENABLED";
+  requireOpenCashSessionForDirectSale: boolean;
+  allowSellerDirectPayment: boolean;
+  allowCashierQueue: boolean;
   updatedAt: Date;
   branch: { id: string; code: string; name: string; isActive: boolean };
 };
@@ -14,11 +19,26 @@ export type BranchModuleConfigRow = {
  * Get module config for a single branch.
  * Returns direct-sale defaults if no config row exists.
  */
-export async function getBranchModuleConfig(branchId: string): Promise<{ enableCashier: boolean; enableDispatch: boolean }> {
+export async function getBranchModuleConfig(branchId: string): Promise<{
+  enableCashier: boolean;
+  enableDispatch: boolean;
+  paymentWorkflowMode: "QUEUE_ONLY" | "DIRECT_ONLY" | "HYBRID";
+  dispatchWorkflowMode: "DISABLED" | "ENABLED";
+  requireOpenCashSessionForDirectSale: boolean;
+  allowSellerDirectPayment: boolean;
+  allowCashierQueue: boolean;
+}> {
   const config = await prisma.branchModuleConfig.findUnique({ where: { branchId } });
+  const enableCashier = config?.enableCashier ?? true;
+  const enableDispatch = config?.enableDispatch ?? true;
   return {
-    enableCashier: config?.enableCashier ?? false,
-    enableDispatch: config?.enableDispatch ?? false,
+    enableCashier,
+    enableDispatch,
+    paymentWorkflowMode: config?.paymentWorkflowMode ?? (enableCashier ? "HYBRID" : "DIRECT_ONLY"),
+    dispatchWorkflowMode: config?.dispatchWorkflowMode ?? (enableDispatch ? "ENABLED" : "DISABLED"),
+    requireOpenCashSessionForDirectSale: config?.requireOpenCashSessionForDirectSale ?? true,
+    allowSellerDirectPayment: config?.allowSellerDirectPayment ?? true,
+    allowCashierQueue: config?.allowCashierQueue ?? enableCashier,
   };
 }
 
@@ -33,8 +53,13 @@ export async function listBranchModuleConfigs(): Promise<BranchModuleConfigRow[]
   return branches.map((branch: any) => ({
     id: branch.moduleConfig?.id ?? "",
     branchId: branch.id,
-    enableCashier: branch.moduleConfig?.enableCashier ?? false,
-    enableDispatch: branch.moduleConfig?.enableDispatch ?? false,
+    enableCashier: branch.moduleConfig?.enableCashier ?? true,
+    enableDispatch: branch.moduleConfig?.enableDispatch ?? true,
+    paymentWorkflowMode: branch.moduleConfig?.paymentWorkflowMode ?? (branch.moduleConfig?.enableCashier === false ? "DIRECT_ONLY" : "HYBRID"),
+    dispatchWorkflowMode: branch.moduleConfig?.dispatchWorkflowMode ?? (branch.moduleConfig?.enableDispatch === false ? "DISABLED" : "ENABLED"),
+    requireOpenCashSessionForDirectSale: branch.moduleConfig?.requireOpenCashSessionForDirectSale ?? true,
+    allowSellerDirectPayment: branch.moduleConfig?.allowSellerDirectPayment ?? true,
+    allowCashierQueue: branch.moduleConfig?.allowCashierQueue ?? (branch.moduleConfig?.enableCashier ?? true),
     updatedAt: branch.moduleConfig?.updatedAt ?? branch.updatedAt,
     branch: { id: branch.id, code: branch.code, name: branch.name, isActive: branch.isActive },
   }));
@@ -45,19 +70,36 @@ export async function upsertBranchModuleConfig(input: {
   branchId: string;
   enableCashier: boolean;
   enableDispatch: boolean;
+  paymentWorkflowMode?: "QUEUE_ONLY" | "DIRECT_ONLY" | "HYBRID";
+  dispatchWorkflowMode?: "DISABLED" | "ENABLED";
+  requireOpenCashSessionForDirectSale?: boolean;
+  allowSellerDirectPayment?: boolean;
+  allowCashierQueue?: boolean;
   actorUserId: string;
 }) {
+  const paymentWorkflowMode = input.paymentWorkflowMode ?? (input.enableCashier ? "HYBRID" : "DIRECT_ONLY");
+  const dispatchWorkflowMode = input.dispatchWorkflowMode ?? (input.enableDispatch ? "ENABLED" : "DISABLED");
   const result = await prisma.branchModuleConfig.upsert({
     where: { branchId: input.branchId },
     update: {
       enableCashier: input.enableCashier,
       enableDispatch: input.enableDispatch,
+      paymentWorkflowMode,
+      dispatchWorkflowMode,
+      requireOpenCashSessionForDirectSale: input.requireOpenCashSessionForDirectSale ?? true,
+      allowSellerDirectPayment: input.allowSellerDirectPayment ?? true,
+      allowCashierQueue: input.allowCashierQueue ?? input.enableCashier,
       updatedByUserId: input.actorUserId,
     },
     create: {
       branchId: input.branchId,
       enableCashier: input.enableCashier,
       enableDispatch: input.enableDispatch,
+      paymentWorkflowMode,
+      dispatchWorkflowMode,
+      requireOpenCashSessionForDirectSale: input.requireOpenCashSessionForDirectSale ?? true,
+      allowSellerDirectPayment: input.allowSellerDirectPayment ?? true,
+      allowCashierQueue: input.allowCashierQueue ?? input.enableCashier,
       updatedByUserId: input.actorUserId,
     },
   });
@@ -72,6 +114,11 @@ export async function upsertBranchModuleConfig(input: {
     metadataJson: {
       enableCashier: input.enableCashier,
       enableDispatch: input.enableDispatch,
+      paymentWorkflowMode,
+      dispatchWorkflowMode,
+      requireOpenCashSessionForDirectSale: input.requireOpenCashSessionForDirectSale ?? true,
+      allowSellerDirectPayment: input.allowSellerDirectPayment ?? true,
+      allowCashierQueue: input.allowCashierQueue ?? input.enableCashier,
     },
   });
 
@@ -102,7 +149,7 @@ export async function bulkUpdateBranchModuleConfigs(input: {
  * Determines the workflow description for a branch config.
  */
 export function describeWorkflow(enableCashier: boolean, enableDispatch: boolean): string {
-  if (enableCashier && enableDispatch) return "Completo: Venta -> Caja -> Despacho";
+  if (enableCashier && enableDispatch) return "Hibrido: Venta directa o Venta -> Caja -> Despacho";
   if (enableCashier && !enableDispatch) return "Sin despacho: Venta -> Caja -> Entregado";
   if (!enableCashier && enableDispatch) return "Sin caja: Venta+Cobro -> Despacho";
   return "Directo: Venta+Cobro+Entrega";

@@ -15,6 +15,15 @@ import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
+import { userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+
+type PaymentTenderInput = {
+  method: PaymentMethod;
+  amount: number;
+  receivedAmount?: number | null;
+  changeAmount?: number | null;
+  referenceNumber?: string | null;
+};
 
 export async function listPendingPaymentOrders(params: { branchId: string; includeAllBranches: boolean }) {
   return prisma.saleOrder.findMany({
@@ -214,7 +223,68 @@ async function validateCashSessionForOrderTx(tx: Prisma.TransactionClient, param
     throw new Error("CASH_BOX_BRANCH_MISMATCH");
   }
 
+  const canOperate = await userCanOperateCashSessionTx(tx, {
+    cashSessionId: session.id,
+    userId: params.actorUserId,
+    branchId: params.branchId,
+  });
+  if (!canOperate) {
+    await tx.auditLog.create({
+      data: {
+        actorUserId: params.actorUserId,
+        branchId: params.branchId,
+        module: "payments",
+        action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+        entityType: "SaleOrder",
+        entityId: params.saleOrderId,
+        metadataJson: { reason: "CASH_SESSION_OPERATOR_REQUIRED", cashSessionId: session.id },
+      },
+    });
+    throw new Error("CASH_SESSION_OPERATOR_REQUIRED");
+  }
+
   return session;
+}
+
+function normalizeTenders(input: {
+  amount: number;
+  method: PaymentMethod;
+  referenceNumber?: string | null;
+  tenders?: PaymentTenderInput[];
+}) {
+  const tenders = input.tenders?.length
+    ? input.tenders
+    : [{
+        method: input.method,
+        amount: input.amount,
+        referenceNumber: input.referenceNumber ?? null,
+      }];
+
+  let total = new Prisma.Decimal(0);
+  let hasCash = false;
+  for (const tender of tenders) {
+    const amount = new Prisma.Decimal(tender.amount);
+    if (amount.lte(0)) throw new Error("INVALID_TENDER_AMOUNT");
+    total = total.add(amount);
+    if (tender.method === PaymentMethod.CASH) {
+      hasCash = true;
+      const received = new Prisma.Decimal(tender.receivedAmount ?? tender.amount);
+      const change = new Prisma.Decimal(tender.changeAmount ?? 0);
+      if (received.lt(amount)) throw new Error("INVALID_CASH_RECEIVED_AMOUNT");
+      if (!received.sub(amount).eq(change)) throw new Error("INVALID_CASH_CHANGE_AMOUNT");
+    }
+    if ((tender.method === PaymentMethod.CARD || tender.method === PaymentMethod.TRANSFER) && !tender.referenceNumber) {
+      throw new Error("PAYMENT_REFERENCE_REQUIRED");
+    }
+  }
+
+  return {
+    tenders,
+    total,
+    method: tenders.length > 1 ? PaymentMethod.MIXED : tenders[0].method,
+    referenceNumber: tenders.length === 1 ? tenders[0].referenceNumber ?? input.referenceNumber ?? null : input.referenceNumber ?? null,
+    hasCash,
+  };
 }
 
 export async function postSaleOrderPayment(input: {
@@ -224,6 +294,7 @@ export async function postSaleOrderPayment(input: {
   method: PaymentMethod;
   actorUserId: string;
   referenceNumber?: string | null;
+  tenders?: PaymentTenderInput[];
 }) {
   try {
     return await prisma.$transaction(async (tx) => {
@@ -271,7 +342,8 @@ export async function postSaleOrderPayment(input: {
       }
 
       const orderTotal = new Prisma.Decimal(order.grandTotal);
-      const requestedAmount = new Prisma.Decimal(input.amount);
+      const tenderSummary = normalizeTenders(input);
+      const requestedAmount = tenderSummary.total;
       if (!requestedAmount.eq(orderTotal)) {
         await tx.auditLog.create({
           data: {
@@ -390,20 +462,30 @@ export async function postSaleOrderPayment(input: {
 
       const now = new Date();
 
-      let payment;
+      let payment: Awaited<ReturnType<typeof tx.payment.create>>;
       try {
         payment = await tx.payment.create({
           data: {
             saleOrderId: order.id,
             cashSessionId: session.id,
             receivedByUserId: input.actorUserId,
-            method: input.method,
+            method: tenderSummary.method,
             status: PaymentStatus.POSTED,
             amount: requestedAmount,
-            referenceNumber: input.referenceNumber ?? null,
+            referenceNumber: tenderSummary.referenceNumber,
             paidAt: now,
             createdAt: now,
           },
+        });
+        await tx.paymentTender.createMany({
+          data: tenderSummary.tenders.map((tender) => ({
+            paymentId: payment.id,
+            method: tender.method,
+            amount: new Prisma.Decimal(tender.amount),
+            receivedAmount: tender.receivedAmount === null || tender.receivedAmount === undefined ? null : new Prisma.Decimal(tender.receivedAmount),
+            changeAmount: tender.changeAmount === null || tender.changeAmount === undefined ? null : new Prisma.Decimal(tender.changeAmount),
+            referenceNumber: tender.referenceNumber ?? null,
+          })),
         });
       } catch (error) {
         if (
@@ -497,7 +579,8 @@ export async function postSaleOrderPayment(input: {
               ? "PENDING_PAYMENT_TO_DISPATCH_PENDING"
               : "PENDING_PAYMENT_TO_DISPATCHED_AUTO",
             amount: requestedAmount.toString(),
-            method: input.method,
+            method: tenderSummary.method,
+            tenders: tenderSummary.tenders,
             cashSessionId: session.id,
             autoDispatched: !branchConfig.enableDispatch,
           },

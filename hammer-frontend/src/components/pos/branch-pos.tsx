@@ -77,6 +77,25 @@ type InventoryBalanceRow = {
   } | null;
 };
 
+type PosV2Context = {
+  workflow: {
+    enableCashier: boolean;
+    enableDispatch: boolean;
+    paymentWorkflowMode: "QUEUE_ONLY" | "DIRECT_ONLY" | "HYBRID";
+    dispatchWorkflowMode: "DISABLED" | "ENABLED";
+  };
+  permissions: {
+    canSendToCashier: boolean;
+    canCollectHere: boolean;
+    canUseCashSession: boolean;
+  };
+  assignedSessions: Array<{ id: string; physicalCashBox?: { code: string; description?: string | null } }>;
+  messages?: {
+    noCashBoxes?: string | null;
+    noAssignedSession?: string | null;
+  };
+};
+
 const ROW_HEIGHT = 96;
 const OVERSCAN = 8;
 const MAX_REASONABLE_QUANTITY = 9999;
@@ -118,7 +137,13 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const ticketPanelRef = useRef<HTMLDivElement | null>(null);
   const sendButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  const [branchConfig, setBranchConfig] = useState<{ enableCashier: boolean; enableDispatch: boolean } | null>(null);
+  const [branchConfig, setBranchConfig] = useState<{
+    enableCashier: boolean;
+    enableDispatch: boolean;
+    paymentWorkflowMode: "QUEUE_ONLY" | "DIRECT_ONLY" | "HYBRID";
+    dispatchWorkflowMode: "DISABLED" | "ENABLED";
+  } | null>(null);
+  const [posContext, setPosContext] = useState<PosV2Context | null>(null);
   const [activeCashSessionId, setActiveCashSessionId] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<string>("CASH");
 
@@ -133,6 +158,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const hasTicketLines = ticketLines.length > 0;
   const totalAmount = Number(order?.grandTotal ?? 0);
   const orderStatusLabel = STATUS_LABELS[order?.status ?? "DRAFT"] ?? (order?.status ?? "Borrador");
+  const canSendToCashier = Boolean(posContext?.permissions?.canSendToCashier) && branchConfig?.paymentWorkflowMode !== "DIRECT_ONLY";
+  const canCollectHere = Boolean(posContext?.permissions?.canCollectHere) && branchConfig?.paymentWorkflowMode !== "QUEUE_ONLY";
 
   const orderLineByProductId = useMemo(() => {
     const map = new Map<string, TicketLine>();
@@ -329,48 +356,36 @@ export function BranchPos({ branchId }: { branchId: string }) {
     }
   }, [branchId, resolveApiMessage, seedSharedStock, setNoticeTimed, topProducts]);
 
-  // Load branch config (enableCashier / enableDispatch)
+  // Load POS V2 workflow and cash-session context.
   useEffect(() => {
-    async function loadBranchConfig() {
-      try {
-        const res = await fetch(`/api/branch-config/${branchId}`);
-        const json = await res.json();
-        const data = json?.data ?? json;
-        setBranchConfig({
-          enableCashier: data?.enableCashier ?? false,
-          enableDispatch: data?.enableDispatch ?? false,
-        });
-      } catch {
-        setBranchConfig({ enableCashier: false, enableDispatch: false });
-      }
-    }
-    loadBranchConfig();
-  }, [branchId]);
-
-  // Load active cash session for direct-sale flow
-  useEffect(() => {
-    if (branchConfig?.enableCashier !== false) {
-      setActiveCashSessionId(null);
-      return;
-    }
-    async function loadActiveCashSession() {
+    async function loadPosContext() {
       try {
         const query = new URLSearchParams({ branchId });
-        const res = await fetch(`/api/cashier/cash-sessions/active?${query.toString()}`);
+        const res = await fetch(`/api/pos/v2/context?${query.toString()}`);
         const json = await res.json();
         const data = json?.data ?? json;
-        if (data?.id) {
-          setActiveCashSessionId(data.id);
-        } else {
-          setActiveCashSessionId(null);
-        }
+        setPosContext(data);
+        const firstAssignedSession = data?.assignedSessions?.[0]?.id ?? null;
+        setActiveCashSessionId(firstAssignedSession);
+        setBranchConfig({
+          enableCashier: data?.workflow?.enableCashier ?? true,
+          enableDispatch: data?.workflow?.enableDispatch ?? true,
+          paymentWorkflowMode: data?.workflow?.paymentWorkflowMode ?? "HYBRID",
+          dispatchWorkflowMode: data?.workflow?.dispatchWorkflowMode ?? "ENABLED",
+        });
       } catch {
+        setPosContext(null);
         setActiveCashSessionId(null);
-        // Will show error when trying to sell
+        setBranchConfig({
+          enableCashier: true,
+          enableDispatch: true,
+          paymentWorkflowMode: "HYBRID",
+          dispatchWorkflowMode: "ENABLED",
+        });
       }
     }
-    loadActiveCashSession();
-  }, [branchConfig, branchId]);
+    loadPosContext();
+  }, [branchId]);
 
   useEffect(() => {
     reloadOrder();
@@ -586,7 +601,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     }
   }
 
-  async function sendToPayment() {
+  async function completeTicket(target: "QUEUE" | "DIRECT") {
     if (!order || isSubmittingPayment || ticketLines.length === 0) return;
 
     if (includeTransport && transportValidationError) {
@@ -595,7 +610,19 @@ export function BranchPos({ branchId }: { branchId: string }) {
       return;
     }
 
-    const isDirectSale = branchConfig?.enableCashier === false;
+    const canQueue = Boolean(posContext?.permissions?.canSendToCashier) && branchConfig?.paymentWorkflowMode !== "DIRECT_ONLY";
+    const canDirectSale = Boolean(posContext?.permissions?.canCollectHere) && branchConfig?.paymentWorkflowMode !== "QUEUE_ONLY";
+    const isDirectSale = target === "DIRECT";
+
+    if (!isDirectSale && !canQueue) {
+      setNoticeTimed("Tu perfil o la configuracion de la sucursal no permite enviar ventas a caja.", 10000);
+      return;
+    }
+
+    if (isDirectSale && !canDirectSale) {
+      setNoticeTimed("Tu perfil o la configuracion de la sucursal no permite cobrar aqui.", 10000);
+      return;
+    }
 
     // Direct sale requires active cash session
     if (isDirectSale && !activeCashSessionId) {
@@ -690,7 +717,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
       setActiveProductIndex(0);
       searchInputRef.current?.focus();
     } catch (error) {
-      console.error("[POS][sendToPayment]", error);
+      console.error("[POS][completeTicket]", error);
       setNoticeTimed(resolveApiMessage({ fallback: "No se pudo completar la operación.", thrownError: error }), 10000);
     } finally {
       setIsSubmittingPayment(false);
@@ -1041,7 +1068,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   </div>
                 ) : null}
 
-                {branchConfig?.enableCashier === false && (
+                {canCollectHere && (
                   <div className="mt-3 space-y-2">
                     <label className="block text-xs font-medium text-[var(--color-text-muted)]">Método de pago</label>
                     <select
@@ -1074,24 +1101,36 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   </div>
                 )}
 
-                <Button
-                  ref={sendButtonRef}
-                  variant="success"
-                  className="mt-3 w-full rounded-lg text-base"
-                  onClick={sendToPayment}
-                  disabled={isBusy || !order || !hasTicketLines || Boolean(includeTransport && transportValidationError)}
-                  data-testid="pos-send-to-payment"
-                  icon={<ShoppingCart className="h-5 w-5" />}
-                  loading={isSubmittingPayment}
-                >
-                  {isSubmittingPayment
-                    ? (branchConfig?.enableCashier === false ? "Registrando..." : "Enviando...")
-                    : !hasTicketLines
-                      ? (branchConfig?.enableCashier === false ? "Agrega productos para cobrar" : "Agrega productos para enviar a caja")
-                      : branchConfig?.enableCashier === false
-                        ? `Cobrar e imprimir - C$ ${displayedTotalAmount.toFixed(2)}`
-                        : `Enviar a caja - C$ ${displayedTotalAmount.toFixed(2)}`}
-                </Button>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {canSendToCashier ? (
+                    <Button
+                      ref={sendButtonRef}
+                      variant="secondary"
+                      className="w-full rounded-lg text-sm"
+                      onClick={() => completeTicket("QUEUE")}
+                      disabled={isBusy || !order || !hasTicketLines || Boolean(includeTransport && transportValidationError)}
+                      data-testid="pos-send-to-payment"
+                      icon={<ShoppingCart className="h-5 w-5" />}
+                      loading={isSubmittingPayment}
+                    >
+                      {!hasTicketLines ? "Agrega productos" : `Enviar a caja - C$ ${displayedTotalAmount.toFixed(2)}`}
+                    </Button>
+                  ) : null}
+                  {canCollectHere ? (
+                    <Button
+                      ref={!canSendToCashier ? sendButtonRef : undefined}
+                      variant="success"
+                      className="w-full rounded-lg text-sm"
+                      onClick={() => completeTicket("DIRECT")}
+                      disabled={isBusy || !order || !hasTicketLines || !activeCashSessionId || Boolean(includeTransport && transportValidationError)}
+                      data-testid="pos-direct-collect"
+                      icon={<Check className="h-5 w-5" />}
+                      loading={isSubmittingPayment}
+                    >
+                      {!hasTicketLines ? "Agrega productos" : `Cobrar aqui - C$ ${displayedTotalAmount.toFixed(2)}`}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             </Card>
           </div>

@@ -62,6 +62,34 @@ enum PaymentStatus {
   VOIDED
 }
 
+enum PaymentWorkflowMode {
+  QUEUE_ONLY
+  DIRECT_ONLY
+  HYBRID
+}
+
+enum DispatchWorkflowMode {
+  DISABLED
+  ENABLED
+}
+
+enum CashSessionOperatorRole {
+  OWNER_OPERATOR
+  CASHIER_OPERATOR
+  SALES_DIRECT_OPERATOR
+  SUPERVISOR_OPERATOR
+}
+
+enum CashMovementType {
+  CASH_IN
+  CASH_OUT
+  CHANGE_IN
+  BANK_DEPOSIT_OUT
+  EXPENSE_OUT
+  REFUND_OUT
+  CORRECTION
+}
+
 enum DispatchStatus {
   PENDING
   IN_PROGRESS
@@ -257,6 +285,10 @@ model User {
   openedSessions             CashSession[]            @relation("CashSessionOpenedBy")
   closedSessions             CashSession[]            @relation("CashSessionClosedBy")
   reviewedCashSessions       CashSession[]            @relation("CashSessionReviewedBy")
+  cashSessionOperators       CashSessionOperator[]     @relation("CashSessionOperatorUser")
+  assignedCashOperators      CashSessionOperator[]     @relation("CashSessionOperatorAssignedBy")
+  createdCashMovements       CashMovement[]            @relation("CashMovementCreatedBy")
+  approvedCashMovements      CashMovement[]            @relation("CashMovementApprovedBy")
   openedOperationalDays      OperationalDay[]         @relation("OperationalDayOpenedBy")
   closedOperationalDays      OperationalDay[]         @relation("OperationalDayClosedBy")
   createdOrders              SaleOrder[]              @relation("SaleOrderCreatedBy")
@@ -383,10 +415,50 @@ model CashSession {
   closedBy        User?           @relation("CashSessionClosedBy", fields: [closedByUserId], references: [id])
   reviewedBy      User?           @relation("CashSessionReviewedBy", fields: [reviewedByUserId], references: [id])
   payments        Payment[]
+  operators       CashSessionOperator[]
+  cashMovements   CashMovement[]
 
   @@index([physicalCashBoxId, status])
   @@index([operationalDayId])
   @@index([status, requiresReview])
+}
+
+model CashSessionOperator {
+  id               String                  @id @default(cuid())
+  cashSessionId    String
+  userId           String
+  operatorRole     CashSessionOperatorRole
+  assignedByUserId String
+  assignedAt       DateTime                @default(now())
+  revokedAt        DateTime?
+  isActive         Boolean                 @default(true)
+
+  cashSession CashSession @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
+  user        User        @relation("CashSessionOperatorUser", fields: [userId], references: [id])
+  assignedBy  User        @relation("CashSessionOperatorAssignedBy", fields: [assignedByUserId], references: [id])
+
+  @@unique([cashSessionId, userId])
+  @@index([cashSessionId, isActive])
+  @@index([userId, isActive])
+}
+
+model CashMovement {
+  id               String           @id @default(cuid())
+  cashSessionId    String
+  type             CashMovementType
+  amount           Decimal
+  reason           String
+  notes            String?
+  createdByUserId  String
+  approvedByUserId String?
+  createdAt        DateTime         @default(now())
+
+  cashSession CashSession @relation(fields: [cashSessionId], references: [id])
+  createdBy   User        @relation("CashMovementCreatedBy", fields: [createdByUserId], references: [id])
+  approvedBy  User?       @relation("CashMovementApprovedBy", fields: [approvedByUserId], references: [id])
+
+  @@index([cashSessionId, createdAt])
+  @@index([type])
 }
 
 model OperationalDay {
@@ -948,8 +1020,25 @@ model Payment {
   saleOrder   SaleOrder   @relation(fields: [saleOrderId], references: [id])
   cashSession CashSession @relation(fields: [cashSessionId], references: [id])
   receivedBy  User        @relation(fields: [receivedByUserId], references: [id])
+  tenders     PaymentTender[]
 
   @@index([cashSessionId, paidAt])
+}
+
+model PaymentTender {
+  id              String        @id @default(cuid())
+  paymentId       String
+  method          PaymentMethod
+  amount          Decimal
+  receivedAmount  Decimal?
+  changeAmount    Decimal?
+  referenceNumber String?
+  createdAt       DateTime      @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@index([method])
 }
 
 model DispatchTicket {
@@ -1736,13 +1825,18 @@ model TransportService {
  */
 
 model BranchModuleConfig {
-  id              String   @id @default(cuid())
-  branchId        String   @unique
-  enableCashier   Boolean  @default(true)
-  enableDispatch  Boolean  @default(true)
-  updatedByUserId String?
-  updatedAt       DateTime @updatedAt
-  createdAt       DateTime @default(now())
+  id                                  String               @id @default(cuid())
+  branchId                            String               @unique
+  enableCashier                       Boolean              @default(true)
+  enableDispatch                      Boolean              @default(true)
+  paymentWorkflowMode                 PaymentWorkflowMode  @default(HYBRID)
+  dispatchWorkflowMode                DispatchWorkflowMode @default(ENABLED)
+  requireOpenCashSessionForDirectSale Boolean              @default(true)
+  allowSellerDirectPayment            Boolean              @default(true)
+  allowCashierQueue                   Boolean              @default(true)
+  updatedByUserId                     String?
+  updatedAt                           DateTime             @updatedAt
+  createdAt                           DateTime             @default(now())
 
   branch    Branch @relation(fields: [branchId], references: [id])
   updatedBy User?  @relation("BranchModuleConfigUpdatedBy", fields: [updatedByUserId], references: [id])

@@ -6,6 +6,7 @@ import {
   positiveMoneySchema,
   quantitySchema,
 } from "@/modules/shared/validators";
+import { paymentTenderSchema } from "@/modules/payments/validators";
 
 export const createSaleOrderSchema = z.object({
   branchId: z.string().cuid(),
@@ -51,4 +52,5 @@ export const saleOrderDirectSaleSchema = saleOrderTransportBaseSchema.extend({
   cashSessionId: z.string().cuid(),
   method: z.nativeEnum(PaymentMethod).optional(),
   referenceNumber: z.string().max(100).optional().nullable(),
+  tenders: z.array(paymentTenderSchema).min(1).max(4).optional(),
 }).superRefine(requireTransportAmount);
