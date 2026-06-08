@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { createInventoryMovement, listInventoryBalances, requestStockAdjustment, INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD } from "@/modules/inventory/service";

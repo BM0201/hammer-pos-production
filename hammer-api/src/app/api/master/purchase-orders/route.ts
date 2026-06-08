@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { listPurchaseOrders, createPurchaseOrder } from "@/modules/purchase-orders/service";

@@ -1,12 +1,11 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
-import { updateCategory, deleteOrDeactivateCategory } from "@/modules/catalog/service";
-import { updateCategorySchema } from "@/modules/catalog/validators";
-import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
-import { ok, fail } from "@/lib/api/response";
+import { ok } from "@/lib/api/response";
+import { toHttpErrorResponse } from "@/lib/http";
+import { deleteStockGroup, updateStockGroup, type StockGroupMemberInput } from "@/modules/catalog/stock-group-crud";
 
-export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+export async function PUT(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
@@ -14,13 +13,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     assertMaster(session);
 
     const { id } = await context.params;
-    const parsed = updateCategorySchema.safeParse(await request.json());
-    if (!parsed.success) {
-      return fail("VALIDATION_ERROR", "Invalid payload", 400);
-    }
+    const body = (await request.json().catch(() => ({}))) as {
+      name?: string;
+      isActive?: boolean;
+      members?: StockGroupMemberInput[];
+    };
 
-    const category = await updateCategory(id, { ...parsed.data, actorUserId: session.userId });
-    return ok(category);
+    const group = await updateStockGroup(
+      id,
+      { name: body.name, isActive: body.isActive, members: body.members },
+      session.userId,
+    );
+
+    return ok(group);
   } catch (error) {
     return toHttpErrorResponse(error);
   }
@@ -34,8 +39,9 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     assertMaster(session);
 
     const { id } = await context.params;
-    const result = await deleteOrDeactivateCategory(id, session.userId);
-    return ok(result);
+    const group = await deleteStockGroup(id, session.userId);
+
+    return ok(group);
   } catch (error) {
     return toHttpErrorResponse(error);
   }
