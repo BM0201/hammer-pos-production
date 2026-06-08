@@ -125,6 +125,14 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
       groupsUpserted += 1;
 
       for (const product of suggestion.products) {
+        await tx.productStockGroupMember.updateMany({
+          where: {
+            productId: product.productId,
+            stockGroupId: { not: group.id },
+            isActive: true,
+          },
+          data: { isActive: false, isCanonical: false },
+        });
         await tx.productStockGroupMember.upsert({
           where: { stockGroupId_productId: { stockGroupId: group.id, productId: product.productId } },
           create: {

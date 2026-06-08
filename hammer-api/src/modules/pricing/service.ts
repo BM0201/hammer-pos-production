@@ -396,6 +396,38 @@ export async function getProductPricingContext(input: { productId: string; branc
 
 export async function applySuggestedPrice(input: ApplyPricingInput & { actorUserId: string }) {
   const warnings: string[] = [];
+  const snapshot = input.calculationSnapshot;
+  const snapshotRecord = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+    ? snapshot as Record<string, any>
+    : null;
+  const snapshotBlockReason = typeof snapshotRecord?.applyBlockReason === "string"
+    ? snapshotRecord.applyBlockReason
+    : null;
+  const snapshotCanApplyPrice = typeof snapshotRecord?.canApplyPrice === "boolean"
+    ? snapshotRecord.canApplyPrice
+    : undefined;
+  const snapshotMarketConflictType = typeof snapshotRecord?.marketConflict?.type === "string"
+    ? snapshotRecord.marketConflict.type
+    : null;
+  const blockReason = input.applyBlockReason ?? snapshotBlockReason ?? snapshotMarketConflictType;
+  const cannotApply = input.canApplyPrice === false
+    || snapshotCanApplyPrice === false
+    || blockReason === "MARKET_MAX_BELOW_MIN_PRICE"
+    || (input.minPrice !== undefined && input.maxPrice !== undefined && input.maxPrice !== null && input.maxPrice < input.minPrice)
+    || (input.totalInternalCost !== undefined && input.suggestedPrice < input.totalInternalCost);
+
+  if (cannotApply) {
+    const error = new Error("PRICE_APPLICATION_BLOCKED");
+    (error as any).details = {
+      reason: blockReason ?? "PRICE_BELOW_PROFITABLE_MINIMUM",
+      minPrice: input.minPrice ?? null,
+      maxPrice: input.maxPrice ?? null,
+      totalInternalCost: input.totalInternalCost ?? null,
+      suggestedPrice: input.suggestedPrice,
+    };
+    throw error;
+  }
+
   if (input.maxPrice !== undefined && input.maxPrice !== null && input.suggestedPrice > input.maxPrice) {
     warnings.push("El precio sugerido supera el precio maximo de mercado indicado.");
   }

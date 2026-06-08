@@ -30,6 +30,38 @@ export async function listSaleOrders(params: { branchId: string; includeAllBranc
   });
 }
 
+export async function getOrCreateActiveDraftSaleOrder(input: {
+  branchId: string;
+  actorUserId: string;
+}) {
+  const existing = await prisma.saleOrder.findFirst({
+    where: {
+      branchId: input.branchId,
+      createdByUserId: input.actorUserId,
+      status: SaleOrderStatus.DRAFT,
+    },
+    include: {
+      lines: {
+        include: {
+          product: {
+            select: { id: true, name: true, sku: true },
+          },
+        },
+      },
+      branch: true,
+      createdBy: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  if (existing) return existing;
+
+  return createDraftSaleOrder({
+    branchId: input.branchId,
+    actorUserId: input.actorUserId,
+  });
+}
+
 export async function createDraftSaleOrder(input: {
   branchId: string;
   customerId?: string | null;
@@ -255,6 +287,7 @@ export async function updateSaleOrderLine(input: {
   quantity?: number;
   unitPrice?: number;
   discountAmount?: number;
+  discountPercent?: number;
   actorUserId: string;
   actorRole?: string;
   overrideReason?: string | null;
@@ -287,7 +320,9 @@ export async function updateSaleOrderLine(input: {
 
     const quantity = new Prisma.Decimal(input.quantity ?? existing.quantity);
     const unitPrice = new Prisma.Decimal(input.unitPrice ?? existing.unitPrice);
-    const discountAmount = new Prisma.Decimal(input.discountAmount ?? existing.discountAmount);
+    const discountAmount = input.discountPercent !== undefined && input.discountAmount === undefined
+      ? unitPrice.mul(quantity).mul(input.discountPercent).div(100)
+      : new Prisma.Decimal(input.discountAmount ?? existing.discountAmount);
     const pricing = await getEffectiveProductPricing(tx, { branchId: order.branchId, productId: existing.productId });
     const categoryPolicy = await resolvePolicyForProduct({ branchId: order.branchId, productId: existing.productId });
     const commercialIntelligence = await buildCommercialIntelligenceForProduct({ branchId: order.branchId, productId: existing.productId });

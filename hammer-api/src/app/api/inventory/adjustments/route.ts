@@ -4,7 +4,7 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { createInventoryMovement, listInventoryBalances, requestStockAdjustment, INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD } from "@/modules/inventory/service";
 import { stockAdjustmentSchema } from "@/modules/inventory/validators";
 import { toHttpErrorResponse } from "@/lib/http";
-import { canRequestStockAdjustment } from "@/modules/inventory/policy";
+import { canExecuteDirectStockAdjustment } from "@/modules/inventory/policy";
 import { logAuditEvent } from "@/modules/audit/service";
 import { hasBranchAccess } from "@/modules/rbac/guards";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
       return ok({ status: "NO_CHANGES", message: "El inventario ya coincide con la cantidad solicitada." });
     }
 
-    if (absDelta <= INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD && canRequestStockAdjustment(session.roleCode)) {
+    if (absDelta <= INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD && canExecuteDirectStockAdjustment(session.roleCode)) {
       const movementType = delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT";
       const unitCost = Number(balances[0]?.weightedAverageCost ?? 0);
       const data = await createInventoryMovement({

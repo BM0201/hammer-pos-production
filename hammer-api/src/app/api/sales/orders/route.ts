@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { isMaster } from "@/modules/rbac/guards";
-import { createDraftSaleOrder, listSaleOrders } from "@/modules/sales/service";
+import { createDraftSaleOrder, getOrCreateActiveDraftSaleOrder, listSaleOrders } from "@/modules/sales/service";
 import { createSaleOrderSchema } from "@/modules/sales/validators";
 import { logAuditEvent } from "@/modules/audit/service";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -22,9 +22,21 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const branchId = searchParams.get("branchId") ?? "";
+    const activeDraft = searchParams.get("activeDraft");
 
     if (!isMaster(session) && !canInBranch(session, branchId, CAPABILITIES.SALES_VIEW)) {
       return fail("FORBIDDEN", "Forbidden", 403);
+    }
+
+    if (activeDraft === "mine") {
+      if (!canInBranch(session, branchId, CAPABILITIES.SALES_DRAFT_MANAGE)) {
+        return fail("FORBIDDEN", "Forbidden", 403);
+      }
+      const data = await getOrCreateActiveDraftSaleOrder({
+        branchId,
+        actorUserId: session.userId,
+      });
+      return ok(data);
     }
 
     const data = await listSaleOrders({ branchId, includeAllBranches: isMaster(session) && !branchId });

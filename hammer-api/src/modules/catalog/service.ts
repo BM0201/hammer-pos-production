@@ -7,6 +7,7 @@ import { formatDualStock, getProductStockConversion, getSharedInventoryBalance }
 
 type CatalogProductWithBranchPricing = {
   id: string;
+  unit: string;
   standardSalePrice: Prisma.Decimal;
   branchProductSettings?: Array<{ branchId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null }>;
   inventoryBalances?: Array<{ branchId: string; quantityOnHand?: Prisma.Decimal; weightedAverageCost: Prisma.Decimal }>;
@@ -34,8 +35,12 @@ async function mapProductWithBranchInventory<TProduct extends CatalogProductWith
     categoryName: product.category?.name ?? null,
     effectiveCost: effective.effectiveCost,
     weightedAverageCost: effective.weightedAverageCost,
-    stockOnHand: shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
-    availableStock: shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
+    stockOnHand: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
+    availableStock: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
+    availableBaseStock: shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
+    availableSaleStock: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
+    baseUnit: conversion?.baseUnit ?? mapped.unit,
+    saleUnit: conversion?.saleUnit ?? mapped.unit,
     stockConversion: conversion ? {
       stockGroupId: conversion.stockGroupId,
       stockGroupCode: conversion.stockGroupCode,
