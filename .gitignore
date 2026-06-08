@@ -67,3 +67,6 @@ hammer-frontend/tests/e2e/.e2e-state.json
 # Keep deploy environment templates versioned
 !.env.example
 !**/.env.example
+
+# local validation artifacts
+node_modules/
