@@ -19,6 +19,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:deploy:standard": "prisma validate && prisma generate && prisma migrate deploy",
+    "seed": "tsx prisma/seed.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:prod": "tsx prisma/seed-production.ts",
     "auth:reset-master": "RESET_MASTER_PASSWORD=true tsx prisma/seed.ts",

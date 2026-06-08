@@ -53,8 +53,9 @@ export const CAPABILITIES = {
   INVENTORY_OPENING_BALANCE: "inventory.opening_balance",
   INVENTORY_IMPORT: "inventory.import",
   PRICING_VIEW: "pricing.view",
-  PRICING_EDIT_BRANCH: "pricing.edit.branch",
-  PRICING_EDIT_GLOBAL: "pricing.edit.global",
+  // [V2] Unified with backend (src/modules/rbac/policies.ts): use snake_case to keep a single source of truth.
+  PRICING_EDIT_BRANCH: "pricing.edit_branch",
+  PRICING_EDIT_GLOBAL: "pricing.edit_global",
   PURCHASES_VIEW: "purchases.view",
   PURCHASES_CREATE: "purchases.create",
   PURCHASES_APPROVE: "purchases.approve",
@@ -133,6 +134,12 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.POS_DIRECT_COLLECT,
     CAPABILITIES.POS_PRINT_QUOTE,
     CAPABILITIES.POS_PRINT_DELIVERY_ORDER,
+    // [V2] Legacy cash capabilities kept in sync with backend policies.ts
+    CAPABILITIES.CASH_VIEW,
+    CAPABILITIES.CASH_OPEN,
+    CAPABILITIES.CASH_CHARGE,
+    CAPABILITIES.CASH_CLOSE,
+    CAPABILITIES.CASH_SESSION_MANAGE,
     CAPABILITIES.CASH_BOX_VIEW,
     CAPABILITIES.CASH_BOX_MANAGE,
     CAPABILITIES.CASH_SESSION_OPEN,
@@ -156,6 +163,11 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.SALES_VIEW,
     CAPABILITIES.SALES_DRAFT_MANAGE,
     CAPABILITIES.SALES_SUBMIT_PAYMENT,
+    // [V2] Warehouse/inventory capabilities kept in sync with backend policies.ts
+    CAPABILITIES.WAREHOUSE_VIEW,
+    CAPABILITIES.DISPATCH_MARK,
+    CAPABILITIES.INVENTORY_VIEW,
+    CAPABILITIES.INVENTORY_ADJUST,
     CAPABILITIES.CASH_PAYMENTS_VIEW,
     CAPABILITIES.CASH_PAYMENTS_COLLECT,
     CAPABILITIES.CASH_SESSION_OPERATE,
@@ -226,6 +238,10 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.PRINT_LOG_VIEW,
   ],
   WAREHOUSE: [
+    // [V2] Warehouse/inventory capabilities kept in sync with backend policies.ts
+    CAPABILITIES.WAREHOUSE_VIEW,
+    CAPABILITIES.INVENTORY_VIEW,
+    CAPABILITIES.INVENTORY_ADJUST,
     CAPABILITIES.BRANCH_DASHBOARD_VIEW,
     CAPABILITIES.BRANCH_INVENTORY_VIEW,
     CAPABILITIES.INVENTORY_MOVEMENT_POST,
