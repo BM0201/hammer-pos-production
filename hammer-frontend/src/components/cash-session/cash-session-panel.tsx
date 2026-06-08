@@ -61,6 +61,9 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
   const [reconcilingSessionId, setReconcilingSessionId] = useState("");
   const [busyAction, setBusyAction] = useState<"open" | "requestClose" | "close" | "review" | null>(null);
   const [loadError, setLoadError] = useState(false);
+  // CORRECCIÓN 2 (UX): el formulario de revisión de cierre automático se muestra
+  // colapsado por defecto para que el botón "Abrir sesión" quede siempre visible.
+  const [showReviewForm, setShowReviewForm] = useState(false);
   const isReconciling = Boolean(reconcilingSessionId);
 
   const canOpen = useMemo(() => !!selectedCashBoxId && !activeSession && !reconcilingSessionId, [selectedCashBoxId, activeSession, reconcilingSessionId]);
@@ -395,6 +398,43 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
         </label>
       ) : null}
 
+      {/* CORRECCIÓN 2 (UX): Acción principal SIEMPRE visible.
+          "Abrir sesión" se muestra arriba en una tarjeta destacada, antes que el
+          formulario de revisión de cierre automático (que ahora es colapsable),
+          para que el botón nunca quede empujado fuera de la vista. */}
+      {!activeSession && !isReconciling && cashBoxes.length > 0 && (
+        <div className="rounded-xl border-2 border-[var(--color-success-200)] bg-[var(--color-success-50)] p-4 space-y-3">
+          <p className="text-sm font-medium text-[var(--color-success-700)]">
+            No hay sesión abierta. Ingresa el monto de apertura y abre una sesión para comenzar a cobrar.
+          </p>
+          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+            <div>
+              <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Monto de apertura (C$)</label>
+              <input
+                className="hm-input rounded-xl"
+                type="number"
+                min="0"
+                step="0.01"
+                value={openingAmount}
+                onChange={(event) => setOpeningAmount(event.target.value)}
+                placeholder="Monto apertura"
+                disabled={Boolean(busyAction)}
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                className="w-full rounded-xl bg-[var(--color-success-600)] hover:bg-[var(--color-success-700)] px-5 py-2.5 text-sm font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                onClick={openSession}
+                disabled={!canOpen || Boolean(busyAction)}
+                data-testid="cash-session-open"
+              >
+                {busyAction === "open" ? "Abriendo..." : "Abrir sesión"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Session details when open */}
       {activeSession && (
         <div className="rounded-xl border border-[var(--color-success-100)] bg-[var(--color-success-50)] p-4 text-sm space-y-1">
@@ -403,129 +443,6 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
           </div>
           <div className="text-[var(--color-success-700)]">
             <strong>Monto de apertura:</strong> C$ {Number(activeSession.openingAmount).toFixed(2)}
-          </div>
-        </div>
-      )}
-
-      {pendingAutoClosedSessions.length > 0 && (
-        <div className="rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-4 text-sm space-y-3">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="font-semibold text-[var(--color-warning-700)]">Cierre automatico pendiente de revision</p>
-              <p className="text-xs text-[var(--color-text-muted)]">Esta caja fue cerrada por horario. No se pueden cobrar pagos sobre esa sesion.</p>
-            </div>
-            <span className="rounded-full border border-[var(--color-warning-200)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-semibold text-[var(--color-warning-700)]">
-              {pendingAutoClosedSessions.length} pendiente{pendingAutoClosedSessions.length !== 1 ? "s" : ""}
-            </span>
-          </div>
-
-          <label className="grid gap-1.5">
-            <span className="text-xs font-semibold text-[var(--color-text-muted)]">Sesion a revisar</span>
-            <select
-              className="hm-input rounded-xl"
-              value={reviewingSessionId}
-              onChange={(event) => {
-                const next = pendingAutoClosedSessions.find((item) => item.id === event.target.value);
-                setReviewingSessionId(event.target.value);
-                setReviewAmount(next?.expectedCashAmount ? Number(next.expectedCashAmount).toFixed(2) : "");
-              }}
-              disabled={Boolean(busyAction)}
-            >
-              {pendingAutoClosedSessions.map((session) => (
-                <option key={session.id} value={session.id}>
-                  {session.physicalCashBox?.code ?? "Caja"} - {session.autoClosedAt ? new Date(session.autoClosedAt).toLocaleString() : "auto-cierre"}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {reviewingSession && (
-            <div className="grid gap-3 md:grid-cols-3">
-              <div className="rounded-lg border border-[var(--color-warning-100)] bg-[var(--color-surface)] p-3">
-                <p className="text-xs text-[var(--color-text-muted)]">Monto esperado</p>
-                <p className="font-semibold text-[var(--color-text)]">C$ {expectedForReview.toFixed(2)}</p>
-              </div>
-              <label className="grid gap-1.5">
-                <span className="text-xs font-semibold text-[var(--color-text-muted)]">Monto contado real</span>
-                <input
-                  className="hm-input rounded-xl"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={reviewAmount}
-                  onChange={(event) => setReviewAmount(event.target.value)}
-                  disabled={Boolean(busyAction)}
-                />
-              </label>
-              <div className={`rounded-lg border p-3 ${Math.abs(reviewDifference) > 5 ? "border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`}>
-                <p className="text-xs text-[var(--color-text-muted)]">Diferencia</p>
-                <p className="font-semibold text-[var(--color-text)]">C$ {reviewDifference.toFixed(2)}</p>
-              </div>
-            </div>
-          )}
-
-          <label className="grid gap-1.5">
-            <span className="text-xs font-semibold text-[var(--color-text-muted)]">Nota de revision</span>
-            <textarea
-              className="hm-input min-h-20 rounded-xl px-3 py-2"
-              value={reviewNote}
-              onChange={(event) => setReviewNote(event.target.value)}
-              placeholder="Describe el conteo fisico y cualquier diferencia."
-              disabled={Boolean(busyAction)}
-            />
-          </label>
-
-          <div className="flex justify-end">
-            <button
-              className="rounded-xl bg-[var(--color-warning-600)] px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[var(--color-warning-700)] disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={reviewAutoClosedSession}
-              disabled={!reviewingSessionId || !reviewNote.trim() || Boolean(busyAction)}
-            >
-              {busyAction === "review" ? "Revisando..." : "Revisar cierre"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* No session message */}
-      {!activeSession && !isReconciling && cashBoxes.length > 0 && (
-        <div className="rounded-xl border border-[var(--color-warning-100)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
-          No hay sesión abierta. Ingresa el monto de apertura y abre una sesión para comenzar a cobrar.
-        </div>
-      )}
-
-      {/* Reconciling message */}
-      {isReconciling && (
-        <div className="rounded-xl border border-[var(--color-warning-100)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
-          Sesión en conciliación. Ingresa el monto de cierre y confirma.
-        </div>
-      )}
-
-      {/* Open session controls */}
-      {!activeSession && !isReconciling && cashBoxes.length > 0 && (
-        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <div>
-            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Monto de apertura (C$)</label>
-            <input
-              className="hm-input rounded-xl"
-              type="number"
-              min="0"
-              step="0.01"
-              value={openingAmount}
-              onChange={(event) => setOpeningAmount(event.target.value)}
-              placeholder="Monto apertura"
-              disabled={Boolean(busyAction)}
-            />
-          </div>
-          <div className="flex items-end">
-            <button
-              className="rounded-xl bg-[var(--color-success-600)] hover:bg-[var(--color-success-700)] px-5 py-2.5 text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-              onClick={openSession}
-              disabled={!canOpen || Boolean(busyAction)}
-              data-testid="cash-session-open"
-            >
-              {busyAction === "open" ? "Abriendo..." : "Abrir sesion"}
-            </button>
           </div>
         </div>
       )}
@@ -541,6 +458,13 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
           >
             {busyAction === "requestClose" ? "Procesando..." : "Solicitar cierre"}
           </button>
+        </div>
+      )}
+
+      {/* Reconciling message */}
+      {isReconciling && (
+        <div className="rounded-xl border border-[var(--color-warning-100)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
+          Sesión en conciliación. Ingresa el monto de cierre y confirma.
         </div>
       )}
 
@@ -570,6 +494,107 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
               {busyAction === "close" ? "Cerrando..." : "Cerrar sesion"}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* CORRECCIÓN 2 (UX): Revisión de cierre automático — indicador claro + colapsable.
+          Se ubica DESPUÉS de la acción principal y queda colapsado por defecto para
+          no desplazar el botón "Abrir sesión". */}
+      {pendingAutoClosedSessions.length > 0 && (
+        <div className="rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-4 text-sm space-y-3" data-testid="cash-session-pending-review">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-2">
+              <span className="mt-1 inline-flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-[var(--color-warning-500)]" />
+              <div>
+                <p className="font-semibold text-[var(--color-warning-700)]">⚠ Cierre automático pendiente de revisión</p>
+                <p className="text-xs text-[var(--color-text-muted)]">Esta caja fue cerrada por horario. No se pueden cobrar pagos sobre esa sesión hasta revisarla.</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full border border-[var(--color-warning-200)] bg-[var(--color-surface)] px-2.5 py-1 text-xs font-semibold text-[var(--color-warning-700)]">
+                {pendingAutoClosedSessions.length} pendiente{pendingAutoClosedSessions.length !== 1 ? "s" : ""}
+              </span>
+              <button
+                type="button"
+                className="rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-surface)] px-3 py-1.5 text-xs font-semibold text-[var(--color-warning-700)] transition-colors hover:bg-[var(--color-warning-100)]"
+                onClick={() => setShowReviewForm((value) => !value)}
+                data-testid="cash-session-toggle-review"
+                aria-expanded={showReviewForm}
+              >
+                {showReviewForm ? "Ocultar revisión" : "Revisar ahora"}
+              </button>
+            </div>
+          </div>
+
+          {showReviewForm && (
+            <div className="space-y-3 border-t border-[var(--color-warning-200)] pt-3">
+              <label className="grid gap-1.5">
+                <span className="text-xs font-semibold text-[var(--color-text-muted)]">Sesion a revisar</span>
+                <select
+                  className="hm-input rounded-xl"
+                  value={reviewingSessionId}
+                  onChange={(event) => {
+                    const next = pendingAutoClosedSessions.find((item) => item.id === event.target.value);
+                    setReviewingSessionId(event.target.value);
+                    setReviewAmount(next?.expectedCashAmount ? Number(next.expectedCashAmount).toFixed(2) : "");
+                  }}
+                  disabled={Boolean(busyAction)}
+                >
+                  {pendingAutoClosedSessions.map((session) => (
+                    <option key={session.id} value={session.id}>
+                      {session.physicalCashBox?.code ?? "Caja"} - {session.autoClosedAt ? new Date(session.autoClosedAt).toLocaleString() : "auto-cierre"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {reviewingSession && (
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-lg border border-[var(--color-warning-100)] bg-[var(--color-surface)] p-3">
+                    <p className="text-xs text-[var(--color-text-muted)]">Monto esperado</p>
+                    <p className="font-semibold text-[var(--color-text)]">C$ {expectedForReview.toFixed(2)}</p>
+                  </div>
+                  <label className="grid gap-1.5">
+                    <span className="text-xs font-semibold text-[var(--color-text-muted)]">Monto contado real</span>
+                    <input
+                      className="hm-input rounded-xl"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={reviewAmount}
+                      onChange={(event) => setReviewAmount(event.target.value)}
+                      disabled={Boolean(busyAction)}
+                    />
+                  </label>
+                  <div className={`rounded-lg border p-3 ${Math.abs(reviewDifference) > 5 ? "border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`}>
+                    <p className="text-xs text-[var(--color-text-muted)]">Diferencia</p>
+                    <p className="font-semibold text-[var(--color-text)]">C$ {reviewDifference.toFixed(2)}</p>
+                  </div>
+                </div>
+              )}
+
+              <label className="grid gap-1.5">
+                <span className="text-xs font-semibold text-[var(--color-text-muted)]">Nota de revision</span>
+                <textarea
+                  className="hm-input min-h-20 rounded-xl px-3 py-2"
+                  value={reviewNote}
+                  onChange={(event) => setReviewNote(event.target.value)}
+                  placeholder="Describe el conteo fisico y cualquier diferencia."
+                  disabled={Boolean(busyAction)}
+                />
+              </label>
+
+              <div className="flex justify-end">
+                <button
+                  className="rounded-xl bg-[var(--color-warning-600)] px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[var(--color-warning-700)] disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={reviewAutoClosedSession}
+                  disabled={!reviewingSessionId || !reviewNote.trim() || Boolean(busyAction)}
+                >
+                  {busyAction === "review" ? "Revisando..." : "Revisar cierre"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -1952,8 +1952,17 @@ function MovementsPanel({
     if (movementType && movement.movementType !== movementType) return false;
     return true;
   });
-  const adjustmentProduct = products.find((product) => product.id === adjustment.productId);
-  const openingProduct = products.find((product) => product.id === opening.productId);
+  // CORRECCIÓN 1 (CRÍTICA): Cuando el usuario busca un producto, el seleccionado
+  // proviene de `openingSearchResults` (resultados de la búsqueda por API) y NO
+  // necesariamente está en la lista base `products`, que viene paginada. Si solo
+  // buscábamos en `products`, el producto seleccionado quedaba como `undefined` y
+  // la carga inicial de inventario fallaba silenciosamente. Por eso buscamos primero
+  // en los resultados de búsqueda activos y luego en la lista base como respaldo.
+  const findProductById = (id: string): ProductRow | undefined =>
+    (id ? openingSearchResults.find((product) => product.id === id) : undefined) ??
+    products.find((product) => product.id === id);
+  const adjustmentProduct = findProductById(adjustment.productId);
+  const openingProduct = findProductById(opening.productId);
   function currentBaseStockForProduct(product?: ProductRow) {
     if (!product) return 0;
     if (product.stockConversion) {
@@ -2097,7 +2106,9 @@ function MovementsPanel({
   }
 
   function editOpeningLine(line: OpeningBalanceTrayLine) {
-    const product = products.find((item) => item.id === line.productId);
+    // CORRECCIÓN 1: usar el mismo respaldo de búsqueda para no perder el producto
+    // si fue seleccionado desde los resultados de búsqueda y no está en `products`.
+    const product = findProductById(line.productId);
     setOpening({
       productId: line.productId,
       quantity: String(line.quantity),

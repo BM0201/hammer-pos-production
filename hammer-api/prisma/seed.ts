@@ -1,5 +1,5 @@
 /**
- * seed.ts — Development / local seed  [V2 — POS/Cashier/Payments + Iron module]
+ * seed.ts — Development / local seed  [V2 — POS/Cashier/Payments]
  *
  * Idempotent: safe to run multiple times without duplicating data.
  *
@@ -7,17 +7,22 @@
  *   1. Branch "Managua Central" (MGA) + MASTER user (kept from V1).
  *   2. Branch "Masaya Central" (MSY) configured in HYBRID payment workflow.
  *   3. Physical cash box "Caja Principal Masaya".
- *   4. Category "Hierro" (iron) — physical category for quintal/varilla products.
- *   5. Iron products: HIERRO 3/8, 1/2, 1/4 (quintal) + VARILLA HIERRO 3/8, 1/2, 1/4.
- *   6. Iron stock groups (shared stock) linking varilla (canonical) <-> quintal.
- *   7. Test users: vendedor (SALES), cajero (CASHIER),
+ *   4. Test users: vendedor (SALES), cajero (CASHIER),
  *      vendedor-cajero (SALES + CASHIER), admin (BRANCH_ADMIN).
+ *
+ * NOTA (CORRECCIÓN 3): La categoría "Hierro" se crea MANUALMENTE en producción
+ * desde el módulo de administración (/app/master) y los productos de hierro se
+ * agrupan manualmente con el endpoint MASTER `POST /api/catalog/stock-groups/
+ * bootstrap-iron`. La lógica de agrupación/conversión vive en
+ * `src/modules/catalog/unit-conversion.ts` (detección por nombre del producto:
+ * "HIERRO ..." / "VARILLA HIERRO ..."). Por eso este seed NO crea la categoría
+ * "Hierro" ni productos de hierro.
  *
  * Run with:  npm run seed        (alias of `tsx prisma/seed.ts`)
  *        or:  npx prisma db seed
  */
 
-import { Prisma, PrismaClient, RoleCode } from "@prisma/client";
+import { PrismaClient, RoleCode } from "@prisma/client";
 import { hashPassword } from "../src/modules/auth/password";
 
 const prisma = new PrismaClient();
@@ -36,13 +41,6 @@ const MSY_NAME = "Masaya Central";
 
 // Default password for all demo operative users.
 const DEMO_PASSWORD = process.env.DEMO_USERS_PASSWORD ?? "Hammer1234!";
-
-// Iron sizes -> bars per quintal (must match unit-conversion.ts).
-const IRON_SIZES: { label: string; code: string; barsPerQuintal: number; quintalPrice: number; varillaPrice: number }[] = [
-  { label: "3/8", code: "HIERRO_3_8", barsPerQuintal: 14, quintalPrice: 3500, varillaPrice: 270 },
-  { label: "1/2", code: "HIERRO_1_2", barsPerQuintal: 8, quintalPrice: 3800, varillaPrice: 510 },
-  { label: "1/4", code: "HIERRO_1_4", barsPerQuintal: 30, quintalPrice: 3300, varillaPrice: 120 },
-];
 
 async function main(): Promise<void> {
   console.log("🔧 Seed (development, V2) — starting …");
@@ -126,81 +124,16 @@ async function main(): Promise<void> {
   });
   console.log(`  ✔ Physical cash box "Caja Principal Masaya" (${masayaCashBox.code})`);
 
-  // ── 4. Category "Hierro" ─────────────────────────────────────────────────────
-  const hierro = await prisma.category.upsert({
-    where: { code: "HIERRO" },
-    update: { name: "Hierro", isActive: true },
-    create: { code: "HIERRO", name: "Hierro", isActive: true },
-  });
-  console.log(`  ✔ Category "${hierro.name}" (${hierro.code})`);
+  // ── CORRECCIÓN 3: Categoría "Hierro" y productos de hierro ───────────────────
+  // Este seed NO crea la categoría "Hierro" ni productos de hierro.
+  // En producción la categoría "Hierro" se crea MANUALMENTE desde /app/master,
+  // y los productos de hierro se agrupan manualmente con el endpoint MASTER:
+  //   POST /api/catalog/stock-groups/bootstrap-iron
+  // La lógica de detección/conversión (3/8 = 14 varillas/quintal, 1/2 = 8,
+  // 1/4 = 30) vive en `src/modules/catalog/unit-conversion.ts` y se mantiene
+  // intacta. No se siembra nada de hierro aquí para evitar datos huérfanos.
 
-  // ── 5 + 6. Iron products + shared stock groups ──────────────────────────────
-  for (const size of IRON_SIZES) {
-    // QUINTAL product (name MUST start with "HIERRO" for unit-conversion detection)
-    const quintal = await prisma.product.upsert({
-      where: { sku: `${size.code}_Q` },
-      update: { name: `HIERRO ${size.label}`, categoryId: hierro.id, unit: "quintal", standardSalePrice: new Prisma.Decimal(size.quintalPrice), isActive: true },
-      create: {
-        sku: `${size.code}_Q`,
-        name: `HIERRO ${size.label}`,
-        categoryId: hierro.id,
-        unit: "quintal",
-        allowsFraction: false,
-        standardSalePrice: new Prisma.Decimal(size.quintalPrice),
-        isActive: true,
-      },
-    });
-
-    // VARILLA product (name MUST start with "VARILLA HIERRO" for detection; canonical/base unit)
-    const varilla = await prisma.product.upsert({
-      where: { sku: `${size.code}_V` },
-      update: { name: `VARILLA HIERRO ${size.label}`, categoryId: hierro.id, unit: "varilla", standardSalePrice: new Prisma.Decimal(size.varillaPrice), isActive: true },
-      create: {
-        sku: `${size.code}_V`,
-        name: `VARILLA HIERRO ${size.label}`,
-        categoryId: hierro.id,
-        unit: "varilla",
-        allowsFraction: false,
-        standardSalePrice: new Prisma.Decimal(size.varillaPrice),
-        isActive: true,
-      },
-    });
-
-    // Stock group (baseUnit = VARILLA). Canonical = varilla (factor 1). Quintal = N bars.
-    const group = await prisma.productStockGroup.upsert({
-      where: { code: size.code },
-      update: { name: `Hierro ${size.label} - stock compartido`, baseUnit: "VARILLA", categoryId: hierro.id, isActive: true },
-      create: { code: size.code, name: `Hierro ${size.label} - stock compartido`, baseUnit: "VARILLA", categoryId: hierro.id },
-    });
-
-    await prisma.productStockGroupMember.upsert({
-      where: { stockGroupId_productId: { stockGroupId: group.id, productId: varilla.id } },
-      update: { saleUnit: "VARILLA", conversionFactor: new Prisma.Decimal(1), isCanonical: true, isActive: true },
-      create: { stockGroupId: group.id, productId: varilla.id, saleUnit: "VARILLA", conversionFactor: new Prisma.Decimal(1), isCanonical: true },
-    });
-    await prisma.productStockGroupMember.upsert({
-      where: { stockGroupId_productId: { stockGroupId: group.id, productId: quintal.id } },
-      update: { saleUnit: "QUINTAL", conversionFactor: new Prisma.Decimal(size.barsPerQuintal), isCanonical: false, isActive: true },
-      create: { stockGroupId: group.id, productId: quintal.id, saleUnit: "QUINTAL", conversionFactor: new Prisma.Decimal(size.barsPerQuintal), isCanonical: false },
-    });
-
-    // Seed shared inventory balance on the canonical (varilla) product for Masaya.
-    await prisma.inventoryBalance.upsert({
-      where: { branchId_productId: { branchId: msy.id, productId: varilla.id } },
-      update: {},
-      create: {
-        branchId: msy.id,
-        productId: varilla.id,
-        quantityOnHand: new Prisma.Decimal(size.barsPerQuintal * 5), // ~5 quintales worth of bars
-        weightedAverageCost: new Prisma.Decimal(size.varillaPrice).mul(new Prisma.Decimal("0.8")),
-        inventoryValue: new Prisma.Decimal(size.barsPerQuintal * 5).mul(new Prisma.Decimal(size.varillaPrice).mul(new Prisma.Decimal("0.8"))),
-      },
-    });
-
-    console.log(`  ✔ Iron group ${size.code}: HIERRO ${size.label} (quintal=${size.barsPerQuintal} varillas) + VARILLA HIERRO ${size.label}`);
-  }
-
-  // ── 7. Operative test users ──────────────────────────────────────────────────
+  // ── 4. Operative test users ──────────────────────────────────────────────────
   const demoHash = hashPassword(DEMO_PASSWORD);
 
   type DemoUser = { username: string; fullName: string; email: string; roles: RoleCode[] };
@@ -248,7 +181,6 @@ async function main(): Promise<void> {
       entityId: masterUser.id,
       metadataJson: {
         branches: [MGA_CODE, MSY_CODE],
-        ironGroups: IRON_SIZES.map((s) => s.code),
         demoUsers: demoUsers.map((u) => u.username),
         environment: "development",
       },
@@ -262,7 +194,7 @@ async function main(): Promise<void> {
   console.log(`   Demo password:   ${DEMO_PASSWORD}`);
   console.log(`   Demo branch:     ${MSY_NAME} (${MSY_CODE}) — HYBRID`);
   console.log(`   Cash box:        Caja Principal Masaya`);
-  console.log(`   Iron category:   Hierro (3/8, 1/2, 1/4 — quintal + varilla)`);
+  console.log(`   Categoría Hierro: se crea manualmente en /app/master (no se siembra)`);
   console.log("   ──────────────────────────────────────────────");
 }
 
