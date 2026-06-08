@@ -1,10 +1,16 @@
 "use client";
 
-import { CashierPayments } from "@/components/payments/cashier-payments";
+import { CashSessionPanel } from "@/components/cash-session/cash-session-panel";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 
-export default function BranchCashierPaymentsPage() {
+/**
+ * FASE 3 (UX): pantalla "Caja".
+ * Solo se encarga del control de la sesión de caja física:
+ * abrir, conciliar y cerrar la caja del día. La cola de cobro de
+ * órdenes vive en una pantalla separada ("Cobros").
+ */
+export default function BranchCashPage() {
   const sessionState = useSession();
 
   if (sessionState.status === "loading") {
@@ -22,12 +28,12 @@ export default function BranchCashierPaymentsPage() {
   return (
     <section className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold text-[var(--color-text)]">Cobros</h1>
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Caja</h1>
         <p className="text-sm text-[var(--color-text-muted)]">
-          Cola de órdenes pendientes de cobro. El control de apertura y cierre de caja está en la pantalla <strong>Caja</strong>.
+          Abre, concilia y cierra la sesión de la caja física. Para cobrar órdenes usa la pantalla <strong>Cobros</strong>.
         </p>
       </div>
-      <CashierPayments branchId={branchId} />
+      <CashSessionPanel branchId={branchId} />
     </section>
   );
 }

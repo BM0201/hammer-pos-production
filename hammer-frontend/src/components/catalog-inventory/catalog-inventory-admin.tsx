@@ -213,31 +213,6 @@ type BranchPricingCostRow = {
   warnings: string[];
 };
 
-type OpeningBalanceTrayLine = {
-  productId: string;
-  sku: string;
-  name: string;
-  categoryName: string;
-  quantity: number;
-  unit: string;
-  unitCost: number | null;
-  costMode: string;
-  salePrice: number | null;
-  priceMode: string;
-  notes?: string;
-  currentBaseStock: number;
-  enteredBaseQuantity: number;
-  finalBaseStock: number;
-  deltaBaseQuantity: number;
-  currentSaleStock: number;
-  finalSaleStock: number;
-  effectiveCost: number | null;
-  effectivePrice: number | null;
-  estimatedMargin: number | null;
-  priceBelowCost: boolean;
-  lowMargin: boolean;
-};
-
 type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "transfers" | "reorder" | "audit";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
@@ -1847,6 +1822,378 @@ function ImportPreviewTable({ items }: { items: ImportPreviewItem[] }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   OPENING BALANCE MODAL — FULL REWRITE (Carga inicial)
+   Flujo simple solicitado por el usuario:
+   1) Buscar producto y hacer clic -> se agrega a la tabla al instante.
+   2) Editar cantidad / costo / precio directamente en la tabla (inline).
+   3) Agregar mas productos repitiendo el paso 1.
+   4) "Guardar carga inicial" envia todas las lineas de una sola vez.
+   ═══════════════════════════════════════════════════════════ */
+type OpeningLine = {
+  productId: string;
+  sku: string;
+  name: string;
+  categoryName: string;
+  unit: string;
+  saleUnit: string;
+  baseUnit: string;
+  hasConversion: boolean;
+  conversionFactor: number;
+  currentBaseStock: number;
+  cantidad: string;
+  costo: string;
+  precioVenta: string;
+};
+
+function OpeningBalanceModal({
+  branches,
+  fallbackProducts,
+  activeBranchId,
+  onSelectBranch,
+  onClose,
+  onDone,
+}: {
+  branches: Branch[];
+  fallbackProducts: ProductRow[];
+  activeBranchId: string;
+  onSelectBranch: (branchId: string) => void;
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK">("SET_PHYSICAL_STOCK");
+  const [reason, setReason] = useState("Carga inicial de inventario");
+  const [notes, setNotes] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<ProductRow[]>(fallbackProducts.slice(0, 12));
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [lines, setLines] = useState<OpeningLine[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
+
+  function currentBaseStockOf(product: ProductRow): number {
+    if (product.stockConversion) {
+      return numberOrNull(product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand) ?? 0;
+    }
+    return numberOrNull(product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand) ?? 0;
+  }
+
+  // Buscador con debounce contra el catalogo (mismo endpoint que ya se usaba).
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      const params = new URLSearchParams();
+      const term = search.trim();
+      if (term) params.set("q", term);
+      if (activeBranchId) params.set("branchId", activeBranchId);
+      params.set("page", "1");
+      params.set("limit", "20");
+      setSearchLoading(true);
+      try {
+        const response = await fetch(`/api/master/catalog-inventory?${params}`, { cache: "no-store", signal: controller.signal });
+        const raw = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo buscar productos.");
+        const payload = unwrapApiData(raw) as CenterData;
+        setSearchResults(payload.products ?? []);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setSearchResults(fallbackProducts.slice(0, 12));
+        }
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 280);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeBranchId, search, fallbackProducts]);
+
+  // Al hacer clic en un resultado: se agrega de inmediato a la tabla (o hace foco si ya existe).
+  function addProduct(product: ProductRow) {
+    setLines((prev) => {
+      if (prev.some((line) => line.productId === product.id)) {
+        toast("Ese producto ya esta en la lista.");
+        return prev;
+      }
+      const pricing = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
+      const saleUnit = product.stockConversion?.saleUnit ?? product.unit ?? "UN";
+      const baseUnit = product.stockConversion?.baseUnit ?? product.unit ?? "UN";
+      const newLine: OpeningLine = {
+        productId: product.id,
+        sku: product.sku,
+        name: product.name,
+        categoryName: product.category?.name ?? "Sin categoria",
+        unit: saleUnit,
+        saleUnit,
+        baseUnit,
+        hasConversion: !!product.stockConversion,
+        conversionFactor: Number(product.stockConversion?.conversionFactor ?? 1) || 1,
+        currentBaseStock: currentBaseStockOf(product),
+        cantidad: "1",
+        costo: pricing?.effectiveCost != null ? String(pricing.effectiveCost) : "",
+        precioVenta: pricing?.effectivePrice != null ? String(pricing.effectivePrice) : "",
+      };
+      return [...prev, newLine];
+    });
+  }
+
+  function updateLine(productId: string, patch: Partial<OpeningLine>) {
+    setLines((prev) => prev.map((line) => (line.productId === productId ? { ...line, ...patch } : line)));
+  }
+
+  function removeLine(productId: string) {
+    setLines((prev) => prev.filter((line) => line.productId !== productId));
+  }
+
+  // Calcula la vista previa de una linea (stock final, margen, alertas).
+  function computeLine(line: OpeningLine) {
+    const cantidad = Number(line.cantidad);
+    const costo = numberOrNull(line.costo);
+    const precio = numberOrNull(line.precioVenta);
+    const isBaseUnit = line.hasConversion && line.unit === line.baseUnit;
+    const enteredBase = line.hasConversion && !isBaseUnit ? cantidad * line.conversionFactor : cantidad;
+    const finalBase = mode === "SET_PHYSICAL_STOCK" ? enteredBase : line.currentBaseStock + enteredBase;
+    const deltaBase = finalBase - line.currentBaseStock;
+    const margin = costo != null && costo > 0 && precio != null && precio > 0 ? ((precio - costo) / precio) * 100 : null;
+    const priceBelowCost = costo != null && precio != null && precio > 0 && precio < costo;
+    const validQuantity = Number.isFinite(cantidad) && cantidad > 0;
+    return { cantidad, costo, precio, enteredBase, finalBase, deltaBase, margin, priceBelowCost, validQuantity };
+  }
+
+  const summary = useMemo(() => {
+    let totalValue = 0;
+    let withoutCost = 0;
+    let withoutPrice = 0;
+    let belowCost = 0;
+    let invalidQty = 0;
+    for (const line of lines) {
+      const c = computeLine(line);
+      totalValue += c.finalBase * (c.costo ?? 0);
+      if (c.costo == null || c.costo <= 0) withoutCost += 1;
+      if (c.precio == null || c.precio <= 0) withoutPrice += 1;
+      if (c.priceBelowCost) belowCost += 1;
+      if (!c.validQuantity) invalidQty += 1;
+    }
+    return { totalProducts: lines.length, totalValue, withoutCost, withoutPrice, belowCost, invalidQty };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, mode]);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
+    if (!reason.trim() || reason.trim().length < 5) { toast.error("El motivo es obligatorio (minimo 5 caracteres)."); return; }
+    if (lines.length === 0) { toast.error("Agrega al menos un producto a la carga."); return; }
+    if (summary.invalidQty > 0) { toast.error("Hay productos con cantidad invalida. Corrigelos antes de guardar."); return; }
+    if (summary.belowCost > 0 && !window.confirm("Hay productos con precio por debajo del costo. Confirma explicitamente que deseas continuar.")) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await apiFetch("/api/inventory/opening-balance/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId: activeBranchId,
+          mode,
+          reason: reason.trim(),
+          notes: notes.trim() || undefined,
+          lines: lines.map((line) => {
+            const costo = numberOrNull(line.costo);
+            const precio = numberOrNull(line.precioVenta);
+            const hasCost = costo != null && costo > 0;
+            const hasPrice = precio != null && precio > 0;
+            return {
+              productId: line.productId,
+              quantity: Number(line.cantidad),
+              unit: line.unit,
+              unitCost: hasCost ? costo : null,
+              costMode: hasCost ? "SET_WAC" : "QUANTITY_ONLY",
+              salePrice: hasPrice ? precio : null,
+              priceMode: hasPrice ? "SET_BRANCH_PRICE" : "NO_PRICE_CHANGE",
+            };
+          }),
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar la carga inicial.");
+      const result = unwrapApiData(payload);
+      toast.success(`Carga inicial completa: ${result.processed} procesados, ${result.skipped} sin cambio.`);
+      setLines([]);
+      onClose();
+      await onDone();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <form
+        className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+        onSubmit={(event) => submit(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar la carga inicial."))}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
+          <div>
+            <h3 className="text-sm font-semibold">Carga inicial de inventario</h3>
+            <p className="text-xs text-[var(--color-text-muted)]">Busca un producto, da clic para agregarlo y edita cantidad, costo y precio en la tabla. Al final guarda toda la carga.</p>
+          </div>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Cerrar</Button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          {/* Encabezado: sucursal + modo + motivo */}
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Sucursal</label>
+              <select className="hm-input w-full" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Modo de carga</label>
+              <select className="hm-input w-full" value={mode} onChange={(e) => setMode(e.target.value as "SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK")}>
+                <option value="SET_PHYSICAL_STOCK">Fijar stock fisico final (recomendado)</option>
+                <option value="ADD_OPENING_STOCK">Sumar al stock actual</option>
+              </select>
+            </div>
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Motivo (obligatorio)</label>
+              <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo de la carga inicial" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Nota (opcional)</label>
+              <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Observacion opcional" />
+            </div>
+          </div>
+
+          {/* Buscador de productos */}
+          <div className="rounded-lg border border-[var(--color-border)] p-3">
+            <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Buscar producto</label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[var(--color-text-muted)]" />
+              <Input className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Nombre, SKU, codigo de barras o categoria" />
+            </div>
+            <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-white">
+              {searchLoading ? (
+                <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando productos...</div>
+              ) : searchResults.length > 0 ? searchResults.map((product) => {
+                const row = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
+                const branchStock = product.stockConversion
+                  ? product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand
+                  : product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand;
+                const stock = branchStock === null || branchStock === undefined ? 0 : Number(branchStock);
+                const alreadyAdded = lines.some((line) => line.productId === product.id);
+                return (
+                  <button
+                    key={product.id}
+                    type="button"
+                    onClick={() => addProduct(product)}
+                    disabled={alreadyAdded}
+                    className={`block w-full border-b border-[var(--color-border)] px-3 py-2 text-left text-xs transition ${alreadyAdded ? "cursor-not-allowed bg-emerald-50 opacity-70" : "bg-white hover:bg-amber-50"}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-[var(--color-text)]">{product.name}</div>
+                        <div className="text-[var(--color-text-muted)]">SKU {product.sku}{product.barcode ? ` - Barra ${product.barcode}` : ""} - {product.category?.name ?? "Sin categoria"} - {product.unit}</div>
+                      </div>
+                      <div className="flex items-center gap-3 text-right text-[var(--color-text-muted)]">
+                        <div>
+                          <div>Stock {qty(stock)}</div>
+                          <div>Precio {formatMoneyOrNd(row?.effectivePrice ?? null)}</div>
+                          <div>Costo {formatMoneyOrNd(row?.effectiveCost ?? null)}</div>
+                        </div>
+                        {alreadyAdded
+                          ? <Check className="h-4 w-4 text-emerald-600" />
+                          : <Plus className="h-4 w-4 text-amber-600" />}
+                      </div>
+                    </div>
+                  </button>
+                );
+              }) : (
+                <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados para la busqueda.</div>
+              )}
+            </div>
+          </div>
+
+          {/* Tabla editable de la carga */}
+          <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+            <table className="hm-table min-w-[1100px] w-full">
+              <thead>
+                <tr>
+                  <th>Producto</th><th>SKU</th><th>Cantidad</th><th>Unidad</th><th>Costo unitario</th><th>Precio venta</th><th>Stock actual</th><th>Stock final</th><th>Margen est.</th><th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((line) => {
+                  const c = computeLine(line);
+                  return (
+                    <tr key={line.productId} className={c.priceBelowCost ? "bg-red-50" : !c.validQuantity ? "bg-amber-50" : undefined}>
+                      <td><div className="font-medium">{line.name}</div><div className="text-xs text-[var(--color-text-muted)]">{line.categoryName}</div></td>
+                      <td className="font-mono text-xs">{line.sku}</td>
+                      <td>
+                        <Input type="number" min="0.0001" step="0.0001" className="w-24" value={line.cantidad} onChange={(e) => updateLine(line.productId, { cantidad: e.target.value })} />
+                      </td>
+                      <td>
+                        {line.hasConversion ? (
+                          <select className="hm-input w-28" value={line.unit} onChange={(e) => updateLine(line.productId, { unit: e.target.value })}>
+                            <option value={line.saleUnit}>{line.saleUnit}</option>
+                            <option value={line.baseUnit}>{line.baseUnit}</option>
+                          </select>
+                        ) : <span className="text-xs">{line.unit}</span>}
+                      </td>
+                      <td>
+                        <Input type="number" min="0" step="0.01" className="w-28" value={line.costo} onChange={(e) => updateLine(line.productId, { costo: e.target.value })} placeholder="Sin cambio" />
+                      </td>
+                      <td>
+                        <Input type="number" min="0" step="0.01" className="w-28" value={line.precioVenta} onChange={(e) => updateLine(line.productId, { precioVenta: e.target.value })} placeholder="Sin cambio" />
+                      </td>
+                      <td>{qty(line.currentBaseStock)} {line.hasConversion ? line.baseUnit.toLowerCase() : ""}</td>
+                      <td>{qty(c.finalBase)} {line.hasConversion ? line.baseUnit.toLowerCase() : ""}</td>
+                      <td><Badge variant={marginBadgeVariant(c.margin)}>{formatMarginOrNd(c.margin)}</Badge></td>
+                      <td>
+                        <Button type="button" variant="danger" size="sm" onClick={() => removeLine(line.productId)} icon={<Trash2 className="h-3.5 w-3.5" />}>Quitar</Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {lines.length === 0 ? (
+                  <tr><td colSpan={10} className="py-8 text-center text-sm text-[var(--color-text-muted)]">Busca un producto arriba y da clic para agregarlo a la carga.</td></tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Resumen */}
+          <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-5">
+            <Kpi label="Productos" value={summary.totalProducts} />
+            <Kpi label="Valor estimado" value={money(summary.totalValue)} />
+            <Kpi label="Sin costo" value={summary.withoutCost} />
+            <Kpi label="Sin precio" value={summary.withoutPrice} />
+            <Kpi label="Bajo costo" value={summary.belowCost} />
+          </div>
+          {summary.withoutCost > 0 || summary.withoutPrice > 0 ? (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+              Hay productos sin costo o sin precio. Quedaran registrados solo con stock, pero deben revisarse luego en Precios y costos.
+            </div>
+          ) : null}
+          {summary.belowCost > 0 ? (
+            <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-700">
+              Hay productos con precio por debajo del costo. Se pedira confirmacion explicita antes de guardar.
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
+          <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" variant="success" loading={submitting} disabled={lines.length === 0} icon={<Check className="h-4 w-4" />}>Guardar carga inicial</Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
    MOVEMENTS PANEL
    ═══════════════════════════════════════════════════════════ */
 function MovementsPanel({
@@ -1883,22 +2230,6 @@ function MovementsPanel({
     reason: "",
     notes: "",
   });
-  const [opening, setOpening] = useState({
-    productId: firstProduct?.id ?? "",
-    quantity: "1",
-    unit: firstProduct?.stockConversion?.saleUnit ?? firstProduct?.unit ?? "UN",
-    unitCost: "",
-    costMode: "SET_WAC",
-    salePrice: "",
-    priceMode: "SET_BRANCH_PRICE",
-    reason: "Carga inicial de inventario",
-    notes: "",
-  });
-  const [openingMode, setOpeningMode] = useState<"SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK">("SET_PHYSICAL_STOCK");
-  const [openingLines, setOpeningLines] = useState<OpeningBalanceTrayLine[]>([]);
-  const [openingSearch, setOpeningSearch] = useState(firstProduct ? `${firstProduct.sku} ${firstProduct.name}` : "");
-  const [openingSearchResults, setOpeningSearchResults] = useState<ProductRow[]>(products.slice(0, 12));
-  const [openingSearchLoading, setOpeningSearchLoading] = useState(false);
 
 
   useEffect(() => {
@@ -1906,45 +2237,6 @@ function MovementsPanel({
     if (initialDialog === "opening") setShowOpening(true);
     if (initialDialog) onInitialDialogHandled?.();
   }, [initialDialog, onInitialDialogHandled]);
-  useEffect(() => {
-    if (!showOpening) return;
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      const params = new URLSearchParams();
-      const term = openingSearch.trim();
-      if (term) params.set("q", term);
-      if (activeBranchId) params.set("branchId", activeBranchId);
-      params.set("page", "1");
-      params.set("limit", "20");
-      setOpeningSearchLoading(true);
-      try {
-        const response = await fetch(`/api/master/catalog-inventory?${params}`, { cache: "no-store", signal: controller.signal });
-        const raw = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo buscar productos.");
-        const payload = unwrapApiData(raw) as CenterData;
-        setOpeningSearchResults(payload.products ?? []);
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setOpeningSearchResults(products.slice(0, 12));
-        }
-      } finally {
-        setOpeningSearchLoading(false);
-      }
-    }, 280);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [activeBranchId, openingSearch, products, showOpening]);
-
-  function selectOpeningProduct(product: ProductRow) {
-    setOpening({
-      ...opening,
-      productId: product.id,
-      unit: product.stockConversion?.saleUnit ?? product.unit ?? "UN",
-    });
-    setOpeningSearch(`${product.sku} ${product.name}`);
-  }
 
   const filteredMovements = movements.filter((movement) => {
     if (activeBranchId && movement.branch.id !== activeBranchId) return false;
@@ -1952,17 +2244,7 @@ function MovementsPanel({
     if (movementType && movement.movementType !== movementType) return false;
     return true;
   });
-  // CORRECCIÓN 1 (CRÍTICA): Cuando el usuario busca un producto, el seleccionado
-  // proviene de `openingSearchResults` (resultados de la búsqueda por API) y NO
-  // necesariamente está en la lista base `products`, que viene paginada. Si solo
-  // buscábamos en `products`, el producto seleccionado quedaba como `undefined` y
-  // la carga inicial de inventario fallaba silenciosamente. Por eso buscamos primero
-  // en los resultados de búsqueda activos y luego en la lista base como respaldo.
-  const findProductById = (id: string): ProductRow | undefined =>
-    (id ? openingSearchResults.find((product) => product.id === id) : undefined) ??
-    products.find((product) => product.id === id);
-  const adjustmentProduct = findProductById(adjustment.productId);
-  const openingProduct = findProductById(opening.productId);
+  const adjustmentProduct = adjustment.productId ? products.find((product) => product.id === adjustment.productId) : undefined;
   function currentBaseStockForProduct(product?: ProductRow) {
     if (!product) return 0;
     if (product.stockConversion) {
@@ -1971,40 +2253,14 @@ function MovementsPanel({
     return numberOrNull(product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand) ?? 0;
   }
   const adjustmentQty = Number(adjustment.quantity);
-  const openingQty = Number(opening.quantity);
   const adjustmentFactor = adjustmentProduct ? ironQuintalFactor(adjustmentProduct) : null;
-  const openingFactor = openingProduct ? ironQuintalFactor(openingProduct) : null;
   const isBaseUnit = !!adjustmentProduct?.stockConversion && adjustment.unit === adjustmentProduct.stockConversion.baseUnit;
-  const openingIsBaseUnit = !!openingProduct?.stockConversion && opening.unit === openingProduct.stockConversion.baseUnit;
   const currentBaseStock = currentBaseStockForProduct(adjustmentProduct);
-  const openingCurrentBaseStock = currentBaseStockForProduct(openingProduct);
   const changeBaseQty = Number.isFinite(adjustmentQty)
     ? (adjustmentProduct?.stockConversion && !isBaseUnit ? adjustmentQty * Number(adjustmentProduct.stockConversion.conversionFactor || 1) : adjustmentQty)
     : 0;
-  const openingBaseQty = Number.isFinite(openingQty)
-    ? (openingProduct?.stockConversion && !openingIsBaseUnit ? openingQty * Number(openingProduct.stockConversion.conversionFactor || 1) : openingQty)
-    : 0;
   const direction = ["ADJUSTMENT_OUT", "DAMAGE"].includes(adjustment.adjustmentType) ? -1 : 1;
   const previewFinalBase = adjustment.adjustmentType === "PHYSICAL_COUNT" ? changeBaseQty : currentBaseStock + (direction * changeBaseQty);
-  const openingPreviewFinalBase = openingMode === "SET_PHYSICAL_STOCK" ? openingBaseQty : openingCurrentBaseStock + openingBaseQty;
-  const openingDeltaBaseQty = openingPreviewFinalBase - openingCurrentBaseStock;
-  const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
-  const openingPricing = openingProduct && activeBranch ? buildBranchPricingCostRow(openingProduct, activeBranch) : null;
-  const openingUnitCost = numberOrNull(opening.unitCost);
-  const openingSalePrice = numberOrNull(opening.salePrice);
-  const previewCost = opening.costMode === "QUANTITY_ONLY" ? openingPricing?.effectiveCost ?? null : openingUnitCost;
-  const previewPrice = opening.priceMode === "NO_PRICE_CHANGE" ? openingPricing?.effectivePrice ?? null : openingSalePrice;
-  const previewMargin = previewCost !== null && previewPrice !== null && previewPrice > 0
-    ? ((previewPrice - previewCost) / previewPrice) * 100
-    : null;
-  const priceBelowCost = previewCost !== null && previewPrice !== null && previewPrice < previewCost;
-  const lowMargin = previewMargin !== null && previewMargin >= 0 && previewMargin < 20;
-  const openingCurrentSaleStock = openingProduct?.stockConversion && openingFactor
-    ? openingCurrentBaseStock / openingFactor
-    : openingCurrentBaseStock;
-  const openingPreviewFinalSale = openingProduct?.stockConversion && openingFactor
-    ? openingPreviewFinalBase / openingFactor
-    : openingPreviewFinalBase;
 
   async function submitAdjustment(event: React.FormEvent) {
     event.preventDefault();
@@ -2039,143 +2295,6 @@ function MovementsPanel({
     }
   }
 
-  function buildOpeningLine(product: ProductRow): OpeningBalanceTrayLine | null {
-    const quantity = Number(opening.quantity);
-    if (!Number.isFinite(quantity) || quantity <= 0) return null;
-    const isOpeningBaseUnit = !!product.stockConversion && opening.unit === product.stockConversion.baseUnit;
-    const factor = Number(product.stockConversion?.conversionFactor ?? 1) || 1;
-    const currentBase = currentBaseStockForProduct(product);
-    const currentSale = product.stockConversion ? currentBase / factor : currentBase;
-    const enteredBase = product.stockConversion && !isOpeningBaseUnit ? quantity * factor : quantity;
-    const finalBase = openingMode === "SET_PHYSICAL_STOCK" ? enteredBase : currentBase + enteredBase;
-    const finalSale = product.stockConversion ? finalBase / factor : finalBase;
-    const pricing = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
-    const lineCost = opening.costMode === "QUANTITY_ONLY" ? pricing?.effectiveCost ?? null : numberOrNull(opening.unitCost);
-    const linePrice = opening.priceMode === "NO_PRICE_CHANGE" ? pricing?.effectivePrice ?? null : numberOrNull(opening.salePrice);
-    const margin = lineCost !== null && linePrice !== null && linePrice > 0
-      ? ((linePrice - lineCost) / linePrice) * 100
-      : null;
-
-    return {
-      productId: product.id,
-      sku: product.sku,
-      name: product.name,
-      categoryName: product.category?.name ?? "Sin categoria",
-      quantity,
-      unit: opening.unit,
-      unitCost: lineCost,
-      costMode: opening.costMode,
-      salePrice: linePrice,
-      priceMode: opening.priceMode,
-      notes: opening.notes.trim() || undefined,
-      currentBaseStock: currentBase,
-      enteredBaseQuantity: enteredBase,
-      finalBaseStock: finalBase,
-      deltaBaseQuantity: finalBase - currentBase,
-      currentSaleStock: currentSale,
-      finalSaleStock: finalSale,
-      effectiveCost: lineCost,
-      effectivePrice: linePrice,
-      estimatedMargin: margin,
-      priceBelowCost: lineCost !== null && linePrice !== null && linePrice < lineCost,
-      lowMargin: margin !== null && margin >= 0 && margin < 20,
-    };
-  }
-
-  function addOpeningLine() {
-    if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
-    if (!openingProduct) { toast.error("Selecciona un producto."); return; }
-    if (opening.costMode !== "QUANTITY_ONLY" && (!Number.isFinite(Number(opening.unitCost)) || Number(opening.unitCost) <= 0)) {
-      toast.error("Este modo requiere un costo inicial mayor que cero.");
-      return;
-    }
-    if (opening.priceMode !== "NO_PRICE_CHANGE" && (!Number.isFinite(Number(opening.salePrice)) || Number(opening.salePrice) <= 0)) {
-      toast.error("Este modo requiere un precio de venta mayor que cero.");
-      return;
-    }
-    const line = buildOpeningLine(openingProduct);
-    if (!line) { toast.error("La cantidad inicial debe ser mayor que cero."); return; }
-    setOpeningLines((prev) => {
-      const exists = prev.some((item) => item.productId === line.productId);
-      return exists
-        ? prev.map((item) => item.productId === line.productId ? line : item)
-        : [...prev, line];
-    });
-    toast.success(openingLines.some((item) => item.productId === line.productId) ? "Linea actualizada." : "Producto agregado a la carga.");
-    setOpening((prev) => ({ ...prev, quantity: "1", unitCost: "", salePrice: "", notes: "" }));
-  }
-
-  function editOpeningLine(line: OpeningBalanceTrayLine) {
-    // CORRECCIÓN 1: usar el mismo respaldo de búsqueda para no perder el producto
-    // si fue seleccionado desde los resultados de búsqueda y no está en `products`.
-    const product = findProductById(line.productId);
-    setOpening({
-      productId: line.productId,
-      quantity: String(line.quantity),
-      unit: line.unit,
-      unitCost: line.costMode === "QUANTITY_ONLY" ? "" : String(line.unitCost ?? ""),
-      costMode: line.costMode,
-      salePrice: line.priceMode === "NO_PRICE_CHANGE" ? "" : String(line.salePrice ?? ""),
-      priceMode: line.priceMode,
-      reason: opening.reason,
-      notes: line.notes ?? "",
-    });
-    setOpeningSearch(product ? `${product.sku} ${product.name}` : line.name);
-  }
-
-  const openingSummary = useMemo(() => {
-    return {
-      totalProducts: openingLines.length,
-      totalInventoryValue: openingLines.reduce((sum, line) => sum + (line.finalSaleStock * (line.effectiveCost ?? 0)), 0),
-      productsWithoutCost: openingLines.filter((line) => line.effectiveCost === null || line.effectiveCost <= 0).length,
-      productsWithoutPrice: openingLines.filter((line) => line.effectivePrice === null || line.effectivePrice <= 0).length,
-      productsBelowCost: openingLines.filter((line) => line.priceBelowCost).length,
-      lowMarginProducts: openingLines.filter((line) => line.lowMargin).length,
-    };
-  }, [openingLines]);
-
-  async function submitOpeningBalance(event: React.FormEvent) {
-    event.preventDefault();
-    if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
-    if (!opening.reason.trim()) { toast.error("El motivo es obligatorio."); return; }
-    if (openingLines.length === 0) { toast.error("Agrega al menos un producto a la carga."); return; }
-    if (openingSummary.productsBelowCost > 0 && !window.confirm("Hay productos con precio por debajo del costo. Confirma explicitamente que deseas continuar.")) {
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const response = await apiFetch("/api/inventory/opening-balance/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          branchId: activeBranchId,
-          mode: openingMode,
-          reason: opening.reason.trim(),
-          notes: opening.notes.trim() || undefined,
-          lines: openingLines.map((line) => ({
-            productId: line.productId,
-            quantity: line.quantity,
-            unit: line.unit,
-            unitCost: line.costMode === "QUANTITY_ONLY" ? null : line.unitCost,
-            costMode: line.costMode,
-            salePrice: line.priceMode === "NO_PRICE_CHANGE" ? null : line.salePrice,
-            priceMode: line.priceMode,
-            notes: line.notes,
-          })),
-        }),
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar carga inicial masiva.");
-      const result = unwrapApiData(payload);
-      toast.success(`Carga inicial completa: ${result.processed} procesados, ${result.skipped} sin cambio.`);
-      setShowOpening(false);
-      setOpeningLines([]);
-      setOpening((prev) => ({ ...prev, quantity: "1", unitCost: "", salePrice: "", notes: "" }));
-      await onDone();
-    } finally {
-      setSubmitting(false);
-    }
-  }
   return (
     <Card noPadding>
       <div className="hm-card-header-purple flex items-center justify-between">
@@ -2263,219 +2382,14 @@ function MovementsPanel({
         </div>
       ) : null}
       {showOpening ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <form className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white shadow-2xl" onSubmit={(event) => submitOpeningBalance(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar carga inicial."))}>
-            <div className="border-b border-[var(--color-border)] px-5 py-4">
-              <h3 className="text-sm font-semibold">Carga inicial de inventario</h3>
-              <p className="text-xs text-[var(--color-text-muted)]">Usa este flujo para registrar inventario fisico inicial al comenzar a usar HAMMER. No crea una compra falsa.</p>
-            </div>
-            <div className="grid gap-4 p-5 lg:grid-cols-[1.1fr_0.9fr]">
-              <div className="space-y-3">
-                <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>
-                  {branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
-                </select>
-                <select className="hm-input" value={openingMode} onChange={(e) => setOpeningMode(e.target.value as "SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK")}>
-                  <option value="SET_PHYSICAL_STOCK">SET_PHYSICAL_STOCK - fijar stock fisico final</option>
-                  <option value="ADD_OPENING_STOCK">ADD_OPENING_STOCK - sumar entrada inicial</option>
-                </select>
-
-                <div className="rounded-lg border border-[var(--color-border)] p-3">
-                  <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Producto</label>
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[var(--color-text-muted)]" />
-                    <Input className="pl-9" value={openingSearch} onChange={(e) => setOpeningSearch(e.target.value)} placeholder="Buscar producto por nombre, SKU o categoria" />
-                  </div>
-                  <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-white">
-                    {openingSearchLoading ? (
-                      <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando productos...</div>
-                    ) : openingSearchResults.length > 0 ? openingSearchResults.map((product) => {
-                      const row = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
-                      const branchStock = product.stockConversion
-                        ? product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand
-                        : product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand;
-                      const stock = branchStock === null || branchStock === undefined ? 0 : Number(branchStock);
-                      return (
-                        <button
-                          key={product.id}
-                          type="button"
-                          onClick={() => selectOpeningProduct(product)}
-                          className={`block w-full border-b border-[var(--color-border)] px-3 py-2 text-left text-xs transition hover:bg-amber-50 ${opening.productId === product.id ? "bg-amber-50" : "bg-white"}`}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="font-semibold text-[var(--color-text)]">{product.name}</div>
-                              <div className="text-[var(--color-text-muted)]">SKU {product.sku}{product.barcode ? ` - Barra ${product.barcode}` : ""} - {product.category?.name ?? "Sin categoria"} - {product.unit}</div>
-                            </div>
-                            <div className="text-right text-[var(--color-text-muted)]">
-                              <div>Stock {qty(stock)}</div>
-                              <div>Precio {formatMoneyOrNd(row?.effectivePrice ?? null)}</div>
-                              <div>Costo {formatMoneyOrNd(row?.effectiveCost ?? null)}</div>
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    }) : (
-                      <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados para la busqueda.</div>
-                    )}
-                  </div>
-                </div>
-
-                {openingProduct ? (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs">
-                    <div className="font-semibold text-amber-900">Producto seleccionado</div>
-                    <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                      <span>Producto: <strong>{openingProduct.name}</strong></span>
-                      <span>SKU: <strong>{openingProduct.sku}</strong></span>
-                      <span>Categoria: <strong>{openingProduct.category?.name ?? "Sin categoria"}</strong></span>
-                      <span>Unidad: <strong>{openingProduct.unit}</strong></span>
-                      <span>Sucursal: <strong>{activeBranch ? `${activeBranch.code} - ${activeBranch.name}` : "N/D"}</strong></span>
-                      <span>Stock actual: <strong>{qty(openingCurrentBaseStock)} {openingProduct.stockConversion?.baseUnit ?? openingProduct.unit}</strong></span>
-                      <span>Costo efectivo actual: <strong>{formatMoneyOrNd(openingPricing?.effectiveCost ?? null)}</strong></span>
-                      <span>Precio efectivo actual: <strong>{formatMoneyOrNd(openingPricing?.effectivePrice ?? null)}</strong></span>
-                    </div>
-                    {openingProduct.stockConversion ? (
-                      <div className="mt-2 rounded border border-amber-200 bg-white/70 p-2">
-                        Stock actual: {qty(openingCurrentBaseStock)} {openingProduct.stockConversion.baseUnit.toLowerCase()}{openingFactor ? ` / ${qty(openingCurrentSaleStock)} quintales` : ""}
-                        <br />
-                        Conversion: {openingFactor ? `1 quintal = ${openingFactor} varillas` : `${openingProduct.stockConversion.conversionFactor} ${openingProduct.stockConversion.baseUnit} por ${openingProduct.stockConversion.saleUnit}`}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="grid grid-cols-[1fr_150px] gap-2 md:col-span-2">
-                    <Input type="number" min="0.0001" step="0.0001" value={opening.quantity} onChange={(e) => setOpening({ ...opening, quantity: e.target.value })} placeholder="Cantidad inicial" />
-                    <select className="hm-input" value={opening.unit} onChange={(e) => setOpening({ ...opening, unit: e.target.value })}>
-                      {openingProduct?.stockConversion ? (
-                        <>
-                          <option value={openingProduct.stockConversion.saleUnit}>{openingProduct.stockConversion.saleUnit}</option>
-                          <option value={openingProduct.stockConversion.baseUnit}>{openingProduct.stockConversion.baseUnit}</option>
-                        </>
-                      ) : <option value={openingProduct?.unit ?? "UN"}>{openingProduct?.unit ?? "UN"}</option>}
-                    </select>
-                  </div>
-                  <select className="hm-input" value={opening.costMode} onChange={(e) => setOpening({ ...opening, costMode: e.target.value })}>
-                    <option value="SET_WAC">Establecer WAC inicial</option>
-                    <option value="SET_BRANCH_COST">Establecer costo sucursal</option>
-                    <option value="QUANTITY_ONLY">Solo cantidad sin costo</option>
-                  </select>
-                  <Input type="number" min="0" step="0.01" value={opening.unitCost} onChange={(e) => setOpening({ ...opening, unitCost: e.target.value })} placeholder={opening.costMode === "QUANTITY_ONLY" ? "Costo no se cambia" : "Costo inicial unitario"} disabled={opening.costMode === "QUANTITY_ONLY"} />
-                  <select className="hm-input" value={opening.priceMode} onChange={(e) => setOpening({ ...opening, priceMode: e.target.value })}>
-                    <option value="SET_BRANCH_PRICE">Aplicar precio a esta sucursal</option>
-                    <option value="SET_GLOBAL_PRICE">Aplicar precio global</option>
-                    <option value="NO_PRICE_CHANGE">No cambiar precio</option>
-                  </select>
-                  <Input type="number" min="0" step="0.01" value={opening.salePrice} onChange={(e) => setOpening({ ...opening, salePrice: e.target.value })} placeholder={opening.priceMode === "NO_PRICE_CHANGE" ? "Precio no se cambia" : "Precio de venta inicial"} disabled={opening.priceMode === "NO_PRICE_CHANGE"} />
-                  <Input className="md:col-span-2" value={opening.reason} onChange={(e) => setOpening({ ...opening, reason: e.target.value })} placeholder="Motivo obligatorio" />
-                  <Input className="md:col-span-2" value={opening.notes} onChange={(e) => setOpening({ ...opening, notes: e.target.value })} placeholder="Nota opcional" />
-                  <Button type="button" className="md:col-span-2" variant="primary" onClick={addOpeningLine} icon={<Plus className="h-4 w-4" />}>Agregar a carga</Button>
-                </div>
-              </div>
-
-              <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 text-sm">
-                <div className="font-semibold">Vista previa</div>
-                <div className="space-y-2 text-xs text-[var(--color-text-muted)]">
-                  <div className="rounded bg-white p-3">
-                    <div className="font-semibold text-[var(--color-text)]">Stock</div>
-                    <div className="mt-1 grid gap-1">
-                      <span>Stock actual: {qty(openingCurrentBaseStock)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
-                      <span>Cantidad ingresada: {qty(openingQty || 0)} {opening.unit}</span>
-                      <span>Cantidad base ingresada: {qty(openingBaseQty)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
-                      <span>Stock final: {qty(openingPreviewFinalBase)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
-                      <span>Diferencia a registrar: {qty(openingDeltaBaseQty)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
-                    </div>
-                    {openingProduct?.stockConversion ? (
-                      <div className="mt-2 text-amber-700">
-                        Stock final convertible: {qty(openingPreviewFinalBase)} {openingProduct.stockConversion.baseUnit.toLowerCase()}{openingFactor ? ` / ${qty(openingPreviewFinalSale)} quintales` : ""}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="rounded bg-white p-3">
-                    <div className="font-semibold text-[var(--color-text)]">Costo</div>
-                    <div className="mt-1 grid gap-1">
-                      <span>Costo actual: {formatMoneyOrNd(openingPricing?.effectiveCost ?? null)}</span>
-                      <span>Costo nuevo: {formatMoneyOrNd(previewCost)}</span>
-                      <span>Fuente despues: {opening.costMode === "SET_WAC" ? "WAC" : opening.costMode === "SET_BRANCH_COST" ? "Costo sucursal" : "Sin cambio de costo"}</span>
-                    </div>
-                  </div>
-                  <div className="rounded bg-white p-3">
-                    <div className="font-semibold text-[var(--color-text)]">Precio</div>
-                    <div className="mt-1 grid gap-1">
-                      <span>Precio actual global: {formatMoneyOrNd(openingPricing?.standardSalePrice ?? null)}</span>
-                      <span>Precio actual sucursal: {formatMoneyOrNd(openingPricing?.branchPrice ?? null)}</span>
-                      <span>Precio efectivo actual: {formatMoneyOrNd(openingPricing?.effectivePrice ?? null)}</span>
-                      <span>Precio nuevo: {formatMoneyOrNd(previewPrice)}</span>
-                      <span>Fuente despues: {opening.priceMode === "SET_GLOBAL_PRICE" ? "Global" : opening.priceMode === "SET_BRANCH_PRICE" ? "Sucursal" : openingPricing?.priceSource === "BRANCH" ? "Sucursal" : "Global"}</span>
-                    </div>
-                  </div>
-                  <div className="rounded bg-white p-3">
-                    <div className="font-semibold text-[var(--color-text)]">Margen estimado</div>
-                    <Badge variant={marginBadgeVariant(previewMargin)}>{formatMarginOrNd(previewMargin)}</Badge>
-                  </div>
-                  {opening.costMode === "QUANTITY_ONLY" ? <div className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-800">Esta carga actualiza stock sin cambiar costo. Si queda stock sin costo, revisa Precios y costos.</div> : null}
-                  {priceBelowCost ? <div className="rounded border border-red-300 bg-red-50 p-2 text-red-700">Precio por debajo del costo. Se pedira confirmacion explicita.</div> : null}
-                  {lowMargin ? <div className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-800">Margen bajo. Revisa precio y costo antes de confirmar.</div> : null}
-                </div>
-              </div>
-            </div>
-            <div className="px-5 pb-5">
-              <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-6">
-                <Kpi label="Productos" value={openingSummary.totalProducts} />
-                <Kpi label="Valor estimado" value={money(openingSummary.totalInventoryValue)} />
-                <Kpi label="Sin costo" value={openingSummary.productsWithoutCost} />
-                <Kpi label="Sin precio" value={openingSummary.productsWithoutPrice} />
-                <Kpi label="Bajo costo" value={openingSummary.productsBelowCost} />
-                <Kpi label="Margen bajo" value={openingSummary.lowMarginProducts} />
-              </div>
-              {openingSummary.productsWithoutCost > 0 || openingSummary.productsWithoutPrice > 0 ? (
-                <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
-                  Hay productos sin costo o sin precio por el modo seleccionado. Quedaran registrados, pero deben revisarse en Precios y costos.
-                </div>
-              ) : null}
-              <div className="mt-3 overflow-x-auto rounded-lg border border-[var(--color-border)]">
-                <table className="hm-table min-w-[1250px] w-full">
-                  <thead>
-                    <tr>
-                      <th>Producto</th><th>SKU</th><th>Unidad</th><th>Cantidad</th><th>Costo</th><th>Modo costo</th><th>Precio</th><th>Modo precio</th><th>Stock actual</th><th>Stock final</th><th>Diferencia</th><th>Margen est.</th><th>Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {openingLines.map((line) => (
-                      <tr key={line.productId}>
-                        <td><div className="font-medium">{line.name}</div><div className="text-xs text-[var(--color-text-muted)]">{line.categoryName}</div></td>
-                        <td className="font-mono text-xs">{line.sku}</td>
-                        <td>{line.unit}</td>
-                        <td>{qty(line.quantity)}</td>
-                        <td>{formatMoneyOrNd(line.effectiveCost)}</td>
-                        <td>{line.costMode}</td>
-                        <td>{formatMoneyOrNd(line.effectivePrice)}</td>
-                        <td>{line.priceMode}</td>
-                        <td>{qty(line.currentBaseStock)}</td>
-                        <td>{qty(line.finalBaseStock)}</td>
-                        <td className={line.deltaBaseQuantity < 0 ? "text-red-700" : "text-emerald-700"}>{qty(line.deltaBaseQuantity)}</td>
-                        <td><Badge variant={marginBadgeVariant(line.estimatedMargin)}>{formatMarginOrNd(line.estimatedMargin)}</Badge></td>
-                        <td>
-                          <div className="flex gap-1">
-                            <Button type="button" variant="ghost" size="sm" onClick={() => editOpeningLine(line)} icon={<Pencil className="h-3.5 w-3.5" />}>Editar</Button>
-                            <Button type="button" variant="danger" size="sm" onClick={() => setOpeningLines((prev) => prev.filter((item) => item.productId !== line.productId))} icon={<Trash2 className="h-3.5 w-3.5" />}>Eliminar</Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {openingLines.length === 0 ? (
-                      <tr><td colSpan={13} className="py-6 text-center text-sm text-[var(--color-text-muted)]">Agrega productos a la bandeja antes de confirmar.</td></tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
-              <Button type="button" variant="ghost" onClick={() => setShowOpening(false)}>Cancelar</Button>
-              <Button type="submit" variant="success" loading={submitting} disabled={openingLines.length === 0} icon={<Check className="h-4 w-4" />}>Confirmar carga inicial completa</Button>
-            </div>
-          </form>
-        </div>
+        <OpeningBalanceModal
+          branches={branches}
+          fallbackProducts={products}
+          activeBranchId={activeBranchId}
+          onSelectBranch={onSelectBranch}
+          onClose={() => setShowOpening(false)}
+          onDone={onDone}
+        />
       ) : null}    </Card>
   );
 }

@@ -30,6 +30,7 @@ export function MasterCashBoxes() {
   const [formDescription, setFormDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [consolidating, setConsolidating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -107,9 +108,47 @@ export function MasterCashBoxes() {
     }
   }
 
-  // Sucursales que aún no tienen ninguna caja física
+  async function consolidate() {
+    if (!window.confirm(
+      "Esto dejará UNA sola caja física por sucursal. Las cajas duplicadas se eliminarán y sus sesiones se moverán a la caja que se conserva. ¿Deseas continuar?",
+    )) {
+      return;
+    }
+    setConsolidating(true);
+    try {
+      const response = await apiFetch("/api/master/cash-boxes/consolidate", { method: "POST" });
+      const raw = await response.json();
+      if (!response.ok) {
+        showToast("error", raw?.error?.message ?? "No se pudo consolidar las cajas duplicadas.");
+        return;
+      }
+      const result = unwrapApiData(raw) as { consolidatedBranches: number; message: string };
+      showToast(result.consolidatedBranches > 0 ? "success" : "info", result.message);
+      await load();
+    } catch {
+      showToast("error", "Error de red al consolidar cajas.");
+    } finally {
+      setConsolidating(false);
+    }
+  }
+
+  // Sucursales que aún no tienen ninguna caja física activa
+  const branchIdsWithActiveBox = new Set(cashBoxes.filter((box) => box.isActive).map((box) => box.branchId));
   const branchIdsWithBox = new Set(cashBoxes.map((box) => box.branchId));
   const branchesWithoutBox = branches.filter((b) => !branchIdsWithBox.has(b.id));
+  // Solo se puede crear caja en sucursales sin caja activa (regla: 1 caja por sucursal).
+  const branchesAvailableForCreate = branches.filter((b) => !branchIdsWithActiveBox.has(b.id));
+  // Sucursales con más de una caja (duplicadas) — requieren consolidación.
+  const branchBoxCounts = cashBoxes.reduce<Record<string, number>>((acc, box) => {
+    acc[box.branchId] = (acc[box.branchId] ?? 0) + 1;
+    return acc;
+  }, {});
+  const branchesWithDuplicates = Object.values(
+    cashBoxes.reduce<Record<string, { code: string; name: string }>>((acc, box) => {
+      if (branchBoxCounts[box.branchId] > 1) acc[box.branchId] = { code: box.branch.code, name: box.branch.name };
+      return acc;
+    }, {}),
+  );
 
   async function toggle(id: string) {
     setToggling(id);
@@ -143,24 +182,44 @@ export function MasterCashBoxes() {
     <section className="space-y-6">
       <div>
         <h1 className="text-xl font-bold text-[var(--color-text)]">Gestión de Cajas Físicas</h1>
-        <p className="text-sm text-[var(--color-text-muted)]">Crea cajas por sucursal, y actívalas o desactívalas. Una sucursal necesita al menos una caja activa para poder cobrar.</p>
+        <p className="text-sm text-[var(--color-text-muted)]">Cada sucursal tiene UNA sola caja física (varios vendedores la comparten). Una sucursal necesita su caja activa para poder cobrar.</p>
       </div>
 
       {/* ── Crear caja manual ── */}
       <Card className="p-5 space-y-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-sm font-semibold text-[var(--color-text)]">Crear nueva caja</h2>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={backfill}
-            loading={backfilling}
-            disabled={creating || backfilling}
-            title="Crea automáticamente la caja principal de cada sucursal que aún no tenga ninguna"
-          >
-            Crear cajas faltantes
-          </Button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={backfill}
+              loading={backfilling}
+              disabled={creating || backfilling || consolidating}
+              title="Crea automáticamente la caja principal de cada sucursal que aún no tenga ninguna"
+            >
+              Crear cajas faltantes
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={consolidate}
+              loading={consolidating}
+              disabled={creating || backfilling || consolidating}
+              title="Deja una sola caja física por sucursal y elimina las duplicadas"
+            >
+              Consolidar duplicadas
+            </Button>
+          </div>
         </div>
+
+        {branchesWithDuplicates.length > 0 && (
+          <div className="rounded-md border border-[var(--color-danger-300)] bg-[var(--color-danger-50)] px-3 py-2 text-xs text-[var(--color-danger-700)]">
+            {branchesWithDuplicates.length === 1
+              ? `La sucursal ${branchesWithDuplicates[0].code} — ${branchesWithDuplicates[0].name} tiene más de una caja física. Solo debe haber una por sucursal. Use "Consolidar duplicadas".`
+              : `${branchesWithDuplicates.length} sucursales tienen cajas duplicadas: ${branchesWithDuplicates.map((b) => b.code).join(", ")}. Use "Consolidar duplicadas".`}
+          </div>
+        )}
 
         {branchesWithoutBox.length > 0 && (
           <div className="rounded-md border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
@@ -180,12 +239,15 @@ export function MasterCashBoxes() {
               disabled={creating}
             >
               <option value="">Seleccione una sucursal…</option>
-              {branches.map((b) => (
+              {branchesAvailableForCreate.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.code} — {b.name}
                 </option>
               ))}
             </select>
+            {branchesAvailableForCreate.length === 0 && (
+              <p className="text-xs text-[var(--color-text-soft)]">Todas las sucursales ya tienen una caja activa.</p>
+            )}
           </div>
           <div className="flex-1 space-y-1">
             <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Descripción (opcional)</label>

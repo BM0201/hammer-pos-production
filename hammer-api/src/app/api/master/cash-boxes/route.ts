@@ -60,8 +60,17 @@ export async function POST(request: Request) {
 
     const existingBoxes = await prisma.physicalCashBox.findMany({
       where: { branchId },
-      select: { code: true },
+      select: { code: true, isActive: true },
     });
+
+    // Regla de negocio: una sucursal solo puede tener UNA caja física activa.
+    // Varios vendedores comparten la misma caja. Esto evita el problema de cajas
+    // duplicadas (p. ej. CAJA-01 + CASH-MGA-01 en una misma sucursal).
+    if (existingBoxes.some((box) => box.isActive)) {
+      throw new Error(
+        "VALIDATION_ERROR: Esta sucursal ya tiene una caja física activa. Solo se permite una caja por sucursal. Desactiva o consolida la caja existente antes de crear otra.",
+      );
+    }
 
     // Determinar el código de la nueva caja.
     let code = typeof body.code === "string" ? body.code.trim().toUpperCase() : "";

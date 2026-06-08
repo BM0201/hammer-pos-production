@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CashSessionPanel, type CashSessionState } from "@/components/cash-session/cash-session-panel";
+import Link from "next/link";
+import type { Route } from "next";
+import { useCashSessionStatus } from "@/lib/client/use-cash-session-status";
 import { measurePosMetric } from "@/lib/telemetry";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { Button } from "@/components/ui/button";
@@ -36,20 +38,15 @@ type PendingOrder = {
   lines: OrderLine[];
 };
 
-const CLOSED_SESSION_STATE: CashSessionState = {
-  hasOpenSession: false,
-  cashSessionId: null,
-  physicalCashBoxId: null,
-  status: null,
-};
-
 export function CashierPayments({ branchId }: { branchId: string }) {
   const [orders, setOrders] = useState<PendingOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string>("");
   const [method, setMethod] = useState("CASH");
   const [referenceNumber, setReferenceNumber] = useState("");
   const [message, setMessage] = useState<string>("");
-  const [cashSessionState, setCashSessionState] = useState<CashSessionState>(CLOSED_SESSION_STATE);
+  // FASE 3: el estado de la sesión de caja se lee en modo solo-lectura.
+  // El control de apertura/cierre de caja vive ahora en la pantalla "Caja".
+  const { state: cashSessionState, cashBoxLabel } = useCashSessionStatus(branchId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingOrders, setIsLoadingOrders] = useState(true);
   const referenceRef = useRef<HTMLInputElement | null>(null);
@@ -230,20 +227,32 @@ export function CashierPayments({ branchId }: { branchId: string }) {
 
   return (
     <section className="space-y-4" data-testid="cashier-payments-root">
-      <CashSessionPanel branchId={branchId} onStatusChange={setCashSessionState} />
-
-      <Card className="flex items-center gap-3 rounded-xl px-4 py-2.5">
-        <span className="text-sm text-[var(--color-text-secondary)]">Estado de sesión:</span>
+      <Card className="flex flex-wrap items-center gap-3 rounded-xl px-4 py-2.5">
+        <span className="text-sm text-[var(--color-text-secondary)]">Estado de caja:</span>
         {cashSessionState.hasOpenSession
           ? <Badge variant="success">ABIERTA</Badge>
-          : cashSessionState.status === "AUTO_CLOSED_PENDING_REVIEW"
-            ? <Badge variant="warning">CIERRE AUTOMATICO PENDIENTE</Badge>
-            : <Badge variant="danger">CERRADA</Badge>}
+          : cashSessionState.status === "RECONCILING"
+            ? <Badge variant="warning">EN CONCILIACIÓN</Badge>
+            : cashSessionState.status === "AUTO_CLOSED_PENDING_REVIEW"
+              ? <Badge variant="warning">CIERRE AUTOMATICO PENDIENTE</Badge>
+              : <Badge variant="danger">CERRADA</Badge>}
         <span className="text-xs text-[var(--color-text-soft)]">
-          {cashSessionState.cashSessionId ? `Sesión: ${cashSessionState.cashSessionId.slice(0, 8)}...` : "Sin sesión activa"}
+          {cashBoxLabel ? `Caja: ${cashBoxLabel}` : "Sin caja asignada"}
+          {cashSessionState.cashSessionId ? ` · Sesión ${cashSessionState.cashSessionId.slice(0, 8)}...` : ""}
         </span>
+        {!cashSessionState.hasOpenSession ? (
+          <Link href={"/app/branch/cash" as Route} className="text-xs font-semibold text-[var(--color-primary-700)] underline">
+            Ir a Caja para abrir sesión
+          </Link>
+        ) : null}
         <span className="ml-auto text-xs text-[var(--color-text-soft)]">F1 efectivo · F2 tarjeta · F3 transferencia</span>
       </Card>
+
+      {!cashSessionState.hasOpenSession ? (
+        <Card className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          La caja está cerrada. Debes abrir una sesión de caja desde la pantalla <strong>Caja</strong> antes de poder cobrar órdenes.
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-[1fr_1.2fr_1fr]">
         <Card className="flex flex-col overflow-hidden rounded-2xl" data-testid="cashier-order-list">

@@ -16,6 +16,20 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const { id } = await context.params;
     const cashBox = await prisma.physicalCashBox.findUniqueOrThrow({ where: { id } });
 
+    // Al ACTIVAR una caja, asegurar que la sucursal no tenga ya otra caja activa.
+    // Una sucursal solo puede tener una caja física activa a la vez.
+    if (!cashBox.isActive) {
+      const otherActive = await prisma.physicalCashBox.findFirst({
+        where: { branchId: cashBox.branchId, isActive: true, id: { not: id } },
+        select: { code: true },
+      });
+      if (otherActive) {
+        throw new Error(
+          `VALIDATION_ERROR: La sucursal ya tiene la caja ${otherActive.code} activa. Desactívala antes de activar otra. Solo se permite una caja activa por sucursal.`,
+        );
+      }
+    }
+
     const updated = await prisma.physicalCashBox.update({
       where: { id },
       data: { isActive: !cashBox.isActive },

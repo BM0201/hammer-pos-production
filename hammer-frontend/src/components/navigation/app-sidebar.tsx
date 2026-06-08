@@ -17,6 +17,7 @@ import {
   Boxes,
   ShoppingCart,
   CreditCard,
+  Wallet,
   Truck,
   ShieldCheck,
   ClipboardList,
@@ -254,8 +255,11 @@ function buildNavSections(
   if (hasAny(CAPABILITIES.OPERATIONS_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.OPERATIONS_VIEW)) {
     operationItems.push({ href: "/app/branch/operations", label: "Operacion de hoy", icon: ClipboardList });
   }
+  if (hasAny(CAPABILITIES.CASH_VIEW, CAPABILITIES.CASH_SESSION_MANAGE) && canInAnyAssignedBranch(session, CAPABILITIES.CASH_VIEW)) {
+    operationItems.push({ href: "/app/branch/cash", label: "Caja", icon: Wallet });
+  }
   if (hasAny(CAPABILITIES.CASH_PAYMENTS_VIEW, CAPABILITIES.CASH_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)) {
-    operationItems.push({ href: "/app/branch/cashier/payments", label: "Caja", icon: CreditCard });
+    operationItems.push({ href: "/app/branch/cashier/payments", label: "Cobros", icon: CreditCard });
   }
   if (hasAny(CAPABILITIES.DISPATCH_VIEW, CAPABILITIES.WAREHOUSE_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW)) {
     operationItems.push({ href: "/app/branch/warehouse/dispatch", label: "Despacho", icon: Truck });
