@@ -1101,6 +1101,30 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   </div>
                 )}
 
+                {/* Mensajes de bloqueo provenientes del backend (ej. sucursal sin caja física) */}
+                {posContext?.messages?.noCashBoxes ? (
+                  <div className="mt-3 rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3" data-testid="pos-no-cashboxes">
+                    <p className="text-xs font-medium text-[var(--color-danger-600)]">⚠️ {posContext.messages.noCashBoxes}</p>
+                    <p className="text-xs text-[var(--color-danger-500)] mt-1">
+                      Pide a un administrador que cree una caja física para esta sucursal (Cajas Físicas).
+                    </p>
+                  </div>
+                ) : posContext?.messages?.noAssignedSession ? (
+                  <div className="mt-3 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3" data-testid="pos-no-session">
+                    <p className="text-xs font-medium text-[var(--color-warning-700)]">{posContext.messages.noAssignedSession}</p>
+                  </div>
+                ) : null}
+
+                {/* Si el perfil/configuración no permite ninguna acción de cobro */}
+                {!canSendToCashier && !canCollectHere ? (
+                  <div className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3" data-testid="pos-no-actions">
+                    <p className="text-xs text-[var(--color-text-secondary)]">
+                      Tu perfil o la configuración de esta sucursal no permite enviar a caja ni cobrar aquí.
+                      Contacta a un administrador para revisar permisos o la configuración de pagos.
+                    </p>
+                  </div>
+                ) : null}
+
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {canSendToCashier ? (
                     <Button

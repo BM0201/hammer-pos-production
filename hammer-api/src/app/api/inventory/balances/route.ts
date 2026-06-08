@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertBranchAccess } from "@/modules/auth/access";
 import { listInventoryBalances } from "@/modules/inventory/service";

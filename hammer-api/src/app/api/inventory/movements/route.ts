@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { InventoryMovementType } from "@prisma/client";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";

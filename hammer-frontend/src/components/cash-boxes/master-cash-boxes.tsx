@@ -17,17 +17,39 @@ type CashBoxRow = {
   _count: { sessions: number };
 };
 
+type BranchOption = { id: string; code: string; name: string };
+
 export function MasterCashBoxes() {
   const [cashBoxes, setCashBoxes] = useState<CashBoxRow[]>([]);
+  const [branches, setBranches] = useState<BranchOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
 
+  // Formulario de creación manual
+  const [formBranchId, setFormBranchId] = useState("");
+  const [formDescription, setFormDescription] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/master/cash-boxes");
-      const raw = await response.json();
-      const list = unwrapApiData(raw);
+      const [boxesRes, branchesRes] = await Promise.all([
+        fetch("/api/master/cash-boxes"),
+        fetch("/api/master/branches"),
+      ]);
+      const boxesRaw = await boxesRes.json();
+      const list = unwrapApiData(boxesRaw);
       setCashBoxes(Array.isArray(list) ? list : []);
+
+      const branchesRaw = await branchesRes.json();
+      const branchList = unwrapApiData(branchesRaw);
+      if (Array.isArray(branchList)) {
+        setBranches(
+          branchList
+            .filter((b: { isActive?: boolean }) => b.isActive !== false)
+            .map((b: { id: string; code: string; name: string }) => ({ id: b.id, code: b.code, name: b.name })),
+        );
+      }
     } catch {
       showToast("error", "No se pudo cargar la lista de cajas.");
     } finally {
@@ -36,6 +58,58 @@ export function MasterCashBoxes() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  async function createCashBox() {
+    if (!formBranchId) {
+      showToast("error", "Seleccione una sucursal.");
+      return;
+    }
+    setCreating(true);
+    try {
+      const response = await apiFetch("/api/master/cash-boxes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branchId: formBranchId, description: formDescription.trim() || undefined }),
+      });
+      const raw = await response.json();
+      if (!response.ok) {
+        showToast("error", raw?.error?.message ?? "No se pudo crear la caja.");
+        return;
+      }
+      const box = unwrapApiData(raw) as CashBoxRow;
+      showToast("success", `Caja ${box.code} creada correctamente.`);
+      setFormBranchId("");
+      setFormDescription("");
+      await load();
+    } catch {
+      showToast("error", "Error de red al crear la caja.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function backfill() {
+    setBackfilling(true);
+    try {
+      const response = await apiFetch("/api/master/cash-boxes/backfill", { method: "POST" });
+      const raw = await response.json();
+      if (!response.ok) {
+        showToast("error", raw?.error?.message ?? "No se pudo ejecutar la creación automática.");
+        return;
+      }
+      const result = unwrapApiData(raw) as { createdCount: number; message: string };
+      showToast(result.createdCount > 0 ? "success" : "info", result.message);
+      await load();
+    } catch {
+      showToast("error", "Error de red al crear cajas faltantes.");
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
+  // Sucursales que aún no tienen ninguna caja física
+  const branchIdsWithBox = new Set(cashBoxes.map((box) => box.branchId));
+  const branchesWithoutBox = branches.filter((b) => !branchIdsWithBox.has(b.id));
 
   async function toggle(id: string) {
     setToggling(id);
@@ -69,8 +143,66 @@ export function MasterCashBoxes() {
     <section className="space-y-6">
       <div>
         <h1 className="text-xl font-bold text-[var(--color-text)]">Gestión de Cajas Físicas</h1>
-        <p className="text-sm text-[var(--color-text-muted)]">Activa o desactiva cajas por sucursal. Las cajas desactivadas no estarán disponibles para abrir sesión.</p>
+        <p className="text-sm text-[var(--color-text-muted)]">Crea cajas por sucursal, y actívalas o desactívalas. Una sucursal necesita al menos una caja activa para poder cobrar.</p>
       </div>
+
+      {/* ── Crear caja manual ── */}
+      <Card className="p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">Crear nueva caja</h2>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={backfill}
+            loading={backfilling}
+            disabled={creating || backfilling}
+            title="Crea automáticamente la caja principal de cada sucursal que aún no tenga ninguna"
+          >
+            Crear cajas faltantes
+          </Button>
+        </div>
+
+        {branchesWithoutBox.length > 0 && (
+          <div className="rounded-md border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
+            {branchesWithoutBox.length === 1
+              ? `La sucursal ${branchesWithoutBox[0].code} — ${branchesWithoutBox[0].name} no tiene ninguna caja física y no podrá cobrar.`
+              : `${branchesWithoutBox.length} sucursales no tienen caja física: ${branchesWithoutBox.map((b) => b.code).join(", ")}. Use "Crear cajas faltantes".`}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex-1 space-y-1">
+            <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Sucursal</label>
+            <select
+              className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+              value={formBranchId}
+              onChange={(e) => setFormBranchId(e.target.value)}
+              disabled={creating}
+            >
+              <option value="">Seleccione una sucursal…</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.code} — {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex-1 space-y-1">
+            <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Descripción (opcional)</label>
+            <input
+              className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+              placeholder="Ej. Caja principal"
+              value={formDescription}
+              onChange={(e) => setFormDescription(e.target.value)}
+              disabled={creating}
+            />
+          </div>
+          <Button onClick={createCashBox} loading={creating} disabled={creating || backfilling || !formBranchId}>
+            Crear caja
+          </Button>
+        </div>
+        <p className="text-xs text-[var(--color-text-soft)]">El código se genera automáticamente (CASH-SUCURSAL-01, -02, …).</p>
+      </Card>
 
       {loading && (
         <Card className="p-6 text-center text-sm text-[var(--color-text-muted)]">Cargando cajas…</Card>
