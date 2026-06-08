@@ -45,3 +45,7 @@ export function canPostMovement(roleCode: RoleCode, movementType: InventoryMovem
 export function canRequestStockAdjustment(roleCode: RoleCode): boolean {
   return roleCode === "SYSTEM_ADMIN" || roleCode === "OWNER" || roleCode === "MASTER" || roleCode === "BRANCH_ADMIN";
 }
+
+export function canExecuteDirectStockAdjustment(roleCode: RoleCode): boolean {
+  return roleCode === "SYSTEM_ADMIN" || roleCode === "OWNER" || roleCode === "MASTER";
+}

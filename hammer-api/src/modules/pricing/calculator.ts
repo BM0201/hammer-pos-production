@@ -277,7 +277,7 @@ export function calculatePricingSuggestion(input: PricingSuggestionInput): Prici
       warnings.push("Se aplico fallback a prorrateo por cantidad.");
       fallbackApplied = true;
       fallbackMethod = "BY_QUANTITY";
-      effectiveProrateMethod = "BY_VALUE";
+      effectiveProrateMethod = "BY_QUANTITY";
       if (unitsUsedForProration.lte(ZERO)) unitsUsedForProration = ONE;
       operatingExpensePerUnit = monthlyOperatingExpenses.div(unitsUsedForProration);
     }

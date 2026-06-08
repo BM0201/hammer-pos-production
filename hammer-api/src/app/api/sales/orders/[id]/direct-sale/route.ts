@@ -25,6 +25,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
 
     const body = parsedBody.data;
+    if (body.method === "CREDIT") {
+      return fail("CREDIT_DIRECT_SALE_UNSUPPORTED", "Credito no disponible en venta directa.", 400);
+    }
     const { id } = await params;
 
     const order = await prisma.saleOrder.findUnique({

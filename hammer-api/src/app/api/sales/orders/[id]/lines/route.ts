@@ -63,6 +63,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     // ── Auto-apply active discounts ──
     let discountAmount = parsed.data.discountAmount ?? 0;
+    if (parsed.data.discountPercent !== undefined && discountAmount === 0) {
+      const pricing = await getEffectiveProductPricing(prisma, { branchId: order.branchId, productId: parsed.data.productId });
+      const unitPrice = parsed.data.unitPrice ?? Number(pricing.effectivePrice);
+      discountAmount = unitPrice * parsed.data.quantity * (parsed.data.discountPercent / 100);
+    }
     if (discountAmount === 0) {
       try {
         const product = await prisma.product.findUnique({
@@ -73,7 +78,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           const activeDiscounts = await getActiveDiscountsForBranch(order.branchId);
           const pricing = await getEffectiveProductPricing(prisma, { branchId: order.branchId, productId: parsed.data.productId });
           const unitPrice = parsed.data.unitPrice ?? Number(pricing.effectivePrice);
-          discountAmount = calculateDiscountForProduct(product, unitPrice, activeDiscounts);
+          discountAmount = calculateDiscountForProduct(product, unitPrice, activeDiscounts) * parsed.data.quantity;
         }
       } catch {
         // If discount calculation fails, proceed without discount

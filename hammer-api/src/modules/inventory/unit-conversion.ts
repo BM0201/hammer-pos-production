@@ -75,6 +75,35 @@ export function formatDualStock(input: {
   };
 }
 
+export function calculateSharedStockChange(input: {
+  currentBaseQuantity: number | Prisma.Decimal;
+  enteredQuantity: number | Prisma.Decimal;
+  conversionFactor?: number | Prisma.Decimal | null;
+  isBaseUnit: boolean;
+  mode: "SET_PHYSICAL_STOCK" | "ADD_TO_STOCK" | "ADD_OPENING_STOCK";
+}) {
+  const currentBaseQty = new Prisma.Decimal(input.currentBaseQuantity);
+  const enteredQty = new Prisma.Decimal(input.enteredQuantity);
+  const factor = new Prisma.Decimal(input.conversionFactor ?? 1);
+  const enteredBaseQty = !input.isBaseUnit && factor.gt(0)
+    ? convertSaleQtyToBaseQty({ quantity: enteredQty, conversionFactor: factor })
+    : enteredQty;
+  const finalBaseQty = input.mode === "SET_PHYSICAL_STOCK"
+    ? enteredBaseQty
+    : currentBaseQty.add(enteredBaseQty);
+  const deltaBaseQty = finalBaseQty.sub(currentBaseQty);
+  const movementQuantity = input.isBaseUnit || factor.lte(0)
+    ? deltaBaseQty.abs()
+    : convertBaseQtyToSaleQty({ baseQuantity: deltaBaseQty.abs(), conversionFactor: factor });
+
+  return {
+    enteredBaseQty,
+    finalBaseQty,
+    deltaBaseQty,
+    movementQuantity,
+  };
+}
+
 export async function getProductStockConversion(db: DbClient, productId: string): Promise<ProductStockConversion | null> {
   const member = await db.productStockGroupMember.findFirst({
     where: { productId, isActive: true, stockGroup: { isActive: true } },

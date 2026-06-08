@@ -25,6 +25,10 @@ type ProductRow = {
   unit: string;
   stockOnHand?: number;
   availableStock?: number;
+  availableBaseStock?: number;
+  availableSaleStock?: number;
+  baseUnit?: string;
+  saleUnit?: string;
   stockConversion?: {
     stockGroupId: string;
     stockGroupCode: string;
@@ -67,6 +71,10 @@ type TicketOrder = {
 type InventoryBalanceRow = {
   productId: string;
   quantityOnHand: string;
+  availableSaleStock?: number;
+  sharedStock?: {
+    saleQuantity: number;
+  } | null;
 };
 
 const ROW_HEIGHT = 96;
@@ -76,6 +84,8 @@ const STATUS_LABELS: Record<string, string> = {
   DRAFT: "Borrador",
   PENDING_PAYMENT: "Pendiente de pago",
   PAID: "Pagado",
+  DISPATCH_PENDING: "Pendiente de despacho",
+  DISPATCHED: "Despachado",
   CANCELLED: "Cancelado",
 };
 
@@ -146,11 +156,14 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const transportAmountValue = includeTransport && Number.isFinite(transportAmountNumber) && transportAmountNumber > 0
     ? transportAmountNumber
     : 0;
+  const displayedTotalAmount = totalAmount + transportAmountValue;
 
   const seedSharedStock = useCallback((rows: ProductRow[]) => {
     const next: Record<string, number> = {};
     for (const row of rows) {
-      if (row.sharedStock && Number.isFinite(row.sharedStock.saleQuantity)) {
+      if (typeof row.availableSaleStock === "number" && Number.isFinite(row.availableSaleStock)) {
+        next[row.id] = row.availableSaleStock;
+      } else if (row.sharedStock && Number.isFinite(row.sharedStock.saleQuantity)) {
         next[row.id] = row.sharedStock.saleQuantity;
       }
     }
@@ -216,36 +229,16 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   const reloadOrder = useCallback(async () => {
     try {
-      const query = new URLSearchParams({ branchId });
+      const query = new URLSearchParams({ branchId, activeDraft: "mine" });
       const response = await fetch(`/api/sales/orders?${query.toString()}`);
-      const json = (await response.json()) as { data?: TicketOrder[]; message?: string; reason?: string };
+      const json = (await response.json()) as { data?: TicketOrder; message?: string; reason?: string };
 
       if (!response.ok) {
         setNoticeTimed(resolveApiMessage({ payload: json, status: response.status, fallback: "No se pudo preparar el ticket de venta." }), 10000);
         return;
       }
 
-      const orders = json.data ?? [];
-      const editable = orders.find((item) => item.status === "DRAFT") ?? null;
-
-      if (editable) {
-        setOrder(editable);
-        return;
-      }
-
-      const createResponse = await apiFetch("/api/sales/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ branchId }),
-      });
-
-      const createJson = (await createResponse.json()) as { data?: TicketOrder; message?: string; reason?: string };
-      if (!createResponse.ok) {
-        setNoticeTimed(resolveApiMessage({ payload: createJson, status: createResponse.status, fallback: "No se pudo crear el ticket." }), 10000);
-        return;
-      }
-
-      setOrder(createJson.data ?? null);
+      setOrder(json.data ?? null);
     } catch (error) {
       console.error("[POS][reloadOrder]", error);
       setNoticeTimed(resolveApiMessage({ fallback: "No se pudo preparar el ticket de venta.", thrownError: error }), 10000);
@@ -447,7 +440,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
       throw new Error(resolveApiMessage({ payload: json, status: response.status, fallback: "No se pudo validar stock disponible." }));
     }
 
-    const qty = Number(json.data?.[0]?.quantityOnHand ?? 0);
+    const row = json.data?.[0];
+    const qty = Number(row?.availableSaleStock ?? row?.sharedStock?.saleQuantity ?? row?.quantityOnHand ?? 0);
     const resolved = Number.isFinite(qty) ? qty : 0;
     setStockByProductId((prev) => ({ ...prev, [productId]: resolved }));
     return resolved;
@@ -455,7 +449,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   async function addProduct(product: ProductRow) {
     if (!order || isBusy) return;
-    const knownAvailableStock = product.availableStock ?? product.sharedStock?.saleQuantity ?? stockByProductId[product.id];
+    const knownAvailableStock = product.availableSaleStock ?? product.sharedStock?.saleQuantity ?? product.availableStock ?? stockByProductId[product.id];
     if (typeof knownAvailableStock === "number" && knownAvailableStock <= 0) {
       setNoticeTimed(`Sin stock en esta sucursal: ${product.name}.`, 8000);
       return;
@@ -606,6 +600,11 @@ export function BranchPos({ branchId }: { branchId: string }) {
     // Direct sale requires active cash session
     if (isDirectSale && !activeCashSessionId) {
       setNoticeTimed("No hay sesión de caja abierta para registrar venta directa. Abra una sesión de caja primero.", 10000);
+      return;
+    }
+
+    if (isDirectSale && paymentMethod === "CREDIT") {
+      setNoticeTimed("Credito no disponible en venta directa: usa caja o selecciona otro metodo de pago.", 10000);
       return;
     }
 
@@ -808,7 +807,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   const displayPrice = product.effectivePrice ?? product.standardSalePrice;
                   const conversionFactor = Number(product.stockConversion?.conversionFactor ?? 0);
                   const sharedStock = product.sharedStock;
-                  const availableStock = product.availableStock ?? sharedStock?.saleQuantity ?? stockByProductId[product.id] ?? 0;
+                  const availableStock = product.availableSaleStock ?? sharedStock?.saleQuantity ?? product.availableStock ?? stockByProductId[product.id] ?? 0;
                   const hasNoStock = availableStock <= 0;
 
                   return (
@@ -842,7 +841,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                             Sucursal
                           </span>
                         ) : null}
-                        <span className="text-[0.65rem] text-[var(--color-text-muted)]">Stock: {availableStock.toFixed(2)} {product.unit}</span>
+                        <span className="text-[0.65rem] text-[var(--color-text-muted)]">Stock: {availableStock.toFixed(2)} {product.saleUnit ?? product.unit}</span>
                       </div>
                       {product.stockConversion && sharedStock ? (
                         <div className="mt-1 text-[0.65rem] text-[var(--color-text-muted)]">
@@ -989,7 +988,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   ) : null}
                   <div className="mt-1 flex justify-between border-t border-[var(--color-border)] pt-2 text-lg">
                     <span>Total</span>
-                    <strong data-testid="pos-total">C$ {totalAmount.toFixed(2)}</strong>
+                    <strong data-testid="pos-total">C$ {displayedTotalAmount.toFixed(2)}</strong>
                   </div>
                 </div>
 
@@ -1055,7 +1054,6 @@ export function BranchPos({ branchId }: { branchId: string }) {
                       <option value="CASH">Efectivo</option>
                       <option value="CARD">Tarjeta</option>
                       <option value="TRANSFER">Transferencia</option>
-                      <option value="CREDIT">Crédito</option>
                     </select>
                     {!activeCashSessionId && (
                       <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3">
@@ -1091,8 +1089,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
                     : !hasTicketLines
                       ? (branchConfig?.enableCashier === false ? "Agrega productos para cobrar" : "Agrega productos para enviar a caja")
                       : branchConfig?.enableCashier === false
-                        ? `Cobrar e imprimir - C$ ${totalAmount.toFixed(2)}`
-                        : `Enviar a caja - C$ ${totalAmount.toFixed(2)}`}
+                        ? `Cobrar e imprimir - C$ ${displayedTotalAmount.toFixed(2)}`
+                        : `Enviar a caja - C$ ${displayedTotalAmount.toFixed(2)}`}
                 </Button>
               </div>
             </Card>

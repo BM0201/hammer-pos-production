@@ -213,6 +213,31 @@ type BranchPricingCostRow = {
   warnings: string[];
 };
 
+type OpeningBalanceTrayLine = {
+  productId: string;
+  sku: string;
+  name: string;
+  categoryName: string;
+  quantity: number;
+  unit: string;
+  unitCost: number | null;
+  costMode: string;
+  salePrice: number | null;
+  priceMode: string;
+  notes?: string;
+  currentBaseStock: number;
+  enteredBaseQuantity: number;
+  finalBaseStock: number;
+  deltaBaseQuantity: number;
+  currentSaleStock: number;
+  finalSaleStock: number;
+  effectiveCost: number | null;
+  effectivePrice: number | null;
+  estimatedMargin: number | null;
+  priceBelowCost: boolean;
+  lowMargin: boolean;
+};
+
 type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "transfers" | "reorder" | "audit";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
@@ -1869,6 +1894,8 @@ function MovementsPanel({
     reason: "Carga inicial de inventario",
     notes: "",
   });
+  const [openingMode, setOpeningMode] = useState<"SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK">("SET_PHYSICAL_STOCK");
+  const [openingLines, setOpeningLines] = useState<OpeningBalanceTrayLine[]>([]);
   const [openingSearch, setOpeningSearch] = useState(firstProduct ? `${firstProduct.sku} ${firstProduct.name}` : "");
   const [openingSearchResults, setOpeningSearchResults] = useState<ProductRow[]>(products.slice(0, 12));
   const [openingSearchLoading, setOpeningSearchLoading] = useState(false);
@@ -1927,14 +1954,21 @@ function MovementsPanel({
   });
   const adjustmentProduct = products.find((product) => product.id === adjustment.productId);
   const openingProduct = products.find((product) => product.id === opening.productId);
+  function currentBaseStockForProduct(product?: ProductRow) {
+    if (!product) return 0;
+    if (product.stockConversion) {
+      return numberOrNull(product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand) ?? 0;
+    }
+    return numberOrNull(product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand) ?? 0;
+  }
   const adjustmentQty = Number(adjustment.quantity);
   const openingQty = Number(opening.quantity);
   const adjustmentFactor = adjustmentProduct ? ironQuintalFactor(adjustmentProduct) : null;
   const openingFactor = openingProduct ? ironQuintalFactor(openingProduct) : null;
   const isBaseUnit = !!adjustmentProduct?.stockConversion && adjustment.unit === adjustmentProduct.stockConversion.baseUnit;
   const openingIsBaseUnit = !!openingProduct?.stockConversion && opening.unit === openingProduct.stockConversion.baseUnit;
-  const currentBaseStock = adjustmentProduct?.sharedStock?.baseQuantity ?? adjustmentProduct?.totalStock ?? 0;
-  const openingCurrentBaseStock = openingProduct?.sharedStock?.baseQuantity ?? openingProduct?.totalStock ?? 0;
+  const currentBaseStock = currentBaseStockForProduct(adjustmentProduct);
+  const openingCurrentBaseStock = currentBaseStockForProduct(openingProduct);
   const changeBaseQty = Number.isFinite(adjustmentQty)
     ? (adjustmentProduct?.stockConversion && !isBaseUnit ? adjustmentQty * Number(adjustmentProduct.stockConversion.conversionFactor || 1) : adjustmentQty)
     : 0;
@@ -1943,7 +1977,8 @@ function MovementsPanel({
     : 0;
   const direction = ["ADJUSTMENT_OUT", "DAMAGE"].includes(adjustment.adjustmentType) ? -1 : 1;
   const previewFinalBase = adjustment.adjustmentType === "PHYSICAL_COUNT" ? changeBaseQty : currentBaseStock + (direction * changeBaseQty);
-  const openingPreviewFinalBase = openingCurrentBaseStock + openingBaseQty;
+  const openingPreviewFinalBase = openingMode === "SET_PHYSICAL_STOCK" ? openingBaseQty : openingCurrentBaseStock + openingBaseQty;
+  const openingDeltaBaseQty = openingPreviewFinalBase - openingCurrentBaseStock;
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
   const openingPricing = openingProduct && activeBranch ? buildBranchPricingCostRow(openingProduct, activeBranch) : null;
   const openingUnitCost = numberOrNull(opening.unitCost);
@@ -1995,12 +2030,52 @@ function MovementsPanel({
     }
   }
 
-  async function submitOpeningBalance(event: React.FormEvent) {
-    event.preventDefault();
+  function buildOpeningLine(product: ProductRow): OpeningBalanceTrayLine | null {
+    const quantity = Number(opening.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) return null;
+    const isOpeningBaseUnit = !!product.stockConversion && opening.unit === product.stockConversion.baseUnit;
+    const factor = Number(product.stockConversion?.conversionFactor ?? 1) || 1;
+    const currentBase = currentBaseStockForProduct(product);
+    const currentSale = product.stockConversion ? currentBase / factor : currentBase;
+    const enteredBase = product.stockConversion && !isOpeningBaseUnit ? quantity * factor : quantity;
+    const finalBase = openingMode === "SET_PHYSICAL_STOCK" ? enteredBase : currentBase + enteredBase;
+    const finalSale = product.stockConversion ? finalBase / factor : finalBase;
+    const pricing = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
+    const lineCost = opening.costMode === "QUANTITY_ONLY" ? pricing?.effectiveCost ?? null : numberOrNull(opening.unitCost);
+    const linePrice = opening.priceMode === "NO_PRICE_CHANGE" ? pricing?.effectivePrice ?? null : numberOrNull(opening.salePrice);
+    const margin = lineCost !== null && linePrice !== null && linePrice > 0
+      ? ((linePrice - lineCost) / linePrice) * 100
+      : null;
+
+    return {
+      productId: product.id,
+      sku: product.sku,
+      name: product.name,
+      categoryName: product.category?.name ?? "Sin categoria",
+      quantity,
+      unit: opening.unit,
+      unitCost: lineCost,
+      costMode: opening.costMode,
+      salePrice: linePrice,
+      priceMode: opening.priceMode,
+      notes: opening.notes.trim() || undefined,
+      currentBaseStock: currentBase,
+      enteredBaseQuantity: enteredBase,
+      finalBaseStock: finalBase,
+      deltaBaseQuantity: finalBase - currentBase,
+      currentSaleStock: currentSale,
+      finalSaleStock: finalSale,
+      effectiveCost: lineCost,
+      effectivePrice: linePrice,
+      estimatedMargin: margin,
+      priceBelowCost: lineCost !== null && linePrice !== null && linePrice < lineCost,
+      lowMargin: margin !== null && margin >= 0 && margin < 20,
+    };
+  }
+
+  function addOpeningLine() {
     if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
-    if (!opening.productId) { toast.error("Selecciona un producto."); return; }
-    if (!opening.reason.trim()) { toast.error("El motivo es obligatorio."); return; }
-    if (!Number.isFinite(openingQty) || openingQty <= 0) { toast.error("La cantidad inicial debe ser mayor que cero."); return; }
+    if (!openingProduct) { toast.error("Selecciona un producto."); return; }
     if (opening.costMode !== "QUANTITY_ONLY" && (!Number.isFinite(Number(opening.unitCost)) || Number(opening.unitCost) <= 0)) {
       toast.error("Este modo requiere un costo inicial mayor que cero.");
       return;
@@ -2009,31 +2084,81 @@ function MovementsPanel({
       toast.error("Este modo requiere un precio de venta mayor que cero.");
       return;
     }
-    if (priceBelowCost && !window.confirm("El precio de venta queda por debajo del costo. Confirma explicitamente que deseas continuar.")) {
+    const line = buildOpeningLine(openingProduct);
+    if (!line) { toast.error("La cantidad inicial debe ser mayor que cero."); return; }
+    setOpeningLines((prev) => {
+      const exists = prev.some((item) => item.productId === line.productId);
+      return exists
+        ? prev.map((item) => item.productId === line.productId ? line : item)
+        : [...prev, line];
+    });
+    toast.success(openingLines.some((item) => item.productId === line.productId) ? "Linea actualizada." : "Producto agregado a la carga.");
+    setOpening((prev) => ({ ...prev, quantity: "1", unitCost: "", salePrice: "", notes: "" }));
+  }
+
+  function editOpeningLine(line: OpeningBalanceTrayLine) {
+    const product = products.find((item) => item.id === line.productId);
+    setOpening({
+      productId: line.productId,
+      quantity: String(line.quantity),
+      unit: line.unit,
+      unitCost: line.costMode === "QUANTITY_ONLY" ? "" : String(line.unitCost ?? ""),
+      costMode: line.costMode,
+      salePrice: line.priceMode === "NO_PRICE_CHANGE" ? "" : String(line.salePrice ?? ""),
+      priceMode: line.priceMode,
+      reason: opening.reason,
+      notes: line.notes ?? "",
+    });
+    setOpeningSearch(product ? `${product.sku} ${product.name}` : line.name);
+  }
+
+  const openingSummary = useMemo(() => {
+    return {
+      totalProducts: openingLines.length,
+      totalInventoryValue: openingLines.reduce((sum, line) => sum + (line.finalSaleStock * (line.effectiveCost ?? 0)), 0),
+      productsWithoutCost: openingLines.filter((line) => line.effectiveCost === null || line.effectiveCost <= 0).length,
+      productsWithoutPrice: openingLines.filter((line) => line.effectivePrice === null || line.effectivePrice <= 0).length,
+      productsBelowCost: openingLines.filter((line) => line.priceBelowCost).length,
+      lowMarginProducts: openingLines.filter((line) => line.lowMargin).length,
+    };
+  }, [openingLines]);
+
+  async function submitOpeningBalance(event: React.FormEvent) {
+    event.preventDefault();
+    if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
+    if (!opening.reason.trim()) { toast.error("El motivo es obligatorio."); return; }
+    if (openingLines.length === 0) { toast.error("Agrega al menos un producto a la carga."); return; }
+    if (openingSummary.productsBelowCost > 0 && !window.confirm("Hay productos con precio por debajo del costo. Confirma explicitamente que deseas continuar.")) {
       return;
     }
     setSubmitting(true);
     try {
-      const response = await apiFetch("/api/inventory/opening-balance", {
+      const response = await apiFetch("/api/inventory/opening-balance/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           branchId: activeBranchId,
-          productId: opening.productId,
-          quantity: openingQty,
-          unit: opening.unit,
-          unitCost: opening.unitCost ? Number(opening.unitCost) : null,
-          costMode: opening.costMode,
-          salePrice: opening.salePrice ? Number(opening.salePrice) : null,
-          priceMode: opening.priceMode,
+          mode: openingMode,
           reason: opening.reason.trim(),
           notes: opening.notes.trim() || undefined,
+          lines: openingLines.map((line) => ({
+            productId: line.productId,
+            quantity: line.quantity,
+            unit: line.unit,
+            unitCost: line.costMode === "QUANTITY_ONLY" ? null : line.unitCost,
+            costMode: line.costMode,
+            salePrice: line.priceMode === "NO_PRICE_CHANGE" ? null : line.salePrice,
+            priceMode: line.priceMode,
+            notes: line.notes,
+          })),
         }),
       });
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar carga inicial.");
-      toast.success("Carga inicial registrada correctamente.");
+      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar carga inicial masiva.");
+      const result = unwrapApiData(payload);
+      toast.success(`Carga inicial completa: ${result.processed} procesados, ${result.skipped} sin cambio.`);
       setShowOpening(false);
+      setOpeningLines([]);
       setOpening((prev) => ({ ...prev, quantity: "1", unitCost: "", salePrice: "", notes: "" }));
       await onDone();
     } finally {
@@ -2138,6 +2263,10 @@ function MovementsPanel({
                 <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>
                   {branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
                 </select>
+                <select className="hm-input" value={openingMode} onChange={(e) => setOpeningMode(e.target.value as "SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK")}>
+                  <option value="SET_PHYSICAL_STOCK">SET_PHYSICAL_STOCK - fijar stock fisico final</option>
+                  <option value="ADD_OPENING_STOCK">ADD_OPENING_STOCK - sumar entrada inicial</option>
+                </select>
 
                 <div className="rounded-lg border border-[var(--color-border)] p-3">
                   <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Producto</label>
@@ -2229,6 +2358,7 @@ function MovementsPanel({
                   <Input type="number" min="0" step="0.01" value={opening.salePrice} onChange={(e) => setOpening({ ...opening, salePrice: e.target.value })} placeholder={opening.priceMode === "NO_PRICE_CHANGE" ? "Precio no se cambia" : "Precio de venta inicial"} disabled={opening.priceMode === "NO_PRICE_CHANGE"} />
                   <Input className="md:col-span-2" value={opening.reason} onChange={(e) => setOpening({ ...opening, reason: e.target.value })} placeholder="Motivo obligatorio" />
                   <Input className="md:col-span-2" value={opening.notes} onChange={(e) => setOpening({ ...opening, notes: e.target.value })} placeholder="Nota opcional" />
+                  <Button type="button" className="md:col-span-2" variant="primary" onClick={addOpeningLine} icon={<Plus className="h-4 w-4" />}>Agregar a carga</Button>
                 </div>
               </div>
 
@@ -2239,9 +2369,10 @@ function MovementsPanel({
                     <div className="font-semibold text-[var(--color-text)]">Stock</div>
                     <div className="mt-1 grid gap-1">
                       <span>Stock actual: {qty(openingCurrentBaseStock)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
-                      <span>Cantidad a cargar: {qty(openingQty || 0)} {opening.unit}</span>
-                      <span>Carga base: {qty(openingBaseQty)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
+                      <span>Cantidad ingresada: {qty(openingQty || 0)} {opening.unit}</span>
+                      <span>Cantidad base ingresada: {qty(openingBaseQty)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
                       <span>Stock final: {qty(openingPreviewFinalBase)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
+                      <span>Diferencia a registrar: {qty(openingDeltaBaseQty)} {openingProduct?.stockConversion?.baseUnit ?? openingProduct?.unit ?? ""}</span>
                     </div>
                     {openingProduct?.stockConversion ? (
                       <div className="mt-2 text-amber-700">
@@ -2277,9 +2408,60 @@ function MovementsPanel({
                 </div>
               </div>
             </div>
+            <div className="px-5 pb-5">
+              <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-6">
+                <Kpi label="Productos" value={openingSummary.totalProducts} />
+                <Kpi label="Valor estimado" value={money(openingSummary.totalInventoryValue)} />
+                <Kpi label="Sin costo" value={openingSummary.productsWithoutCost} />
+                <Kpi label="Sin precio" value={openingSummary.productsWithoutPrice} />
+                <Kpi label="Bajo costo" value={openingSummary.productsBelowCost} />
+                <Kpi label="Margen bajo" value={openingSummary.lowMarginProducts} />
+              </div>
+              {openingSummary.productsWithoutCost > 0 || openingSummary.productsWithoutPrice > 0 ? (
+                <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+                  Hay productos sin costo o sin precio por el modo seleccionado. Quedaran registrados, pero deben revisarse en Precios y costos.
+                </div>
+              ) : null}
+              <div className="mt-3 overflow-x-auto rounded-lg border border-[var(--color-border)]">
+                <table className="hm-table min-w-[1250px] w-full">
+                  <thead>
+                    <tr>
+                      <th>Producto</th><th>SKU</th><th>Unidad</th><th>Cantidad</th><th>Costo</th><th>Modo costo</th><th>Precio</th><th>Modo precio</th><th>Stock actual</th><th>Stock final</th><th>Diferencia</th><th>Margen est.</th><th>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openingLines.map((line) => (
+                      <tr key={line.productId}>
+                        <td><div className="font-medium">{line.name}</div><div className="text-xs text-[var(--color-text-muted)]">{line.categoryName}</div></td>
+                        <td className="font-mono text-xs">{line.sku}</td>
+                        <td>{line.unit}</td>
+                        <td>{qty(line.quantity)}</td>
+                        <td>{formatMoneyOrNd(line.effectiveCost)}</td>
+                        <td>{line.costMode}</td>
+                        <td>{formatMoneyOrNd(line.effectivePrice)}</td>
+                        <td>{line.priceMode}</td>
+                        <td>{qty(line.currentBaseStock)}</td>
+                        <td>{qty(line.finalBaseStock)}</td>
+                        <td className={line.deltaBaseQuantity < 0 ? "text-red-700" : "text-emerald-700"}>{qty(line.deltaBaseQuantity)}</td>
+                        <td><Badge variant={marginBadgeVariant(line.estimatedMargin)}>{formatMarginOrNd(line.estimatedMargin)}</Badge></td>
+                        <td>
+                          <div className="flex gap-1">
+                            <Button type="button" variant="ghost" size="sm" onClick={() => editOpeningLine(line)} icon={<Pencil className="h-3.5 w-3.5" />}>Editar</Button>
+                            <Button type="button" variant="danger" size="sm" onClick={() => setOpeningLines((prev) => prev.filter((item) => item.productId !== line.productId))} icon={<Trash2 className="h-3.5 w-3.5" />}>Eliminar</Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {openingLines.length === 0 ? (
+                      <tr><td colSpan={13} className="py-6 text-center text-sm text-[var(--color-text-muted)]">Agrega productos a la bandeja antes de confirmar.</td></tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
             <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
               <Button type="button" variant="ghost" onClick={() => setShowOpening(false)}>Cancelar</Button>
-              <Button type="submit" variant="success" loading={submitting} icon={<Check className="h-4 w-4" />}>Confirmar carga inicial</Button>
+              <Button type="submit" variant="success" loading={submitting} disabled={openingLines.length === 0} icon={<Check className="h-4 w-4" />}>Confirmar carga inicial completa</Button>
             </div>
           </form>
         </div>
@@ -3042,11 +3224,3 @@ function AuditPanel({ logs }: { logs: AuditRow[] }) {
     </Card>
   );
 }
-
-
-
-
-
-
-
-

@@ -10,6 +10,7 @@ import {
   convertSaleQtyToBaseQty,
   convertSaleUnitCostToBaseUnitCost,
   formatDualStock,
+  calculateSharedStockChange,
   getSharedInventoryBalance,
   resolveInventoryProductForMovement,
 } from "@/modules/inventory/unit-conversion";
@@ -20,7 +21,7 @@ export async function listInventoryBalances(params: { branchId: string; productI
   const resolved = params.productId
     ? await resolveInventoryProductForMovement(prisma, params.productId)
     : null;
-  return prisma.inventoryBalance.findMany({
+  const balances = await prisma.inventoryBalance.findMany({
     where: {
       branchId: params.branchId,
       ...(params.productId ? { productId: resolved?.inventoryProductId ?? params.productId } : {}),
@@ -28,13 +29,36 @@ export async function listInventoryBalances(params: { branchId: string; productI
     include: { product: true, branch: true },
     orderBy: { product: { name: "asc" } },
   });
+
+  if (!params.productId || !resolved?.conversion) return balances;
+
+  return balances.map((balance) => {
+    const sharedStock = formatDualStock({
+      baseQuantity: balance.quantityOnHand,
+      conversionFactor: resolved.conversion!.conversionFactor,
+      baseUnit: resolved.conversion!.baseUnit,
+      saleUnit: resolved.conversion!.saleUnit,
+    });
+
+    return {
+      ...balance,
+      availableBaseStock: sharedStock.baseQuantity,
+      availableSaleStock: sharedStock.saleQuantity,
+      baseUnit: sharedStock.baseUnit,
+      saleUnit: sharedStock.saleUnit,
+      sharedStock,
+    };
+  });
 }
 
 export async function listInventoryMovements(params: { branchId: string; productId?: string; limit?: number }) {
+  const resolved = params.productId
+    ? await resolveInventoryProductForMovement(prisma, params.productId)
+    : null;
   return prisma.inventoryMovement.findMany({
     where: {
       branchId: params.branchId,
-      ...(params.productId ? { productId: params.productId } : {}),
+      ...(params.productId ? { productId: resolved?.inventoryProductId ?? params.productId } : {}),
     },
     include: {
       product: {
@@ -78,12 +102,22 @@ type OpeningBalanceInput = {
   productId: string;
   quantity: number;
   unit?: string;
+  stockMode: "SET_PHYSICAL_STOCK" | "ADD_TO_STOCK" | "ADD_OPENING_STOCK";
   unitCost?: number | null;
   costMode: "SET_WAC" | "SET_BRANCH_COST" | "QUANTITY_ONLY";
   salePrice?: number | null;
   priceMode: "SET_BRANCH_PRICE" | "SET_GLOBAL_PRICE" | "NO_PRICE_CHANGE";
   reason: string;
   notes?: string | null;
+};
+
+type OpeningBalanceTxOptions = {
+  referenceType?: string;
+  referenceId?: string;
+  auditAction?: string;
+  createNoopMovement?: boolean;
+  skipLineAudit?: boolean;
+  bulkReference?: string;
 };
 
 export async function createInventoryMovementTx(
@@ -363,8 +397,11 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
   });
 }
 
-export async function createOpeningBalance(input: OpeningBalanceInput) {
-  return prisma.$transaction(async (tx) => {
+async function createOpeningBalanceTx(
+  tx: Prisma.TransactionClient,
+  input: OpeningBalanceInput,
+  options: OpeningBalanceTxOptions = {},
+) {
     const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
     const conversion = shared.conversion;
     const selectedUnit = (input.unit ?? conversion?.saleUnit ?? "").toUpperCase();
@@ -373,10 +410,18 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
     const previousBaseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
     const requestedQty = new Prisma.Decimal(input.quantity);
     const movementProductId = isBaseUnit && conversion ? conversion.canonicalProductId : input.productId;
-    const movementQty = requestedQty;
-    const baseQuantity = conversion && !isBaseUnit
-      ? convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor })
-      : requestedQty;
+    const stockChange = calculateSharedStockChange({
+      currentBaseQuantity: currentBaseQty,
+      enteredQuantity: requestedQty,
+      conversionFactor: conversion?.conversionFactor ?? 1,
+      isBaseUnit,
+      mode: input.stockMode,
+    });
+    const baseQuantity = stockChange.enteredBaseQty;
+    const baseDelta = stockChange.deltaBaseQty;
+    const movementBaseQty = baseDelta.abs();
+    const movementQty = stockChange.movementQuantity;
+    const movementType = baseDelta.lt(0) ? "ADJUSTMENT_OUT" : "ADJUSTMENT_IN";
 
     const [product, existingSetting] = await Promise.all([
       tx.product.findUniqueOrThrow({
@@ -403,17 +448,46 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
       unitCost = new Prisma.Decimal(0);
     }
 
-    let movementResult: Awaited<ReturnType<typeof createInventoryMovementTx>> | null = null;
-    if (input.costMode === "SET_WAC") {
+    const referenceType = options.referenceType ?? "OPENING_BALANCE";
+    const referenceId = options.referenceId ?? `OPENING-${Date.now()}`;
+    let movementResult: any = null;
+    if (baseDelta.eq(0)) {
+      const balance = await tx.inventoryBalance.upsert({
+        where: { branchId_productId: { branchId: input.branchId, productId: shared.inventoryProductId } },
+        create: {
+          branchId: input.branchId,
+          productId: shared.inventoryProductId,
+          quantityOnHand: currentBaseQty,
+          weightedAverageCost: previousBaseWac,
+          inventoryValue: currentBaseQty.mul(previousBaseWac),
+        },
+        update: {},
+      });
+      const movement = options.createNoopMovement === false
+        ? null
+        : await tx.inventoryMovement.create({
+            data: {
+              branchId: input.branchId,
+              productId: shared.inventoryProductId,
+              movementType: "ADJUSTMENT_IN",
+              quantity: new Prisma.Decimal(0),
+              unitCost: previousBaseWac,
+              referenceType,
+              referenceId,
+              notes: `Sin cambio de stock - ${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+            },
+          });
+      movementResult = { movement, balance };
+    } else if (input.costMode === "SET_WAC") {
       movementResult = await createInventoryMovementTx(tx, {
         actorUserId: input.actorUserId,
         branchId: input.branchId,
         productId: movementProductId,
-        movementType: "ADJUSTMENT_IN",
+        movementType,
         quantity: Number(movementQty),
         unitCost: Number(unitCost),
-        referenceType: "OPENING_BALANCE",
-        referenceId: `OPENING-${Date.now()}`,
+        referenceType,
+        referenceId,
         notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
       });
     } else {
@@ -440,17 +514,19 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
         where: { branchId_productId: { branchId: input.branchId, productId: inventoryProductId } },
       });
       if (!balance) throw new Error("INVENTORY_BALANCE_NOT_FOUND");
-      const nextQty = balance.quantityOnHand.plus(baseQuantity);
+      const nextQty = input.stockMode === "SET_PHYSICAL_STOCK"
+        ? baseQuantity
+        : balance.quantityOnHand.plus(baseQuantity);
       const nextWac = balance.weightedAverageCost;
       const movement = await tx.inventoryMovement.create({
         data: {
           branchId: input.branchId,
           productId: inventoryProductId,
-          movementType: "ADJUSTMENT_IN",
-          quantity: baseQuantity,
+          movementType,
+          quantity: movementBaseQty,
           unitCost: nextWac,
-          referenceType: "OPENING_BALANCE",
-          referenceId: `OPENING-${Date.now()}`,
+          referenceType,
+          referenceId,
           notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
         },
       });
@@ -516,21 +592,26 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
       ? convertBaseQtyToSaleQty({ baseQuantity: newBaseQty, conversionFactor: conversion.conversionFactor })
       : newBaseQty;
 
-    await logAuditEvent({
-      actorUserId: input.actorUserId,
-      branchId: input.branchId,
-      module: "inventory",
-      action: "OPENING_BALANCE_CREATE",
-      entityType: "Product",
-      entityId: input.productId,
-      metadataJson: {
+    if (!options.skipLineAudit) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: input.branchId,
+          module: "inventory",
+          action: options.auditAction ?? "OPENING_BALANCE_CREATE",
+          entityType: "Product",
+          entityId: input.productId,
+          metadataJson: {
         productId: input.productId,
         branchId: input.branchId,
         inventoryProductId: shared.inventoryProductId,
-        movementId: movementResult.movement.id,
+        movementId: movementResult.movement?.id ?? null,
+        bulkReference: options.bulkReference ?? null,
         oldStock: currentBaseQty.toString(),
         newStock: newBaseQty.toString(),
         quantityBase: baseQuantity.toString(),
+        stockMode: input.stockMode,
+        adjustmentBaseDelta: baseDelta.toString(),
         quantity: input.quantity,
         unit: input.unit ?? null,
         oldCost: previousEffectiveCost?.toString() ?? null,
@@ -552,20 +633,26 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
           conversionFactor: conversion.conversionFactor.toString(),
         } : null,
       },
-    });
+        },
+      });
+    }
 
     return {
       ok: true,
-      movementId: movementResult.movement.id,
+      movementId: movementResult.movement?.id ?? null,
       productId: input.productId,
+      inventoryProductId: shared.inventoryProductId,
       branchId: input.branchId,
-      movementType: "ADJUSTMENT_IN",
-      referenceType: "OPENING_BALANCE",
+      movementType,
+      referenceType,
+      referenceId,
       costMode: input.costMode,
       priceMode: input.priceMode,
       previousBaseStock: Number(currentBaseQty),
       newBaseStock: Number(newBaseQty),
       quantityBase: Number(baseQuantity),
+      stockMode: input.stockMode,
+      adjustmentBaseDelta: Number(baseDelta),
       newStock: Number(newSaleQty),
       oldCost: previousEffectiveCost === null ? null : Number(previousEffectiveCost),
       newCost: newEffectiveCost === null ? null : Number(newEffectiveCost),
@@ -578,9 +665,125 @@ export async function createOpeningBalance(input: OpeningBalanceInput) {
         baseUnit: conversion.baseUnit,
         saleUnit: conversion.saleUnit,
       }) : null,
+      stockConversion: conversion ? {
+        stockGroupId: conversion.stockGroupId,
+        stockGroupCode: conversion.stockGroupCode,
+        baseUnit: conversion.baseUnit,
+        saleUnit: conversion.saleUnit,
+        conversionFactor: conversion.conversionFactor.toString(),
+        saleQuantity: input.quantity,
+        baseQuantity: Number(baseQuantity),
+      } : null,
+    };
+}
+
+export async function createOpeningBalance(input: OpeningBalanceInput) {
+  return prisma.$transaction((tx) => createOpeningBalanceTx(tx, input, { createNoopMovement: true }));
+}
+
+export async function createOpeningBalanceBulk(input: {
+  actorUserId: string;
+  branchId: string;
+  mode: "SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK";
+  reason: string;
+  notes?: string | null;
+  lines: Array<{
+    productId: string;
+    quantity: number;
+    unit?: string;
+    unitCost?: number | null;
+    costMode: "SET_WAC" | "SET_BRANCH_COST" | "QUANTITY_ONLY";
+    salePrice?: number | null;
+    priceMode: "SET_BRANCH_PRICE" | "SET_GLOBAL_PRICE" | "NO_PRICE_CHANGE";
+    notes?: string | null;
+  }>;
+}) {
+  const batchReference = `OPENING-BULK-${Date.now()}`;
+  return prisma.$transaction(async (tx) => {
+    const lines = [];
+    for (let index = 0; index < input.lines.length; index += 1) {
+      const line = input.lines[index];
+      const result = await createOpeningBalanceTx(tx, {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        productId: line.productId,
+        quantity: line.quantity,
+        unit: line.unit,
+        stockMode: input.mode,
+        unitCost: line.unitCost,
+        costMode: line.costMode,
+        salePrice: line.salePrice,
+        priceMode: line.priceMode,
+        reason: input.reason,
+        notes: [line.notes, input.notes].filter(Boolean).join(" - ") || null,
+      }, {
+        referenceType: "OPENING_BALANCE_BULK",
+        referenceId: `${batchReference}-${index + 1}`,
+        createNoopMovement: false,
+        skipLineAudit: true,
+        bulkReference: batchReference,
+      });
+      lines.push(result);
+    }
+
+    const processed = lines.filter((line) => line.movementId !== null).length;
+    const skipped = lines.length - processed;
+    const summary = {
+      totalProducts: lines.length,
+      totalInventoryValue: lines.reduce((sum, line) => sum + (Number(line.newBaseStock) * Number(line.weightedAverageCost)), 0),
+      productsWithoutCost: lines.filter((line) => line.newCost === null || line.newCost <= 0).length,
+      productsWithoutPrice: lines.filter((line) => line.newPrice === null || line.newPrice <= 0).length,
+      productsBelowCost: lines.filter((line) => line.newCost !== null && line.newPrice < line.newCost).length,
+      lowMarginProducts: lines.filter((line) => {
+        if (line.newCost === null || line.newPrice <= 0 || line.newPrice < line.newCost) return false;
+        const margin = ((line.newPrice - line.newCost) / line.newPrice) * 100;
+        return margin < 20;
+      }).length,
+    };
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "inventory",
+        action: "OPENING_BALANCE_BULK_CREATE",
+        entityType: "InventoryMovement",
+        entityId: batchReference,
+        metadataJson: {
+          batchReference,
+          mode: input.mode,
+          reason: input.reason,
+          notes: input.notes ?? null,
+          lineCount: input.lines.length,
+          processed,
+          skipped,
+          productIds: input.lines.map((line) => line.productId),
+          summary,
+          changes: lines.map((line) => ({
+            productId: line.productId,
+            inventoryProductId: line.inventoryProductId,
+            movementId: line.movementId,
+            previousBaseStock: line.previousBaseStock,
+            newBaseStock: line.newBaseStock,
+            adjustmentBaseDelta: line.adjustmentBaseDelta,
+            movementType: line.movementType,
+            stockConversion: line.stockConversion,
+          })),
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      batchReference,
+      processed,
+      skipped,
+      summary,
+      lines,
     };
   });
 }
+
 export async function requestStockAdjustment(input: {
   actorUserId: string;
   branchId: string;
@@ -628,5 +831,3 @@ export async function requestStockAdjustment(input: {
     created: result.created,
   } as const;
 }
-
-

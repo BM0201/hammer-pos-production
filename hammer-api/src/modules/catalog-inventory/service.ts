@@ -265,9 +265,17 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       };
     });
     const selectedShared = params.branchId ? sharedBalances.find((balance) => balance.branchId === params.branchId) : null;
-    const sharedStock = conversion && selectedShared?.quantityOnHand
+    const aggregateBaseQty = sharedBalances.reduce((sum, balance) => sum.add(balance.quantityOnHand ?? 0), new Prisma.Decimal(0));
+    const aggregateInventoryValue = sharedBalances.reduce((sum, balance) => {
+      const qty = balance.quantityOnHand ?? new Prisma.Decimal(0);
+      const wac = balance.weightedAverageCost ?? new Prisma.Decimal(0);
+      return sum.add(qty.mul(wac));
+    }, new Prisma.Decimal(0));
+    const displayedBaseQty = selectedShared?.quantityOnHand ?? aggregateBaseQty;
+    const displayedWac = selectedShared?.weightedAverageCost ?? (aggregateBaseQty.gt(0) ? aggregateInventoryValue.div(aggregateBaseQty) : null);
+    const sharedStock = conversion && displayedBaseQty
         ? formatDualStock({
-            baseQuantity: selectedShared.quantityOnHand,
+            baseQuantity: displayedBaseQty,
             conversionFactor: conversion.conversionFactor,
             baseUnit: conversion.baseUnit,
             saleUnit: conversion.saleUnit,
@@ -275,6 +283,14 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         : null;
     return {
       ...product,
+      ...(conversion ? {
+        totalStock: Number(displayedBaseQty),
+        branchesWithStock: sharedBalances.filter((balance) => decimalToNumber(balance.quantityOnHand) > 0).length,
+        inventoryValue: Number(aggregateInventoryValue),
+        baseCost: displayedWac ? Number(displayedWac) : 0,
+        hasZeroStock: displayedBaseQty.eq(0),
+        hasNegativeStock: displayedBaseQty.lt(0),
+      } : {}),
       stockConversion: conversion ? {
         stockGroupId: conversion.stockGroupId,
         stockGroupCode: conversion.stockGroupCode,
@@ -444,4 +460,3 @@ export async function massDeleteAllProducts(input: MassDeleteProductsInput, acto
 
   return { deleted: result };
 }
-

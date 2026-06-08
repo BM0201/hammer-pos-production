@@ -160,6 +160,8 @@ export const applyPricingSchema = z.object({
   marginPercent: nonNegativeNumericInput.optional(),
   grossMarginPercent: nonNegativeNumericInput.optional(),
   markupPercent: nonNegativeNumericInput.optional(),
+  canApplyPrice: z.boolean().optional(),
+  applyBlockReason: z.string().max(100).optional().nullable(),
   roundingRule: z.string().max(50).optional(),
   reason: z.string().max(500).optional(),
   calculationSnapshot: z.unknown().optional(),

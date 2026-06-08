@@ -30,13 +30,25 @@ export const updateSaleOrderLineSchema = z.object({
   overrideReason: z.string().max(500).optional(),
 });
 
-export const saleOrderTransportSchema = z.object({
+const saleOrderTransportBaseSchema = z.object({
   requiresTransport: z.boolean().optional(),
   transportAmount: nonNegativeMoneySchema.optional(),
 });
 
-export const saleOrderDirectSaleSchema = saleOrderTransportSchema.extend({
+function requireTransportAmount(data: { requiresTransport?: boolean; transportAmount?: number }, ctx: z.RefinementCtx) {
+  if (data.requiresTransport === true && (data.transportAmount === undefined || data.transportAmount <= 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["transportAmount"],
+      message: "TRANSPORT_AMOUNT_REQUIRED",
+    });
+  }
+}
+
+export const saleOrderTransportSchema = saleOrderTransportBaseSchema.superRefine(requireTransportAmount);
+
+export const saleOrderDirectSaleSchema = saleOrderTransportBaseSchema.extend({
   cashSessionId: z.string().cuid(),
   method: z.nativeEnum(PaymentMethod).optional(),
   referenceNumber: z.string().max(100).optional().nullable(),
-});
+}).superRefine(requireTransportAmount);
