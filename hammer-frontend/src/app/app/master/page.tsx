@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { Route } from "next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { Card } from "@/components/ui/card";
@@ -371,7 +372,7 @@ export default function MasterCommandCenterPage() {
             return (
               <Link
                 key={item.href}
-                href={item.href}
+                href={item.href as Route}
                 className="group flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 transition-colors hover:border-[var(--color-master-400)] hover:bg-[var(--color-surface-alt)]"
               >
                 <div className="hm-section-icon hm-section-icon-master shrink-0">
