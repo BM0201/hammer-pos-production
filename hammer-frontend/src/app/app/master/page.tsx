@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { Card } from "@/components/ui/card";
@@ -16,8 +17,22 @@ import {
   AlertTriangle,
   CheckCircle2,
   Banknote,
+  Settings,
+  AlarmClock,
+  Activity,
+  ChevronRight,
+  type LucideIcon,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+
+/* Quick access to management screens that were removed from the sidebar:
+   the Command Center is now the single entry point for cash/box/user control. */
+const MANAGEMENT_LINKS: { href: string; label: string; description: string; icon: LucideIcon }[] = [
+  { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", description: "Revisar y aprobar cierres", icon: Wallet },
+  { href: "/app/master/cash-boxes", label: "Cajas Físicas", description: "Administrar cajas por sucursal", icon: Settings },
+  { href: "/app/master/settings/cash-auto-close", label: "Cierre Automático", description: "Configurar horario de cierre", icon: AlarmClock },
+  { href: "/app/master/users/activity", label: "Detalle de usuarios", description: "Actividad y sesiones en detalle", icon: Activity },
+];
 
 /* ──────────────────────────────────────────────────────────────────────── */
 /* Types (mirror backend command-center snapshot)                            */
@@ -335,6 +350,42 @@ export default function MasterCommandCenterPage() {
           tone="default"
           roleAccent="MASTER"
         />
+      </div>
+
+      {/* ── Quick access to management screens (centralized here) ── */}
+      <div>
+        <div className="flex items-center gap-2.5 mb-3">
+          <div className="hm-section-icon hm-section-icon-master">
+            <Settings className="h-4 w-4" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-[var(--color-text)]">Gestión</h2>
+            <p className="text-[0.6875rem] text-[var(--color-text-muted)]">
+              Acceso directo a cierres, cajas, cierre automático y detalle de usuarios
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {MANAGEMENT_LINKS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="group flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 transition-colors hover:border-[var(--color-master-400)] hover:bg-[var(--color-surface-alt)]"
+              >
+                <div className="hm-section-icon hm-section-icon-master shrink-0">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-[var(--color-text)]">{item.label}</p>
+                  <p className="truncate text-[0.6875rem] text-[var(--color-text-muted)]">{item.description}</p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-text-muted)] transition-transform group-hover:translate-x-0.5" />
+              </Link>
+            );
+          })}
+        </div>
       </div>
 
       {/* ── Branch operational status grid ── */}
