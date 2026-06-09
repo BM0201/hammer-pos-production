@@ -63,6 +63,7 @@ type TicketOrder = {
   grandTotal: string;
   subtotal: string;
   discountTotal: string;
+  manualDiscountAmount?: string;
   taxTotal: string;
   transportAmount?: string;
   lines?: TicketLine[];
@@ -106,6 +107,13 @@ const STATUS_LABELS: Record<string, string> = {
   DISPATCH_PENDING: "Pendiente de despacho",
   DISPATCHED: "Despachado",
   CANCELLED: "Cancelado",
+};
+
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  CASH: "Efectivo",
+  CARD: "Tarjeta",
+  TRANSFER: "Transferencia",
+  CREDIT: "Crédito",
 };
 
 export function BranchPos({ branchId }: { branchId: string }) {
@@ -154,6 +162,14 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const [activeCashSessionId, setActiveCashSessionId] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<string>("CASH");
 
+  // ── Descuento manual de orden (Feature 3) ──
+  const [discountMode, setDiscountMode] = useState<"amount" | "percent">("amount");
+  const [discountInput, setDiscountInput] = useState("");
+  const [isApplyingDiscount, setIsApplyingDiscount] = useState(false);
+
+  // ── Confirmación antes de cobrar (Feature 2) ──
+  const [confirmTarget, setConfirmTarget] = useState<"QUEUE" | "DIRECT" | null>(null);
+
   // ── Print Modal (FASE 3) ──
   const [printModalOrderId, setPrintModalOrderId] = useState<string | null>(null);
   const [printModalOrderNumber, setPrintModalOrderNumber] = useState<string>("");
@@ -185,6 +201,17 @@ export function BranchPos({ branchId }: { branchId: string }) {
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, [branchId]);
+
+  // Refleja el descuento manual ya guardado al cambiar de orden (modo monto).
+  const orderId = order?.id ?? null;
+  const orderManualDiscount = Number(order?.manualDiscountAmount ?? 0);
+  useEffect(() => {
+    if (discountMode === "amount") {
+      setDiscountInput(orderManualDiscount > 0 ? String(orderManualDiscount) : "");
+    }
+    // Solo al cambiar de orden, no en cada tecla.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId]);
 
   const transportAmountNumber = Number(transportAmount);
   const transportAmountValue = includeTransport && Number.isFinite(transportAmountNumber) && transportAmountNumber > 0
@@ -670,6 +697,42 @@ export function BranchPos({ branchId }: { branchId: string }) {
     }
   }
 
+  async function applyManualDiscount() {
+    if (!order || isBusy || isApplyingDiscount) return;
+    const raw = discountInput.trim();
+    const value = raw === "" ? 0 : Number(raw);
+    if (!Number.isFinite(value) || value < 0) {
+      setNoticeTimed("Ingresa un descuento válido (0 o mayor).", 8000);
+      return;
+    }
+    if (discountMode === "percent" && value > 100) {
+      setNoticeTimed("El porcentaje de descuento no puede superar 100%.", 8000);
+      return;
+    }
+
+    setIsApplyingDiscount(true);
+    try {
+      const body = discountMode === "percent" ? { discountPercent: value } : { discountAmount: value };
+      const response = await apiFetch(`/api/sales/orders/${order.id}/discount`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = (await response.json()) as ApiErrorPayload;
+      if (!response.ok) {
+        setNoticeTimed(resolveApiMessage({ payload: json, status: response.status, fallback: "No se pudo aplicar el descuento." }), 10000);
+        return;
+      }
+      await reloadOrder();
+      setNoticeTimed(value > 0 ? "Descuento aplicado al ticket. ✓" : "Descuento removido.");
+    } catch (error) {
+      console.error("[POS][applyManualDiscount]", error);
+      setNoticeTimed(resolveApiMessage({ fallback: "No se pudo aplicar el descuento.", thrownError: error }), 10000);
+    } finally {
+      setIsApplyingDiscount(false);
+    }
+  }
+
   async function completeTicket(target: "QUEUE" | "DIRECT") {
     if (!order || isSubmittingPayment || ticketLines.length === 0) return;
 
@@ -860,7 +923,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   return (
     <section className="space-y-3" data-testid="pos-root">
-      <section className="h-[calc(100vh-12rem)] min-h-[34rem] overflow-hidden">
+      <section className="h-[calc(100vh-11rem)] min-h-[28rem] overflow-hidden">
         <div className="grid h-full grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
           <Card noPadding className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm" data-testid="pos-catalog-zone">
             <div className="hm-card-header-blue flex items-center justify-between">
@@ -956,7 +1019,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
             ref={ticketPanelRef}
             tabIndex={0}
             onKeyDown={handleTicketKeyDown}
-            className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-strong)]"
+            className="flex h-full min-h-0 flex-col rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-strong)]"
             data-testid="pos-ticket-zone"
           >
             <Card noPadding className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm">
@@ -1082,6 +1145,73 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   ) : null}
                 </div>
 
+                {/* Descuento editable a nivel de orden (monto o porcentaje). */}
+                {hasTicketLines ? (
+                  <div className="mt-3 space-y-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3" data-testid="pos-discount-editor">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-[var(--color-text)]">Descuento del ticket</label>
+                      <div className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]" role="group" aria-label="Tipo de descuento">
+                        <button
+                          type="button"
+                          onClick={() => setDiscountMode("amount")}
+                          className={`px-2.5 py-1 text-xs font-medium transition-colors ${discountMode === "amount" ? "bg-[var(--color-info-600)] text-white" : "bg-[var(--color-surface)] text-[var(--color-text-muted)]"}`}
+                          disabled={isBusy}
+                          data-testid="pos-discount-mode-amount"
+                        >
+                          C$
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDiscountMode("percent")}
+                          className={`px-2.5 py-1 text-xs font-medium transition-colors ${discountMode === "percent" ? "bg-[var(--color-info-600)] text-white" : "bg-[var(--color-surface)] text-[var(--color-text-muted)]"}`}
+                          disabled={isBusy}
+                          data-testid="pos-discount-mode-percent"
+                        >
+                          %
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-info-500)] focus:ring-2 focus:ring-[var(--color-info-100)]"
+                        type="number"
+                        min="0"
+                        step={discountMode === "percent" ? "0.5" : "0.01"}
+                        max={discountMode === "percent" ? "100" : undefined}
+                        value={discountInput}
+                        onChange={(event) => setDiscountInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void applyManualDiscount();
+                          }
+                        }}
+                        placeholder={discountMode === "percent" ? "Ej: 10" : "Ej: 50.00"}
+                        disabled={isBusy || isApplyingDiscount}
+                        data-testid="pos-discount-input"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="shrink-0 rounded-lg text-sm"
+                        onClick={() => void applyManualDiscount()}
+                        disabled={isBusy || isApplyingDiscount}
+                        loading={isApplyingDiscount}
+                        data-testid="pos-discount-apply"
+                      >
+                        Aplicar
+                      </Button>
+                    </div>
+                    {orderManualDiscount > 0 ? (
+                      <p className="text-xs text-[var(--color-success-600)]" data-testid="pos-discount-active">
+                        Descuento aplicado: C$ {orderManualDiscount.toFixed(2)}. Escribe 0 y aplica para quitarlo.
+                      </p>
+                    ) : (
+                      <p className="text-[0.7rem] text-[var(--color-text-muted)]">El total se recalcula automáticamente al aplicar.</p>
+                    )}
+                  </div>
+                ) : null}
+
                 <label className={`mt-3 flex cursor-pointer select-none items-start gap-3 rounded-lg border p-3 transition-colors ${includeTransport ? "border-[var(--color-info-300)] bg-[var(--color-info-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`} data-testid="pos-transport-toggle">
                   <input
                     type="checkbox"
@@ -1202,7 +1332,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                       ref={sendButtonRef}
                       variant="secondary"
                       className="w-full rounded-lg text-sm"
-                      onClick={() => completeTicket("QUEUE")}
+                      onClick={() => setConfirmTarget("QUEUE")}
                       disabled={isBusy || !order || !hasTicketLines || Boolean(includeTransport && transportValidationError)}
                       data-testid="pos-send-to-payment"
                       icon={<ShoppingCart className="h-5 w-5" />}
@@ -1216,7 +1346,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                       ref={!canSendToCashier ? sendButtonRef : undefined}
                       variant="success"
                       className="w-full rounded-lg text-sm"
-                      onClick={() => completeTicket("DIRECT")}
+                      onClick={() => setConfirmTarget("DIRECT")}
                       disabled={isBusy || !order || !hasTicketLines || !activeCashSessionId || Boolean(includeTransport && transportValidationError)}
                       data-testid="pos-direct-collect"
                       icon={<Check className="h-5 w-5" />}
@@ -1236,6 +1366,104 @@ export function BranchPos({ branchId }: { branchId: string }) {
         <p className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-sm text-[var(--color-text-secondary)]" data-testid="pos-notice">
           {notice}
         </p>
+      ) : null}
+
+      {/* Modal de confirmación antes de cobrar / enviar a caja */}
+      {confirmTarget && order ? (
+        <div
+          className="fixed inset-0 z-[9985] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirmar operación"
+          data-testid="pos-confirm-modal"
+          onClick={() => { if (!isSubmittingPayment) setConfirmTarget(null); }}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-xl bg-[var(--color-surface)] shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={`flex items-center gap-2.5 px-5 py-3 text-white ${confirmTarget === "DIRECT" ? "bg-[var(--color-success-600)]" : "bg-[var(--color-info-600)]"}`}>
+              {confirmTarget === "DIRECT" ? <Check className="h-5 w-5" /> : <ShoppingCart className="h-5 w-5" />}
+              <h2 className="text-base font-semibold">
+                {confirmTarget === "DIRECT" ? "Confirmar cobro" : "Confirmar envío a caja"}
+              </h2>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <p className="text-sm text-[var(--color-text-secondary)]">
+                Revisa los datos antes de continuar. Orden <strong>{order.orderNumber}</strong>.
+              </p>
+
+              <div className="mt-3 space-y-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3 text-sm">
+                <div className="flex justify-between"><span>Productos</span><strong>{ticketLines.length}</strong></div>
+                <div className="flex justify-between"><span>Subtotal</span><strong>C$ {Number(order.subtotal ?? 0).toFixed(2)}</strong></div>
+                {Number(order.discountTotal ?? 0) > 0 ? (
+                  <div className="flex justify-between text-[var(--color-success-700)]"><span>Descuento</span><strong>- C$ {Number(order.discountTotal ?? 0).toFixed(2)}</strong></div>
+                ) : null}
+                {includeTransport && transportAmountValue > 0 ? (
+                  <div className="flex justify-between"><span>Transporte</span><strong>C$ {transportAmountValue.toFixed(2)}</strong></div>
+                ) : null}
+                {confirmTarget === "DIRECT" ? (
+                  <div className="flex justify-between"><span>Método de pago</span><strong>{PAYMENT_METHOD_LABELS[paymentMethod] ?? paymentMethod}</strong></div>
+                ) : null}
+                <div className="mt-1 flex justify-between border-t border-[var(--color-border)] pt-2 text-base">
+                  <span className="font-medium">Total</span>
+                  <strong data-testid="pos-confirm-total">C$ {displayedTotalAmount.toFixed(2)}</strong>
+                </div>
+              </div>
+
+              <div className="mt-3 max-h-44 overflow-y-auto rounded-lg border border-[var(--color-border)]">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-[var(--color-surface-muted)] text-left text-[var(--color-text-muted)]">
+                      <th className="px-3 py-1.5 font-medium">Producto</th>
+                      <th className="px-3 py-1.5 text-right font-medium">Cant.</th>
+                      <th className="px-3 py-1.5 text-right font-medium">Importe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ticketLines.map((line) => (
+                      <tr key={line.id} className="border-t border-[var(--color-border)]">
+                        <td className="px-3 py-1.5">{line.product?.name ?? line.productId}</td>
+                        <td className="px-3 py-1.5 text-right">{Number(line.quantity)}</td>
+                        <td className="px-3 py-1.5 text-right">C$ {Number(line.lineSubtotal ?? 0).toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 border-t border-[var(--color-border)] px-5 py-3">
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full rounded-lg"
+                onClick={() => setConfirmTarget(null)}
+                disabled={isSubmittingPayment}
+                data-testid="pos-confirm-cancel"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                variant={confirmTarget === "DIRECT" ? "success" : "primary"}
+                className="w-full rounded-lg"
+                onClick={async () => {
+                  const target = confirmTarget;
+                  if (!target) return;
+                  await completeTicket(target);
+                  setConfirmTarget(null);
+                }}
+                disabled={isSubmittingPayment}
+                loading={isSubmittingPayment}
+                data-testid="pos-confirm-accept"
+              >
+                {confirmTarget === "DIRECT" ? "Confirmar cobro" : "Confirmar envío"}
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {/* FASE 3: Modal de impresión post-pago */}
