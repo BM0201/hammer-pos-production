@@ -42,6 +42,7 @@ import {
   Printer,
   Factory,
   Activity,
+  AlarmClock,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -108,6 +109,7 @@ function buildNavSections(
           { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
           { href: "/app/master/cash-boxes", label: "Cajas Fisicas", icon: Settings, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_SESSION_MANAGE] },
           { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
+          { href: "/app/master/settings/cash-auto-close", label: "Cierre Automático", icon: AlarmClock, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
           { href: "/app/master/audit", label: "Auditoria", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
           { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
         ],
@@ -166,6 +168,7 @@ function buildNavSections(
           { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
           { href: "/app/master/cash-boxes", label: "Cajas Físicas", icon: Settings, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_SESSION_MANAGE] },
           { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
+          { href: "/app/master/settings/cash-auto-close", label: "Cierre Automático", icon: AlarmClock, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
           { href: "/app/master/audit", label: "Auditoría", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
           { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
         ],
@@ -217,6 +220,7 @@ function buildNavSections(
           { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
           { href: "/app/master/cash-boxes", label: "Cajas Físicas", icon: Settings, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_SESSION_MANAGE] },
           { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: CreditCard, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
+          { href: "/app/master/settings/cash-auto-close", label: "Cierre Automático", icon: AlarmClock, capabilities: [CAPABILITIES.MASTER_CASH_MONITOR_VIEW, CAPABILITIES.CASH_REVIEW] },
           { href: "/app/master/audit", label: "Auditoría", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
           { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
           { href: "/app/master/inventory-fusion", label: "Fusión de Inventario", icon: ArrowLeftRight, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE] },

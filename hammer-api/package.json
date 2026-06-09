@@ -10,7 +10,7 @@
     "build": "npm run prisma:generate && next build",
     "vercel-build": "npx prisma generate && npx prisma migrate deploy && next build",
     "start": "next start --port 4000",
-    "test": "node --import tsx --test src/modules/dashboard/access.test.ts src/modules/rbac/effective-permissions.test.ts src/modules/rbac/policies.test.ts src/modules/workflow/branch-workflow.test.ts src/modules/transport/validators.test.ts src/modules/sales/validators.test.ts src/modules/pricing/calculator.test.ts src/modules/pricing/service.test.ts src/modules/timber/calculator.test.ts src/modules/inventory/policy.test.ts src/modules/inventory/validators.test.ts src/modules/inventory/unit-conversion.test.ts src/lib/api/errors.test.ts",
+    "test": "node --import tsx --test src/modules/dashboard/access.test.ts src/modules/rbac/effective-permissions.test.ts src/modules/rbac/policies.test.ts src/modules/workflow/branch-workflow.test.ts src/modules/transport/validators.test.ts src/modules/sales/validators.test.ts src/modules/pricing/calculator.test.ts src/modules/pricing/service.test.ts src/modules/timber/calculator.test.ts src/modules/cash-session/auto-close-config.test.ts src/modules/inventory/policy.test.ts src/modules/inventory/validators.test.ts src/modules/inventory/unit-conversion.test.ts src/lib/api/errors.test.ts",
     "typecheck": "tsc --noEmit",
     "prisma:format": "prisma format",
     "prisma:validate": "node scripts/prisma-validate.mjs",

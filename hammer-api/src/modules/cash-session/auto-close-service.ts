@@ -8,6 +8,11 @@ import { prisma } from "@/lib/prisma";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
 import { calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
+import {
+  DEFAULT_CASH_AUTO_CLOSE_CONFIG,
+  getCashAutoCloseConfig,
+  type CashAutoCloseConfig,
+} from "@/modules/cash-session/auto-close-config";
 
 const DEFAULT_TIMEZONE = "America/Managua";
 const AUTO_CLOSE_REASON = "Cierre automatico por horario operativo.";
@@ -52,15 +57,31 @@ function localParts(now: Date, timezone = DEFAULT_TIMEZONE): LocalParts {
   };
 }
 
-export function getCashAutoCloseDeadline(_branch: { id: string }, now: Date) {
-  const timezone = DEFAULT_TIMEZONE;
+/**
+ * Resolve the auto-close deadline for "now" given a configuration.
+ *
+ * The closing time is configurable per day-type (weekday / Saturday / Sunday) and
+ * defaults to 17:30 (5:30 PM) on weekdays, 16:00 on Saturdays, disabled on Sundays.
+ * Pure function (no I/O) — the caller passes the config it loaded once.
+ */
+export function getCashAutoCloseDeadline(
+  _branch: { id: string },
+  now: Date,
+  config: CashAutoCloseConfig = DEFAULT_CASH_AUTO_CLOSE_CONFIG,
+) {
+  const timezone = config.timezone || DEFAULT_TIMEZONE;
+
+  if (!config.enabled) {
+    return { enabled: false, timezone, closeTime: null, expired: false, rule: "DISABLED" };
+  }
+
   const parts = localParts(now, timezone);
   const weekday = parts.weekday.toLowerCase();
   const closeTime = weekday === "saturday"
-    ? "16:00"
+    ? config.saturdayCloseTime
     : weekday === "sunday"
-      ? null
-      : "17:20";
+      ? config.sundayCloseTime
+      : config.weekdayCloseTime;
 
   if (!closeTime) {
     return {
@@ -68,7 +89,7 @@ export function getCashAutoCloseDeadline(_branch: { id: string }, now: Date) {
       timezone,
       closeTime: null,
       expired: false,
-      rule: "SUNDAY_DISABLED",
+      rule: weekday === "sunday" ? "SUNDAY_DISABLED" : "DISABLED",
     };
   }
 
@@ -81,7 +102,7 @@ export function getCashAutoCloseDeadline(_branch: { id: string }, now: Date) {
     timezone,
     closeTime,
     expired: currentMinutes >= deadlineMinutes,
-    rule: weekday === "saturday" ? "SATURDAY_16_00" : "WEEKDAY_17_20",
+    rule: weekday === "saturday" ? "SATURDAY" : weekday === "sunday" ? "SUNDAY" : "WEEKDAY",
   };
 }
 
@@ -116,6 +137,7 @@ export async function autoCloseExpiredCashSessions(input: {
   const now = input.now ?? new Date();
   const dryRun = Boolean(input.dryRun);
   const actorUserId = actorUserIdForAudit(input.actor ?? "SYSTEM");
+  const config = await getCashAutoCloseConfig();
 
   const openSessions = await prisma.cashSession.findMany({
     where: { status: CashSessionStatus.OPEN },
@@ -136,7 +158,7 @@ export async function autoCloseExpiredCashSessions(input: {
   };
 
   for (const session of openSessions) {
-    const deadline = getCashAutoCloseDeadline(session.physicalCashBox.branch, now);
+    const deadline = getCashAutoCloseDeadline(session.physicalCashBox.branch, now, config);
 
     if (!deadline.enabled || !deadline.expired) {
       result.skipped += 1;
