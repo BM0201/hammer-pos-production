@@ -1,13 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { Route } from "next";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { RefreshCw, FlaskConical, Ban, RotateCcw, Receipt } from "lucide-react";
+import {
+  RefreshCw,
+  FlaskConical,
+  Ban,
+  RotateCcw,
+  Receipt,
+  Eye,
+  Filter,
+  Search,
+  ListChecks,
+  ShieldAlert,
+  Wallet,
+} from "lucide-react";
 
 type SaleRow = {
   id: string;
@@ -41,8 +55,22 @@ const STATUS_LABELS: Record<string, string> = {
   RETURNED: "Devuelto",
 };
 
+// Mapea cada estado a una variante de color de badge para mejor legibilidad.
+const STATUS_VARIANT: Record<string, "success" | "warning" | "danger" | "info" | "neutral"> = {
+  DRAFT: "neutral",
+  PENDING_PAYMENT: "warning",
+  PAID: "success",
+  DISPATCH_PENDING: "info",
+  DISPATCHED: "success",
+  CANCELLED: "danger",
+  RETURN_REQUESTED: "warning",
+  RETURN_APPROVED: "info",
+  RETURN_REJECTED: "danger",
+  RETURNED: "neutral",
+};
+
 function formatMoney(value: number) {
-  return `C$ ${Number(value ?? 0).toFixed(2)}`;
+  return `C$ ${Number(value ?? 0).toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatDate(iso: string) {
@@ -54,6 +82,7 @@ function formatDate(iso: string) {
 }
 
 export function SalesManagement() {
+  const router = useRouter();
   const [rows, setRows] = useState<SaleRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +148,13 @@ export function SalesManagement() {
     };
   }, [rows]);
 
+  const openDetail = useCallback(
+    (row: SaleRow) => {
+      router.push(`/app/master/sales-management/${row.id}` as Route);
+    },
+    [router],
+  );
+
   const toggleTest = useCallback(async (row: SaleRow) => {
     // Marcar como prueba pide confirmación con motivo; desmarcar es directo.
     if (!row.isTest) {
@@ -181,7 +217,12 @@ export function SalesManagement() {
         body: JSON.stringify(body),
       });
       if (!response.ok) throw new Error("No se pudo completar la operación.");
-      showToast("success", kind === "void" ? "Venta anulada y excluida de métricas." : "Venta marcada como prueba.");
+      showToast(
+        "success",
+        kind === "void"
+          ? "Venta anulada. Historial guardado e inventario revertido."
+          : "Venta marcada como prueba. Historial guardado e inventario revertido.",
+      );
       setActionRow(null);
       setReason("");
       void load();
@@ -192,70 +233,95 @@ export function SalesManagement() {
     }
   }, [actionRow, reason, load]);
 
+  const hasActiveFilters = Boolean(dateFrom || dateTo || branchId || status || test !== "all" || voided !== "all" || search.trim());
+
   return (
     <div className="space-y-5">
-      <div className="flex items-center gap-2.5">
-        <Receipt className="h-6 w-6 text-[var(--color-info-600)]" />
-        <div>
-          <h1 className="text-xl font-semibold text-[var(--color-text)]">Gestión de Ventas</h1>
+      {/* Encabezado */}
+      <div className="flex items-center gap-3">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-info-600)]/10 text-[var(--color-info-700)]">
+          <Receipt className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-tight text-[var(--color-text)]">Gestión de Ventas</h1>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Revisa todas las ventas, marca pruebas y anula con justificación. Las pruebas y anuladas se excluyen de reportes y métricas.
+            Revisa, audita y controla todas las ventas. Las pruebas y anuladas se excluyen de reportes y métricas.
           </p>
         </div>
       </div>
 
       {/* Resumen */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Card className="p-3"><p className="text-xs text-[var(--color-text-muted)]">Ventas listadas</p><p className="text-lg font-semibold">{metrics.total}</p></Card>
-        <Card className="p-3"><p className="text-xs text-[var(--color-text-muted)]">De prueba</p><p className="text-lg font-semibold text-[var(--color-warning-600)]">{metrics.test}</p></Card>
-        <Card className="p-3"><p className="text-xs text-[var(--color-text-muted)]">Anuladas</p><p className="text-lg font-semibold text-[var(--color-danger-600)]">{metrics.voided}</p></Card>
-        <Card className="p-3"><p className="text-xs text-[var(--color-text-muted)]">Total válido</p><p className="text-lg font-semibold text-[var(--color-success-700)]">{formatMoney(metrics.validTotal)}</p></Card>
+        <Card className="flex items-center gap-3 p-3.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-info-600)]/10 text-[var(--color-info-700)]"><ListChecks className="h-5 w-5" /></div>
+          <div><p className="text-xs text-[var(--color-text-muted)]">Ventas listadas</p><p className="text-lg font-semibold text-[var(--color-text)]">{metrics.total}</p></div>
+        </Card>
+        <Card className="flex items-center gap-3 p-3.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-warning-500)]/15 text-[var(--color-warning-600)]"><FlaskConical className="h-5 w-5" /></div>
+          <div><p className="text-xs text-[var(--color-text-muted)]">De prueba</p><p className="text-lg font-semibold text-[var(--color-warning-600)]">{metrics.test}</p></div>
+        </Card>
+        <Card className="flex items-center gap-3 p-3.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-danger-500)]/15 text-[var(--color-danger-600)]"><ShieldAlert className="h-5 w-5" /></div>
+          <div><p className="text-xs text-[var(--color-text-muted)]">Anuladas</p><p className="text-lg font-semibold text-[var(--color-danger-600)]">{metrics.voided}</p></div>
+        </Card>
+        <Card className="flex items-center gap-3 p-3.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-success-600)]/12 text-[var(--color-success-700)]"><Wallet className="h-5 w-5" /></div>
+          <div className="min-w-0"><p className="text-xs text-[var(--color-text-muted)]">Total válido</p><p className="truncate text-lg font-semibold text-[var(--color-success-700)]">{formatMoney(metrics.validTotal)}</p></div>
+        </Card>
       </div>
 
-      {/* Filtros */}
+      {/* Filtros compactos */}
       <Card className="p-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <label className="space-y-1 text-xs">
-            <span className="font-medium text-[var(--color-text-muted)]">Desde</span>
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" />
+        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[var(--color-text-secondary)]">
+          <Filter className="h-4 w-4 text-[var(--color-text-muted)]" />
+          Filtros
+          {hasActiveFilters ? <Badge variant="info" className="ml-1">Activos</Badge> : null}
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Desde</span>
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm transition-colors focus:border-[var(--color-info-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-info-500)]/30" />
           </label>
-          <label className="space-y-1 text-xs">
-            <span className="font-medium text-[var(--color-text-muted)]">Hasta</span>
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" />
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Hasta</span>
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm transition-colors focus:border-[var(--color-info-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-info-500)]/30" />
           </label>
-          <label className="space-y-1 text-xs">
-            <span className="font-medium text-[var(--color-text-muted)]">Sucursal</span>
-            <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm">
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Sucursal</span>
+            <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm transition-colors focus:border-[var(--color-info-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-info-500)]/30">
               <option value="">Todas</option>
               {branchOptions.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
             </select>
           </label>
-          <label className="space-y-1 text-xs">
-            <span className="font-medium text-[var(--color-text-muted)]">Estado</span>
-            <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm">
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Estado</span>
+            <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm transition-colors focus:border-[var(--color-info-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-info-500)]/30">
               <option value="">Todos</option>
               {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </label>
-          <label className="space-y-1 text-xs">
-            <span className="font-medium text-[var(--color-text-muted)]">Pruebas</span>
-            <select value={test} onChange={(e) => setTest(e.target.value as typeof test)} className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm">
-              <option value="all">Incluir</option>
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Pruebas</span>
+            <select value={test} onChange={(e) => setTest(e.target.value as typeof test)} className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm transition-colors focus:border-[var(--color-info-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-info-500)]/30">
+              <option value="all">Incluir pruebas</option>
               <option value="only">Solo pruebas</option>
               <option value="exclude">Excluir pruebas</option>
             </select>
           </label>
-          <label className="space-y-1 text-xs">
-            <span className="font-medium text-[var(--color-text-muted)]">Anuladas</span>
-            <select value={voided} onChange={(e) => setVoided(e.target.value as typeof voided)} className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm">
-              <option value="all">Incluir</option>
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Anuladas</span>
+            <select value={voided} onChange={(e) => setVoided(e.target.value as typeof voided)} className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm transition-colors focus:border-[var(--color-info-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-info-500)]/30">
+              <option value="all">Incluir anuladas</option>
               <option value="only">Solo anuladas</option>
               <option value="exclude">Excluir anuladas</option>
             </select>
           </label>
-          <label className="space-y-1 text-xs lg:col-span-2">
-            <span className="font-medium text-[var(--color-text-muted)]">Buscar (orden o cliente)</span>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Ej: SO-MGA-..." className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm" />
+          <label className="space-y-1 sm:col-span-2 lg:col-span-1">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Buscar (orden o cliente)</span>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-soft)]" />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void load(); }} placeholder="Ej: SO-MGA-..." className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2 pl-9 pr-3 text-sm transition-colors focus:border-[var(--color-info-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-info-500)]/30" />
+            </div>
           </label>
           <div className="flex items-end">
             <Button onClick={() => void load()} icon={<RefreshCw className="h-4 w-4" />} className="w-full rounded-lg" loading={loading}>
@@ -270,9 +336,9 @@ export function SalesManagement() {
         {error ? (
           <div className="p-4 text-sm text-[var(--color-danger-600)]">{error}</div>
         ) : loading ? (
-          <div className="p-6 text-center text-sm text-[var(--color-text-muted)]">Cargando ventas…</div>
+          <div className="p-10 text-center text-sm text-[var(--color-text-muted)]">Cargando ventas…</div>
         ) : rows.length === 0 ? (
-          <div className="p-6 text-center text-sm text-[var(--color-text-muted)]">No hay ventas para los filtros seleccionados.</div>
+          <div className="p-10 text-center text-sm text-[var(--color-text-muted)]">No hay ventas para los filtros seleccionados.</div>
         ) : (
           <div className="overflow-x-auto">
             <Table>
@@ -283,20 +349,30 @@ export function SalesManagement() {
                   <TH>Sucursal</TH>
                   <TH>Vendedor</TH>
                   <TH>Estado</TH>
-                  <TH>Total</TH>
+                  <TH className="text-right">Total</TH>
                   <TH>Marca</TH>
-                  <TH>Acciones</TH>
+                  <TH className="text-right">Acciones</TH>
                 </TR>
               </THead>
               <TBody>
                 {rows.map((row) => (
                   <TR key={row.id} className={row.voidedAt ? "opacity-60" : ""}>
-                    <TD className="font-medium">{row.orderNumber}</TD>
-                    <TD className="whitespace-nowrap text-xs">{formatDate(row.createdAt)}</TD>
-                    <TD className="text-xs">{row.branchCode}</TD>
+                    <TD>
+                      <button
+                        type="button"
+                        onClick={() => openDetail(row)}
+                        className="font-semibold text-[var(--color-info-700)] underline-offset-2 transition-colors hover:text-[var(--color-info-600)] hover:underline"
+                        title="Ver detalle de la factura"
+                      >
+                        {row.orderNumber}
+                      </button>
+                      <p className="text-[11px] text-[var(--color-text-soft)]">{row.linesCount} {row.linesCount === 1 ? "ítem" : "ítems"}</p>
+                    </TD>
+                    <TD className="whitespace-nowrap text-xs text-[var(--color-text-muted)]">{formatDate(row.createdAt)}</TD>
+                    <TD className="text-xs font-medium">{row.branchCode}</TD>
                     <TD className="text-xs">{row.seller}</TD>
-                    <TD><Badge variant="neutral">{STATUS_LABELS[row.status] ?? row.status}</Badge></TD>
-                    <TD className="whitespace-nowrap font-semibold">{formatMoney(row.grandTotal)}</TD>
+                    <TD><Badge variant={STATUS_VARIANT[row.status] ?? "neutral"}>{STATUS_LABELS[row.status] ?? row.status}</Badge></TD>
+                    <TD className="whitespace-nowrap text-right font-semibold tabular-nums text-[var(--color-text)]">{formatMoney(row.grandTotal)}</TD>
                     <TD>
                       <div className="flex flex-wrap gap-1">
                         {row.isTest ? <Badge variant="warning">Prueba</Badge> : null}
@@ -305,13 +381,24 @@ export function SalesManagement() {
                       </div>
                     </TD>
                     <TD>
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => openDetail(row)}
+                          icon={<Eye className="h-3.5 w-3.5" />}
+                          className="rounded-md text-xs"
+                          title="Ver detalle de la factura"
+                        >
+                          Detalle
+                        </Button>
                         <Button
                           size="sm"
                           variant={row.isTest ? "secondary" : "ghost"}
                           onClick={() => void toggleTest(row)}
                           icon={<FlaskConical className="h-3.5 w-3.5" />}
                           className="rounded-md text-xs"
+                          title={row.isTest ? "Quitar la marca de prueba" : "Marcar como venta de prueba (guarda historial y revierte inventario)"}
                         >
                           {row.isTest ? "Quitar prueba" : "Prueba"}
                         </Button>
@@ -321,6 +408,7 @@ export function SalesManagement() {
                           onClick={() => void toggleVoid(row)}
                           icon={row.voidedAt ? <RotateCcw className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
                           className="rounded-md text-xs"
+                          title={row.voidedAt ? "Restaurar la venta (revertir anulación)" : "Anular la venta (guarda historial y revierte inventario)"}
                         >
                           {row.voidedAt ? "Restaurar" : "Anular"}
                         </Button>
@@ -337,8 +425,8 @@ export function SalesManagement() {
       {/* Modal de motivo (anular / marcar prueba) */}
       {actionRow ? (
         <div className="fixed inset-0 z-[9985] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md rounded-xl bg-[var(--color-surface)] shadow-xl">
-            <div className={`flex items-center gap-2.5 rounded-t-xl px-5 py-3 text-white ${actionRow.kind === "void" ? "bg-[var(--color-danger-600)]" : "bg-[var(--color-warning-600)]"}`}>
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-[var(--color-surface)] shadow-2xl">
+            <div className={`flex items-center gap-2.5 px-5 py-3.5 text-white ${actionRow.kind === "void" ? "bg-[var(--color-danger-600)]" : "bg-[var(--color-warning-600)]"}`}>
               {actionRow.kind === "void" ? <Ban className="h-5 w-5" /> : <FlaskConical className="h-5 w-5" />}
               <h2 className="text-base font-semibold">
                 {actionRow.kind === "void" ? "Anular venta" : "Marcar como prueba"}
@@ -348,18 +436,18 @@ export function SalesManagement() {
               <p className="text-sm text-[var(--color-text-secondary)]">
                 Orden <strong>{actionRow.row.orderNumber}</strong> · {formatMoney(actionRow.row.grandTotal)}.
                 {actionRow.kind === "void"
-                  ? " La venta no se borra; quedará registrada como anulada y se excluirá de reportes y métricas."
-                  : " Se excluirá de reportes y métricas. Puedes revertirlo en cualquier momento."}
+                  ? " La venta no se borra: se guarda un historial completo (productos, cantidades, cliente, total), se revierte el inventario y se excluye de reportes y métricas."
+                  : " Se guarda un historial completo de lo vendido, se revierte el inventario y se excluye de reportes y métricas. Puedes revertirlo en cualquier momento."}
               </p>
-              <label className="block space-y-1 text-xs">
-                <span className="font-medium text-[var(--color-text-muted)]">
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-[var(--color-text-muted)]">
                   Motivo {actionRow.kind === "void" ? "(obligatorio)" : "(opcional)"}
                 </span>
                 <textarea
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                   rows={3}
-                  className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm"
+                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm transition-colors focus:border-[var(--color-info-500)] focus:outline-none focus:ring-2 focus:ring-[var(--color-info-500)]/30"
                   placeholder="Ej: Venta de prueba durante capacitación."
                 />
               </label>

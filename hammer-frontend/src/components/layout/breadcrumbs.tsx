@@ -44,6 +44,14 @@ export function Breadcrumbs() {
   const pathname = usePathname();
   const segments = pathname.split("/").filter(Boolean);
 
+  // ── UX: La barra de breadcrumbs ("Sucursal > Caja > Pagos") se considera
+  // redundante respecto al encabezado del módulo y al menú lateral, por lo que
+  // se oculta globalmente. El sistema de sucursales sigue intacto; solo se
+  // elimina la visualización del breadcrumb. Para reactivarlo, cambiar a
+  // `const HIDE_BREADCRUMBS = false;`.
+  const HIDE_BREADCRUMBS = true;
+  if (HIDE_BREADCRUMBS) return null;
+
   if (segments.length <= 2) return null;
 
   const crumbs = segments.map((seg, i) => ({

@@ -12,4 +12,9 @@ export const SALE_AUDIT_EVENTS = {
   ORDER_MARKED_TEST: "SALE_ORDER_MARKED_TEST",
   ORDER_UNMARKED_TEST: "SALE_ORDER_UNMARKED_TEST",
   ORDER_VOIDED: "SALE_ORDER_VOIDED",
+  // Snapshot completo del contenido de la venta (productos, cantidades, cliente,
+  // totales) que se conserva como historial al marcar prueba o anular.
+  ORDER_SNAPSHOT_ARCHIVED: "SALE_ORDER_SNAPSHOT_ARCHIVED",
+  // Reversión de inventario aplicada al excluir una venta (RETURN_IN).
+  ORDER_INVENTORY_REVERTED: "SALE_ORDER_INVENTORY_REVERTED",
 } as const;
