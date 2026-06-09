@@ -1066,10 +1066,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
                     <p className="mt-1 text-xs text-[var(--color-text-muted)]">Agrega productos desde el catalogo rapido.</p>
                   </div>
                 ) : null}
-              </div>
-
-              <div className="rounded-b-lg border-t border-[var(--color-border)] bg-[var(--color-surface-muted)] px-4 py-3" data-testid="pos-payment-zone">
-                <div className="grid gap-1 text-sm">
+                {/* Resumen y configuración secundaria (dentro del área con scroll) */}
+                <div className="mt-3 grid gap-1 text-sm">
                   <div className="flex justify-between"><span>Subtotal</span><strong>C$ {Number(order?.subtotal ?? 0).toFixed(2)}</strong></div>
                   <div className="flex justify-between"><span>Descuento</span><strong>C$ {Number(order?.discountTotal ?? 0).toFixed(2)}</strong></div>
                   {Number(order?.taxTotal ?? 0) > 0 ? (
@@ -1082,10 +1080,6 @@ export function BranchPos({ branchId }: { branchId: string }) {
                       <span>Transporte</span><strong>C$ {transportAmountValue.toFixed(2)}</strong>
                     </div>
                   ) : null}
-                  <div className="mt-1 flex justify-between border-t border-[var(--color-border)] pt-2 text-lg">
-                    <span>Total</span>
-                    <strong data-testid="pos-total">C$ {displayedTotalAmount.toFixed(2)}</strong>
-                  </div>
                 </div>
 
                 <label className={`mt-3 flex cursor-pointer select-none items-start gap-3 rounded-lg border p-3 transition-colors ${includeTransport ? "border-[var(--color-info-300)] bg-[var(--color-info-50)]" : "border-[var(--color-border)] bg-[var(--color-surface)]"}`} data-testid="pos-transport-toggle">
@@ -1193,8 +1187,16 @@ export function BranchPos({ branchId }: { branchId: string }) {
                     </p>
                   </div>
                 ) : null}
+              </div>
 
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {/* Footer fijo: Total y botones de cobro SIEMPRE visibles, sin importar
+                  cuántos productos tenga el ticket ni el alto de la pantalla. */}
+              <div className="shrink-0 rounded-b-lg border-t border-[var(--color-border)] bg-[var(--color-surface-muted)] px-4 py-3 shadow-[0_-4px_12px_-8px_rgba(0,0,0,0.25)]" data-testid="pos-payment-zone">
+                <div className="flex items-center justify-between text-lg">
+                  <span className="font-medium text-[var(--color-text)]">Total</span>
+                  <strong data-testid="pos-total">C$ {displayedTotalAmount.toFixed(2)}</strong>
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   {canSendToCashier ? (
                     <Button
                       ref={sendButtonRef}
