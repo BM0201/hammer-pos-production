@@ -217,6 +217,9 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.CASH_CLOSE,
     CAPABILITIES.CASH_SESSION_MANAGE,
     CAPABILITIES.CASH_BOX_VIEW,
+    // El cajero opera una caja FÍSICA COMPARTIDA: debe poder abrir la sesión
+    // de caja del día (no solo usarla). La caja no pertenece a un usuario.
+    CAPABILITIES.CASH_SESSION_OPEN,
     CAPABILITIES.CASH_SESSION_USE,
     CAPABILITIES.CASH_SESSION_CLOSE_REQUEST,
     CAPABILITIES.PAYMENT_QUEUE_VIEW,

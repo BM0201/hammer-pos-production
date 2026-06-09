@@ -27,7 +27,17 @@ export async function POST(request: Request) {
     parsedBranchId = parsed.data.branchId;
     parsedCashBoxId = parsed.data.physicalCashBoxId;
 
-    if (!canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_OPERATE)) {
+    // Abrir caja se gobierna con la capacidad dedicada CASH_SESSION_OPEN
+    // (MASTER, BRANCH_ADMIN y CASHIER). Se acepta además CASH_SESSION_OPERATE
+    // por compatibilidad con roles que ya operaban la caja.
+    const canOpenCash = (branchId: string) =>
+      canInBranch(session, branchId, CAPABILITIES.CASH_SESSION_OPEN) ||
+      canInBranch(session, branchId, CAPABILITIES.CASH_SESSION_OPERATE);
+    const canOpenCashAnyBranch =
+      canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_OPEN) ||
+      canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_OPERATE);
+
+    if (!canOpenCashAnyBranch) {
       await logCashSessionDenied({
         actorUserId: session.userId,
         branchId: parsed.data.branchId,
@@ -38,7 +48,7 @@ export async function POST(request: Request) {
       return fail("FORBIDDEN", "Forbidden", 403);
     }
 
-    if (!isMaster(session) && !canInBranch(session, parsed.data.branchId, CAPABILITIES.CASH_SESSION_OPERATE)) {
+    if (!isMaster(session) && !canOpenCash(parsed.data.branchId)) {
       await logCashSessionDenied({
         actorUserId: session.userId,
         branchId: parsed.data.branchId,

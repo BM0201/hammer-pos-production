@@ -438,6 +438,11 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
       {/* Session details when open */}
       {activeSession && (
         <div className="rounded-xl border border-[var(--color-success-100)] bg-[var(--color-success-50)] p-4 text-sm space-y-1">
+          {/* Caja física COMPARTIDA: se muestra el nombre real de quien la abrió
+              (fullName), no el usuario. Si no hay nombre, cae al username. */}
+          <div className="text-[var(--color-success-700)]">
+            <strong>👤 Caja abierta por:</strong> {activeSession.openedBy?.fullName?.trim() || activeSession.openedBy?.username || "—"}
+          </div>
           <div className="text-[var(--color-success-700)]">
             <strong>⏱ Abierta desde:</strong> {new Date(activeSession.openedAt).toLocaleString()}
           </div>

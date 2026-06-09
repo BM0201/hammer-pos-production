@@ -14,7 +14,7 @@
 | `MASTER` | Operación total del negocio (incluye producción). |
 | `BRANCH_ADMIN` | Supervisión de sucursal: vende, cobra, opera caja, asigna operadores, aprueba diferencias. |
 | `SALES` | Vendedor: crea/edita borradores y **envía a caja**. No cobra. |
-| `CASHIER` | Cajero: **cobra**, opera sesión de caja, solicita cierre. |
+| `CASHIER` | Cajero: **cobra**, **abre** y opera la sesión de caja (caja física compartida), solicita cierre. |
 | `WAREHOUSE` | Bodega: despacho e inventario. |
 
 > **Vendedor-Cajero** no es un `RoleCode` nativo: se modela como **membresía combinada `SALES` + `CASHIER`**
@@ -55,7 +55,7 @@
 | pos.print_quote | ✅ | ✅ | ✅ | — | — | ✅ |
 | cash_box.view | ✅ | ✅ | — | ✅ | — | ✅ |
 | cash_box.manage | ✅ | ✅ | — | — | — | — |
-| cash_session.open | ✅ | ✅ | — | — | — | — |
+| cash_session.open | ✅ | ✅ | — | ✅ | — | ✅ |
 | cash_session.assign_operator | ✅ | ✅ | — | — | — | — |
 | **cash_session.use** | ✅ | ✅ | — | ✅ | — | ✅ |
 | cash_session.close_request | ✅ | ✅ | — | ✅ | — | ✅ |
@@ -80,8 +80,8 @@
 | Perfil | Membresías | Puede vender | Enviar a caja | Cobrar directo | Operar caja | Abrir/Cerrar caja | Asignar operadores | Despachar |
 |--------|-----------|:-----------:|:-------------:|:--------------:|:-----------:|:----------------:|:------------------:|:---------:|
 | Vendedor | SALES | ✅ | ✅ | — | — | — | — | — |
-| Cajero | CASHIER | — | — | ✅ | ✅ | solicita cierre | — | — |
-| Vendedor-Cajero | SALES + CASHIER | ✅ | ✅ | ✅* | ✅ | solicita cierre | — | — |
+| Cajero | CASHIER | — | — | ✅ | ✅ | abre · solicita cierre | — | — |
+| Vendedor-Cajero | SALES + CASHIER | ✅ | ✅ | ✅* | ✅ | abre · solicita cierre | — | — |
 | Bodega | WAREHOUSE | — | — | — | — | — | — | ✅ |
 | Administrador de Sucursal | BRANCH_ADMIN | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Operador completo | MASTER | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
