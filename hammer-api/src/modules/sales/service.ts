@@ -168,16 +168,78 @@ export async function createDraftSaleOrder(input: {
 }
 
 async function recalcOrderTotalsTx(tx: Prisma.TransactionClient, saleOrderId: string) {
-  const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: saleOrderId }, select: { transportAmount: true } });
+  const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: saleOrderId }, select: { transportAmount: true, manualDiscountAmount: true } });
   const lines = await tx.saleOrderLine.findMany({ where: { saleOrderId } });
   const totals = aggregateOrderTotals(
     lines.map((line) => ({ lineSubtotal: line.lineSubtotal, discountAmount: line.discountAmount })),
     order.transportAmount,
+    order.manualDiscountAmount,
   );
 
   return tx.saleOrder.update({
     where: { id: saleOrderId },
     data: totals,
+  });
+}
+
+/**
+ * Aplica (o elimina) un descuento manual a nivel de ORDEN sobre el ticket en
+ * borrador. Acepta monto absoluto (C$) o porcentaje del subtotal de líneas.
+ * Respeta el límite de descuento del rol del usuario y recalcula los totales.
+ */
+export async function setOrderManualDiscount(input: {
+  saleOrderId: string;
+  actorUserId: string;
+  actorRole?: string;
+  discountAmount?: number;
+  discountPercent?: number;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
+    if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
+
+    const lines = await tx.saleOrderLine.findMany({ where: { saleOrderId: input.saleOrderId }, select: { lineSubtotal: true } });
+    const lineSubtotal = lines.reduce((acc, line) => acc.plus(line.lineSubtotal), new Prisma.Decimal(0));
+
+    // Resolver monto del descuento desde monto o porcentaje.
+    let amount: Prisma.Decimal;
+    if (input.discountPercent !== undefined && input.discountPercent !== null) {
+      const pct = new Prisma.Decimal(input.discountPercent);
+      if (pct.lt(0)) throw new Error("INVALID_DISCOUNT");
+      amount = lineSubtotal.mul(pct).div(100);
+    } else {
+      amount = new Prisma.Decimal(input.discountAmount ?? 0);
+    }
+    if (amount.lt(0)) throw new Error("INVALID_DISCOUNT");
+    // No puede exceder el subtotal (dejaría total negativo).
+    if (amount.gt(lineSubtotal)) amount = lineSubtotal;
+
+    // Validar contra el límite porcentual del rol.
+    const effectivePercent = lineSubtotal.gt(0) ? amount.div(lineSubtotal).mul(100) : new Prisma.Decimal(0);
+    const roleMaxPercent = new Prisma.Decimal(getMaxDiscountPercentForRole(input.actorRole));
+    if (effectivePercent.gt(roleMaxPercent)) {
+      const err = new Error("DISCOUNT_LIMIT_EXCEEDED");
+      (err as unknown as { details: unknown }).details = {
+        roleMaxPercent: roleMaxPercent.toNumber(),
+        requestedPercent: Number(effectivePercent.toFixed(2)),
+      };
+      throw err;
+    }
+
+    await tx.saleOrder.update({ where: { id: input.saleOrderId }, data: { manualDiscountAmount: amount } });
+    const updated = await recalcOrderTotalsTx(tx, input.saleOrderId);
+
+    await logAuditEvent({
+      actorUserId: input.actorUserId,
+      branchId: order.branchId,
+      module: "sales",
+      action: SALE_AUDIT_EVENTS.ORDER_MANUAL_DISCOUNT_SET,
+      entityType: "SaleOrder",
+      entityId: input.saleOrderId,
+      metadataJson: { manualDiscountAmount: amount.toString(), effectivePercent: effectivePercent.toFixed(2) },
+    });
+
+    return updated;
   });
 }
 
