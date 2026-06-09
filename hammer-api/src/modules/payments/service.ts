@@ -16,6 +16,7 @@ import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+import { assertPayableOrder } from "@/modules/sales/helpers/order-guards";
 
 type PaymentTenderInput = {
   method: PaymentMethod;
@@ -310,6 +311,28 @@ export async function postSaleOrderPayment(input: {
         include: { lines: true, payments: true },
       });
 
+      // Guarda: una orden anulada o de prueba NUNCA debe poder cobrarse,
+      // sin importar su status. Se valida tras el FOR UPDATE, dentro de la
+      // transacción, para abortar todo si la orden no es válida.
+      if (order.voidedAt || order.isTest) {
+        await tx.auditLog.create({
+          data: {
+            actorUserId: input.actorUserId,
+            branchId: order.branchId,
+            module: "payments",
+            action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+            entityType: "SaleOrder",
+            entityId: order.id,
+            metadataJson: {
+              reason: order.voidedAt ? "ORDER_VOIDED" : "ORDER_IS_TEST",
+              voidedAt: order.voidedAt ? order.voidedAt.toISOString() : null,
+              isTest: order.isTest,
+              currentStatus: order.status,
+            },
+          },
+        });
+        throw new Error(order.voidedAt ? "ORDER_VOIDED" : "ORDER_IS_TEST");
+      }
       if (order.status !== SaleOrderStatus.PENDING_PAYMENT) {
         await tx.auditLog.create({
           data: {
@@ -324,6 +347,8 @@ export async function postSaleOrderPayment(input: {
         });
         throw new Error("PAYMENT_INVALID_STATUS");
       }
+      // Asegura consistencia con la guarda unificada (redundante pero explícito).
+      assertPayableOrder(order);
 
       const existingPayment = order.payments.find((payment) => payment.status === PaymentStatus.POSTED);
       if (existingPayment) {

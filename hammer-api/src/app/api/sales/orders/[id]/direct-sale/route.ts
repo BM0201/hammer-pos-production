@@ -32,13 +32,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     const order = await prisma.saleOrder.findUnique({
       where: { id },
-      select: { id: true, branchId: true, status: true },
+      select: { id: true, branchId: true, status: true, voidedAt: true, isTest: true },
     });
 
     if (!order) {
       return notFound("Orden no encontrada");
     }
 
+    // Defensa en profundidad: rechaza temprano órdenes anuladas/prueba antes de
+    // entrar a la transacción. (La transacción de submitDirectSale revalida.)
+    if (order.voidedAt) {
+      return fail("ORDER_VOIDED", "La orden fue anulada y no admite cambios ni cobros.", 409);
+    }
+    if (order.isTest) {
+      return fail("ORDER_IS_TEST", "La orden esta marcada como prueba y no admite cambios ni cobros.", 409);
+    }
     if (order.status !== SaleOrderStatus.DRAFT) {
       return fail("ORDER_NOT_DRAFT", "La orden no esta en estado editable.", 409);
     }

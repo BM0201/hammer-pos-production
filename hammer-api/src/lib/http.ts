@@ -80,6 +80,12 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "ORDER_NOT_DRAFT" || error.message === "INVALID_TRANSITION") {
       return errJson("CONFLICT", "La orden no está en estado editable.", 409);
     }
+    if (error.message === "ORDER_VOIDED") {
+      return errJson("ORDER_VOIDED", "La orden está anulada y no admite cambios, cobros ni despachos.", 409);
+    }
+    if (error.message === "ORDER_IS_TEST") {
+      return errJson("ORDER_IS_TEST", "La orden está marcada como prueba y no admite cambios, cobros ni despachos.", 409);
+    }
     if (error.message === "ORDER_EMPTY") {
       return errJson("VALIDATION_ERROR", "La orden está vacía. Agrega productos primero.", 400);
     }

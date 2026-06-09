@@ -14,6 +14,7 @@ import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-servi
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+import { assertEditableOrder } from "@/modules/sales/helpers/order-guards";
 
 type DirectSaleTenderInput = {
   method: PaymentMethod;
@@ -196,7 +197,8 @@ export async function setOrderManualDiscount(input: {
 }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
-    if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
+    // Guarda unificada: bloquea órdenes anuladas/prueba además de no-DRAFT.
+    assertEditableOrder(order);
 
     const lines = await tx.saleOrderLine.findMany({ where: { saleOrderId: input.saleOrderId }, select: { lineSubtotal: true } });
     const lineSubtotal = lines.reduce((acc, line) => acc.plus(line.lineSubtotal), new Prisma.Decimal(0));
@@ -266,7 +268,8 @@ export async function addSaleOrderLine(input: {
 }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
-    if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
+    // Guarda unificada: bloquea órdenes anuladas/prueba además de no-DRAFT.
+    assertEditableOrder(order);
 
     const product = await tx.product.findUniqueOrThrow({ where: { id: input.productId } });
     if (!product.isActive) throw new Error("PRODUCT_INACTIVE");
@@ -399,7 +402,8 @@ export async function updateSaleOrderLine(input: {
 }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
-    if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
+    // Guarda unificada: bloquea órdenes anuladas/prueba además de no-DRAFT.
+    assertEditableOrder(order);
 
     const existing = await tx.saleOrderLine.findFirst({
       where: { id: input.lineId, saleOrderId: input.saleOrderId },
@@ -528,7 +532,8 @@ export async function updateSaleOrderLine(input: {
 export async function removeSaleOrderLine(input: { saleOrderId: string; lineId: string; actorUserId: string }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
-    if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
+    // Guarda unificada: bloquea órdenes anuladas/prueba además de no-DRAFT.
+    assertEditableOrder(order);
 
     const deleted = await tx.saleOrderLine.deleteMany({
       where: { id: input.lineId, saleOrderId: input.saleOrderId },
@@ -581,6 +586,26 @@ export async function submitSaleOrderToPendingPayment(input: {
 }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
+    // Una orden anulada/prueba no debe poder enviarse a cobro.
+    if (order.voidedAt || order.isTest) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "sales",
+          action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
+          entityType: "SaleOrder",
+          entityId: order.id,
+          metadataJson: {
+            reason: order.voidedAt ? "ORDER_VOIDED" : "ORDER_IS_TEST",
+            voidedAt: order.voidedAt ? order.voidedAt.toISOString() : null,
+            isTest: order.isTest,
+            currentStatus: order.status,
+          },
+        },
+      });
+      throw new Error(order.voidedAt ? "ORDER_VOIDED" : "ORDER_IS_TEST");
+    }
     if (order.status !== SaleOrderStatus.DRAFT) {
       await tx.auditLog.create({
         data: {
@@ -745,7 +770,29 @@ export async function submitDirectSale(input: {
       include: { lines: true, payments: true },
     });
 
-    if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
+    // Guarda crítica del checkout: una orden anulada o de prueba NUNCA debe
+    // poder cobrarse (este era el origen del bug que descontaba inventario y
+    // posteaba pagos sobre órdenes anuladas). Se valida dentro de la
+    // transacción tras el lock, así un fallo aborta todo (atomicidad).
+    if (order.voidedAt || order.isTest) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "sales",
+          action: SALE_AUDIT_EVENTS.DIRECT_SALE_DENIED,
+          entityType: "SaleOrder",
+          entityId: order.id,
+          metadataJson: {
+            reason: order.voidedAt ? "ORDER_VOIDED" : "ORDER_IS_TEST",
+            voidedAt: order.voidedAt ? order.voidedAt.toISOString() : null,
+            isTest: order.isTest,
+            currentStatus: order.status,
+          },
+        },
+      });
+    }
+    assertEditableOrder(order);
     if (order.lines.length === 0) throw new Error("ORDER_EMPTY");
 
     const uniqueProductIds = [...new Set(order.lines.map((line) => line.productId))].sort();

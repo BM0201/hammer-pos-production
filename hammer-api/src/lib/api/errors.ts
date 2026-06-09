@@ -127,6 +127,14 @@ export function toApiErrorResponse(error: unknown) {
     return fail(message, "La orden no esta en estado editable.", 409);
   }
 
+  if (message === "ORDER_VOIDED") {
+    return fail("ORDER_VOIDED", "La orden fue anulada y no admite cambios ni cobros.", 409);
+  }
+
+  if (message === "ORDER_IS_TEST") {
+    return fail("ORDER_IS_TEST", "La orden esta marcada como prueba y no admite cambios ni cobros.", 409);
+  }
+
   if (message === "ORDER_EMPTY") {
     return fail("ORDER_EMPTY", "La orden esta vacia. Agrega productos primero.", 400);
   }

@@ -2,6 +2,7 @@ import { DispatchStatus, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { DISPATCH_AUDIT_EVENTS } from "@/modules/dispatch/audit-events";
+import { assertOrderNotVoidedOrTest } from "@/modules/sales/helpers/order-guards";
 
 export async function listDispatchPendingOrders(params: { branchId: string; includeAllBranches: boolean }) {
   return prisma.saleOrder.findMany({
@@ -58,6 +59,9 @@ export async function markOrderDispatched(input: { orderId: string; actorUserId:
     if (order.dispatchTickets.length > 0) {
       throw new Error("DISPATCH_ALREADY_COMPLETED");
     }
+
+    // Una orden anulada o de prueba no debe poder despacharse.
+    assertOrderNotVoidedOrTest(order);
 
     const transition = await tx.saleOrder.updateMany({
       where: {
