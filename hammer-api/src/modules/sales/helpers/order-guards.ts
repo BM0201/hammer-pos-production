@@ -62,17 +62,38 @@ export function assertOrderNotVoidedOrTest(order: GuardableOrder): void {
 }
 
 /**
+ * Estados PRE-PAGO en los que una orden todavía es editable (puede recibir,
+ * cambiar o quitar líneas y descuentos). Una orden sólo deja de ser editable
+ * cuando YA se cobró/avanzó (PAID, DISPATCH_PENDING, DISPATCHED, CANCELLED,
+ * RETURN_*). El estado NO es lo que protege contra el bug de la venta perdida:
+ * de eso se encargan `voidedAt`/`isTest` (ver bloque superior).
+ */
+export const EDITABLE_ORDER_STATUSES: readonly SaleOrderStatus[] = [
+  SaleOrderStatus.DRAFT,
+  SaleOrderStatus.PENDING_PAYMENT,
+];
+
+/**
  * Guarda para EDITAR una orden (agregar/actualizar/quitar líneas, descuentos,
  * enviar a cobro, venta directa). La orden debe:
- *   1. NO estar anulada (`voidedAt = null`)
- *   2. NO ser de prueba (`isTest = false`)
- *   3. Estar en `DRAFT`
+ *   1. NO estar anulada (`voidedAt = null`)   ← bloqueo CRÍTICO
+ *   2. NO ser de prueba (`isTest = false`)     ← bloqueo CRÍTICO
+ *   3. Estar en un estado PRE-PAGO editable (DRAFT o PENDING_PAYMENT)
+ *
+ * IMPORTANTE: una orden NO se bloquea por estar en `DRAFT` — el `DRAFT` es
+ * justamente el estado normal de edición en el POS. El único bloqueo real de
+ * edición es por anulación (`voidedAt`) o prueba (`isTest`); el estado sólo
+ * impide editar órdenes ya cobradas/avanzadas.
  *
  * Lanza `ORDER_VOIDED`, `ORDER_IS_TEST` o `ORDER_NOT_DRAFT`.
  */
 export function assertEditableOrder(order: GuardableOrder): void {
+  // 1) Bloqueo crítico: una orden anulada o de prueba NUNCA es editable,
+  //    sin importar su estado. Esto previene el bug de la venta perdida.
   assertOrderNotVoidedOrTest(order);
-  if (order.status !== SaleOrderStatus.DRAFT) {
+  // 2) Sólo se bloquea por estado si la orden YA pasó del punto de cobro.
+  //    Los estados pre-pago (DRAFT, PENDING_PAYMENT) siguen siendo editables.
+  if (!EDITABLE_ORDER_STATUSES.includes(order.status)) {
     throw new Error(ORDER_GUARD_ERRORS.NOT_DRAFT);
   }
 }

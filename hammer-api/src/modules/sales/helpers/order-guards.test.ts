@@ -75,10 +75,30 @@ test("assertEditableOrder rechaza DRAFT de prueba (bug original)", () => {
   );
 });
 
-test("assertEditableOrder rechaza estado no DRAFT", () => {
+test("assertEditableOrder permite estado pre-pago PENDING_PAYMENT", () => {
+  assert.doesNotThrow(() =>
+    assertEditableOrder(makeOrder({ status: SaleOrderStatus.PENDING_PAYMENT })),
+  );
+});
+
+test("assertEditableOrder rechaza orden ya cobrada (PAID)", () => {
   assert.throws(
-    () => assertEditableOrder(makeOrder({ status: SaleOrderStatus.PENDING_PAYMENT })),
+    () => assertEditableOrder(makeOrder({ status: SaleOrderStatus.PAID })),
     /ORDER_NOT_DRAFT/,
+  );
+});
+
+test("assertEditableOrder rechaza orden ya despachada (DISPATCHED)", () => {
+  assert.throws(
+    () => assertEditableOrder(makeOrder({ status: SaleOrderStatus.DISPATCHED })),
+    /ORDER_NOT_DRAFT/,
+  );
+});
+
+test("assertEditableOrder rechaza PENDING_PAYMENT anulada (bloqueo crítico se mantiene)", () => {
+  assert.throws(
+    () => assertEditableOrder(makeOrder({ status: SaleOrderStatus.PENDING_PAYMENT, voidedAt: new Date() })),
+    /ORDER_VOIDED/,
   );
 });
 

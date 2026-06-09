@@ -75,6 +75,13 @@ export async function getOrCreateActiveDraftSaleOrder(input: {
       branchId: input.branchId,
       createdByUserId: input.actorUserId,
       status: SaleOrderStatus.DRAFT,
+      // CRÍTICO: nunca reutilizar como "ticket activo" una orden anulada
+      // (`voidedAt`) o de prueba (`isTest`). Si se reutilizara, el POS cargaría
+      // un borrador anulado y, al agregar el primer producto, la guarda
+      // `assertEditableOrder` lanzaría ORDER_VOIDED — exactamente el error que
+      // bloqueaba ventas nuevas. Al excluirlas aquí, se crea un borrador limpio.
+      voidedAt: null,
+      isTest: false,
     },
     include: {
       lines: {
