@@ -2,56 +2,188 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
-import { getEffectiveProductPricing, mapProductWithEffectivePricing } from "@/modules/catalog/effective-pricing";
-import { formatDualStock, getProductStockConversion, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
+import { resolveEffectivePricing } from "@/modules/catalog/effective-pricing";
+import {
+  convertBaseQtyToSaleQty,
+  convertBaseUnitCostToSaleUnitCost,
+  formatDualStock,
+  getProductStockConversionsBatch,
+  type ProductStockConversion,
+} from "@/modules/inventory/unit-conversion";
 
 type CatalogProductWithBranchPricing = {
   id: string;
   unit: string;
+  name?: string;
+  sku?: string;
+  barcode?: string | null;
   standardSalePrice: Prisma.Decimal;
   branchProductSettings?: Array<{ branchId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null }>;
-  inventoryBalances?: Array<{ branchId: string; quantityOnHand?: Prisma.Decimal; weightedAverageCost: Prisma.Decimal }>;
+  inventoryBalances?: Array<{ branchId: string; quantityOnHand?: Prisma.Decimal | null; weightedAverageCost: Prisma.Decimal }>;
   category?: { id: string; code?: string; name: string } | null;
 };
 
-async function mapProductWithBranchInventory<TProduct extends CatalogProductWithBranchPricing>(product: TProduct, branchId: string) {
-  const mapped = mapProductWithEffectivePricing(product, branchId);
-  const [conversion, shared, effective] = await Promise.all([
-    getProductStockConversion(prisma, product.id),
-    getSharedInventoryBalance(prisma, { branchId, productId: product.id }),
-    getEffectiveProductPricing(prisma, { branchId, productId: product.id }),
-  ]);
-  const dualStock = conversion && shared.balance
+const ZERO = new Prisma.Decimal(0);
+
+/**
+ * Synchronously build the branch-scoped catalog row for a single product using data that has
+ * already been loaded in bulk (branch settings + inventory balances from the main query, plus
+ * the pre-loaded stock-conversion map and shared-balance map). This is the key to fixing the
+ * N+1 query problem that made the POS catalog slow (~6s) and occasionally fail.
+ */
+function buildBranchProductRow<TProduct extends CatalogProductWithBranchPricing>(
+  product: TProduct,
+  branchId: string,
+  conversion: ProductStockConversion | null,
+  sharedBalanceMap: Map<string, { quantityOnHand: Prisma.Decimal | null; weightedAverageCost: Prisma.Decimal }>,
+) {
+  const branchSetting = product.branchProductSettings?.find((setting) => setting.branchId === branchId);
+  const ownBalance = product.inventoryBalances?.find((balance) => balance.branchId === branchId);
+
+  // For products that belong to a shared stock group (e.g. iron quintal/varilla), the real
+  // stock and WAC live on the canonical product, expressed in the base unit.
+  let baseQuantity: Prisma.Decimal;
+  let baseWac: Prisma.Decimal | null;
+  if (conversion) {
+    const sharedBalance = sharedBalanceMap.get(conversion.canonicalProductId);
+    baseQuantity = sharedBalance?.quantityOnHand ?? ZERO;
+    baseWac = sharedBalance?.weightedAverageCost ?? null;
+  } else {
+    baseQuantity = ownBalance?.quantityOnHand ?? ZERO;
+    baseWac = ownBalance?.weightedAverageCost ?? null;
+  }
+
+  // Convert base-unit values to the sale unit when a conversion factor applies.
+  const saleQuantity = conversion
+    ? convertBaseQtyToSaleQty({ baseQuantity, conversionFactor: conversion.conversionFactor })
+    : baseQuantity;
+  const saleUnitWac = conversion && baseWac
+    ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: baseWac, conversionFactor: conversion.conversionFactor })
+    : baseWac;
+
+  const pricing = resolveEffectivePricing({
+    productId: product.id,
+    standardSalePrice: product.standardSalePrice,
+    branchPrice: branchSetting?.branchPrice ?? null,
+    branchCost: branchSetting?.branchCost ?? null,
+    weightedAverageCost: saleUnitWac,
+  });
+
+  const dualStock = conversion
     ? formatDualStock({
-        baseQuantity: shared.balance.quantityOnHand,
+        baseQuantity,
         conversionFactor: conversion.conversionFactor,
         baseUnit: conversion.baseUnit,
         saleUnit: conversion.saleUnit,
       })
     : null;
 
+  const saleQtyNum = dualStock?.saleQuantity ?? Number(saleQuantity.toDecimalPlaces(4));
+  const baseQtyNum = Number(baseQuantity.toDecimalPlaces(4));
+
+  const { branchProductSettings: _settings, inventoryBalances: _balances, ...productData } = product;
+
   return {
-    ...mapped,
+    ...productData,
+    ...pricing,
     categoryName: product.category?.name ?? null,
-    effectiveCost: effective.effectiveCost,
-    weightedAverageCost: effective.weightedAverageCost,
-    stockOnHand: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
-    availableStock: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
-    availableBaseStock: shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
-    availableSaleStock: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
-    baseUnit: conversion?.baseUnit ?? mapped.unit,
-    saleUnit: conversion?.saleUnit ?? mapped.unit,
-    stockConversion: conversion ? {
-      stockGroupId: conversion.stockGroupId,
-      stockGroupCode: conversion.stockGroupCode,
-      stockGroupName: conversion.stockGroupName,
-      baseUnit: conversion.baseUnit,
-      saleUnit: conversion.saleUnit,
-      conversionFactor: conversion.conversionFactor,
-      isCanonical: conversion.isCanonical,
-    } : null,
+    stockOnHand: saleQtyNum,
+    availableStock: saleQtyNum,
+    availableBaseStock: baseQtyNum,
+    availableSaleStock: saleQtyNum,
+    baseUnit: conversion?.baseUnit ?? product.unit,
+    saleUnit: conversion?.saleUnit ?? product.unit,
+    stockConversion: conversion
+      ? {
+          stockGroupId: conversion.stockGroupId,
+          stockGroupCode: conversion.stockGroupCode,
+          stockGroupName: conversion.stockGroupName,
+          baseUnit: conversion.baseUnit,
+          saleUnit: conversion.saleUnit,
+          conversionFactor: conversion.conversionFactor,
+          isCanonical: conversion.isCanonical,
+        }
+      : null,
     sharedStock: dualStock,
   };
+}
+
+/**
+ * Map a batch of products to branch-scoped catalog rows efficiently.
+ * Performs at most 2 extra queries total (stock conversions + shared canonical balances)
+ * regardless of how many products are passed in — replacing the previous 3-queries-per-product
+ * pattern that caused the slow/failing POS catalog.
+ */
+async function mapProductsWithBranchInventory<TProduct extends CatalogProductWithBranchPricing>(
+  products: TProduct[],
+  branchId: string,
+) {
+  if (products.length === 0) return [];
+
+  const productIds = products.map((product) => product.id);
+  const conversionMap = await getProductStockConversionsBatch(prisma, productIds);
+
+  // Collect canonical product ids for shared stock groups whose balances are not the product's own.
+  const canonicalIds = new Set<string>();
+  for (const conversion of conversionMap.values()) {
+    canonicalIds.add(conversion.canonicalProductId);
+  }
+
+  const sharedBalanceMap = new Map<string, { quantityOnHand: Prisma.Decimal | null; weightedAverageCost: Prisma.Decimal }>();
+  if (canonicalIds.size > 0) {
+    const balances = await prisma.inventoryBalance.findMany({
+      where: { branchId, productId: { in: [...canonicalIds] } },
+      select: { productId: true, quantityOnHand: true, weightedAverageCost: true },
+    });
+    for (const balance of balances) {
+      sharedBalanceMap.set(balance.productId, balance);
+    }
+  }
+
+  return products.map((product) =>
+    buildBranchProductRow(product, branchId, conversionMap.get(product.id) ?? null, sharedBalanceMap),
+  );
+}
+
+/**
+ * Relevance score for catalog search. Higher is better. Used to rank matches BEFORE applying the
+ * limit so that an exact barcode/name/SKU match is never dropped just because it sorts later
+ * alphabetically (this was a cause of "product exists but is not found" in the POS).
+ */
+function searchRelevanceScore(
+  item: { name?: string | null; sku?: string | null; barcode?: string | null; categoryName?: string | null; category?: { name?: string | null } | null },
+  query: string,
+): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  const name = (item.name ?? "").toLowerCase();
+  const sku = (item.sku ?? "").toLowerCase();
+  const barcode = (item.barcode ?? "").toLowerCase();
+  const categoryName = (item.categoryName ?? item.category?.name ?? "").toLowerCase();
+
+  if (barcode && barcode === q) return 100;
+  if (sku && sku === q) return 95;
+  if (name === q) return 90;
+  if (name.startsWith(q)) return 80;
+  if (sku.startsWith(q)) return 72;
+  if (barcode.startsWith(q)) return 68;
+  if (name.includes(q)) return 55;
+  if (sku.includes(q)) return 45;
+  if (barcode.includes(q)) return 40;
+  if (categoryName.includes(q)) return 20;
+  return 0;
+}
+
+function rankBySearchRelevance<T extends { name?: string | null }>(items: T[], query: string): T[] {
+  return [...items]
+    .map((item, index) => ({ item, index, score: searchRelevanceScore(item as never, query) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const nameCompare = (a.item.name ?? "").localeCompare(b.item.name ?? "");
+      if (nameCompare !== 0) return nameCompare;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.item);
 }
 
 export async function listCategories() {
@@ -123,21 +255,35 @@ export async function updateCategory(categoryId: string, input: {
   return category;
 }
 
-export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string; limit?: number }) {
+export async function listProducts(params: {
+  q?: string;
+  isActive?: boolean;
+  branchId?: string;
+  limit?: number;
+  /** When true, products without positive available stock in the branch are excluded (POS mode). */
+  inStockOnly?: boolean;
+}) {
+  const query = params.q?.trim();
   const where: Prisma.ProductWhereInput = {
     isActive: params.isActive,
-    ...(params.q
+    ...(query
       ? {
           OR: [
-            { sku: { contains: params.q, mode: "insensitive" } },
-            { name: { contains: params.q, mode: "insensitive" } },
-            { barcode: { contains: params.q, mode: "insensitive" } },
-            { category: { name: { contains: params.q, mode: "insensitive" } } },
-            { category: { code: { contains: params.q, mode: "insensitive" } } },
+            { sku: { contains: query, mode: "insensitive" } },
+            { name: { contains: query, mode: "insensitive" } },
+            { barcode: { contains: query, mode: "insensitive" } },
+            { category: { name: { contains: query, mode: "insensitive" } } },
+            { category: { code: { contains: query, mode: "insensitive" } } },
           ],
         }
       : {}),
   };
+
+  const limit = params.limit ?? 1000;
+  // When searching or filtering by stock we must over-fetch and then rank/filter so that the
+  // most relevant in-stock matches survive the limit (fixes the "exists but not found" bug).
+  const needsPostProcessing = Boolean(query) || Boolean(params.inStockOnly);
+  const take = needsPostProcessing ? Math.min(Math.max(limit * 10, 200), 1000) : limit;
 
   const products = await prisma.product.findMany({
     where,
@@ -157,12 +303,27 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
         : {}),
     },
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
-    take: params.limit ?? 1000,
+    take,
   });
 
-  if (!params.branchId) return products;
+  if (!params.branchId) {
+    const ranked = query ? rankBySearchRelevance(products, query) : products;
+    return ranked.slice(0, limit);
+  }
 
-  return Promise.all(products.map((product) => mapProductWithBranchInventory(product, params.branchId!)));
+  let mapped = await mapProductsWithBranchInventory(products, params.branchId);
+
+  // Hide out-of-stock products when requested by the POS.
+  if (params.inStockOnly) {
+    mapped = mapped.filter((product) => (product.availableStock ?? 0) > 0);
+  }
+
+  // Rank by relevance before truncating so exact matches always make the cut.
+  if (query) {
+    mapped = rankBySearchRelevance(mapped, query);
+  }
+
+  return mapped.slice(0, limit);
 }
 
 /**
@@ -494,6 +655,15 @@ export async function deleteOrDeactivateCategory(categoryId: string, actorUserId
   };
 }
 
+/**
+ * Top-selling products to surface in the POS. Per the requirements this returns the products with
+ * the highest sales volume:
+ *   - in THIS branch only (sales are scoped by saleOrder.branchId),
+ *   - over the last 7 days (the current week of activity),
+ *   - that currently have stock (out-of-stock items are excluded),
+ *   - limited to the top N (default 5).
+ * If there aren't enough qualifying best-sellers, it backfills with other in-stock active products.
+ */
 export async function getTopSellingProducts(params: { limit?: number; isActive?: boolean; branchId?: string }) {
   const limit = params.limit ?? 5;
   const include = {
@@ -512,37 +682,82 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
       : {}),
   };
 
-  // Get the top-selling product IDs by aggregating sale order lines
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  // Aggregate sales for the last 7 days, scoped to this branch when provided.
+  // Exclude cancelled/returned orders so they don't inflate the ranking.
   const topLines = await prisma.saleOrderLine.groupBy({
     by: ["productId"],
+    where: {
+      createdAt: { gte: weekAgo },
+      ...(params.branchId
+        ? {
+            saleOrder: {
+              branchId: params.branchId,
+              status: { notIn: ["CANCELLED", "RETURNED", "DRAFT"] },
+            },
+          }
+        : {}),
+    },
     _sum: { quantity: true },
     orderBy: { _sum: { quantity: "desc" } },
-    take: limit,
+    // Over-fetch: some best-sellers may now be out of stock and get filtered out below.
+    take: Math.max(limit * 4, 20),
   });
 
-  if (topLines.length === 0) {
-    // Fallback: return first N active products if no sales yet
+  const orderedTopIds = topLines.map((line) => line.productId);
+  let topProducts: Awaited<ReturnType<typeof mapProductsWithBranchInventory>> = [];
+
+  if (orderedTopIds.length > 0) {
+    const products = await prisma.product.findMany({
+      where: {
+        id: { in: orderedTopIds },
+        ...(params.isActive !== undefined ? { isActive: params.isActive } : {}),
+      },
+      include,
+    });
+
+    const idOrder = new Map(orderedTopIds.map((id, idx) => [id, idx]));
+    products.sort((a, b) => (idOrder.get(a.id) ?? 99999) - (idOrder.get(b.id) ?? 99999));
+
+    if (!params.branchId) {
+      // No branch context: return raw products (no stock filtering possible).
+      return products.slice(0, limit);
+    }
+
+    const mapped = await mapProductsWithBranchInventory(products, params.branchId);
+    topProducts = mapped.filter((product) => (product.availableStock ?? 0) > 0);
+  }
+
+  // Without a branch we cannot filter by stock; just return the top sellers (or active fallback).
+  if (!params.branchId) {
+    if (topProducts.length > 0) return topProducts.slice(0, limit);
     const fallbackProducts = await prisma.product.findMany({
       where: { isActive: params.isActive },
       include,
       orderBy: { name: "asc" },
       take: limit,
     });
-    return params.branchId ? Promise.all(fallbackProducts.map((product) => mapProductWithBranchInventory(product, params.branchId!))) : fallbackProducts;
+    return fallbackProducts;
   }
 
-  const productIds = topLines.map((line) => line.productId);
-  const products = await prisma.product.findMany({
+  if (topProducts.length >= limit) {
+    return topProducts.slice(0, limit);
+  }
+
+  // Backfill with other in-stock active products not already included.
+  const alreadyIncluded = new Set(topProducts.map((product) => product.id));
+  const fallbackCandidates = await prisma.product.findMany({
     where: {
-      id: { in: productIds },
-      ...(params.isActive !== undefined ? { isActive: params.isActive } : {}),
+      isActive: params.isActive ?? true,
+      id: { notIn: [...alreadyIncluded] },
     },
     include,
+    orderBy: { name: "asc" },
+    take: Math.max((limit - topProducts.length) * 8, 40),
   });
+  const fallbackMapped = (await mapProductsWithBranchInventory(fallbackCandidates, params.branchId))
+    .filter((product) => (product.availableStock ?? 0) > 0);
 
-  // Sort by sales volume (same order as topLines)
-  const idOrder = new Map(productIds.map((id, idx) => [id, idx]));
-  products.sort((a, b) => (idOrder.get(a.id) ?? 99) - (idOrder.get(b.id) ?? 99));
-
-  return params.branchId ? Promise.all(products.map((product) => mapProductWithBranchInventory(product, params.branchId!))) : products;
+  return [...topProducts, ...fallbackMapped].slice(0, limit);
 }

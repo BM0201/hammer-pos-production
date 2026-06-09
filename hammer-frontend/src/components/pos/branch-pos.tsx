@@ -313,7 +313,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     setLoadingProducts(true);
 
     try {
-      const params = new URLSearchParams({ q: query, isActive: "true", branchId, limit: "20" });
+      const params = new URLSearchParams({ q: query, isActive: "true", branchId, limit: "20", inStockOnly: "true" });
       const response = await fetch(`/api/catalog/products?${params.toString()}`);
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 

@@ -35,13 +35,14 @@ export async function GET(request: Request) {
     const limitParam = searchParams.get("limit");
     const limit = limitParam ? parseInt(limitParam, 10) : undefined;
     const branchId = searchParams.get("branchId") ?? undefined;
+    const inStockOnly = searchParams.get("inStockOnly") === "true";
 
     if (topSelling) {
       const products = await getTopSellingProducts({ limit: limit ?? 5, isActive, branchId });
       return ok(products);
     }
 
-    const products = await listProducts({ q, isActive, branchId, limit });
+    const products = await listProducts({ q, isActive, branchId, limit, inStockOnly });
     return ok(products);
   } catch (error) {
     return toHttpErrorResponse(error);

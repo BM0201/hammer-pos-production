@@ -636,6 +636,8 @@ model Product {
 
   @@index([abcClassification])
   @@index([rotationIndex])
+  // Supports the POS catalog query (filter by isActive, order by name) and speeds up product search.
+  @@index([isActive, name])
 }
 
 model ProductStockGroup {

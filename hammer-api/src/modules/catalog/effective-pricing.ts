@@ -13,6 +13,14 @@ export type EffectivePricing = {
   effectiveCost: Prisma.Decimal | null;
   priceSource: "BRANCH" | "STANDARD";
   costSource: "BRANCH" | "WAC" | "NONE";
+  /**
+   * True when this branch has its OWN operational price configured.
+   * When false, the branch is temporarily falling back to the shared standard price
+   * and the UI should prompt the user to set a branch-specific price.
+   * Per-branch price separation: each branch operates with fully independent prices;
+   * the ONLY shared base across branches is the product cost.
+   */
+  branchPriceConfigured: boolean;
 };
 
 type ProductWithOptionalBranchPricing = {
@@ -84,14 +92,18 @@ export function mapProductWithEffectivePricing<TProduct extends ProductWithOptio
   };
 }
 
-function resolveEffectivePricing(input: {
+export function resolveEffectivePricing(input: {
   productId: string;
   standardSalePrice: Prisma.Decimal;
   branchPrice: Prisma.Decimal | null;
   branchCost: Prisma.Decimal | null;
   weightedAverageCost: Prisma.Decimal | null;
 }): EffectivePricing {
+  // Per-branch price separation: the branch price is the ONLY operational sale price for the branch.
+  // The standard price is just a shared fallback used until the branch configures its own price.
+  const branchPriceConfigured = input.branchPrice !== null;
   const effectivePrice = input.branchPrice ?? input.standardSalePrice;
+  // Cost is the only value shared across branches (product base cost / WAC).
   const effectiveCost = input.branchCost ?? input.weightedAverageCost ?? null;
 
   return {
@@ -102,7 +114,8 @@ function resolveEffectivePricing(input: {
     branchCost: input.branchCost,
     weightedAverageCost: input.weightedAverageCost,
     effectiveCost,
-    priceSource: input.branchPrice === null ? "STANDARD" : "BRANCH",
+    priceSource: branchPriceConfigured ? "BRANCH" : "STANDARD",
     costSource: input.branchCost !== null ? "BRANCH" : input.weightedAverageCost !== null ? "WAC" : "NONE",
+    branchPriceConfigured,
   };
 }

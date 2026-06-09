@@ -22,7 +22,16 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, fmtDateTime } from "@/lib/format";
 
 /* ── Types ── */
-type Product = { id: string; sku: string; name: string; unit: string };
+type Product = {
+  id: string;
+  sku: string;
+  name: string;
+  unit: string;
+  barcode?: string | null;
+  category?: { id: string; name: string; code?: string } | null;
+  categoryName?: string | null;
+  standardSalePrice?: number;
+};
 type POLine = {
   id?: string;
   productId: string;
@@ -82,6 +91,211 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+/* ── Per-branch sale-price adjuster (used after an order is received) ── */
+type AdjustRow = {
+  productId: string;
+  name: string;
+  sku: string;
+  landedCost: number;
+  currentBranchPrice: number | null;
+  suggestedPrice: number;
+  newPrice: string;
+  marginPercent: number | null;
+  loading: boolean;
+  applied: boolean;
+  error: string | null;
+};
+
+function BranchPriceAdjuster({ order, onClose }: { order: PurchaseOrder; onClose: () => void }) {
+  const [rows, setRows] = useState<AdjustRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load a suggested SALE price for each received product, scoped to THIS branch.
+  // Reuses the repo's pricing calculation system (GET /api/pricing/suggested).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const base: AdjustRow[] = order.lines.map((line) => ({
+        productId: line.productId,
+        name: line.product.name,
+        sku: line.product.sku,
+        landedCost: Number(line.finalUnitCost ?? line.costWithTax ?? line.unitCost ?? 0),
+        currentBranchPrice: null,
+        suggestedPrice: 0,
+        newPrice: "",
+        marginPercent: null,
+        loading: false,
+        applied: false,
+        error: null,
+      }));
+
+      const resolved = await Promise.all(
+        base.map(async (row) => {
+          try {
+            const params = new URLSearchParams({
+              branchId: order.branch.id,
+              purchaseCostPerUnit: String(row.landedCost),
+              productId: row.productId,
+            });
+            const res = await fetch(`/api/pricing/suggested?${params.toString()}`);
+            const json = await res.json();
+            if (!res.ok) return row;
+            const data = unwrapApiData(json) as { suggestedPrice?: number; marginPercent?: number };
+            const suggested = Number(data?.suggestedPrice ?? 0);
+            return {
+              ...row,
+              suggestedPrice: suggested,
+              marginPercent: data?.marginPercent != null ? Number(data.marginPercent) : null,
+              newPrice: suggested > 0 ? suggested.toFixed(2) : "",
+            };
+          } catch {
+            return row;
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        setRows(resolved);
+        setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [order]);
+
+  const updatePrice = (productId: string, value: string) => {
+    setRows((prev) => prev.map((r) => (r.productId === productId ? { ...r, newPrice: value, applied: false } : r)));
+  };
+
+  const applyRow = async (productId: string) => {
+    const row = rows.find((r) => r.productId === productId);
+    if (!row) return;
+    const price = parseFloat(row.newPrice);
+    if (!price || price <= 0) {
+      setRows((prev) => prev.map((r) => (r.productId === productId ? { ...r, error: "Precio inválido" } : r)));
+      return;
+    }
+    setRows((prev) => prev.map((r) => (r.productId === productId ? { ...r, loading: true, error: null } : r)));
+    try {
+      // applyScope BRANCH ensures the price is stored ONLY for this branch (per-branch separation).
+      const res = await apiFetch("/api/pricing/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId,
+          branchId: order.branch.id,
+          applyScope: "BRANCH",
+          suggestedPrice: price,
+          effectiveCost: row.landedCost,
+          reason: `Ajuste de precio tras recepción del pedido ${order.orderNumber}`,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error?.message ?? json.message ?? "Error al aplicar precio");
+      setRows((prev) => prev.map((r) => (r.productId === productId ? { ...r, loading: false, applied: true } : r)));
+      toast.success(`Precio de ${row.name} actualizado para ${order.branch.code}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error al aplicar precio";
+      setRows((prev) => prev.map((r) => (r.productId === productId ? { ...r, loading: false, error: message } : r)));
+      toast.error(message);
+    }
+  };
+
+  const applyAll = async () => {
+    for (const row of rows) {
+      if (!row.applied) {
+        await applyRow(row.productId);
+      }
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface)] overflow-hidden shadow-md">
+      <div className="hm-card-header-green px-5 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <DollarSign className="h-5 w-5" />
+          <h2 className="font-semibold">Ajustar precios de venta — Sucursal {order.branch.code}</h2>
+        </div>
+        <button onClick={onClose} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
+      </div>
+      <div className="p-5 space-y-4">
+        <p className="text-xs text-[var(--color-text-secondary)]">
+          Precios calculados con el sistema del repositorio a partir del costo aterrizado de la recepción.
+          Cada precio se guarda <strong>solo para la sucursal {order.branch.name}</strong>; las demás sucursales no se ven afectadas.
+        </p>
+        {loading ? (
+          <div className="flex items-center gap-2 py-6 text-sm text-[var(--color-text-muted)]">
+            <Loader2 className="h-5 w-5 animate-spin" /> Calculando precios sugeridos...
+          </div>
+        ) : (
+          <>
+            <table className="hm-table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th className="text-right">Costo final</th>
+                  <th className="text-right">Margen</th>
+                  <th className="text-right">Precio sugerido</th>
+                  <th className="text-right">Nuevo precio</th>
+                  <th className="text-center">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.productId}>
+                    <td>
+                      <p className="font-medium text-[var(--color-text)]">{row.name}</p>
+                      <p className="font-mono text-xs text-[var(--color-text-muted)]">{row.sku}</p>
+                      {row.error && <p className="text-xs text-[var(--color-danger-600)]">{row.error}</p>}
+                    </td>
+                    <td className="text-right font-mono">{money(row.landedCost)}</td>
+                    <td className="text-right font-mono text-[var(--color-text-muted)]">{row.marginPercent != null ? `${row.marginPercent.toFixed(1)}%` : "—"}</td>
+                    <td className="text-right font-mono">{money(row.suggestedPrice)}</td>
+                    <td className="text-right">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={row.newPrice}
+                        onChange={(e) => updatePrice(row.productId, e.target.value)}
+                        className="w-28 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-right text-sm text-[var(--color-text)]"
+                      />
+                    </td>
+                    <td className="text-center">
+                      {row.applied ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-success-700)]">
+                          <CheckCircle className="h-4 w-4" /> Aplicado
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => applyRow(row.productId)}
+                          disabled={row.loading}
+                          className="rounded-lg bg-[var(--color-master-600)] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50"
+                        >
+                          {row.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Aplicar"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="flex justify-end">
+              <button
+                onClick={applyAll}
+                disabled={rows.every((r) => r.applied)}
+                className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] shadow-md transition-all disabled:opacity-50"
+              >
+                <CheckCircle className="h-4 w-4" /> Aplicar todos los precios
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Page ── */
 export default function PurchaseOrdersPage() {
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
@@ -106,6 +320,44 @@ export default function PurchaseOrdersPage() {
   const [otherChargesAmount, setOtherChargesAmount] = useState("0");
   const [globalDiscountAmount, setGlobalDiscountAmount] = useState("0");
 
+  // Product picker (search by category / name / SKU to add lines)
+  const [productSearch, setProductSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+
+  // Price adjustment panel (after receiving) — adjusts the SALE price per branch.
+  const [showPriceAdjust, setShowPriceAdjust] = useState(false);
+
+  // Distinct categories available for the picker filter.
+  const categoryOptions = Array.from(
+    new Map(
+      products
+        .map((p) => p.categoryName ?? p.category?.name ?? null)
+        .filter((name): name is string => Boolean(name))
+        .map((name) => [name, name]),
+    ).keys(),
+  ).sort((a, b) => a.localeCompare(b));
+
+  // Products matching the current picker search + category filter, excluding ones already added.
+  const addedProductIds = new Set(formLines.map((l) => l.productId).filter(Boolean));
+  const productMatches = (() => {
+    const q = productSearch.trim().toLowerCase();
+    if (!q && !categoryFilter) return [];
+    return products
+      .filter((p) => {
+        if (addedProductIds.has(p.id)) return false;
+        const cat = p.categoryName ?? p.category?.name ?? "";
+        if (categoryFilter && cat !== categoryFilter) return false;
+        if (!q) return true;
+        return (
+          p.name.toLowerCase().includes(q) ||
+          p.sku.toLowerCase().includes(q) ||
+          (p.barcode ?? "").toLowerCase().includes(q) ||
+          cat.toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 25);
+  })();
+
   const fetchOrders = useCallback(async () => {
     try {
       setLoading(true);
@@ -127,13 +379,19 @@ export default function PurchaseOrdersPage() {
   const fetchMeta = useCallback(async () => {
     try {
       const [branchRes, prodRes] = await Promise.all([
-        fetch("/api/master/users"),
+        fetch("/api/master/branches"),
         fetch("/api/catalog/products"),
       ]);
       const branchJson = unwrapApiData(await branchRes.json());
       const prodJson = unwrapApiData(await prodRes.json());
-      if (branchJson?.branches) setBranches(branchJson.branches);
-      const prods = Array.isArray(prodJson) ? prodJson : [];
+      // /api/master/branches returns the array of branches directly.
+      const branchList = Array.isArray(branchJson) ? branchJson : branchJson?.branches ?? [];
+      setBranches(branchList);
+      const prods = (Array.isArray(prodJson) ? prodJson : []).map((p: Product) => ({
+        ...p,
+        categoryName: p.categoryName ?? p.category?.name ?? null,
+        standardSalePrice: typeof p.standardSalePrice === "number" ? p.standardSalePrice : Number(p.standardSalePrice ?? 0),
+      }));
       setProducts(prods);
     } catch { /* non-critical */ }
   }, []);
@@ -149,9 +407,30 @@ export default function PurchaseOrdersPage() {
     setFreightAmount("0");
     setOtherChargesAmount("0");
     setGlobalDiscountAmount("0");
-    setFormLines([{ productId: "", quantity: "1", unitCostBeforeTax: "0", taxRate: "15" }]);
+    setProductSearch("");
+    setCategoryFilter("");
+    setFormLines([]);
     setShowModal(true);
     setSelectedOrder(null);
+  };
+
+  // Lookup helper to resolve a product by id for line display.
+  const productById = useCallback(
+    (id: string) => products.find((p) => p.id === id) ?? null,
+    [products],
+  );
+
+  // Add a product to the order (from the search picker), avoiding duplicates.
+  const addProductLine = (product: Product) => {
+    if (formLines.some((l) => l.productId === product.id)) {
+      toast("Ese producto ya está en la lista.", { icon: "ℹ️" });
+      return;
+    }
+    setFormLines((prev) => [
+      ...prev,
+      { productId: product.id, quantity: "1", unitCostBeforeTax: "0", taxRate: "15" },
+    ]);
+    setProductSearch("");
   };
 
   const handleCreate = async () => {
@@ -261,7 +540,6 @@ export default function PurchaseOrdersPage() {
     }
   };
 
-  const addLine = () => setFormLines([...formLines, { productId: "", quantity: "1", unitCostBeforeTax: "0", taxRate: "15" }]);
   const removeLine = (idx: number) => setFormLines(formLines.filter((_, i) => i !== idx));
   const updateLine = (idx: number, field: keyof PurchaseOrderLineForm, value: string) => {
     const updated = [...formLines];
@@ -441,7 +719,7 @@ export default function PurchaseOrdersPage() {
               <h2 className="font-semibold">Pedido {selectedOrder.orderNumber}</h2>
               <StatusBadge status={selectedOrder.status} />
             </div>
-            <button onClick={() => setSelectedOrder(null)} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
+            <button onClick={() => { setSelectedOrder(null); setShowPriceAdjust(false); }} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
           </div>
 
           <div className="p-5 space-y-4">
@@ -568,8 +846,28 @@ export default function PurchaseOrdersPage() {
                 )}
               </div>
             )}
+
+            {/* Ajuste de precio de venta por sucursal (pedido recibido) */}
+            {selectedOrder.status === "RECEIVED" && (
+              <div className="flex flex-col gap-3 pt-2 border-t border-[var(--color-border)]">
+                <p className="text-xs text-[var(--color-text-secondary)]">
+                  El inventario ya fue recibido. Ahora puedes ajustar el precio de venta de estos productos
+                  <span className="font-semibold"> solo para la sucursal {selectedOrder.branch.code}</span> usando el costo de compra de este pedido.
+                </p>
+                <button
+                  onClick={() => setShowPriceAdjust(true)}
+                  className="flex w-fit items-center gap-2 rounded-lg bg-[var(--color-primary-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-primary-700)] shadow-md hover:shadow-lg transition-all"
+                >
+                  <DollarSign className="h-4 w-4" /> Ajustar precio de venta por sucursal
+                </button>
+              </div>
+            )}
           </div>
         </div>
+      )}
+
+      {showPriceAdjust && selectedOrder && (
+        <BranchPriceAdjuster order={selectedOrder} onClose={() => setShowPriceAdjust(false)} />
       )}
 
       {/* Create Modal */}
@@ -667,78 +965,131 @@ export default function PurchaseOrdersPage() {
               <div className="text-xs"><span className="text-[var(--color-text-muted)]">Total estimado</span><p className="text-base font-extrabold">{money(formTotalPaid)}</p></div>
             </div>
 
-            {/* Lines */}
+            {/* Step 1 — Search & add products */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-[var(--color-text)]">Líneas del Pedido</h3>
-                <button
-                  onClick={addLine}
-                  className="flex items-center gap-1 text-xs font-medium text-[var(--color-master-600)] hover:text-[var(--color-master-700)]"
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                <ShoppingCart className="h-4 w-4" /> 1. Buscar y agregar productos
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
                 >
-                  <Plus className="h-3.5 w-3.5" /> Agregar línea
-                </button>
-              </div>
-
-              {formLines.map((line, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-4">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Producto</label>}
-                    <select
-                      value={line.productId}
-                      onChange={(e) => updateLine(idx, "productId", e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
-                    >
-                      <option value="">Seleccionar producto...</option>
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>
+                  <option value="">Todas las categorías</option>
+                  {categoryOptions.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <div className="md:col-span-2 relative">
+                  <input
+                    type="text"
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    placeholder="Buscar por nombre, SKU o código de barras..."
+                    className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                  />
+                  {(productSearch.trim() || categoryFilter) && productMatches.length > 0 && (
+                    <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-lg">
+                      {productMatches.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => addProductLine(p)}
+                          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-[var(--color-master-50)]"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium text-[var(--color-text)]">{p.name}</span>
+                            <span className="block truncate text-xs text-[var(--color-text-muted)]">
+                              {p.sku}{(p.categoryName ?? p.category?.name) ? ` · ${p.categoryName ?? p.category?.name}` : ""}
+                            </span>
+                          </span>
+                          <Plus className="h-4 w-4 flex-shrink-0 text-[var(--color-master-600)]" />
+                        </button>
                       ))}
-                    </select>
-                  </div>
-                  <div className="col-span-2">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Cantidad</label>}
-                    <input
-                      type="number"
-                      min="1"
-                      value={line.quantity}
-                      onChange={(e) => updateLine(idx, "quantity", e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Costo sin IVA</label>}
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={line.unitCostBeforeTax}
-                      onChange={(e) => updateLine(idx, "unitCostBeforeTax", e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
-                    />
-                  </div>
-                  <div className="col-span-1">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">IVA %</label>}
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={line.taxRate}
-                      onChange={(e) => updateLine(idx, "taxRate", e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
-                    />
-                  </div>
-                  <div className="col-span-2 text-right">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Subtotal</label>}
-                    <span className="text-sm font-medium text-[var(--color-text)]">
-                      C${((parseFloat(line.quantity) || 0) * (parseFloat(line.unitCostBeforeTax) || 0)).toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="col-span-1 text-center">
-                    {formLines.length > 1 && (
-                      <button onClick={() => removeLine(idx)} className="text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)] text-lg">✕</button>
-                    )}
-                  </div>
+                    </div>
+                  )}
+                  {(productSearch.trim() || categoryFilter) && productMatches.length === 0 && (
+                    <div className="absolute z-20 mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-text-muted)] shadow-lg">
+                      Sin coincidencias.
+                    </div>
+                  )}
                 </div>
-              ))}
+              </div>
+            </div>
+
+            {/* Step 2 — Lines with purchase cost */}
+            <div className="space-y-3">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                <DollarSign className="h-4 w-4" /> 2. Indicar costo de compra ({formLines.length} producto{formLines.length === 1 ? "" : "s"})
+              </h3>
+
+              {formLines.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-6 text-center text-sm text-[var(--color-text-muted)]">
+                  Busca productos arriba para agregarlos al pedido.
+                </div>
+              ) : (
+                <>
+                  <div className="hidden md:grid grid-cols-12 gap-2 px-1 text-xs font-medium text-[var(--color-text-muted)]">
+                    <div className="col-span-5">Producto</div>
+                    <div className="col-span-2">Cantidad</div>
+                    <div className="col-span-2">Costo sin IVA</div>
+                    <div className="col-span-1">IVA %</div>
+                    <div className="col-span-1 text-right">Subtotal</div>
+                    <div className="col-span-1" />
+                  </div>
+                  {formLines.map((line, idx) => {
+                    const prod = productById(line.productId);
+                    return (
+                      <div key={line.productId || idx} className="grid grid-cols-12 gap-2 items-center">
+                        <div className="col-span-5 min-w-0">
+                          <p className="truncate text-sm font-medium text-[var(--color-text)]">{prod?.name ?? "Producto"}</p>
+                          <p className="truncate text-xs text-[var(--color-text-muted)]">
+                            {prod?.sku}{(prod?.categoryName ?? prod?.category?.name) ? ` · ${prod?.categoryName ?? prod?.category?.name}` : ""}
+                          </p>
+                        </div>
+                        <div className="col-span-2">
+                          <input
+                            type="number"
+                            min="1"
+                            value={line.quantity}
+                            onChange={(e) => updateLine(idx, "quantity", e.target.value)}
+                            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={line.unitCostBeforeTax}
+                            onChange={(e) => updateLine(idx, "unitCostBeforeTax", e.target.value)}
+                            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
+                          />
+                        </div>
+                        <div className="col-span-1">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={line.taxRate}
+                            onChange={(e) => updateLine(idx, "taxRate", e.target.value)}
+                            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
+                          />
+                        </div>
+                        <div className="col-span-1 text-right">
+                          <span className="text-sm font-medium text-[var(--color-text)]">
+                            C${((parseFloat(line.quantity) || 0) * (parseFloat(line.unitCostBeforeTax) || 0)).toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="col-span-1 text-center">
+                          <button onClick={() => removeLine(idx)} className="text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)] text-lg" title="Quitar">✕</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
 
               <div className="flex justify-end border-t border-[var(--color-border)] pt-3">
                 <div className="text-right text-sm">

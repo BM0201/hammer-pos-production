@@ -133,6 +133,53 @@ export async function getProductStockConversion(db: DbClient, productId: string)
   };
 }
 
+/**
+ * Batch-load stock conversions for many products in a single query.
+ * Avoids the N+1 query pattern of calling getProductStockConversion per product.
+ * Returns a Map keyed by productId. Products without a stock group are absent from the map.
+ */
+export async function getProductStockConversionsBatch(
+  db: DbClient,
+  productIds: string[],
+): Promise<Map<string, ProductStockConversion>> {
+  const map = new Map<string, ProductStockConversion>();
+  if (productIds.length === 0) return map;
+
+  const members = await db.productStockGroupMember.findMany({
+    where: { productId: { in: productIds }, isActive: true, stockGroup: { isActive: true } },
+    include: {
+      stockGroup: {
+        include: {
+          products: {
+            where: { isActive: true },
+            select: { productId: true, isCanonical: true, conversionFactor: true },
+            orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
+          },
+        },
+      },
+    },
+  });
+
+  for (const member of members) {
+    const canonical =
+      member.stockGroup.products.find((item) => item.isCanonical) ??
+      member.stockGroup.products.find((item) => new Prisma.Decimal(item.conversionFactor).eq(1)) ??
+      member;
+    map.set(member.productId, {
+      stockGroupId: member.stockGroupId,
+      stockGroupCode: member.stockGroup.code,
+      stockGroupName: member.stockGroup.name,
+      baseUnit: member.stockGroup.baseUnit,
+      saleUnit: member.saleUnit,
+      conversionFactor: member.conversionFactor,
+      canonicalProductId: canonical.productId,
+      isCanonical: member.isCanonical,
+    });
+  }
+
+  return map;
+}
+
 export async function resolveInventoryProductForMovement(db: DbClient, productId: string) {
   const conversion = await getProductStockConversion(db, productId);
   return {
