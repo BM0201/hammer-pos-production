@@ -111,7 +111,6 @@ const STATUS_LABELS: Record<string, string> = {
 export function BranchPos({ branchId }: { branchId: string }) {
   const [search, setSearch] = useState("");
   const [products, setProducts] = useState<ProductRow[]>([]);
-  const [topProducts, setTopProducts] = useState<ProductRow[]>([]);
   const [order, setOrder] = useState<TicketOrder | null>(null);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -136,6 +135,14 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const catalogViewportRef = useRef<HTMLDivElement | null>(null);
   const ticketPanelRef = useRef<HTMLDivElement | null>(null);
   const sendButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // Search performance: keep a live mirror of `search`, the latest top-selling
+  // rows, an in-flight request controller (to cancel stale searches) and a
+  // small client cache (normalized query → rows) so repeated lookups are instant.
+  const searchRef = useRef("");
+  const topProductsRef = useRef<ProductRow[]>([]);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const searchCacheRef = useRef<Map<string, ProductRow[]>>(new Map());
 
   const [branchConfig, setBranchConfig] = useState<{
     enableCashier: boolean;
@@ -287,8 +294,11 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
       const rows = json.data ?? [];
       seedSharedStock(rows);
-      setTopProducts(rows);
-      if (!search.trim()) {
+      topProductsRef.current = rows;
+      // Only fill the visible list with top-sellers when the user is not
+      // actively searching (read the live value via ref to avoid recreating
+      // this callback on every keystroke).
+      if (!searchRef.current.trim()) {
         setProducts(rows);
         setShowingTopSelling(true);
       }
@@ -296,25 +306,52 @@ export function BranchPos({ branchId }: { branchId: string }) {
       console.error("[POS][loadTopSelling]", error);
       setNoticeTimed(resolveApiMessage({ fallback: "No se pudieron cargar los productos más vendidos.", thrownError: error }), 10000);
     }
-  }, [branchId, resolveApiMessage, seedSharedStock, setNoticeTimed, search]);
+  }, [branchId, resolveApiMessage, seedSharedStock, setNoticeTimed]);
 
-  const loadProducts = useCallback(async (query: string) => {
-    if (!query.trim()) {
-      setProducts(topProducts);
+  const applySearchRows = useCallback((rows: ProductRow[]) => {
+    setProducts(rows);
+    setActiveProductIndex(0);
+    setCatalogScrollTop(0);
+    if (catalogViewportRef.current) catalogViewportRef.current.scrollTop = 0;
+  }, []);
+
+  const loadProducts = useCallback(async (rawQuery: string) => {
+    const query = rawQuery.trim();
+
+    // Empty query → cancel any in-flight search and fall back to top-sellers.
+    if (!query) {
+      if (searchAbortRef.current) {
+        searchAbortRef.current.abort();
+        searchAbortRef.current = null;
+      }
+      setLoadingProducts(false);
       setShowingTopSelling(true);
-      setActiveProductIndex(0);
-      setCatalogScrollTop(0);
-      if (catalogViewportRef.current) catalogViewportRef.current.scrollTop = 0;
+      applySearchRows(topProductsRef.current);
       return;
     }
 
     setShowingTopSelling(false);
+    const cacheKey = query.toLowerCase();
+
+    // Cache hit → render instantly, no network round-trip or spinner.
+    const cached = searchCacheRef.current.get(cacheKey);
+    if (cached) {
+      setLoadingProducts(false);
+      applySearchRows(cached);
+      return;
+    }
+
+    // Cancel the previous in-flight search so only the latest one wins.
+    if (searchAbortRef.current) searchAbortRef.current.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
     const stopMetric = measurePosMetric("search_latency", { queryLength: query.length });
     setLoadingProducts(true);
 
     try {
       const params = new URLSearchParams({ q: query, isActive: "true", branchId, limit: "20" });
-      const response = await fetch(`/api/catalog/products?${params.toString()}`);
+      const response = await fetch(`/api/catalog/products?${params.toString()}`, { signal: controller.signal });
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
       if (!response.ok) {
@@ -325,7 +362,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
       const rows = json.data ?? [];
       seedSharedStock(rows);
-      const q = query.trim().toLowerCase();
+      const q = cacheKey;
       const rank = (item: ProductRow) => {
         if (!q) return 99;
         if (item.name.toLowerCase().startsWith(q)) return 0;
@@ -342,19 +379,35 @@ export function BranchPos({ branchId }: { branchId: string }) {
         return a.name.localeCompare(b.name);
       });
 
-      setProducts(rows);
-      setActiveProductIndex(0);
-      setCatalogScrollTop(0);
-      if (catalogViewportRef.current) catalogViewportRef.current.scrollTop = 0;
+      // Store in cache (cap size to keep memory bounded).
+      if (searchCacheRef.current.size > 100) searchCacheRef.current.clear();
+      searchCacheRef.current.set(cacheKey, rows);
+
+      // Ignore results from a search that the user has already moved past.
+      if (controller.signal.aborted || searchRef.current.trim().toLowerCase() !== cacheKey) {
+        stopMetric(true);
+        return;
+      }
+
+      applySearchRows(rows);
       stopMetric(true);
     } catch (error) {
+      // A cancelled request is expected — never surface it as an error.
+      if (controller.signal.aborted || (error as { name?: string })?.name === "AbortError") {
+        stopMetric(false);
+        return;
+      }
       console.error("[POS][loadProducts]", error);
       setNoticeTimed(resolveApiMessage({ fallback: "No se pudo cargar el catálogo.", thrownError: error }), 10000);
       stopMetric(false);
     } finally {
-      setLoadingProducts(false);
+      // Only the latest request clears the loading flag.
+      if (searchAbortRef.current === controller) {
+        searchAbortRef.current = null;
+        setLoadingProducts(false);
+      }
     }
-  }, [branchId, resolveApiMessage, seedSharedStock, setNoticeTimed, topProducts]);
+  }, [branchId, resolveApiMessage, seedSharedStock, setNoticeTimed, applySearchRows]);
 
   // Load POS V2 workflow and cash-session context.
   useEffect(() => {
@@ -387,18 +440,34 @@ export function BranchPos({ branchId }: { branchId: string }) {
     loadPosContext();
   }, [branchId]);
 
+  // Keep a live mirror of the current search term for the async callbacks.
+  useEffect(() => {
+    searchRef.current = search;
+  }, [search]);
+
+  // Ticket + top-sellers load once per branch. These callbacks are now stable
+  // (no `search` dependency), so typing never re-triggers this effect.
   useEffect(() => {
     reloadOrder();
     loadTopSelling();
   }, [reloadOrder, loadTopSelling]);
 
+  // Debounced search. `loadProducts` is stable, so this only runs when the
+  // search term changes. The debounce + in-flight cancellation keep it instant.
   useEffect(() => {
     const handler = setTimeout(() => {
       loadProducts(search);
-    }, 300);
+    }, 250);
 
     return () => clearTimeout(handler);
   }, [search, loadProducts]);
+
+  // Abort any pending search request when the component unmounts.
+  useEffect(() => {
+    return () => {
+      if (searchAbortRef.current) searchAbortRef.current.abort();
+    };
+  }, []);
 
   useEffect(() => {
     searchInputRef.current?.focus();
