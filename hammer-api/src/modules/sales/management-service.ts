@@ -4,6 +4,7 @@ import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
+import { validSaleWhere } from "@/modules/sales/helpers/valid-sale-where";
 
 /**
  * Estados de venta que, al momento de marcarse como prueba o anularse, ya
@@ -654,3 +655,140 @@ export async function getSaleOrderDetail(saleOrderId: string) {
 }
 
 export type SaleOrderDetail = NonNullable<Awaited<ReturnType<typeof getSaleOrderDetail>>>;
+
+/**
+ * ============================================================================
+ *  BITÁCORA DE VENTAS DE SUCURSAL (branch sales log)
+ * ============================================================================
+ *
+ * A diferencia de `listSaleOrdersForManagement` (que por diseño SÍ muestra
+ * ventas de prueba y anuladas porque su propósito es gestionarlas), la bitácora
+ * de sucursal es un historial de SOLO ventas VÁLIDAS. Por eso usa el helper
+ * unificado `validSaleWhere` (excluye anuladas, de prueba y canceladas) y está
+ * paginada para soportar historiales largos en el punto de venta.
+ */
+export type BranchSalesLogFilters = {
+  /** Sucursal ya validada por el control de acceso. Obligatoria. */
+  branchId: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  status?: SaleOrderStatus;
+  /** Filtro por vendedor (usuario que creó la venta). */
+  sellerId?: string;
+  /** Búsqueda por número de orden o nombre/razón social del cliente. */
+  search?: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export type BranchSalesLogRow = {
+  id: string;
+  orderNumber: string;
+  status: SaleOrderStatus;
+  createdAt: string;
+  customerName: string;
+  sellerId: string;
+  seller: string;
+  linesCount: number;
+  grandTotal: number;
+};
+
+export type BranchSalesLogSeller = {
+  id: string;
+  name: string;
+};
+
+export type BranchSalesLogResult = {
+  rows: BranchSalesLogRow[];
+  sellers: BranchSalesLogSeller[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+function buildBranchSalesLogWhere(filters: BranchSalesLogFilters): Prisma.SaleOrderWhereInput {
+  const extra: Prisma.SaleOrderWhereInput = { branchId: filters.branchId };
+
+  if (filters.status) extra.status = filters.status;
+  if (filters.sellerId) extra.createdByUserId = filters.sellerId;
+
+  if (filters.dateFrom || filters.dateTo) {
+    extra.createdAt = {
+      ...(filters.dateFrom ? { gte: filters.dateFrom } : {}),
+      ...(filters.dateTo ? { lte: filters.dateTo } : {}),
+    };
+  }
+
+  if (filters.search?.trim()) {
+    const term = filters.search.trim();
+    extra.OR = [
+      { orderNumber: { contains: term, mode: "insensitive" } },
+      { customer: { is: { displayName: { contains: term, mode: "insensitive" } } } },
+      { customer: { is: { legalName: { contains: term, mode: "insensitive" } } } },
+    ];
+  }
+
+  // `validSaleWhere` fuerza voidedAt:null, isTest:false y status!=CANCELLED
+  // (salvo que se pase un status explícito, que de todos modos excluye CANCELLED).
+  return validSaleWhere(extra);
+}
+
+/**
+ * Lista las ventas VÁLIDAS de UNA sucursal para la bitácora de ventas, con
+ * paginación y filtros por fecha, estado y vendedor. Devuelve además la lista
+ * de vendedores con ventas válidas en la sucursal para alimentar el filtro.
+ */
+export async function listBranchSalesLog(filters: BranchSalesLogFilters): Promise<BranchSalesLogResult> {
+  const page = Math.max(filters.page ?? 1, 1);
+  const pageSize = Math.min(Math.max(filters.pageSize ?? 25, 1), 100);
+  const skip = (page - 1) * pageSize;
+
+  const where = buildBranchSalesLogWhere(filters);
+
+  const [total, rows, sellerRows] = await Promise.all([
+    prisma.saleOrder.count({ where }),
+    prisma.saleOrder.findMany({
+      where,
+      include: {
+        customer: { select: { id: true, code: true, displayName: true, legalName: true } },
+        createdBy: { select: { id: true, username: true, fullName: true } },
+        _count: { select: { lines: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: pageSize,
+    }),
+    // Vendedores distintos con ventas válidas en la sucursal (para el filtro).
+    prisma.saleOrder.findMany({
+      where: validSaleWhere({ branchId: filters.branchId }),
+      distinct: ["createdByUserId"],
+      select: { createdBy: { select: { id: true, username: true, fullName: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  return {
+    rows: rows.map((row) => ({
+      id: row.id,
+      orderNumber: row.orderNumber,
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      customerName: row.customer?.displayName || row.customer?.legalName || "Cliente general",
+      sellerId: row.createdByUserId,
+      seller: row.createdBy?.fullName || row.createdBy?.username || "—",
+      linesCount: row._count.lines,
+      grandTotal: Number(row.grandTotal),
+    })),
+    sellers: sellerRows
+      .map((row) => ({
+        id: row.createdBy.id,
+        name: row.createdBy.fullName || row.createdBy.username,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, "es")),
+    total,
+    page,
+    pageSize,
+    totalPages: Math.max(Math.ceil(total / pageSize), 1),
+  };
+}

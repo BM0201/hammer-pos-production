@@ -138,7 +138,19 @@ function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string;
   );
 }
 
-export function SaleDetail({ saleId }: { saleId: string }) {
+/**
+ * Detalle de venta reutilizable. Por defecto consulta el endpoint de gestión de
+ * Master (`/api/master/sales-management`), pero acepta una ruta base alterna vía
+ * `endpoint` para reutilizarlo en la bitácora de ventas de sucursal
+ * (`/api/branch/sales-log`). El detalle se carga como `${endpoint}/${saleId}`.
+ */
+export function SaleDetail({
+  saleId,
+  endpoint = "/api/master/sales-management",
+}: {
+  saleId: string;
+  endpoint?: string;
+}) {
   const router = useRouter();
   const [detail, setDetail] = useState<SaleDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -148,7 +160,7 @@ export function SaleDetail({ saleId }: { saleId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const response = await apiFetch(`/api/master/sales-management/${saleId}`);
+      const response = await apiFetch(`${endpoint}/${saleId}`);
       const json = await response.json();
       if (!response.ok) throw new Error("No se pudo cargar el detalle de la venta.");
       setDetail(unwrapApiData<SaleDetail>(json));
@@ -157,7 +169,7 @@ export function SaleDetail({ saleId }: { saleId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [saleId]);
+  }, [saleId, endpoint]);
 
   useEffect(() => {
     void load();

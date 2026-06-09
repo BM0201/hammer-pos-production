@@ -251,6 +251,13 @@ function buildNavSections(
   if (hasAny(CAPABILITIES.CASH_PAYMENTS_VIEW, CAPABILITIES.CASH_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)) {
     operationItems.push({ href: "/app/branch/cashier/payments", label: "Cobros", icon: CreditCard });
   }
+  if (
+    hasAny(CAPABILITIES.CASH_PAYMENTS_VIEW, CAPABILITIES.SALES_HISTORY_VIEW) &&
+    (canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW) ||
+      canInAnyAssignedBranch(session, CAPABILITIES.SALES_HISTORY_VIEW))
+  ) {
+    operationItems.push({ href: "/app/branch/sales-log", label: "Bitácora de Ventas", icon: Receipt });
+  }
   if (hasAny(CAPABILITIES.DISPATCH_VIEW, CAPABILITIES.WAREHOUSE_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.DISPATCH_VIEW)) {
     operationItems.push({ href: "/app/branch/warehouse/dispatch", label: "Despacho", icon: Truck });
   }
