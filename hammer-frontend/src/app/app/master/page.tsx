@@ -33,6 +33,7 @@ const MANAGEMENT_LINKS: { href: string; label: string; description: string; icon
   { href: "/app/master/cash-boxes", label: "Cajas Físicas", description: "Administrar cajas por sucursal", icon: Settings },
   { href: "/app/master/settings/cash-auto-close", label: "Cierre Automático", description: "Configurar horario de cierre", icon: AlarmClock },
   { href: "/app/master/users/activity", label: "Detalle de usuarios", description: "Actividad y sesiones en detalle", icon: Activity },
+  { href: "/app/master/sales-management", label: "Gestión de Ventas", description: "Ver, marcar prueba y anular ventas", icon: ClipboardCheck },
 ];
 
 /* ──────────────────────────────────────────────────────────────────────── */
