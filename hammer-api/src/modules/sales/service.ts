@@ -1174,3 +1174,155 @@ export async function cancelSaleOrder(input: {
     };
   }, { timeout: 20000 });
 }
+
+/**
+ * Devuelve el detalle completo de una factura/orden de venta para la vista de
+ * auditoría del Centro de Comando: cabecera, cliente, items (con producto/SKU),
+ * pagos (con tenders), usuario vendedor, totales e historial de auditoría.
+ * Reservado al rol master/admin (validado en el endpoint).
+ */
+export async function getSaleOrderDetailForManagement(orderId: string) {
+  const order = await prisma.saleOrder.findUnique({
+    where: { id: orderId },
+    include: {
+      branch: { select: { id: true, code: true, name: true } },
+      customer: {
+        select: {
+          id: true,
+          code: true,
+          legalName: true,
+          displayName: true,
+          taxId: true,
+          phone: true,
+          email: true,
+          address: true,
+        },
+      },
+      createdBy: { select: { id: true, username: true, fullName: true } },
+      manualInvoiceRegisteredBy: { select: { id: true, username: true, fullName: true } },
+      lines: {
+        include: {
+          product: { select: { id: true, sku: true, name: true, unit: true } },
+        },
+        orderBy: { createdAt: "asc" },
+      },
+      payments: {
+        include: {
+          receivedBy: { select: { id: true, username: true, fullName: true } },
+          tenders: true,
+        },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  });
+
+  if (!order) throw new Error("NOT_FOUND");
+
+  // Historial de auditoría asociado a esta orden (anulación, intentos, etc.).
+  const auditLogs = await prisma.auditLog.findMany({
+    where: { entityType: "SaleOrder", entityId: order.id },
+    orderBy: { occurredAt: "desc" },
+    take: 50,
+    select: {
+      id: true,
+      occurredAt: true,
+      action: true,
+      module: true,
+      metadataJson: true,
+      actor: { select: { id: true, username: true, fullName: true } },
+    },
+  });
+
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    status: order.status,
+    cancellable: isSaleOrderCancellable(order.status),
+    createdAt: order.createdAt.toISOString(),
+    updatedAt: order.updatedAt.toISOString(),
+    notes: order.notes ?? null,
+    branch: order.branch,
+    createdBy: order.createdBy
+      ? {
+          id: order.createdBy.id,
+          name: order.createdBy.fullName ?? order.createdBy.username,
+          username: order.createdBy.username,
+        }
+      : null,
+    customer: order.customer
+      ? {
+          id: order.customer.id,
+          code: order.customer.code,
+          name: order.customer.displayName ?? order.customer.legalName,
+          legalName: order.customer.legalName,
+          taxId: order.customer.taxId ?? null,
+          phone: order.customer.phone ?? null,
+          email: order.customer.email ?? null,
+          address: order.customer.address ?? null,
+        }
+      : null,
+    totals: {
+      subtotal: Number(order.subtotal),
+      discountTotal: Number(order.discountTotal),
+      taxTotal: Number(order.taxTotal),
+      transportAmount: Number(order.transportAmount),
+      grandTotal: Number(order.grandTotal),
+    },
+    documentMode: order.documentMode,
+    requiresManualInvoice: order.requiresManualInvoice,
+    manualInvoice: order.requiresManualInvoice
+      ? {
+          series: order.manualInvoiceSeries ?? null,
+          number: order.manualInvoiceNumber ?? null,
+          date: order.manualInvoiceDate ? order.manualInvoiceDate.toISOString() : null,
+          customerName: order.manualInvoiceCustomerName ?? null,
+          customerRuc: order.manualInvoiceCustomerRuc ?? null,
+          status: order.manualInvoiceStatus,
+          registeredBy: order.manualInvoiceRegisteredBy
+            ? order.manualInvoiceRegisteredBy.fullName ?? order.manualInvoiceRegisteredBy.username
+            : null,
+          registeredAt: order.manualInvoiceRegisteredAt
+            ? order.manualInvoiceRegisteredAt.toISOString()
+            : null,
+          notes: order.manualInvoiceNotes ?? null,
+        }
+      : null,
+    lines: order.lines.map((l) => ({
+      id: l.id,
+      productId: l.productId,
+      productName: l.product?.name ?? "(producto eliminado)",
+      sku: l.product?.sku ?? null,
+      unit: l.product?.unit ?? null,
+      quantity: Number(l.quantity),
+      unitPrice: Number(l.unitPrice),
+      discountAmount: Number(l.discountAmount),
+      lineSubtotal: Number(l.lineSubtotal),
+    })),
+    payments: order.payments.map((p) => ({
+      id: p.id,
+      method: p.method,
+      status: p.status,
+      amount: Number(p.amount),
+      currencyCode: p.currencyCode,
+      referenceNumber: p.referenceNumber ?? null,
+      paidAt: p.paidAt.toISOString(),
+      receivedByName: p.receivedBy ? p.receivedBy.fullName ?? p.receivedBy.username : null,
+      tenders: p.tenders.map((t) => ({
+        id: t.id,
+        method: t.method,
+        amount: Number(t.amount),
+        receivedAmount: t.receivedAmount != null ? Number(t.receivedAmount) : null,
+        changeAmount: t.changeAmount != null ? Number(t.changeAmount) : null,
+        referenceNumber: t.referenceNumber ?? null,
+      })),
+    })),
+    auditTrail: auditLogs.map((a) => ({
+      id: a.id,
+      occurredAt: a.occurredAt.toISOString(),
+      action: a.action,
+      module: a.module,
+      actorName: a.actor ? a.actor.fullName ?? a.actor.username : null,
+      metadata: a.metadataJson ?? null,
+    })),
+  };
+}

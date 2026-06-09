@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,12 @@ import {
   FileText,
   Ban,
   X,
+  Eye,
+  User as UserIcon,
+  Package,
+  CreditCard,
+  Receipt,
+  Printer,
   type LucideIcon,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
@@ -137,6 +143,86 @@ type ManagedOrder = {
   cancellable: boolean;
 };
 
+/** Detalle completo de una factura (vista de auditoría). */
+type OrderDetail = {
+  id: string;
+  orderNumber: string;
+  status: string;
+  cancellable: boolean;
+  createdAt: string;
+  updatedAt: string;
+  notes: string | null;
+  branch: { id: string; code: string; name: string };
+  createdBy: { id: string; name: string; username: string } | null;
+  customer: {
+    id: string;
+    code: string;
+    name: string;
+    legalName: string;
+    taxId: string | null;
+    phone: string | null;
+    email: string | null;
+    address: string | null;
+  } | null;
+  totals: {
+    subtotal: number;
+    discountTotal: number;
+    taxTotal: number;
+    transportAmount: number;
+    grandTotal: number;
+  };
+  documentMode: string;
+  requiresManualInvoice: boolean;
+  manualInvoice: {
+    series: string | null;
+    number: string | null;
+    date: string | null;
+    customerName: string | null;
+    customerRuc: string | null;
+    status: string;
+    registeredBy: string | null;
+    registeredAt: string | null;
+    notes: string | null;
+  } | null;
+  lines: {
+    id: string;
+    productId: string;
+    productName: string;
+    sku: string | null;
+    unit: string | null;
+    quantity: number;
+    unitPrice: number;
+    discountAmount: number;
+    lineSubtotal: number;
+  }[];
+  payments: {
+    id: string;
+    method: string;
+    status: string;
+    amount: number;
+    currencyCode: string;
+    referenceNumber: string | null;
+    paidAt: string;
+    receivedByName: string | null;
+    tenders: {
+      id: string;
+      method: string;
+      amount: number;
+      receivedAmount: number | null;
+      changeAmount: number | null;
+      referenceNumber: string | null;
+    }[];
+  }[];
+  auditTrail: {
+    id: string;
+    occurredAt: string;
+    action: string;
+    module: string;
+    actorName: string | null;
+    metadata: unknown;
+  }[];
+};
+
 /* ──────────────────────────────────────────────────────────────────────── */
 /* Helpers                                                                   */
 /* ──────────────────────────────────────────────────────────────────────── */
@@ -171,6 +257,37 @@ function orderStatusBadge(status: string) {
 function localTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", timeZone: "America/Managua" });
 }
+
+/** Fecha y hora completa (Managua) de un ISO timestamp. */
+function localDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("es-NI", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Managua",
+  });
+}
+
+/** Etiquetas en español para los métodos de pago. */
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  CASH: "Efectivo",
+  CARD: "Tarjeta",
+  TRANSFER: "Transferencia",
+  CREDIT: "Crédito",
+  CHECK: "Cheque",
+  MIXED: "Mixto",
+  OTHER: "Otro",
+};
+const paymentMethodLabel = (m: string) => PAYMENT_METHOD_LABELS[m] ?? m;
+
+/** Etiquetas legibles para las acciones del historial de auditoría. */
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  SALE_ORDER_CANCELLED: "Factura anulada",
+  SALE_ORDER_CANCEL_DENIED: "Intento de anulación denegado",
+};
+const auditActionLabel = (a: string) => AUDIT_ACTION_LABELS[a] ?? a;
 
 /** Fecha de hoy en formato YYYY-MM-DD en la zona horaria de Managua. */
 function todayManaguaYmd(): string {
@@ -300,6 +417,103 @@ function ClosuresTable({ rows, showDifference }: { rows: CashClosure[]; showDiff
 /* Gestión de Facturas (anulación) — solo rol master                         */
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** Celda de información etiqueta/valor para el modal de detalle. */
+function InfoTile({ label, value, icon }: { label: string; value: string; icon?: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-1 text-[0.625rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+        {icon}
+        {label}
+      </div>
+      <div className="text-sm text-[var(--color-text)] truncate" title={value}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+/** Título de sección dentro del modal de detalle. */
+function SectionTitle({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
+  return (
+    <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)] mb-2">
+      {icon}
+      {children}
+    </h4>
+  );
+}
+
+/** Fila de total (etiqueta + monto) para el resumen del modal. */
+function TotalRow({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between text-[var(--color-text-secondary)]">
+      <span>{label}</span>
+      <span className="font-mono">{money(value)}</span>
+    </div>
+  );
+}
+
+/**
+ * Genera una vista imprimible (y exportable a PDF vía "Guardar como PDF") del
+ * detalle de la factura en una ventana nueva.
+ */
+function printOrderDetail(d: OrderDetail) {
+  const esc = (s: unknown) =>
+    String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+  const rows = d.lines
+    .map(
+      (l) =>
+        `<tr><td>${esc(l.productName)}</td><td>${esc(l.sku ?? "—")}</td><td style="text-align:right">${esc(l.quantity)} ${esc(l.unit ?? "")}</td><td style="text-align:right">${money(l.unitPrice)}</td><td style="text-align:right">${money(l.lineSubtotal)}</td></tr>`,
+    )
+    .join("");
+  const pays = d.payments
+    .map(
+      (p) =>
+        `<li>${esc(paymentMethodLabel(p.method))} — ${p.currencyCode === "USD" ? "US$" : "C$"}${p.amount.toFixed(2)}${
+          p.status === "VOIDED" ? " (ANULADO)" : ""
+        }${p.referenceNumber ? ` · Ref. ${esc(p.referenceNumber)}` : ""}</li>`,
+    )
+    .join("");
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Factura ${esc(d.orderNumber)}</title>
+<style>
+  body{font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;padding:24px;font-size:13px}
+  h1{font-size:18px;margin:0 0 4px} h2{font-size:13px;margin:18px 0 6px;text-transform:uppercase;color:#555;border-bottom:1px solid #ddd;padding-bottom:3px}
+  table{width:100%;border-collapse:collapse;margin-top:6px} th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}
+  th{background:#f3f4f6} .muted{color:#666} .right{text-align:right} .totals{margin-top:8px;float:right;width:260px}
+  .totals div{display:flex;justify-content:space-between;padding:2px 0} .grand{font-weight:bold;border-top:1px solid #333;margin-top:4px;padding-top:4px}
+  ul{margin:4px 0;padding-left:18px}
+</style></head><body>
+  <h1>Factura / Orden ${esc(d.orderNumber)}</h1>
+  <div class="muted">Estado: ${esc(d.status)} · ${esc(localDateTime(d.createdAt))} · Sucursal ${esc(d.branch.code)} - ${esc(d.branch.name)}</div>
+  <div class="muted">Vendedor: ${esc(d.createdBy?.name ?? "—")}</div>
+  <h2>Cliente</h2>
+  <div>${esc(d.customer?.name ?? "Consumidor final")}${d.customer?.taxId ? ` · RUC ${esc(d.customer.taxId)}` : ""}${
+    d.customer?.phone ? ` · Tel. ${esc(d.customer.phone)}` : ""
+  }</div>
+  <h2>Productos</h2>
+  <table><thead><tr><th>Producto</th><th>SKU</th><th class="right">Cant.</th><th class="right">Precio</th><th class="right">Subtotal</th></tr></thead><tbody>${rows}</tbody></table>
+  <div class="totals">
+    <div><span>Subtotal</span><span>${money(d.totals.subtotal)}</span></div>
+    ${d.totals.discountTotal > 0 ? `<div><span>Descuento</span><span>-${money(d.totals.discountTotal)}</span></div>` : ""}
+    ${d.totals.taxTotal > 0 ? `<div><span>Impuestos</span><span>${money(d.totals.taxTotal)}</span></div>` : ""}
+    ${d.totals.transportAmount > 0 ? `<div><span>Transporte</span><span>${money(d.totals.transportAmount)}</span></div>` : ""}
+    <div class="grand"><span>Total</span><span>${money(d.totals.grandTotal)}</span></div>
+  </div>
+  <div style="clear:both"></div>
+  <h2>Pagos</h2><ul>${pays || "<li>Sin pagos</li>"}</ul>
+  ${d.notes ? `<h2>Notas</h2><pre style="white-space:pre-wrap;font-family:inherit">${esc(d.notes)}</pre>` : ""}
+</body></html>`;
+  const w = window.open("", "_blank", "width=820,height=900");
+  if (!w) {
+    toast.error("No se pudo abrir la ventana de impresión (¿bloqueador de pop-ups?).");
+    return;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 300);
+}
+
 function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
   const [orders, setOrders] = useState<ManagedOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -312,6 +526,12 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const mounted = useRef(true);
+
+  // Estado del modal de detalles/auditoría.
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<OrderDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -385,6 +605,54 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
     }
   };
 
+  // ── Detalles / auditoría ──
+  const openDetail = useCallback(async (orderId: string) => {
+    setDetailId(orderId);
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const res = await apiFetch(`/api/master/sales-orders/${orderId}`);
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const msg = json?.error?.message ?? json?.message ?? `No se pudo cargar el detalle (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+      const data = unwrapApiData(json) as { order: OrderDetail };
+      if (mounted.current) setDetail(data.order);
+    } catch (e) {
+      if (mounted.current) setDetailError(e instanceof Error ? e.message : "Error al cargar el detalle");
+    } finally {
+      if (mounted.current) setDetailLoading(false);
+    }
+  }, []);
+
+  const closeDetail = () => {
+    setDetailId(null);
+    setDetail(null);
+    setDetailError(null);
+  };
+
+  // Anular desde el modal de detalle: cierra detalle y abre confirmación.
+  const cancelFromDetail = () => {
+    if (!detail) return;
+    const managed: ManagedOrder = {
+      id: detail.id,
+      orderNumber: detail.orderNumber,
+      status: detail.status,
+      grandTotal: detail.totals.grandTotal,
+      createdAt: detail.createdAt,
+      branch: detail.branch,
+      customerName: detail.customer?.name ?? null,
+      createdByName: detail.createdBy?.name ?? null,
+      linesCount: detail.lines.length,
+      cancellable: detail.cancellable,
+    };
+    closeDetail();
+    setTarget(managed);
+    setReason("");
+  };
+
   const visibleOrders = showCancelled ? orders : orders.filter((o) => o.status !== "CANCELLED");
   const activeOrders = orders.filter((o) => o.status !== "CANCELLED");
   const cancelledCount = orders.length - activeOrders.length;
@@ -451,7 +719,7 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
               <TH>Estado</TH>
               <TH className="text-right">Total</TH>
               <TH className="text-right">Hora</TH>
-              <TH className="text-right">Acción</TH>
+              <TH className="text-right">Acciones</TH>
             </TR>
           </THead>
           <TBody>
@@ -474,18 +742,305 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
                 <TD className="text-right font-mono text-xs font-semibold text-[var(--color-text)]">{money(o.grandTotal)}</TD>
                 <TD className="text-right text-xs text-[var(--color-text-muted)]">{localTime(o.createdAt)}</TD>
                 <TD className="text-right">
-                  {o.cancellable ? (
-                    <Button variant="danger" size="sm" icon={<Ban className="h-3.5 w-3.5" />} onClick={() => openCancelModal(o)}>
-                      Anular
+                  <div className="inline-flex items-center justify-end gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Eye className="h-3.5 w-3.5" />}
+                      onClick={() => openDetail(o.id)}
+                      title="Ver detalles y auditoría de la factura"
+                    >
+                      Ver
                     </Button>
-                  ) : (
-                    <span className="text-xs text-[var(--color-text-soft)]">—</span>
-                  )}
+                    {o.cancellable && (
+                      <Button variant="danger" size="sm" icon={<Ban className="h-3.5 w-3.5" />} onClick={() => openCancelModal(o)}>
+                        Anular
+                      </Button>
+                    )}
+                  </div>
                 </TD>
               </TR>
             ))}
           </TBody>
         </Table>
+      )}
+
+      {/* ── Modal de detalles / auditoría ── */}
+      {detailId && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          onClick={closeDetail}
+        >
+          <div
+            className="my-4 w-full max-w-4xl rounded-xl bg-[var(--color-surface)] shadow-xl border border-[var(--color-border)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Encabezado */}
+            <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-surface)] rounded-t-xl z-10">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-master-50)] text-[var(--color-master-600)]">
+                  <Receipt className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-semibold text-[var(--color-text)] truncate">
+                      {detail ? detail.orderNumber : "Detalle de factura"}
+                    </h3>
+                    {detail && orderStatusBadge(detail.status)}
+                  </div>
+                  {detail && (
+                    <p className="text-[0.6875rem] text-[var(--color-text-muted)]">{localDateTime(detail.createdAt)}</p>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={closeDetail}
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0"
+                aria-label="Cerrar"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Cuerpo */}
+            <div className="px-5 py-4 max-h-[70vh] overflow-y-auto space-y-5">
+              {detailLoading ? (
+                <div className="py-12 text-center text-sm text-[var(--color-text-muted)] animate-pulse">Cargando detalle…</div>
+              ) : detailError ? (
+                <div className="py-12 text-center">
+                  <AlertTriangle className="h-6 w-6 text-[var(--color-danger-500)] mx-auto mb-2" />
+                  <p className="text-sm text-[var(--color-danger-600)]">{detailError}</p>
+                  <Button variant="secondary" size="sm" className="mt-3" onClick={() => openDetail(detailId)}>
+                    Reintentar
+                  </Button>
+                </div>
+              ) : detail ? (
+                <>
+                  {/* Información operativa */}
+                  <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <InfoTile label="Sucursal" value={`${detail.branch.code} · ${detail.branch.name}`} />
+                    <InfoTile label="Vendedor" value={detail.createdBy?.name ?? "—"} icon={<UserIcon className="h-3.5 w-3.5" />} />
+                    <InfoTile label="Fecha y hora" value={localDateTime(detail.createdAt)} />
+                    <InfoTile label="Líneas" value={`${detail.lines.length} producto(s)`} />
+                  </section>
+
+                  {/* Cliente */}
+                  <section>
+                    <SectionTitle icon={<UserIcon className="h-3.5 w-3.5" />}>Cliente</SectionTitle>
+                    {detail.customer ? (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                        <InfoTile label="Nombre" value={detail.customer.name} />
+                        <InfoTile label="Identificación / RUC" value={detail.customer.taxId ?? "—"} />
+                        <InfoTile label="Teléfono" value={detail.customer.phone ?? "—"} />
+                        <InfoTile label="Correo" value={detail.customer.email ?? "—"} />
+                        {detail.customer.address && (
+                          <div className="col-span-2 sm:col-span-4">
+                            <InfoTile label="Dirección" value={detail.customer.address} />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[var(--color-text-muted)]">Venta sin cliente asignado (consumidor final).</p>
+                    )}
+                  </section>
+
+                  {/* Productos */}
+                  <section>
+                    <SectionTitle icon={<Package className="h-3.5 w-3.5" />}>Productos</SectionTitle>
+                    <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-[var(--color-surface-alt)] text-[var(--color-text-secondary)] text-xs">
+                            <th className="text-left font-medium px-3 py-2">Producto</th>
+                            <th className="text-left font-medium px-3 py-2">SKU</th>
+                            <th className="text-right font-medium px-3 py-2">Cant.</th>
+                            <th className="text-right font-medium px-3 py-2">Precio Unit.</th>
+                            <th className="text-right font-medium px-3 py-2">Desc.</th>
+                            <th className="text-right font-medium px-3 py-2">Subtotal</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.lines.map((l) => (
+                            <tr key={l.id} className="border-t border-[var(--color-border)]">
+                              <td className="px-3 py-2 text-[var(--color-text)]">{l.productName}</td>
+                              <td className="px-3 py-2 text-xs text-[var(--color-text-muted)] font-mono">{l.sku ?? "—"}</td>
+                              <td className="px-3 py-2 text-right font-mono">
+                                {l.quantity}
+                                {l.unit ? <span className="text-[var(--color-text-muted)]"> {l.unit}</span> : null}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono">{money(l.unitPrice)}</td>
+                              <td className="px-3 py-2 text-right font-mono text-[var(--color-text-muted)]">
+                                {l.discountAmount > 0 ? `-${money(l.discountAmount)}` : "—"}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono font-semibold text-[var(--color-text)]">
+                                {money(l.lineSubtotal)}
+                              </td>
+                            </tr>
+                          ))}
+                          {detail.lines.length === 0 && (
+                            <tr>
+                              <td colSpan={6} className="px-3 py-6 text-center text-sm text-[var(--color-text-muted)]">
+                                Sin productos registrados.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Totales */}
+                    <div className="mt-3 flex justify-end">
+                      <div className="w-full sm:w-72 space-y-1 text-sm">
+                        <TotalRow label="Subtotal" value={detail.totals.subtotal} />
+                        {detail.totals.discountTotal > 0 && (
+                          <TotalRow label="Descuento" value={-detail.totals.discountTotal} />
+                        )}
+                        {detail.totals.taxTotal > 0 && <TotalRow label="Impuestos" value={detail.totals.taxTotal} />}
+                        {detail.totals.transportAmount > 0 && (
+                          <TotalRow label="Transporte" value={detail.totals.transportAmount} />
+                        )}
+                        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-1.5 mt-1.5">
+                          <span className="font-semibold text-[var(--color-text)]">Total</span>
+                          <span className="font-mono font-bold text-base text-[var(--color-text)]">
+                            {money(detail.totals.grandTotal)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Pagos */}
+                  <section>
+                    <SectionTitle icon={<CreditCard className="h-3.5 w-3.5" />}>Pagos</SectionTitle>
+                    {detail.payments.length === 0 ? (
+                      <p className="text-sm text-[var(--color-text-muted)]">Sin pagos registrados.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {detail.payments.map((p) => (
+                          <div
+                            key={p.id}
+                            className="rounded-lg border border-[var(--color-border)] px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-medium text-sm text-[var(--color-text)]">{paymentMethodLabel(p.method)}</span>
+                              {p.status === "VOIDED" ? (
+                                <Badge variant="danger">Anulado</Badge>
+                              ) : (
+                                <Badge variant="success">Registrado</Badge>
+                              )}
+                              {p.referenceNumber && (
+                                <span className="text-xs text-[var(--color-text-muted)]">Ref.: {p.referenceNumber}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs text-[var(--color-text-muted)]">{localDateTime(p.paidAt)}</span>
+                              {p.receivedByName && (
+                                <span className="text-xs text-[var(--color-text-muted)]">por {p.receivedByName}</span>
+                              )}
+                              <span className="font-mono font-semibold text-sm text-[var(--color-text)]">
+                                {p.currencyCode === "USD" ? "US$" : "C$"}
+                                {p.amount.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  {/* Factura manual (si aplica) */}
+                  {detail.manualInvoice && (
+                    <section>
+                      <SectionTitle icon={<FileText className="h-3.5 w-3.5" />}>Factura manual</SectionTitle>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                        <InfoTile
+                          label="Serie / Número"
+                          value={`${detail.manualInvoice.series ?? "—"} ${detail.manualInvoice.number ?? ""}`.trim()}
+                        />
+                        <InfoTile label="Estado" value={detail.manualInvoice.status} />
+                        <InfoTile label="Cliente" value={detail.manualInvoice.customerName ?? "—"} />
+                        <InfoTile label="RUC" value={detail.manualInvoice.customerRuc ?? "—"} />
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Notas */}
+                  {detail.notes && (
+                    <section>
+                      <SectionTitle icon={<FileText className="h-3.5 w-3.5" />}>Notas</SectionTitle>
+                      <pre className="whitespace-pre-wrap text-sm text-[var(--color-text-secondary)] bg-[var(--color-surface-alt)] rounded-lg px-3 py-2 border border-[var(--color-border)]">
+                        {detail.notes}
+                      </pre>
+                    </section>
+                  )}
+
+                  {/* Historial / auditoría */}
+                  <section>
+                    <SectionTitle icon={<History className="h-3.5 w-3.5" />}>Historial y auditoría</SectionTitle>
+                    {detail.auditTrail.length === 0 ? (
+                      <p className="text-sm text-[var(--color-text-muted)]">Sin eventos de auditoría registrados.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {detail.auditTrail.map((a) => {
+                          const meta = (a.metadata ?? {}) as Record<string, unknown>;
+                          const reasonTxt = typeof meta.reason === "string" ? meta.reason : null;
+                          return (
+                            <li
+                              key={a.id}
+                              className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm flex items-start gap-2"
+                            >
+                              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[var(--color-master-500)] shrink-0" />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-medium text-[var(--color-text)]">{auditActionLabel(a.action)}</span>
+                                  <span className="text-xs text-[var(--color-text-muted)]">{localDateTime(a.occurredAt)}</span>
+                                  {a.actorName && (
+                                    <span className="text-xs text-[var(--color-text-muted)]">· {a.actorName}</span>
+                                  )}
+                                </div>
+                                {reasonTxt && (
+                                  <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">Motivo: {reasonTxt}</p>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </section>
+                </>
+              ) : null}
+            </div>
+
+            {/* Acciones */}
+            <div className="flex items-center justify-between gap-2 px-5 py-4 border-t border-[var(--color-border)] flex-wrap">
+              <div>
+                {detail && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Printer className="h-3.5 w-3.5" />}
+                    onClick={() => printOrderDetail(detail)}
+                  >
+                    Imprimir
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {detail?.cancellable && (
+                  <Button variant="danger" size="sm" icon={<Ban className="h-3.5 w-3.5" />} onClick={cancelFromDetail}>
+                    Anular factura
+                  </Button>
+                )}
+                <Button variant="secondary" size="sm" onClick={closeDetail}>
+                  Cerrar
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Modal de confirmación de anulación ── */}
