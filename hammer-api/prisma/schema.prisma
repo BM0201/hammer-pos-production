@@ -979,6 +979,7 @@ model SaleOrder {
 
   @@unique([branchId, manualInvoiceSeries, manualInvoiceNumber])
   @@index([branchId, status])
+  @@index([branchId, createdByUserId, status])
   @@index([customerId, createdAt])
   @@index([deliveryOrderNumber])
   @@index([manualInvoiceSeries, manualInvoiceNumber])

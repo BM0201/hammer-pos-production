@@ -39,6 +39,32 @@ export async function listSaleOrders(params: { branchId: string; includeAllBranc
   });
 }
 
+// Borradores vacíos abandonados por más de este tiempo se eliminan para que no
+// se acumulen en la base de datos ni afecten el rendimiento del POS.
+const STALE_EMPTY_DRAFT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Elimina (best-effort) los borradores VACÍOS y antiguos de un usuario en una
+ * sucursal. Nunca borra borradores con líneas (ventas en progreso). Es
+ * tolerante a fallos: si algo sale mal, no interrumpe la apertura del POS.
+ */
+async function cleanupStaleEmptyDrafts(branchId: string, actorUserId: string) {
+  const cutoff = new Date(Date.now() - STALE_EMPTY_DRAFT_MS);
+  try {
+    await prisma.saleOrder.deleteMany({
+      where: {
+        branchId,
+        createdByUserId: actorUserId,
+        status: SaleOrderStatus.DRAFT,
+        createdAt: { lt: cutoff },
+        lines: { none: {} },
+      },
+    });
+  } catch (error) {
+    console.error("[sales][cleanupStaleEmptyDrafts]", error);
+  }
+}
+
 export async function getOrCreateActiveDraftSaleOrder(input: {
   branchId: string;
   actorUserId: string;
@@ -63,7 +89,15 @@ export async function getOrCreateActiveDraftSaleOrder(input: {
     orderBy: { createdAt: "desc" },
   });
 
-  if (existing) return existing;
+  if (existing) {
+    const isEmpty = existing.lines.length === 0;
+    const isStale = existing.createdAt.getTime() < Date.now() - STALE_EMPTY_DRAFT_MS;
+    // Reutiliza el borrador salvo que esté vacío y abandonado: en ese caso se
+    // limpia y se entrega uno nuevo para no arrastrar basura entre días.
+    if (!(isEmpty && isStale)) return existing;
+  }
+
+  await cleanupStaleEmptyDrafts(input.branchId, input.actorUserId);
 
   return createDraftSaleOrder({
     branchId: input.branchId,
