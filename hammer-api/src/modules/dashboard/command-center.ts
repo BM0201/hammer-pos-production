@@ -174,6 +174,9 @@ export async function getCommandCenterSnapshot() {
       by: ["branchId"],
       where: {
         createdAt: { gte: start, lt: end },
+        // Excluir ventas de prueba y anuladas de las métricas.
+        isTest: false,
+        voidedAt: null,
         status: {
           in: [
             SaleOrderStatus.PAID,

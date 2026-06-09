@@ -22,6 +22,9 @@ export async function getMasterDashboardSummary() {
       by: ["branchId"],
       where: {
         createdAt: { gte: start, lt: end },
+        // Excluir ventas de prueba y anuladas de las métricas.
+        isTest: false,
+        voidedAt: null,
         status: { in: [SaleOrderStatus.PAID, SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED, SaleOrderStatus.PENDING_PAYMENT] },
       },
       _sum: { grandTotal: true },
@@ -79,6 +82,9 @@ export async function getBranchAdminDashboardSummary(branchIds: string[]) {
       where: {
         branchId: { in: branchIds },
         createdAt: { gte: start, lt: end },
+        // Excluir ventas de prueba y anuladas de las métricas.
+        isTest: false,
+        voidedAt: null,
         status: { in: [SaleOrderStatus.PAID, SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED, SaleOrderStatus.PENDING_PAYMENT] },
       },
       _sum: { grandTotal: true },
@@ -132,6 +138,9 @@ export async function getSalesDashboardSummary(branchId: string, userId: string)
         branchId,
         createdByUserId: userId,
         createdAt: { gte: start, lt: end },
+        // Excluir ventas de prueba y anuladas de las métricas.
+        isTest: false,
+        voidedAt: null,
         status: { in: [SaleOrderStatus.PENDING_PAYMENT, SaleOrderStatus.PAID, SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED] },
       },
       _sum: { grandTotal: true },

@@ -42,6 +42,9 @@ export async function getSalesReportRows(filters: ReportFilters) {
       ...branchWhere(filters),
       ...dateWhere(filters, "createdAt"),
       ...(filters.status ? { status: filters.status as SaleOrderStatus } : {}),
+      // Excluir ventas de prueba y anuladas de los reportes.
+      isTest: false,
+      voidedAt: null,
     },
     include: { branch: { select: { code: true, name: true } }, createdBy: { select: { username: true, fullName: true } } },
     orderBy: { createdAt: "desc" },
