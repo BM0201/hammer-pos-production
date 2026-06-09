@@ -19,6 +19,88 @@ import type {
 import { Decimal } from "@prisma/client/runtime/library";
 import { parseWoodDimensions } from "@/modules/catalog/sku-generator";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { createInventoryMovementTx } from "@/modules/inventory/service";
+import type { Prisma, TimberTripLine } from "@prisma/client";
+
+/** Default category used when auto-creating timber products on inventory injection. */
+const TIMBER_CATEGORY_CODE = "MAD";
+const TIMBER_CATEGORY_NAME = "Madera";
+
+/** Find-or-create the "Madera" category used for auto-generated timber products. */
+async function resolveTimberCategoryTx(tx: Prisma.TransactionClient): Promise<string> {
+  const existing = await tx.category.findUnique({ where: { code: TIMBER_CATEGORY_CODE } });
+  if (existing) return existing.id;
+  const created = await tx.category.create({
+    data: { code: TIMBER_CATEGORY_CODE, name: TIMBER_CATEGORY_NAME, isActive: true },
+  });
+  return created.id;
+}
+
+/**
+ * Find-or-create the Product + TimberProduct that represents a given trip line dimension.
+ * The SKU pattern matches createTimberProduct (`MAD-<GRP>-<T>x<W>x<L>`) so the same physical
+ * measure always maps to the same inventory product across trips.
+ */
+async function resolveTimberProductForLineTx(
+  tx: Prisma.TransactionClient,
+  line: TimberTripLine,
+  pricing: TimberPricing,
+): Promise<{ productId: string; timberProductId: string }> {
+  const calc = calculateTimber(
+    { thickness: line.thicknessIn, width: line.widthIn, length: line.lengthIn },
+    pricing,
+  );
+  const sku = `MAD-${calc.priceGroup.substring(0, 3)}-${line.thicknessIn}x${line.widthIn}x${line.lengthIn}`;
+
+  // Already linked on the line → reuse it.
+  if (line.timberProductId) {
+    const existing = await tx.timberProduct.findUnique({ where: { id: line.timberProductId } });
+    if (existing) return { productId: existing.productId, timberProductId: existing.id };
+  }
+
+  // Existing product with the deterministic SKU → reuse it.
+  const existingProduct = await tx.product.findUnique({
+    where: { sku },
+    include: { timberProduct: true },
+  });
+  if (existingProduct?.timberProduct) {
+    return { productId: existingProduct.id, timberProductId: existingProduct.timberProduct.id };
+  }
+
+  // Otherwise create both Product and TimberProduct.
+  const categoryId = await resolveTimberCategoryTx(tx);
+  const product = existingProduct
+    ?? (await tx.product.create({
+      data: {
+        sku,
+        name: `Madera ${calc.priceGroup} ${line.thicknessIn}"×${line.widthIn}"×${calc.varaLength} pies`,
+        description: `Madera ${calc.priceGroup} — ${line.thicknessIn}"×${line.widthIn}"×${calc.varaLength} pies — ${calc.boardFeet} pies tablares`,
+        categoryId,
+        unit: "pieza",
+        isActive: true,
+        allowsFraction: false,
+        isTimber: true,
+        standardSalePrice: new Decimal(calc.sellingPrice),
+      },
+    }));
+
+  const timberProduct = await tx.timberProduct.create({
+    data: {
+      productId: product.id,
+      timberType: calc.priceGroup,
+      thickness: new Decimal(line.thicknessIn),
+      width: new Decimal(line.widthIn),
+      length: new Decimal(line.lengthIn),
+      boardFeet: new Decimal(calc.boardFeet),
+      baseCost: new Decimal(calc.baseCost),
+      pricePerInch: new Decimal(calc.pricePerInch),
+      sellingPrice: new Decimal(calc.sellingPrice),
+      varaLength: calc.varaLength,
+    },
+  });
+
+  return { productId: product.id, timberProductId: timberProduct.id };
+}
 
 /* ══════════════════════════════════════════════════════════
    Pricing Config
@@ -366,7 +448,9 @@ export async function createTimberTrip(input: CreateTimberTripInput, userId?: st
     priceGroup: l.priceGroup,
   }));
 
-  const calc = calculateTimberTrip(tripLines, input.woodTripTotalCost, tripPricing);
+  const calc = calculateTimberTrip(tripLines, input.woodTripTotalCost, tripPricing, {
+    costPerFootInput: input.costPerFoot,
+  });
   const tripCode = await generateTripCode();
 
   const trip = await prisma.$transaction(async (tx) => {
@@ -453,6 +537,7 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
     })),
     woodCost,
     tripPricing,
+    { costPerFootInput: input.costPerFoot },
   );
 
   const trip = await prisma.$transaction(async (tx) => {
@@ -502,7 +587,15 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
   return { trip, calculation: calc };
 }
 
-/** Confirm a timber trip — marks it as CONFIRMED and can trigger inventory intake */
+/**
+ * Confirm a timber trip and inject all its lines into the destination branch inventory.
+ *
+ * This is the single step the user expects from the "Confirmar e insertar en inventario"
+ * action: a DRAFT/CUBICADO trip is validated, every line is resolved to a (Product +
+ * TimberProduct), a TIMBER_INTAKE_IN inventory movement is created for each line into the
+ * destination branch (qty = piezas, unitCost = costo por pieza), and the trip transitions
+ * to TRANSFERRED. Everything runs inside one transaction so it is all-or-nothing.
+ */
 export async function confirmTimberTrip(id: string, userId?: string) {
   const trip = await prisma.timberTrip.findUnique({
     where: { id },
@@ -512,15 +605,83 @@ export async function confirmTimberTrip(id: string, userId?: string) {
   if (trip.status !== "DRAFT" && trip.status !== "CUBICADO") {
     throw new Error("TRIP_CANNOT_BE_CONFIRMED");
   }
+  if (trip.lines.length === 0) {
+    throw new Error("TRIP_HAS_NO_LINES");
+  }
+  // A positive cost per board foot is required so inbound inventory movements have a real cost.
+  if (trip.computedCostPerFoot.lte(0)) {
+    throw new Error("TRIP_REQUIRES_COST");
+  }
 
-  return prisma.timberTrip.update({
-    where: { id },
-    data: {
-      status: "CONFIRMED",
-      confirmedById: userId,
-      confirmedAt: new Date(),
-    },
-    include: { lines: true, destinationBranch: true },
+  const pricing: TimberPricing = {
+    costPerFoot: trip.computedCostPerFoot.toNumber(),
+    pricePerInchTabla: trip.pricePerInchTabla.toNumber(),
+    pricePerInchTablilla: trip.pricePerInchTablilla.toNumber(),
+    pricePerInchCuadro: trip.pricePerInchCuadro.toNumber(),
+  };
+
+  return prisma.$transaction(async (tx) => {
+    for (const line of trip.lines) {
+      if (line.pieces <= 0) continue;
+      const { productId, timberProductId } = await resolveTimberProductForLineTx(tx, line, pricing);
+
+      // Unit cost per piece — fall back to cost/feet ÷ pieces when not pre-computed.
+      const unitCost = line.calculatedCostPerPiece.gt(0)
+        ? line.calculatedCostPerPiece.toNumber()
+        : line.pieces > 0
+          ? line.calculatedCostFeet.toNumber() / line.pieces
+          : 0;
+
+      await createInventoryMovementTx(tx, {
+        actorUserId: userId ?? "SYSTEM",
+        branchId: trip.destinationBranchId,
+        productId,
+        movementType: "TIMBER_INTAKE_IN",
+        quantity: line.pieces,
+        unitCost,
+        referenceType: "TIMBER_TRIP",
+        referenceId: trip.id,
+        notes: `Viaje de madera ${trip.tripCode} — ${line.thicknessIn}"×${line.widthIn}"×${line.varaLength} pies`,
+      });
+
+      // Link the line to the resolved product for traceability.
+      if (line.timberProductId !== timberProductId) {
+        await tx.timberTripLine.update({
+          where: { id: line.id },
+          data: { timberProductId },
+        });
+      }
+    }
+
+    const updated = await tx.timberTrip.update({
+      where: { id },
+      data: {
+        status: "TRANSFERRED",
+        confirmedById: userId,
+        confirmedAt: new Date(),
+      },
+      include: { lines: true, destinationBranch: true },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: userId,
+        branchId: trip.destinationBranchId,
+        module: "timber",
+        action: "TIMBER_TRIP_CONFIRMED_AND_INJECTED",
+        entityType: "TimberTrip",
+        entityId: trip.id,
+        metadataJson: {
+          tripCode: trip.tripCode,
+          totalPieces: trip.totalPieces,
+          totalFeet: trip.totalFeet.toString(),
+          totalCost: trip.totalCost.toString(),
+          linesInjected: trip.lines.length,
+        },
+      },
+    });
+
+    return updated;
   });
 }
 

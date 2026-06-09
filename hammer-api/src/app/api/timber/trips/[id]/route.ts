@@ -102,8 +102,11 @@ export async function PATCH(
       if (err.message.includes("NOT_FOUND")) {
         return fail("NOT_FOUND", err.message, 404);
       }
-      if (err.message.includes("CANNOT")) {
+      if (err.message.includes("CANNOT") || err.message === "TRIP_HAS_NO_LINES") {
         return fail("CONFLICT", err.message, 409);
+      }
+      if (err.message === "TRIP_REQUIRES_COST") {
+        return fail("VALIDATION_ERROR", "El viaje necesita un costo (total o por pie) antes de inyectarse al inventario.", 400);
       }
     }
     return toHttpErrorResponse(err);

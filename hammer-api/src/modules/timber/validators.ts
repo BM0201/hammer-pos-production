@@ -65,6 +65,9 @@ export const timberTripLineSchema = z.object({
 export const createTimberTripSchema = z.object({
   destinationBranchId: z.string().min(1, "Sucursal destino es requerida"),
   woodTripTotalCost: z.number().nonnegative("Costo total del viaje debe ser ≥ 0").max(100000000).default(0),
+  // PER_FOOT mode — when provided (> 0), the cost per board foot is used directly and the
+  // trip total is derived (woodTripTotalCost = costPerFoot × total de pies). Overrides woodTripTotalCost.
+  costPerFoot: z.number().positive("Precio por pie debe ser mayor a 0").max(100000).optional(),
   supplierName: z.string().max(200).optional(),
   origin: z.string().max(200).optional(),
   notes: z.string().max(2000).optional(),
@@ -77,6 +80,8 @@ export const createTimberTripSchema = z.object({
 
 export const updateTimberTripSchema = z.object({
   woodTripTotalCost: z.number().nonnegative().max(100000000).optional(),
+  // PER_FOOT mode (see createTimberTripSchema)
+  costPerFoot: z.number().positive("Precio por pie debe ser mayor a 0").max(100000).optional(),
   supplierName: z.string().max(200).optional().nullable(),
   origin: z.string().max(200).optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),

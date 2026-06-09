@@ -247,8 +247,11 @@ export function TimberTrips({ showHeader = true }: { showHeader?: boolean }) {
   }, [expandedTrip]);
 
   const handleAction = useCallback(async (id: string, action: "confirm" | "cancel") => {
-    const labels = { confirm: "confirmar", cancel: "cancelar" };
-    if (!confirm(`¿Seguro que desea ${labels[action]} este viaje?`)) return;
+    const messages = {
+      confirm: "¿Confirmar este viaje e inyectar toda la madera al inventario de la sucursal destino? Esta acción no se puede deshacer.",
+      cancel: "¿Seguro que desea cancelar este viaje?",
+    };
+    if (!confirm(messages[action])) return;
     try {
       const res = await apiFetch(`/api/timber/trips/${id}`, {
         method: "PATCH",
@@ -498,7 +501,12 @@ function CreateTripForm({
 }) {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branchId, setBranchId] = useState("");
+  // Cost can be entered in two ways:
+  //  - TOTAL    → total purchase price of the whole trip (cost/pie is derived)
+  //  - PER_FOOT → purchase price per board foot, e.g. C$52 (total is derived)
+  const [costMode, setCostMode] = useState<"TOTAL" | "PER_FOOT">("TOTAL");
   const [totalCost, setTotalCost] = useState(0);
+  const [costPerFoot, setCostPerFoot] = useState(0);
   const [supplier, setSupplier] = useState("");
   const [origin, setOrigin] = useState("");
   const [notes, setNotes] = useState("");
@@ -601,7 +609,10 @@ function CreateTripForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           destinationBranchId: branchId,
-          woodTripTotalCost: totalCost,
+          // In PER_FOOT mode we send costPerFoot (the backend derives the trip total);
+          // in TOTAL mode we send woodTripTotalCost.
+          woodTripTotalCost: costMode === "TOTAL" ? totalCost : 0,
+          costPerFoot: costMode === "PER_FOOT" && costPerFoot > 0 ? costPerFoot : undefined,
           supplierName: supplier || undefined,
           origin: origin || undefined,
           notes: notes || undefined,
@@ -653,15 +664,54 @@ function CreateTripForm({
               {branches.map((b) => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
             </select>
           </div>
-          <Input
-            label="Costo Total Viaje (C$)"
-            type="number"
-            min={0}
-            step="0.01"
-            value={totalCost}
-            onChange={(e) => setTotalCost(parseFloat(e.target.value) || 0)}
-            className="text-sm"
-          />
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium text-[var(--color-text)]">
+                {costMode === "TOTAL" ? "Costo Total Viaje (C$)" : "Precio por Pie (C$)"}
+              </label>
+              <div className="flex gap-0.5 rounded-md bg-[var(--color-surface-alt)] p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setCostMode("TOTAL")}
+                  className={`text-[0.625rem] font-semibold px-2 py-0.5 rounded transition-colors ${
+                    costMode === "TOTAL" ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-muted)]"
+                  }`}
+                >
+                  Total
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCostMode("PER_FOOT")}
+                  className={`text-[0.625rem] font-semibold px-2 py-0.5 rounded transition-colors ${
+                    costMode === "PER_FOOT" ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-muted)]"
+                  }`}
+                >
+                  Por pie
+                </button>
+              </div>
+            </div>
+            {costMode === "TOTAL" ? (
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={totalCost || ""}
+                placeholder="0.00"
+                onChange={(e) => setTotalCost(parseFloat(e.target.value) || 0)}
+                className="w-full border border-[var(--color-border-strong)] rounded-lg px-3 py-2.5 text-sm text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-info-500)] focus:border-[var(--color-info-500)] min-h-[44px]"
+              />
+            ) : (
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={costPerFoot || ""}
+                placeholder="Ej: 52.00"
+                onChange={(e) => setCostPerFoot(parseFloat(e.target.value) || 0)}
+                className="w-full border border-[var(--color-border-strong)] rounded-lg px-3 py-2.5 text-sm text-[var(--color-text)] focus:ring-2 focus:ring-[var(--color-info-500)] focus:border-[var(--color-info-500)] min-h-[44px]"
+              />
+            )}
+          </div>
           <Input
             label="Proveedor"
             value={supplier}
@@ -779,7 +829,7 @@ function CreateTripForm({
             <h4 className="text-xs font-bold text-[var(--color-master-700)] uppercase tracking-wide mb-2">
               Cubicación Automática
             </h4>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-4 gap-4">
               <div className="text-center">
                 <p className="text-[0.625rem] text-[var(--color-text-muted)]">Total Piezas</p>
                 <p className="text-lg font-bold text-[var(--color-text)]">{summary.totalPieces}</p>
@@ -791,7 +841,17 @@ function CreateTripForm({
               <div className="text-center">
                 <p className="text-[0.625rem] text-[var(--color-text-muted)]">Costo por Pie</p>
                 <p className="text-lg font-bold text-[var(--color-text)]">
-                  {summary.totalFeet > 0 ? `C$${(totalCost / summary.totalFeet).toFixed(2)}` : "—"}
+                  {costMode === "PER_FOOT"
+                    ? (costPerFoot > 0 ? `C$${costPerFoot.toFixed(2)}` : "—")
+                    : (summary.totalFeet > 0 ? `C$${(totalCost / summary.totalFeet).toFixed(2)}` : "—")}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-[0.625rem] text-[var(--color-text-muted)]">Costo Total Viaje</p>
+                <p className="text-lg font-bold text-[var(--color-text)]">
+                  {costMode === "PER_FOOT"
+                    ? (costPerFoot > 0 ? `C$${(costPerFoot * summary.totalFeet).toFixed(2)}` : "—")
+                    : (totalCost > 0 ? `C$${totalCost.toFixed(2)}` : "—")}
                 </p>
               </div>
             </div>

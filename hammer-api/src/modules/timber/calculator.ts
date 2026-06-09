@@ -231,11 +231,30 @@ export function calculateTimber(
  * Calculate an entire timber trip (viaje de madera).
  * This is the main cubication function that processes all lines.
  */
+/**
+ * Options to control how the trip cost is derived.
+ *
+ * Two mutually-exclusive cost modes are supported (matches "FORMULA PARA MADERA.xlsx"):
+ *  - TOTAL_COST  → the user enters the total purchase price of the whole trip and the
+ *                  cost per board foot is derived: costPerFoot = woodTripTotalCost / totalFeet.
+ *  - PER_FOOT    → the user enters the purchase price per board foot (e.g. C$52.00) and the
+ *                  total cost is derived: woodTripTotalCost = costPerFootInput × totalFeet.
+ */
+export interface TimberTripCostOptions {
+  /**
+   * When provided (> 0), forces PER_FOOT mode: this value is used directly as the cost per
+   * board foot and the trip total is computed from it. Overrides woodTripTotalCost.
+   */
+  costPerFootInput?: number;
+}
+
 export function calculateTimberTrip(
   lines: TimberTripLineInput[],
   woodTripTotalCost: number,
   pricing: TimberPricing = DEFAULT_PRICING,
+  options: TimberTripCostOptions = {},
 ): TimberTripResult {
+  const perFootMode = typeof options.costPerFootInput === "number" && options.costPerFootInput > 0;
   // Phase 1: calculate feet for all lines
   const rawLines = lines.map((line) => {
     const priceGroup = line.priceGroup ?? classifyTimber(line.thickness, line.width, line.length);
@@ -258,11 +277,15 @@ export function calculateTimberTrip(
   const totalPieces = rawLines.reduce((acc, l) => acc + l.pieces, 0);
   const totalFeet = roundTo(rawLines.reduce((acc, l) => acc + l.feet, 0), FEET_DECIMALS);
 
-  // Phase 2: compute cost per foot from trip total
+  // Phase 2: compute cost per foot.
+  // PER_FOOT mode → use the entered price per board foot directly.
+  // TOTAL_COST mode → derive it from the trip total (woodTripTotalCost / totalFeet).
   const computedCostPerFoot = roundTo(
-    totalFeet > 0
-      ? (woodTripTotalCost > 0 ? woodTripTotalCost / totalFeet : pricing.costPerFoot)
-      : 0,
+    perFootMode
+      ? (options.costPerFootInput as number)
+      : totalFeet > 0
+        ? (woodTripTotalCost > 0 ? woodTripTotalCost / totalFeet : pricing.costPerFoot)
+        : 0,
     MONEY_DECIMALS,
   );
 
@@ -298,7 +321,14 @@ export function calculateTimberTrip(
     totalPieces,
     totalFeet,
     computedCostPerFoot,
-    woodTripTotalCost: roundTo(woodTripTotalCost > 0 ? woodTripTotalCost : totalCostFeet, MONEY_DECIMALS),
+    woodTripTotalCost: roundTo(
+      perFootMode
+        ? computedCostPerFoot * totalFeet
+        : woodTripTotalCost > 0
+          ? woodTripTotalCost
+          : totalCostFeet,
+      MONEY_DECIMALS,
+    ),
     totalCostFeet,
     totalSale,
     totalProfit,
