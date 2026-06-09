@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { z, type ZodSchema } from "zod";
 import { MissingDatabaseUrlError, isDatabaseConnectionError } from "@/lib/prisma";
 import { isCsrfError } from "@/modules/security/csrf";
+import { InsufficientStockError } from "@/modules/inventory/wac";
 import { conflict, fail, forbidden, notFound, unauthorized, validationFail } from "@/lib/api/response";
 
 const VALIDATION_CODES = new Set([
@@ -113,6 +114,11 @@ export function toApiErrorResponse(error: unknown) {
 
   if (message?.startsWith("INVALID_INPUT:")) {
     return fail("INVALID_INPUT", message.replace("INVALID_INPUT: ", ""), 400);
+  }
+
+  // Descriptive insufficient-stock error (includes available/requested qty).
+  if (error instanceof InsufficientStockError) {
+    return conflict(error.detail);
   }
 
   if (message === "INSUFFICIENT_STOCK" || message === "INSUFFICIENT_STOCK_AT_PAYMENT") {

@@ -2,6 +2,7 @@ import { InventoryMovementType } from "@prisma/client";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { createInventoryMovement, listInventoryMovements } from "@/modules/inventory/service";
+import { InsufficientStockError } from "@/modules/inventory/wac";
 import { createInventoryMovementSchema } from "@/modules/inventory/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canPostMovement } from "@/modules/inventory/policy";
@@ -212,8 +213,11 @@ export async function POST(request: Request) {
     if (error instanceof Error && error.name === "WacValidationError") {
       return fail("VALIDATION_ERROR", error.message, 422);
     }
+    if (error instanceof InsufficientStockError) {
+      return fail("CONFLICT", error.detail, 409);
+    }
     if (error instanceof Error && error.message === "INSUFFICIENT_STOCK") {
-      return fail("CONFLICT", "Insufficient stock for this movement.", 409);
+      return fail("CONFLICT", "Stock insuficiente para este movimiento.", 409);
     }
     return toHttpErrorResponse(error);
   }

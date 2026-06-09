@@ -27,6 +27,35 @@ export class WacValidationError extends Error {
 }
 
 /* ────────────────────────────────────────────────────────────────
+ * Insufficient-stock error (negative-stock prevention)
+ *
+ * Se lanza cuando un movimiento de salida dejaria el inventario en
+ * negativo. Mantiene `message = "INSUFFICIENT_STOCK"` para conservar la
+ * compatibilidad con los manejadores existentes que comparan por mensaje,
+ * pero expone cantidades (`available` / `requested`) y un mensaje
+ * descriptivo en espanol (`detail`) para mostrar al usuario final.
+ * ──────────────────────────────────────────────────────────────── */
+export class InsufficientStockError extends Error {
+  constructor(
+    public readonly available: Prisma.Decimal,
+    public readonly requested: Prisma.Decimal,
+    public readonly unit?: string | null,
+  ) {
+    super("INSUFFICIENT_STOCK");
+    this.name = "InsufficientStockError";
+  }
+
+  /** Mensaje descriptivo en espanol para el usuario final. */
+  get detail(): string {
+    const u = this.unit ? ` ${this.unit}` : "";
+    return (
+      `Stock insuficiente: disponible ${this.available.toString()}${u}, ` +
+      `solicitado ${this.requested.toString()}${u}. El movimiento dejaria el inventario en negativo.`
+    );
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
  * Validate movement inputs before WAC calculation
  * ──────────────────────────────────────────────────────────────── */
 export function validateMovementInputs(input: {
@@ -70,6 +99,8 @@ export function recalculateWeightedAverage(input: {
   movementQty: Prisma.Decimal;
   movementUnitCost: Prisma.Decimal;
   inbound: boolean;
+  /** Unidad base del movimiento, usada para mensajes de error descriptivos. */
+  unit?: string | null;
 }) {
   const zero = new Prisma.Decimal(0);
   const currentQty = input.currentQty;
@@ -121,9 +152,9 @@ export function recalculateWeightedAverage(input: {
     return { newQty, newWac, inventoryValue };
   }
 
-  // Outbound: ensure sufficient stock
+  // Outbound: ensure sufficient stock (negative-stock prevention).
   if (currentQty.lt(input.movementQty)) {
-    throw new Error("INSUFFICIENT_STOCK");
+    throw new InsufficientStockError(currentQty, input.movementQty, input.unit);
   }
 
   const newQty = currentQty.minus(input.movementQty);

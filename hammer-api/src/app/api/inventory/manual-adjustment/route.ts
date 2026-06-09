@@ -8,6 +8,7 @@ import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { canPostMovement } from "@/modules/inventory/policy";
 import { manualInventoryAdjustmentSchema } from "@/modules/inventory/validators";
 import { createManualInventoryAdjustment } from "@/modules/inventory/service";
+import { InsufficientStockError } from "@/modules/inventory/wac";
 
 export async function POST(request: Request) {
   try {
@@ -37,6 +38,9 @@ export async function POST(request: Request) {
 
     return ok(await createManualInventoryAdjustment({ ...parsed.data, actorUserId: session.userId }));
   } catch (error) {
+    if (error instanceof InsufficientStockError) {
+      return fail("CONFLICT", error.detail, 409);
+    }
     if (error instanceof Error && error.message === "INSUFFICIENT_STOCK") {
       return fail("CONFLICT", "Stock insuficiente para este ajuste.", 409);
     }

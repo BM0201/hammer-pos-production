@@ -861,6 +861,13 @@ model InventoryMovement {
   @@index([referenceType, referenceId])
   @@index([movementType, createdAt])
   @@index([actorUserId])
+  // ── Kardex performance indexes (added 2026-06) ────────────────────────────
+  // Optimizan consultas del Kardex que filtran por sucursal o producto dentro
+  // de un rango de fechas (ORDER BY createdAt). Complementan el indice
+  // compuesto (branchId, productId, createdAt) para casos donde solo se filtra
+  // por una de las dos dimensiones.
+  @@index([branchId, createdAt])
+  @@index([productId, createdAt])
 }
 
 model InventoryImportBatch {

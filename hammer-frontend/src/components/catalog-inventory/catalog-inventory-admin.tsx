@@ -250,6 +250,22 @@ function statusFor(total: number) {
   return { label: "OK", variant: "success" as const };
 }
 
+/**
+ * Indicador visual del nivel de existencias por umbrales de cantidad:
+ *  • Bajo   (< 10)     → rojo (danger)
+ *  • Medio  (10 – 50)  → amarillo (warning)
+ *  • Normal (> 50)     → verde (success)
+ * Complementa a `statusFor` (que marca negativo/cero/critico) con una lectura
+ * rapida del volumen disponible.
+ */
+const STOCK_LEVEL_LOW_THRESHOLD = 10;
+const STOCK_LEVEL_MEDIUM_THRESHOLD = 50;
+function stockLevelFor(total: number) {
+  if (total < STOCK_LEVEL_LOW_THRESHOLD) return { label: "Bajo", variant: "danger" as const };
+  if (total <= STOCK_LEVEL_MEDIUM_THRESHOLD) return { label: "Medio", variant: "warning" as const };
+  return { label: "Normal", variant: "success" as const };
+}
+
 function ironQuintalFactor(product: ProductRow) {
   const code = product.stockConversion?.stockGroupCode ?? "";
   if (code.includes("1_2")) return 8;
@@ -1082,7 +1098,10 @@ export function CatalogInventoryAdmin() {
                     </td>
                     <td>{product.stockConversion?.saleUnit ?? product.unit}</td>
                     <td>
-                      <div>{sharedStock?.primary ?? qty(product.totalStock)}</div>
+                      <div className="flex items-center gap-2">
+                        <span>{sharedStock?.primary ?? qty(product.totalStock)}</span>
+                        {(() => { const lvl = stockLevelFor(product.totalStock); return <Badge variant={lvl.variant}>{lvl.label}</Badge>; })()}
+                      </div>
                       {sharedStock ? (
                         <div className="mt-1 space-y-1 text-[0.65rem] text-[var(--color-text-muted)]">
                           <div>Equivale a {sharedStock.secondary}</div>
@@ -1164,12 +1183,18 @@ export function CatalogInventoryAdmin() {
             </div>
             <div className="overflow-x-auto">
               <table className="hm-table min-w-[900px] w-full">
-                <thead><tr><th>Producto</th>{data.branches.map((branch) => <th key={branch.id}>{branch.code}</th>)}<th>Total</th><th>Estado</th></tr></thead>
+                <thead><tr><th>Producto</th>{data.branches.map((branch) => <th key={branch.id}>{branch.code}</th>)}<th>Total</th><th>Nivel</th><th>Estado</th></tr></thead>
                 <tbody>
                   {matrix.map((row) => {
                     const total = row.branches.reduce((sum, item) => sum + item.quantity, 0);
                     const state = statusFor(total);
-                    return <tr key={row.product.id}><td className="font-medium">{row.product.sku} · {row.product.name}</td>{row.branches.map((item) => <td key={item.branch.id}>{qty(item.quantity)}</td>)}<td className="font-semibold">{qty(total)}</td><td><Badge variant={state.variant}>{state.label}</Badge></td></tr>;
+                    const level = stockLevelFor(total);
+                    return <tr key={row.product.id}><td className="font-medium">{row.product.sku} · {row.product.name}</td>{row.branches.map((item) => {
+                      const cell = stockLevelFor(item.quantity);
+                      // Color por celda: rojo (<10), amarillo (10-50), verde (>50).
+                      const cellColor = cell.variant === "danger" ? "text-rose-600 font-semibold" : cell.variant === "warning" ? "text-amber-600 font-medium" : "text-emerald-700";
+                      return <td key={item.branch.id} className={cellColor}>{qty(item.quantity)}</td>;
+                    })}<td className="font-semibold">{qty(total)}</td><td><Badge variant={level.variant}>{level.label}</Badge></td><td><Badge variant={state.variant}>{state.label}</Badge></td></tr>;
                   })}
                 </tbody>
               </table>
@@ -2292,6 +2317,24 @@ function MovementsPanel({
     totalPages: 1,
     currentPage: 1,
   });
+  // Period totals (entradas / salidas / saldo neto / conteo) over the full
+  // filtered set, returned by the API alongside the current page.
+  type KardexSummary = {
+    totalEntradas: number;
+    totalSalidas: number;
+    saldoNeto: number;
+    totalMovimientos: number;
+    countEntradas: number;
+    countSalidas: number;
+  };
+  const [summary, setSummary] = useState<KardexSummary>({
+    totalEntradas: 0,
+    totalSalidas: 0,
+    saldoNeto: 0,
+    totalMovimientos: 0,
+    countEntradas: 0,
+    countSalidas: 0,
+  });
 
   const loadMovements = useCallback(async () => {
     if (!activeBranchId) return;
@@ -2313,13 +2356,25 @@ function MovementsPanel({
         total: number;
         totalPages: number;
         currentPage: number;
+        summary?: KardexSummary;
       };
       setServerMovements(data.movements ?? []);
       setMeta({ total: data.total ?? 0, totalPages: data.totalPages ?? 1, currentPage: data.currentPage ?? 1 });
+      setSummary(
+        data.summary ?? {
+          totalEntradas: 0,
+          totalSalidas: 0,
+          saldoNeto: 0,
+          totalMovimientos: data.total ?? 0,
+          countEntradas: 0,
+          countSalidas: 0,
+        },
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Error al cargar movimientos.");
       setServerMovements([]);
       setMeta({ total: 0, totalPages: 1, currentPage: 1 });
+      setSummary({ totalEntradas: 0, totalSalidas: 0, saldoNeto: 0, totalMovimientos: 0, countEntradas: 0, countSalidas: 0 });
     } finally {
       setMovementsLoading(false);
     }
@@ -2346,6 +2401,46 @@ function MovementsPanel({
     setStartDate("");
     setEndDate("");
     setActivePreset("");
+  }
+
+  // ── Excel export ──────────────────────────────────────────────────────────
+  // Llama al endpoint server-side que genera el .xlsx con los MISMOS filtros
+  // activos (no solo la pagina visible) y dispara la descarga en el navegador.
+  const [exporting, setExporting] = useState(false);
+  async function exportToExcel() {
+    if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
+    if (meta.total === 0) { toast.error("No hay movimientos para exportar."); return; }
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("branchId", activeBranchId);
+      if (productId) params.set("productId", productId);
+      if (movementType) params.set("movementType", movementType);
+      if (startDate) params.set("startDate", startDate);
+      if (endDate) params.set("endDate", endDate);
+      const response = await fetch(`/api/inventory/movements/export?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error?.message ?? "No se pudo generar el Excel.");
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] ?? `kardex_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Kardex exportado a Excel.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Error al exportar a Excel.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   // Reload only the Kardex list after registering a movement, then refresh the
@@ -2479,12 +2574,46 @@ function MovementsPanel({
           ) : null}
         </div>
 
-        {/* Result counter */}
-        <div className="flex items-center justify-between text-xs text-[var(--color-text-muted)]">
-          <span>
+        {/* Period summary: total entradas / salidas / saldo neto / # movimientos */}
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700"><TrendingUp className="h-3.5 w-3.5" /> Total entradas</div>
+            <div className="mt-1 text-lg font-semibold text-emerald-800">{qty(summary.totalEntradas)}</div>
+            <div className="text-[11px] text-emerald-600">{summary.countEntradas} movimiento(s)</div>
+          </div>
+          <div className="rounded-lg border border-rose-200 bg-rose-50 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-rose-700"><ChevronDown className="h-3.5 w-3.5" /> Total salidas</div>
+            <div className="mt-1 text-lg font-semibold text-rose-800">{qty(summary.totalSalidas)}</div>
+            <div className="text-[11px] text-rose-600">{summary.countSalidas} movimiento(s)</div>
+          </div>
+          <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-sky-700"><BarChart3 className="h-3.5 w-3.5" /> Saldo neto</div>
+            <div className={`mt-1 text-lg font-semibold ${summary.saldoNeto < 0 ? "text-rose-700" : "text-sky-800"}`}>{qty(summary.saldoNeto)}</div>
+            <div className="text-[11px] text-sky-600">entradas − salidas</div>
+          </div>
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-muted)]"><History className="h-3.5 w-3.5" /> Movimientos</div>
+            <div className="mt-1 text-lg font-semibold text-[var(--color-text)]">{summary.totalMovimientos}</div>
+            <div className="text-[11px] text-[var(--color-text-muted)]">en el período filtrado</div>
+          </div>
+        </div>
+
+        {/* Result counter + Excel export */}
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--color-text-muted)]">
+          <span className="flex items-center gap-2">
             {meta.total === 0 ? "Sin movimientos para los filtros seleccionados." : `Mostrando ${rangeStart}-${rangeEnd} de ${meta.total} movimientos`}
+            {movementsLoading ? <span className="flex items-center gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando…</span> : null}
           </span>
-          {movementsLoading ? <span className="flex items-center gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando…</span> : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { void exportToExcel(); }}
+            disabled={exporting || movementsLoading || meta.total === 0}
+            loading={exporting}
+            icon={<FileSpreadsheet className="h-4 w-4" />}
+          >
+            Exportar a Excel
+          </Button>
         </div>
 
         <div className="overflow-x-auto">

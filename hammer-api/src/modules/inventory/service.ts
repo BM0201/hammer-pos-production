@@ -2,8 +2,9 @@ import { InventoryMovementType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
-import { isInboundMovement, recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
+import { isInboundMovement, recalculateWeightedAverage, WacValidationError, InsufficientStockError } from "@/modules/inventory/wac";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
+import { NICARAGUA_TIMEZONE } from "@/lib/timezone";
 import {
   convertBaseQtyToSaleQty,
   convertBaseUnitCostToSaleUnitCost,
@@ -119,7 +120,45 @@ export async function listInventoryMovements(params: {
     prisma.inventoryMovement.count({ where }),
   ]);
 
+  // Period totals over the FULL filtered set (not just the current page),
+  // grouped by movement type so we can classify inbound/outbound.
+  const grouped = await prisma.inventoryMovement.groupBy({
+    by: ["movementType"],
+    where,
+    _sum: { quantity: true },
+    _count: { _all: true },
+  });
+
   const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  // ── Period summary (entradas / salidas / saldo neto / conteo) ─────────────
+  // Las entradas y salidas se clasifican con `isInboundMovement`. Se suman las
+  // cantidades (en unidad base) de todos los movimientos que cumplen los
+  // filtros activos, independientemente de la pagina mostrada.
+  let totalEntradas = new Prisma.Decimal(0);
+  let totalSalidas = new Prisma.Decimal(0);
+  let countEntradas = 0;
+  let countSalidas = 0;
+  for (const group of grouped) {
+    const qty = group._sum.quantity ?? new Prisma.Decimal(0);
+    const count = group._count._all;
+    if (isInboundMovement(group.movementType)) {
+      totalEntradas = totalEntradas.plus(qty);
+      countEntradas += count;
+    } else {
+      totalSalidas = totalSalidas.plus(qty);
+      countSalidas += count;
+    }
+  }
+
+  const summary = {
+    totalEntradas: Number(totalEntradas),
+    totalSalidas: Number(totalSalidas),
+    saldoNeto: Number(totalEntradas.minus(totalSalidas)),
+    totalMovimientos: total,
+    countEntradas,
+    countSalidas,
+  };
 
   return {
     movements,
@@ -128,7 +167,185 @@ export async function listInventoryMovements(params: {
     limit,
     totalPages,
     currentPage: page,
+    summary,
   };
+}
+
+/** Hard cap of rows exported to Excel to avoid unbounded memory usage. */
+export const INVENTORY_MOVEMENTS_EXPORT_MAX_ROWS = 50000;
+
+/** Inbound movement types (for the "Entrada" / "Salida" split in exports). */
+const INBOUND_MOVEMENT_TYPES = new Set<InventoryMovementType>([
+  "PURCHASE_IN",
+  "RETURN_IN",
+  "ADJUSTMENT_IN",
+  "TRANSFER_IN",
+  "TIMBER_INTAKE_IN",
+  "PRODUCTION_OUTPUT",
+]);
+
+/**
+ * Builds an Excel (.xlsx) buffer of the Kardex matching the active filters.
+ *
+ * Unlike `listInventoryMovements`, this returns the **entire filtered set**
+ * (capped at `INVENTORY_MOVEMENTS_EXPORT_MAX_ROWS`) so the export reflects what
+ * the user is filtering, not just the visible page. The applied filters are
+ * written in the header for traceability and a totals row is appended.
+ */
+export async function exportInventoryMovementsToExcel(params: {
+  branchId: string;
+  productId?: string;
+  movementType?: InventoryMovementType;
+  startDate?: Date;
+  endDate?: Date;
+  /** Human-readable filter labels for the header (resolved by the route). */
+  filterLabels?: {
+    branch?: string;
+    product?: string;
+    movementType?: string;
+    startDate?: string;
+    endDate?: string;
+  };
+}): Promise<Buffer> {
+  const { default: ExcelJS } = await import("exceljs");
+
+  const resolved = params.productId
+    ? await resolveInventoryProductForMovement(prisma, params.productId)
+    : null;
+
+  let createdAt: Prisma.DateTimeFilter | undefined;
+  if (params.startDate || params.endDate) {
+    createdAt = {};
+    if (params.startDate) createdAt.gte = params.startDate;
+    if (params.endDate) createdAt.lte = params.endDate;
+  }
+
+  const where: Prisma.InventoryMovementWhereInput = {
+    branchId: params.branchId,
+    ...(params.productId ? { productId: resolved?.inventoryProductId ?? params.productId } : {}),
+    ...(params.movementType ? { movementType: params.movementType } : {}),
+    ...(createdAt ? { createdAt } : {}),
+  };
+
+  const movements = await prisma.inventoryMovement.findMany({
+    where,
+    include: {
+      product: { select: { id: true, sku: true, name: true } },
+      branch: { select: { id: true, code: true, name: true } },
+      actor: { select: { id: true, username: true, fullName: true } },
+    },
+    orderBy: { createdAt: "desc" },
+    take: INVENTORY_MOVEMENTS_EXPORT_MAX_ROWS,
+  });
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "H.A.M.M.E.R. POS";
+  workbook.created = new Date();
+  const sheet = workbook.addWorksheet("Kardex");
+
+  // ── Header block: title + applied filters ────────────────────────────────
+  const labels = params.filterLabels ?? {};
+  const headerLines: Array<[string, string]> = [
+    ["Kardex de Inventario", ""],
+    ["Sucursal:", labels.branch ?? params.branchId],
+    ["Producto:", labels.product ?? "Todos"],
+    ["Tipo de movimiento:", labels.movementType ?? "Todos"],
+    ["Desde:", labels.startDate ?? "—"],
+    ["Hasta:", labels.endDate ?? "—"],
+    ["Generado:", new Date().toLocaleString("es-NI", { timeZone: NICARAGUA_TIMEZONE })],
+  ];
+  headerLines.forEach((line, idx) => {
+    const row = sheet.addRow(line);
+    if (idx === 0) {
+      row.getCell(1).font = { bold: true, size: 14 };
+    } else {
+      row.getCell(1).font = { bold: true };
+    }
+  });
+  sheet.addRow([]);
+
+  // ── Column headers ────────────────────────────────────────────────────────
+  const columns = [
+    "Fecha",
+    "Producto",
+    "SKU",
+    "Sucursal",
+    "Tipo",
+    "Entrada",
+    "Salida",
+    "Saldo final",
+    "Unidad",
+    "Costo unitario",
+    "Usuario",
+    "Referencia",
+    "Motivo / nota",
+  ];
+  const headerRow = sheet.addRow(columns);
+  headerRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
+  });
+
+  let totalIn = 0;
+  let totalOut = 0;
+  for (const m of movements) {
+    const quantity = Number(m.quantity);
+    const inbound = INBOUND_MOVEMENT_TYPES.has(m.movementType);
+    if (inbound) totalIn += quantity;
+    else totalOut += quantity;
+    const visibleType =
+      m.referenceType === "OPENING_BALANCE"
+        ? "Carga inicial"
+        : m.referenceType === "MANUAL_ADJUSTMENT"
+          ? "Ajuste manual"
+          : m.movementType;
+    sheet.addRow([
+      new Date(m.createdAt).toLocaleString("es-NI", { timeZone: NICARAGUA_TIMEZONE }),
+      m.product.name,
+      m.product.sku,
+      m.branch.code,
+      visibleType,
+      inbound ? quantity : "",
+      inbound ? "" : quantity,
+      m.balanceAfter !== null && m.balanceAfter !== undefined ? Number(m.balanceAfter) : "",
+      m.unit ?? "",
+      Number(m.unitCost),
+      m.actor?.fullName ?? m.actor?.username ?? "",
+      `${m.referenceType} / ${m.referenceId}`,
+      m.notes ?? "",
+    ]);
+  }
+
+  // ── Totals row ──────────────────────────────────────────────────────────
+  const totalsRow = sheet.addRow([
+    "TOTALES",
+    "",
+    "",
+    "",
+    `${movements.length} movimiento(s)`,
+    totalIn,
+    totalOut,
+    "",
+    "",
+    "",
+    "",
+    "",
+    `Saldo neto: ${totalIn - totalOut}`,
+  ]);
+  totalsRow.eachCell((cell) => {
+    cell.font = { bold: true };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+  });
+
+  // Column widths for readability.
+  const widths = [20, 28, 14, 10, 16, 12, 12, 14, 10, 14, 18, 26, 30];
+  sheet.columns.forEach((col, idx) => {
+    col.width = widths[idx] ?? 14;
+  });
+
+  const arrayBuffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
 }
 
 type InventoryMovementInput = {
@@ -246,19 +463,21 @@ export async function createInventoryMovementTx(
     throw new Error("INVENTORY_BALANCE_NOT_FOUND");
   }
 
+  // Resolve the movement unit for the Kardex (base unit when there is a
+  // stock-group conversion, otherwise the product's native unit). Computed
+  // before recalculation so it can enrich insufficient-stock error messages.
+  const movementUnit = resolved.conversion?.baseUnit
+    ?? (await tx.product.findUnique({ where: { id: inventoryProductId }, select: { unit: true } }))?.unit
+    ?? null;
+
   const next = recalculateWeightedAverage({
     currentQty: balance.quantityOnHand,
     currentWac: balance.weightedAverageCost,
     movementQty: baseMovementQty,
     movementUnitCost: baseMovementUnitCost,
     inbound,
+    unit: movementUnit,
   });
-
-  // Resolve the movement unit for the Kardex (base unit when there is a
-  // stock-group conversion, otherwise the product's native unit).
-  const movementUnit = resolved.conversion?.baseUnit
-    ?? (await tx.product.findUnique({ where: { id: inventoryProductId }, select: { unit: true } }))?.unit
-    ?? null;
 
   const movement = await tx.inventoryMovement.create({
     data: {
@@ -385,7 +604,8 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
       ? (isBaseUnitAdjustment ? movementQty : (conversion ? convertSaleQtyToBaseQty({ quantity: movementQty, conversionFactor: conversion.conversionFactor }) : movementQty))
       : new Prisma.Decimal(0);
     if (outboundBaseQty.gt(currentBaseQty)) {
-      throw new Error("INSUFFICIENT_STOCK");
+      // Negative-stock prevention with descriptive available/requested detail.
+      throw new InsufficientStockError(currentBaseQty, outboundBaseQty);
     }
 
     const baseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);

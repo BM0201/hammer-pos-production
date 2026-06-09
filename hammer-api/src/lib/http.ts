@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { MissingDatabaseUrlError, isDatabaseConnectionError } from "@/lib/prisma";
 import { isCsrfError } from "@/modules/security/csrf";
+import { InsufficientStockError } from "@/modules/inventory/wac";
 
 /**
  * Convert errors to appropriate HTTP responses using standard contract.
@@ -66,7 +67,10 @@ export function toHttpErrorResponse(error: unknown) {
       return errJson("PRICE_APPLICATION_BLOCKED", "El precio no puede aplicarse porque no cumple la rentabilidad minima.", 409);
     }
 
-    // Stock errors
+    // Stock errors (descriptive message when available/requested are known).
+    if (error instanceof InsufficientStockError) {
+      return errJson("CONFLICT", error.detail, 409);
+    }
     if (error.message === "INSUFFICIENT_STOCK" || error.message === "INSUFFICIENT_STOCK_AT_PAYMENT") {
       return errJson("CONFLICT", "Stock insuficiente", 409);
     }
