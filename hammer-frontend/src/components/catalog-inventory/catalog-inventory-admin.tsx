@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, DollarSign,
+  AlertTriangle, BarChart3, Boxes, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, DollarSign,
   Download, FileSpreadsheet, FileUp, History, Info, Loader2, Package, Pencil,
   Plus, RefreshCcw, Save, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
@@ -67,6 +67,11 @@ type Movement = {
   referenceType: string;
   referenceId: string;
   notes?: string | null;
+  // Kardex enrichment fields (populated by new movements; nullable for history)
+  balanceAfter?: string | null;
+  unit?: string | null;
+  actorUserId?: string | null;
+  actor?: { id: string; username: string; fullName: string } | null;
   product: { id: string; sku: string; name: string };
   branch: Branch;
 };
@@ -269,6 +274,53 @@ function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+/* ── Kardex date helpers (America/Managua) ──────────────────────────────────
+   The POS works in Nicaragua time. We compute YYYY-MM-DD in that timezone so
+   quick-filter presets (Hoy / Semana / Mes / Año) match the operational day. */
+const MANAGUA_TZ = "America/Managua";
+
+/** Current Managua calendar date as YYYY-MM-DD. */
+function managuaTodayYmd(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: MANAGUA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/** Formats a Date object into YYYY-MM-DD (in Managua timezone). */
+function toManaguaYmd(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: MANAGUA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+/** Returns {startDate, endDate} (YYYY-MM-DD) for a named quick-filter preset. */
+function datePreset(preset: "today" | "week" | "month" | "year"): { startDate: string; endDate: string } {
+  const today = managuaTodayYmd();
+  const [y, m, d] = today.split("-").map(Number);
+  if (preset === "today") {
+    return { startDate: today, endDate: today };
+  }
+  if (preset === "year") {
+    return { startDate: `${y}-01-01`, endDate: today };
+  }
+  if (preset === "month") {
+    return { startDate: `${y}-${String(m).padStart(2, "0")}-01`, endDate: today };
+  }
+  // "week" → Monday-to-today of the current week (Managua).
+  const base = new Date(Date.UTC(y, m - 1, d));
+  const dow = base.getUTCDay(); // 0=Sun … 6=Sat
+  const diffToMonday = (dow + 6) % 7; // days since Monday
+  const monday = new Date(base);
+  monday.setUTCDate(base.getUTCDate() - diffToMonday);
+  return { startDate: toManaguaYmd(monday), endDate: today };
 }
 
 function formatMoneyOrNd(value: number | null) {
@@ -2199,7 +2251,6 @@ function OpeningBalanceModal({
 function MovementsPanel({
   branches,
   products,
-  movements,
   selectedBranchId,
   initialDialog,
   onInitialDialogHandled,
@@ -2208,7 +2259,10 @@ function MovementsPanel({
 }: {
   branches: Branch[];
   products: ProductRow[];
-  movements: Movement[];
+  /** @deprecated The Kardex now fetches its own paginated data from
+   *  `/api/inventory/movements`; this prop is accepted for backward
+   *  compatibility but no longer used. */
+  movements?: Movement[];
   selectedBranchId?: string;
   initialDialog?: "adjustment" | "opening" | null;
   onInitialDialogHandled?: () => void;
@@ -2217,11 +2271,89 @@ function MovementsPanel({
 }) {
   const [productId, setProductId] = useState("");
   const [movementType, setMovementType] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [activePreset, setActivePreset] = useState<"today" | "week" | "month" | "year" | "">("");
+  const [page, setPage] = useState(1);
   const [showAdjustment, setShowAdjustment] = useState(false);
   const [showOpening, setShowOpening] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const activeBranchId = selectedBranchId || branches[0]?.id || "";
   const firstProduct = products[0];
+
+  // ── Server-side Kardex data (dedicated paginated endpoint) ───────────────
+  // Replaces the previous client-side filtering over the catalog bundle's
+  // fixed 200-row block. We now request exactly the page/filters we need.
+  const PAGE_SIZE = 50;
+  const [serverMovements, setServerMovements] = useState<Movement[]>([]);
+  const [movementsLoading, setMovementsLoading] = useState(false);
+  const [meta, setMeta] = useState<{ total: number; totalPages: number; currentPage: number }>({
+    total: 0,
+    totalPages: 1,
+    currentPage: 1,
+  });
+
+  const loadMovements = useCallback(async () => {
+    if (!activeBranchId) return;
+    setMovementsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("branchId", activeBranchId);
+      if (productId) params.set("productId", productId);
+      if (movementType) params.set("movementType", movementType);
+      if (startDate) params.set("startDate", startDate);
+      if (endDate) params.set("endDate", endDate);
+      params.set("page", String(page));
+      params.set("limit", String(PAGE_SIZE));
+      const response = await fetch(`/api/inventory/movements?${params.toString()}`, { cache: "no-store" });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? "No se pudieron cargar los movimientos.");
+      const data = unwrapApiData(payload) as {
+        movements: Movement[];
+        total: number;
+        totalPages: number;
+        currentPage: number;
+      };
+      setServerMovements(data.movements ?? []);
+      setMeta({ total: data.total ?? 0, totalPages: data.totalPages ?? 1, currentPage: data.currentPage ?? 1 });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Error al cargar movimientos.");
+      setServerMovements([]);
+      setMeta({ total: 0, totalPages: 1, currentPage: 1 });
+    } finally {
+      setMovementsLoading(false);
+    }
+  }, [activeBranchId, productId, movementType, startDate, endDate, page]);
+
+  useEffect(() => {
+    loadMovements();
+  }, [loadMovements]);
+
+  // Reset to page 1 whenever any filter changes.
+  useEffect(() => {
+    setPage(1);
+  }, [activeBranchId, productId, movementType, startDate, endDate]);
+
+  // Apply a quick-filter preset (Hoy / Esta semana / Este mes / Este año).
+  function applyPreset(preset: "today" | "week" | "month" | "year") {
+    const range = datePreset(preset);
+    setStartDate(range.startDate);
+    setEndDate(range.endDate);
+    setActivePreset(preset);
+  }
+
+  function clearDateFilters() {
+    setStartDate("");
+    setEndDate("");
+    setActivePreset("");
+  }
+
+  // Reload only the Kardex list after registering a movement, then refresh the
+  // surrounding catalog bundle (balances/preview) via the parent.
+  const reloadAfterMutation = useCallback(async () => {
+    await loadMovements();
+    await onDone();
+  }, [loadMovements, onDone]);
   const [adjustment, setAdjustment] = useState({
     productId: firstProduct?.id ?? "",
     adjustmentType: "ADJUSTMENT_IN",
@@ -2238,12 +2370,11 @@ function MovementsPanel({
     if (initialDialog) onInitialDialogHandled?.();
   }, [initialDialog, onInitialDialogHandled]);
 
-  const filteredMovements = movements.filter((movement) => {
-    if (activeBranchId && movement.branch.id !== activeBranchId) return false;
-    if (productId && movement.product.id !== productId) return false;
-    if (movementType && movement.movementType !== movementType) return false;
-    return true;
-  });
+  // Movements now come pre-filtered & paginated from the server.
+  const filteredMovements = serverMovements;
+  // "Mostrando X-Y de Z" counter values.
+  const rangeStart = meta.total === 0 ? 0 : (meta.currentPage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(meta.currentPage * PAGE_SIZE, meta.total);
   const adjustmentProduct = adjustment.productId ? products.find((product) => product.id === adjustment.productId) : undefined;
   function currentBaseStockForProduct(product?: ProductRow) {
     if (!product) return 0;
@@ -2289,7 +2420,7 @@ function MovementsPanel({
       toast.success("Ajuste manual registrado.");
       setShowAdjustment(false);
       setAdjustment((prev) => ({ ...prev, quantity: "1", reason: "", notes: "" }));
-      await onDone();
+      await reloadAfterMutation();
     } finally {
       setSubmitting(false);
     }
@@ -2305,12 +2436,57 @@ function MovementsPanel({
         </div>
       </div>
       <div className="p-4 space-y-4">
+        {/* Base filters: branch / product / type */}
         <div className="grid gap-2 md:grid-cols-4">
           <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
           <select className="hm-input" value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">Todos los productos</option>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
           <select className="hm-input" value={movementType} onChange={(e) => setMovementType(e.target.value)}><option value="">Todos los tipos</option><option value="PURCHASE_IN">Compra / entrada</option><option value="SALE_OUT">Venta / salida</option><option value="ADJUSTMENT_IN">Ajuste entrada / carga inicial</option><option value="ADJUSTMENT_OUT">Ajuste salida</option><option value="RETURN_IN">Devolucion entrada</option><option value="RETURN_OUT">Devolucion salida</option><option value="TRANSFER_IN">Traslado entrada</option><option value="TRANSFER_OUT">Traslado salida</option></select>
           <div className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">Los costos se ajustan desde Precios y costos, no desde Kardex.</div>
         </div>
+
+        {/* Date filters: quick presets + custom range */}
+        <div className="flex flex-wrap items-end gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 flex items-center gap-1 text-xs font-semibold text-[var(--color-text-muted)]"><Calendar className="h-3.5 w-3.5" /> Periodo:</span>
+            {([
+              { id: "today", label: "Hoy" },
+              { id: "week", label: "Esta Semana" },
+              { id: "month", label: "Este Mes" },
+              { id: "year", label: "Este Año" },
+            ] as const).map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => applyPreset(preset.id)}
+                className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${activePreset === preset.id ? "border-[var(--color-master-600)] bg-[var(--color-master-600)] text-white" : "border-[var(--color-border)] bg-white text-[var(--color-text)] hover:bg-[var(--color-surface-alt)]"}`}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-end gap-2">
+            <label className="flex flex-col text-xs text-[var(--color-text-muted)]">
+              Desde
+              <input type="date" className="hm-input mt-0.5" value={startDate} max={endDate || undefined} onChange={(e) => { setStartDate(e.target.value); setActivePreset(""); }} />
+            </label>
+            <label className="flex flex-col text-xs text-[var(--color-text-muted)]">
+              Hasta
+              <input type="date" className="hm-input mt-0.5" value={endDate} min={startDate || undefined} onChange={(e) => { setEndDate(e.target.value); setActivePreset(""); }} />
+            </label>
+          </div>
+          {(startDate || endDate) ? (
+            <button type="button" onClick={clearDateFilters} className="rounded-md border border-[var(--color-border)] bg-white px-2.5 py-1.5 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]">Limpiar fechas</button>
+          ) : null}
+        </div>
+
+        {/* Result counter */}
+        <div className="flex items-center justify-between text-xs text-[var(--color-text-muted)]">
+          <span>
+            {meta.total === 0 ? "Sin movimientos para los filtros seleccionados." : `Mostrando ${rangeStart}-${rangeEnd} de ${meta.total} movimientos`}
+          </span>
+          {movementsLoading ? <span className="flex items-center gap-1"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando…</span> : null}
+        </div>
+
         <div className="overflow-x-auto">
           <table className="hm-table min-w-[980px] w-full">
             <thead><tr><th>Fecha</th><th>Producto</th><th>SKU</th><th>Sucursal</th><th>Tipo</th><th>Entrada</th><th>Salida</th><th>Saldo final</th><th>Unidad</th><th>Usuario</th><th>Referencia</th><th>Motivo / nota</th></tr></thead>
@@ -2319,12 +2495,31 @@ function MovementsPanel({
                 const quantity = Number(item.quantity);
                 const isIn = ["PURCHASE_IN", "RETURN_IN", "ADJUSTMENT_IN", "TRANSFER_IN", "TIMBER_INTAKE_IN"].includes(item.movementType);
                 const visibleType = item.referenceType === "OPENING_BALANCE" ? "Carga inicial" : item.referenceType === "MANUAL_ADJUSTMENT" ? "Ajuste manual" : item.movementType;
-                return <tr key={item.id}><td>{new Date(item.createdAt).toLocaleString("es-NI")}</td><td className="font-medium">{item.product.name}</td><td className="font-mono text-xs">{item.product.sku}</td><td>{item.branch.code}</td><td>{visibleType}</td><td>{isIn ? qty(quantity) : "-"}</td><td>{!isIn ? qty(quantity) : "-"}</td><td className="text-[var(--color-text-muted)]">-</td><td>Unidad</td><td className="text-[var(--color-text-muted)]">-</td><td>{item.referenceType} / {item.referenceId}</td><td>{item.notes ?? "-"}</td></tr>;
+                // Enriched columns (fallback to "-"/"Unidad" for legacy rows).
+                const balance = numberOrNull(item.balanceAfter);
+                const actorLabel = item.actor?.fullName ?? item.actor?.username ?? "-";
+                const unitLabel = item.unit ?? "Unidad";
+                return <tr key={item.id}><td>{new Date(item.createdAt).toLocaleString("es-NI", { timeZone: "America/Managua" })}</td><td className="font-medium">{item.product.name}</td><td className="font-mono text-xs">{item.product.sku}</td><td>{item.branch.code}</td><td>{visibleType}</td><td>{isIn ? qty(quantity) : "-"}</td><td>{!isIn ? qty(quantity) : "-"}</td><td className={balance === null ? "text-[var(--color-text-muted)]" : "font-medium"}>{balance === null ? "-" : qty(balance)}</td><td>{unitLabel}</td><td className={item.actor ? "" : "text-[var(--color-text-muted)]"}>{actorLabel}</td><td>{item.referenceType} / {item.referenceId}</td><td>{item.notes ?? "-"}</td></tr>;
               })}
-              {filteredMovements.length === 0 ? <tr><td colSpan={12} className="py-8 text-center text-sm text-[var(--color-text-muted)]">Sin movimientos recientes para los filtros seleccionados.</td></tr> : null}
+              {filteredMovements.length === 0 && !movementsLoading ? <tr><td colSpan={12} className="py-8 text-center text-sm text-[var(--color-text-muted)]">Sin movimientos recientes para los filtros seleccionados.</td></tr> : null}
             </tbody>
           </table>
         </div>
+
+        {/* Pagination controls */}
+        {meta.totalPages > 1 ? (
+          <div className="flex items-center justify-between gap-2">
+            <Button variant="ghost" size="sm" disabled={meta.currentPage <= 1 || movementsLoading} onClick={() => setPage((p) => Math.max(1, p - 1))} icon={<ChevronLeft className="h-4 w-4" />}>Anterior</Button>
+            <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+              <span>Página</span>
+              <select className="hm-input !py-1 !w-auto" value={meta.currentPage} onChange={(e) => setPage(Number(e.target.value))}>
+                {Array.from({ length: meta.totalPages }, (_, i) => i + 1).map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <span>de {meta.totalPages}</span>
+            </div>
+            <Button variant="ghost" size="sm" disabled={meta.currentPage >= meta.totalPages || movementsLoading} onClick={() => setPage((p) => Math.min(meta.totalPages, p + 1))}>Siguiente <ChevronRight className="h-4 w-4" /></Button>
+          </div>
+        ) : null}
       </div>
       {showAdjustment ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -2388,7 +2583,7 @@ function MovementsPanel({
           activeBranchId={activeBranchId}
           onSelectBranch={onSelectBranch}
           onClose={() => setShowOpening(false)}
-          onDone={onDone}
+          onDone={reloadAfterMutation}
         />
       ) : null}    </Card>
   );

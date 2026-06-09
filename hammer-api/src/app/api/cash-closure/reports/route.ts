@@ -59,6 +59,8 @@ export async function GET(request: NextRequest) {
       total: result.total,
       page: result.page,
       limit: result.limit,
+      totalPages: result.totalPages,
+      currentPage: result.currentPage,
     });
   } catch (error) {
     if (error instanceof Error && error.message === "UNAUTHENTICATED") {

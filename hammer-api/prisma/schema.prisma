@@ -282,6 +282,7 @@ model User {
   updatedAt          DateTime  @updatedAt
 
   userBranchRoles            UserBranchRole[]
+  inventoryMovements         InventoryMovement[]      @relation("InventoryMovementActor")
   openedSessions             CashSession[]            @relation("CashSessionOpenedBy")
   closedSessions             CashSession[]            @relation("CashSessionClosedBy")
   reviewedCashSessions       CashSession[]            @relation("CashSessionReviewedBy")
@@ -845,12 +846,21 @@ model InventoryMovement {
   notes         String?
   createdAt     DateTime              @default(now())
 
+  // ── Kardex enrichment fields (added 2026-06) ──────────────────────────────
+  // Nullable to preserve backward compatibility with historical rows that
+  // predate this migration. New movements populate these automatically.
+  balanceAfter  Decimal? /// Saldo (en unidad base) inmediatamente despues de aplicar este movimiento.
+  actorUserId   String? /// Usuario que origino el movimiento (columna "USUARIO" del Kardex).
+  unit          String? /// Unidad de medida del movimiento (columna "UNIDAD" del Kardex).
+
   branch  Branch  @relation(fields: [branchId], references: [id])
   product Product @relation(fields: [productId], references: [id])
+  actor   User?   @relation("InventoryMovementActor", fields: [actorUserId], references: [id])
 
   @@index([branchId, productId, createdAt])
   @@index([referenceType, referenceId])
   @@index([movementType, createdAt])
+  @@index([actorUserId])
 }
 
 model InventoryImportBatch {

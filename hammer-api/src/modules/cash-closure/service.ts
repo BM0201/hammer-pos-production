@@ -2,8 +2,13 @@ import { CashSessionStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { autoCloseExpiredCashSessions, getCashAutoCloseDeadline } from "@/modules/cash-session/auto-close-service";
+import { isValidYmd, managuaStartOfDayUtc, managuaEndOfDayUtc } from "@/lib/timezone";
 
 const NICARAGUA_TZ = "America/Managua";
+
+/** Default / maximum page size for the closure reports endpoint. */
+export const CASH_CLOSURE_REPORTS_DEFAULT_LIMIT = 20;
+export const CASH_CLOSURE_REPORTS_MAX_LIMIT = 100;
 
 /* ── Helpers ── */
 
@@ -275,18 +280,25 @@ export async function getClosureReports(params: {
     where.branchId = params.branchId;
   }
 
+  // Normalize date filters to America/Managua day boundaries so a single-day
+  // filter (startDate === endDate) captures the full local day, and ranges are
+  // inclusive on both ends regardless of the stored UTC offset.
   if (params.startDate || params.endDate) {
     where.closureDate = {};
-    if (params.startDate) {
-      where.closureDate.gte = new Date(params.startDate);
+    if (params.startDate && isValidYmd(params.startDate)) {
+      where.closureDate.gte = managuaStartOfDayUtc(params.startDate);
     }
-    if (params.endDate) {
-      where.closureDate.lte = new Date(params.endDate);
+    if (params.endDate && isValidYmd(params.endDate)) {
+      where.closureDate.lte = managuaEndOfDayUtc(params.endDate);
     }
   }
 
-  const page = params.page ?? 1;
-  const limit = params.limit ?? 50;
+  const page = Math.max(1, Math.floor(params.page ?? 1));
+  // Cap the page size to avoid heavy/abusive queries via a manipulated `limit`.
+  const limit = Math.min(
+    CASH_CLOSURE_REPORTS_MAX_LIMIT,
+    Math.max(1, Math.floor(params.limit ?? CASH_CLOSURE_REPORTS_DEFAULT_LIMIT)),
+  );
 
   const [closures, total] = await Promise.all([
     prisma.cashClosure.findMany({
@@ -304,5 +316,6 @@ export async function getClosureReports(params: {
     prisma.cashClosure.count({ where }),
   ]);
 
-  return { closures, total, page, limit };
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return { closures, total, page, limit, totalPages, currentPage: page };
 }

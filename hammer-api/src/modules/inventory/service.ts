@@ -51,26 +51,84 @@ export async function listInventoryBalances(params: { branchId: string; productI
   });
 }
 
-export async function listInventoryMovements(params: { branchId: string; productId?: string; limit?: number }) {
+/** Maximum page size accepted by the paginated Kardex endpoint. */
+export const INVENTORY_MOVEMENTS_MAX_LIMIT = 100;
+/** Default page size for the Kardex (matches the catalog pagination pattern). */
+export const INVENTORY_MOVEMENTS_DEFAULT_LIMIT = 50;
+
+/**
+ * Lists inventory movements (Kardex) with **server-side pagination and filters**.
+ *
+ * Supports:
+ *  - Pagination: `page` (1-based) + `limit` (default 50, capped at 100).
+ *  - Date range: `startDate` / `endDate` (inclusive). Callers should pass
+ *    timezone-normalized boundaries (America/Managua) — see the route adapter.
+ *  - Filters: `productId`, `movementType`.
+ *
+ * Returns the page of movements plus pagination metadata so the UI can render
+ * "Mostrando X-Y de Z" and page controls. Leverages the existing
+ * `@@index([branchId, productId, createdAt])` / `@@index([movementType, createdAt])`.
+ */
+export async function listInventoryMovements(params: {
+  branchId: string;
+  productId?: string;
+  movementType?: InventoryMovementType;
+  startDate?: Date;
+  endDate?: Date;
+  page?: number;
+  limit?: number;
+}) {
   const resolved = params.productId
     ? await resolveInventoryProductForMovement(prisma, params.productId)
     : null;
-  return prisma.inventoryMovement.findMany({
-    where: {
-      branchId: params.branchId,
-      ...(params.productId ? { productId: resolved?.inventoryProductId ?? params.productId } : {}),
-    },
-    include: {
-      product: {
-        select: { id: true, sku: true, name: true },
+
+  // Normalize/clamp pagination inputs.
+  const page = Math.max(1, Math.floor(params.page ?? 1));
+  const limit = Math.min(
+    INVENTORY_MOVEMENTS_MAX_LIMIT,
+    Math.max(1, Math.floor(params.limit ?? INVENTORY_MOVEMENTS_DEFAULT_LIMIT)),
+  );
+
+  // Build the createdAt range only when at least one boundary is provided.
+  let createdAt: Prisma.DateTimeFilter | undefined;
+  if (params.startDate || params.endDate) {
+    createdAt = {};
+    if (params.startDate) createdAt.gte = params.startDate;
+    if (params.endDate) createdAt.lte = params.endDate;
+  }
+
+  const where: Prisma.InventoryMovementWhereInput = {
+    branchId: params.branchId,
+    ...(params.productId ? { productId: resolved?.inventoryProductId ?? params.productId } : {}),
+    ...(params.movementType ? { movementType: params.movementType } : {}),
+    ...(createdAt ? { createdAt } : {}),
+  };
+
+  const [movements, total] = await prisma.$transaction([
+    prisma.inventoryMovement.findMany({
+      where,
+      include: {
+        product: { select: { id: true, sku: true, name: true } },
+        branch: { select: { id: true, code: true, name: true } },
+        actor: { select: { id: true, username: true, fullName: true } },
       },
-      branch: {
-        select: { id: true, code: true, name: true },
-      },
-    },
-    orderBy: { createdAt: "desc" },
-    take: params.limit ?? 25,
-  });
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    prisma.inventoryMovement.count({ where }),
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  return {
+    movements,
+    total,
+    page,
+    limit,
+    totalPages,
+    currentPage: page,
+  };
 }
 
 type InventoryMovementInput = {
@@ -196,6 +254,12 @@ export async function createInventoryMovementTx(
     inbound,
   });
 
+  // Resolve the movement unit for the Kardex (base unit when there is a
+  // stock-group conversion, otherwise the product's native unit).
+  const movementUnit = resolved.conversion?.baseUnit
+    ?? (await tx.product.findUnique({ where: { id: inventoryProductId }, select: { unit: true } }))?.unit
+    ?? null;
+
   const movement = await tx.inventoryMovement.create({
     data: {
       branchId: input.branchId,
@@ -206,6 +270,10 @@ export async function createInventoryMovementTx(
       referenceType: input.referenceType,
       referenceId: input.referenceId,
       notes: input.notes,
+      // Kardex enrichment: who, balance after, and unit (base unit).
+      actorUserId: input.actorUserId,
+      balanceAfter: next.newQty,
+      unit: movementUnit,
     },
   });
 
@@ -475,6 +543,10 @@ async function createOpeningBalanceTx(
               referenceType,
               referenceId,
               notes: `Sin cambio de stock - ${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+              // Kardex enrichment fields
+              actorUserId: input.actorUserId,
+              balanceAfter: currentBaseQty,
+              unit: conversion?.baseUnit ?? null,
             },
           });
       movementResult = { movement, balance };
@@ -528,6 +600,10 @@ async function createOpeningBalanceTx(
           referenceType,
           referenceId,
           notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+          // Kardex enrichment fields
+          actorUserId: input.actorUserId,
+          balanceAfter: nextQty,
+          unit: conversion?.baseUnit ?? null,
         },
       });
       const updatedBalance = await tx.inventoryBalance.update({

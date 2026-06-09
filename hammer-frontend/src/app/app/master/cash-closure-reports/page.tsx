@@ -16,6 +16,9 @@ import {
   ChevronUp,
   Lock,
   Unlock,
+  Calendar,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 
 type ClosureLog = {
@@ -61,13 +64,60 @@ type Branch = {
 
 
 
+const MANAGUA_TZ = "America/Managua";
+
 function formatTime(dateStr: string): string {
   const d = new Date(dateStr);
   return d.toLocaleTimeString("es-NI", {
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "America/Managua",
+    timeZone: MANAGUA_TZ,
   });
+}
+
+/* ── Date helpers (America/Managua) ──────────────────────────────────────── */
+
+/** Current Managua calendar date as YYYY-MM-DD. */
+function managuaTodayYmd(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: MANAGUA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function toYmd(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: MANAGUA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+type ClosurePreset = "today" | "yesterday" | "week" | "month" | "year";
+
+/** Returns {startDate, endDate} (YYYY-MM-DD) for a named quick-filter preset. */
+function closureDatePreset(preset: ClosurePreset): { startDate: string; endDate: string } {
+  const today = managuaTodayYmd();
+  const [y, m, d] = today.split("-").map(Number);
+  const base = new Date(Date.UTC(y, m - 1, d));
+  if (preset === "today") return { startDate: today, endDate: today };
+  if (preset === "yesterday") {
+    const yest = new Date(base);
+    yest.setUTCDate(base.getUTCDate() - 1);
+    const ymd = toYmd(yest);
+    return { startDate: ymd, endDate: ymd };
+  }
+  if (preset === "year") return { startDate: `${y}-01-01`, endDate: today };
+  if (preset === "month") return { startDate: `${y}-${String(m).padStart(2, "0")}-01`, endDate: today };
+  // week → Monday..today
+  const dow = base.getUTCDay();
+  const diffToMonday = (dow + 6) % 7;
+  const monday = new Date(base);
+  monday.setUTCDate(base.getUTCDate() - diffToMonday);
+  return { startDate: toYmd(monday), endDate: today };
 }
 
 function ClosureTypeBadge({ type }: { type: string }) {
@@ -219,8 +269,38 @@ export default function CashClosureReportsPage() {
   const [selectedBranch, setSelectedBranch] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [activePreset, setActivePreset] = useState<ClosurePreset | "">("");
+  const [singleDay, setSingleDay] = useState(""); // exact-day filter (sets start=end)
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+
+  // Apply a quick preset (Hoy / Ayer / Esta semana / Este mes / Este año).
+  function applyPreset(preset: ClosurePreset) {
+    const range = closureDatePreset(preset);
+    setStartDate(range.startDate);
+    setEndDate(range.endDate);
+    setSingleDay(preset === "today" || preset === "yesterday" ? range.startDate : "");
+    setActivePreset(preset);
+    setPage(1);
+  }
+
+  // Filter by an exact day (start === end).
+  function applySingleDay(day: string) {
+    setSingleDay(day);
+    setStartDate(day);
+    setEndDate(day);
+    setActivePreset(day === managuaTodayYmd() ? "today" : "");
+    setPage(1);
+  }
+
+  function clearAllFilters() {
+    setSelectedBranch("");
+    setStartDate("");
+    setEndDate("");
+    setSingleDay("");
+    setActivePreset("");
+    setPage(1);
+  }
 
   const fetchBranches = useCallback(async () => {
     try {
@@ -345,12 +425,34 @@ export default function CashClosureReportsPage() {
       </div>
 
       {/* Filters */}
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4">
-        <div className="flex items-center gap-2 mb-3">
+      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-4 space-y-3">
+        <div className="flex items-center gap-2">
           <Filter className="h-4 w-4 text-[var(--color-text-muted)]" />
           <h4 className="text-sm font-semibold text-[var(--color-text)]">Filtros</h4>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+
+        {/* Quick presets */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 flex items-center gap-1 text-xs font-semibold text-[var(--color-text-muted)]"><Calendar className="h-3.5 w-3.5" /> Rápidos:</span>
+          {([
+            { id: "today", label: "Hoy" },
+            { id: "yesterday", label: "Ayer" },
+            { id: "week", label: "Esta Semana" },
+            { id: "month", label: "Este Mes" },
+            { id: "year", label: "Este Año" },
+          ] as const).map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => applyPreset(preset.id)}
+              className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${activePreset === preset.id ? "border-[var(--color-master-600)] bg-[var(--color-master-600)] text-white" : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:bg-[var(--color-surface-alt)]"}`}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <div>
             <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Sucursal</label>
             <select
@@ -365,11 +467,21 @@ export default function CashClosureReportsPage() {
             </select>
           </div>
           <div>
+            <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Día específico</label>
+            <input
+              type="date"
+              value={singleDay}
+              onChange={(e) => applySingleDay(e.target.value)}
+              className="w-full border border-[var(--color-border)] rounded px-3 py-1.5 text-sm"
+            />
+          </div>
+          <div>
             <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">Desde</label>
             <input
               type="date"
               value={startDate}
-              onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
+              max={endDate || undefined}
+              onChange={(e) => { setStartDate(e.target.value); setSingleDay(""); setActivePreset(""); setPage(1); }}
               className="w-full border border-[var(--color-border)] rounded px-3 py-1.5 text-sm"
             />
           </div>
@@ -378,19 +490,38 @@ export default function CashClosureReportsPage() {
             <input
               type="date"
               value={endDate}
-              onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
+              min={startDate || undefined}
+              onChange={(e) => { setEndDate(e.target.value); setSingleDay(""); setActivePreset(""); setPage(1); }}
               className="w-full border border-[var(--color-border)] rounded px-3 py-1.5 text-sm"
             />
           </div>
           <div className="flex items-end">
             <button
-              onClick={() => { setSelectedBranch(""); setStartDate(""); setEndDate(""); setPage(1); }}
+              onClick={clearAllFilters}
               className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] border border-[var(--color-border)] rounded hover:bg-[var(--color-surface-alt)]"
             >
               Limpiar filtros
             </button>
           </div>
         </div>
+
+        {/* Visual indicator for an exact-day filter (con / sin cierre) */}
+        {singleDay && !loading ? (
+          total > 0 ? (
+            <div className="flex items-center gap-2 rounded-md border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-3 py-2 text-sm text-[var(--color-success-700)]">
+              <CheckCircle2 className="h-4 w-4" />
+              <span>
+                {fmtDate(singleDay)}: <strong>{total}</strong> cierre{total === 1 ? "" : "s"} registrado{total === 1 ? "" : "s"}
+                {selectedBranch ? " para la sucursal seleccionada" : " (todas las sucursales)"}.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-md border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-sm text-[var(--color-warning-700)]">
+              <XCircle className="h-4 w-4" />
+              <span>{fmtDate(singleDay)}: sin cierre de caja registrado{selectedBranch ? " para la sucursal seleccionada" : ""}.</span>
+            </div>
+          )
+        ) : null}
       </div>
 
       {/* Results */}

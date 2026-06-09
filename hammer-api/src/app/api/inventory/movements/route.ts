@@ -11,6 +11,7 @@ import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { calculateSuggestedPriceForProduct } from "@/modules/pricing/service";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created, fail } from "@/lib/api/response";
+import { isValidYmd, managuaStartOfDayUtc, managuaEndOfDayUtc } from "@/lib/timezone";
 
 export async function GET(request: Request) {
   try {
@@ -20,6 +21,11 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const branchId = searchParams.get("branchId");
     const productId = searchParams.get("productId") ?? undefined;
+    const movementTypeRaw = searchParams.get("movementType") ?? undefined;
+    const startDateRaw = searchParams.get("startDate") ?? undefined;
+    const endDateRaw = searchParams.get("endDate") ?? undefined;
+    const pageRaw = searchParams.get("page") ?? undefined;
+    const limitRaw = searchParams.get("limit") ?? undefined;
 
     if (!branchId) {
       return fail("VALIDATION_ERROR", "branchId is required", 400);
@@ -29,7 +35,35 @@ export async function GET(request: Request) {
       return fail("FORBIDDEN", "Forbidden", 403);
     }
 
-    const data = await listInventoryMovements({ branchId, productId, limit: 30 });
+    // Validate movementType against the Prisma enum (ignore unknown values).
+    const movementType =
+      movementTypeRaw && movementTypeRaw in InventoryMovementType
+        ? (movementTypeRaw as InventoryMovementType)
+        : undefined;
+
+    // Validate date filters (expect YYYY-MM-DD) and normalize to America/Managua
+    // day boundaries so movements near midnight land on the correct day.
+    if (startDateRaw && !isValidYmd(startDateRaw)) {
+      return fail("VALIDATION_ERROR", "startDate must be in YYYY-MM-DD format", 400);
+    }
+    if (endDateRaw && !isValidYmd(endDateRaw)) {
+      return fail("VALIDATION_ERROR", "endDate must be in YYYY-MM-DD format", 400);
+    }
+    const startDate = startDateRaw ? managuaStartOfDayUtc(startDateRaw) : undefined;
+    const endDate = endDateRaw ? managuaEndOfDayUtc(endDateRaw) : undefined;
+
+    const page = pageRaw ? Number.parseInt(pageRaw, 10) : undefined;
+    const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined;
+
+    const data = await listInventoryMovements({
+      branchId,
+      productId,
+      movementType,
+      startDate,
+      endDate,
+      page: Number.isFinite(page as number) ? page : undefined,
+      limit: Number.isFinite(limit as number) ? limit : undefined,
+    });
     return ok(data);
   } catch (error) {
     return toHttpErrorResponse(error);
