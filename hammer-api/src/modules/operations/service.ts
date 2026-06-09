@@ -3,16 +3,26 @@ import {
   BrainDecisionSeverity,
   CashSessionStatus,
   OperationalDayStatus,
-  PaymentMethod,
-  PaymentStatus,
   Prisma,
   SaleOrderStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { OperationalDayClosePreview, ChecklistItem } from "@/modules/operations/types";
+import {
+  OPERATIONAL_TIMEZONE as TIMEZONE,
+  businessDateFromInput,
+  businessDateFromNow,
+  operationalWindow,
+} from "@/modules/operations/operational-window";
+import {
+  CLOSED_SALE_ORDER_STATUSES,
+  validPaymentWhere,
+  validSaleWhereWithDates,
+} from "@/modules/sales/helpers/valid-sale-where";
 
-const TIMEZONE = "America/Managua";
-const CLOSED_ORDER_STATUSES = [SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED, SaleOrderStatus.PAID];
+// Re-export para mantener compatibilidad con quienes importan desde este módulo.
+export { businessDateFromInput, businessDateFromNow };
+
 const ACTIVE_DISPATCH_STATUSES = ["PENDING", "IN_PROGRESS"] as const;
 
 function decimal(value: number) {
@@ -25,37 +35,6 @@ function n(value: Prisma.Decimal | number | string | null | undefined) {
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
-}
-
-function localDateParts(date: Date) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const [year, month, day] = formatter.format(date).split("-").map(Number);
-  return { year, month, day };
-}
-
-export function businessDateFromNow(now = new Date()) {
-  const { year, month, day } = localDateParts(now);
-  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
-}
-
-export function businessDateFromInput(input?: string) {
-  if (!input) return businessDateFromNow();
-  const [year, month, day] = input.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
-}
-
-function operationalWindow(businessDate: Date) {
-  const year = businessDate.getUTCFullYear();
-  const month = businessDate.getUTCMonth();
-  const day = businessDate.getUTCDate();
-  const start = new Date(Date.UTC(year, month, day, 6, 0, 0, 0));
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { start, end };
 }
 
 async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: { id: string; branchId: string; businessDate: Date }) {
@@ -74,16 +53,19 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
     paymentsByMethod,
     cashSessions,
   ] = await Promise.all([
+    // VENTAS DEL DÍA — sólo ventas válidas (excluye anuladas, prueba y CANCELLED).
     tx.saleOrder.aggregate({
-      where: { branchId: day.branchId, createdAt: { gte: start, lt: end }, status: { not: SaleOrderStatus.CANCELLED } },
+      where: validSaleWhereWithDates({ branchId: day.branchId, start, end }),
       _sum: { grandTotal: true },
     }),
+    // PAGADAS / cerradas — válidas en estados cerrados (cobradas/despacho).
     tx.saleOrder.aggregate({
-      where: { branchId: day.branchId, createdAt: { gte: start, lt: end }, status: { in: CLOSED_ORDER_STATUSES } },
+      where: validSaleWhereWithDates({ branchId: day.branchId, start, end, status: { in: CLOSED_SALE_ORDER_STATUSES } }),
       _sum: { grandTotal: true },
     }),
+    // PENDIENTES DE PAGO — válidas en estado PENDING_PAYMENT.
     tx.saleOrder.aggregate({
-      where: { branchId: day.branchId, createdAt: { gte: start, lt: end }, status: SaleOrderStatus.PENDING_PAYMENT },
+      where: validSaleWhereWithDates({ branchId: day.branchId, start, end, status: SaleOrderStatus.PENDING_PAYMENT }),
       _sum: { grandTotal: true },
     }),
     tx.cashSession.count({
@@ -105,9 +87,10 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
     tx.cashSession.aggregate({ where: { operationalDayId: day.id }, _sum: { expectedCashAmount: true } }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id, requiresReview: false }, _sum: { countedCashAmount: true } }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id, requiresReview: false }, _sum: { differenceAmount: true } }),
+    // PAGOS POR MÉTODO — sólo pagos POSTED de ventas válidas (no anuladas/prueba).
     tx.payment.groupBy({
       by: ["method"],
-      where: { status: PaymentStatus.POSTED, paidAt: { gte: start, lt: end }, saleOrder: { branchId: day.branchId } },
+      where: validPaymentWhere({ branchId: day.branchId, start, end }),
       _sum: { amount: true },
       _count: { _all: true },
     }),
@@ -423,8 +406,10 @@ export async function cancelOperationalDay(input: { id: string; actorUserId: str
   return prisma.$transaction(async (tx) => {
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
     const { start, end } = operationalWindow(day.businessDate);
+    // Sólo cuentan los pagos REALES: POSTED de ventas válidas (no anuladas/prueba).
+    // Un día con sólo ventas anuladas o de prueba puede cancelarse sin override.
     const realPayments = await tx.payment.count({
-      where: { paidAt: { gte: start, lt: end }, saleOrder: { branchId: day.branchId } },
+      where: validPaymentWhere({ branchId: day.branchId, start, end }),
     });
     if (realPayments > 0 && !input.override) throw new Error("OPERATIONAL_DAY_HAS_REAL_PAYMENTS");
     const cancelled = await tx.operationalDay.update({
@@ -486,13 +471,15 @@ export async function getDailyReport(id: string) {
   const [orders, paymentsByMethod, dispatches, brain, audit] = await Promise.all([
     prisma.saleOrder.findMany({
       where: { branchId: day.branchId, createdAt: { gte: start, lt: end } },
-      select: { id: true, orderNumber: true, status: true, grandTotal: true, createdAt: true },
+      // El reporte detallado lista TODAS las órdenes del día, pero incluye los
+      // flags isTest/voidedAt para que el front pueda marcar/excluir las inválidas.
+      select: { id: true, orderNumber: true, status: true, grandTotal: true, createdAt: true, isTest: true, voidedAt: true, voidReason: true },
       orderBy: { createdAt: "asc" },
       take: 200,
     }),
     prisma.payment.groupBy({
       by: ["method"],
-      where: { status: PaymentStatus.POSTED, paidAt: { gte: start, lt: end }, saleOrder: { branchId: day.branchId } },
+      where: validPaymentWhere({ branchId: day.branchId, start, end }),
       _sum: { amount: true },
       _count: { _all: true },
     }),
