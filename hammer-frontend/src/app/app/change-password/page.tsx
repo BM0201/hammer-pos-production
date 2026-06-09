@@ -111,7 +111,7 @@ export default function ChangePasswordPage() {
             <div>
               <p className="text-sm font-semibold text-blue-800">Debe cambiar su contraseña inicial</p>
               <p className="text-xs text-blue-700 mt-1">
-                La contraseña <span className="font-mono font-medium">ElChele1234!</span> es temporal.
+                La contraseña temporal que te asignaron es de un solo uso.
                 Debes crear una contraseña personal y segura antes de acceder al sistema.
               </p>
             </div>
@@ -153,7 +153,7 @@ export default function ChangePasswordPage() {
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2.5 pr-10 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
-                placeholder={isFirstLogin ? "ElChele1234!" : "Ingresa tu contraseña actual"}
+                placeholder={isFirstLogin ? "Ingresa tu contraseña temporal" : "Ingresa tu contraseña actual"}
                 autoComplete="current-password"
                 required
               />

@@ -409,6 +409,16 @@ export async function executeInventoryImport(input: ExecuteInput) {
           result.details.push({ rowNumber: item.rowNumber, sku: item.sku, branchCode: item.targetBranchCode, status: "SKIPPED", message: "Producto no existe y creación automática está desactivada." });
           continue;
         }
+        // FIX precios "C$ 1.00": ya NO se inventa un precio de C$ 1.00 cuando
+        // falta el dato. Si el producto nuevo no trae precio (ni en la fila ni
+        // como default de la importación), se omite con un mensaje claro para
+        // que se corrija, en lugar de guardar un precio falso.
+        const resolvedSalePrice = item.standardSalePrice ?? input.defaultStandardSalePrice ?? null;
+        if (resolvedSalePrice === null || resolvedSalePrice <= 0) {
+          result.omitidos += 1;
+          result.details.push({ rowNumber: item.rowNumber, sku: item.sku, branchCode: item.targetBranchCode, status: "SKIPPED", message: "Producto nuevo sin precio de venta. Indica un precio (no se asigna C$ 1.00 automático)." });
+          continue;
+        }
         const created = await createProduct({
           actorUserId: input.actorUserId,
           sku: cleanSku,
@@ -417,7 +427,7 @@ export async function executeInventoryImport(input: ExecuteInput) {
           unit: defaultUnit,
           allowsFraction: false,
           isTimber: false,
-          standardSalePrice: item.standardSalePrice ?? input.defaultStandardSalePrice ?? 1,
+          standardSalePrice: resolvedSalePrice,
           barcode: null,
           description: "Creado por importación masiva de inventario",
         });

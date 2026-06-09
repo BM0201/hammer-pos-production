@@ -15,7 +15,7 @@ const ERROR_MESSAGES_ES: Record<string, string> = {
   NO_ACTIVE_CASH_BOX: "No hay caja física activa. Contacta al administrador.",
   CASH_SESSION_NOT_OPEN: "La sesión de caja no está abierta.",
   CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW: "La caja fue cerrada automaticamente por horario y requiere revision. Abre una nueva caja para continuar.",
-  OPERATIONAL_DAY_NOT_OPEN: "No hay dia operativo abierto para esta sucursal. Solicita a un administrador abrir la operacion de hoy.",
+  OPERATIONAL_DAY_NOT_OPEN: "El dia operativo de esta sucursal esta cerrado. Vuelve a abrir la caja para reactivarlo automaticamente.",
   CASH_SESSION_ALREADY_OPEN: "Ya existe una sesión abierta para esta caja.",
   CASH_SESSION_CASH_BOX_INVALID: "La caja física no está activa o no pertenece a la sucursal.",
   CASH_SESSION_NOT_RECONCILING: "La sesión debe estar en conciliación antes de cerrarla.",

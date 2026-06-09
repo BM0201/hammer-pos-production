@@ -34,7 +34,7 @@ const SESSION_REASON_MESSAGES: Record<string, string> = {
   CASH_SESSION_CASH_BOX_INVALID: "La caja física no está activa o no pertenece a la sucursal.",
   CASH_SESSION_NOT_OPEN: "La sesión ya no está abierta.",
   CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW: "La caja fue cerrada automaticamente por horario y requiere revision. Abre una nueva caja para continuar.",
-  OPERATIONAL_DAY_NOT_OPEN: "No hay dia operativo abierto para esta sucursal. Un administrador debe abrirlo antes de abrir caja.",
+  OPERATIONAL_DAY_NOT_OPEN: "El dia operativo de esta sucursal esta cerrado. Vuelve a intentar abrir la caja para reactivarlo automaticamente.",
   CASH_SESSION_UNRESOLVED_ORDERS: "No puedes cerrar caja con órdenes pendientes de pago o despacho.",
   CASH_SESSION_NOT_RECONCILING: "La sesión debe estar en conciliación antes de cerrarla.",
   CASH_SESSION_NOT_PENDING_AUTO_REVIEW: "La sesion ya no esta pendiente de revision automatica.",

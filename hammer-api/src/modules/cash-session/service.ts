@@ -88,7 +88,7 @@ export async function openCashSession(input: {
       if (!cashBox || cashBox.branchId !== input.branchId || !cashBox.isActive) {
         throw new Error("CASH_SESSION_CASH_BOX_INVALID");
       }
-      const operationalDay = await ensureOpenOperationalDayTx(tx, input.branchId);
+      const operationalDay = await ensureOpenOperationalDayTx(tx, input.branchId, input.actorUserId);
 
       // FIX: Removed manual existingOpen findFirst check — rely solely on the
       // unique constraint on activeSessionKey for atomicity. This eliminates the

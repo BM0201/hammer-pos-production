@@ -572,6 +572,20 @@ async function productForLineTx(tx: Prisma.TransactionClient, line: {
   const category = await tx.category.findUnique({ where: { id: batch.defaultCategoryId }, select: { id: true, isActive: true } });
   if (!category?.isActive) throw new ImportLineExecutionError("Categoria default invalida o inactiva.", line.id, line.rowNumber);
 
+  // FIX precios "C$ 1.00": antes, si la línea no traía precio y no había precio
+  // default del lote, el producto se creaba con un precio ficticio de C$ 1.00.
+  // Eso provocaba que sucursales (p. ej. Masaya) mostraran todos los productos a
+  // C$ 1.00 sin que nadie lo notara. Ahora exigimos un precio real: si falta, la
+  // línea falla con un mensaje claro en lugar de inventar un precio incorrecto.
+  const resolvedSalePrice = line.standardSalePrice ?? batch.defaultStandardSalePrice ?? null;
+  if (resolvedSalePrice === null || resolvedSalePrice.lessThanOrEqualTo(0)) {
+    throw new ImportLineExecutionError(
+      "El producto nuevo no tiene precio de venta. Indica un precio en la fila o un precio default del lote (no se permite C$ 0/1 automático).",
+      line.id,
+      line.rowNumber,
+    );
+  }
+
   const created = await tx.product.create({
     data: {
       sku,
@@ -580,7 +594,7 @@ async function productForLineTx(tx: Prisma.TransactionClient, line: {
       unit: line.unit?.trim() || batch.defaultUnit || "UN",
       allowsFraction: false,
       isTimber: false,
-      standardSalePrice: line.standardSalePrice ?? batch.defaultStandardSalePrice ?? new Prisma.Decimal(1),
+      standardSalePrice: resolvedSalePrice,
       description: "Creado por importacion de catalogo e inventario",
     },
     select: { id: true, sku: true },

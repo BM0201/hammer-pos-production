@@ -7,7 +7,7 @@ import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
-import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
+import { refreshOperationalDaySummaryTx, ensureOpenOperationalDay } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
@@ -78,22 +78,9 @@ export async function createDraftSaleOrder(input: {
   actorUserId: string;
 }) {
   const branch = await prisma.branch.findUniqueOrThrow({ where: { id: input.branchId } });
-  const operationalDay = await prisma.operationalDay.findFirst({
-    where: { branchId: input.branchId, status: "OPEN" },
-    orderBy: { openedAt: "desc" },
-  });
-  if (!operationalDay) {
-    await logAuditEvent({
-      actorUserId: input.actorUserId,
-      branchId: input.branchId,
-      module: "sales",
-      action: SALE_AUDIT_EVENTS.ORDER_CREATE_DENIED,
-      entityType: "SaleOrder",
-      entityId: "draft",
-      metadataJson: { reason: "OPERATIONAL_DAY_NOT_OPEN" },
-    });
-    throw new Error("OPERATIONAL_DAY_NOT_OPEN");
-  }
+  // El día operativo se abre automáticamente si no hay uno abierto: el vendedor
+  // no queda bloqueado esperando que un admin abra el día.
+  await ensureOpenOperationalDay(input.branchId, input.actorUserId);
 
   const order = await prisma.saleOrder.create({
     data: {

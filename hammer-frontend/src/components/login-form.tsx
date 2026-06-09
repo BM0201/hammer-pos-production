@@ -129,11 +129,6 @@ export function LoginForm() {
         </div>
       ) : null}
 
-      {/* First-time help hint */}
-      <p className="text-xs text-center text-[var(--color-text-soft)]">
-        ¿Primera vez? Usa la contraseña: <span className="font-mono font-medium">ElChele1234!</span>
-      </p>
-
       {/* Submit */}
       <Button
         className="w-full"

@@ -187,10 +187,92 @@ export async function getOpenOperationalDayForBranchTx(tx: Prisma.TransactionCli
   });
 }
 
-export async function ensureOpenOperationalDayTx(tx: Prisma.TransactionClient, branchId: string) {
-  const day = await getOpenOperationalDayForBranchTx(tx, branchId);
-  if (!day) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
-  return day;
+/**
+ * Garantiza que la sucursal tenga un día operativo ABIERTO y lo devuelve.
+ *
+ * AUTOMATIZACIÓN: el día operativo ya NO requiere que un administrador lo abra
+ * manualmente. Si no hay un día abierto, se abre automáticamente (o se reactiva
+ * el día de hoy si quedó cerrado), de forma que cajeros y vendedores puedan
+ * operar sin bloqueos ni intervención de un admin. El concepto se conserva
+ * porque agrupa las sesiones de caja, alimenta el reporte diario y el cierre de
+ * caja; solo se elimina el bloqueo manual.
+ */
+export async function ensureOpenOperationalDayTx(
+  tx: Prisma.TransactionClient,
+  branchId: string,
+  actorUserId: string,
+) {
+  const open = await getOpenOperationalDayForBranchTx(tx, branchId);
+  if (open) return open;
+
+  const businessDate = businessDateFromNow();
+
+  // Por la restricción única (branchId + businessDate) solo puede existir un día
+  // por fecha. Si el de hoy ya existe pero está cerrado/cancelado, lo reactivamos
+  // para no bloquear la operación.
+  const sameDate = await tx.operationalDay.findUnique({
+    where: { branchId_businessDate: { branchId, businessDate } },
+  });
+  if (sameDate) {
+    if (sameDate.status === OperationalDayStatus.OPEN) return sameDate;
+    const reopened = await tx.operationalDay.update({
+      where: { id: sameDate.id },
+      data: { status: OperationalDayStatus.OPEN, closedByUserId: null, closedAt: null },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorUserId,
+        branchId,
+        module: "operations",
+        action: "OPERATIONAL_DAY_AUTO_REOPENED",
+        entityType: "OperationalDay",
+        entityId: reopened.id,
+        metadataJson: { branchId, businessDate, auto: true, previousStatus: sameDate.status, timezone: TIMEZONE },
+      },
+    });
+    return reopened;
+  }
+
+  try {
+    const day = await tx.operationalDay.create({
+      data: {
+        branchId,
+        businessDate,
+        openedByUserId: actorUserId,
+        notes: "Apertura automática del día operativo.",
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorUserId,
+        branchId,
+        module: "operations",
+        action: "OPERATIONAL_DAY_AUTO_OPENED",
+        entityType: "OperationalDay",
+        entityId: day.id,
+        metadataJson: { branchId, businessDate, auto: true, timezone: TIMEZONE },
+      },
+    });
+    return day;
+  } catch (error) {
+    // Carrera: otra transacción creó el día al mismo tiempo. Re-leemos.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const raced =
+        (await getOpenOperationalDayForBranchTx(tx, branchId)) ??
+        (await tx.operationalDay.findUnique({
+          where: { branchId_businessDate: { branchId, businessDate } },
+        }));
+      if (raced) return raced;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Variante fuera de transacción para llamadas que no comparten un `tx`.
+ */
+export async function ensureOpenOperationalDay(branchId: string, actorUserId: string) {
+  return prisma.$transaction((tx) => ensureOpenOperationalDayTx(tx, branchId, actorUserId));
 }
 
 function buildChecklist(summary: Awaited<ReturnType<typeof calculateOperationalSummaryTx>>, dayStatus: OperationalDayStatus): OperationalDayClosePreview {
