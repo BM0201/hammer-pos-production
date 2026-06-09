@@ -314,6 +314,7 @@ model User {
   userPermissions            UserPermission[]
   grantedPermissions         UserPermission[]         @relation("PermissionGrantedBy")
   registeredManualInvoices   SaleOrder[]              @relation("ManualInvoiceRegisteredBy")
+  voidedSaleOrders           SaleOrder[]              @relation("SaleOrderVoidedBy")
   documentPrintLogs          DocumentPrintLog[]       @relation("DocumentPrintedBy")
   createdDocumentTemplates   DocumentTemplate[]       @relation("DocumentTemplateCreatedBy")
   resolvedBrainDecisions     BrainDecision[]          @relation("BrainDecisionResolvedBy")
@@ -939,6 +940,8 @@ model SaleOrder {
   status            SaleOrderStatus
   subtotal          Decimal         @default(0)
   discountTotal     Decimal         @default(0)
+  // Descuento manual a nivel de orden (adicional a los descuentos por línea).
+  manualDiscountAmount Decimal      @default(0)
   taxTotal          Decimal         @default(0)
   grandTotal        Decimal         @default(0)
   requiresTransport Boolean         @default(false)
@@ -946,6 +949,14 @@ model SaleOrder {
   notes             String?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
+
+  // ── Gestión de ventas (Master/Admin): pruebas y anulaciones ──
+  // Marca la venta como "de prueba" para excluirla de reportes y métricas.
+  isTest            Boolean         @default(false)
+  // Anulación con justificación (no borra la venta; la excluye de métricas).
+  voidedAt          DateTime?
+  voidedByUserId    String?
+  voidReason        String?
 
   // ── Documentos comerciales ──
   documentMode          DocumentMode @default(DELIVERY_ORDER_ONLY)
@@ -971,6 +982,7 @@ model SaleOrder {
   customer                  Customer?          @relation(fields: [customerId], references: [id])
   createdBy                 User               @relation("SaleOrderCreatedBy", fields: [createdByUserId], references: [id])
   manualInvoiceRegisteredBy User?              @relation("ManualInvoiceRegisteredBy", fields: [manualInvoiceRegisteredById], references: [id])
+  voidedBy                  User?              @relation("SaleOrderVoidedBy", fields: [voidedByUserId], references: [id])
   lines                     SaleOrderLine[]
   payments                  Payment[]
   dispatchTickets           DispatchTicket[]
@@ -983,6 +995,9 @@ model SaleOrder {
   @@index([customerId, createdAt])
   @@index([deliveryOrderNumber])
   @@index([manualInvoiceSeries, manualInvoiceNumber])
+  @@index([isTest])
+  @@index([voidedAt])
+  @@index([voidedByUserId])
 }
 
 model SaleOrderLine {
