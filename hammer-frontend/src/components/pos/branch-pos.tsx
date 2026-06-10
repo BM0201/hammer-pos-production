@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { Check, ShoppingCart, Trash2 } from "lucide-react";
+import { Banknote, Check, Clock, ReceiptText, ShoppingCart, Trash2 } from "lucide-react";
 import { measurePosMetric } from "@/lib/telemetry";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
-import { apiFetch } from "@/lib/client/api";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
+import { money } from "@/lib/format";
 import { PrintModal } from "@/components/print/print-modal";
 import { openPrintableDocument, recordPrintAudit } from "@/lib/printing";
 import "@/styles/responsive.css";
@@ -96,6 +98,19 @@ type PosV2Context = {
   };
 };
 
+type PosRealtimeSummary = {
+  paidSalesTotal: number;
+  paidSalesCount: number;
+  pendingPaymentTotal: number;
+  pendingPaymentCount: number;
+  lastSale: {
+    orderNumber: string;
+    amount: number;
+    paidAt: string;
+    method: string;
+  } | null;
+};
+
 const ROW_HEIGHT = 96;
 const OVERSCAN = 8;
 const MAX_REASONABLE_QUANTITY = 9999;
@@ -153,6 +168,9 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const [posContext, setPosContext] = useState<PosV2Context | null>(null);
   const [activeCashSessionId, setActiveCashSessionId] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<string>("CASH");
+  const [realtimeSummary, setRealtimeSummary] = useState<PosRealtimeSummary | null>(null);
+  const [summaryUpdatedAt, setSummaryUpdatedAt] = useState<string | null>(null);
+  const summaryRequestId = useRef(0);
 
   // ── Print Modal (FASE 3) ──
   const [printModalOrderId, setPrintModalOrderId] = useState<string | null>(null);
@@ -167,6 +185,24 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const orderStatusLabel = STATUS_LABELS[order?.status ?? "DRAFT"] ?? (order?.status ?? "Borrador");
   const canSendToCashier = Boolean(posContext?.permissions?.canSendToCashier) && branchConfig?.paymentWorkflowMode !== "DIRECT_ONLY";
   const canCollectHere = Boolean(posContext?.permissions?.canCollectHere) && branchConfig?.paymentWorkflowMode !== "QUEUE_ONLY";
+
+  const loadRealtimeSummary = useCallback(async () => {
+    const requestId = ++summaryRequestId.current;
+    const response = await apiFetch(`/api/branch/pos/realtime-summary?branchId=${encodeURIComponent(branchId)}`);
+    if (!response.ok) return;
+    const raw = await response.json();
+    const payload = unwrapApiData(raw) as { summary: PosRealtimeSummary };
+    if (requestId !== summaryRequestId.current) return;
+    setRealtimeSummary(payload.summary);
+    setSummaryUpdatedAt(new Date().toISOString());
+  }, [branchId]);
+
+  useOperationalPolling({
+    task: loadRealtimeSummary,
+    intervalMs: 5000,
+    deps: [loadRealtimeSummary],
+    onError: () => undefined,
+  });
 
   const orderLineByProductId = useMemo(() => {
     const map = new Map<string, TicketLine>();
@@ -782,6 +818,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
       setTransportAmount("");
       setTransportTouched(false);
       await reloadOrder();
+      await loadRealtimeSummary();
       setSearch("");
       setActiveProductIndex(0);
       searchInputRef.current?.focus();
@@ -860,6 +897,37 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   return (
     <section className="space-y-3" data-testid="pos-root">
+      <div className="grid gap-3 md:grid-cols-5">
+        <Card className="p-3">
+          <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">
+            <Banknote className="h-3.5 w-3.5" /> Ventas del dia
+          </p>
+          <p className="mt-1 text-lg font-bold text-[var(--color-text)]">{money(realtimeSummary?.paidSalesTotal ?? 0)}</p>
+        </Card>
+        <Card className="p-3">
+          <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">
+            <ReceiptText className="h-3.5 w-3.5" /> Cobradas
+          </p>
+          <p className="mt-1 text-lg font-bold text-[var(--color-text)]">{realtimeSummary?.paidSalesCount ?? 0}</p>
+        </Card>
+        <Card className="p-3">
+          <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">
+            <Clock className="h-3.5 w-3.5" /> Por cobrar
+          </p>
+          <p className="mt-1 text-lg font-bold text-[var(--color-text)]">{money(realtimeSummary?.pendingPaymentTotal ?? 0)}</p>
+        </Card>
+        <Card className="p-3 md:col-span-2">
+          <p className="text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">Ultima venta</p>
+          <p className="mt-1 truncate text-sm font-semibold text-[var(--color-text)]">
+            {realtimeSummary?.lastSale
+              ? `${realtimeSummary.lastSale.orderNumber} · ${money(realtimeSummary.lastSale.amount)}`
+              : "Sin ventas cobradas"}
+          </p>
+          <p className="text-[0.68rem] text-[var(--color-text-muted)]">
+            Caja {activeCashSessionId ? "activa" : "sin sesion"}{summaryUpdatedAt ? ` · actualizado ${new Date(summaryUpdatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}
+          </p>
+        </Card>
+      </div>
       <section className="h-[calc(100vh-12rem)] min-h-[34rem] overflow-hidden">
         <div className="grid h-full grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
           <Card noPadding className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm" data-testid="pos-catalog-zone">

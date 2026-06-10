@@ -3,7 +3,6 @@ import {
   BrainDecisionSeverity,
   CashSessionStatus,
   OperationalDayStatus,
-  PaymentMethod,
   PaymentStatus,
   Prisma,
   SaleOrderStatus,
@@ -11,10 +10,10 @@ import {
 import { prisma } from "@/lib/prisma";
 import type { OperationalDayClosePreview, ChecklistItem } from "@/modules/operations/types";
 import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-policy";
+import { getSalesSummaryForOperationalDayTx } from "@/modules/sales/realtime-sales-summary";
 
 export const OPERATIONAL_TIMEZONE = "America/Managua";
 const TIMEZONE = OPERATIONAL_TIMEZONE;
-const CLOSED_ORDER_STATUSES = [SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED, SaleOrderStatus.PAID];
 const ACTIVE_DISPATCH_STATUSES = ["PENDING", "IN_PROGRESS"] as const;
 function decimal(value: number) {
   return new Prisma.Decimal(Number.isFinite(value) ? value : 0);
@@ -65,10 +64,8 @@ export function getOperationalWindowForNow(now = new Date()) {
 
 async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: { id: string; branchId: string; businessDate: Date }) {
   const { start, end } = operationalWindow(day.businessDate);
+  const salesSummary = await getSalesSummaryForOperationalDayTx(tx, day.id);
   const [
-    salesTotal,
-    paidOrdersTotal,
-    pendingPaymentTotal,
     openCashSessionsCount,
     autoClosedPendingReviewCount,
     pendingDispatchCount,
@@ -76,21 +73,8 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
     expectedCashTotal,
     countedCashTotal,
     cashDifferenceTotal,
-    paymentsByMethod,
     cashSessions,
   ] = await Promise.all([
-    tx.saleOrder.aggregate({
-      where: { branchId: day.branchId, createdAt: { gte: start, lt: end }, status: { not: SaleOrderStatus.CANCELLED } },
-      _sum: { grandTotal: true },
-    }),
-    tx.saleOrder.aggregate({
-      where: { branchId: day.branchId, createdAt: { gte: start, lt: end }, status: { in: CLOSED_ORDER_STATUSES } },
-      _sum: { grandTotal: true },
-    }),
-    tx.saleOrder.aggregate({
-      where: { branchId: day.branchId, createdAt: { gte: start, lt: end }, status: SaleOrderStatus.PENDING_PAYMENT },
-      _sum: { grandTotal: true },
-    }),
     tx.cashSession.count({
       where: { operationalDayId: day.id, status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] } },
     }),
@@ -110,12 +94,6 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
     tx.cashSession.aggregate({ where: { operationalDayId: day.id }, _sum: { expectedCashAmount: true } }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id, requiresReview: false }, _sum: { countedCashAmount: true } }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id, requiresReview: false }, _sum: { differenceAmount: true } }),
-    tx.payment.groupBy({
-      by: ["method"],
-      where: { status: PaymentStatus.POSTED, paidAt: { gte: start, lt: end }, saleOrder: { branchId: day.branchId } },
-      _sum: { amount: true },
-      _count: { _all: true },
-    }),
     tx.cashSession.findMany({
       where: { operationalDayId: day.id },
       include: {
@@ -129,9 +107,16 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
 
   return {
     window: { start, end, timezone: TIMEZONE },
-    salesTotal: n(salesTotal._sum.grandTotal),
-    paidOrdersTotal: n(paidOrdersTotal._sum.grandTotal),
-    pendingPaymentTotal: n(pendingPaymentTotal._sum.grandTotal),
+    salesTotal: salesSummary.paidSalesTotal,
+    paidOrdersTotal: salesSummary.paidSalesTotal,
+    paidSalesTotal: salesSummary.paidSalesTotal,
+    paidSalesCount: salesSummary.paidSalesCount,
+    pendingPaymentTotal: salesSummary.pendingPaymentTotal,
+    pendingPaymentCount: salesSummary.pendingPaymentCount,
+    cancelledSalesTotal: salesSummary.cancelledSalesTotal,
+    cancelledSalesCount: salesSummary.cancelledSalesCount,
+    postedPaymentsCount: salesSummary.postedPaymentsCount,
+    voidedPaymentsCount: salesSummary.voidedPaymentsCount,
     expectedCashTotal: n(expectedCashTotal._sum.expectedCashAmount),
     countedCashTotal: n(countedCashTotal._sum.countedCashAmount),
     cashDifferenceTotal: n(cashDifferenceTotal._sum.differenceAmount),
@@ -139,11 +124,7 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
     autoClosedPendingReviewCount,
     pendingDispatchCount,
       criticalBrainDecisionCount,
-      paymentsByMethod: paymentsByMethod.map((row) => ({
-      method: row.method,
-      amount: n(row._sum.amount),
-      count: row._count._all,
-      })),
+      paymentsByMethod: salesSummary.paymentsByMethod,
     cashSessions: cashSessions.map((session) => ({
       id: session.id,
       status: session.status,

@@ -1,4 +1,4 @@
-import { CashSessionStatus, SaleOrderStatus } from "@prisma/client";
+import { CashSessionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getUserActivitySnapshot } from "@/modules/auth/presence-service";
 import { getOperationalWindowForNow, OPERATIONAL_TIMEZONE } from "@/modules/operations/service";
@@ -6,6 +6,7 @@ import {
   commandCenterCompletedStatuses,
   commandCenterPendingStatuses,
 } from "@/modules/dashboard/command-center-policy";
+import { getAllBranchesSalesRealtimeSummary } from "@/modules/sales/realtime-sales-summary";
 
 /**
  * Centro de Comando (Command Center) snapshot.
@@ -98,7 +99,7 @@ export async function getCommandCenterSnapshot() {
     pendingSessions,
     completedTodaySessions,
     historySessions,
-    salesTodayByBranch,
+    salesSummaries,
   ] = await Promise.all([
     // 1. Connected users (presence) — reuse the existing snapshot.
     getUserActivitySnapshot(),
@@ -158,22 +159,8 @@ export async function getCommandCenterSnapshot() {
       orderBy: { updatedAt: "desc" },
       take: 20,
     }),
-    // 9. Sales today per branch.
-    prisma.saleOrder.groupBy({
-      by: ["branchId"],
-      where: {
-        createdAt: { gte: start, lt: end },
-        status: {
-          in: [
-            SaleOrderStatus.PAID,
-            SaleOrderStatus.DISPATCH_PENDING,
-            SaleOrderStatus.DISPATCHED,
-            SaleOrderStatus.PENDING_PAYMENT,
-          ],
-        },
-      },
-      _sum: { grandTotal: true },
-    }),
+    // 9. Real-time commercial sales per branch.
+    getAllBranchesSalesRealtimeSummary(),
   ]);
 
   // Map boxId -> branchId for resolving grouped session counts.
@@ -183,7 +170,7 @@ export async function getCommandCenterSnapshot() {
   const byBranch = branches.map((branch) => {
     const boxes = physicalBoxes.filter((b) => b.branchId === branch.id);
     const day = operationalDays.find((d) => d.branchId === branch.id) ?? null;
-    const sales = salesTodayByBranch.find((s) => s.branchId === branch.id);
+    const sales = salesSummaries.find((s) => s.branchId === branch.id);
 
     let openCount = 0;
     let reconcilingCount = 0;
@@ -205,7 +192,11 @@ export async function getCommandCenterSnapshot() {
       openSessions: openCount,
       reconcilingSessions: reconcilingCount,
       pendingReviewSessions: pendingReviewCount,
-      salesToday: num(sales?._sum.grandTotal),
+      salesToday: sales?.paidSalesTotal ?? 0,
+      paidSalesCount: sales?.paidSalesCount ?? 0,
+      pendingPaymentTotal: sales?.pendingPaymentTotal ?? 0,
+      pendingPaymentCount: sales?.pendingPaymentCount ?? 0,
+      lastSale: sales?.lastSale ?? null,
       operationalDay: day
         ? {
             status: day.status,
@@ -227,6 +218,9 @@ export async function getCommandCenterSnapshot() {
 
   const totals = {
     salesToday: byBranch.reduce((acc, b) => acc + b.salesToday, 0),
+    paidSalesCount: byBranch.reduce((acc, b) => acc + b.paidSalesCount, 0),
+    pendingPaymentTotal: byBranch.reduce((acc, b) => acc + b.pendingPaymentTotal, 0),
+    pendingPaymentCount: byBranch.reduce((acc, b) => acc + b.pendingPaymentCount, 0),
     openSessions: byBranch.reduce((acc, b) => acc + b.openSessions, 0),
     pendingReviewSessions: byBranch.reduce((acc, b) => acc + b.pendingReviewSessions, 0),
     reconcilingSessions: byBranch.reduce((acc, b) => acc + b.reconcilingSessions, 0),

@@ -72,6 +72,15 @@ type BranchBlock = {
   reconcilingSessions: number;
   pendingReviewSessions: number;
   salesToday: number;
+  paidSalesCount: number;
+  pendingPaymentTotal: number;
+  pendingPaymentCount: number;
+  lastSale: {
+    orderNumber: string;
+    amount: number;
+    paidAt: string;
+    method: string;
+  } | null;
   operationalDay: {
     status: string;
     salesTotal: number;
@@ -116,6 +125,9 @@ type CommandCenter = {
     usersOnline: number;
     usersIdle: number;
     usersOffline: number;
+    paidSalesCount: number;
+    pendingPaymentTotal: number;
+    pendingPaymentCount: number;
   };
   users: {
     summary: { online: number; idle: number; offline: number; openCashSessions: number };
@@ -133,6 +145,20 @@ type CommandCenter = {
 type ManagedOrder = {
   id: string;
   orderNumber: string;
+  deliveryOrderNumber: string | null;
+  deliveryOrderIssuedAt: string | null;
+  documentMode: string;
+  requiresManualInvoice: boolean;
+  manualInvoiceSeries: string | null;
+  manualInvoiceNumber: string | null;
+  manualInvoiceStatus: string | null;
+  manualInvoiceRegisteredAt: string | null;
+  manualInvoiceCustomerName: string | null;
+  manualInvoiceCustomerRuc: string | null;
+  latestPaymentAt: string | null;
+  paymentStatus: string | null;
+  paymentMethod: string | null;
+  commercialDate: string;
   status: string;
   grandTotal: number;
   createdAt: string;
@@ -251,11 +277,6 @@ function orderStatusBadge(status: string) {
   if (status === "PENDING_PAYMENT" || status === "DISPATCH_PENDING") return <Badge variant="warning">{label}</Badge>;
   if (status.startsWith("RETURN") || status === "RETURNED") return <Badge variant="info">{label}</Badge>;
   return <Badge variant="neutral">{label}</Badge>;
-}
-
-/** Hora local (Managua) de un ISO timestamp. */
-function localTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", timeZone: "America/Managua" });
 }
 
 /** Fecha y hora completa (Managua) de un ISO timestamp. */
@@ -556,7 +577,7 @@ function printOrderDetail(d: OrderDetail) {
   setTimeout(() => w.print(), 300);
 }
 
-function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
+function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => void; refreshKey?: string }) {
   const [orders, setOrders] = useState<ManagedOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -568,6 +589,7 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const mounted = useRef(true);
+  const requestId = useRef(0);
 
   // Estado del modal de detalles/auditoría.
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -576,20 +598,21 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
   const [detailError, setDetailError] = useState<string | null>(null);
 
   const loadOrders = useCallback(async () => {
+    const currentRequest = ++requestId.current;
     setLoading(true);
     try {
       const res = await apiFetch(`/api/master/sales-orders?date=${encodeURIComponent(date)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const data = unwrapApiData(json) as { orders: ManagedOrder[] };
-      if (mounted.current) {
+      if (mounted.current && currentRequest === requestId.current) {
         setOrders(data.orders ?? []);
         setError(null);
       }
     } catch (e) {
-      if (mounted.current) setError(e instanceof Error ? e.message : "Error al cargar facturas");
+      if (mounted.current && currentRequest === requestId.current) setError(e instanceof Error ? e.message : "Error al cargar facturas");
     } finally {
-      if (mounted.current) setLoading(false);
+      if (mounted.current && currentRequest === requestId.current) setLoading(false);
     }
   }, [date]);
 
@@ -599,7 +622,7 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
     return () => {
       mounted.current = false;
     };
-  }, [loadOrders]);
+  }, [loadOrders, refreshKey]);
 
   const openCancelModal = (order: ManagedOrder) => {
     setTarget(order);
@@ -681,6 +704,20 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
     const managed: ManagedOrder = {
       id: detail.id,
       orderNumber: detail.orderNumber,
+      deliveryOrderNumber: null,
+      deliveryOrderIssuedAt: null,
+      documentMode: detail.documentMode,
+      requiresManualInvoice: detail.requiresManualInvoice,
+      manualInvoiceSeries: detail.manualInvoice?.series ?? null,
+      manualInvoiceNumber: detail.manualInvoice?.number ?? null,
+      manualInvoiceStatus: detail.manualInvoice?.status ?? null,
+      manualInvoiceRegisteredAt: detail.manualInvoice?.registeredAt ?? null,
+      manualInvoiceCustomerName: detail.manualInvoice?.customerName ?? null,
+      manualInvoiceCustomerRuc: detail.manualInvoice?.customerRuc ?? null,
+      latestPaymentAt: detail.payments[0]?.paidAt ?? null,
+      paymentStatus: detail.payments[0]?.status ?? null,
+      paymentMethod: detail.payments[0]?.method ?? null,
+      commercialDate: detail.payments[0]?.paidAt ?? detail.manualInvoice?.registeredAt ?? detail.updatedAt ?? detail.createdAt,
       status: detail.status,
       grandTotal: detail.totals.grandTotal,
       createdAt: detail.createdAt,
@@ -758,9 +795,11 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
               <TH>Factura / Orden</TH>
               <TH>Sucursal</TH>
               <TH>Cliente / Vendedor</TH>
-              <TH>Estado</TH>
+              <TH>Estado venta</TH>
+              <TH>Documento</TH>
+              <TH>Pago</TH>
               <TH className="text-right">Total</TH>
-              <TH className="text-right">Hora</TH>
+              <TH className="text-right">Fecha comercial</TH>
               <TH className="text-right">Acciones</TH>
             </TR>
           </THead>
@@ -781,8 +820,10 @@ function InvoicesManagementCard({ onChanged }: { onChanged: () => void }) {
                   </div>
                 </TD>
                 <TD>{orderStatusBadge(o.status)}</TD>
+                <TD className="text-xs text-[var(--color-text-secondary)]">{o.manualInvoiceStatus ?? o.documentMode}</TD>
+                <TD className="text-xs text-[var(--color-text-secondary)]">{o.paymentMethod ?? o.paymentStatus ?? "—"}</TD>
                 <TD className="text-right font-mono text-xs font-semibold text-[var(--color-text)]">{money(o.grandTotal)}</TD>
-                <TD className="text-right text-xs text-[var(--color-text-muted)]">{localTime(o.createdAt)}</TD>
+                <TD className="text-right text-xs text-[var(--color-text-muted)]">{localDateTime(o.commercialDate)}</TD>
                 <TD className="text-right">
                   <div className="inline-flex items-center justify-end gap-2">
                     <Button
@@ -1195,7 +1236,7 @@ export default function MasterCommandCenterPage() {
   useEffect(() => {
     mounted.current = true;
     load(false);
-    const id = setInterval(() => load(true), 20000);
+    const id = setInterval(() => load(true), 5000);
     return () => {
       mounted.current = false;
       clearInterval(id);
@@ -1415,6 +1456,10 @@ export default function MasterCommandCenterPage() {
                       }}
                     />
                   </div>
+                  <div className="mt-1 flex items-center justify-between text-[0.68rem] text-[var(--color-text-muted)]">
+                    <span>{b.paidSalesCount} cobrada(s)</span>
+                    <span>{b.pendingPaymentCount} pendiente(s) · {money(b.pendingPaymentTotal)}</span>
+                  </div>
                 </div>
 
                 {/* Mini stats */}
@@ -1584,7 +1629,7 @@ export default function MasterCommandCenterPage() {
         </div>
       ) : null}
 
-      <InvoicesManagementCard onChanged={() => load(true)} />
+      <InvoicesManagementCard onChanged={() => load(true)} refreshKey={data.generatedAt} />
 
       {/* ── Connected users ── */}
       <Card noPadding>

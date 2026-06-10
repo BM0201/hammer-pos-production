@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { KpiCard } from "@/components/dashboard/kpi-card";
@@ -22,6 +22,7 @@ import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
 import { money } from "@/lib/format";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { useSession } from "@/lib/client/session";
+import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import type { SessionPayload } from "@/types/auth";
 
 type QuickLink = { href: string; label: string; icon: ReactNode };
@@ -52,6 +53,8 @@ type WarehouseSummary = {
 
 type BranchAdminSummary = {
   salesToday: number;
+  pendingPaymentTotal?: number;
+  paidSalesCount?: number;
   pendingPayments: number;
   pendingDispatches: number;
   pendingApprovals: number;
@@ -144,38 +147,43 @@ export default function BranchPage() {
   const [data, setData] = useState<BranchDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   const variant = useMemo(() => {
     if (sessionState.status !== "authenticated") return null;
     return resolveRoleVariant(sessionState.session);
   }, [sessionState]);
 
-  useEffect(() => {
+  const loadDashboard = useCallback(async () => {
     if (sessionState.status !== "authenticated" || !variant || variant === "MASTER") {
       if (variant === "MASTER") setLoading(false);
       return;
     }
 
-    let cancelled = false;
-    setLoading(true);
-    apiFetch("/api/branch/dashboard")
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<ApiResponse<BranchDashboardResponse> | BranchDashboardResponse>;
-      })
-      .then((payload) => {
-        if (!cancelled) setData(unwrapApiData<BranchDashboardResponse>(payload));
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e?.message ?? "Failed to load dashboard");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+    const requestId = ++requestIdRef.current;
+    try {
+      const response = await apiFetch("/api/branch/dashboard");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = await response.json() as ApiResponse<BranchDashboardResponse> | BranchDashboardResponse;
+      if (requestId !== requestIdRef.current) return;
+      setData(unwrapApiData<BranchDashboardResponse>(payload));
+      setUpdatedAt(new Date().toISOString());
+      setError(null);
+    } catch (e) {
+      if (requestId === requestIdRef.current) setError(e instanceof Error ? e.message : "Failed to load dashboard");
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
   }, [sessionState, variant]);
+
+  useOperationalPolling({
+    task: loadDashboard,
+    intervalMs: 5000,
+    enabled: sessionState.status === "authenticated" && Boolean(variant) && variant !== "MASTER",
+    deps: [loadDashboard],
+    onError: () => undefined,
+  });
 
   if (sessionState.status === "loading") {
     return <p className="text-[var(--color-text-muted)] animate-pulse">Cargando…</p>;
@@ -223,6 +231,8 @@ export default function BranchPage() {
     }
     const summary = data.summary;
     return (
+      <>
+      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {new Date(updatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p> : null}
       <RoleSummary
         title="Punto de Venta"
         subtitle="Tu actividad comercial del día."
@@ -242,6 +252,7 @@ export default function BranchPage() {
           },
         ]}
       />
+      </>
     );
   }
 
@@ -255,6 +266,8 @@ export default function BranchPage() {
       ? [`Hay ${summary.discrepancyApprovals} cierres con discrepancia pendientes de revisión.`]
       : [];
     return (
+      <>
+      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {new Date(updatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p> : null}
       <RoleSummary
         title="Caja & Cobros"
         subtitle="Operación de cobro y estado de sesión de caja."
@@ -281,6 +294,7 @@ export default function BranchPage() {
           },
         ]}
       />
+      </>
     );
   }
 
@@ -334,6 +348,7 @@ export default function BranchPage() {
 
   return (
     <>
+      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {new Date(updatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p> : null}
       <RoleSummary
         title="Supervisión de Sucursal"
         subtitle="Resumen operativo para administración local."

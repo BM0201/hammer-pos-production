@@ -1,4 +1,4 @@
-import { ApprovalStatus, PaymentMethod, SaleOrderStatus } from "@prisma/client";
+import { ApprovalStatus, PaymentMethod, PaymentStatus, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 type ReportFilters = {
@@ -37,25 +37,37 @@ function fixed2(value: number) {
 }
 
 export async function getSalesReportRows(filters: ReportFilters) {
-  const rows = await prisma.saleOrder.findMany({
+  const rows = await prisma.payment.findMany({
     where: {
-      ...branchWhere(filters),
-      ...dateWhere(filters, "createdAt"),
-      ...(filters.status ? { status: filters.status as SaleOrderStatus } : {}),
+      status: PaymentStatus.POSTED,
+      ...dateWhere(filters, "paidAt"),
+      saleOrder: {
+        ...branchWhere(filters),
+        status: filters.status ? (filters.status as SaleOrderStatus) : { not: SaleOrderStatus.CANCELLED },
+      },
     },
-    include: { branch: { select: { code: true, name: true } }, createdBy: { select: { username: true, fullName: true } } },
-    orderBy: { createdAt: "desc" },
+    include: {
+      saleOrder: {
+        select: {
+          orderNumber: true,
+          status: true,
+          branch: { select: { code: true, name: true } },
+          createdBy: { select: { username: true, fullName: true } },
+        },
+      },
+    },
+    orderBy: { paidAt: "desc" },
     take: 2000,
   });
 
   return rows.map((row) => ({
-    fecha: row.createdAt.toISOString(),
-    sucursal_codigo: row.branch.code,
-    sucursal_nombre: row.branch.name,
-    orden: row.orderNumber,
-    estado: row.status,
-    vendedor: formatActor(row.createdBy),
-    total: row.grandTotal.toString(),
+    fecha: row.paidAt.toISOString(),
+    sucursal_codigo: row.saleOrder.branch.code,
+    sucursal_nombre: row.saleOrder.branch.name,
+    orden: row.saleOrder.orderNumber,
+    estado: row.saleOrder.status,
+    vendedor: formatActor(row.saleOrder.createdBy),
+    total: row.amount.toString(),
   }));
 }
 

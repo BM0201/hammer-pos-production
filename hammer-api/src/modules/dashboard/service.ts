@@ -1,5 +1,6 @@
-import { ApprovalStatus, SaleOrderStatus, TransportServiceStatus } from "@prisma/client";
+import { ApprovalStatus, PaymentStatus, SaleOrderStatus, TransportServiceStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getBranchSalesRealtimeSummary, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 
 function dayBounds(date = new Date()) {
   const start = new Date(date);
@@ -14,21 +15,11 @@ function toNumber(value: { toNumber: () => number } | null | undefined): number 
 }
 
 export async function getMasterDashboardSummary() {
-  const { start, end } = dayBounds();
-
-  const [branches, salesToday, pendingOrders, pendingApprovals, pendingDispatch] = await Promise.all([
+  const [branches, pendingOrders, pendingApprovals, pendingDispatch] = await Promise.all([
     prisma.branch.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true }, orderBy: { code: "asc" } }),
     prisma.saleOrder.groupBy({
       by: ["branchId"],
-      where: {
-        createdAt: { gte: start, lt: end },
-        status: { in: [SaleOrderStatus.PAID, SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED, SaleOrderStatus.PENDING_PAYMENT] },
-      },
-      _sum: { grandTotal: true },
-    }),
-    prisma.saleOrder.groupBy({
-      by: ["branchId"],
-      where: { status: { in: [SaleOrderStatus.PENDING_PAYMENT, SaleOrderStatus.DISPATCH_PENDING] } },
+      where: { status: SaleOrderStatus.PENDING_PAYMENT },
       _count: { _all: true },
     }),
     prisma.approvalRequest.groupBy({
@@ -42,9 +33,10 @@ export async function getMasterDashboardSummary() {
       _count: { _all: true },
     }),
   ]);
+  const salesSummaries = await Promise.all(branches.map((branch) => getBranchSalesRealtimeSummary(branch.id)));
 
   const byBranch = branches.map((branch) => {
-    const today = salesToday.find((item) => item.branchId === branch.id);
+    const today = salesSummaries.find((item) => item.branchId === branch.id);
     const pending = pendingOrders.find((item) => item.branchId === branch.id);
     const approvals = pendingApprovals.find((item) => item.branchId === branch.id);
     const dispatch = pendingDispatch.find((item) => item.branchId === branch.id);
@@ -52,7 +44,7 @@ export async function getMasterDashboardSummary() {
       branchId: branch.id,
       branchCode: branch.code,
       branchName: branch.name,
-      salesToday: toNumber(today?._sum.grandTotal),
+      salesToday: today?.paidSalesTotal ?? 0,
       pendingOrders: pending?._count._all ?? 0,
       pendingApprovals: approvals?._count._all ?? 0,
       pendingDispatch: dispatch?._count._all ?? 0,
@@ -72,17 +64,8 @@ export async function getMasterDashboardSummary() {
 }
 
 export async function getBranchAdminDashboardSummary(branchIds: string[]) {
-  const { start, end } = dayBounds();
-
-  const [salesToday, pendingPayments, pendingDispatches, pendingApprovals, criticalInventory, pendingTransports] = await Promise.all([
-    prisma.saleOrder.aggregate({
-      where: {
-        branchId: { in: branchIds },
-        createdAt: { gte: start, lt: end },
-        status: { in: [SaleOrderStatus.PAID, SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED, SaleOrderStatus.PENDING_PAYMENT] },
-      },
-      _sum: { grandTotal: true },
-    }),
+  const [salesSummaries, pendingPayments, pendingDispatches, pendingApprovals, criticalInventory, pendingTransports] = await Promise.all([
+    Promise.all(branchIds.map((branchId) => getBranchSalesRealtimeSummary(branchId))),
     prisma.saleOrder.count({
       where: { branchId: { in: branchIds }, status: SaleOrderStatus.PENDING_PAYMENT },
     }),
@@ -111,7 +94,9 @@ export async function getBranchAdminDashboardSummary(branchIds: string[]) {
   if (criticalInventory > 0) alerts.push(`Hay ${criticalInventory} balances con inventario crítico (≤ 5).`);
 
   return {
-    salesToday: toNumber(salesToday._sum.grandTotal),
+    salesToday: salesSummaries.reduce((acc, summary) => acc + summary.paidSalesTotal, 0),
+    pendingPaymentTotal: salesSummaries.reduce((acc, summary) => acc + summary.pendingPaymentTotal, 0),
+    paidSalesCount: salesSummaries.reduce((acc, summary) => acc + summary.paidSalesCount, 0),
     pendingPayments,
     pendingDispatches,
     pendingApprovals,
@@ -122,26 +107,27 @@ export async function getBranchAdminDashboardSummary(branchIds: string[]) {
 }
 
 export async function getSalesDashboardSummary(branchId: string, userId: string) {
-  const { start, end } = dayBounds();
+  const { start, end } = getOperationalWindowForManaguaDate();
 
   const [draftsOpen, sentToPayment, salesToday] = await Promise.all([
     prisma.saleOrder.count({ where: { branchId, createdByUserId: userId, status: SaleOrderStatus.DRAFT } }),
     prisma.saleOrder.count({ where: { branchId, createdByUserId: userId, status: SaleOrderStatus.PENDING_PAYMENT } }),
-    prisma.saleOrder.aggregate({
+    prisma.payment.aggregate({
       where: {
-        branchId,
-        createdByUserId: userId,
-        createdAt: { gte: start, lt: end },
-        status: { in: [SaleOrderStatus.PENDING_PAYMENT, SaleOrderStatus.PAID, SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED] },
+        status: PaymentStatus.POSTED,
+        paidAt: { gte: start, lt: end },
+        saleOrder: { branchId, createdByUserId: userId, status: { not: SaleOrderStatus.CANCELLED } },
       },
-      _sum: { grandTotal: true },
+      _sum: { amount: true },
+      _count: { _all: true },
     }),
   ]);
 
   return {
     draftsOpen,
     sentToPayment,
-    salesToday: toNumber(salesToday._sum.grandTotal),
+    salesToday: toNumber(salesToday._sum.amount),
+    paidSalesCount: salesToday._count._all,
   };
 }
 
@@ -155,7 +141,7 @@ export async function getCashierDashboardSummary(branchId: string) {
     }),
     prisma.saleOrder.count({ where: { branchId, status: SaleOrderStatus.PENDING_PAYMENT } }),
     prisma.payment.findFirst({
-      where: { saleOrder: { branchId } },
+      where: { status: PaymentStatus.POSTED, saleOrder: { branchId, status: { not: SaleOrderStatus.CANCELLED } } },
       orderBy: { paidAt: "desc" },
       include: { saleOrder: { select: { orderNumber: true } } },
     }),

@@ -952,9 +952,15 @@ export async function listSaleOrdersForManagement(params: {
 }) {
   const { start, end } = managuaDayRangeUtc(params.date ?? undefined);
   const where: Prisma.SaleOrderWhereInput = {
-    createdAt: { gte: start, lt: end },
     // Excluimos los borradores: no son ventas confirmadas.
     status: { not: SaleOrderStatus.DRAFT },
+    OR: [
+      { payments: { some: { status: PaymentStatus.POSTED, paidAt: { gte: start, lt: end } } } },
+      { manualInvoiceRegisteredAt: { gte: start, lt: end } },
+      { deliveryOrderIssuedAt: { gte: start, lt: end } },
+      { updatedAt: { gte: start, lt: end } },
+      { createdAt: { gte: start, lt: end } },
+    ],
   };
   if (!params.includeAllBranches && params.branchId) {
     where.branchId = params.branchId;
@@ -970,28 +976,70 @@ export async function listSaleOrdersForManagement(params: {
       status: true,
       grandTotal: true,
       createdAt: true,
+      updatedAt: true,
       notes: true,
+      deliveryOrderNumber: true,
+      deliveryOrderIssuedAt: true,
+      documentMode: true,
+      requiresManualInvoice: true,
+      manualInvoiceSeries: true,
+      manualInvoiceNumber: true,
+      manualInvoiceStatus: true,
+      manualInvoiceRegisteredAt: true,
+      manualInvoiceCustomerName: true,
+      manualInvoiceCustomerRuc: true,
       branch: { select: { id: true, code: true, name: true } },
       customer: { select: { displayName: true, legalName: true } },
       createdBy: { select: { id: true, username: true, fullName: true } },
+      payments: {
+        where: { status: PaymentStatus.POSTED },
+        select: { paidAt: true, status: true, method: true },
+        orderBy: { paidAt: "desc" },
+        take: 1,
+      },
       _count: { select: { lines: true } },
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: { updatedAt: "desc" },
     take: 200,
   });
 
-  return orders.map((o) => ({
-    id: o.id,
-    orderNumber: o.orderNumber,
-    status: o.status,
-    grandTotal: Number(o.grandTotal),
-    createdAt: o.createdAt.toISOString(),
-    branch: o.branch,
-    customerName: o.customer?.displayName ?? o.customer?.legalName ?? null,
-    createdByName: o.createdBy?.fullName ?? o.createdBy?.username ?? null,
-    linesCount: o._count.lines,
-    cancellable: isSaleOrderCancellable(o.status),
-  }));
+  return orders
+    .map((o) => {
+      const latestPayment = o.payments[0] ?? null;
+      const commercialDate =
+        latestPayment?.paidAt ??
+        o.manualInvoiceRegisteredAt ??
+        o.deliveryOrderIssuedAt ??
+        o.updatedAt ??
+        o.createdAt;
+      return {
+        id: o.id,
+        orderNumber: o.orderNumber,
+        deliveryOrderNumber: o.deliveryOrderNumber,
+        deliveryOrderIssuedAt: o.deliveryOrderIssuedAt?.toISOString() ?? null,
+        documentMode: o.documentMode,
+        requiresManualInvoice: o.requiresManualInvoice,
+        manualInvoiceSeries: o.manualInvoiceSeries,
+        manualInvoiceNumber: o.manualInvoiceNumber,
+        manualInvoiceStatus: o.manualInvoiceStatus,
+        manualInvoiceRegisteredAt: o.manualInvoiceRegisteredAt?.toISOString() ?? null,
+        manualInvoiceCustomerName: o.manualInvoiceCustomerName,
+        manualInvoiceCustomerRuc: o.manualInvoiceCustomerRuc,
+        latestPaymentAt: latestPayment?.paidAt.toISOString() ?? null,
+        paymentStatus: latestPayment?.status ?? (o.status === SaleOrderStatus.PENDING_PAYMENT ? "PENDING_PAYMENT" : null),
+        paymentMethod: latestPayment?.method ?? null,
+        commercialDate: commercialDate.toISOString(),
+        status: o.status,
+        grandTotal: Number(o.grandTotal),
+        createdAt: o.createdAt.toISOString(),
+        branch: o.branch,
+        customerName: o.customer?.displayName ?? o.customer?.legalName ?? null,
+        createdByName: o.createdBy?.fullName ?? o.createdBy?.username ?? null,
+        linesCount: o._count.lines,
+        cancellable: isSaleOrderCancellable(o.status),
+      };
+    })
+    .sort((a, b) => new Date(b.commercialDate).getTime() - new Date(a.commercialDate).getTime());
 }
 
 /**
