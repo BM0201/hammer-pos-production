@@ -35,8 +35,21 @@ export const decisionFiltersSchema = z.object({
 });
 
 export const scanBrainSchema = z.object({
+  mode: z.enum(["QUICK_SCAN", "OPERATIONAL_DAY_SCAN", "ENTITY_SCAN", "DEEP_SCAN", "REPAIR_SCAN"]).optional(),
   branchId: z.string().min(1).optional(),
+  businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  operationalDayId: z.string().min(1).optional(),
+  cashSessionId: z.string().min(1).optional(),
+  saleOrderId: z.string().min(1).optional(),
+  productId: z.string().min(1).optional(),
   category: z.nativeEnum(BrainDecisionCategory).optional(),
+  severity: z.nativeEnum(BrainDecisionSeverity).optional(),
+  detector: z.string().max(80).optional(),
+  dateFrom: z.string().datetime().optional(),
+  dateTo: z.string().datetime().optional(),
+  maxIssues: z.number().int().min(1).max(500).optional(),
+  maxEntities: z.number().int().min(1).max(5000).optional(),
+  timeoutMs: z.number().int().min(500).max(30000).optional(),
   dryRun: z.boolean().optional(),
   force: z.boolean().optional(),
   days: z.number().int().min(1).max(365).optional(),

@@ -2,6 +2,8 @@ import { convertAlertToPurchaseOrder, convertAlertToTransfer } from "@/modules/r
 import { createPurchaseOrder } from "@/modules/purchase-orders/service";
 import { createTransfer } from "@/modules/transfers/service";
 import { prisma } from "@/lib/prisma";
+import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
+import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 
 type ExecuteInput = {
   decisionId: string;
@@ -161,6 +163,61 @@ export async function executeDecisionAction(input: ExecuteInput): Promise<Execut
     };
   }
 
+  if (action === "RECALCULATE_CASH_SESSION") {
+    const cashSessionId = stringValue(payload.cashSessionId ?? asRecord(payload.target).entityId);
+    if (!cashSessionId) return { executed: false, action, message: "Falta cashSessionId para recalcular caja." };
+    const before = await prisma.cashSession.findUnique({
+      where: { id: cashSessionId },
+      select: { expectedCashAmount: true, differenceAmount: true },
+    });
+    const snapshot = await prisma.$transaction((tx) => syncCashSessionSnapshotTx(tx, cashSessionId));
+    const after = await prisma.cashSession.findUnique({
+      where: { id: cashSessionId },
+      select: { expectedCashAmount: true, differenceAmount: true },
+    });
+    return {
+      executed: true,
+      action,
+      executedEntityType: "CashSession",
+      executedEntityId: cashSessionId,
+      before: {
+        expectedCashAmount: before?.expectedCashAmount?.toString() ?? null,
+        differenceAmount: before?.differenceAmount?.toString() ?? null,
+      },
+      after: {
+        expectedCashAmount: after?.expectedCashAmount?.toString() ?? null,
+        differenceAmount: after?.differenceAmount?.toString() ?? null,
+      },
+      snapshot,
+    };
+  }
+
+  if (action === "REFRESH_OPERATIONAL_DAY") {
+    const operationalDayId = stringValue(payload.operationalDayId ?? asRecord(payload.target).entityId);
+    if (!operationalDayId) return { executed: false, action, message: "Falta operationalDayId para refrescar Dia Operativo." };
+    const before = await prisma.operationalDay.findUnique({
+      where: { id: operationalDayId },
+      select: { salesTotal: true, pendingPaymentTotal: true, autoClosedPendingReviewCount: true, summaryJson: true },
+    });
+    const after = await prisma.$transaction((tx) => refreshOperationalDaySummaryTx(tx, operationalDayId));
+    return {
+      executed: true,
+      action,
+      executedEntityType: "OperationalDay",
+      executedEntityId: operationalDayId,
+      before: before ? {
+        salesTotal: before.salesTotal.toString(),
+        pendingPaymentTotal: before.pendingPaymentTotal.toString(),
+        autoClosedPendingReviewCount: before.autoClosedPendingReviewCount,
+      } : null,
+      after: after ? {
+        salesTotal: after.salesTotal.toString(),
+        pendingPaymentTotal: after.pendingPaymentTotal.toString(),
+        autoClosedPendingReviewCount: after.autoClosedPendingReviewCount,
+      } : null,
+    };
+  }
+
   if (
     action === "CREATE_PRICE_CHANGE_PROPOSAL"
     || action === "CREATE_DISCOUNT_PROPOSAL"
@@ -169,6 +226,11 @@ export async function executeDecisionAction(input: ExecuteInput): Promise<Execut
     || action === "REVIEW_CASH_SESSION"
     || action === "REQUIRE_CASH_REVIEW"
     || action === "REVIEW_ONLY"
+    || action === "REPAIR_DRAFT_ORDER_TOTALS"
+    || action === "BLOCK_ORDER_FOR_REVIEW"
+    || action === "RECALCULATE_KARDEX_BALANCE"
+    || action === "CREATE_INVENTORY_ADJUSTMENT_DRAFT"
+    || action === "INVALIDATE_MANUAL_INVOICE"
   ) {
     return {
       executed: false,

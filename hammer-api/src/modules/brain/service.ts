@@ -8,7 +8,7 @@ import {
   priorityScoreFor,
   riskScoreFor,
 } from "@/modules/brain/scoring";
-import type { BrainDecisionDraft, BrainDecisionFilters, BrainScanResult } from "@/modules/brain/types";
+import type { BrainDecisionDraft, BrainDecisionFilters, BrainScanResult, BrainDetectorLimits, BrainScanScope } from "@/modules/brain/types";
 
 const terminalStatuses: BrainDecisionStatus[] = ["EXECUTED", "DISMISSED"];
 const activeStatuses: BrainDecisionStatus[] = ["OPEN", "APPROVED", "MANUAL_REVIEW", "SNOOZED", "FAILED"];
@@ -420,7 +420,13 @@ async function writeActionLog(input: {
 export async function persistBrainDecisions(
   drafts: BrainDecisionDraft[],
   actorUserId?: string,
-  options: { force?: boolean; dryRun?: boolean; scannedCategories?: BrainScanResult["scannedCategories"] } = {},
+  options: {
+    force?: boolean;
+    dryRun?: boolean;
+    scannedCategories?: BrainScanResult["scannedCategories"];
+    scope?: BrainScanScope;
+    limits?: BrainDetectorLimits;
+  } = {},
 ): Promise<BrainScanResult> {
   let created = 0;
   let updated = 0;
@@ -520,7 +526,7 @@ export async function persistBrainDecisions(
         action: "SCANNED",
         entityType: "BrainDecision",
         entityId: "scan",
-        metadataJson: { total: drafts.length, created, updated, reopened, expired, skipped, errors, byCategory },
+        metadataJson: { total: drafts.length, created, updated, reopened, expired, skipped, errors, byCategory, scope: options.scope, limits: options.limits },
       },
     });
   }
@@ -535,6 +541,8 @@ export async function persistBrainDecisions(
     errors,
     scannedCategories: options.scannedCategories ?? [],
     byCategory,
+    scope: options.scope,
+    limits: options.limits,
   };
 }
 

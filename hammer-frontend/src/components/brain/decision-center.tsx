@@ -45,6 +45,8 @@ type BrainResponse = {
   };
 };
 
+type BrainScanMode = "QUICK_SCAN" | "OPERATIONAL_DAY_SCAN" | "ENTITY_SCAN" | "DEEP_SCAN" | "REPAIR_SCAN";
+
 const initialFilters: BrainFilterState = {
   branchId: "",
   category: "",
@@ -95,6 +97,13 @@ function scrollToPriorities() {
 
 export function DecisionCenter() {
   const [filters, setFilters] = useState(initialFilters);
+  const [scanMode, setScanMode] = useState<BrainScanMode>("QUICK_SCAN");
+  const [businessDate, setBusinessDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [operationalDayId, setOperationalDayId] = useState("");
+  const [cashSessionId, setCashSessionId] = useState("");
+  const [saleOrderId, setSaleOrderId] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [branches, setBranches] = useState<BranchOption[]>([]);
   const [data, setData] = useState<BrainResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -156,20 +165,37 @@ export function DecisionCenter() {
     setBusyAction(dryRun ? "dry-run" : "scan");
     setMessage(null);
     try {
+      const entityScope = scanMode === "ENTITY_SCAN"
+        ? {
+            operationalDayId: operationalDayId || undefined,
+            cashSessionId: cashSessionId || undefined,
+            saleOrderId: saleOrderId || undefined,
+            productId: filters.productId || undefined,
+          }
+        : {};
       const response = await apiFetch("/api/master/brain/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode: scanMode,
           branchId: filters.branchId || undefined,
+          businessDate: scanMode === "QUICK_SCAN" || scanMode === "OPERATIONAL_DAY_SCAN" ? businessDate || undefined : undefined,
+          operationalDayId: scanMode === "OPERATIONAL_DAY_SCAN" ? operationalDayId || undefined : undefined,
+          ...entityScope,
           category: filters.category || undefined,
+          severity: filters.severity || undefined,
+          dateFrom: scanMode === "DEEP_SCAN" && dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`).toISOString() : undefined,
+          dateTo: scanMode === "DEEP_SCAN" && dateTo ? new Date(`${dateTo}T23:59:59.999Z`).toISOString() : undefined,
+          maxIssues: scanMode === "QUICK_SCAN" ? 50 : 150,
+          maxEntities: scanMode === "QUICK_SCAN" ? 250 : 1000,
           days: Number(filters.days || 30),
           dryRun,
         }),
       });
       const raw = await response.json();
       if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo ejecutar el analisis.");
-      const result = unwrapApiData(raw) as { created: number; updated: number; reopened: number; expired: number; skipped: number; errors?: unknown[] };
-      setMessage(`${dryRun ? "Dry run" : "Analisis"} completado: ${result.created} nuevas, ${result.updated} actualizadas, ${result.reopened} reabiertas, ${result.expired} expiradas, ${result.skipped} omitidas${result.errors?.length ? `, ${result.errors.length} avisos` : ""}.`);
+      const result = unwrapApiData(raw) as { created: number; updated: number; reopened: number; expired: number; skipped: number; errors?: unknown[]; total?: number; scannedCategories?: string[] };
+      setMessage(`${dryRun ? "Dry run" : scanMode} completado: ${result.created} nuevas, ${result.updated} actualizadas, ${result.reopened} reabiertas, ${result.expired} expiradas, ${result.skipped} omitidas, ${result.total ?? 0} hallazgos${result.errors?.length ? `, ${result.errors.length} avisos` : ""}.`);
       if (!dryRun) await load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Error ejecutando analisis.");
@@ -285,7 +311,7 @@ export function DecisionCenter() {
             ) : null}
             <button type="button" disabled={Boolean(busyAction)} className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/25 transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300" onClick={() => scan(false)}>
               {busyAction === "scan" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
-              {busyAction === "scan" ? "Escaneando..." : "Escanear ahora"}
+              {busyAction === "scan" ? "Escaneando..." : scanMode === "QUICK_SCAN" ? "Escaneo rapido" : "Escanear scope"}
             </button>
             <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white/90 px-4 py-2.5 text-sm font-bold text-blue-700 shadow-sm transition hover:bg-blue-50" onClick={scrollToPriorities}>
               <ArrowDown className="h-4 w-4" />
@@ -296,6 +322,55 @@ export function DecisionCenter() {
       </header>
 
       <BrainSummary kpis={kpis} />
+
+      <section className="rounded-2xl border border-blue-100 bg-white p-4 shadow-lg shadow-blue-100/60">
+        <div className="grid gap-3 lg:grid-cols-12">
+          <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-3">
+            Tipo de escaneo
+            <select className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={scanMode} onChange={(event) => setScanMode(event.target.value as BrainScanMode)}>
+              <option value="QUICK_SCAN">Escaneo rapido</option>
+              <option value="OPERATIONAL_DAY_SCAN">Dia operativo</option>
+              <option value="ENTITY_SCAN">Entidad</option>
+              <option value="DEEP_SCAN">Profundo</option>
+              <option value="REPAIR_SCAN">Revalidar abiertos</option>
+            </select>
+          </label>
+          <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-2">
+            Fecha operativa
+            <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} />
+          </label>
+          <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-3">
+            Dia operativo ID
+            <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={operationalDayId} onChange={(event) => setOperationalDayId(event.target.value)} placeholder="OperationalDay" />
+          </label>
+          <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-2">
+            Desde
+            <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} disabled={scanMode !== "DEEP_SCAN"} />
+          </label>
+          <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-2">
+            Hasta
+            <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} disabled={scanMode !== "DEEP_SCAN"} />
+          </label>
+          <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-3">
+            Orden ID
+            <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={saleOrderId} onChange={(event) => setSaleOrderId(event.target.value)} disabled={scanMode !== "ENTITY_SCAN"} placeholder="SaleOrder" />
+          </label>
+          <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-3">
+            Caja ID
+            <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={cashSessionId} onChange={(event) => setCashSessionId(event.target.value)} disabled={scanMode !== "ENTITY_SCAN"} placeholder="CashSession" />
+          </label>
+          <div className="flex items-end gap-2 lg:col-span-6">
+            <button type="button" disabled={Boolean(busyAction)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60" onClick={() => scan(true)}>
+              <Sparkles className="h-4 w-4" />
+              Dry-run
+            </button>
+            <button type="button" disabled={Boolean(busyAction)} className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/25 transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300" onClick={() => scan(false)}>
+              {busyAction === "scan" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
+              Ejecutar
+            </button>
+          </div>
+        </div>
+      </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-lg shadow-slate-200/60">
         <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">

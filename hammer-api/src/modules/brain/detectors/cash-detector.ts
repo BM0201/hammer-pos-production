@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
 import { riskScoreFor } from "@/modules/brain/scoring";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
 
@@ -18,20 +19,20 @@ function formatActor(user: { fullName?: string | null; username?: string | null 
 export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
 
-  const [closures, discountedOrders, payments] = await Promise.all([
-    prisma.cashClosure.findMany({
+  const [closures, discountedOrders, payments, scopedCashSessions] = await Promise.all([
+    ctx.mode === "DEEP_SCAN" || ctx.mode === "REPAIR_SCAN" ? prisma.cashClosure.findMany({
       where: {
-        closedAt: { gte: ctx.since },
+        closedAt: { gte: ctx.dateFrom, lt: ctx.dateTo },
         ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
         OR: [{ isReopened: true }, { reopenCount: { gt: 0 } }, { emergencySalesCount: { gt: 0 } }],
       },
       include: { branch: { select: { id: true, code: true, name: true } } },
-      take: 100,
+      take: Math.min(100, ctx.limits.maxEntities),
       orderBy: { closedAt: "desc" },
-    }),
+    }) : Promise.resolve([]),
     prisma.saleOrder.findMany({
       where: {
-        createdAt: { gte: ctx.since },
+        payments: { some: { paidAt: { gte: ctx.dateFrom, lt: ctx.dateTo } } },
         discountTotal: { gt: 0 },
         ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
       },
@@ -39,17 +40,36 @@ export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<Br
         branch: { select: { id: true, code: true, name: true } },
         createdBy: { select: { id: true, username: true, fullName: true } },
       },
-      take: 500,
+      take: Math.min(500, ctx.limits.maxEntities),
       orderBy: { createdAt: "desc" },
     }),
     prisma.payment.findMany({
       where: {
-        createdAt: { gte: ctx.since },
+        paidAt: { gte: ctx.dateFrom, lt: ctx.dateTo },
         status: "POSTED",
         saleOrder: ctx.branchId ? { branchId: ctx.branchId } : undefined,
       },
       select: { saleOrderId: true },
-      take: 1000,
+      take: Math.min(1000, ctx.limits.maxEntities),
+    }),
+    prisma.cashSession.findMany({
+      where: {
+        ...(ctx.cashSessionId ? { id: ctx.cashSessionId } : {}),
+        ...(ctx.operationalDayId ? { operationalDayId: ctx.operationalDayId } : {}),
+        ...(ctx.branchId ? { physicalCashBox: { branchId: ctx.branchId } } : {}),
+        openedAt: ctx.cashSessionId || ctx.operationalDayId ? undefined : { lt: ctx.dateTo },
+        OR: ctx.cashSessionId || ctx.operationalDayId ? undefined : [
+          { closedAt: null },
+          { closedAt: { gte: ctx.dateFrom } },
+          { autoClosedAt: { gte: ctx.dateFrom } },
+        ],
+      },
+      include: {
+        physicalCashBox: { include: { branch: { select: { id: true, code: true, name: true } } } },
+        openedBy: { select: { id: true, username: true, fullName: true } },
+      },
+      take: Math.min(200, ctx.limits.maxEntities),
+      orderBy: { openedAt: "desc" },
     }),
   ]);
 
@@ -94,6 +114,51 @@ export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<Br
       },
       sourceJson: { detector: "cash-detector", cashSessionId: session.id },
       fingerprintParts: ["cash", "auto-closed-pending-review", session.id],
+    });
+  }
+
+  for (const session of scopedCashSessions) {
+    const snapshot = await prisma.$transaction((tx) => calculateExpectedCashForSessionTx(tx, session.id, session.openingAmount));
+    const storedExpected = session.expectedCashAmount == null ? null : n(session.expectedCashAmount);
+    const mismatch = storedExpected !== null && Math.abs(storedExpected - snapshot.expectedCash) >= 0.01;
+    if (!mismatch) continue;
+
+    decisions.push({
+      category: "CASH",
+      severity: Math.abs((storedExpected ?? 0) - snapshot.expectedCash) > 1000 ? "CRITICAL" : "HIGH",
+      title: `Snapshot de caja desactualizado: ${session.physicalCashBox.code}`,
+      description: `${session.physicalCashBox.branch.code} guarda esperado C$${storedExpected?.toFixed(2) ?? "0.00"}, pero PaymentTender + movimientos calculan C$${snapshot.expectedCash.toFixed(2)}.`,
+      recommendation: "Recalcular la caja desde PaymentTender POSTED y CashMovement antes de cerrar Dia Operativo.",
+      branchId: session.physicalCashBox.branchId,
+      targetUserId: session.openedByUserId,
+      confidenceScore: 98,
+      impactAmount: Math.abs((storedExpected ?? 0) - snapshot.expectedCash),
+      riskScore: riskScoreFor(Math.abs((storedExpected ?? 0) - snapshot.expectedCash) > 1000 ? "CRITICAL" : "HIGH", 98),
+      proposedActionType: "RECALCULATE_CASH_SESSION",
+      proposedActionJson: {
+        type: "RECALCULATE_CASH_SESSION",
+        dryRunSupported: true,
+        requiresApproval: false,
+        target: { entityType: "CashSession", entityId: session.id },
+        expectedEffect: "Actualizar expectedCashAmount/differenceAmount desde tenders y movimientos.",
+        cashSessionId: session.id,
+      },
+      evidenceJson: {
+        detector: "CASH_SESSION_INTEGRITY_DETECTOR",
+        rootCause: "CashSession.expectedCashAmount no coincide con el snapshot tecnico calculado desde PaymentTender POSTED y CashMovement.",
+        diagnosis: "Caja con snapshot viejo o descuadrado.",
+        cashSessionId: session.id,
+        storedExpectedCashAmount: storedExpected,
+        computedExpectedCashAmount: snapshot.expectedCash,
+        openingAmount: snapshot.openingAmount,
+        postedCashPayments: snapshot.postedCashPayments,
+        cashMovementsNet: snapshot.cashMovementsNet,
+        cashChange: snapshot.cashChange,
+        blocksOperationalDayClose: true,
+        actionPlan: "RECALCULATE_CASH_SESSION",
+      },
+      sourceJson: { detector: "cash-detector", mode: ctx.mode, scope: ctx.scope, problemCode: "CASH_SESSION_EXPECTED_MISMATCH" },
+      fingerprintParts: ["brain", "CASH_SESSION_INTEGRITY_DETECTOR", session.physicalCashBox.branchId, ctx.businessDate ?? "range", "CashSession", session.id, "CASH_SESSION_EXPECTED_MISMATCH"],
     });
   }
 

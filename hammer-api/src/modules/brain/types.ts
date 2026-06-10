@@ -5,11 +5,47 @@ import type {
   Prisma,
 } from "@prisma/client";
 
+export type BrainScanMode = "QUICK_SCAN" | "OPERATIONAL_DAY_SCAN" | "ENTITY_SCAN" | "DEEP_SCAN" | "REPAIR_SCAN";
+
+export type BrainScanScope = {
+  branchId?: string;
+  businessDate?: string;
+  operationalDayId?: string;
+  cashSessionId?: string;
+  saleOrderId?: string;
+  productId?: string;
+  category?: BrainDecisionCategory;
+  module?: string;
+  severity?: BrainDecisionSeverity;
+  detector?: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  mode: BrainScanMode;
+};
+
+export type BrainDetectorLimits = {
+  maxIssues: number;
+  maxEntities: number;
+  timeoutMs: number;
+};
+
 export type BrainDetectorContext = {
   branchId?: string;
+  businessDate?: string;
+  operationalDayId?: string;
+  cashSessionId?: string;
+  saleOrderId?: string;
+  productId?: string;
+  detector?: string;
+  mode: BrainScanMode;
   days: number;
   since: Date;
   now: Date;
+  dateFrom: Date;
+  dateTo: Date;
+  scope: BrainScanScope;
+  limits: BrainDetectorLimits;
+  dryRun?: boolean;
 };
 
 export type BrainDecisionDraft = {
@@ -44,6 +80,8 @@ export type BrainScanResult = {
   errors: Array<{ detector?: string; message: string }>;
   scannedCategories: BrainDecisionCategory[];
   byCategory: Partial<Record<BrainDecisionCategory, number>>;
+  scope?: BrainScanScope;
+  limits?: BrainDetectorLimits;
 };
 
 export type BrainDecisionFilters = {
