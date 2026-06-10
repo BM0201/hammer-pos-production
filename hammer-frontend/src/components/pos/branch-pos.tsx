@@ -896,8 +896,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
   }
 
   return (
-    <section className="space-y-3" data-testid="pos-root">
-      <div className="grid gap-3 md:grid-cols-5">
+    <section className="flex h-[calc(100vh-7.5rem)] min-h-[34rem] flex-col gap-3 overflow-hidden" data-testid="pos-root">
+      <div className="grid shrink-0 gap-3 md:grid-cols-5">
         <Card className="p-3">
           <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">
             <Banknote className="h-3.5 w-3.5" /> Ventas del dia
@@ -928,9 +928,9 @@ export function BranchPos({ branchId }: { branchId: string }) {
           </p>
         </Card>
       </div>
-      <section className="h-[calc(100vh-12rem)] min-h-[34rem] overflow-hidden">
-        <div className="grid h-full grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-          <Card noPadding className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm" data-testid="pos-catalog-zone">
+      <section className="min-h-0 flex-1 overflow-hidden">
+        <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(12rem,0.75fr)_minmax(0,1.25fr)] gap-4 xl:grid-cols-[0.9fr_1.1fr] xl:grid-rows-1">
+          <Card noPadding className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm" data-testid="pos-catalog-zone">
             <div className="hm-card-header-blue flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <ShoppingCart className="h-4 w-4" />
@@ -1024,10 +1024,10 @@ export function BranchPos({ branchId }: { branchId: string }) {
             ref={ticketPanelRef}
             tabIndex={0}
             onKeyDown={handleTicketKeyDown}
-            className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-strong)]"
+            className="h-full min-h-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-strong)]"
             data-testid="pos-ticket-zone"
           >
-            <Card noPadding className="flex h-full flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm">
+            <Card noPadding className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm">
               <div className="hm-card-header-green flex items-center gap-2.5">
                 <Check className="h-4 w-4" />
                 <div>
