@@ -20,6 +20,10 @@ export function CloseDayDialog({
   const [busy, setBusy] = useState<"preview" | "close" | null>(null);
   const hasWarnings = Boolean(preview?.warnings.length);
   const hasBlockers = Boolean(preview?.blockers.length);
+  const hasHardBlockers = Boolean(preview?.blockers.some((item) => (
+    item.key === "open_cash_sessions" || item.key === "auto_closed_pending_review" || item.key === "pending_payments"
+  )));
+  const canForceClose = hasBlockers && !hasHardBlockers;
 
   async function previewNow() {
     setBusy("preview");
@@ -43,7 +47,7 @@ export function CloseDayDialog({
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
       <div className="flex flex-wrap gap-2">
         <Button variant="secondary" onClick={previewNow} loading={busy === "preview"} disabled={disabled}>Previsualizar cierre</Button>
-        <Button variant="danger" onClick={closeNow} loading={busy === "close"} disabled={disabled || !preview || (hasBlockers && !forceClose) || ((hasWarnings || forceClose) && note.trim().length < 5)}>
+        <Button variant="danger" onClick={closeNow} loading={busy === "close"} disabled={disabled || !preview || hasHardBlockers || (hasBlockers && !forceClose) || ((hasWarnings || forceClose) && note.trim().length < 5)}>
           Cerrar dia operativo
         </Button>
       </div>
@@ -51,11 +55,16 @@ export function CloseDayDialog({
         <span className="font-semibold text-[var(--color-text-muted)]">Nota de cierre</span>
         <textarea className="hm-input min-h-20 rounded-lg px-3 py-2" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Obligatoria si hay advertencias o cierre forzado." />
       </label>
-      {hasBlockers ? (
+      {canForceClose ? (
         <label className="mt-3 flex items-center gap-2 text-sm text-[var(--color-danger-700)]">
           <input type="checkbox" checked={forceClose} onChange={(event) => setForceClose(event.target.checked)} />
           Forzar cierre con permiso MASTER
         </label>
+      ) : null}
+      {hasHardBlockers ? (
+        <p className="mt-3 text-sm text-[var(--color-danger-700)]">
+          Hay bloqueantes duros: cajas abiertas, cierres automaticos pendientes o pagos pendientes deben resolverse antes de cerrar.
+        </p>
       ) : null}
     </div>
   );

@@ -10,11 +10,12 @@ import {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { OperationalDayClosePreview, ChecklistItem } from "@/modules/operations/types";
+import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-policy";
 
-const TIMEZONE = "America/Managua";
+export const OPERATIONAL_TIMEZONE = "America/Managua";
+const TIMEZONE = OPERATIONAL_TIMEZONE;
 const CLOSED_ORDER_STATUSES = [SaleOrderStatus.DISPATCH_PENDING, SaleOrderStatus.DISPATCHED, SaleOrderStatus.PAID];
 const ACTIVE_DISPATCH_STATUSES = ["PENDING", "IN_PROGRESS"] as const;
-
 function decimal(value: number) {
   return new Prisma.Decimal(Number.isFinite(value) ? value : 0);
 }
@@ -56,6 +57,10 @@ function operationalWindow(businessDate: Date) {
   const start = new Date(Date.UTC(year, month, day, 6, 0, 0, 0));
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { start, end };
+}
+
+export function getOperationalWindowForNow(now = new Date()) {
+  return operationalWindow(businessDateFromNow(now));
 }
 
 async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: { id: string; branchId: string; businessDate: Date }) {
@@ -346,6 +351,10 @@ export async function closeOperationalDay(input: {
     const summary = await calculateOperationalSummaryTx(tx, day);
     const preview = buildChecklist(summary, day.status);
     const hasWarnings = preview.warnings.length > 0;
+    const hardBlockers = preview.blockers.filter((item) => isHardOperationalDayCloseBlocker(item.key));
+    if (hardBlockers.length > 0) {
+      throw new Error("OPERATIONAL_DAY_HAS_HARD_BLOCKERS");
+    }
     if (preview.blockers.length > 0 && !(input.forceClose && input.isMaster)) {
       throw new Error("OPERATIONAL_DAY_HAS_BLOCKERS");
     }

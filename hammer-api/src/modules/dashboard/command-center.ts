@@ -1,6 +1,11 @@
 import { CashSessionStatus, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getUserActivitySnapshot } from "@/modules/auth/presence-service";
+import { getOperationalWindowForNow, OPERATIONAL_TIMEZONE } from "@/modules/operations/service";
+import {
+  commandCenterCompletedStatuses,
+  commandCenterPendingStatuses,
+} from "@/modules/dashboard/command-center-policy";
 
 /**
  * Centro de Comando (Command Center) snapshot.
@@ -15,31 +20,15 @@ import { getUserActivitySnapshot } from "@/modules/auth/presence-service";
  * This is a read-only aggregation; it performs no writes.
  */
 
-function dayBounds(date = new Date()) {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return { start, end };
-}
-
 function num(value: { toNumber: () => number } | null | undefined): number {
   return value ? value.toNumber() : 0;
 }
 
 /** Cash sessions that still require attention (open, reconciling or pending review). */
-const PENDING_STATUSES: CashSessionStatus[] = [
-  CashSessionStatus.OPEN,
-  CashSessionStatus.RECONCILING,
-  CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW,
-];
+const PENDING_STATUSES = commandCenterPendingStatuses();
 
 /** Cash sessions considered finalized. */
-const COMPLETED_STATUSES: CashSessionStatus[] = [
-  CashSessionStatus.CLOSED,
-  CashSessionStatus.AUTO_CLOSED,
-  CashSessionStatus.PERMANENTLY_CLOSED,
-];
+const COMPLETED_STATUSES = commandCenterCompletedStatuses();
 
 type CashSessionWithRefs = {
   id: string;
@@ -98,7 +87,7 @@ const sessionInclude = {
 } as const;
 
 export async function getCommandCenterSnapshot() {
-  const { start, end } = dayBounds();
+  const { start, end } = getOperationalWindowForNow();
 
   const [
     activity,
@@ -251,6 +240,7 @@ export async function getCommandCenterSnapshot() {
 
   return {
     generatedAt: new Date().toISOString(),
+    operationalWindow: { start: start.toISOString(), end: end.toISOString(), timezone: OPERATIONAL_TIMEZONE },
     totals,
     users: {
       summary: activity.summary,

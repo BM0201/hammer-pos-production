@@ -344,7 +344,19 @@ function presenceDot(status: ConnectedUser["status"]) {
 /* Cash closures table                                                       */
 /* ──────────────────────────────────────────────────────────────────────── */
 
-function ClosuresTable({ rows, showDifference }: { rows: CashClosure[]; showDifference: boolean }) {
+function ClosuresTable({
+  rows,
+  showDifference,
+  onConfirmOk,
+  onRegisterDifference,
+  reviewingId,
+}: {
+  rows: CashClosure[];
+  showDifference: boolean;
+  onConfirmOk?: (row: CashClosure) => void;
+  onRegisterDifference?: (row: CashClosure) => void;
+  reviewingId?: string | null;
+}) {
   if (rows.length === 0) {
     return (
       <div className="flex items-center gap-2 px-5 py-8 text-sm text-[var(--color-text-muted)] justify-center">
@@ -364,6 +376,7 @@ function ClosuresTable({ rows, showDifference }: { rows: CashClosure[]; showDiff
           <TH className="text-right">Contado</TH>
           {showDifference && <TH className="text-right">Diferencia</TH>}
           <TH className="text-right">Hora</TH>
+          {(onConfirmOk || onRegisterDifference) && <TH className="text-right">Acciones</TH>}
         </TR>
       </THead>
       <TBody>
@@ -406,6 +419,35 @@ function ClosuresTable({ rows, showDifference }: { rows: CashClosure[]; showDiff
               </TD>
             )}
             <TD className="text-right text-xs text-[var(--color-text-muted)]">{timeAgo(r.closedAt ?? r.openedAt)}</TD>
+            {(onConfirmOk || onRegisterDifference) && (
+              <TD className="text-right">
+                {r.status === "AUTO_CLOSED_PENDING_REVIEW" ? (
+                  <div className="flex justify-end gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={reviewingId === r.id}
+                      disabled={Boolean(reviewingId)}
+                      icon={<CheckCircle2 className="h-3.5 w-3.5" />}
+                      onClick={() => onConfirmOk?.(r)}
+                    >
+                      OK
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={Boolean(reviewingId)}
+                      icon={<Receipt className="h-3.5 w-3.5" />}
+                      onClick={() => onRegisterDifference?.(r)}
+                    >
+                      Diferencia
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="text-[var(--color-text-soft)]">-</span>
+                )}
+              </TD>
+            )}
           </TR>
         ))}
       </TBody>
@@ -1124,6 +1166,10 @@ export default function MasterCommandCenterPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<ClosureTab>("pending");
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [differenceTarget, setDifferenceTarget] = useState<CashClosure | null>(null);
+  const [differenceAmount, setDifferenceAmount] = useState("");
+  const [differenceNote, setDifferenceNote] = useState("");
   const mounted = useRef(true);
 
   const load = useCallback(async (isRefresh: boolean) => {
@@ -1155,6 +1201,53 @@ export default function MasterCommandCenterPage() {
       clearInterval(id);
     };
   }, [load]);
+
+  const reviewAutoClose = useCallback(async (cashSessionId: string, payload: Record<string, unknown>) => {
+    setReviewingId(cashSessionId);
+    try {
+      const res = await apiFetch(`/api/master/cash-sessions/${cashSessionId}/review-auto-close`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await load(true);
+      toast.success("Cierre automatico revisado");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo revisar el cierre");
+    } finally {
+      setReviewingId(null);
+    }
+  }, [load]);
+
+  const confirmOk = useCallback((row: CashClosure) => {
+    void reviewAutoClose(row.id, { confirmOk: true });
+  }, [reviewAutoClose]);
+
+  const openDifferenceModal = useCallback((row: CashClosure) => {
+    setDifferenceTarget(row);
+    setDifferenceAmount(row.expectedCashAmount == null ? "" : String(row.expectedCashAmount));
+    setDifferenceNote("");
+  }, []);
+
+  const submitDifference = useCallback(async () => {
+    if (!differenceTarget) return;
+    const countedCashAmount = Number(differenceAmount);
+    if (!Number.isFinite(countedCashAmount) || countedCashAmount < 0) {
+      toast.error("Monto contado invalido");
+      return;
+    }
+    if (differenceNote.trim().length < 5) {
+      toast.error("Agrega una nota para la diferencia");
+      return;
+    }
+    await reviewAutoClose(differenceTarget.id, {
+      countedCashAmount,
+      note: differenceNote.trim(),
+    });
+    setDifferenceTarget(null);
+    setDifferenceAmount("");
+    setDifferenceNote("");
+  }, [differenceAmount, differenceNote, differenceTarget, reviewAutoClose]);
 
   if (loading) {
     return <p className="text-[var(--color-text-muted)] animate-pulse">Cargando Centro de Comando…</p>;
@@ -1410,10 +1503,87 @@ export default function MasterCommandCenterPage() {
             ))}
           </div>
         </div>
-        <ClosuresTable rows={closureRows} showDifference={tab !== "pending"} />
+        <ClosuresTable
+          rows={closureRows}
+          showDifference={tab !== "pending"}
+          onConfirmOk={tab === "pending" ? confirmOk : undefined}
+          onRegisterDifference={tab === "pending" ? openDifferenceModal : undefined}
+          reviewingId={reviewingId}
+        />
       </Card>
 
       {/* ── Gestión de facturas (anulación) ── */}
+      {differenceTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl">
+            <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--color-text)]">Registrar diferencia</h3>
+                <p className="text-xs text-[var(--color-text-muted)]">
+                  {differenceTarget.branchCode} · {differenceTarget.boxName}
+                </p>
+              </div>
+              <button
+                onClick={() => setDifferenceTarget(null)}
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                aria-label="Cerrar"
+                disabled={reviewingId === differenceTarget.id}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3 px-5 py-4">
+              <div className="grid grid-cols-2 gap-3 rounded-lg bg-[var(--color-surface-alt)] p-3 text-xs">
+                <div>
+                  <p className="text-[var(--color-text-muted)]">Esperado</p>
+                  <p className="font-mono font-semibold text-[var(--color-text)]">
+                    {differenceTarget.expectedCashAmount == null ? "-" : money(differenceTarget.expectedCashAmount)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[var(--color-text-muted)]">Diferencia</p>
+                  <p className="font-mono font-semibold text-[var(--color-text)]">
+                    {Number.isFinite(Number(differenceAmount)) && differenceTarget.expectedCashAmount != null
+                      ? money(Number(differenceAmount) - differenceTarget.expectedCashAmount)
+                      : "-"}
+                  </p>
+                </div>
+              </div>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+                Monto contado
+                <Input
+                  className="mt-1"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={differenceAmount}
+                  onChange={(event) => setDifferenceAmount(event.target.value)}
+                  disabled={reviewingId === differenceTarget.id}
+                />
+              </label>
+              <label className="block text-xs font-medium text-[var(--color-text-secondary)]">
+                Nota
+                <textarea
+                  className="hm-input mt-1 min-h-20 w-full rounded-lg px-3 py-2"
+                  value={differenceNote}
+                  onChange={(event) => setDifferenceNote(event.target.value)}
+                  placeholder="Justificacion o detalle del conteo"
+                  disabled={reviewingId === differenceTarget.id}
+                />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
+              <Button variant="secondary" size="sm" onClick={() => setDifferenceTarget(null)} disabled={reviewingId === differenceTarget.id}>
+                Cancelar
+              </Button>
+              <Button size="sm" loading={reviewingId === differenceTarget.id} onClick={submitDifference}>
+                Guardar revision
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <InvoicesManagementCard onChanged={() => load(true)} />
 
       {/* ── Connected users ── */}

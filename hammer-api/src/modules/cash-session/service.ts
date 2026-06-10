@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
 import { ensureOpenOperationalDayTx, refreshOperationalDaySummaryTx } from "@/modules/operations/service";
+import { resolveAutoCloseReview } from "@/modules/cash-session/review-policy";
 
 function toDecimal(value: number): Prisma.Decimal {
   return new Prisma.Decimal(value);
@@ -494,8 +495,9 @@ export async function closeCashSession(input: {
 
 export async function reviewAutoClosedCashSession(input: {
   cashSessionId: string;
-  countedCashAmount: number;
-  note: string;
+  countedCashAmount?: number;
+  confirmOk?: boolean;
+  note?: string | null;
   actorUserId: string;
 }) {
   return prisma.$transaction(async (tx) => {
@@ -518,14 +520,19 @@ export async function reviewAutoClosedCashSession(input: {
     const expectedCash = session.expectedCashAmount != null
       ? Number(session.expectedCashAmount)
       : (await calculateExpectedCashForSessionTx(tx, session.id, session.openingAmount)).expectedCash;
-    const countedCash = Number(input.countedCashAmount);
-    const difference = countedCash - expectedCash;
     const now = new Date();
+    const review = resolveAutoCloseReview({
+      expectedCash,
+      countedCashAmount: input.countedCashAmount,
+      confirmOk: input.confirmOk,
+      note: input.note,
+    });
+    const { countedCash, difference, note } = review;
 
     const updated = await tx.cashSession.update({
       where: { id: session.id },
       data: {
-        status: CashSessionStatus.CLOSED,
+        status: review.status,
         closedAt: session.closedAt ?? session.autoClosedAt ?? now,
         closingAmount: toDecimal(countedCash),
         countedCashAmount: toDecimal(countedCash),
@@ -534,7 +541,7 @@ export async function reviewAutoClosedCashSession(input: {
         requiresReview: false,
         reviewedAt: now,
         reviewedByUserId: input.actorUserId,
-        reviewNote: input.note,
+        reviewNote: note,
       },
     });
     await refreshOperationalDaySummaryTx(tx, session.operationalDayId);
@@ -551,8 +558,9 @@ export async function reviewAutoClosedCashSession(input: {
           expectedCash,
           countedCash,
           difference,
-          note: input.note,
+          note,
           autoClosedAt: session.autoClosedAt,
+          confirmOk: Boolean(input.confirmOk),
         },
       },
     });
@@ -575,6 +583,7 @@ export async function reviewAutoClosedCashSession(input: {
             countedCash,
             difference,
             reviewedAt: now.toISOString(),
+            note,
           },
         },
       });
@@ -583,12 +592,13 @@ export async function reviewAutoClosedCashSession(input: {
           decisionId: relatedDecision.id,
           actorUserId: input.actorUserId,
           action: "REVIEW_COMPLETED",
-          note: input.note,
+          note,
           metadataJson: {
             cashSessionId: session.id,
             expectedCash,
             countedCash,
             difference,
+            confirmOk: Boolean(input.confirmOk),
           },
         },
       });

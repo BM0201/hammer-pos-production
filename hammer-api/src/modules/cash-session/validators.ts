@@ -26,6 +26,23 @@ export const closeCashSessionSchema = z.object({
 
 export const reviewAutoClosedCashSessionSchema = z.object({
   cashSessionId: z.string().cuid(),
-  countedCashAmount: nonNegativeMoneySchema,
-  note: z.string().trim().min(5, "La nota de revision es obligatoria.").max(1000),
+  confirmOk: z.boolean().optional().default(false),
+  countedCashAmount: nonNegativeMoneySchema.optional(),
+  note: z.string().trim().max(1000).optional().nullable(),
+}).superRefine((value, ctx) => {
+  if (value.confirmOk) return;
+  if (value.countedCashAmount === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["countedCashAmount"],
+      message: "El monto contado es obligatorio.",
+    });
+  }
+  if (!value.note || value.note.trim().length < 5) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["note"],
+      message: "La nota de revision es obligatoria.",
+    });
+  }
 });
