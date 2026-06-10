@@ -77,8 +77,12 @@ export async function upsertBranchModuleConfig(input: {
   allowCashierQueue?: boolean;
   actorUserId: string;
 }) {
-  const paymentWorkflowMode = input.paymentWorkflowMode ?? (input.enableCashier ? "HYBRID" : "DIRECT_ONLY");
-  const dispatchWorkflowMode = input.dispatchWorkflowMode ?? (input.enableDispatch ? "ENABLED" : "DISABLED");
+  const existing = await prisma.branchModuleConfig.findUnique({ where: { branchId: input.branchId } });
+  const paymentWorkflowMode = input.paymentWorkflowMode ?? existing?.paymentWorkflowMode ?? (input.enableCashier ? "HYBRID" : "DIRECT_ONLY");
+  const dispatchWorkflowMode = input.dispatchWorkflowMode ?? existing?.dispatchWorkflowMode ?? (input.enableDispatch ? "ENABLED" : "DISABLED");
+  const requireOpenCashSessionForDirectSale = input.requireOpenCashSessionForDirectSale ?? existing?.requireOpenCashSessionForDirectSale ?? true;
+  const allowSellerDirectPayment = input.allowSellerDirectPayment ?? existing?.allowSellerDirectPayment ?? true;
+  const allowCashierQueue = input.allowCashierQueue ?? existing?.allowCashierQueue ?? input.enableCashier;
   const result = await prisma.branchModuleConfig.upsert({
     where: { branchId: input.branchId },
     update: {
@@ -86,9 +90,9 @@ export async function upsertBranchModuleConfig(input: {
       enableDispatch: input.enableDispatch,
       paymentWorkflowMode,
       dispatchWorkflowMode,
-      requireOpenCashSessionForDirectSale: input.requireOpenCashSessionForDirectSale ?? true,
-      allowSellerDirectPayment: input.allowSellerDirectPayment ?? true,
-      allowCashierQueue: input.allowCashierQueue ?? input.enableCashier,
+      requireOpenCashSessionForDirectSale,
+      allowSellerDirectPayment,
+      allowCashierQueue,
       updatedByUserId: input.actorUserId,
     },
     create: {
@@ -97,9 +101,9 @@ export async function upsertBranchModuleConfig(input: {
       enableDispatch: input.enableDispatch,
       paymentWorkflowMode,
       dispatchWorkflowMode,
-      requireOpenCashSessionForDirectSale: input.requireOpenCashSessionForDirectSale ?? true,
-      allowSellerDirectPayment: input.allowSellerDirectPayment ?? true,
-      allowCashierQueue: input.allowCashierQueue ?? input.enableCashier,
+      requireOpenCashSessionForDirectSale,
+      allowSellerDirectPayment,
+      allowCashierQueue,
       updatedByUserId: input.actorUserId,
     },
   });
@@ -116,9 +120,9 @@ export async function upsertBranchModuleConfig(input: {
       enableDispatch: input.enableDispatch,
       paymentWorkflowMode,
       dispatchWorkflowMode,
-      requireOpenCashSessionForDirectSale: input.requireOpenCashSessionForDirectSale ?? true,
-      allowSellerDirectPayment: input.allowSellerDirectPayment ?? true,
-      allowCashierQueue: input.allowCashierQueue ?? input.enableCashier,
+      requireOpenCashSessionForDirectSale,
+      allowSellerDirectPayment,
+      allowCashierQueue,
     },
   });
 

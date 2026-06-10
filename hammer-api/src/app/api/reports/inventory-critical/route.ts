@@ -1,4 +1,4 @@
-import { resolveReportRequest, csvReportResponse } from "@/modules/reports/http";
+import { resolveReportRequest, reportResponse } from "@/modules/reports/http";
 import { toCsv } from "@/modules/reports/serializers";
 import { getInventoryCriticalReportRows } from "@/modules/reports/service";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -14,7 +14,7 @@ export async function GET(request: Request) {
       branchIds: resolved.branchIds,
     });
 
-    return csvReportResponse("reporte-inventario-critico.csv", toCsv(COLUMNS, rows));
+    return reportResponse(resolved, "reporte-inventario-critico.csv", toCsv(COLUMNS, rows), rows);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

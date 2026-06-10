@@ -2,7 +2,7 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { closeCashSessionSchema } from "@/modules/cash-session/validators";
-import { closeCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
+import { calculateExpectedCashForSessionTx, closeCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
 import { logAuditEvent } from "@/modules/audit/service";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
 import { prisma } from "@/lib/prisma";
@@ -11,7 +11,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
-import { PaymentMethod, PaymentStatus, SaleOrderStatus } from "@prisma/client";
+import { PaymentStatus, SaleOrderStatus } from "@prisma/client";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
 
@@ -96,30 +96,8 @@ export async function POST(request: Request) {
       return fail("CONFLICT", "CASH_SESSION_HAS_PENDING_PAYMENTS", 409);
     }
 
-    const cashInAggregate = await prisma.payment.aggregate({
-      where: {
-        cashSessionId: cashSession.id,
-        status: PaymentStatus.POSTED,
-        method: PaymentMethod.CASH,
-        amount: { gte: 0 },
-      },
-      _sum: { amount: true },
-    });
-
-    const cashOutAggregate = await prisma.payment.aggregate({
-      where: {
-        cashSessionId: cashSession.id,
-        status: PaymentStatus.POSTED,
-        method: PaymentMethod.CASH,
-        amount: { lt: 0 },
-      },
-      _sum: { amount: true },
-    });
-
-    const openingAmount = Number(cashSession.openingAmount);
-    const postedCashPayments = Number(cashInAggregate._sum.amount ?? 0);
-    const refundsOrWithdrawals = Math.abs(Number(cashOutAggregate._sum.amount ?? 0));
-    const expectedCash = openingAmount + postedCashPayments - refundsOrWithdrawals;
+    const { openingAmount, postedCashPayments, refundsOrWithdrawals, cashMovementsNet, cashChange, expectedCash } =
+      await prisma.$transaction((tx) => calculateExpectedCashForSessionTx(tx, cashSession.id, cashSession.openingAmount));
     const countedCash = Number(parsed.data.closingAmount);
     const difference = countedCash - expectedCash;
 
@@ -135,6 +113,8 @@ export async function POST(request: Request) {
           openingAmount,
           postedCashPayments,
           refundsOrWithdrawals,
+          cashMovementsNet,
+          cashChange,
           expectedCash,
           countedCash,
           difference,
@@ -153,6 +133,8 @@ export async function POST(request: Request) {
           openingAmount,
           postedCashPayments,
           refundsOrWithdrawals,
+          cashMovementsNet,
+          cashChange,
           expectedCash,
           countedCash,
           difference,

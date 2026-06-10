@@ -1,7 +1,7 @@
 import { InventoryMovementType } from "@prisma/client";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import { createInventoryMovement, listInventoryMovements } from "@/modules/inventory/service";
+import { createInventoryMovement, listInventoryMovementsPaginated } from "@/modules/inventory/service";
 import { createInventoryMovementSchema } from "@/modules/inventory/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canPostMovement } from "@/modules/inventory/policy";
@@ -20,16 +20,34 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const branchId = searchParams.get("branchId");
     const productId = searchParams.get("productId") ?? undefined;
+    const movementType = searchParams.get("movementType") as InventoryMovementType | null;
+    const page = Number(searchParams.get("page") ?? 1);
+    const limit = Number(searchParams.get("limit") ?? 30);
+    const dateFrom = searchParams.get("dateFrom") ?? undefined;
+    const dateTo = searchParams.get("dateTo") ?? undefined;
+    const search = searchParams.get("search") ?? undefined;
 
     if (!branchId) {
       return fail("VALIDATION_ERROR", "branchId is required", 400);
+    }
+    if (movementType && !Object.values(InventoryMovementType).includes(movementType)) {
+      return fail("VALIDATION_ERROR", "Invalid movementType", 400);
     }
 
     if (!hasBranchAccess(session, branchId)) {
       return fail("FORBIDDEN", "Forbidden", 403);
     }
 
-    const data = await listInventoryMovements({ branchId, productId, limit: 30 });
+    const data = await listInventoryMovementsPaginated({
+      branchId,
+      productId,
+      movementType: movementType ?? undefined,
+      page,
+      limit,
+      dateFrom,
+      dateTo,
+      search,
+    });
     return ok(data);
   } catch (error) {
     return toHttpErrorResponse(error);

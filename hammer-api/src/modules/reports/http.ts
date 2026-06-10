@@ -26,7 +26,8 @@ export async function resolveReportRequest(request: Request) {
 
   try {
     const branchIds = resolveReportBranchScope(session, parsed.data.branchId);
-    return { query: parsed.data, branchIds };
+    const format: "csv" | "json" = searchParams.get("format") === "json" ? "json" : "csv";
+    return { query: parsed.data, branchIds, format };
   } catch (error) {
     if (error instanceof Error && error.message === "FORBIDDEN_BRANCH") {
       return { error: NextResponse.json({ message: "Forbidden", reason: "FORBIDDEN_BRANCH" }, { status: 403 }) };
@@ -44,4 +45,19 @@ export function csvReportResponse(filename: string, csv: string) {
       "cache-control": "no-store",
     },
   });
+}
+
+export function reportResponse(
+  request: { format: "csv" | "json" },
+  filename: string,
+  csv: string,
+  rows: Array<Record<string, unknown>>,
+) {
+  if (request.format === "json") {
+    return NextResponse.json(
+      { rows, count: rows.length, generatedAt: new Date().toISOString() },
+      { status: 200, headers: { "cache-control": "no-store" } },
+    );
+  }
+  return csvReportResponse(filename, csv);
 }

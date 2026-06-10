@@ -13,6 +13,11 @@ const singleUpdateSchema = z.object({
   branchId: z.string().cuid(),
   enableCashier: z.boolean(),
   enableDispatch: z.boolean(),
+  paymentWorkflowMode: z.enum(["QUEUE_ONLY", "DIRECT_ONLY", "HYBRID"]).optional(),
+  dispatchWorkflowMode: z.enum(["DISABLED", "ENABLED"]).optional(),
+  requireOpenCashSessionForDirectSale: z.boolean().optional(),
+  allowSellerDirectPayment: z.boolean().optional(),
+  allowCashierQueue: z.boolean().optional(),
 });
 
 const bulkUpdateSchema = z.object({
@@ -64,6 +69,11 @@ export async function PUT(request: Request) {
       branchId: parsed.data.branchId,
       enableCashier: parsed.data.enableCashier,
       enableDispatch: parsed.data.enableDispatch,
+      paymentWorkflowMode: parsed.data.paymentWorkflowMode,
+      dispatchWorkflowMode: parsed.data.dispatchWorkflowMode,
+      requireOpenCashSessionForDirectSale: parsed.data.requireOpenCashSessionForDirectSale,
+      allowSellerDirectPayment: parsed.data.allowSellerDirectPayment,
+      allowCashierQueue: parsed.data.allowCashierQueue,
       actorUserId: session.userId,
     });
     return ok(result);

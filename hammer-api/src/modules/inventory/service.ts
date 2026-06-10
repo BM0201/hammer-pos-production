@@ -51,26 +51,97 @@ export async function listInventoryBalances(params: { branchId: string; productI
   });
 }
 
-export async function listInventoryMovements(params: { branchId: string; productId?: string; limit?: number }) {
+export type InventoryMovementPaginationParams = {
+  page?: number;
+  limit?: number;
+  branchId?: string;
+  productId?: string;
+  movementType?: InventoryMovementType;
+  dateFrom?: string | Date;
+  dateTo?: string | Date;
+  search?: string;
+};
+
+export function clampInventoryMovementPagination(input: { page?: number; limit?: number }) {
+  const page = Math.max(1, Math.trunc(input.page ?? 1) || 1);
+  const limit = Math.min(100, Math.max(1, Math.trunc(input.limit ?? 30) || 30));
+  return { page, limit, skip: (page - 1) * limit };
+}
+
+function endOfDay(date: Date) {
+  const end = new Date(date);
+  end.setUTCHours(23, 59, 59, 999);
+  return end;
+}
+
+export async function listInventoryMovementsPaginated(params: InventoryMovementPaginationParams) {
   const resolved = params.productId
     ? await resolveInventoryProductForMovement(prisma, params.productId)
     : null;
-  return prisma.inventoryMovement.findMany({
-    where: {
-      branchId: params.branchId,
-      ...(params.productId ? { productId: resolved?.inventoryProductId ?? params.productId } : {}),
-    },
-    include: {
-      product: {
-        select: { id: true, sku: true, name: true },
+  const { page, limit, skip } = clampInventoryMovementPagination(params);
+  const dateFrom = params.dateFrom ? new Date(params.dateFrom) : null;
+  const dateTo = params.dateTo ? endOfDay(new Date(params.dateTo)) : null;
+  const search = params.search?.trim();
+  const where: Prisma.InventoryMovementWhereInput = {
+    ...(params.branchId ? { branchId: params.branchId } : {}),
+    ...(params.productId ? { productId: resolved?.inventoryProductId ?? params.productId } : {}),
+    ...(params.movementType ? { movementType: params.movementType } : {}),
+    ...((dateFrom || dateTo) ? {
+      createdAt: {
+        ...(dateFrom ? { gte: dateFrom } : {}),
+        ...(dateTo ? { lte: dateTo } : {}),
       },
-      branch: {
-        select: { id: true, code: true, name: true },
+    } : {}),
+    ...(search ? {
+      OR: [
+        { referenceType: { contains: search, mode: "insensitive" } },
+        { referenceId: { contains: search, mode: "insensitive" } },
+        { notes: { contains: search, mode: "insensitive" } },
+        { product: { sku: { contains: search, mode: "insensitive" } } },
+        { product: { name: { contains: search, mode: "insensitive" } } },
+        { branch: { code: { contains: search, mode: "insensitive" } } },
+        { branch: { name: { contains: search, mode: "insensitive" } } },
+      ],
+    } : {}),
+  };
+
+  const [rows, total] = await Promise.all([
+    prisma.inventoryMovement.findMany({
+      where,
+      include: {
+        product: {
+          select: { id: true, sku: true, name: true },
+        },
+        branch: {
+          select: { id: true, code: true, name: true },
+        },
       },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: limit,
+    }),
+    prisma.inventoryMovement.count({ where }),
+  ]);
+
+  return {
+    rows,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
     },
-    orderBy: { createdAt: "desc" },
-    take: params.limit ?? 25,
+  };
+}
+
+export async function listInventoryMovements(params: { branchId: string; productId?: string; limit?: number }) {
+  const result = await listInventoryMovementsPaginated({
+    branchId: params.branchId,
+    productId: params.productId,
+    limit: params.limit ?? 25,
+    page: 1,
   });
+  return result.rows;
 }
 
 type InventoryMovementInput = {

@@ -1,4 +1,4 @@
-import { resolveReportRequest, csvReportResponse } from "@/modules/reports/http";
+import { resolveReportRequest, reportResponse } from "@/modules/reports/http";
 import { toCsv } from "@/modules/reports/serializers";
 import { getDispatchReportRows } from "@/modules/reports/service";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
       status: resolved.query.status,
     });
 
-    return csvReportResponse("reporte-despachos.csv", toCsv(COLUMNS, rows));
+    return reportResponse(resolved, "reporte-despachos.csv", toCsv(COLUMNS, rows), rows);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

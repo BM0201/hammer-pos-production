@@ -2217,6 +2217,14 @@ function MovementsPanel({
 }) {
   const [productId, setProductId] = useState("");
   const [movementType, setMovementType] = useState("");
+  const [movementSearch, setMovementSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [movementPage, setMovementPage] = useState(1);
+  const [movementLimit, setMovementLimit] = useState(30);
+  const [pagedMovements, setPagedMovements] = useState<Movement[]>(movements);
+  const [movementPagination, setMovementPagination] = useState<Pagination>({ page: 1, limit: 30, total: movements.length, totalPages: 1 });
+  const [loadingMovements, setLoadingMovements] = useState(false);
   const [showAdjustment, setShowAdjustment] = useState(false);
   const [showOpening, setShowOpening] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -2238,12 +2246,38 @@ function MovementsPanel({
     if (initialDialog) onInitialDialogHandled?.();
   }, [initialDialog, onInitialDialogHandled]);
 
-  const filteredMovements = movements.filter((movement) => {
-    if (activeBranchId && movement.branch.id !== activeBranchId) return false;
-    if (productId && movement.product.id !== productId) return false;
-    if (movementType && movement.movementType !== movementType) return false;
-    return true;
-  });
+  const loadMovements = useCallback(async () => {
+    if (!activeBranchId) return;
+    setLoadingMovements(true);
+    try {
+      const params = new URLSearchParams({
+        branchId: activeBranchId,
+        page: String(movementPage),
+        limit: String(movementLimit),
+      });
+      if (productId) params.set("productId", productId);
+      if (movementType) params.set("movementType", movementType);
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      if (movementSearch.trim()) params.set("search", movementSearch.trim());
+      const response = await apiFetch(`/api/master/catalog-inventory/movements?${params}`);
+      const raw = await response.json();
+      if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo cargar Kardex.");
+      const payload = unwrapApiData(raw) as { rows: Movement[]; pagination: Pagination };
+      setPagedMovements(payload.rows);
+      setMovementPagination(payload.pagination);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo cargar Kardex.");
+    } finally {
+      setLoadingMovements(false);
+    }
+  }, [activeBranchId, dateFrom, dateTo, movementLimit, movementPage, movementSearch, movementType, productId]);
+
+  useEffect(() => {
+    void loadMovements();
+  }, [loadMovements]);
+
+  const resetMovementPage = () => setMovementPage(1);
   const adjustmentProduct = adjustment.productId ? products.find((product) => product.id === adjustment.productId) : undefined;
   function currentBaseStockForProduct(product?: ProductRow) {
     if (!product) return 0;
@@ -2305,23 +2339,35 @@ function MovementsPanel({
         </div>
       </div>
       <div className="p-4 space-y-4">
-        <div className="grid gap-2 md:grid-cols-4">
-          <select className="hm-input" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
-          <select className="hm-input" value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">Todos los productos</option>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
-          <select className="hm-input" value={movementType} onChange={(e) => setMovementType(e.target.value)}><option value="">Todos los tipos</option><option value="PURCHASE_IN">Compra / entrada</option><option value="SALE_OUT">Venta / salida</option><option value="ADJUSTMENT_IN">Ajuste entrada / carga inicial</option><option value="ADJUSTMENT_OUT">Ajuste salida</option><option value="RETURN_IN">Devolucion entrada</option><option value="RETURN_OUT">Devolucion salida</option><option value="TRANSFER_IN">Traslado entrada</option><option value="TRANSFER_OUT">Traslado salida</option></select>
+        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-7">
+          <select className="hm-input" value={activeBranchId} onChange={(e) => { onSelectBranch(e.target.value); resetMovementPage(); }}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
+          <select className="hm-input" value={productId} onChange={(e) => { setProductId(e.target.value); resetMovementPage(); }}><option value="">Todos los productos</option>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
+          <select className="hm-input" value={movementType} onChange={(e) => { setMovementType(e.target.value); resetMovementPage(); }}><option value="">Todos los tipos</option><option value="PURCHASE_IN">Compra / entrada</option><option value="SALE_OUT">Venta / salida</option><option value="ADJUSTMENT_IN">Ajuste entrada / carga inicial</option><option value="ADJUSTMENT_OUT">Ajuste salida</option><option value="RETURN_IN">Devolucion entrada</option><option value="RETURN_OUT">Devolucion salida</option><option value="TRANSFER_IN">Traslado entrada</option><option value="TRANSFER_OUT">Traslado salida</option></select>
+          <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetMovementPage(); }} />
+          <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetMovementPage(); }} />
+          <Input value={movementSearch} onChange={(e) => { setMovementSearch(e.target.value); resetMovementPage(); }} placeholder="Buscar ref./nota/producto" />
+          <select className="hm-input" value={movementLimit} onChange={(e) => { setMovementLimit(Number(e.target.value)); resetMovementPage(); }}><option value="30">30</option><option value="50">50</option><option value="100">100</option></select>
           <div className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">Los costos se ajustan desde Precios y costos, no desde Kardex.</div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
+          <span>{movementPagination.total} movimientos · pagina {movementPagination.page} de {movementPagination.totalPages}</span>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" disabled={movementPage <= 1 || loadingMovements} onClick={() => setMovementPage((p) => Math.max(1, p - 1))} icon={<ChevronLeft className="h-3.5 w-3.5" />}>Anterior</Button>
+            <Button variant="secondary" size="sm" disabled={movementPage >= movementPagination.totalPages || loadingMovements} onClick={() => setMovementPage((p) => p + 1)} icon={<ChevronRight className="h-3.5 w-3.5" />}>Siguiente</Button>
+            <Button variant="ghost" size="sm" loading={loadingMovements} onClick={() => void loadMovements()} icon={<RefreshCcw className="h-3.5 w-3.5" />}>Actualizar</Button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="hm-table min-w-[980px] w-full">
             <thead><tr><th>Fecha</th><th>Producto</th><th>SKU</th><th>Sucursal</th><th>Tipo</th><th>Entrada</th><th>Salida</th><th>Saldo final</th><th>Unidad</th><th>Usuario</th><th>Referencia</th><th>Motivo / nota</th></tr></thead>
             <tbody>
-              {filteredMovements.map((item) => {
+              {pagedMovements.map((item) => {
                 const quantity = Number(item.quantity);
                 const isIn = ["PURCHASE_IN", "RETURN_IN", "ADJUSTMENT_IN", "TRANSFER_IN", "TIMBER_INTAKE_IN"].includes(item.movementType);
                 const visibleType = item.referenceType === "OPENING_BALANCE" ? "Carga inicial" : item.referenceType === "MANUAL_ADJUSTMENT" ? "Ajuste manual" : item.movementType;
                 return <tr key={item.id}><td>{new Date(item.createdAt).toLocaleString("es-NI")}</td><td className="font-medium">{item.product.name}</td><td className="font-mono text-xs">{item.product.sku}</td><td>{item.branch.code}</td><td>{visibleType}</td><td>{isIn ? qty(quantity) : "-"}</td><td>{!isIn ? qty(quantity) : "-"}</td><td className="text-[var(--color-text-muted)]">-</td><td>Unidad</td><td className="text-[var(--color-text-muted)]">-</td><td>{item.referenceType} / {item.referenceId}</td><td>{item.notes ?? "-"}</td></tr>;
               })}
-              {filteredMovements.length === 0 ? <tr><td colSpan={12} className="py-8 text-center text-sm text-[var(--color-text-muted)]">Sin movimientos recientes para los filtros seleccionados.</td></tr> : null}
+              {pagedMovements.length === 0 ? <tr><td colSpan={12} className="py-8 text-center text-sm text-[var(--color-text-muted)]">{loadingMovements ? "Cargando movimientos..." : "Sin movimientos para los filtros seleccionados."}</td></tr> : null}
             </tbody>
           </table>
         </div>

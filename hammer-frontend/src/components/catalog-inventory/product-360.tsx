@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
   Package,
@@ -90,18 +90,30 @@ type ProductDetail = {
     branch?: Branch | null;
   }>;
 };
+type KardexMovement = ProductDetail["product"]["inventoryMovements"][number] & {
+  notes?: string | null;
+  product?: { id: string; sku: string; name: string };
+};
+type MovementPagination = { page: number; limit: number; total: number; totalPages: number };
 
 type Tab = "general" | "stock" | "movements" | "pricing" | "brain" | "audit";
 
 /* ── Movement type label + color ── */
 function movementLabel(type: string) {
   const map: Record<string, { label: string; color: "success" | "danger" | "warning" | "info" | "neutral" }> = {
+    PURCHASE_IN: { label: "Compra / entrada", color: "success" },
+    SALE_OUT: { label: "Venta / salida", color: "danger" },
+    ADJUSTMENT_IN: { label: "Ajuste entrada", color: "success" },
+    ADJUSTMENT_OUT: { label: "Ajuste salida", color: "danger" },
+    RETURN_IN: { label: "Devolucion entrada", color: "success" },
+    RETURN_OUT: { label: "Devolucion salida", color: "danger" },
+    TRANSFER_IN: { label: "Transfer. Entrada", color: "success" },
+    TRANSFER_OUT: { label: "Transfer. Salida", color: "warning" },
+    TIMBER_INTAKE_IN: { label: "Entrada madera", color: "info" },
     PURCHASE: { label: "Compra", color: "success" },
     SALE: { label: "Venta", color: "danger" },
     ADJUSTMENT_ADD: { label: "Ajuste (+)", color: "success" },
     ADJUSTMENT_SUBTRACT: { label: "Ajuste (−)", color: "danger" },
-    TRANSFER_IN: { label: "Transfer. Entrada", color: "success" },
-    TRANSFER_OUT: { label: "Transfer. Salida", color: "warning" },
     IMPORT: { label: "Importación", color: "info" },
     PRODUCTION: { label: "Producción", color: "info" },
     INITIAL_STOCK: { label: "Stock Inicial", color: "info" },
@@ -111,11 +123,26 @@ function movementLabel(type: string) {
 }
 
 function MovementIcon({ type }: { type: string }) {
-  if (type.includes("SALE") || type.includes("SUBTRACT") || type === "TRANSFER_OUT")
+  if (isOutboundMovement(type))
     return <TrendingDown className="h-4 w-4 text-red-500" />;
-  if (type.includes("PURCHASE") || type.includes("ADD") || type === "TRANSFER_IN" || type === "INITIAL_STOCK")
+  if (isInboundMovement(type))
     return <TrendingUp className="h-4 w-4 text-emerald-500" />;
   return <Minus className="h-4 w-4 text-slate-400" />;
+}
+
+function isInboundMovement(type: string) {
+  return (
+    type.endsWith("_IN") ||
+    type.includes("ADD") ||
+    type === "PURCHASE" ||
+    type === "INITIAL_STOCK" ||
+    type === "IMPORT" ||
+    type === "PRODUCTION"
+  );
+}
+
+function isOutboundMovement(type: string) {
+  return type.endsWith("_OUT") || type.includes("SUBTRACT") || type === "SALE";
 }
 
 /* ── Tab config ── */
@@ -226,7 +253,7 @@ export function Product360({ productId }: { productId: string }) {
             <KpiMini icon={Warehouse} label="Stock Total" value={qty(totalStock)} accent="emerald" />
             <KpiMini icon={DollarSign} label="Precio Base" value={money(product.standardSalePrice)} accent="blue" />
             <KpiMini icon={Building2} label="Sucursales con stock" value={String(product.inventoryBalances.length)} accent="indigo" />
-            <KpiMini icon={Activity} label="Movimientos" value={String(product.inventoryMovements.length)} accent="amber" />
+            <KpiMini icon={Activity} label="Movimientos recientes" value={String(product.inventoryMovements.length)} accent="amber" />
           </div>
           {totalValue > 0 && (
             <Card className="p-4 bg-gradient-to-r from-slate-50 to-white dark:from-slate-900/50 dark:to-[var(--color-surface)]">
@@ -295,7 +322,7 @@ export function Product360({ productId }: { productId: string }) {
       )}
 
       {/* ═══ MOVEMENTS / KARDEX TAB ═══ */}
-      {tab === "movements" && <KardexTab movements={product.inventoryMovements} />}
+      {tab === "movements" && <KardexTab productId={product.id} fallbackMovements={product.inventoryMovements} />}
 
       {/* ═══ PRICING TAB ═══ */}
       {tab === "pricing" && (
@@ -479,43 +506,59 @@ function KpiMini({
 /* ── Kardex Tab — full-featured movements view ── */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 function KardexTab({
-  movements,
+  productId,
+  fallbackMovements,
 }: {
-  movements: ProductDetail["product"]["inventoryMovements"];
+  productId: string;
+  fallbackMovements: ProductDetail["product"]["inventoryMovements"];
 }) {
+  const [movements, setMovements] = useState<KardexMovement[]>(fallbackMovements);
+  const [pagination, setPagination] = useState<MovementPagination>({ page: 1, limit: 30, total: fallbackMovements.length, totalPages: 1 });
   const [filterBranch, setFilterBranch] = useState("");
   const [filterType, setFilterType] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(30);
+  const [loading, setLoading] = useState(false);
   const [sortAsc, setSortAsc] = useState(false);
 
-  // Unique values for filters
-  const branches = [...new Set(movements.map((m) => m.branch.code))].sort();
-  const types = [...new Set(movements.map((m) => m.movementType))].sort();
+  const loadMovements = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+      if (filterBranch) params.set("branchId", filterBranch);
+      if (filterType) params.set("movementType", filterType);
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      const response = await fetch(`/api/master/catalog-inventory/products/${productId}/movements?${params}`, { cache: "no-store" });
+      const raw = await response.json();
+      if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo cargar Kardex.");
+      const payload = raw.data as { rows: KardexMovement[]; pagination: MovementPagination };
+      setMovements(payload.rows);
+      setPagination(payload.pagination);
+    } catch {
+      setMovements(fallbackMovements);
+    } finally {
+      setLoading(false);
+    }
+  }, [dateFrom, dateTo, fallbackMovements, filterBranch, filterType, limit, page, productId]);
 
-  let filtered = movements;
-  if (filterBranch) filtered = filtered.filter((m) => m.branch.code === filterBranch);
-  if (filterType) filtered = filtered.filter((m) => m.movementType === filterType);
+  useEffect(() => {
+    void loadMovements();
+  }, [loadMovements]);
 
-  const sorted = [...filtered].sort((a, b) => {
+  const branches = [...new Map([...fallbackMovements, ...movements].map((m) => [m.branch.id, m.branch])).values()].sort((a, b) => a.code.localeCompare(b.code));
+  const types = [...new Set([...fallbackMovements, ...movements].map((m) => m.movementType))].sort();
+
+  const sorted = [...movements].sort((a, b) => {
     const diff = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
     return sortAsc ? diff : -diff;
   });
 
   // Totals
-  const totalEntries = sorted.filter(
-    (m) =>
-      m.movementType.includes("ADD") ||
-      m.movementType === "PURCHASE" ||
-      m.movementType === "TRANSFER_IN" ||
-      m.movementType === "INITIAL_STOCK" ||
-      m.movementType === "IMPORT" ||
-      m.movementType === "PRODUCTION"
-  ).length;
-  const totalExits = sorted.filter(
-    (m) =>
-      m.movementType.includes("SUBTRACT") ||
-      m.movementType === "SALE" ||
-      m.movementType === "TRANSFER_OUT"
-  ).length;
+  const totalEntries = sorted.filter((m) => isInboundMovement(m.movementType)).length;
+  const totalExits = sorted.filter((m) => isOutboundMovement(m.movementType)).length;
 
   return (
     <div className="space-y-4">
@@ -526,19 +569,19 @@ function KardexTab({
           <Filter className="h-4 w-4 text-[var(--color-text-muted)]" />
           <select
             value={filterBranch}
-            onChange={(e) => setFilterBranch(e.target.value)}
+            onChange={(e) => { setFilterBranch(e.target.value); setPage(1); }}
             className="hm-input !w-auto !py-1.5 !px-3 !text-sm"
           >
             <option value="">Todas las sucursales</option>
             {branches.map((b) => (
-              <option key={b} value={b}>{b}</option>
+              <option key={b.id} value={b.id}>{b.code}</option>
             ))}
           </select>
         </div>
         {/* Type filter */}
         <select
           value={filterType}
-          onChange={(e) => setFilterType(e.target.value)}
+          onChange={(e) => { setFilterType(e.target.value); setPage(1); }}
           className="hm-input !w-auto !py-1.5 !px-3 !text-sm"
         >
           <option value="">Todos los tipos</option>
@@ -546,6 +589,13 @@ function KardexTab({
             const lbl = movementLabel(t);
             return <option key={t} value={t}>{lbl.label}</option>;
           })}
+        </select>
+        <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} className="hm-input !w-auto !py-1.5 !px-3 !text-sm" />
+        <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="hm-input !w-auto !py-1.5 !px-3 !text-sm" />
+        <select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }} className="hm-input !w-auto !py-1.5 !px-3 !text-sm">
+          <option value="30">30</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
         </select>
 
         {/* Sort toggle */}
@@ -567,8 +617,15 @@ function KardexTab({
             <TrendingDown className="h-3 w-3" /> {totalExits} salidas
           </span>
           <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-300 px-3 py-1 text-xs font-bold text-slate-700">
-            {sorted.length} total
+            {pagination.total} total
           </span>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
+        <span>Pagina {pagination.page} de {pagination.totalPages}{loading ? " · cargando..." : ""}</span>
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={page <= 1 || loading} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-md border border-[var(--color-border)] px-2 py-1 disabled:opacity-40">Anterior</button>
+          <button type="button" disabled={page >= pagination.totalPages || loading} onClick={() => setPage((p) => p + 1)} className="rounded-md border border-[var(--color-border)] px-2 py-1 disabled:opacity-40">Siguiente</button>
         </div>
       </div>
 
@@ -577,7 +634,7 @@ function KardexTab({
         <div className="hm-card-header-green px-5 py-3 flex items-center gap-2">
           <ArrowLeftRight className="h-5 w-5" />
           <h2 className="font-semibold">Kardex de Movimientos</h2>
-          <span className="ml-auto text-xs opacity-80">{sorted.length} registros</span>
+          <span className="ml-auto text-xs opacity-80">{pagination.total} registros</span>
         </div>
 
         {sorted.length === 0 ? (
@@ -604,10 +661,7 @@ function KardexTab({
               <tbody>
                 {sorted.map((m) => {
                   const ml = movementLabel(m.movementType);
-                  const isNegative =
-                    m.movementType.includes("SUBTRACT") ||
-                    m.movementType === "SALE" ||
-                    m.movementType === "TRANSFER_OUT";
+                  const isNegative = isOutboundMovement(m.movementType);
                   return (
                     <tr key={m.id}>
                       <td><MovementIcon type={m.movementType} /></td>

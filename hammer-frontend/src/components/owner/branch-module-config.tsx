@@ -23,6 +23,11 @@ type BranchConfig = {
   branchId: string;
   enableCashier: boolean;
   enableDispatch: boolean;
+  paymentWorkflowMode: "QUEUE_ONLY" | "DIRECT_ONLY" | "HYBRID";
+  dispatchWorkflowMode: "DISABLED" | "ENABLED";
+  requireOpenCashSessionForDirectSale: boolean;
+  allowSellerDirectPayment: boolean;
+  allowCashierQueue: boolean;
   branch: { id: string; code: string; name: string; isActive: boolean };
 };
 
@@ -67,6 +72,15 @@ export function BranchModuleConfigPanel() {
     setFeedback(null);
   };
 
+  const updateConfig = (branchId: string, patch: Partial<BranchConfig>) => {
+    setConfigs((prev) =>
+      (prev ?? []).map((c: LocalConfig) =>
+        c?.branchId === branchId ? { ...c, ...patch, dirty: true } : c
+      )
+    );
+    setFeedback(null);
+  };
+
   const saveSingle = async (branchId: string) => {
     const cfg = (configs ?? []).find((c: LocalConfig) => c?.branchId === branchId);
     if (!cfg) return;
@@ -79,6 +93,11 @@ export function BranchModuleConfigPanel() {
           branchId,
           enableCashier: cfg.enableCashier,
           enableDispatch: cfg.enableDispatch,
+          paymentWorkflowMode: cfg.paymentWorkflowMode,
+          dispatchWorkflowMode: cfg.dispatchWorkflowMode,
+          requireOpenCashSessionForDirectSale: cfg.requireOpenCashSessionForDirectSale,
+          allowSellerDirectPayment: cfg.allowSellerDirectPayment,
+          allowCashierQueue: cfg.allowCashierQueue,
         }),
       });
       if (!res.ok) throw new Error("Error al guardar");
@@ -279,6 +298,56 @@ export function BranchModuleConfigPanel() {
                         {cfg?.enableDispatch ? "Activo" : "Inactivo"}
                       </Badge>
                     </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold text-[var(--color-text-secondary)]">Modo de pago</span>
+                      <select
+                        className="hm-input !py-2 !text-sm"
+                        value={cfg.paymentWorkflowMode}
+                        onChange={(event) => updateConfig(cfg.branchId, { paymentWorkflowMode: event.target.value as BranchConfig["paymentWorkflowMode"] })}
+                      >
+                        <option value="HYBRID">Hibrido</option>
+                        <option value="QUEUE_ONLY">Solo cola de caja</option>
+                        <option value="DIRECT_ONLY">Solo pago directo</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs font-semibold text-[var(--color-text-secondary)]">Modo de despacho</span>
+                      <select
+                        className="hm-input !py-2 !text-sm"
+                        value={cfg.dispatchWorkflowMode}
+                        onChange={(event) => updateConfig(cfg.branchId, { dispatchWorkflowMode: event.target.value as BranchConfig["dispatchWorkflowMode"] })}
+                      >
+                        <option value="ENABLED">Despacho habilitado</option>
+                        <option value="DISABLED">Entrega inmediata</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-medium text-[var(--color-text)]">
+                      <input
+                        type="checkbox"
+                        checked={cfg.requireOpenCashSessionForDirectSale}
+                        onChange={(event) => updateConfig(cfg.branchId, { requireOpenCashSessionForDirectSale: event.target.checked })}
+                      />
+                      Requerir caja abierta para venta directa
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-medium text-[var(--color-text)]">
+                      <input
+                        type="checkbox"
+                        checked={cfg.allowSellerDirectPayment}
+                        onChange={(event) => updateConfig(cfg.branchId, { allowSellerDirectPayment: event.target.checked })}
+                      />
+                      Permitir cobro directo del vendedor
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-medium text-[var(--color-text)]">
+                      <input
+                        type="checkbox"
+                        checked={cfg.allowCashierQueue}
+                        onChange={(event) => updateConfig(cfg.branchId, { allowCashierQueue: event.target.checked })}
+                      />
+                      Permitir envio a cola de caja
+                    </label>
                   </div>
 
                   {/* Workflow Preview */}

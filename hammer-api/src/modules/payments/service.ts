@@ -15,7 +15,7 @@ import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
-import { userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 
 type PaymentTenderInput = {
   method: PaymentMethod;
@@ -587,6 +587,7 @@ export async function postSaleOrderPayment(input: {
         },
       });
 
+      await syncCashSessionSnapshotTx(tx, session.id);
       await refreshOperationalDaySummaryTx(tx, session.operationalDayId);
 
       return { payment, order: updatedOrder, inventoryMovementIds: inventoryDeductions };

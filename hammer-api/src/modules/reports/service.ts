@@ -1,4 +1,4 @@
-import { ApprovalStatus, SaleOrderStatus } from "@prisma/client";
+import { ApprovalStatus, PaymentMethod, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 type ReportFilters = {
@@ -118,22 +118,32 @@ export async function getPaymentsReportRows(filters: ReportFilters) {
     include: {
       saleOrder: { select: { orderNumber: true, branch: { select: { code: true, name: true } } } },
       receivedBy: { select: { username: true, fullName: true } },
+      tenders: { select: { method: true, amount: true, changeAmount: true, referenceNumber: true } },
     },
     orderBy: { paidAt: "desc" },
     take: 2000,
   });
 
-  return rows.map((row) => ({
-    fecha_pago: row.paidAt.toISOString(),
-    sucursal_codigo: row.saleOrder.branch.code,
-    sucursal_nombre: row.saleOrder.branch.name,
-    orden: row.saleOrder.orderNumber,
-    metodo: row.method,
-    estado: row.status,
-    cajero: formatActor(row.receivedBy),
-    monto: row.amount.toString(),
-    referencia: row.referenceNumber ?? "",
-  }));
+  return rows.map((row) => {
+    const cashTender = row.tenders
+      .filter((tender) => tender.method === PaymentMethod.CASH)
+      .reduce((sum, tender) => sum + Number(tender.amount), 0);
+    const cashChange = row.tenders.reduce((sum, tender) => sum + Number(tender.changeAmount ?? 0), 0);
+    return {
+      fecha_pago: row.paidAt.toISOString(),
+      sucursal_codigo: row.saleOrder.branch.code,
+      sucursal_nombre: row.saleOrder.branch.name,
+      orden: row.saleOrder.orderNumber,
+      metodo: row.method,
+      tenders: row.tenders.map((tender) => `${tender.method}:${fixed2(Number(tender.amount))}`).join(" | "),
+      estado: row.status,
+      cajero: formatActor(row.receivedBy),
+      monto: row.amount.toString(),
+      efectivo: fixed2(cashTender),
+      cambio: fixed2(cashChange),
+      referencia: row.referenceNumber ?? row.tenders.map((tender) => tender.referenceNumber).filter(Boolean).join(" | "),
+    };
+  });
 }
 
 export async function getDispatchReportRows(filters: ReportFilters) {

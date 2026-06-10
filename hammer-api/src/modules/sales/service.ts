@@ -13,7 +13,7 @@ import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
-import { userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 
 type DirectSaleTenderInput = {
   method: PaymentMethod;
@@ -1107,12 +1107,17 @@ export async function cancelSaleOrder(input: {
 
     // ── 2) Anulación de pagos POSTED ─────────────────────────────────────
     const voidedPayments: string[] = [];
+    const cashSessionIds = new Set<string>();
     const operationalDayIds = new Set<string>();
     for (const p of order.payments) {
       if (p.status === PaymentStatus.POSTED) {
         await tx.payment.update({ where: { id: p.id }, data: { status: PaymentStatus.VOIDED } });
         voidedPayments.push(p.id);
+        cashSessionIds.add(p.cashSessionId);
       }
+    }
+    for (const cashSessionId of cashSessionIds) {
+      await syncCashSessionSnapshotTx(tx, cashSessionId);
     }
     if (order.payments.length > 0) {
       const sessions = await tx.cashSession.findMany({

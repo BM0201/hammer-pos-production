@@ -1,4 +1,4 @@
-import { resolveReportRequest, csvReportResponse } from "@/modules/reports/http";
+import { resolveReportRequest, reportResponse } from "@/modules/reports/http";
 import { toCsv } from "@/modules/reports/serializers";
 import { getEmployeeLoansReportRows } from "@/modules/reports/service";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       branchIds: resolved.branchIds,
     });
 
-    return csvReportResponse("reporte-prestamos-empleados.csv", toCsv(COLUMNS, rows));
+    return reportResponse(resolved, "reporte-prestamos-empleados.csv", toCsv(COLUMNS, rows), rows);
   } catch (error: unknown) {
     return toHttpErrorResponse(error);
   }

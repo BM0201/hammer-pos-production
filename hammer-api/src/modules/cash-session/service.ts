@@ -56,6 +56,35 @@ export async function calculateExpectedCashForSessionTx(
   };
 }
 
+export async function syncCashSessionSnapshotTx(
+  tx: Prisma.TransactionClient,
+  cashSessionId: string,
+) {
+  const session = await tx.cashSession.findUniqueOrThrow({
+    where: { id: cashSessionId },
+    select: {
+      id: true,
+      status: true,
+      openingAmount: true,
+      countedCashAmount: true,
+      operationalDayId: true,
+    },
+  });
+  const snapshot = await calculateExpectedCashForSessionTx(tx, session.id, session.openingAmount);
+  const countedCash = session.countedCashAmount == null ? null : Number(session.countedCashAmount);
+  await tx.cashSession.update({
+    where: { id: session.id },
+    data: {
+      expectedCashAmount: toDecimal(snapshot.expectedCash),
+      ...(countedCash !== null && session.status !== CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW
+        ? { differenceAmount: toDecimal(countedCash - snapshot.expectedCash) }
+        : {}),
+    },
+  });
+  if (session.operationalDayId) await refreshOperationalDaySummaryTx(tx, session.operationalDayId);
+  return snapshot;
+}
+
 export async function getActiveCashSession(params: { branchId: string; physicalCashBoxId?: string | null }) {
   return prisma.cashSession.findFirst({
     where: {
@@ -285,6 +314,7 @@ export async function createCashMovement(input: {
         approvedByUserId: input.approvedByUserId ?? null,
       },
     });
+    await syncCashSessionSnapshotTx(tx, session.id);
     await tx.auditLog.create({
       data: {
         actorUserId: input.actorUserId,
