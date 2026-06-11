@@ -75,6 +75,17 @@ type BranchBlock = {
   paidSalesCount: number;
   pendingPaymentTotal: number;
   pendingPaymentCount: number;
+  openingCashTotal: number;
+  cashTenderNetTotal: number;
+  cashMovementsNet: number;
+  expectedCashOnHand: number;
+  cashNetWithoutOpening: number;
+  cardTenderTotal: number;
+  transferTenderTotal: number;
+  otherTenderTotal: number;
+  estimatedCostOfGoodsSold: number | null;
+  estimatedGrossProfit: number | null;
+  activeCashSessionIds: string[];
   lastSale: {
     orderNumber: string;
     amount: number;
@@ -128,6 +139,14 @@ type CommandCenter = {
     paidSalesCount: number;
     pendingPaymentTotal: number;
     pendingPaymentCount: number;
+    openingCashTotal: number;
+    cashTenderNetTotal: number;
+    cashMovementsNet: number;
+    expectedCashOnHand: number;
+    cashNetWithoutOpening: number;
+    cardTenderTotal: number;
+    transferTenderTotal: number;
+    otherTenderTotal: number;
   };
   users: {
     summary: { online: number; idle: number; offline: number; openCashSessions: number };
@@ -511,6 +530,17 @@ function TotalRow({ label, value }: { label: string; value: number }) {
     <div className="flex items-center justify-between text-[var(--color-text-secondary)]">
       <span>{label}</span>
       <span className="font-mono">{money(value)}</span>
+    </div>
+  );
+}
+
+function CashMiniRow({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-2">
+      <span className="truncate text-[var(--color-text-muted)]">{label}</span>
+      <span className={`shrink-0 font-mono ${strong ? "font-semibold text-[var(--color-text)]" : "text-[var(--color-text-secondary)]"}`}>
+        {value}
+      </span>
     </div>
   );
 }
@@ -1459,6 +1489,31 @@ export default function MasterCommandCenterPage() {
                   <div className="mt-1 flex items-center justify-between text-[0.68rem] text-[var(--color-text-muted)]">
                     <span>{b.paidSalesCount} cobrada(s)</span>
                     <span>{b.pendingPaymentCount} pendiente(s) · {money(b.pendingPaymentTotal)}</span>
+                  </div>
+                </div>
+
+                <div className="mb-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-[0.72rem]">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-text)]">
+                      <Banknote className="h-3.5 w-3.5" />
+                      Caja del día
+                    </span>
+                    <span className="font-mono text-[0.68rem] text-[var(--color-text-muted)]">
+                      {b.activeCashSessionIds.length} activa(s)
+                    </span>
+                  </div>
+                  <div className="grid gap-x-3 gap-y-1.5 sm:grid-cols-2">
+                    <CashMiniRow label="Apertura" value={money(b.openingCashTotal)} />
+                    <CashMiniRow label="Efectivo neto" value={money(b.cashTenderNetTotal)} />
+                    <CashMiniRow label="Movimientos" value={money(b.cashMovementsNet)} />
+                    <CashMiniRow label="Sin apertura" value={money(b.cashNetWithoutOpening)} />
+                    <CashMiniRow label="Tarjeta" value={money(b.cardTenderTotal)} />
+                    <CashMiniRow label="Transferencia" value={money(b.transferTenderTotal)} />
+                    <CashMiniRow label="Otros" value={money(b.otherTenderTotal)} />
+                    <CashMiniRow label="Utilidad est." value={b.estimatedGrossProfit === null ? "N/D" : money(b.estimatedGrossProfit)} />
+                  </div>
+                  <div className="mt-2 border-t border-[var(--color-border)] pt-2">
+                    <CashMiniRow label="Efectivo esperado" value={money(b.expectedCashOnHand)} strong />
                   </div>
                 </div>
 

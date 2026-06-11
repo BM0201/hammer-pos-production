@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { canExportReports, resolveReportBranchScope } from "@/modules/reports/access";
+import { buildReportPdf } from "@/modules/reports/pdf";
 import { reportQuerySchema } from "@/modules/reports/validators";
 
 export async function resolveReportRequest(request: Request) {
@@ -26,7 +27,8 @@ export async function resolveReportRequest(request: Request) {
 
   try {
     const branchIds = resolveReportBranchScope(session, parsed.data.branchId);
-    const format: "csv" | "json" = searchParams.get("format") === "json" ? "json" : "csv";
+    const rawFormat = searchParams.get("format");
+    const format: "csv" | "json" | "pdf" = rawFormat === "json" || rawFormat === "pdf" ? rawFormat : "csv";
     return { query: parsed.data, branchIds, format };
   } catch (error) {
     if (error instanceof Error && error.message === "FORBIDDEN_BRANCH") {
@@ -48,7 +50,7 @@ export function csvReportResponse(filename: string, csv: string) {
 }
 
 export function reportResponse(
-  request: { format: "csv" | "json" },
+  request: { format: "csv" | "json" | "pdf" },
   filename: string,
   csv: string,
   rows: Array<Record<string, unknown>>,
@@ -58,6 +60,17 @@ export function reportResponse(
       { rows, count: rows.length, generatedAt: new Date().toISOString() },
       { status: 200, headers: { "cache-control": "no-store" } },
     );
+  }
+  if (request.format === "pdf") {
+    const pdf = buildReportPdf({ title: filename.replace(/\.csv$/i, ""), rows });
+    return new NextResponse(pdf, {
+      status: 200,
+      headers: {
+        "content-type": "application/pdf",
+        "content-disposition": `attachment; filename=\"${filename.replace(/\.csv$/i, ".pdf")}\"`,
+        "cache-control": "no-store",
+      },
+    });
   }
   return csvReportResponse(filename, csv);
 }

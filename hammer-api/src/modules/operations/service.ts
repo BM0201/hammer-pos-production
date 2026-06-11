@@ -1,8 +1,10 @@
 import {
   BrainDecisionCategory,
   BrainDecisionSeverity,
+  CashMovementType,
   CashSessionStatus,
   OperationalDayStatus,
+  PaymentMethod,
   PaymentStatus,
   Prisma,
   SaleOrderStatus,
@@ -21,6 +23,18 @@ function decimal(value: number) {
 
 function n(value: Prisma.Decimal | number | string | null | undefined) {
   return Number(value ?? 0);
+}
+
+function movementSignedAmount(type: CashMovementType, amount: number) {
+  if (
+    type === CashMovementType.CASH_OUT ||
+    type === CashMovementType.BANK_DEPOSIT_OUT ||
+    type === CashMovementType.EXPENSE_OUT ||
+    type === CashMovementType.REFUND_OUT
+  ) {
+    return -amount;
+  }
+  return amount;
 }
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue {
@@ -74,6 +88,8 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
     countedCashTotal,
     cashDifferenceTotal,
     cashSessions,
+    dayTenders,
+    cashMovements,
   ] = await Promise.all([
     tx.cashSession.count({
       where: { operationalDayId: day.id, status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] } },
@@ -103,7 +119,37 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
       },
       orderBy: { openedAt: "asc" },
     }),
+    tx.paymentTender.findMany({
+      where: {
+        payment: {
+          status: PaymentStatus.POSTED,
+          paidAt: { gte: start, lt: end },
+          saleOrder: { branchId: day.branchId, status: { not: SaleOrderStatus.CANCELLED } },
+        },
+      },
+      select: { method: true, amount: true, changeAmount: true },
+    }),
+    tx.cashMovement.findMany({
+      where: { cashSession: { operationalDayId: day.id } },
+      select: { type: true, amount: true },
+    }),
   ]);
+
+  const openingCashTotal = cashSessions.reduce((sum, session) => sum + n(session.openingAmount), 0);
+  const cashTenderNetTotal = dayTenders
+    .filter((tender) => tender.method === PaymentMethod.CASH)
+    .reduce((sum, tender) => sum + n(tender.amount) - n(tender.changeAmount), 0);
+  const cardTenderTotal = dayTenders
+    .filter((tender) => tender.method === PaymentMethod.CARD)
+    .reduce((sum, tender) => sum + n(tender.amount), 0);
+  const transferTenderTotal = dayTenders
+    .filter((tender) => tender.method === PaymentMethod.TRANSFER)
+    .reduce((sum, tender) => sum + n(tender.amount), 0);
+  const otherTenderTotal = dayTenders
+    .filter((tender) => tender.method !== PaymentMethod.CASH && tender.method !== PaymentMethod.CARD && tender.method !== PaymentMethod.TRANSFER)
+    .reduce((sum, tender) => sum + n(tender.amount), 0);
+  const cashMovementsNet = cashMovements.reduce((sum, movement) => sum + movementSignedAmount(movement.type, n(movement.amount)), 0);
+  const expectedCashOnHand = openingCashTotal + cashTenderNetTotal + cashMovementsNet;
 
   return {
     window: { start, end, timezone: TIMEZONE },
@@ -120,6 +166,14 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
     expectedCashTotal: n(expectedCashTotal._sum.expectedCashAmount),
     countedCashTotal: n(countedCashTotal._sum.countedCashAmount),
     cashDifferenceTotal: n(cashDifferenceTotal._sum.differenceAmount),
+    openingCashTotal,
+    cashTenderNetTotal,
+    cashMovementsNet,
+    expectedCashOnHand,
+    cashNetWithoutOpening: expectedCashOnHand - openingCashTotal,
+    cardTenderTotal,
+    transferTenderTotal,
+    otherTenderTotal,
     openCashSessionsCount,
     autoClosedPendingReviewCount,
     pendingDispatchCount,

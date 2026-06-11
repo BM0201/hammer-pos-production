@@ -1,4 +1,4 @@
-import { CashSessionStatus } from "@prisma/client";
+import { CashMovementType, CashSessionStatus, PaymentMethod, PaymentStatus, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getUserActivitySnapshot } from "@/modules/auth/presence-service";
 import { getOperationalWindowForNow, OPERATIONAL_TIMEZONE } from "@/modules/operations/service";
@@ -23,6 +23,18 @@ import { getAllBranchesSalesRealtimeSummary } from "@/modules/sales/realtime-sal
 
 function num(value: { toNumber: () => number } | null | undefined): number {
   return value ? value.toNumber() : 0;
+}
+
+function movementSignedAmount(type: CashMovementType, amount: number) {
+  if (
+    type === CashMovementType.CASH_OUT ||
+    type === CashMovementType.BANK_DEPOSIT_OUT ||
+    type === CashMovementType.EXPENSE_OUT ||
+    type === CashMovementType.REFUND_OUT
+  ) {
+    return -amount;
+  }
+  return amount;
 }
 
 /** Cash sessions that still require attention (open, reconciling or pending review). */
@@ -100,6 +112,9 @@ export async function getCommandCenterSnapshot() {
     completedTodaySessions,
     historySessions,
     salesSummaries,
+    dayCashSessions,
+    dayTenders,
+    dayCashMovements,
   ] = await Promise.all([
     // 1. Connected users (presence) — reuse the existing snapshot.
     getUserActivitySnapshot(),
@@ -161,16 +176,108 @@ export async function getCommandCenterSnapshot() {
     }),
     // 9. Real-time commercial sales per branch.
     getAllBranchesSalesRealtimeSummary(),
+    // 10. Cash sessions tied to today's operational day.
+    prisma.cashSession.findMany({
+      where: { operationalDay: { businessDate: { gte: start, lt: end } } },
+      select: {
+        id: true,
+        status: true,
+        openingAmount: true,
+        physicalCashBox: { select: { branchId: true } },
+      },
+    }),
+    // 11. Posted payment tenders in the operational window.
+    prisma.paymentTender.findMany({
+      where: {
+        payment: {
+          status: PaymentStatus.POSTED,
+          paidAt: { gte: start, lt: end },
+          saleOrder: { status: { not: SaleOrderStatus.CANCELLED } },
+        },
+      },
+      select: {
+        method: true,
+        amount: true,
+        changeAmount: true,
+        payment: { select: { saleOrder: { select: { branchId: true } } } },
+      },
+    }),
+    // 12. Cash movements registered against today's sessions.
+    prisma.cashMovement.findMany({
+      where: { cashSession: { operationalDay: { businessDate: { gte: start, lt: end } } } },
+      select: {
+        type: true,
+        amount: true,
+        cashSession: { select: { physicalCashBox: { select: { branchId: true } } } },
+      },
+    }),
   ]);
 
   // Map boxId -> branchId for resolving grouped session counts.
   const boxBranch = new Map(physicalBoxes.map((b) => [b.id, b.branchId]));
+  const cashByBranch = new Map<
+    string,
+    {
+      openingCashTotal: number;
+      cashTenderNetTotal: number;
+      cashMovementsNet: number;
+      cardTenderTotal: number;
+      transferTenderTotal: number;
+      otherTenderTotal: number;
+      activeCashSessionIds: string[];
+    }
+  >();
+
+  function cashTotalsFor(branchId: string) {
+    const current = cashByBranch.get(branchId);
+    if (current) return current;
+    const initial = {
+      openingCashTotal: 0,
+      cashTenderNetTotal: 0,
+      cashMovementsNet: 0,
+      cardTenderTotal: 0,
+      transferTenderTotal: 0,
+      otherTenderTotal: 0,
+      activeCashSessionIds: [],
+    };
+    cashByBranch.set(branchId, initial);
+    return initial;
+  }
+
+  for (const session of dayCashSessions) {
+    const totals = cashTotalsFor(session.physicalCashBox.branchId);
+    totals.openingCashTotal += num(session.openingAmount);
+    if (session.status === CashSessionStatus.OPEN || session.status === CashSessionStatus.RECONCILING) {
+      totals.activeCashSessionIds.push(session.id);
+    }
+  }
+
+  for (const tender of dayTenders) {
+    const totals = cashTotalsFor(tender.payment.saleOrder.branchId);
+    const amount = num(tender.amount);
+    if (tender.method === PaymentMethod.CASH) {
+      totals.cashTenderNetTotal += amount - num(tender.changeAmount);
+    } else if (tender.method === PaymentMethod.CARD) {
+      totals.cardTenderTotal += amount;
+    } else if (tender.method === PaymentMethod.TRANSFER) {
+      totals.transferTenderTotal += amount;
+    } else {
+      totals.otherTenderTotal += amount;
+    }
+  }
+
+  for (const movement of dayCashMovements) {
+    const totals = cashTotalsFor(movement.cashSession.physicalCashBox.branchId);
+    totals.cashMovementsNet += movementSignedAmount(movement.type, num(movement.amount));
+  }
 
   // Per-branch aggregates.
   const byBranch = branches.map((branch) => {
     const boxes = physicalBoxes.filter((b) => b.branchId === branch.id);
     const day = operationalDays.find((d) => d.branchId === branch.id) ?? null;
     const sales = salesSummaries.find((s) => s.branchId === branch.id);
+    const cash = cashTotalsFor(branch.id);
+    const expectedCashOnHand = cash.openingCashTotal + cash.cashTenderNetTotal + cash.cashMovementsNet;
 
     let openCount = 0;
     let reconcilingCount = 0;
@@ -196,6 +303,17 @@ export async function getCommandCenterSnapshot() {
       paidSalesCount: sales?.paidSalesCount ?? 0,
       pendingPaymentTotal: sales?.pendingPaymentTotal ?? 0,
       pendingPaymentCount: sales?.pendingPaymentCount ?? 0,
+      openingCashTotal: cash.openingCashTotal,
+      cashTenderNetTotal: cash.cashTenderNetTotal,
+      cashMovementsNet: cash.cashMovementsNet,
+      expectedCashOnHand,
+      cashNetWithoutOpening: expectedCashOnHand - cash.openingCashTotal,
+      cardTenderTotal: cash.cardTenderTotal,
+      transferTenderTotal: cash.transferTenderTotal,
+      otherTenderTotal: cash.otherTenderTotal,
+      estimatedCostOfGoodsSold: null,
+      estimatedGrossProfit: null,
+      activeCashSessionIds: cash.activeCashSessionIds,
       lastSale: sales?.lastSale ?? null,
       operationalDay: day
         ? {
@@ -221,6 +339,14 @@ export async function getCommandCenterSnapshot() {
     paidSalesCount: byBranch.reduce((acc, b) => acc + b.paidSalesCount, 0),
     pendingPaymentTotal: byBranch.reduce((acc, b) => acc + b.pendingPaymentTotal, 0),
     pendingPaymentCount: byBranch.reduce((acc, b) => acc + b.pendingPaymentCount, 0),
+    openingCashTotal: byBranch.reduce((acc, b) => acc + b.openingCashTotal, 0),
+    cashTenderNetTotal: byBranch.reduce((acc, b) => acc + b.cashTenderNetTotal, 0),
+    cashMovementsNet: byBranch.reduce((acc, b) => acc + b.cashMovementsNet, 0),
+    expectedCashOnHand: byBranch.reduce((acc, b) => acc + b.expectedCashOnHand, 0),
+    cashNetWithoutOpening: byBranch.reduce((acc, b) => acc + b.cashNetWithoutOpening, 0),
+    cardTenderTotal: byBranch.reduce((acc, b) => acc + b.cardTenderTotal, 0),
+    transferTenderTotal: byBranch.reduce((acc, b) => acc + b.transferTenderTotal, 0),
+    otherTenderTotal: byBranch.reduce((acc, b) => acc + b.otherTenderTotal, 0),
     openSessions: byBranch.reduce((acc, b) => acc + b.openSessions, 0),
     pendingReviewSessions: byBranch.reduce((acc, b) => acc + b.pendingReviewSessions, 0),
     reconcilingSessions: byBranch.reduce((acc, b) => acc + b.reconcilingSessions, 0),
