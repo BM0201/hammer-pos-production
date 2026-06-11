@@ -7,8 +7,13 @@ export type ProductStockConversion = {
   stockGroupCode: string;
   stockGroupName: string;
   baseUnit: string;
+  packageUnit: string | null;
   saleUnit: string;
   conversionFactor: Prisma.Decimal;
+  conversionFactorToBase: Prisma.Decimal | null;
+  tracksPackages: boolean;
+  approximateFactor: boolean;
+  isPackagePresentation: boolean;
   canonicalProductId: string;
   isCanonical: boolean;
 };
@@ -41,6 +46,43 @@ export function ironStockGroupCode(productName: string): string | null {
   return null;
 }
 
+export const NAIL_PACKAGE_PRESETS = [
+  { key: "clavo_acero_4", label: 'Clavo acero 4"', measure: '4"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 80 },
+  { key: "clavo_acero_3", label: 'Clavo acero 3"', measure: '3"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 105 },
+  { key: "clavo_acero_2_1_2", label: 'Clavo acero 2 1/2"', measure: '2 1/2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 142 },
+  { key: "clavo_acero_2", label: 'Clavo acero 2"', measure: '2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 216 },
+  { key: "clavo_acero_1_1_2", label: 'Clavo acero 1 1/2"', measure: '1 1/2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 308 },
+  { key: "clavo_acero_1", label: 'Clavo acero 1"', measure: '1"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 417 },
+] as const;
+
+export function detectNailPackagePreset(productName: string) {
+  const name = normalize(productName);
+  if (!name.includes("CLAVO") || !name.includes("ACERO")) return null;
+  const ordered = [...NAIL_PACKAGE_PRESETS].sort((a, b) => b.measure.length - a.measure.length);
+  return ordered.find((preset) => name.includes(preset.measure.toUpperCase())) ?? null;
+}
+
+export function formatPackageLooseStock(input: {
+  closedPackageQuantity: number | Prisma.Decimal;
+  looseUnitQuantity: number | Prisma.Decimal;
+  conversionFactor: number | Prisma.Decimal;
+  packageUnit: string;
+  baseUnit: string;
+}) {
+  const closed = new Prisma.Decimal(input.closedPackageQuantity);
+  const loose = new Prisma.Decimal(input.looseUnitQuantity);
+  const factor = new Prisma.Decimal(input.conversionFactor);
+  const equivalentBaseQuantity = closed.mul(factor).add(loose);
+  return {
+    closedPackageQuantity: Number(closed.toDecimalPlaces(4)),
+    looseUnitQuantity: Number(loose.toDecimalPlaces(4)),
+    equivalentBaseQuantity: Number(equivalentBaseQuantity.toDecimalPlaces(4)),
+    conversionFactor: Number(factor.toDecimalPlaces(4)),
+    packageUnit: input.packageUnit,
+    baseUnit: input.baseUnit,
+  };
+}
+
 export function convertSaleQtyToBaseQty(input: { quantity: number | Prisma.Decimal; conversionFactor: number | Prisma.Decimal }) {
   return new Prisma.Decimal(input.quantity).mul(input.conversionFactor);
 }
@@ -66,12 +108,26 @@ export function formatDualStock(input: {
   conversionFactor: number | Prisma.Decimal;
   baseUnit: string;
   saleUnit: string;
+  closedPackageQuantity?: number | Prisma.Decimal | null;
+  looseUnitQuantity?: number | Prisma.Decimal | null;
+  packageUnit?: string | null;
+  tracksPackages?: boolean;
 }) {
+  const packageStock = input.tracksPackages && input.packageUnit
+    ? formatPackageLooseStock({
+        closedPackageQuantity: input.closedPackageQuantity ?? 0,
+        looseUnitQuantity: input.looseUnitQuantity ?? input.baseQuantity,
+        conversionFactor: input.conversionFactor,
+        packageUnit: input.packageUnit,
+        baseUnit: input.baseUnit,
+      })
+    : null;
   return {
     baseQuantity: Number(new Prisma.Decimal(input.baseQuantity).toDecimalPlaces(4)),
     saleQuantity: Number(convertBaseQtyToSaleQty({ baseQuantity: input.baseQuantity, conversionFactor: input.conversionFactor }).toDecimalPlaces(4)),
     baseUnit: input.baseUnit,
     saleUnit: input.saleUnit,
+    packageStock,
   };
 }
 
@@ -126,8 +182,13 @@ export async function getProductStockConversion(db: DbClient, productId: string)
     stockGroupCode: member.stockGroup.code,
     stockGroupName: member.stockGroup.name,
     baseUnit: member.stockGroup.baseUnit,
+    packageUnit: member.stockGroup.packageUnit,
     saleUnit: member.saleUnit,
     conversionFactor: member.conversionFactor,
+    conversionFactorToBase: member.stockGroup.conversionFactorToBase,
+    tracksPackages: member.stockGroup.tracksPackages,
+    approximateFactor: member.stockGroup.approximateFactor,
+    isPackagePresentation: member.isPackagePresentation,
     canonicalProductId: canonical.productId,
     isCanonical: member.isCanonical,
   };

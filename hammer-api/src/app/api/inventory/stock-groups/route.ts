@@ -28,6 +28,10 @@ export async function POST(request: Request) {
       name?: string;
       code?: string;
       baseUnit?: string;
+      packageUnit?: string | null;
+      conversionFactorToBase?: number | null;
+      tracksPackages?: boolean;
+      approximateFactor?: boolean;
       categoryId?: string | null;
       members?: StockGroupMemberInput[];
     };
@@ -37,6 +41,10 @@ export async function POST(request: Request) {
         name: body.name ?? "",
         code: body.code,
         baseUnit: body.baseUnit,
+        packageUnit: body.packageUnit,
+        conversionFactorToBase: body.conversionFactorToBase,
+        tracksPackages: body.tracksPackages,
+        approximateFactor: body.approximateFactor,
         categoryId: body.categoryId ?? null,
         members: body.members ?? [],
       },

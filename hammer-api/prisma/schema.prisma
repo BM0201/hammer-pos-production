@@ -135,6 +135,13 @@ enum InventoryMovementType {
   ADJUSTMENT_OUT
   TRANSFER_OUT
   TRANSFER_IN
+  PACKAGE_IN
+  PACKAGE_SALE_OUT
+  PACKAGE_OPENED
+  LOOSE_UNIT_SALE_OUT
+  LOOSE_UNIT_RETURN_IN
+  LOOSE_ADJUSTMENT
+  PACKAGE_ADJUSTMENT
   TIMBER_INTAKE_IN
   PRODUCTION_CONSUME
   PRODUCTION_OUTPUT
@@ -639,14 +646,18 @@ model Product {
 }
 
 model ProductStockGroup {
-  id         String   @id @default(cuid())
-  code       String   @unique
-  name       String
-  baseUnit   String
-  categoryId String?
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                     String   @id @default(cuid())
+  code                   String   @unique
+  name                   String
+  baseUnit               String
+  packageUnit            String?
+  conversionFactorToBase Decimal?
+  tracksPackages         Boolean  @default(false)
+  approximateFactor      Boolean  @default(false)
+  categoryId             String?
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   category Category?                 @relation(fields: [categoryId], references: [id])
   products ProductStockGroupMember[]
@@ -656,15 +667,16 @@ model ProductStockGroup {
 }
 
 model ProductStockGroupMember {
-  id               String  @id @default(cuid())
-  stockGroupId     String
-  productId        String
-  saleUnit         String
-  conversionFactor Decimal
-  isCanonical      Boolean @default(false)
-  isActive         Boolean @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  stockGroupId          String
+  productId             String
+  saleUnit              String
+  conversionFactor      Decimal
+  isCanonical           Boolean  @default(false)
+  isPackagePresentation Boolean  @default(false)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   stockGroup ProductStockGroup @relation(fields: [stockGroupId], references: [id])
   product    Product           @relation(fields: [productId], references: [id])
@@ -823,6 +835,8 @@ model InventoryBalance {
   branchId            String
   productId           String
   quantityOnHand      Decimal  @default(0)
+  closedPackageQuantity Decimal @default(0)
+  looseUnitQuantity     Decimal @default(0)
   weightedAverageCost Decimal  @default(0)
   inventoryValue      Decimal  @default(0)
   updatedAt           DateTime @updatedAt
@@ -834,16 +848,32 @@ model InventoryBalance {
 }
 
 model InventoryMovement {
-  id            String                @id @default(cuid())
-  branchId      String
-  productId     String
-  movementType  InventoryMovementType
-  quantity      Decimal
-  unitCost      Decimal
-  referenceType String
-  referenceId   String
-  notes         String?
-  createdAt     DateTime              @default(now())
+  id                       String                @id @default(cuid())
+  branchId                 String
+  productId                String
+  movementType             InventoryMovementType
+  quantity                 Decimal
+  unitCost                 Decimal
+  referenceType            String
+  referenceId              String
+  notes                    String?
+  inputProductId           String?
+  inputQuantity            Decimal?
+  inputUnit                String?
+  packageUnit              String?
+  baseUnit                 String?
+  conversionFactorSnapshot Decimal?
+  estimatedUnits           Decimal?
+  actualUnits              Decimal?
+  closedPackageBefore      Decimal?
+  closedPackageAfter       Decimal?
+  looseUnitBefore          Decimal?
+  looseUnitAfter           Decimal?
+  equivalentBaseBefore     Decimal?
+  equivalentBaseAfter      Decimal?
+  reason                   String?
+  userId                   String?
+  createdAt                DateTime              @default(now())
 
   branch  Branch  @relation(fields: [branchId], references: [id])
   product Product @relation(fields: [productId], references: [id])

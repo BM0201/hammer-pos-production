@@ -16,12 +16,24 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
     const body = (await request.json().catch(() => ({}))) as {
       name?: string;
       isActive?: boolean;
+      packageUnit?: string | null;
+      conversionFactorToBase?: number | null;
+      tracksPackages?: boolean;
+      approximateFactor?: boolean;
       members?: StockGroupMemberInput[];
     };
 
     const group = await updateStockGroup(
       id,
-      { name: body.name, isActive: body.isActive, members: body.members },
+      {
+        name: body.name,
+        isActive: body.isActive,
+        packageUnit: body.packageUnit,
+        conversionFactorToBase: body.conversionFactorToBase,
+        tracksPackages: body.tracksPackages,
+        approximateFactor: body.approximateFactor,
+        members: body.members,
+      },
       session.userId,
     );
 

@@ -41,8 +41,13 @@ type ProductRow = {
     stockGroupCode: string;
     stockGroupName: string;
     baseUnit: string;
+    packageUnit?: string | null;
     saleUnit: string;
     conversionFactor: string | number;
+    conversionFactorToBase?: string | number | null;
+    tracksPackages?: boolean;
+    approximateFactor?: boolean;
+    isPackagePresentation?: boolean;
     isCanonical: boolean;
   } | null;
   sharedStock?: {
@@ -50,11 +55,21 @@ type ProductRow = {
     saleQuantity: number;
     baseUnit: string;
     saleUnit: string;
+    packageStock?: {
+      closedPackageQuantity: number;
+      looseUnitQuantity: number;
+      equivalentBaseQuantity: number;
+      conversionFactor: number;
+      packageUnit: string;
+      baseUnit: string;
+    } | null;
   } | null;
   allSharedInventoryBalances?: Array<{
     branchId: string;
     inventoryProductId: string;
     quantityOnHand: string | null;
+    closedPackageQuantity?: string | null;
+    looseUnitQuantity?: string | null;
     weightedAverageCost: string | null;
   }>;
 };
@@ -257,6 +272,13 @@ function renderSharedStock(product: ProductRow) {
   const shared = product.sharedStock;
   const conversion = product.stockConversion;
   if (!shared || !conversion) return null;
+  if (conversion.tracksPackages && shared.packageStock) {
+    return {
+      primary: `${qty(shared.packageStock.closedPackageQuantity)} ${(conversion.packageUnit ?? "KILO").toLowerCase()} cerrados`,
+      secondary: `${qty(shared.packageStock.looseUnitQuantity)} ${shared.packageStock.baseUnit.toLowerCase()} abiertos | total ${qty(shared.packageStock.equivalentBaseQuantity)} ${shared.packageStock.baseUnit.toLowerCase()}`,
+      chip: `1 ${conversion.packageUnit ?? shared.saleUnit} = ${qty(shared.packageStock.conversionFactor)} ${shared.packageStock.baseUnit} aprox.`,
+    };
+  }
   const factor = ironQuintalFactor(product);
   const primary = `${qty(shared.saleQuantity)} ${shared.saleUnit.toLowerCase()}`;
   const secondary = conversion.saleUnit === shared.baseUnit && factor

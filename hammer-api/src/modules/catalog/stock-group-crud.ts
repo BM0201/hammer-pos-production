@@ -19,12 +19,17 @@ export type StockGroupMemberInput = {
   saleUnit: string;
   conversionFactor: number;
   isCanonical: boolean;
+  isPackagePresentation?: boolean;
 };
 
 export type CreateStockGroupInput = {
   name: string;
   code?: string;
   baseUnit?: string;
+  packageUnit?: string | null;
+  conversionFactorToBase?: number | null;
+  tracksPackages?: boolean;
+  approximateFactor?: boolean;
   categoryId?: string | null;
   members: StockGroupMemberInput[];
 };
@@ -32,6 +37,10 @@ export type CreateStockGroupInput = {
 export type UpdateStockGroupInput = {
   name?: string;
   isActive?: boolean;
+  packageUnit?: string | null;
+  conversionFactorToBase?: number | null;
+  tracksPackages?: boolean;
+  approximateFactor?: boolean;
   members?: StockGroupMemberInput[];
 };
 
@@ -79,6 +88,25 @@ function validateMembers(members: StockGroupMemberInput[]) {
   return canonical;
 }
 
+function validatePackageSettings(input: {
+  tracksPackages?: boolean;
+  packageUnit?: string | null;
+  conversionFactorToBase?: number | null;
+  members: StockGroupMemberInput[];
+}) {
+  if (!input.tracksPackages) return;
+  if (!input.packageUnit?.trim()) {
+    throw new Error("VALIDATION_ERROR: La unidad de empaque es obligatoria para presentaciones cerradas.");
+  }
+  if (!Number.isFinite(Number(input.conversionFactorToBase)) || Number(input.conversionFactorToBase) <= 0) {
+    throw new Error("VALIDATION_ERROR: El factor de empaque debe ser mayor que 0.");
+  }
+  const packageMembers = input.members.filter((member) => member.isPackagePresentation || !member.isCanonical);
+  if (packageMembers.length < 1) {
+    throw new Error("VALIDATION_ERROR: Debe marcar una presentacion cerrada para manejar stock cerrado/suelto.");
+  }
+}
+
 async function assertProductsAvailable(
   tx: Prisma.TransactionClient,
   members: StockGroupMemberInput[],
@@ -110,7 +138,8 @@ async function assertProductsAvailable(
 }
 
 export async function listStockGroups() {
-  const groups = await prisma.productStockGroup.findMany({
+  const [groups, branches] = await Promise.all([
+    prisma.productStockGroup.findMany({
     where: { isActive: true },
     include: {
       category: { select: { id: true, code: true, name: true } },
@@ -123,16 +152,69 @@ export async function listStockGroups() {
       },
     },
     orderBy: { name: "asc" },
-  });
+    }),
+    prisma.branch.findMany({
+      where: { isActive: true },
+      select: { id: true, code: true, name: true },
+      orderBy: { code: "asc" },
+    }),
+  ]);
+
+  const canonicalProductIds = groups.flatMap((group) => group.products.filter((member) => member.isCanonical).map((member) => member.productId));
+  const balances = canonicalProductIds.length > 0
+    ? await prisma.inventoryBalance.findMany({
+        where: { productId: { in: canonicalProductIds } },
+        select: {
+          branchId: true,
+          productId: true,
+          quantityOnHand: true,
+          closedPackageQuantity: true,
+          looseUnitQuantity: true,
+        },
+      })
+    : [];
+  const balanceByBranchProduct = new Map(balances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]));
 
   return groups.map((group) => ({
+    ...(group.tracksPackages ? (() => {
+      const canonical = group.products.find((member) => member.isCanonical);
+      const factor = group.conversionFactorToBase ?? group.products.find((member) => !member.isCanonical)?.conversionFactor ?? new Prisma.Decimal(1);
+      const branchStocks = canonical
+        ? branches.map((branch) => {
+            const balance = balanceByBranchProduct.get(`${branch.id}:${canonical.productId}`);
+            return {
+              branch,
+              closedPackageQuantity: Number(balance?.closedPackageQuantity ?? 0),
+              looseUnitQuantity: Number(balance?.looseUnitQuantity ?? 0),
+              equivalentBaseQuantity: Number(balance?.quantityOnHand ?? 0),
+            };
+          })
+        : [];
+      return {
+        branchStocks,
+        totalClosedPackageQuantity: branchStocks.reduce((sum, item) => sum + item.closedPackageQuantity, 0),
+        totalLooseUnitQuantity: branchStocks.reduce((sum, item) => sum + item.looseUnitQuantity, 0),
+        totalEquivalentBaseQuantity: branchStocks.reduce((sum, item) => sum + item.equivalentBaseQuantity, 0),
+        displayConversionFactor: Number(factor),
+      };
+    })() : {
+      branchStocks: [],
+      totalClosedPackageQuantity: 0,
+      totalLooseUnitQuantity: 0,
+      totalEquivalentBaseQuantity: 0,
+      displayConversionFactor: null,
+    }),
     id: group.id,
     code: group.code,
     name: group.name,
-    baseUnit: group.baseUnit,
-    isActive: group.isActive,
-    category: group.category,
-    members: group.products.map((m) => ({
+      baseUnit: group.baseUnit,
+      packageUnit: group.packageUnit,
+      conversionFactorToBase: group.conversionFactorToBase ? Number(group.conversionFactorToBase) : null,
+      tracksPackages: group.tracksPackages,
+      approximateFactor: group.approximateFactor,
+      isActive: group.isActive,
+      category: group.category,
+      members: group.products.map((m) => ({
       id: m.id,
       productId: m.productId,
       sku: m.product.sku,
@@ -140,6 +222,7 @@ export async function listStockGroups() {
       saleUnit: m.saleUnit,
       conversionFactor: Number(m.conversionFactor),
       isCanonical: m.isCanonical,
+      isPackagePresentation: m.isPackagePresentation,
     })),
   }));
 }
@@ -149,7 +232,15 @@ export async function createStockGroup(input: CreateStockGroupInput, actorUserId
   if (!name) throw new Error("VALIDATION_ERROR: El nombre de la fusión es obligatorio.");
 
   const canonical = validateMembers(input.members);
+  validatePackageSettings({
+    tracksPackages: input.tracksPackages,
+    packageUnit: input.packageUnit,
+    conversionFactorToBase: input.conversionFactorToBase,
+    members: input.members,
+  });
   const baseUnit = (input.baseUnit ?? canonical.saleUnit).trim();
+  const packageUnit = input.packageUnit?.trim().toUpperCase() || null;
+  const conversionFactorToBase = input.conversionFactorToBase ?? input.members.find((member) => !member.isCanonical)?.conversionFactor ?? null;
   const code = (input.code?.trim() || slugifyCode(name)).toUpperCase();
 
   const group = await prisma.$transaction(async (tx) => {
@@ -165,6 +256,10 @@ export async function createStockGroup(input: CreateStockGroupInput, actorUserId
         code,
         name,
         baseUnit,
+        packageUnit,
+        conversionFactorToBase: conversionFactorToBase === null ? null : new Prisma.Decimal(conversionFactorToBase),
+        tracksPackages: Boolean(input.tracksPackages),
+        approximateFactor: Boolean(input.approximateFactor),
         categoryId: input.categoryId ?? null,
       },
     });
@@ -177,6 +272,7 @@ export async function createStockGroup(input: CreateStockGroupInput, actorUserId
           saleUnit: member.saleUnit.trim(),
           conversionFactor: new Prisma.Decimal(member.conversionFactor),
           isCanonical: member.isCanonical,
+          isPackagePresentation: Boolean(member.isPackagePresentation || (!member.isCanonical && input.tracksPackages)),
         },
       });
     }
@@ -204,9 +300,21 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
     const data: Prisma.ProductStockGroupUpdateInput = {};
     if (typeof input.name === "string" && input.name.trim()) data.name = input.name.trim();
     if (typeof input.isActive === "boolean") data.isActive = input.isActive;
+    if (typeof input.packageUnit !== "undefined") data.packageUnit = input.packageUnit?.trim().toUpperCase() || null;
+    if (typeof input.conversionFactorToBase !== "undefined") {
+      data.conversionFactorToBase = input.conversionFactorToBase === null ? null : new Prisma.Decimal(input.conversionFactorToBase);
+    }
+    if (typeof input.tracksPackages === "boolean") data.tracksPackages = input.tracksPackages;
+    if (typeof input.approximateFactor === "boolean") data.approximateFactor = input.approximateFactor;
 
     if (input.members) {
       const canonical = validateMembers(input.members);
+      validatePackageSettings({
+        tracksPackages: input.tracksPackages ?? current.tracksPackages,
+        packageUnit: input.packageUnit ?? current.packageUnit,
+        conversionFactorToBase: input.conversionFactorToBase ?? (current.conversionFactorToBase ? Number(current.conversionFactorToBase) : null),
+        members: input.members,
+      });
       data.baseUnit = canonical.saleUnit.trim();
       await assertProductsAvailable(tx, input.members, id);
 
@@ -226,11 +334,13 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
             saleUnit: member.saleUnit.trim(),
             conversionFactor: new Prisma.Decimal(member.conversionFactor),
             isCanonical: member.isCanonical,
+            isPackagePresentation: Boolean(member.isPackagePresentation || (!member.isCanonical && (input.tracksPackages ?? current.tracksPackages))),
           },
           update: {
             saleUnit: member.saleUnit.trim(),
             conversionFactor: new Prisma.Decimal(member.conversionFactor),
             isCanonical: member.isCanonical,
+            isPackagePresentation: Boolean(member.isPackagePresentation || (!member.isCanonical && (input.tracksPackages ?? current.tracksPackages))),
             isActive: true,
           },
         });

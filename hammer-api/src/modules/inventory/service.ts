@@ -38,6 +38,10 @@ export async function listInventoryBalances(params: { branchId: string; productI
       conversionFactor: resolved.conversion!.conversionFactor,
       baseUnit: resolved.conversion!.baseUnit,
       saleUnit: resolved.conversion!.saleUnit,
+      closedPackageQuantity: balance.closedPackageQuantity,
+      looseUnitQuantity: balance.looseUnitQuantity,
+      packageUnit: resolved.conversion!.packageUnit,
+      tracksPackages: resolved.conversion!.tracksPackages,
     });
 
     return {
@@ -156,6 +160,15 @@ type InventoryMovementInput = {
   notes?: string | null;
 };
 
+type OpenPackageInput = {
+  actorUserId: string;
+  branchId: string;
+  stockGroupId: string;
+  packageProductId?: string | null;
+  actualUnits?: number | null;
+  reason?: string | null;
+};
+
 type ManualAdjustmentInput = {
   actorUserId: string;
   branchId: string;
@@ -200,6 +213,12 @@ export async function createInventoryMovementTx(
   const inbound = isInboundMovement(input.movementType);
   const resolved = await resolveInventoryProductForMovement(tx, input.productId);
   const inventoryProductId = resolved.inventoryProductId;
+  const tracksPackages = Boolean(resolved.conversion?.tracksPackages);
+  const packageFactor = new Prisma.Decimal(
+    resolved.conversion?.conversionFactorToBase
+      ?? resolved.conversion?.conversionFactor
+      ?? 1,
+  );
   const baseMovementQty = resolved.conversion
     ? convertSaleQtyToBaseQty({ quantity: movementQty, conversionFactor: resolved.conversion.conversionFactor })
     : movementQty;
@@ -230,6 +249,8 @@ export async function createInventoryMovementTx(
       branchId: input.branchId,
       productId: inventoryProductId,
       quantityOnHand: 0,
+      closedPackageQuantity: 0,
+      looseUnitQuantity: 0,
       weightedAverageCost: 0,
       inventoryValue: 0,
     },
@@ -267,25 +288,85 @@ export async function createInventoryMovementTx(
     inbound,
   });
 
+  let closedPackageBefore: Prisma.Decimal | null = null;
+  let closedPackageAfter: Prisma.Decimal | null = null;
+  let looseUnitBefore: Prisma.Decimal | null = null;
+  let looseUnitAfter: Prisma.Decimal | null = null;
+  let equivalentBaseBefore: Prisma.Decimal | null = null;
+  let equivalentBaseAfter: Prisma.Decimal | null = null;
+  let effectiveMovementType = input.movementType;
+  let effectiveQuantityOnHand = next.newQty;
+
+  if (tracksPackages && resolved.conversion) {
+    closedPackageBefore = balance.closedPackageQuantity;
+    looseUnitBefore = balance.looseUnitQuantity;
+    equivalentBaseBefore = balance.quantityOnHand;
+    closedPackageAfter = closedPackageBefore;
+    looseUnitAfter = looseUnitBefore;
+
+    if (inbound) {
+      if (resolved.conversion.isPackagePresentation) {
+        closedPackageAfter = closedPackageAfter.add(movementQty);
+        effectiveMovementType = input.movementType === "PURCHASE_IN" ? "PACKAGE_IN" : input.movementType;
+      } else {
+        looseUnitAfter = looseUnitAfter.add(baseMovementQty);
+        effectiveMovementType = input.movementType === "RETURN_IN" ? "LOOSE_UNIT_RETURN_IN" : input.movementType;
+      }
+    } else if (resolved.conversion.isPackagePresentation) {
+      if (closedPackageBefore.lt(movementQty)) {
+        throw new Error("INSUFFICIENT_CLOSED_PACKAGE_STOCK");
+      }
+      closedPackageAfter = closedPackageAfter.sub(movementQty);
+      effectiveMovementType = input.movementType === "SALE_OUT" ? "PACKAGE_SALE_OUT" : input.movementType;
+    } else {
+      if (looseUnitBefore.lt(baseMovementQty)) {
+        throw new Error("INSUFFICIENT_LOOSE_UNIT_STOCK");
+      }
+      looseUnitAfter = looseUnitAfter.sub(baseMovementQty);
+      effectiveMovementType = input.movementType === "SALE_OUT" ? "LOOSE_UNIT_SALE_OUT" : input.movementType;
+    }
+
+    equivalentBaseAfter = closedPackageAfter.mul(packageFactor).add(looseUnitAfter);
+    effectiveQuantityOnHand = equivalentBaseAfter;
+  }
+
   const movement = await tx.inventoryMovement.create({
     data: {
       branchId: input.branchId,
       productId: inventoryProductId,
-      movementType: input.movementType,
+      movementType: effectiveMovementType,
       quantity: baseMovementQty,
       unitCost: baseMovementUnitCost,
       referenceType: input.referenceType,
       referenceId: input.referenceId,
       notes: input.notes,
+      inputProductId: input.productId,
+      inputQuantity: movementQty,
+      inputUnit: resolved.conversion?.saleUnit ?? null,
+      packageUnit: resolved.conversion?.packageUnit ?? null,
+      baseUnit: resolved.conversion?.baseUnit ?? null,
+      conversionFactorSnapshot: resolved.conversion?.conversionFactor ?? null,
+      closedPackageBefore,
+      closedPackageAfter,
+      looseUnitBefore,
+      looseUnitAfter,
+      equivalentBaseBefore,
+      equivalentBaseAfter,
+      reason: input.notes ?? null,
+      userId: input.actorUserId,
     },
   });
 
   const updatedBalance = await tx.inventoryBalance.update({
     where: { id: balance.id },
     data: {
-      quantityOnHand: next.newQty,
+      quantityOnHand: effectiveQuantityOnHand,
+      ...(tracksPackages && closedPackageAfter && looseUnitAfter ? {
+        closedPackageQuantity: closedPackageAfter,
+        looseUnitQuantity: looseUnitAfter,
+      } : {}),
       weightedAverageCost: next.newWac,
-      inventoryValue: next.inventoryValue,
+      inventoryValue: effectiveQuantityOnHand.mul(next.newWac),
     },
   });
 
@@ -325,6 +406,159 @@ export async function createInventoryMovementTx(
 
 export async function createInventoryMovement(input: InventoryMovementInput) {
   return prisma.$transaction((tx) => createInventoryMovementTx(tx, input));
+}
+
+export async function openStockPackage(input: OpenPackageInput) {
+  return prisma.$transaction(async (tx) => {
+    const group = await tx.productStockGroup.findUnique({
+      where: { id: input.stockGroupId },
+      include: {
+        products: {
+          where: { isActive: true },
+          include: { product: { select: { id: true, sku: true, name: true } } },
+          orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
+        },
+      },
+    });
+    if (!group || !group.isActive) throw new Error("NOT_FOUND: Grupo de stock no encontrado.");
+    if (!group.tracksPackages || !group.packageUnit || !group.conversionFactorToBase) {
+      throw new Error("VALIDATION_ERROR: Este grupo no maneja stock cerrado/suelto.");
+    }
+
+    const canonical = group.products.find((member) => member.isCanonical)
+      ?? group.products.find((member) => new Prisma.Decimal(member.conversionFactor).eq(1));
+    const packageMember = input.packageProductId
+      ? group.products.find((member) => member.productId === input.packageProductId)
+      : group.products.find((member) => member.isPackagePresentation) ?? group.products.find((member) => !member.isCanonical);
+    if (!canonical || !packageMember) {
+      throw new Error("VALIDATION_ERROR: El grupo requiere producto base y presentacion cerrada.");
+    }
+
+    const estimatedUnits = group.conversionFactorToBase;
+    const actualUnits = new Prisma.Decimal(input.actualUnits ?? Number(estimatedUnits));
+    if (actualUnits.lte(0)) {
+      throw new Error("VALIDATION_ERROR: Las unidades reales deben ser mayores que 0.");
+    }
+
+    await tx.inventoryBalance.upsert({
+      where: { branchId_productId: { branchId: input.branchId, productId: canonical.productId } },
+      create: {
+        branchId: input.branchId,
+        productId: canonical.productId,
+        quantityOnHand: 0,
+        closedPackageQuantity: 0,
+        looseUnitQuantity: 0,
+        weightedAverageCost: 0,
+        inventoryValue: 0,
+      },
+      update: {},
+    });
+    await tx.$queryRaw`
+      SELECT id
+      FROM "InventoryBalance"
+      WHERE "branchId" = ${input.branchId}
+        AND "productId" = ${canonical.productId}
+      FOR UPDATE
+    `;
+
+    const balance = await tx.inventoryBalance.findUnique({
+      where: { branchId_productId: { branchId: input.branchId, productId: canonical.productId } },
+    });
+    if (!balance) throw new Error("INVENTORY_BALANCE_NOT_FOUND");
+    if (balance.closedPackageQuantity.lt(1)) {
+      throw new Error("INSUFFICIENT_CLOSED_PACKAGE_STOCK");
+    }
+
+    const closedPackageBefore = balance.closedPackageQuantity;
+    const looseUnitBefore = balance.looseUnitQuantity;
+    const equivalentBaseBefore = balance.quantityOnHand;
+    const closedPackageAfter = closedPackageBefore.sub(1);
+    const looseUnitAfter = looseUnitBefore.add(actualUnits);
+    const equivalentBaseAfter = closedPackageAfter.mul(estimatedUnits).add(looseUnitAfter);
+    const reason = input.reason?.trim() || "Apertura para venta unitaria";
+
+    const movement = await tx.inventoryMovement.create({
+      data: {
+        branchId: input.branchId,
+        productId: canonical.productId,
+        movementType: "PACKAGE_OPENED",
+        quantity: new Prisma.Decimal(1),
+        unitCost: balance.weightedAverageCost,
+        referenceType: "PACKAGE_OPENING",
+        referenceId: `OPEN-PACKAGE-${Date.now()}`,
+        notes: reason,
+        inputProductId: packageMember.productId,
+        inputQuantity: new Prisma.Decimal(1),
+        inputUnit: group.packageUnit,
+        packageUnit: group.packageUnit,
+        baseUnit: group.baseUnit,
+        conversionFactorSnapshot: estimatedUnits,
+        estimatedUnits,
+        actualUnits,
+        closedPackageBefore,
+        closedPackageAfter,
+        looseUnitBefore,
+        looseUnitAfter,
+        equivalentBaseBefore,
+        equivalentBaseAfter,
+        reason,
+        userId: input.actorUserId,
+      },
+    });
+
+    const updatedBalance = await tx.inventoryBalance.update({
+      where: { id: balance.id },
+      data: {
+        closedPackageQuantity: closedPackageAfter,
+        looseUnitQuantity: looseUnitAfter,
+        quantityOnHand: equivalentBaseAfter,
+        inventoryValue: equivalentBaseAfter.mul(balance.weightedAverageCost),
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "inventory",
+        action: "PACKAGE_OPENED",
+        entityType: "ProductStockGroup",
+        entityId: group.id,
+        metadataJson: {
+          stockGroupId: group.id,
+          packageProductId: packageMember.productId,
+          canonicalProductId: canonical.productId,
+          packageUnit: group.packageUnit,
+          baseUnit: group.baseUnit,
+          estimatedUnits: estimatedUnits.toString(),
+          actualUnits: actualUnits.toString(),
+          closedPackageBefore: closedPackageBefore.toString(),
+          closedPackageAfter: closedPackageAfter.toString(),
+          looseUnitBefore: looseUnitBefore.toString(),
+          looseUnitAfter: looseUnitAfter.toString(),
+          equivalentBaseBefore: equivalentBaseBefore.toString(),
+          equivalentBaseAfter: equivalentBaseAfter.toString(),
+          reason,
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      movementId: movement.id,
+      branchId: input.branchId,
+      stockGroupId: group.id,
+      packageProductId: packageMember.productId,
+      baseProductId: canonical.productId,
+      packageUnit: group.packageUnit,
+      baseUnit: group.baseUnit,
+      estimatedUnits: Number(estimatedUnits),
+      actualUnits: Number(actualUnits),
+      closedPackageQuantity: Number(updatedBalance.closedPackageQuantity),
+      looseUnitQuantity: Number(updatedBalance.looseUnitQuantity),
+      equivalentBaseQuantity: Number(updatedBalance.quantityOnHand),
+    };
+  });
 }
 
 export async function createManualInventoryAdjustment(input: ManualAdjustmentInput) {

@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { Link2, Plus, Trash2, X, Search } from "lucide-react";
+import { Link2, PackageOpen, Plus, Trash2, X, Search } from "lucide-react";
 
 /* ───────────────────────── Tipos ───────────────────────── */
 
@@ -19,6 +19,7 @@ type FusionMember = {
   saleUnit: string;
   conversionFactor: number;
   isCanonical: boolean;
+  isPackagePresentation?: boolean;
 };
 
 type FusionGroup = {
@@ -26,6 +27,20 @@ type FusionGroup = {
   code: string;
   name: string;
   baseUnit: string;
+  packageUnit?: string | null;
+  conversionFactorToBase?: number | null;
+  tracksPackages?: boolean;
+  approximateFactor?: boolean;
+  totalClosedPackageQuantity?: number;
+  totalLooseUnitQuantity?: number;
+  totalEquivalentBaseQuantity?: number;
+  displayConversionFactor?: number | null;
+  branchStocks?: Array<{
+    branch: { id: string; code: string; name: string };
+    closedPackageQuantity: number;
+    looseUnitQuantity: number;
+    equivalentBaseQuantity: number;
+  }>;
   isActive: boolean;
   category: { id: string; code: string; name: string } | null;
   members: {
@@ -36,6 +51,7 @@ type FusionGroup = {
     saleUnit: string;
     conversionFactor: number;
     isCanonical: boolean;
+    isPackagePresentation?: boolean;
   }[];
 };
 
@@ -85,12 +101,52 @@ const PRESETS: Preset[] = [
     description: "Principal: libra. Derivado: quintal (1 quintal = 100 libras).",
   },
   {
-    key: "clavos",
-    label: "Clavos",
-    name: "Clavos - stock compartido",
-    baseUnit: "LIBRA",
-    derived: [{ saleUnit: "CAJA", conversionFactor: 50, hint: "1 caja = 50 libras" }],
-    description: "Principal: libra. Derivado: caja de 50 lb (1 caja = 50 libras).",
+    key: "clavo_4",
+    label: 'Clavo acero 4"',
+    name: 'Clavo acero 4" - stock compartido / presentaciones',
+    baseUnit: "UNIDAD",
+    derived: [{ saleUnit: "KILO", conversionFactor: 80, hint: "1 KILO = 80 UNIDADES aprox." }],
+    description: "Principal: unidad. Presentacion: kilo/caja de 1kg (aprox. 80 unidades).",
+  },
+  {
+    key: "clavo_3",
+    label: 'Clavo acero 3"',
+    name: 'Clavo acero 3" - stock compartido / presentaciones',
+    baseUnit: "UNIDAD",
+    derived: [{ saleUnit: "KILO", conversionFactor: 105, hint: "1 KILO = 105 UNIDADES aprox." }],
+    description: "Principal: unidad. Presentacion: kilo/caja de 1kg (aprox. 105 unidades).",
+  },
+  {
+    key: "clavo_2_1_2",
+    label: 'Clavo acero 2 1/2"',
+    name: 'Clavo acero 2 1/2" - stock compartido / presentaciones',
+    baseUnit: "UNIDAD",
+    derived: [{ saleUnit: "KILO", conversionFactor: 142, hint: "1 KILO = 142 UNIDADES aprox." }],
+    description: "Principal: unidad. Presentacion: kilo/caja de 1kg (aprox. 142 unidades).",
+  },
+  {
+    key: "clavo_2",
+    label: 'Clavo acero 2"',
+    name: 'Clavo acero 2" - stock compartido / presentaciones',
+    baseUnit: "UNIDAD",
+    derived: [{ saleUnit: "KILO", conversionFactor: 216, hint: "1 KILO = 216 UNIDADES aprox." }],
+    description: "Principal: unidad. Presentacion: kilo/caja de 1kg (aprox. 216 unidades).",
+  },
+  {
+    key: "clavo_1_1_2",
+    label: 'Clavo acero 1 1/2"',
+    name: 'Clavo acero 1 1/2" - stock compartido / presentaciones',
+    baseUnit: "UNIDAD",
+    derived: [{ saleUnit: "KILO", conversionFactor: 308, hint: "1 KILO = 308 UNIDADES aprox." }],
+    description: "Principal: unidad. Presentacion: kilo/caja de 1kg (aprox. 308 unidades).",
+  },
+  {
+    key: "clavo_1",
+    label: 'Clavo acero 1"',
+    name: 'Clavo acero 1" - stock compartido / presentaciones',
+    baseUnit: "UNIDAD",
+    derived: [{ saleUnit: "KILO", conversionFactor: 417, hint: "1 KILO = 417 UNIDADES aprox." }],
+    description: "Principal: unidad. Presentacion: kilo/caja de 1kg (aprox. 417 unidades).",
   },
 ];
 
@@ -106,7 +162,16 @@ export function InventoryFusionPanel() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [baseUnit, setBaseUnit] = useState("");
+  const [tracksPackages, setTracksPackages] = useState(false);
+  const [packageUnit, setPackageUnit] = useState("");
+  const [conversionFactorToBase, setConversionFactorToBase] = useState<number | "">("");
+  const [approximateFactor, setApproximateFactor] = useState(true);
   const [members, setMembers] = useState<FusionMember[]>([]);
+  const [openingGroup, setOpeningGroup] = useState<FusionGroup | null>(null);
+  const [openingBranchId, setOpeningBranchId] = useState("");
+  const [openingActualUnits, setOpeningActualUnits] = useState<number | "">("");
+  const [openingReason, setOpeningReason] = useState("Apertura para venta unitaria");
+  const [opening, setOpening] = useState(false);
 
   // Buscador de productos
   const [search, setSearch] = useState("");
@@ -160,6 +225,10 @@ export function InventoryFusionPanel() {
     setEditingId(null);
     setName("");
     setBaseUnit("");
+    setTracksPackages(false);
+    setPackageUnit("");
+    setConversionFactorToBase("");
+    setApproximateFactor(true);
     setMembers([]);
     setSearch("");
     setResults([]);
@@ -180,6 +249,7 @@ export function InventoryFusionPanel() {
         saleUnit: product.unit || (isFirst ? baseUnit : ""),
         conversionFactor: isFirst ? 1 : 1,
         isCanonical: isFirst,
+        isPackagePresentation: !isFirst && tracksPackages,
       },
     ]);
     if (isFirst && !baseUnit) setBaseUnit(product.unit || "");
@@ -215,6 +285,13 @@ export function InventoryFusionPanel() {
   function applyPreset(preset: Preset) {
     if (!name.trim()) setName(preset.name);
     if (!baseUnit.trim()) setBaseUnit(preset.baseUnit);
+    const firstDerived = preset.derived[0];
+    if (preset.baseUnit === "UNIDAD" && firstDerived?.saleUnit === "KILO") {
+      setTracksPackages(true);
+      setPackageUnit("KILO");
+      setConversionFactorToBase(firstDerived.conversionFactor);
+      setApproximateFactor(true);
+    }
     showToast(
       "info",
       `Plantilla "${preset.label}": ${preset.description} Ahora seleccione los productos correspondientes.`,
@@ -225,6 +302,10 @@ export function InventoryFusionPanel() {
     setEditingId(group.id);
     setName(group.name);
     setBaseUnit(group.baseUnit);
+    setTracksPackages(Boolean(group.tracksPackages));
+    setPackageUnit(group.packageUnit ?? "");
+    setConversionFactorToBase(group.conversionFactorToBase ?? "");
+    setApproximateFactor(Boolean(group.approximateFactor));
     setMembers(
       group.members.map((m) => ({
         productId: m.productId,
@@ -233,6 +314,7 @@ export function InventoryFusionPanel() {
         saleUnit: m.saleUnit,
         conversionFactor: m.conversionFactor,
         isCanonical: m.isCanonical,
+        isPackagePresentation: m.isPackagePresentation,
       })),
     );
     setSearch("");
@@ -254,6 +336,10 @@ export function InventoryFusionPanel() {
       showToast("error", "Debe marcar exactamente un producto como principal.");
       return;
     }
+    if (tracksPackages && (!packageUnit.trim() || !(Number(conversionFactorToBase) > 0))) {
+      showToast("error", "Para empaques indique unidad de empaque y factor mayor que 0.");
+      return;
+    }
     for (const m of members) {
       if (!m.saleUnit.trim()) {
         showToast("error", `Indique la unidad de venta de ${m.sku}.`);
@@ -270,11 +356,16 @@ export function InventoryFusionPanel() {
       const payload = {
         name: name.trim(),
         baseUnit: baseUnit.trim() || members.find((m) => m.isCanonical)?.saleUnit,
+        packageUnit: tracksPackages ? packageUnit.trim() : null,
+        conversionFactorToBase: tracksPackages ? Number(conversionFactorToBase) : null,
+        tracksPackages,
+        approximateFactor: tracksPackages ? approximateFactor : false,
         members: members.map((m) => ({
           productId: m.productId,
           saleUnit: m.saleUnit.trim(),
           conversionFactor: Number(m.conversionFactor),
           isCanonical: m.isCanonical,
+          isPackagePresentation: Boolean(m.isPackagePresentation || (!m.isCanonical && tracksPackages)),
         })),
       };
       const url = editingId ? `/api/inventory/stock-groups/${editingId}` : "/api/inventory/stock-groups";
@@ -321,12 +412,58 @@ export function InventoryFusionPanel() {
     }
   }
 
+  function startOpenPackage(group: FusionGroup) {
+    const firstBranch = group.branchStocks?.find((row) => row.closedPackageQuantity > 0)?.branch.id
+      ?? group.branchStocks?.[0]?.branch.id
+      ?? "";
+    setOpeningGroup(group);
+    setOpeningBranchId(firstBranch);
+    setOpeningActualUnits(group.conversionFactorToBase ?? group.displayConversionFactor ?? "");
+    setOpeningReason("Apertura para venta unitaria");
+  }
+
+  async function confirmOpenPackage() {
+    if (!openingGroup || !openingBranchId || !(Number(openingActualUnits) > 0)) {
+      showToast("error", "Seleccione sucursal y unidades reales mayores que 0.");
+      return;
+    }
+    const packageMember = openingGroup.members.find((member) => member.isPackagePresentation) ?? openingGroup.members.find((member) => !member.isCanonical);
+    setOpening(true);
+    try {
+      const res = await apiFetch(`/api/inventory/stock-groups/${openingGroup.id}/open-package`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId: openingBranchId,
+          packageProductId: packageMember?.productId ?? null,
+          actualUnits: Number(openingActualUnits),
+          reason: openingReason.trim() || "Apertura para venta unitaria",
+        }),
+      });
+      const raw = await res.json();
+      if (!res.ok) {
+        showToast("error", raw?.error?.message ?? "No se pudo abrir el kilo/caja.");
+        return;
+      }
+      showToast("success", "Kilo/caja abierto para venta unitaria.");
+      setOpeningGroup(null);
+      await loadGroups();
+    } catch {
+      showToast("error", "Error de red al abrir el kilo/caja.");
+    } finally {
+      setOpening(false);
+    }
+  }
+
   return (
     <section className="space-y-6">
       <div>
         <h1 className="text-xl font-bold text-[var(--color-text)] flex items-center gap-2">
           <Link2 className="h-5 w-5" /> Fusión de Inventario
         </h1>
+        <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
+          Stock compartido / Presentaciones
+        </p>
         <p className="text-sm text-[var(--color-text-muted)] max-w-3xl">
           Une dos o más productos que comparten el mismo inventario físico pero se venden en distintas
           presentaciones. El <strong>producto principal</strong> lleva el stock (unidad base) y cada
@@ -387,6 +524,44 @@ export function InventoryFusionPanel() {
               disabled={saving}
             />
           </div>
+        </div>
+
+        <div className="rounded-lg border border-[var(--color-border)] p-3 space-y-3">
+          <label className="flex items-center gap-2 text-sm font-medium text-[var(--color-text)]">
+            <input type="checkbox" checked={tracksPackages} onChange={(e) => setTracksPackages(e.target.checked)} disabled={saving} />
+            Manejar presentacion cerrada y unidades sueltas
+          </label>
+          {tracksPackages && (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Unidad empaque</label>
+                <input
+                  className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+                  placeholder="KILO, CAJA 1KG"
+                  value={packageUnit}
+                  onChange={(e) => setPackageUnit(e.target.value.toUpperCase())}
+                  disabled={saving}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Factor a base</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+                  placeholder="105"
+                  value={conversionFactorToBase}
+                  onChange={(e) => setConversionFactorToBase(e.target.value === "" ? "" : Number(e.target.value))}
+                  disabled={saving}
+                />
+              </div>
+              <label className="flex items-end gap-2 pb-2 text-sm text-[var(--color-text-secondary)]">
+                <input type="checkbox" checked={approximateFactor} onChange={(e) => setApproximateFactor(e.target.checked)} disabled={saving} />
+                Factor aproximado
+              </label>
+            </div>
+          )}
         </div>
 
         {/* Buscador de productos */}
@@ -472,6 +647,18 @@ export function InventoryFusionPanel() {
                     />
                   </div>
 
+                  {tracksPackages && !m.isCanonical && (
+                    <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(m.isPackagePresentation)}
+                        onChange={(e) => updateMember(m.productId, { isPackagePresentation: e.target.checked })}
+                        disabled={saving}
+                      />
+                      Presentacion cerrada
+                    </label>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => removeMember(m.productId)}
@@ -525,6 +712,11 @@ export function InventoryFusionPanel() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {group.tracksPackages && (
+                    <Button variant="secondary" size="sm" onClick={() => startOpenPackage(group)}>
+                      <PackageOpen className="h-4 w-4" /> Abrir kilo/caja
+                    </Button>
+                  )}
                   <Button variant="secondary" size="sm" onClick={() => startEdit(group)}>Editar</Button>
                   <Button
                     variant="danger"
@@ -537,6 +729,22 @@ export function InventoryFusionPanel() {
                   </Button>
                 </div>
               </div>
+              {group.tracksPackages && (
+                <div className="grid gap-2 border-b border-[var(--color-border)] px-5 py-3 text-xs sm:grid-cols-3">
+                  <div>
+                    <span className="text-[var(--color-text-soft)]">Cerrados</span>
+                    <div className="font-semibold text-[var(--color-text)]">{group.totalClosedPackageQuantity ?? 0} {(group.packageUnit ?? "KILO").toLowerCase()}</div>
+                  </div>
+                  <div>
+                    <span className="text-[var(--color-text-soft)]">Abiertos</span>
+                    <div className="font-semibold text-[var(--color-text)]">{group.totalLooseUnitQuantity ?? 0} {group.baseUnit.toLowerCase()}</div>
+                  </div>
+                  <div>
+                    <span className="text-[var(--color-text-soft)]">Equivalente total</span>
+                    <div className="font-semibold text-[var(--color-text)]">{group.totalEquivalentBaseQuantity ?? 0} {group.baseUnit.toLowerCase()}</div>
+                  </div>
+                </div>
+              )}
               <div className="divide-y divide-[var(--color-border)]">
                 {group.members.map((m) => (
                   <div key={m.id} className="flex items-center justify-between px-5 py-2.5">
@@ -549,7 +757,7 @@ export function InventoryFusionPanel() {
                         <Badge variant="success">Principal (stock)</Badge>
                       ) : (
                         <span className="text-xs text-[var(--color-text-muted)]">
-                          1 {m.saleUnit} = {m.conversionFactor} {canonical?.saleUnit ?? group.baseUnit}
+                          1 {m.saleUnit} = {m.conversionFactor} {canonical?.saleUnit ?? group.baseUnit}{group.approximateFactor ? " aprox." : ""}
                         </span>
                       )}
                     </div>
@@ -560,6 +768,63 @@ export function InventoryFusionPanel() {
           );
         })}
       </div>
+      {openingGroup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-[var(--color-surface)] shadow-xl border border-[var(--color-border)]">
+            <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3">
+              <h2 className="text-sm font-semibold text-[var(--color-text)]">Abrir kilo/caja</h2>
+              <button type="button" onClick={() => setOpeningGroup(null)} className="text-[var(--color-text-soft)] hover:text-[var(--color-text)]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3 p-5">
+              <div className="text-sm text-[var(--color-text)]">
+                <div className="font-medium">{openingGroup.name}</div>
+                <div className="text-xs text-[var(--color-text-muted)]">
+                  Estimado: {openingGroup.conversionFactorToBase ?? openingGroup.displayConversionFactor ?? 0} {openingGroup.baseUnit.toLowerCase()}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Sucursal</label>
+                <select
+                  className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+                  value={openingBranchId}
+                  onChange={(e) => setOpeningBranchId(e.target.value)}
+                >
+                  {(openingGroup.branchStocks ?? []).map((row) => (
+                    <option key={row.branch.id} value={row.branch.id}>
+                      {row.branch.code} - {row.branch.name} | Cerrados: {row.closedPackageQuantity} | Abiertos: {row.looseUnitQuantity}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Unidades reales al abrir</label>
+                <input
+                  type="number"
+                  min={1}
+                  step="any"
+                  className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+                  value={openingActualUnits}
+                  onChange={(e) => setOpeningActualUnits(e.target.value === "" ? "" : Number(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Motivo</label>
+                <input
+                  className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+                  value={openingReason}
+                  onChange={(e) => setOpeningReason(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-3">
+              <Button variant="ghost" onClick={() => setOpeningGroup(null)} disabled={opening}>Cancelar</Button>
+              <Button onClick={confirmOpenPackage} loading={opening} disabled={opening}>Confirmar</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -16,8 +16,13 @@ type CatalogStockConversion = {
   stockGroupCode: string;
   stockGroupName: string;
   baseUnit: string;
+  packageUnit: string | null;
   saleUnit: string;
   conversionFactor: Prisma.Decimal;
+  conversionFactorToBase: Prisma.Decimal | null;
+  tracksPackages: boolean;
+  approximateFactor: boolean;
+  isPackagePresentation: boolean;
   canonicalProductId: string;
   isCanonical: boolean;
 };
@@ -218,7 +223,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
             include: {
               products: {
                 where: { isActive: true },
-                select: { productId: true, isCanonical: true, conversionFactor: true },
+                select: { productId: true, isCanonical: true, conversionFactor: true, isPackagePresentation: true },
                 orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
               },
             },
@@ -236,8 +241,13 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       stockGroupCode: member.stockGroup.code,
       stockGroupName: member.stockGroup.name,
       baseUnit: member.stockGroup.baseUnit,
+      packageUnit: member.stockGroup.packageUnit,
       saleUnit: member.saleUnit,
       conversionFactor: member.conversionFactor,
+      conversionFactorToBase: member.stockGroup.conversionFactorToBase,
+      tracksPackages: member.stockGroup.tracksPackages,
+      approximateFactor: member.stockGroup.approximateFactor,
+      isPackagePresentation: member.isPackagePresentation,
       canonicalProductId: canonical.productId,
       isCanonical: member.isCanonical,
     });
@@ -247,7 +257,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   const sharedInventoryBalances = inventoryProductIds.length > 0 && branchIds.length > 0
     ? await prisma.inventoryBalance.findMany({
         where: { productId: { in: inventoryProductIds }, branchId: { in: branchIds } },
-        select: { branchId: true, productId: true, quantityOnHand: true, weightedAverageCost: true },
+        select: { branchId: true, productId: true, quantityOnHand: true, closedPackageQuantity: true, looseUnitQuantity: true, weightedAverageCost: true },
       })
     : [];
   const sharedBalanceByBranchProduct = new Map(sharedInventoryBalances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]));
@@ -261,6 +271,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         branchId: branch.id,
         inventoryProductId,
         quantityOnHand: balance?.quantityOnHand ?? null,
+        closedPackageQuantity: balance?.closedPackageQuantity ?? null,
+        looseUnitQuantity: balance?.looseUnitQuantity ?? null,
         weightedAverageCost: balance?.weightedAverageCost ?? null,
       };
     });
@@ -279,6 +291,10 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
             conversionFactor: conversion.conversionFactor,
             baseUnit: conversion.baseUnit,
             saleUnit: conversion.saleUnit,
+            closedPackageQuantity: selectedShared?.closedPackageQuantity ?? null,
+            looseUnitQuantity: selectedShared?.looseUnitQuantity ?? null,
+            packageUnit: conversion.packageUnit,
+            tracksPackages: conversion.tracksPackages,
           })
         : null;
     return {
@@ -296,8 +312,13 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         stockGroupCode: conversion.stockGroupCode,
         stockGroupName: conversion.stockGroupName,
         baseUnit: conversion.baseUnit,
+        packageUnit: conversion.packageUnit,
         saleUnit: conversion.saleUnit,
         conversionFactor: conversion.conversionFactor,
+        conversionFactorToBase: conversion.conversionFactorToBase,
+        tracksPackages: conversion.tracksPackages,
+        approximateFactor: conversion.approximateFactor,
+        isPackagePresentation: conversion.isPackagePresentation,
         isCanonical: conversion.isCanonical,
       } : null,
       sharedStock,
@@ -305,6 +326,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         branchId: balance.branchId,
         inventoryProductId: balance.inventoryProductId,
         quantityOnHand: balance.quantityOnHand?.toString() ?? null,
+        closedPackageQuantity: balance.closedPackageQuantity?.toString() ?? null,
+        looseUnitQuantity: balance.looseUnitQuantity?.toString() ?? null,
         weightedAverageCost: balance.weightedAverageCost?.toString() ?? null,
       })),
     };
