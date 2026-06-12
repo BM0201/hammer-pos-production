@@ -277,12 +277,16 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     });
     const selectedShared = params.branchId ? sharedBalances.find((balance) => balance.branchId === params.branchId) : null;
     const aggregateBaseQty = sharedBalances.reduce((sum, balance) => sum.add(balance.quantityOnHand ?? 0), new Prisma.Decimal(0));
+    const aggregateClosedPackageQty = sharedBalances.reduce((sum, balance) => sum.add(balance.closedPackageQuantity ?? 0), new Prisma.Decimal(0));
+    const aggregateLooseUnitQty = sharedBalances.reduce((sum, balance) => sum.add(balance.looseUnitQuantity ?? 0), new Prisma.Decimal(0));
     const aggregateInventoryValue = sharedBalances.reduce((sum, balance) => {
       const qty = balance.quantityOnHand ?? new Prisma.Decimal(0);
       const wac = balance.weightedAverageCost ?? new Prisma.Decimal(0);
       return sum.add(qty.mul(wac));
     }, new Prisma.Decimal(0));
     const displayedBaseQty = selectedShared?.quantityOnHand ?? aggregateBaseQty;
+    const displayedClosedPackageQty = selectedShared?.closedPackageQuantity ?? aggregateClosedPackageQty;
+    const displayedLooseUnitQty = selectedShared?.looseUnitQuantity ?? aggregateLooseUnitQty;
     const displayedWac = selectedShared?.weightedAverageCost ?? (aggregateBaseQty.gt(0) ? aggregateInventoryValue.div(aggregateBaseQty) : null);
     const productCost = decimalToNumber(product.averageCost ?? product.globalCost ?? product.lastPurchaseCost);
     const sharedStock = conversion && displayedBaseQty
@@ -291,8 +295,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
             conversionFactor: conversion.conversionFactor,
             baseUnit: conversion.baseUnit,
             saleUnit: conversion.saleUnit,
-            closedPackageQuantity: selectedShared?.closedPackageQuantity ?? null,
-            looseUnitQuantity: selectedShared?.looseUnitQuantity ?? null,
+            closedPackageQuantity: displayedClosedPackageQty,
+            looseUnitQuantity: displayedLooseUnitQty,
             packageUnit: conversion.packageUnit,
             tracksPackages: conversion.tracksPackages,
             minimumClosedPackageReserve: conversion.minimumClosedPackageReserve,

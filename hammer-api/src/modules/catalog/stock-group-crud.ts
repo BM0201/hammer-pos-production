@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
+import { NAIL_PACKAGE_PRESETS, detectNailPackagePreset } from "@/modules/inventory/unit-conversion";
 
 /**
  * CRUD genérico de "Fusión de Inventario" (ProductStockGroup).
@@ -415,4 +416,241 @@ export async function deleteStockGroup(id: string, actorUserId: string) {
   });
 
   return group;
+}
+
+function normalizedName(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isKiloNailProduct(product: { name: string; sku: string; unit: string }) {
+  const name = normalizedName(`${product.sku} ${product.name} ${product.unit}`);
+  return name.includes("CLAVO") && name.includes("ACERO") && (name.includes(" KILO ") || name.includes("KILO CLAVO") || product.unit.toUpperCase() === "KILO");
+}
+
+function isLooseNailProduct(product: { name: string; sku: string; unit: string }) {
+  const name = normalizedName(`${product.sku} ${product.name} ${product.unit}`);
+  return name.includes("CLAVO") && name.includes("ACERO") && (name.includes(" UD") || name.includes("UNIDAD") || product.unit.toUpperCase() === "UNIDAD");
+}
+
+export async function normalizeNailStockGroups(actorUserId: string) {
+  const [products, branches] = await Promise.all([
+    prisma.product.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { name: { contains: "CLAVO", mode: "insensitive" } },
+          { sku: { contains: "CLV", mode: "insensitive" } },
+        ],
+      },
+      select: { id: true, sku: true, name: true, unit: true, categoryId: true },
+      orderBy: { sku: "asc" },
+    }),
+    prisma.branch.findMany({
+      where: { isActive: true },
+      select: { id: true, code: true, name: true },
+      orderBy: { code: "asc" },
+    }),
+  ]);
+
+  const results = [];
+
+  for (const preset of NAIL_PACKAGE_PRESETS) {
+    const matching = products.filter((product) => detectNailPackagePreset(product.name)?.key === preset.key);
+    const packageProduct = matching.find(isKiloNailProduct);
+    const looseProduct = matching.find(isLooseNailProduct);
+    if (!packageProduct || !looseProduct) {
+      results.push({ preset: preset.key, status: "SKIPPED", reason: "PAIR_NOT_FOUND" });
+      continue;
+    }
+
+    const group = await prisma.$transaction(async (tx) => {
+      const memberships = await tx.productStockGroupMember.findMany({
+        where: {
+          productId: { in: [packageProduct.id, looseProduct.id] },
+          isActive: true,
+          stockGroup: { isActive: true },
+        },
+        include: { stockGroup: true },
+      });
+      const groupIds = Array.from(new Set(memberships.map((membership) => membership.stockGroupId)));
+      if (groupIds.length > 1) {
+        throw new Error(`VALIDATION_ERROR: Los productos de ${preset.label} pertenecen a fusiones activas distintas.`);
+      }
+
+      const code = preset.key.toUpperCase();
+      const currentGroup = groupIds[0]
+        ? await tx.productStockGroup.findUniqueOrThrow({ where: { id: groupIds[0] } })
+        : await tx.productStockGroup.findUnique({ where: { code } });
+
+      const normalizedGroup = currentGroup
+        ? await tx.productStockGroup.update({
+            where: { id: currentGroup.id },
+            data: {
+              code: currentGroup.code,
+              name: `${preset.label} - KILO/UNIDAD por sucursal`,
+              baseUnit: preset.baseUnit,
+              packageUnit: preset.packageUnit,
+              conversionFactorToBase: new Prisma.Decimal(preset.factor),
+              tracksPackages: true,
+              approximateFactor: true,
+              minimumClosedPackageReserve: new Prisma.Decimal(1),
+              autoOpenForUnitSale: true,
+              categoryId: packageProduct.categoryId ?? looseProduct.categoryId,
+              isActive: true,
+            },
+          })
+        : await tx.productStockGroup.create({
+            data: {
+              code,
+              name: `${preset.label} - KILO/UNIDAD por sucursal`,
+              baseUnit: preset.baseUnit,
+              packageUnit: preset.packageUnit,
+              conversionFactorToBase: new Prisma.Decimal(preset.factor),
+              tracksPackages: true,
+              approximateFactor: true,
+              minimumClosedPackageReserve: new Prisma.Decimal(1),
+              autoOpenForUnitSale: true,
+              categoryId: packageProduct.categoryId ?? looseProduct.categoryId,
+            },
+          });
+
+      await tx.productStockGroupMember.updateMany({
+        where: {
+          stockGroupId: normalizedGroup.id,
+          productId: { notIn: [packageProduct.id, looseProduct.id] },
+        },
+        data: { isActive: false, isCanonical: false },
+      });
+
+      await tx.productStockGroupMember.upsert({
+        where: { stockGroupId_productId: { stockGroupId: normalizedGroup.id, productId: looseProduct.id } },
+        create: {
+          stockGroupId: normalizedGroup.id,
+          productId: looseProduct.id,
+          saleUnit: preset.baseUnit,
+          conversionFactor: new Prisma.Decimal(1),
+          isCanonical: true,
+          isPackagePresentation: false,
+        },
+        update: {
+          saleUnit: preset.baseUnit,
+          conversionFactor: new Prisma.Decimal(1),
+          isCanonical: true,
+          isPackagePresentation: false,
+          isActive: true,
+        },
+      });
+      await tx.productStockGroupMember.upsert({
+        where: { stockGroupId_productId: { stockGroupId: normalizedGroup.id, productId: packageProduct.id } },
+        create: {
+          stockGroupId: normalizedGroup.id,
+          productId: packageProduct.id,
+          saleUnit: preset.packageUnit,
+          conversionFactor: new Prisma.Decimal(preset.factor),
+          isCanonical: false,
+          isPackagePresentation: true,
+        },
+        update: {
+          saleUnit: preset.packageUnit,
+          conversionFactor: new Prisma.Decimal(preset.factor),
+          isCanonical: false,
+          isPackagePresentation: true,
+          isActive: true,
+        },
+      });
+
+      const migratedBranches = [];
+      for (const branch of branches) {
+        const existingAudit = await tx.auditLog.findFirst({
+          where: {
+            branchId: branch.id,
+            module: "inventory",
+            action: "NAIL_STOCK_GROUP_NORMALIZED",
+            entityType: "ProductStockGroup",
+            entityId: normalizedGroup.id,
+          },
+          select: { id: true },
+        });
+        if (existingAudit) continue;
+
+        const [packageBalance, looseBalance] = await Promise.all([
+          tx.inventoryBalance.findUnique({
+            where: { branchId_productId: { branchId: branch.id, productId: packageProduct.id } },
+          }),
+          tx.inventoryBalance.findUnique({
+            where: { branchId_productId: { branchId: branch.id, productId: looseProduct.id } },
+          }),
+        ]);
+        const closedPackageQuantity = packageBalance?.closedPackageQuantity.gt(0)
+          ? packageBalance.closedPackageQuantity
+          : packageBalance?.quantityOnHand ?? new Prisma.Decimal(0);
+        const looseUnitQuantity = looseBalance?.looseUnitQuantity.gt(0)
+          ? looseBalance.looseUnitQuantity
+          : looseBalance?.quantityOnHand ?? new Prisma.Decimal(0);
+        const equivalentBaseQuantity = closedPackageQuantity.mul(preset.factor).add(looseUnitQuantity);
+        const weightedAverageCost = looseBalance?.weightedAverageCost
+          ?? (packageBalance?.weightedAverageCost ? packageBalance.weightedAverageCost.div(preset.factor) : new Prisma.Decimal(0));
+
+        await tx.inventoryBalance.upsert({
+          where: { branchId_productId: { branchId: branch.id, productId: looseProduct.id } },
+          create: {
+            branchId: branch.id,
+            productId: looseProduct.id,
+            quantityOnHand: equivalentBaseQuantity,
+            closedPackageQuantity,
+            looseUnitQuantity,
+            weightedAverageCost,
+            inventoryValue: equivalentBaseQuantity.mul(weightedAverageCost),
+          },
+          update: {
+            quantityOnHand: equivalentBaseQuantity,
+            closedPackageQuantity,
+            looseUnitQuantity,
+            weightedAverageCost,
+            inventoryValue: equivalentBaseQuantity.mul(weightedAverageCost),
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorUserId,
+            branchId: branch.id,
+            module: "inventory",
+            action: "NAIL_STOCK_GROUP_NORMALIZED",
+            entityType: "ProductStockGroup",
+            entityId: normalizedGroup.id,
+            metadataJson: {
+              preset: preset.key,
+              packageProductId: packageProduct.id,
+              looseProductId: looseProduct.id,
+              factor: preset.factor,
+              closedPackageQuantity: closedPackageQuantity.toString(),
+              looseUnitQuantity: looseUnitQuantity.toString(),
+              equivalentBaseQuantity: equivalentBaseQuantity.toString(),
+            },
+          },
+        });
+        migratedBranches.push(branch.code);
+      }
+
+      return { ...normalizedGroup, migratedBranches };
+    });
+
+    results.push({
+      preset: preset.key,
+      status: "NORMALIZED",
+      stockGroupId: group.id,
+      code: group.code,
+      packageProductId: packageProduct.id,
+      looseProductId: looseProduct.id,
+      migratedBranches: group.migratedBranches,
+    });
+  }
+
+  return { results };
 }

@@ -279,6 +279,13 @@ function renderSharedStock(product: ProductRow) {
   const conversion = product.stockConversion;
   if (!shared || !conversion) return null;
   if (conversion.tracksPackages && shared.packageStock) {
+    if (!conversion.isPackagePresentation) {
+      return {
+        primary: `${qty(shared.packageStock.looseUnitQuantity)} ${shared.packageStock.baseUnit.toLowerCase()} sueltos fisicos`,
+        secondary: `abrible ${qty(shared.packageStock.autoOpenableUnitsTotal ?? 0)} ${shared.packageStock.baseUnit.toLowerCase()} | cerrados ${qty(shared.packageStock.closedPackageQuantity)} ${(conversion.packageUnit ?? "KILO").toLowerCase()} | total ${qty(shared.packageStock.equivalentBaseQuantity)} ${shared.packageStock.baseUnit.toLowerCase()}`,
+        chip: `1 ${conversion.packageUnit ?? shared.packageStock.packageUnit} = ${qty(shared.packageStock.conversionFactor)} ${shared.packageStock.baseUnit} aprox.`,
+      };
+    }
     return {
       primary: `${qty(shared.packageStock.closedPackageQuantity)} ${(conversion.packageUnit ?? "KILO").toLowerCase()} cerrados`,
       secondary: `${qty(shared.packageStock.looseUnitQuantity)} ${shared.packageStock.baseUnit.toLowerCase()} sueltos fisicos | abrible ${qty(shared.packageStock.autoOpenableUnitsTotal ?? 0)} | total ${qty(shared.packageStock.equivalentBaseQuantity)} ${shared.packageStock.baseUnit.toLowerCase()}`,

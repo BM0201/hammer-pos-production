@@ -10,7 +10,13 @@ type CatalogProductWithBranchPricing = {
   unit: string;
   standardSalePrice: Prisma.Decimal;
   branchProductSettings?: Array<{ branchId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null }>;
-  inventoryBalances?: Array<{ branchId: string; quantityOnHand?: Prisma.Decimal; weightedAverageCost: Prisma.Decimal }>;
+  inventoryBalances?: Array<{
+    branchId: string;
+    quantityOnHand?: Prisma.Decimal;
+    closedPackageQuantity?: Prisma.Decimal;
+    looseUnitQuantity?: Prisma.Decimal;
+    weightedAverageCost: Prisma.Decimal;
+  }>;
   category?: { id: string; code?: string; name: string } | null;
 };
 
@@ -27,18 +33,44 @@ async function mapProductWithBranchInventory<TProduct extends CatalogProductWith
         conversionFactor: conversion.conversionFactor,
         baseUnit: conversion.baseUnit,
         saleUnit: conversion.saleUnit,
+        closedPackageQuantity: shared.balance.closedPackageQuantity,
+        looseUnitQuantity: shared.balance.looseUnitQuantity,
+        packageUnit: conversion.packageUnit,
+        tracksPackages: conversion.tracksPackages,
+        minimumClosedPackageReserve: conversion.minimumClosedPackageReserve,
+        autoOpenForUnitSale: conversion.autoOpenForUnitSale,
       })
     : null;
+  const fallbackBalance = product.inventoryBalances?.find((item) => item.branchId === branchId);
+  const fallbackQty = fallbackBalance?.quantityOnHand?.toNumber() ?? 0;
+  const packageAvailableSaleStock = conversion?.tracksPackages && shared.balance
+    ? conversion.isPackagePresentation
+      ? shared.balance.closedPackageQuantity.toNumber()
+      : shared.balance.looseUnitQuantity
+          .add(
+            conversion.autoOpenForUnitSale
+              ? Prisma.Decimal.max(
+                  0,
+                  shared.balance.closedPackageQuantity.sub(conversion.minimumClosedPackageReserve),
+                ).mul(conversion.conversionFactorToBase ?? conversion.conversionFactor)
+              : 0,
+          )
+          .toNumber()
+    : null;
+  const displaySaleStock = packageAvailableSaleStock
+    ?? dualStock?.saleQuantity
+    ?? shared.balance?.quantityOnHand.toNumber()
+    ?? fallbackQty;
 
   return {
     ...mapped,
     categoryName: product.category?.name ?? null,
     effectiveCost: effective.effectiveCost,
     weightedAverageCost: effective.weightedAverageCost,
-    stockOnHand: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
-    availableStock: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
-    availableBaseStock: shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
-    availableSaleStock: dualStock?.saleQuantity ?? shared.balance?.quantityOnHand.toNumber() ?? product.inventoryBalances?.find((item) => item.branchId === branchId)?.quantityOnHand?.toNumber() ?? 0,
+    stockOnHand: displaySaleStock,
+    availableStock: displaySaleStock,
+    availableBaseStock: shared.balance?.quantityOnHand.toNumber() ?? fallbackQty,
+    availableSaleStock: displaySaleStock,
     baseUnit: conversion?.baseUnit ?? mapped.unit,
     saleUnit: conversion?.saleUnit ?? mapped.unit,
     stockConversion: conversion ? {
@@ -48,6 +80,12 @@ async function mapProductWithBranchInventory<TProduct extends CatalogProductWith
       baseUnit: conversion.baseUnit,
       saleUnit: conversion.saleUnit,
       conversionFactor: conversion.conversionFactor,
+      conversionFactorToBase: conversion.conversionFactorToBase,
+      tracksPackages: conversion.tracksPackages,
+      packageUnit: conversion.packageUnit,
+      minimumClosedPackageReserve: conversion.minimumClosedPackageReserve,
+      autoOpenForUnitSale: conversion.autoOpenForUnitSale,
+      isPackagePresentation: conversion.isPackagePresentation,
       isCanonical: conversion.isCanonical,
     } : null,
     sharedStock: dualStock,
@@ -151,7 +189,7 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
             },
             inventoryBalances: {
               where: { branchId: params.branchId },
-              select: { branchId: true, quantityOnHand: true, weightedAverageCost: true },
+              select: { branchId: true, quantityOnHand: true, closedPackageQuantity: true, looseUnitQuantity: true, weightedAverageCost: true },
             },
           }
         : {}),
@@ -506,7 +544,7 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
           },
           inventoryBalances: {
             where: { branchId: params.branchId },
-            select: { branchId: true, quantityOnHand: true, weightedAverageCost: true },
+            select: { branchId: true, quantityOnHand: true, closedPackageQuantity: true, looseUnitQuantity: true, weightedAverageCost: true },
           },
         }
       : {}),

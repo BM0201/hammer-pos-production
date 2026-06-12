@@ -5,14 +5,13 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
-import { consumeSharedStockForSaleTx, createInventoryMovementTx } from "@/modules/inventory/service";
+import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
-import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 
 type DirectSaleTenderInput = {
@@ -594,12 +593,12 @@ export async function submitSaleOrderToPendingPayment(input: {
     }
 
     for (const line of lines) {
-      const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
-      const available = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
-      const required = shared.conversion
-        ? convertSaleQtyToBaseQty({ quantity: line.quantity, conversionFactor: shared.conversion.conversionFactor })
-        : line.quantity;
-      if (available.lt(required)) {
+      const availability = await getSaleStockAvailabilityTx(tx, {
+        branchId: order.branchId,
+        productId: line.productId,
+        quantity: line.quantity,
+      });
+      if (!availability.ok) {
         await tx.auditLog.create({
           data: {
             actorUserId: input.actorUserId,
@@ -608,10 +607,25 @@ export async function submitSaleOrderToPendingPayment(input: {
             action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
             entityType: "SaleOrder",
             entityId: order.id,
-            metadataJson: { reason: "INSUFFICIENT_STOCK", productId: line.productId, inventoryProductId: shared.inventoryProductId, requiredBaseQty: required.toString(), availableBaseQty: available.toString() },
+            metadataJson: {
+              reason: availability.reason ?? "INSUFFICIENT_STOCK",
+              productId: line.productId,
+              inventoryProductId: availability.inventoryProductId,
+              stockMode: availability.stockMode,
+              requestedQty: availability.requestedQuantity.toString(),
+              requiredBaseQty: availability.requestedBaseQuantity.toString(),
+              availableSaleQty: availability.availableSaleQuantity.toString(),
+              availableBaseQty: availability.availableBaseQuantity.toString(),
+              details: Object.fromEntries(
+                Object.entries(availability.details).map(([key, value]) => [
+                  key,
+                  value instanceof Prisma.Decimal ? value.toString() : value ?? null,
+                ]),
+              ),
+            },
           },
         });
-        throw new Error("INSUFFICIENT_STOCK");
+        throw new Error(availability.reason ?? "INSUFFICIENT_STOCK");
       }
     }
 
@@ -742,12 +756,12 @@ export async function submitDirectSale(input: {
 
     // Verify stock (locked balances)
     for (const line of order.lines) {
-      const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
-      const available = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
-      const required = shared.conversion
-        ? convertSaleQtyToBaseQty({ quantity: line.quantity, conversionFactor: shared.conversion.conversionFactor })
-        : line.quantity;
-      if (available.lt(required)) throw new Error("INSUFFICIENT_STOCK");
+      const availability = await getSaleStockAvailabilityTx(tx, {
+        branchId: order.branchId,
+        productId: line.productId,
+        quantity: line.quantity,
+      });
+      if (!availability.ok) throw new Error(availability.reason ?? "INSUFFICIENT_STOCK");
     }
 
     // Calculate totals

@@ -176,6 +176,29 @@ type ConsumeSharedStockForSaleInput = {
   notes?: string | null;
 };
 
+export type SaleStockAvailability = {
+  ok: boolean;
+  branchId: string;
+  productId: string;
+  inventoryProductId: string;
+  requestedQuantity: Prisma.Decimal;
+  requestedBaseQuantity: Prisma.Decimal;
+  availableBaseQuantity: Prisma.Decimal;
+  availableSaleQuantity: Prisma.Decimal;
+  stockMode: "STANDARD" | "PACKAGE" | "LOOSE_WITH_AUTO_OPEN";
+  reason?: string;
+  details: {
+    closedPackageQuantity?: Prisma.Decimal;
+    looseUnitQuantity?: Prisma.Decimal;
+    openablePackageQuantity?: Prisma.Decimal;
+    openableUnitQuantity?: Prisma.Decimal;
+    minimumClosedPackageReserve?: Prisma.Decimal;
+    packageUnit?: string | null;
+    baseUnit?: string | null;
+    conversionFactor?: Prisma.Decimal;
+  };
+};
+
 export class InventoryStockError extends Error {
   public readonly code: string;
 
@@ -184,6 +207,96 @@ export class InventoryStockError extends Error {
     this.name = "InventoryStockError";
     this.code = code;
   }
+}
+
+export async function getSaleStockAvailabilityTx(
+  tx: Prisma.TransactionClient,
+  input: { branchId: string; productId: string; quantity: Prisma.Decimal | number | string },
+): Promise<SaleStockAvailability> {
+  const requestedQty = new Prisma.Decimal(input.quantity);
+  const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
+  const conversion = shared.conversion;
+  const balance = shared.balance;
+
+  if (!conversion?.tracksPackages) {
+    const requestedBaseQuantity = conversion
+      ? convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor })
+      : requestedQty;
+    const availableBaseQuantity = balance?.quantityOnHand ?? new Prisma.Decimal(0);
+    return {
+      ok: availableBaseQuantity.gte(requestedBaseQuantity),
+      branchId: input.branchId,
+      productId: input.productId,
+      inventoryProductId: shared.inventoryProductId,
+      requestedQuantity: requestedQty,
+      requestedBaseQuantity,
+      availableBaseQuantity,
+      availableSaleQuantity: conversion
+        ? convertBaseQtyToSaleQty({ baseQuantity: availableBaseQuantity, conversionFactor: conversion.conversionFactor })
+        : availableBaseQuantity,
+      stockMode: "STANDARD",
+      reason: availableBaseQuantity.gte(requestedBaseQuantity) ? undefined : "INSUFFICIENT_STOCK",
+      details: {
+        baseUnit: conversion?.baseUnit ?? null,
+        conversionFactor: conversion?.conversionFactor,
+      },
+    };
+  }
+
+  const factor = new Prisma.Decimal(conversion.conversionFactorToBase ?? conversion.conversionFactor);
+  const closed = balance?.closedPackageQuantity ?? new Prisma.Decimal(0);
+  const loose = balance?.looseUnitQuantity ?? new Prisma.Decimal(0);
+  const reserve = new Prisma.Decimal(conversion.minimumClosedPackageReserve ?? DEFAULT_MINIMUM_CLOSED_PACKAGE_RESERVE);
+  const equivalent = closed.mul(factor).add(loose);
+
+  if (conversion.isPackagePresentation) {
+    return {
+      ok: closed.gte(requestedQty),
+      branchId: input.branchId,
+      productId: input.productId,
+      inventoryProductId: shared.inventoryProductId,
+      requestedQuantity: requestedQty,
+      requestedBaseQuantity: requestedQty.mul(factor),
+      availableBaseQuantity: equivalent,
+      availableSaleQuantity: closed,
+      stockMode: "PACKAGE",
+      reason: closed.gte(requestedQty) ? undefined : "INSUFFICIENT_CLOSED_PACKAGE_STOCK",
+      details: {
+        closedPackageQuantity: closed,
+        looseUnitQuantity: loose,
+        minimumClosedPackageReserve: reserve,
+        packageUnit: conversion.packageUnit,
+        baseUnit: conversion.baseUnit,
+        conversionFactor: factor,
+      },
+    };
+  }
+
+  const openablePackages = Prisma.Decimal.max(0, closed.sub(reserve));
+  const openableUnits = conversion.autoOpenForUnitSale ? openablePackages.mul(factor) : new Prisma.Decimal(0);
+  const availableLooseForSale = loose.add(openableUnits);
+  return {
+    ok: availableLooseForSale.gte(requestedQty),
+    branchId: input.branchId,
+    productId: input.productId,
+    inventoryProductId: shared.inventoryProductId,
+    requestedQuantity: requestedQty,
+    requestedBaseQuantity: requestedQty,
+    availableBaseQuantity: equivalent,
+    availableSaleQuantity: availableLooseForSale,
+    stockMode: "LOOSE_WITH_AUTO_OPEN",
+    reason: availableLooseForSale.gte(requestedQty) ? undefined : "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK",
+    details: {
+      closedPackageQuantity: closed,
+      looseUnitQuantity: loose,
+      openablePackageQuantity: openablePackages,
+      openableUnitQuantity: openableUnits,
+      minimumClosedPackageReserve: reserve,
+      packageUnit: conversion.packageUnit,
+      baseUnit: conversion.baseUnit,
+      conversionFactor: factor,
+    },
+  };
 }
 
 type OpenPackageInput = {
@@ -1056,6 +1169,8 @@ async function createOpeningBalanceTx(
           branchId: input.branchId,
           productId: inventoryProductId,
           quantityOnHand: 0,
+          closedPackageQuantity: 0,
+          looseUnitQuantity: 0,
           weightedAverageCost: shared.balance?.weightedAverageCost ?? 0,
           inventoryValue: 0,
         },
@@ -1072,10 +1187,39 @@ async function createOpeningBalanceTx(
         where: { branchId_productId: { branchId: input.branchId, productId: inventoryProductId } },
       });
       if (!balance) throw new Error("INVENTORY_BALANCE_NOT_FOUND");
-      const nextQty = input.stockMode === "SET_PHYSICAL_STOCK"
+      let nextQty = input.stockMode === "SET_PHYSICAL_STOCK"
         ? baseQuantity
         : balance.quantityOnHand.plus(baseQuantity);
       const nextWac = balance.weightedAverageCost;
+      let closedPackageBefore: Prisma.Decimal | null = null;
+      let closedPackageAfter: Prisma.Decimal | null = null;
+      let looseUnitBefore: Prisma.Decimal | null = null;
+      let looseUnitAfter: Prisma.Decimal | null = null;
+      let equivalentBaseBefore: Prisma.Decimal | null = null;
+      let equivalentBaseAfter: Prisma.Decimal | null = null;
+
+      if (conversion?.tracksPackages) {
+        const factor = new Prisma.Decimal(conversion.conversionFactorToBase ?? conversion.conversionFactor);
+        closedPackageBefore = balance.closedPackageQuantity;
+        looseUnitBefore = balance.looseUnitQuantity;
+        equivalentBaseBefore = balance.quantityOnHand;
+        closedPackageAfter = closedPackageBefore;
+        looseUnitAfter = looseUnitBefore;
+
+        if (conversion.isPackagePresentation) {
+          closedPackageAfter = input.stockMode === "SET_PHYSICAL_STOCK"
+            ? requestedQty
+            : closedPackageBefore.add(requestedQty);
+        } else {
+          looseUnitAfter = input.stockMode === "SET_PHYSICAL_STOCK"
+            ? baseQuantity
+            : looseUnitBefore.add(baseQuantity);
+        }
+
+        equivalentBaseAfter = closedPackageAfter.mul(factor).add(looseUnitAfter);
+        nextQty = equivalentBaseAfter;
+      }
+
       const movement = await tx.inventoryMovement.create({
         data: {
           branchId: input.branchId,
@@ -1086,12 +1230,30 @@ async function createOpeningBalanceTx(
           referenceType,
           referenceId,
           notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+          inputProductId: input.productId,
+          inputQuantity: requestedQty,
+          inputUnit: input.unit ?? conversion?.saleUnit ?? null,
+          packageUnit: conversion?.packageUnit ?? null,
+          baseUnit: conversion?.baseUnit ?? null,
+          conversionFactorSnapshot: conversion?.conversionFactor ?? null,
+          closedPackageBefore,
+          closedPackageAfter,
+          looseUnitBefore,
+          looseUnitAfter,
+          equivalentBaseBefore,
+          equivalentBaseAfter,
+          reason: input.reason,
+          userId: input.actorUserId,
         },
       });
       const updatedBalance = await tx.inventoryBalance.update({
         where: { id: balance.id },
         data: {
           quantityOnHand: nextQty,
+          ...(conversion?.tracksPackages && closedPackageAfter !== null && looseUnitAfter !== null ? {
+            closedPackageQuantity: closedPackageAfter,
+            looseUnitQuantity: looseUnitAfter,
+          } : {}),
           inventoryValue: nextQty.mul(nextWac),
         },
       });

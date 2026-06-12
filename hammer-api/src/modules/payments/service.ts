@@ -8,12 +8,11 @@ import {
   SaleOrderStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { consumeSharedStockForSaleTx } from "@/modules/inventory/service";
+import { consumeSharedStockForSaleTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
 import { PAYMENT_AUDIT_EVENTS } from "@/modules/payments/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
-import { convertSaleQtyToBaseQty, getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 
 type PaymentTenderInput = {
@@ -382,12 +381,12 @@ export async function postSaleOrderPayment(input: {
       }
 
       for (const line of order.lines) {
-        const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
-        const available = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
-        const required = shared.conversion
-          ? convertSaleQtyToBaseQty({ quantity: line.quantity, conversionFactor: shared.conversion.conversionFactor })
-          : line.quantity;
-        if (available.lt(required)) {
+        const availability = await getSaleStockAvailabilityTx(tx, {
+          branchId: order.branchId,
+          productId: line.productId,
+          quantity: line.quantity,
+        });
+        if (!availability.ok) {
           await tx.auditLog.create({
             data: {
               actorUserId: input.actorUserId,
@@ -397,16 +396,24 @@ export async function postSaleOrderPayment(input: {
               entityType: "SaleOrder",
               entityId: order.id,
               metadataJson: {
-                reason: "INSUFFICIENT_STOCK_AT_PAYMENT",
+                reason: availability.reason ?? "INSUFFICIENT_STOCK_AT_PAYMENT",
                 productId: line.productId,
-                inventoryProductId: shared.inventoryProductId,
-                available: available.toString(),
-                requested: line.quantity.toString(),
-                requiredBaseQty: required.toString(),
+                inventoryProductId: availability.inventoryProductId,
+                stockMode: availability.stockMode,
+                requested: availability.requestedQuantity.toString(),
+                requiredBaseQty: availability.requestedBaseQuantity.toString(),
+                availableSaleQty: availability.availableSaleQuantity.toString(),
+                availableBaseQty: availability.availableBaseQuantity.toString(),
+                details: Object.fromEntries(
+                  Object.entries(availability.details).map(([key, value]) => [
+                    key,
+                    value instanceof Prisma.Decimal ? value.toString() : value ?? null,
+                  ]),
+                ),
               },
             },
           });
-          throw new Error("INSUFFICIENT_STOCK_AT_PAYMENT");
+          throw new Error(availability.reason ?? "INSUFFICIENT_STOCK_AT_PAYMENT");
         }
       }
 

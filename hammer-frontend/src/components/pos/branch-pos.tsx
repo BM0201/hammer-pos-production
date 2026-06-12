@@ -36,8 +36,12 @@ type ProductRow = {
     stockGroupCode: string;
     stockGroupName: string;
     baseUnit: string;
+    packageUnit?: string | null;
     saleUnit: string;
     conversionFactor: string | number;
+    conversionFactorToBase?: string | number | null;
+    tracksPackages?: boolean;
+    isPackagePresentation?: boolean;
     isCanonical: boolean;
   } | null;
   sharedStock?: {
@@ -45,6 +49,16 @@ type ProductRow = {
     saleQuantity: number;
     baseUnit: string;
     saleUnit: string;
+    packageStock?: {
+      closedPackageQuantity: number;
+      looseUnitQuantity: number;
+      autoOpenablePackages?: number;
+      autoOpenableUnitsTotal?: number;
+      equivalentBaseQuantity: number;
+      conversionFactor: number;
+      packageUnit: string;
+      baseUnit: string;
+    } | null;
   } | null;
 };
 
@@ -969,7 +983,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
                   const index = startIndex + localIndex;
                   const selected = index === activeProductIndex;
                   const displayPrice = product.effectivePrice ?? product.standardSalePrice;
-                  const conversionFactor = Number(product.stockConversion?.conversionFactor ?? 0);
+                  const conversionFactor = Number(product.stockConversion?.conversionFactorToBase ?? product.stockConversion?.conversionFactor ?? 0);
                   const sharedStock = product.sharedStock;
                   const availableStock = product.availableSaleStock ?? sharedStock?.saleQuantity ?? product.availableStock ?? stockByProductId[product.id] ?? 0;
                   const hasNoStock = availableStock <= 0;
@@ -1009,8 +1023,26 @@ export function BranchPos({ branchId }: { branchId: string }) {
                       </div>
                       {product.stockConversion && sharedStock ? (
                         <div className="mt-1 text-[0.65rem] text-[var(--color-text-muted)]">
-                          Stock compartido: {sharedStock.saleQuantity.toFixed(2)} {sharedStock.saleUnit} / {sharedStock.baseQuantity.toFixed(2)} {sharedStock.baseUnit}
-                          {conversionFactor > 1 ? ` - 1 ${sharedStock.saleUnit} = ${conversionFactor} ${sharedStock.baseUnit}` : ""}
+                          {product.stockConversion.tracksPackages && sharedStock.packageStock ? (
+                            product.stockConversion.isPackagePresentation ? (
+                              <>
+                                Cerrados: {sharedStock.packageStock.closedPackageQuantity.toFixed(2)} {sharedStock.packageStock.packageUnit}
+                                {conversionFactor > 1 ? ` - 1 ${sharedStock.packageStock.packageUnit} = ${conversionFactor} ${sharedStock.packageStock.baseUnit}` : ""}
+                              </>
+                            ) : (
+                              <>
+                                Sueltos: {sharedStock.packageStock.looseUnitQuantity.toFixed(2)} {sharedStock.packageStock.baseUnit}
+                                {" | "}
+                                Abrible: {(sharedStock.packageStock.autoOpenableUnitsTotal ?? 0).toFixed(2)} {sharedStock.packageStock.baseUnit}
+                                {conversionFactor > 1 ? ` - 1 ${sharedStock.packageStock.packageUnit} = ${conversionFactor} ${sharedStock.packageStock.baseUnit}` : ""}
+                              </>
+                            )
+                          ) : (
+                            <>
+                              Stock compartido: {sharedStock.saleQuantity.toFixed(2)} {sharedStock.saleUnit} / {sharedStock.baseQuantity.toFixed(2)} {sharedStock.baseUnit}
+                              {conversionFactor > 1 ? ` - 1 ${sharedStock.saleUnit} = ${conversionFactor} ${sharedStock.baseUnit}` : ""}
+                            </>
+                          )}
                         </div>
                       ) : null}
                     </button>

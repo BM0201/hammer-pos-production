@@ -251,19 +251,30 @@ export function InventoryFusionPanel() {
       return;
     }
     const isFirst = members.length === 0;
+    const productUnit = (product.unit || "").toUpperCase();
+    const normalizedBaseUnit = baseUnit.trim().toUpperCase();
+    const normalizedPackageUnit = packageUnit.trim().toUpperCase();
+    const isBaseLooseUnit = tracksPackages && normalizedBaseUnit && productUnit === normalizedBaseUnit;
+    const isClosedPackage = tracksPackages && normalizedPackageUnit && (
+      productUnit === normalizedPackageUnit
+      || product.name.toUpperCase().includes(normalizedPackageUnit)
+    );
+    const shouldBeCanonical = tracksPackages
+      ? Boolean(isBaseLooseUnit && !members.some((member) => member.isCanonical))
+      : isFirst;
     setMembers((prev) => [
       ...prev,
       {
         productId: product.id,
         sku: product.sku,
         productName: product.name,
-        saleUnit: product.unit || (isFirst ? baseUnit : ""),
-        conversionFactor: isFirst ? 1 : 1,
-        isCanonical: isFirst,
-        isPackagePresentation: !isFirst && tracksPackages,
+        saleUnit: product.unit || (shouldBeCanonical ? baseUnit : ""),
+        conversionFactor: shouldBeCanonical ? 1 : Number(conversionFactorToBase || 1),
+        isCanonical: shouldBeCanonical,
+        isPackagePresentation: Boolean(isClosedPackage || (!shouldBeCanonical && tracksPackages)),
       },
     ]);
-    if (isFirst && !baseUnit) setBaseUnit(product.unit || "");
+    if (isFirst && !baseUnit && !tracksPackages) setBaseUnit(product.unit || "");
     setSearch("");
     setResults([]);
   }
@@ -772,15 +783,15 @@ export function InventoryFusionPanel() {
               {group.tracksPackages && (
                 <div className="grid gap-2 border-b border-[var(--color-border)] px-5 py-3 text-xs sm:grid-cols-4">
                   <div>
-                    <span className="text-[var(--color-text-soft)]">Cerrados</span>
+                    <span className="text-[var(--color-text-soft)]">Cerrados agregados</span>
                     <div className="font-semibold text-[var(--color-text)]">{group.totalClosedPackageQuantity ?? 0} {(group.packageUnit ?? "KILO").toLowerCase()}</div>
                   </div>
                   <div>
-                    <span className="text-[var(--color-text-soft)]">Sueltos fisicos</span>
+                    <span className="text-[var(--color-text-soft)]">Sueltos fisicos agregados</span>
                     <div className="font-semibold text-[var(--color-text)]">{group.totalLooseUnitQuantity ?? 0} {group.baseUnit.toLowerCase()}</div>
                   </div>
                   <div>
-                    <span className="text-[var(--color-text-soft)]">Abrible automatico</span>
+                    <span className="text-[var(--color-text-soft)]">Abrible automatico agregado</span>
                     <div className="font-semibold text-[var(--color-text)]">hasta {group.totalAutoOpenableUnits ?? 0} {group.baseUnit.toLowerCase()}</div>
                   </div>
                   <div>
@@ -788,12 +799,41 @@ export function InventoryFusionPanel() {
                     <div className="font-semibold text-[var(--color-text)]">{group.totalEquivalentBaseQuantity ?? 0} {group.baseUnit.toLowerCase()}</div>
                   </div>
                   <div className="sm:col-span-4 flex flex-wrap gap-2">
+                    <Badge variant="warning">Total agregado informativo</Badge>
                     {group.autoOpenForUnitSale && (group.totalAutoOpenableUnits ?? 0) > 0 ? (
                       <Badge variant="success">Venta unitaria automatica</Badge>
                     ) : null}
                     {(group.branchStocks ?? []).some((row) => row.onlyClosedReserveRemaining) ? (
                       <Badge variant="warning">Solo queda reserva cerrada</Badge>
                     ) : null}
+                  </div>
+                  <div className="sm:col-span-4 overflow-x-auto">
+                    <table className="min-w-full text-xs">
+                      <thead className="text-[var(--color-text-soft)]">
+                        <tr className="border-t border-[var(--color-border)]">
+                          <th className="py-2 pr-3 text-left font-medium">Sucursal</th>
+                          <th className="py-2 pr-3 text-right font-medium">Cerrados</th>
+                          <th className="py-2 pr-3 text-right font-medium">Sueltos fisicos</th>
+                          <th className="py-2 pr-3 text-right font-medium">Abrible automatico</th>
+                          <th className="py-2 pr-3 text-right font-medium">Equivalente total</th>
+                          <th className="py-2 text-left font-medium">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--color-border)]">
+                        {(group.branchStocks ?? []).map((row) => (
+                          <tr key={row.branch.id}>
+                            <td className="py-2 pr-3 font-medium text-[var(--color-text)]">{row.branch.code}</td>
+                            <td className="py-2 pr-3 text-right">{row.closedPackageQuantity} {group.packageUnit ?? "KILO"}</td>
+                            <td className="py-2 pr-3 text-right">{row.looseUnitQuantity} {group.baseUnit}</td>
+                            <td className="py-2 pr-3 text-right">{row.autoOpenablePackages ?? 0} {group.packageUnit ?? "KILO"}</td>
+                            <td className="py-2 pr-3 text-right">{row.equivalentBaseQuantity} {group.baseUnit}</td>
+                            <td className="py-2">
+                              {row.unitSaleAutomaticallyEnabled ? "Unidad vendible" : row.onlyClosedReserveRemaining ? "Reserva cerrada" : "Sin apertura"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}
@@ -806,7 +846,14 @@ export function InventoryFusionPanel() {
                     </div>
                     <div className="flex items-center gap-3">
                       {m.isCanonical ? (
-                        <Badge variant="success">Principal (stock)</Badge>
+                        <Badge variant="success">{group.tracksPackages ? "Unidad base / venta suelta" : "Principal (stock)"}</Badge>
+                      ) : m.isPackagePresentation && group.tracksPackages ? (
+                        <div className="flex flex-col items-end gap-1">
+                          <Badge variant="info">Principal comercial / empaque cerrado</Badge>
+                          <span className="text-xs text-[var(--color-text-muted)]">
+                            1 {group.packageUnit ?? m.saleUnit} = {group.conversionFactorToBase ?? m.conversionFactor} {group.baseUnit}{group.approximateFactor ? " aprox." : ""}
+                          </span>
+                        </div>
                       ) : (
                         <span className="text-xs text-[var(--color-text-muted)]">
                           1 {m.saleUnit} = {m.conversionFactor} {canonical?.saleUnit ?? group.baseUnit}{group.approximateFactor ? " aprox." : ""}
