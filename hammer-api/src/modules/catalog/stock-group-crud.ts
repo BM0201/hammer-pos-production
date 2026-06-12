@@ -30,6 +30,8 @@ export type CreateStockGroupInput = {
   conversionFactorToBase?: number | null;
   tracksPackages?: boolean;
   approximateFactor?: boolean;
+  minimumClosedPackageReserve?: number | null;
+  autoOpenForUnitSale?: boolean;
   categoryId?: string | null;
   members: StockGroupMemberInput[];
 };
@@ -41,6 +43,8 @@ export type UpdateStockGroupInput = {
   conversionFactorToBase?: number | null;
   tracksPackages?: boolean;
   approximateFactor?: boolean;
+  minimumClosedPackageReserve?: number | null;
+  autoOpenForUnitSale?: boolean;
   members?: StockGroupMemberInput[];
 };
 
@@ -92,6 +96,7 @@ function validatePackageSettings(input: {
   tracksPackages?: boolean;
   packageUnit?: string | null;
   conversionFactorToBase?: number | null;
+  minimumClosedPackageReserve?: number | null;
   members: StockGroupMemberInput[];
 }) {
   if (!input.tracksPackages) return;
@@ -100,6 +105,9 @@ function validatePackageSettings(input: {
   }
   if (!Number.isFinite(Number(input.conversionFactorToBase)) || Number(input.conversionFactorToBase) <= 0) {
     throw new Error("VALIDATION_ERROR: El factor de empaque debe ser mayor que 0.");
+  }
+  if (input.minimumClosedPackageReserve !== null && input.minimumClosedPackageReserve !== undefined && Number(input.minimumClosedPackageReserve) < 0) {
+    throw new Error("VALIDATION_ERROR: La reserva minima de empaques cerrados no puede ser negativa.");
   }
   const packageMembers = input.members.filter((member) => member.isPackagePresentation || !member.isCanonical);
   if (packageMembers.length < 1) {
@@ -179,14 +187,24 @@ export async function listStockGroups() {
     ...(group.tracksPackages ? (() => {
       const canonical = group.products.find((member) => member.isCanonical);
       const factor = group.conversionFactorToBase ?? group.products.find((member) => !member.isCanonical)?.conversionFactor ?? new Prisma.Decimal(1);
+      const reserve = group.minimumClosedPackageReserve ?? new Prisma.Decimal(1);
       const branchStocks = canonical
         ? branches.map((branch) => {
             const balance = balanceByBranchProduct.get(`${branch.id}:${canonical.productId}`);
+            const closed = new Prisma.Decimal(balance?.closedPackageQuantity ?? 0);
+            const loose = new Prisma.Decimal(balance?.looseUnitQuantity ?? 0);
+            const autoOpenablePackages = Prisma.Decimal.max(0, closed.sub(reserve));
+            const autoOpenableUnitsTotal = autoOpenablePackages.mul(factor);
+            const equivalentBaseQuantity = closed.mul(factor).add(loose);
             return {
               branch,
-              closedPackageQuantity: Number(balance?.closedPackageQuantity ?? 0),
-              looseUnitQuantity: Number(balance?.looseUnitQuantity ?? 0),
-              equivalentBaseQuantity: Number(balance?.quantityOnHand ?? 0),
+              closedPackageQuantity: Number(closed),
+              looseUnitQuantity: Number(loose),
+              autoOpenablePackages: Number(autoOpenablePackages),
+              autoOpenableUnitsTotal: Number(autoOpenableUnitsTotal),
+              equivalentBaseQuantity: Number(equivalentBaseQuantity),
+              unitSaleAutomaticallyEnabled: Boolean(group.autoOpenForUnitSale && autoOpenablePackages.gt(0)),
+              onlyClosedReserveRemaining: closed.lte(reserve) && loose.eq(0),
             };
           })
         : [];
@@ -194,6 +212,7 @@ export async function listStockGroups() {
         branchStocks,
         totalClosedPackageQuantity: branchStocks.reduce((sum, item) => sum + item.closedPackageQuantity, 0),
         totalLooseUnitQuantity: branchStocks.reduce((sum, item) => sum + item.looseUnitQuantity, 0),
+        totalAutoOpenableUnits: branchStocks.reduce((sum, item) => sum + item.autoOpenableUnitsTotal, 0),
         totalEquivalentBaseQuantity: branchStocks.reduce((sum, item) => sum + item.equivalentBaseQuantity, 0),
         displayConversionFactor: Number(factor),
       };
@@ -212,6 +231,8 @@ export async function listStockGroups() {
       conversionFactorToBase: group.conversionFactorToBase ? Number(group.conversionFactorToBase) : null,
       tracksPackages: group.tracksPackages,
       approximateFactor: group.approximateFactor,
+      minimumClosedPackageReserve: Number(group.minimumClosedPackageReserve ?? 1),
+      autoOpenForUnitSale: group.autoOpenForUnitSale,
       isActive: group.isActive,
       category: group.category,
       members: group.products.map((m) => ({
@@ -236,11 +257,13 @@ export async function createStockGroup(input: CreateStockGroupInput, actorUserId
     tracksPackages: input.tracksPackages,
     packageUnit: input.packageUnit,
     conversionFactorToBase: input.conversionFactorToBase,
+    minimumClosedPackageReserve: input.minimumClosedPackageReserve,
     members: input.members,
   });
   const baseUnit = (input.baseUnit ?? canonical.saleUnit).trim();
   const packageUnit = input.packageUnit?.trim().toUpperCase() || null;
   const conversionFactorToBase = input.conversionFactorToBase ?? input.members.find((member) => !member.isCanonical)?.conversionFactor ?? null;
+  const minimumClosedPackageReserve = input.minimumClosedPackageReserve ?? 1;
   const code = (input.code?.trim() || slugifyCode(name)).toUpperCase();
 
   const group = await prisma.$transaction(async (tx) => {
@@ -260,6 +283,8 @@ export async function createStockGroup(input: CreateStockGroupInput, actorUserId
         conversionFactorToBase: conversionFactorToBase === null ? null : new Prisma.Decimal(conversionFactorToBase),
         tracksPackages: Boolean(input.tracksPackages),
         approximateFactor: Boolean(input.approximateFactor),
+        minimumClosedPackageReserve: new Prisma.Decimal(minimumClosedPackageReserve),
+        autoOpenForUnitSale: input.tracksPackages ? input.autoOpenForUnitSale ?? true : false,
         categoryId: input.categoryId ?? null,
       },
     });
@@ -306,6 +331,10 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
     }
     if (typeof input.tracksPackages === "boolean") data.tracksPackages = input.tracksPackages;
     if (typeof input.approximateFactor === "boolean") data.approximateFactor = input.approximateFactor;
+    if (typeof input.minimumClosedPackageReserve !== "undefined") {
+      data.minimumClosedPackageReserve = new Prisma.Decimal(input.minimumClosedPackageReserve ?? 1);
+    }
+    if (typeof input.autoOpenForUnitSale === "boolean") data.autoOpenForUnitSale = input.autoOpenForUnitSale;
 
     if (input.members) {
       const canonical = validateMembers(input.members);
@@ -313,6 +342,7 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
         tracksPackages: input.tracksPackages ?? current.tracksPackages,
         packageUnit: input.packageUnit ?? current.packageUnit,
         conversionFactorToBase: input.conversionFactorToBase ?? (current.conversionFactorToBase ? Number(current.conversionFactorToBase) : null),
+        minimumClosedPackageReserve: input.minimumClosedPackageReserve ?? Number(current.minimumClosedPackageReserve),
         members: input.members,
       });
       data.baseUnit = canonical.saleUnit.trim();

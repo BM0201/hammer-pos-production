@@ -13,10 +13,14 @@ export type ProductStockConversion = {
   conversionFactorToBase: Prisma.Decimal | null;
   tracksPackages: boolean;
   approximateFactor: boolean;
+  minimumClosedPackageReserve: Prisma.Decimal;
+  autoOpenForUnitSale: boolean;
   isPackagePresentation: boolean;
   canonicalProductId: string;
   isCanonical: boolean;
 };
+
+export const DEFAULT_MINIMUM_CLOSED_PACKAGE_RESERVE = 1;
 
 function normalize(value: string) {
   return value.toUpperCase().replace(/\s+/g, " ").trim();
@@ -68,14 +72,23 @@ export function formatPackageLooseStock(input: {
   conversionFactor: number | Prisma.Decimal;
   packageUnit: string;
   baseUnit: string;
+  minimumClosedPackageReserve?: number | Prisma.Decimal | null;
+  autoOpenForUnitSale?: boolean | null;
 }) {
   const closed = new Prisma.Decimal(input.closedPackageQuantity);
   const loose = new Prisma.Decimal(input.looseUnitQuantity);
   const factor = new Prisma.Decimal(input.conversionFactor);
+  const reserve = new Prisma.Decimal(input.minimumClosedPackageReserve ?? DEFAULT_MINIMUM_CLOSED_PACKAGE_RESERVE);
+  const autoOpenablePackages = Prisma.Decimal.max(0, closed.sub(reserve));
+  const autoOpenableUnitsTotal = autoOpenablePackages.mul(factor);
   const equivalentBaseQuantity = closed.mul(factor).add(loose);
   return {
     closedPackageQuantity: Number(closed.toDecimalPlaces(4)),
     looseUnitQuantity: Number(loose.toDecimalPlaces(4)),
+    minimumClosedPackageReserve: Number(reserve.toDecimalPlaces(4)),
+    autoOpenForUnitSale: input.autoOpenForUnitSale ?? true,
+    autoOpenablePackages: Number(autoOpenablePackages.toDecimalPlaces(4)),
+    autoOpenableUnitsTotal: Number(autoOpenableUnitsTotal.toDecimalPlaces(4)),
     equivalentBaseQuantity: Number(equivalentBaseQuantity.toDecimalPlaces(4)),
     conversionFactor: Number(factor.toDecimalPlaces(4)),
     packageUnit: input.packageUnit,
@@ -112,6 +125,8 @@ export function formatDualStock(input: {
   looseUnitQuantity?: number | Prisma.Decimal | null;
   packageUnit?: string | null;
   tracksPackages?: boolean;
+  minimumClosedPackageReserve?: number | Prisma.Decimal | null;
+  autoOpenForUnitSale?: boolean | null;
 }) {
   const packageStock = input.tracksPackages && input.packageUnit
     ? formatPackageLooseStock({
@@ -120,6 +135,8 @@ export function formatDualStock(input: {
         conversionFactor: input.conversionFactor,
         packageUnit: input.packageUnit,
         baseUnit: input.baseUnit,
+        minimumClosedPackageReserve: input.minimumClosedPackageReserve,
+        autoOpenForUnitSale: input.autoOpenForUnitSale,
       })
     : null;
   return {
@@ -188,6 +205,8 @@ export async function getProductStockConversion(db: DbClient, productId: string)
     conversionFactorToBase: member.stockGroup.conversionFactorToBase,
     tracksPackages: member.stockGroup.tracksPackages,
     approximateFactor: member.stockGroup.approximateFactor,
+    minimumClosedPackageReserve: member.stockGroup.minimumClosedPackageReserve,
+    autoOpenForUnitSale: member.stockGroup.autoOpenForUnitSale,
     isPackagePresentation: member.isPackagePresentation,
     canonicalProductId: canonical.productId,
     isCanonical: member.isCanonical,

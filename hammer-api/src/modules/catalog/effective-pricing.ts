@@ -10,14 +10,20 @@ export type EffectivePricing = {
   effectivePrice: Prisma.Decimal;
   branchCost: Prisma.Decimal | null;
   weightedAverageCost: Prisma.Decimal | null;
+  globalCost: Prisma.Decimal | null;
+  averageCost: Prisma.Decimal | null;
+  lastPurchaseCost: Prisma.Decimal | null;
   effectiveCost: Prisma.Decimal | null;
   priceSource: "BRANCH" | "STANDARD";
-  costSource: "BRANCH" | "WAC" | "NONE";
+  costSource: "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
 };
 
 type ProductWithOptionalBranchPricing = {
   id: string;
   standardSalePrice: Prisma.Decimal;
+  globalCost?: Prisma.Decimal | null;
+  averageCost?: Prisma.Decimal | null;
+  lastPurchaseCost?: Prisma.Decimal | null;
   branchProductSettings?: Array<{
     branchId: string;
     branchPrice: Prisma.Decimal | null;
@@ -35,7 +41,7 @@ export async function getEffectiveProductPricing(
 ): Promise<EffectivePricing> {
   const product = await txOrPrisma.product.findUniqueOrThrow({
     where: { id: input.productId },
-    select: { id: true, standardSalePrice: true },
+    select: { id: true, standardSalePrice: true, globalCost: true, averageCost: true, lastPurchaseCost: true },
   });
 
   const stockResolution = await resolveInventoryProductForMovement(txOrPrisma, input.productId);
@@ -56,6 +62,9 @@ export async function getEffectiveProductPricing(
   return resolveEffectivePricing({
     productId: product.id,
     standardSalePrice: product.standardSalePrice,
+    globalCost: product.globalCost,
+    averageCost: product.averageCost,
+    lastPurchaseCost: product.lastPurchaseCost,
     branchPrice: branchSetting?.branchPrice ?? null,
     branchCost: branchSetting?.branchCost ?? null,
     weightedAverageCost: saleUnitWac,
@@ -77,6 +86,9 @@ export function mapProductWithEffectivePricing<TProduct extends ProductWithOptio
     ...resolveEffectivePricing({
       productId: product.id,
       standardSalePrice: product.standardSalePrice,
+      globalCost: product.globalCost ?? null,
+      averageCost: product.averageCost ?? null,
+      lastPurchaseCost: product.lastPurchaseCost ?? null,
       branchPrice: branchSetting?.branchPrice ?? null,
       branchCost: branchSetting?.branchCost ?? null,
       weightedAverageCost: inventoryBalance?.weightedAverageCost ?? null,
@@ -87,12 +99,24 @@ export function mapProductWithEffectivePricing<TProduct extends ProductWithOptio
 function resolveEffectivePricing(input: {
   productId: string;
   standardSalePrice: Prisma.Decimal;
+  globalCost?: Prisma.Decimal | null;
+  averageCost?: Prisma.Decimal | null;
+  lastPurchaseCost?: Prisma.Decimal | null;
   branchPrice: Prisma.Decimal | null;
   branchCost: Prisma.Decimal | null;
   weightedAverageCost: Prisma.Decimal | null;
 }): EffectivePricing {
   const effectivePrice = input.branchPrice ?? input.standardSalePrice;
-  const effectiveCost = input.branchCost ?? input.weightedAverageCost ?? null;
+  const effectiveCost = input.averageCost ?? input.globalCost ?? input.lastPurchaseCost ?? input.weightedAverageCost ?? null;
+  const costSource = input.averageCost !== null && input.averageCost !== undefined
+    ? "GLOBAL_AVERAGE"
+    : input.globalCost !== null && input.globalCost !== undefined
+      ? "GLOBAL"
+      : input.lastPurchaseCost !== null && input.lastPurchaseCost !== undefined
+        ? "LAST_PURCHASE"
+        : input.weightedAverageCost !== null
+          ? "WAC_ESTIMATE"
+          : "NONE";
 
   return {
     productId: input.productId,
@@ -101,8 +125,11 @@ function resolveEffectivePricing(input: {
     effectivePrice,
     branchCost: input.branchCost,
     weightedAverageCost: input.weightedAverageCost,
+    globalCost: input.globalCost ?? null,
+    averageCost: input.averageCost ?? null,
+    lastPurchaseCost: input.lastPurchaseCost ?? null,
     effectiveCost,
     priceSource: input.branchPrice === null ? "STANDARD" : "BRANCH",
-    costSource: input.branchCost !== null ? "BRANCH" : input.weightedAverageCost !== null ? "WAC" : "NONE",
+    costSource,
   };
 }

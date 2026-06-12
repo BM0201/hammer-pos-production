@@ -138,6 +138,7 @@ enum InventoryMovementType {
   PACKAGE_IN
   PACKAGE_SALE_OUT
   PACKAGE_OPENED
+  PACKAGE_AUTO_OPENED
   LOOSE_UNIT_SALE_OUT
   LOOSE_UNIT_RETURN_IN
   LOOSE_ADJUSTMENT
@@ -609,6 +610,12 @@ model Product {
   allowsFraction    Boolean  @default(false)
   isTimber          Boolean  @default(false)
   standardSalePrice Decimal
+  globalCost        Decimal?
+  averageCost       Decimal?
+  lastPurchaseCost  Decimal?
+  costUpdatedAt     DateTime?
+  costSource        String?
+  costUpdatedByUserId String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -654,6 +661,8 @@ model ProductStockGroup {
   conversionFactorToBase Decimal?
   tracksPackages         Boolean  @default(false)
   approximateFactor      Boolean  @default(false)
+  minimumClosedPackageReserve Decimal @default(1)
+  autoOpenForUnitSale    Boolean  @default(true)
   categoryId             String?
   isActive               Boolean  @default(true)
   createdAt              DateTime @default(now())
@@ -949,6 +958,12 @@ model BranchProductSetting {
   reorderPoint Decimal?
   branchCost   Decimal?
   branchPrice  Decimal?
+  minPrice      Decimal?
+  wholesalePrice Decimal?
+  priceSource   String?
+  marginPercent Decimal?
+  lastPriceUpdateAt DateTime?
+  priceUpdatedByUserId String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1021,6 +1036,10 @@ model SaleOrderLine {
   productId      String
   quantity       Decimal
   unitPrice      Decimal
+  costSnapshot   Decimal?
+  marginSnapshot Decimal?
+  marginPercentSnapshot Decimal?
+  costSourceSnapshot String?
   discountAmount Decimal  @default(0)
   lineSubtotal   Decimal
   createdAt      DateTime @default(now())
@@ -1500,6 +1519,9 @@ model PurchaseOrder {
   orderNumber          String              @unique
   date                 DateTime            @default(now())
   supplier             String?
+  supplierId           String?
+  supplierNameSnapshot String?
+  supplierSnapshotJson Json?
   status               PurchaseOrderStatus @default(DRAFT)
   total                Decimal             @default(0)
   subtotalBeforeTax    Decimal             @default(0)
@@ -1516,9 +1538,11 @@ model PurchaseOrder {
 
   branch    Branch              @relation(fields: [branchId], references: [id])
   createdBy User                @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
+  supplierRef Supplier?         @relation(fields: [supplierId], references: [id])
   lines     PurchaseOrderLine[]
 
   @@index([branchId, status])
+  @@index([supplierId])
   @@index([date])
 }
 
@@ -1537,12 +1561,51 @@ model PurchaseOrderLine {
   allocatedDiscountPerUnit     Decimal @default(0)
   finalUnitCost                Decimal @default(0)
   subtotal                     Decimal
+  previousGlobalCost           Decimal?
+  newGlobalCost                Decimal?
+  previousAverageCost          Decimal?
+  newAverageCost               Decimal?
+  receivedQtySnapshot          Decimal?
+  supplierIdSnapshot           String?
+  supplierNameSnapshot         String?
 
   purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   product       Product       @relation(fields: [productId], references: [id])
 
   @@unique([purchaseOrderId, productId])
   @@index([purchaseOrderId])
+}
+
+model Supplier {
+  id                     String   @id @default(cuid())
+  name                   String
+  commercialName         String?
+  ruc                    String?  @unique
+  phone                  String?
+  phone2                 String?
+  email                  String?
+  address                String?
+  contactName            String?
+  contactPhone           String?
+  bankName               String?
+  bankAccountNumber      String?
+  accountHolder          String?
+  paymentTerms           String?
+  creditLimit            Decimal?
+  notes                  String?
+  category               String?
+  defaultCurrency        String?
+  leadTimeDays           Int?
+  preferredPaymentMethod String?
+  supplierCode           String?  @unique
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@index([name])
+  @@index([isActive])
 }
 
 /**

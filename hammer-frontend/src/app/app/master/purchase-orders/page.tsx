@@ -23,6 +23,19 @@ import { money, fmtDateTime } from "@/lib/format";
 
 /* ── Types ── */
 type Product = { id: string; sku: string; name: string; unit: string };
+type Supplier = {
+  id: string;
+  name: string;
+  commercialName?: string | null;
+  ruc?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  contactName?: string | null;
+  bankName?: string | null;
+  bankAccountNumber?: string | null;
+  accountHolder?: string | null;
+  paymentTerms?: string | null;
+};
 type POLine = {
   id?: string;
   productId: string;
@@ -43,7 +56,10 @@ type PurchaseOrder = {
   id: string;
   orderNumber: string;
   date: string;
+  supplierId?: string | null;
   supplier: string | null;
+  supplierRef?: Supplier | null;
+  supplierNameSnapshot?: string | null;
   status: string;
   total: number;
   subtotalBeforeTax: number;
@@ -87,6 +103,7 @@ export default function PurchaseOrdersPage() {
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -95,9 +112,23 @@ export default function PurchaseOrdersPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [receiveUpdateBranchCost, setReceiveUpdateBranchCost] = useState(true);
   const [receiveCreatePriceReviewAlerts, setReceiveCreatePriceReviewAlerts] = useState(true);
+  const [supplierQuery, setSupplierQuery] = useState("");
+  const [showSupplierQuickCreate, setShowSupplierQuickCreate] = useState(false);
+  const [supplierDraft, setSupplierDraft] = useState({
+    name: "",
+    ruc: "",
+    phone: "",
+    email: "",
+    contactName: "",
+    bankName: "",
+    bankAccountNumber: "",
+    accountHolder: "",
+    paymentTerms: "",
+  });
 
   // Form state
   const [formBranchId, setFormBranchId] = useState("");
+  const [formSupplierId, setFormSupplierId] = useState("");
   const [formSupplier, setFormSupplier] = useState("");
   const [formNotes, setFormNotes] = useState("");
   const [formLines, setFormLines] = useState<PurchaseOrderLineForm[]>([]);
@@ -126,15 +157,18 @@ export default function PurchaseOrdersPage() {
 
   const fetchMeta = useCallback(async () => {
     try {
-      const [branchRes, prodRes] = await Promise.all([
+      const [branchRes, prodRes, supplierRes] = await Promise.all([
         fetch("/api/master/users"),
         fetch("/api/catalog/products"),
+        fetch("/api/suppliers"),
       ]);
       const branchJson = unwrapApiData(await branchRes.json());
       const prodJson = unwrapApiData(await prodRes.json());
+      const supplierJson = unwrapApiData(await supplierRes.json());
       if (branchJson?.branches) setBranches(branchJson.branches);
       const prods = Array.isArray(prodJson) ? prodJson : [];
       setProducts(prods);
+      setSuppliers(Array.isArray(supplierJson) ? supplierJson : []);
     } catch { /* non-critical */ }
   }, []);
 
@@ -143,7 +177,11 @@ export default function PurchaseOrdersPage() {
 
   const openCreate = () => {
     setFormBranchId(branches[0]?.id || "");
+    setFormSupplierId("");
     setFormSupplier("");
+    setSupplierQuery("");
+    setShowSupplierQuickCreate(false);
+    setSupplierDraft({ name: "", ruc: "", phone: "", email: "", contactName: "", bankName: "", bankAccountNumber: "", accountHolder: "", paymentTerms: "" });
     setFormNotes("");
     setPurchaseTaxTreatment("INCLUDE_IN_COST");
     setFreightAmount("0");
@@ -178,6 +216,7 @@ export default function PurchaseOrdersPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           branchId: formBranchId,
+          supplierId: formSupplierId || undefined,
           supplier: formSupplier || undefined,
           notes: formNotes || undefined,
           purchaseTaxTreatment,
@@ -195,6 +234,32 @@ export default function PurchaseOrdersPage() {
       fetchOrders();
     } catch (error) {
       toast.error(getErrorMessage(error, "Error al crear pedido"));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleQuickCreateSupplier = async () => {
+    try {
+      if (!supplierDraft.name.trim()) throw new Error("Nombre del proveedor requerido");
+      setActionLoading("supplier");
+      const res = await apiFetch("/api/suppliers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(supplierDraft),
+      });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al crear proveedor");
+      const supplier = unwrapApiData(raw) as Supplier;
+      setSuppliers((current) => [supplier, ...current.filter((item) => item.id !== supplier.id)]);
+      setFormSupplierId(supplier.id);
+      setFormSupplier(supplier.name);
+      setSupplierQuery("");
+      setShowSupplierQuickCreate(false);
+      setSupplierDraft({ name: "", ruc: "", phone: "", email: "", contactName: "", bankName: "", bankAccountNumber: "", accountHolder: "", paymentTerms: "" });
+      toast.success("Proveedor creado");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al crear proveedor"));
     } finally {
       setActionLoading(null);
     }
@@ -228,6 +293,7 @@ export default function PurchaseOrdersPage() {
         body: JSON.stringify({
           branchId: selectedOrder?.branch.id,
           updateBranchCost: receiveUpdateBranchCost,
+          updateGlobalCost: receiveUpdateBranchCost,
           createPriceReviewAlerts: receiveCreatePriceReviewAlerts,
         }),
       });
@@ -276,6 +342,13 @@ export default function PurchaseOrdersPage() {
     return acc + (parseFloat(l.quantity) || 0) * unitCostBeforeTax * (taxRate / 100);
   }, 0);
   const formTotalPaid = formSubtotalBeforeTax + formTaxAmount + (parseFloat(freightAmount) || 0) + (parseFloat(otherChargesAmount) || 0) - (parseFloat(globalDiscountAmount) || 0);
+  const filteredSuppliers = suppliers.filter((supplier) => {
+    const q = supplierQuery.trim().toLowerCase();
+    if (!q) return true;
+    return [supplier.name, supplier.commercialName, supplier.ruc, supplier.phone, supplier.contactName]
+      .some((value) => value?.toLowerCase().includes(q));
+  });
+  const selectedSupplier = suppliers.find((supplier) => supplier.id === formSupplierId) ?? null;
 
   return (
     <section className="space-y-6">
@@ -374,7 +447,7 @@ export default function PurchaseOrdersPage() {
                   <td className="text-[var(--color-text-secondary)]">
                     {fmtDateTime(order.date)}
                   </td>
-                  <td className="text-[var(--color-text)]">{order.supplier || <span className="text-[var(--color-text-muted)]">—</span>}</td>
+                  <td className="text-[var(--color-text)]">{(order.supplierRef?.name ?? order.supplierNameSnapshot ?? order.supplier) || <span className="text-[var(--color-text-muted)]">—</span>}</td>
                   <td>
                     <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--color-master-50)] text-[var(--color-master-700)] text-xs font-bold">
                       {order.branch.code}
@@ -449,7 +522,8 @@ export default function PurchaseOrdersPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
                 <p className="text-xs font-bold uppercase text-slate-600 mb-1"><Truck className="h-3 w-3 inline mr-1" />Proveedor</p>
-                <p className="font-semibold text-[var(--color-text)]">{selectedOrder.supplier || "—"}</p>
+                <p className="font-semibold text-[var(--color-text)]">{(selectedOrder.supplierRef?.name ?? selectedOrder.supplierNameSnapshot ?? selectedOrder.supplier) || "—"}</p>
+                {selectedOrder.supplierRef?.phone && <p className="text-xs text-[var(--color-text-muted)]">{selectedOrder.supplierRef.phone}</p>}
               </div>
               <div className="rounded-lg bg-blue-50 border border-blue-200 p-3">
                 <p className="text-xs font-bold uppercase text-blue-600 mb-1"><Building2 className="h-3 w-3 inline mr-1" />Sucursal</p>
@@ -465,6 +539,15 @@ export default function PurchaseOrdersPage() {
                 <p className="text-xl font-extrabold text-[var(--color-text)]">{money(selectedOrder.total)}</p>
               </div>
             </div>
+
+            {selectedOrder.supplierRef && (
+              <div className="grid grid-cols-1 gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs md:grid-cols-4">
+                <div><span className="font-bold text-[var(--color-text-secondary)]">RUC</span><p>{selectedOrder.supplierRef.ruc || "—"}</p></div>
+                <div><span className="font-bold text-[var(--color-text-secondary)]">Contacto</span><p>{selectedOrder.supplierRef.contactName || selectedOrder.supplierRef.phone || "—"}</p></div>
+                <div><span className="font-bold text-[var(--color-text-secondary)]">Banco</span><p>{selectedOrder.supplierRef.bankName || "—"}</p></div>
+                <div><span className="font-bold text-[var(--color-text-secondary)]">Cuenta / plazo</span><p>{selectedOrder.supplierRef.bankAccountNumber || selectedOrder.supplierRef.paymentTerms || "—"}</p></div>
+              </div>
+            )}
 
             {/* Financial breakdown */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] p-3 text-xs">
@@ -544,7 +627,7 @@ export default function PurchaseOrdersPage() {
                           onChange={(e) => setReceiveUpdateBranchCost(e.target.checked)}
                           className="h-4 w-4"
                         />
-                        Actualizar costo de sucursal con WAC recibido
+                        Actualizar costo global con recepción
                       </label>
                       <label className="inline-flex items-center gap-2">
                         <input
@@ -604,15 +687,90 @@ export default function PurchaseOrdersPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Proveedor</label>
+                <div className="flex gap-2">
+                  <select
+                    value={formSupplierId}
+                    onChange={(e) => {
+                      const supplier = suppliers.find((item) => item.id === e.target.value) ?? null;
+                      setFormSupplierId(e.target.value);
+                      setFormSupplier(supplier?.name ?? "");
+                    }}
+                    className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                  >
+                    <option value="">Sin proveedor registrado</option>
+                    {filteredSuppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>{supplier.name}{supplier.ruc ? ` · ${supplier.ruc}` : ""}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setShowSupplierQuickCreate((value) => !value)}
+                    className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]"
+                    title="Registrar proveedor"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </div>
                 <input
-                  type="text"
-                  value={formSupplier}
-                  onChange={(e) => setFormSupplier(e.target.value)}
-                  placeholder="Nombre del proveedor"
-                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                  type="search"
+                  value={supplierQuery}
+                  onChange={(e) => setSupplierQuery(e.target.value)}
+                  placeholder="Buscar proveedor por nombre, RUC o teléfono"
+                  className="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
                 />
               </div>
             </div>
+
+            {selectedSupplier && (
+              <div className="grid grid-cols-1 gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs md:grid-cols-4">
+                <div><span className="font-bold text-[var(--color-text-secondary)]">Contacto</span><p>{selectedSupplier.contactName || selectedSupplier.phone || "—"}</p></div>
+                <div><span className="font-bold text-[var(--color-text-secondary)]">RUC</span><p>{selectedSupplier.ruc || "—"}</p></div>
+                <div><span className="font-bold text-[var(--color-text-secondary)]">Banco</span><p>{selectedSupplier.bankName || "—"}</p></div>
+                <div><span className="font-bold text-[var(--color-text-secondary)]">Cuenta / plazo</span><p>{selectedSupplier.bankAccountNumber || selectedSupplier.paymentTerms || "—"}</p></div>
+              </div>
+            )}
+
+            {showSupplierQuickCreate && (
+              <div className="rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-[var(--color-text)]">Registrar proveedor</h3>
+                  <button type="button" onClick={() => setShowSupplierQuickCreate(false)} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><X className="h-4 w-4" /></button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  {([
+                    ["name", "Nombre"],
+                    ["ruc", "RUC"],
+                    ["phone", "Teléfono"],
+                    ["email", "Email"],
+                    ["contactName", "Contacto"],
+                    ["bankName", "Banco"],
+                    ["bankAccountNumber", "Cuenta bancaria"],
+                    ["accountHolder", "Titular"],
+                    ["paymentTerms", "Plazo de pago"],
+                  ] as const).map(([field, label]) => (
+                    <label key={field} className="text-xs font-medium text-[var(--color-text-secondary)]">
+                      {label}
+                      <input
+                        value={supplierDraft[field]}
+                        onChange={(e) => setSupplierDraft((draft) => ({ ...draft, [field]: e.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleQuickCreateSupplier}
+                    disabled={actionLoading === "supplier"}
+                    className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50"
+                  >
+                    {actionLoading === "supplier" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                    Guardar proveedor
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Notas</label>

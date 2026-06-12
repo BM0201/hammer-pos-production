@@ -47,6 +47,8 @@ type ProductRow = {
     conversionFactorToBase?: string | number | null;
     tracksPackages?: boolean;
     approximateFactor?: boolean;
+    minimumClosedPackageReserve?: string | number | null;
+    autoOpenForUnitSale?: boolean;
     isPackagePresentation?: boolean;
     isCanonical: boolean;
   } | null;
@@ -58,6 +60,10 @@ type ProductRow = {
     packageStock?: {
       closedPackageQuantity: number;
       looseUnitQuantity: number;
+      minimumClosedPackageReserve?: number;
+      autoOpenForUnitSale?: boolean;
+      autoOpenablePackages?: number;
+      autoOpenableUnitsTotal?: number;
       equivalentBaseQuantity: number;
       conversionFactor: number;
       packageUnit: string;
@@ -220,7 +226,7 @@ type BranchPricingCostRow = {
   weightedAverageCost: number | null;
   branchCost: number | null;
   effectiveCost: number | null;
-  costSource: "WAC" | "BRANCH" | "NONE";
+  costSource: "GLOBAL" | "NONE";
   effectiveMarginPercent: number | null;
   isConvertibleStock: boolean;
   baseUnit?: string | null;
@@ -275,7 +281,7 @@ function renderSharedStock(product: ProductRow) {
   if (conversion.tracksPackages && shared.packageStock) {
     return {
       primary: `${qty(shared.packageStock.closedPackageQuantity)} ${(conversion.packageUnit ?? "KILO").toLowerCase()} cerrados`,
-      secondary: `${qty(shared.packageStock.looseUnitQuantity)} ${shared.packageStock.baseUnit.toLowerCase()} abiertos | total ${qty(shared.packageStock.equivalentBaseQuantity)} ${shared.packageStock.baseUnit.toLowerCase()}`,
+      secondary: `${qty(shared.packageStock.looseUnitQuantity)} ${shared.packageStock.baseUnit.toLowerCase()} sueltos fisicos | abrible ${qty(shared.packageStock.autoOpenableUnitsTotal ?? 0)} | total ${qty(shared.packageStock.equivalentBaseQuantity)} ${shared.packageStock.baseUnit.toLowerCase()}`,
       chip: `1 ${conversion.packageUnit ?? shared.saleUnit} = ${qty(shared.packageStock.conversionFactor)} ${shared.packageStock.baseUnit} aprox.`,
     };
   }
@@ -321,7 +327,7 @@ function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchP
   const weightedAverageCost = baseWeightedAverageCost === null
     ? null
     : baseWeightedAverageCost * (product.stockConversion ? conversionFactor : 1);
-  const effectiveCost = branchCost ?? weightedAverageCost;
+  const effectiveCost = numberOrNull(product.baseCost);
   const effectiveMarginPercent = effectivePrice > 0 && effectiveCost !== null && effectiveCost > 0
     ? ((effectivePrice - effectiveCost) / effectivePrice) * 100
     : null;
@@ -338,7 +344,7 @@ function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchP
     weightedAverageCost,
     branchCost,
     effectiveCost,
-    costSource: branchCost !== null ? "BRANCH" : weightedAverageCost !== null ? "WAC" : "NONE",
+    costSource: effectiveCost !== null ? "GLOBAL" : "NONE",
     effectiveMarginPercent,
     isConvertibleStock: Boolean(product.stockConversion),
     baseUnit: product.stockConversion?.baseUnit ?? null,
@@ -471,7 +477,7 @@ export function CatalogInventoryAdmin() {
     await load();
   }
 
-  async function updateBranchPrice(product: ProductRow, branch: Branch, field: "branchPrice" | "branchCost", value: string) {
+  async function updateBranchPrice(product: ProductRow, branch: Branch, field: "branchPrice", value: string) {
     const numeric = value.trim() === "" ? null : Number(value);
     if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
       toast.error("No se permiten costos o precios negativos.");
@@ -486,7 +492,7 @@ export function CatalogInventoryAdmin() {
       toast.error("No se pudo guardar la configuracion por sucursal.");
       return;
     }
-    toast.success(`${field === "branchCost" ? "Costo" : "Precio"} guardado para ${branch.code}`);
+    toast.success(`Precio guardado para ${branch.code}`);
     await load();
   }
 
@@ -2467,7 +2473,7 @@ function MovementsPanel({
    Pre-populates inputs with current branchProductSettings,
    uses controlled state, shows save button per cell, toast.
    ═══════════════════════════════════════════════════════════ */
-type PricingDraft = Record<string, Record<string, { cost: string; price: string; dirty: boolean }>>;
+type PricingDraft = Record<string, Record<string, { price: string; dirty: boolean }>>;
 
 function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingDraft {
   const draft: PricingDraft = {};
@@ -2477,7 +2483,6 @@ function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingD
     for (const branch of branches) {
       const setting = settingsMap.get(branch.id);
       draft[product.id][branch.id] = {
-        cost: setting?.branchCost ?? "",
         price: setting?.branchPrice ?? "",
         dirty: false,
       };
@@ -2499,7 +2504,7 @@ function PricingPanel({
   selectedBranchId?: string;
   focusedProductId?: string | null;
   onSelectBranch: (branchId: string) => void;
-  onSave: (product: ProductRow, branch: Branch, field: "branchPrice" | "branchCost", value: string) => Promise<void>;
+  onSave: (product: ProductRow, branch: Branch, field: "branchPrice", value: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState<PricingDraft>(() => buildPricingDraft(products, branches));
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -2528,7 +2533,7 @@ function PricingPanel({
     }
   }, [products, branches]);
 
-  function updateCell(productId: string, branchId: string, field: "cost" | "price", value: string) {
+  function updateCell(productId: string, branchId: string, field: "price", value: string) {
     setDraft((prev) => ({
       ...prev,
       [productId]: {
@@ -2538,14 +2543,14 @@ function PricingPanel({
     }));
   }
 
-  async function saveCell(product: ProductRow, branch: Branch, field: "cost" | "price") {
+  async function saveCell(product: ProductRow, branch: Branch, field: "price") {
     const cell = draft[product.id]?.[branch.id];
     if (!cell) return;
-    const apiField = field === "cost" ? "branchCost" : "branchPrice";
+    const apiField = "branchPrice";
     const key = `${product.id}-${branch.id}-${field}`;
     setSavingKey(key);
     try {
-      await onSave(product, branch, apiField as "branchCost" | "branchPrice", cell[field]);
+      await onSave(product, branch, apiField, cell[field]);
       // Mark cell as no longer dirty after successful save (optimistic)
       setDraft((prev) => ({
         ...prev,
@@ -2567,10 +2572,6 @@ function PricingPanel({
       const cell = cells[branch.id];
       if (!cell?.dirty) continue;
       const origSetting = product.branchProductSettings.find((s) => s.branchId === branch.id);
-      if (cell.cost !== (origSetting?.branchCost ?? "")) {
-        await onSave(product, branch, "branchCost", cell.cost);
-        saved++;
-      }
       if (cell.price !== (origSetting?.branchPrice ?? "")) {
         await onSave(product, branch, "branchPrice", cell.price);
         saved++;
@@ -2594,9 +2595,9 @@ function PricingPanel({
     <Card noPadding>
       <div className="hm-card-header-green">
         <h2 className="text-sm font-semibold flex items-center gap-2">
-          <DollarSign className="h-4 w-4" /> Precios y costos por sucursal
+          <DollarSign className="h-4 w-4" /> Precios por sucursal y costo global
         </h2>
-        <p className="mt-0.5 text-xs opacity-90">Edita solo la sucursal seleccionada. Los margenes usan precio efectivo y costo efectivo reales.</p>
+        <p className="mt-0.5 text-xs opacity-90">Edita precios por sucursal. Los margenes usan el costo global efectivo.</p>
       </div>
       {/* Branch pricing filters */}
       <div className="grid gap-2 px-4 pt-3 md:grid-cols-[240px_1fr_auto_auto]">
@@ -2610,7 +2611,7 @@ function PricingPanel({
       {comparisonMode ? (
         <div className="overflow-x-auto p-4">
           <table className="hm-table min-w-[900px] w-full">
-            <thead><tr><th>Producto</th><th>Precio global</th>{branches.map((branch) => <th key={branch.id}>{branch.code} precio / costo</th>)}<th>Modo</th></tr></thead>
+            <thead><tr><th>Producto</th><th>Precio global</th>{branches.map((branch) => <th key={branch.id}>{branch.code} precio / costo global</th>)}<th>Modo</th></tr></thead>
             <tbody>
               {filteredProducts.map((product) => (
                 <tr key={product.id}>
@@ -2621,7 +2622,7 @@ function PricingPanel({
                     return (
                       <td key={branch.id} className="text-xs">
                         <div>Precio: {formatMoneyOrNd(row.effectivePrice)} ({row.priceSource === "BRANCH" ? "Sucursal" : "Global"})</div>
-                        <div>Costo: {formatMoneyOrNd(row.effectiveCost)} ({row.costSource === "BRANCH" ? "Sucursal" : row.costSource === "WAC" ? "WAC" : "Sin costo"})</div>
+                        <div>Costo global: {formatMoneyOrNd(row.effectiveCost)}</div>
                         <div>Margen: {formatMarginOrNd(row.effectiveMarginPercent)}</div>
                       </td>
                     );
@@ -2641,9 +2642,8 @@ function PricingPanel({
               <th>Precio global</th>
               <th>Precio sucursal</th>
               <th>Precio efectivo</th>
-              <th>Costo WAC</th>
-              <th>Costo sucursal</th>
-              <th>Costo efectivo</th>
+              <th>WAC referencia</th>
+              <th>Costo global</th>
               <th>Margen efectivo</th>
               <th>Fuente</th>
               <th>Alertas</th>
@@ -2655,7 +2655,6 @@ function PricingPanel({
               if (!activeBranch) return null;
               const row = buildBranchPricingCostRow(p, activeBranch);
               const cell = draft[p.id]?.[activeBranch.id] ?? { cost: "", price: "", dirty: false };
-              const costKey = `${p.id}-${activeBranch.id}-cost`;
               const priceKey = `${p.id}-${activeBranch.id}-price`;
               const hasDirty = Boolean(cell.dirty);
               return (
@@ -2683,19 +2682,11 @@ function PricingPanel({
                     <div>{formatMoneyOrNd(row.weightedAverageCost)}</div>
                     {row.isConvertibleStock ? <div className="text-[0.65rem] text-[var(--color-text-muted)]">Base: {formatMoneyOrNd(row.baseWeightedAverageCost)} / {row.baseUnit}</div> : null}
                   </td>
-                  <td className="py-2">
-                    <div className="flex items-center gap-1">
-                      <Input className={`h-7 text-xs flex-1 ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`} type="number" min="0" step="0.01" placeholder="Costo" value={cell.cost} onChange={(e) => updateCell(p.id, activeBranch.id, "cost", e.target.value)} />
-                      <button type="button" title="Guardar costo" className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === costKey ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm hover:shadow"}`} disabled={savingKey === costKey} onClick={() => saveCell(p, activeBranch, "cost")}>
-                        {savingKey === costKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                      </button>
-                    </div>
-                  </td>
                   <td>{formatMoneyOrNd(row.effectiveCost)}</td>
                   <td><Badge variant={marginBadgeVariant(row.effectiveMarginPercent)}>{formatMarginOrNd(row.effectiveMarginPercent)}</Badge></td>
                   <td className="text-xs">
                     <div>Precio: {row.priceSource === "BRANCH" ? "Sucursal" : "Global"}</div>
-                    <div>Costo: {row.costSource === "BRANCH" ? "Sucursal" : row.costSource === "WAC" ? "WAC" : "Sin costo"}</div>
+                    <div>Costo: {row.costSource === "GLOBAL" ? "Global" : "Sin costo"}</div>
                   </td>
                   <td>
                     <div className="flex flex-col gap-1 text-xs">
@@ -2709,7 +2700,7 @@ function PricingPanel({
               );
             })}
             {filteredProducts.length === 0 ? (
-              <tr><td colSpan={11} className="py-6 text-center text-[var(--color-text-muted)]">No hay productos.</td></tr>
+              <tr><td colSpan={10} className="py-6 text-center text-[var(--color-text-muted)]">No hay productos.</td></tr>
             ) : null}
           </tbody>
         </table>

@@ -31,15 +31,22 @@ type FusionGroup = {
   conversionFactorToBase?: number | null;
   tracksPackages?: boolean;
   approximateFactor?: boolean;
+  minimumClosedPackageReserve?: number;
+  autoOpenForUnitSale?: boolean;
   totalClosedPackageQuantity?: number;
   totalLooseUnitQuantity?: number;
+  totalAutoOpenableUnits?: number;
   totalEquivalentBaseQuantity?: number;
   displayConversionFactor?: number | null;
   branchStocks?: Array<{
     branch: { id: string; code: string; name: string };
     closedPackageQuantity: number;
     looseUnitQuantity: number;
+    autoOpenablePackages?: number;
+    autoOpenableUnitsTotal?: number;
     equivalentBaseQuantity: number;
+    unitSaleAutomaticallyEnabled?: boolean;
+    onlyClosedReserveRemaining?: boolean;
   }>;
   isActive: boolean;
   category: { id: string; code: string; name: string } | null;
@@ -166,6 +173,8 @@ export function InventoryFusionPanel() {
   const [packageUnit, setPackageUnit] = useState("");
   const [conversionFactorToBase, setConversionFactorToBase] = useState<number | "">("");
   const [approximateFactor, setApproximateFactor] = useState(true);
+  const [autoOpenForUnitSale, setAutoOpenForUnitSale] = useState(true);
+  const [minimumClosedPackageReserve, setMinimumClosedPackageReserve] = useState<number | "">(1);
   const [members, setMembers] = useState<FusionMember[]>([]);
   const [openingGroup, setOpeningGroup] = useState<FusionGroup | null>(null);
   const [openingBranchId, setOpeningBranchId] = useState("");
@@ -229,6 +238,8 @@ export function InventoryFusionPanel() {
     setPackageUnit("");
     setConversionFactorToBase("");
     setApproximateFactor(true);
+    setAutoOpenForUnitSale(true);
+    setMinimumClosedPackageReserve(1);
     setMembers([]);
     setSearch("");
     setResults([]);
@@ -291,6 +302,8 @@ export function InventoryFusionPanel() {
       setPackageUnit("KILO");
       setConversionFactorToBase(firstDerived.conversionFactor);
       setApproximateFactor(true);
+      setAutoOpenForUnitSale(true);
+      setMinimumClosedPackageReserve(1);
     }
     showToast(
       "info",
@@ -306,6 +319,8 @@ export function InventoryFusionPanel() {
     setPackageUnit(group.packageUnit ?? "");
     setConversionFactorToBase(group.conversionFactorToBase ?? "");
     setApproximateFactor(Boolean(group.approximateFactor));
+    setAutoOpenForUnitSale(group.autoOpenForUnitSale ?? true);
+    setMinimumClosedPackageReserve(group.minimumClosedPackageReserve ?? 1);
     setMembers(
       group.members.map((m) => ({
         productId: m.productId,
@@ -340,6 +355,10 @@ export function InventoryFusionPanel() {
       showToast("error", "Para empaques indique unidad de empaque y factor mayor que 0.");
       return;
     }
+    if (tracksPackages && Number(minimumClosedPackageReserve) < 0) {
+      showToast("error", "La reserva minima no puede ser negativa.");
+      return;
+    }
     for (const m of members) {
       if (!m.saleUnit.trim()) {
         showToast("error", `Indique la unidad de venta de ${m.sku}.`);
@@ -360,6 +379,8 @@ export function InventoryFusionPanel() {
         conversionFactorToBase: tracksPackages ? Number(conversionFactorToBase) : null,
         tracksPackages,
         approximateFactor: tracksPackages ? approximateFactor : false,
+        autoOpenForUnitSale: tracksPackages ? autoOpenForUnitSale : false,
+        minimumClosedPackageReserve: tracksPackages ? Number(minimumClosedPackageReserve) : 1,
         members: members.map((m) => ({
           productId: m.productId,
           saleUnit: m.saleUnit.trim(),
@@ -560,6 +581,25 @@ export function InventoryFusionPanel() {
                 <input type="checkbox" checked={approximateFactor} onChange={(e) => setApproximateFactor(e.target.checked)} disabled={saving} />
                 Factor aproximado
               </label>
+              <label className="flex items-end gap-2 pb-2 text-sm text-[var(--color-text-secondary)]">
+                <input type="checkbox" checked={autoOpenForUnitSale} onChange={(e) => setAutoOpenForUnitSale(e.target.checked)} disabled={saving} />
+                Abrir automaticamente para venta unitaria
+              </label>
+              <div className="space-y-1 sm:col-span-2">
+                <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Reserva minima de kilos/cajas cerradas</label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+                  value={minimumClosedPackageReserve}
+                  onChange={(e) => setMinimumClosedPackageReserve(e.target.value === "" ? "" : Number(e.target.value))}
+                  disabled={saving}
+                />
+                <p className="text-xs text-[var(--color-text-muted)]">
+                  Si hay mas de 1 kilo/caja cerrada, Hammer abrira automaticamente una para vender unidades sueltas.
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -730,18 +770,30 @@ export function InventoryFusionPanel() {
                 </div>
               </div>
               {group.tracksPackages && (
-                <div className="grid gap-2 border-b border-[var(--color-border)] px-5 py-3 text-xs sm:grid-cols-3">
+                <div className="grid gap-2 border-b border-[var(--color-border)] px-5 py-3 text-xs sm:grid-cols-4">
                   <div>
                     <span className="text-[var(--color-text-soft)]">Cerrados</span>
                     <div className="font-semibold text-[var(--color-text)]">{group.totalClosedPackageQuantity ?? 0} {(group.packageUnit ?? "KILO").toLowerCase()}</div>
                   </div>
                   <div>
-                    <span className="text-[var(--color-text-soft)]">Abiertos</span>
+                    <span className="text-[var(--color-text-soft)]">Sueltos fisicos</span>
                     <div className="font-semibold text-[var(--color-text)]">{group.totalLooseUnitQuantity ?? 0} {group.baseUnit.toLowerCase()}</div>
+                  </div>
+                  <div>
+                    <span className="text-[var(--color-text-soft)]">Abrible automatico</span>
+                    <div className="font-semibold text-[var(--color-text)]">hasta {group.totalAutoOpenableUnits ?? 0} {group.baseUnit.toLowerCase()}</div>
                   </div>
                   <div>
                     <span className="text-[var(--color-text-soft)]">Equivalente total</span>
                     <div className="font-semibold text-[var(--color-text)]">{group.totalEquivalentBaseQuantity ?? 0} {group.baseUnit.toLowerCase()}</div>
+                  </div>
+                  <div className="sm:col-span-4 flex flex-wrap gap-2">
+                    {group.autoOpenForUnitSale && (group.totalAutoOpenableUnits ?? 0) > 0 ? (
+                      <Badge variant="success">Venta unitaria automatica</Badge>
+                    ) : null}
+                    {(group.branchStocks ?? []).some((row) => row.onlyClosedReserveRemaining) ? (
+                      <Badge variant="warning">Solo queda reserva cerrada</Badge>
+                    ) : null}
                   </div>
                 </div>
               )}
@@ -786,14 +838,14 @@ export function InventoryFusionPanel() {
               </div>
               <div className="space-y-1">
                 <label className="block text-sm font-medium text-[var(--color-text-secondary)]">Sucursal</label>
-                <select
+                  <select
                   className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
                   value={openingBranchId}
                   onChange={(e) => setOpeningBranchId(e.target.value)}
                 >
                   {(openingGroup.branchStocks ?? []).map((row) => (
                     <option key={row.branch.id} value={row.branch.id}>
-                      {row.branch.code} - {row.branch.name} | Cerrados: {row.closedPackageQuantity} | Abiertos: {row.looseUnitQuantity}
+                      {row.branch.code} - {row.branch.name} | Cerrados: {row.closedPackageQuantity} | Sueltos: {row.looseUnitQuantity} | Abrible: {row.autoOpenableUnitsTotal ?? 0}
                     </option>
                   ))}
                 </select>

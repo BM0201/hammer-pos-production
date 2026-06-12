@@ -24,6 +24,9 @@ export function toHttpErrorResponse(error: unknown) {
     if (["INVALID_MOVEMENT_QUANTITY", "NEGATIVE_UNIT_COST", "ZERO_COST_INBOUND", "NEGATIVE_CURRENT_QUANTITY", "NEGATIVE_CURRENT_WAC", "NEGATIVE_RESULTING_WAC", "NEGATIVE_INVENTORY_VALUE", "INVALID_INBOUND_QUANTITY"].includes(code)) {
       return errJson(code, error.message, 400);
     }
+    if (code === "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK") {
+      return errJson(code, error.message, 400);
+    }
   }
 
   if (error instanceof MissingDatabaseUrlError || isDatabaseConnectionError(error)) {

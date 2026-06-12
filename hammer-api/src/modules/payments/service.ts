@@ -1,7 +1,6 @@
 import {
   CashSessionStatus,
   DispatchStatus,
-  InventoryMovementType,
   PaymentMethod,
   PaymentStatus,
   Prisma,
@@ -9,7 +8,7 @@ import {
   SaleOrderStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { createInventoryMovementTx } from "@/modules/inventory/service";
+import { consumeSharedStockForSaleTx } from "@/modules/inventory/service";
 import { PAYMENT_AUDIT_EVENTS } from "@/modules/payments/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
@@ -414,22 +413,18 @@ export async function postSaleOrderPayment(input: {
       const inventoryDeductions: string[] = [];
       try {
         for (const line of order.lines) {
-          const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
-          const currentWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
-
-          const movementResult = await createInventoryMovementTx(tx, {
-            actorUserId: input.actorUserId,
+          const movementResult = await consumeSharedStockForSaleTx(tx, {
             branchId: order.branchId,
             productId: line.productId,
-            movementType: InventoryMovementType.SALE_OUT,
             quantity: toNumber(line.quantity),
-            unitCost: toNumber(currentWac),
+            userId: input.actorUserId,
+            saleOrderId: order.id,
             referenceType: "SALE_PAYMENT",
             referenceId: order.id,
             notes: `Sale payment deduction for order ${order.orderNumber}`,
           });
 
-          inventoryDeductions.push(movementResult.movement.id);
+          inventoryDeductions.push(...movementResult.movements.map((movement) => movement.id));
         }
       } catch (error) {
         await tx.auditLog.create({

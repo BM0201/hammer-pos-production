@@ -5,7 +5,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
-import { createInventoryMovementTx } from "@/modules/inventory/service";
+import { consumeSharedStockForSaleTx, createInventoryMovementTx } from "@/modules/inventory/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
@@ -42,6 +42,30 @@ export async function listSaleOrders(params: { branchId: string; includeAllBranc
 // Borradores vacíos abandonados por más de este tiempo se eliminan para que no
 // se acumulen en la base de datos ni afecten el rendimiento del POS.
 const STALE_EMPTY_DRAFT_MS = 24 * 60 * 60 * 1000;
+
+function saleLineCostSnapshot(input: {
+  quantity: Prisma.Decimal;
+  lineSubtotal: Prisma.Decimal;
+  effectiveCost: Prisma.Decimal | null;
+  costSource: string;
+}) {
+  if (input.effectiveCost === null) {
+    return {
+      costSnapshot: null,
+      marginSnapshot: null,
+      marginPercentSnapshot: null,
+      costSourceSnapshot: input.costSource,
+    };
+  }
+  const totalCost = input.effectiveCost.mul(input.quantity);
+  const margin = input.lineSubtotal.sub(totalCost);
+  return {
+    costSnapshot: input.effectiveCost,
+    marginSnapshot: margin,
+    marginPercentSnapshot: input.lineSubtotal.gt(0) ? margin.div(input.lineSubtotal).mul(100) : null,
+    costSourceSnapshot: input.costSource,
+  };
+}
 
 /**
  * Elimina (best-effort) los borradores VACÍOS y antiguos de un usuario en una
@@ -276,6 +300,12 @@ export async function addSaleOrderLine(input: {
     }
 
     const lineSubtotal = calculateLineSubtotal(quantity, unitPrice, discountAmount);
+    const snapshots = saleLineCostSnapshot({
+      quantity,
+      lineSubtotal,
+      effectiveCost: pricing.effectiveCost,
+      costSource: pricing.costSource,
+    });
 
     const line = await tx.saleOrderLine.create({
       data: {
@@ -285,6 +315,7 @@ export async function addSaleOrderLine(input: {
         unitPrice,
         discountAmount,
         lineSubtotal,
+        ...snapshots,
       },
     });
 
@@ -307,6 +338,8 @@ export async function addSaleOrderLine(input: {
           effectivePrice: pricing.effectivePrice.toString(),
           effectiveCost: pricing.effectiveCost?.toString() ?? null,
           costSource: pricing.costSource,
+          marginSnapshot: snapshots.marginSnapshot?.toString() ?? null,
+          marginPercentSnapshot: snapshots.marginPercentSnapshot?.toString() ?? null,
           netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
           discountPercent: discountPercent.toString(),
           overrideReason: input.overrideReason ?? null,
@@ -427,10 +460,16 @@ export async function updateSaleOrderLine(input: {
     }
 
     const lineSubtotal = calculateLineSubtotal(quantity, unitPrice, discountAmount);
+    const snapshots = saleLineCostSnapshot({
+      quantity,
+      lineSubtotal,
+      effectiveCost: pricing.effectiveCost,
+      costSource: pricing.costSource,
+    });
 
     const updated = await tx.saleOrderLine.update({
       where: { id: existing.id },
-      data: { quantity, unitPrice, discountAmount, lineSubtotal },
+      data: { quantity, unitPrice, discountAmount, lineSubtotal, ...snapshots },
     });
 
     const orderUpdated = await recalcOrderTotalsTx(tx, input.saleOrderId);
@@ -454,6 +493,10 @@ export async function updateSaleOrderLine(input: {
             quantity: updated.quantity.toString(),
             unitPrice: updated.unitPrice.toString(),
             discountAmount: updated.discountAmount.toString(),
+            costSnapshot: updated.costSnapshot?.toString() ?? null,
+            marginSnapshot: updated.marginSnapshot?.toString() ?? null,
+            marginPercentSnapshot: updated.marginPercentSnapshot?.toString() ?? null,
+            costSourceSnapshot: updated.costSourceSnapshot,
           },
         },
       },
@@ -777,15 +820,12 @@ export async function submitDirectSale(input: {
 
     // Deduct inventory (same locked balances)
     for (const line of order.lines) {
-      const shared = await getSharedInventoryBalance(tx, { branchId: order.branchId, productId: line.productId });
-      const currentWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
-      await createInventoryMovementTx(tx, {
-        actorUserId: input.actorUserId,
+      await consumeSharedStockForSaleTx(tx, {
         branchId: order.branchId,
         productId: line.productId,
-        movementType: InventoryMovementType.SALE_OUT,
         quantity: Number(line.quantity),
-        unitCost: Number(currentWac),
+        userId: input.actorUserId,
+        saleOrderId: order.id,
         referenceType: "DIRECT_SALE",
         referenceId: order.id,
         notes: `Venta directa orden ${order.orderNumber}`,

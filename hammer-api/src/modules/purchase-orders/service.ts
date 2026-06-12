@@ -35,6 +35,7 @@ type ReceivePurchaseOrderInput = {
   }[];
   freightAmount?: number;
   otherChargesAmount?: number;
+  updateGlobalCost?: boolean;
   updateBranchCost?: boolean;
   createPriceReviewAlerts?: boolean;
   allowOverReceive?: boolean;
@@ -65,12 +66,152 @@ function normalizeTaxTreatment(value: unknown): PurchaseTaxTreatment {
   return value === "SEPARATE_CREDIT" ? "SEPARATE_CREDIT" : "INCLUDE_IN_COST";
 }
 
+type SupplierSnapshot = {
+  id: string;
+  name: string;
+  commercialName: string | null;
+  ruc: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  contactName: string | null;
+  contactPhone: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  accountHolder: string | null;
+  paymentTerms: string | null;
+  supplierCode: string | null;
+};
+
+async function supplierSnapshot(tx: Prisma.TransactionClient, supplierId?: string | null): Promise<SupplierSnapshot | null> {
+  if (!supplierId) return null;
+  const supplier = await tx.supplier.findUnique({
+    where: { id: supplierId },
+    select: {
+      id: true,
+      name: true,
+      commercialName: true,
+      ruc: true,
+      phone: true,
+      email: true,
+      address: true,
+      contactName: true,
+      contactPhone: true,
+      bankName: true,
+      bankAccountNumber: true,
+      accountHolder: true,
+      paymentTerms: true,
+      supplierCode: true,
+      isActive: true,
+    },
+  });
+  if (!supplier) throw new Error("INVALID_INPUT: Proveedor no encontrado");
+  if (!supplier.isActive) throw new Error("INVALID_INPUT: Proveedor inactivo");
+  const { isActive: _isActive, ...snapshot } = supplier;
+  return snapshot;
+}
+
+async function updateGlobalProductCostForReceiptTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    actorUserId: string;
+    branchId: string;
+    productId: string;
+    purchaseOrderId: string;
+    purchaseOrderLineId: string;
+    receivedQuantity: Prisma.Decimal;
+    receivedUnitCost: Prisma.Decimal;
+  },
+) {
+  const resolution = await resolveInventoryProductForMovement(tx, input.productId);
+  const receivedBaseQty = resolution.conversion
+    ? convertSaleQtyToBaseQty({ quantity: input.receivedQuantity, conversionFactor: resolution.conversion.conversionFactor })
+    : input.receivedQuantity;
+  const receivedBaseUnitCost = resolution.conversion
+    ? input.receivedUnitCost.div(resolution.conversion.conversionFactor)
+    : input.receivedUnitCost;
+
+  const product = await tx.product.findUniqueOrThrow({
+    where: { id: resolution.inventoryProductId },
+    select: { id: true, globalCost: true, averageCost: true, lastPurchaseCost: true },
+  });
+  const stock = await tx.inventoryBalance.aggregate({
+    where: { productId: resolution.inventoryProductId },
+    _sum: { quantityOnHand: true },
+  });
+  const currentQty = new Prisma.Decimal(stock._sum.quantityOnHand ?? 0);
+  const previousQty = Prisma.Decimal.max(new Prisma.Decimal(0), currentQty.sub(receivedBaseQty));
+  const previousAverageCost = product.averageCost ?? product.globalCost ?? product.lastPurchaseCost;
+  const newAverageCost = previousAverageCost && previousQty.gt(0)
+    ? previousQty.mul(previousAverageCost).add(receivedBaseQty.mul(receivedBaseUnitCost)).div(previousQty.add(receivedBaseQty))
+    : receivedBaseUnitCost;
+
+  await tx.product.update({
+    where: { id: resolution.inventoryProductId },
+    data: {
+      globalCost: newAverageCost,
+      averageCost: newAverageCost,
+      lastPurchaseCost: receivedBaseUnitCost,
+      costUpdatedAt: new Date(),
+      costSource: "PURCHASE_RECEIPT",
+      costUpdatedByUserId: input.actorUserId,
+    },
+  });
+
+  if (resolution.inventoryProductId !== input.productId) {
+    await tx.product.update({
+      where: { id: input.productId },
+      data: {
+        globalCost: input.receivedUnitCost,
+        averageCost: input.receivedUnitCost,
+        lastPurchaseCost: input.receivedUnitCost,
+        costUpdatedAt: new Date(),
+        costSource: "PURCHASE_RECEIPT",
+        costUpdatedByUserId: input.actorUserId,
+      },
+    });
+  }
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "catalog",
+      action: "PRODUCT_GLOBAL_COST_UPDATED",
+      entityType: "Product",
+      entityId: resolution.inventoryProductId,
+      metadataJson: {
+        productId: input.productId,
+        inventoryProductId: resolution.inventoryProductId,
+        purchaseOrderId: input.purchaseOrderId,
+        purchaseOrderLineId: input.purchaseOrderLineId,
+        previousGlobalCost: product.globalCost?.toString() ?? null,
+        newGlobalCost: newAverageCost.toString(),
+        previousAverageCost: previousAverageCost?.toString() ?? null,
+        newAverageCost: newAverageCost.toString(),
+        lastPurchaseCost: receivedBaseUnitCost.toString(),
+        receivedQty: input.receivedQuantity.toString(),
+        receivedBaseQty: receivedBaseQty.toString(),
+      },
+    },
+  });
+
+  return {
+    previousGlobalCost: product.globalCost,
+    newGlobalCost: newAverageCost,
+    previousAverageCost,
+    newAverageCost,
+    receivedQtySnapshot: input.receivedQuantity,
+  };
+}
+
 /* ── List ── */
 export async function listPurchaseOrders(params?: { status?: PurchaseOrderStatus }) {
   return prisma.purchaseOrder.findMany({
     where: params?.status ? { status: params.status } : undefined,
     include: {
       branch: true,
+      supplierRef: true,
       createdBy: { select: { id: true, username: true, fullName: true } },
       lines: { include: { product: { select: { id: true, sku: true, name: true, unit: true } } } },
     },
@@ -84,6 +225,7 @@ export async function getPurchaseOrder(id: string) {
     where: { id },
     include: {
       branch: true,
+      supplierRef: true,
       createdBy: { select: { id: true, username: true, fullName: true } },
       lines: { include: { product: { select: { id: true, sku: true, name: true, unit: true } } } },
     },
@@ -96,6 +238,7 @@ export async function getPurchaseOrder(id: string) {
 type CreatePOInput = {
   userId: string;
   branchId: string;
+  supplierId?: string | null;
   supplier?: string;
   notes?: string;
   purchaseTaxTreatment?: string;
@@ -182,11 +325,15 @@ export async function createPurchaseOrder(input: CreatePOInput) {
   });
 
   const total = new Prisma.Decimal(totalPaidNumber);
+  const supplier = await supplierSnapshot(prisma, input.supplierId ?? null);
 
   const po = await prisma.purchaseOrder.create({
     data: {
       orderNumber: generateOrderNumber(),
-      supplier: input.supplier || null,
+      supplierId: supplier?.id ?? null,
+      supplier: supplier?.name ?? input.supplier ?? null,
+      supplierNameSnapshot: supplier?.name ?? input.supplier ?? null,
+      supplierSnapshotJson: supplier ? (supplier as Prisma.InputJsonValue) : undefined,
       notes: input.notes || null,
       branchId: input.branchId,
       userId: input.userId,
@@ -217,6 +364,7 @@ export async function createPurchaseOrder(input: CreatePOInput) {
     include: {
       lines: { include: { product: { select: { id: true, sku: true, name: true } } } },
       branch: true,
+      supplierRef: true,
     },
   });
 
@@ -234,6 +382,8 @@ export async function createPurchaseOrder(input: CreatePOInput) {
       taxAmount: taxAmountNumber,
       purchaseTaxTreatment,
       linesCount: lines.length,
+      supplierId: supplier?.id ?? null,
+      supplierName: supplier?.name ?? input.supplier ?? null,
     },
   });
 
@@ -244,7 +394,7 @@ export async function createPurchaseOrder(input: CreatePOInput) {
 export async function approvePurchaseOrder(id: string, userId: string) {
   const po = await prisma.purchaseOrder.findUnique({
     where: { id },
-    include: { lines: { include: { product: true } }, branch: true },
+    include: { lines: { include: { product: true } }, branch: true, supplierRef: true },
   });
 
   if (!po) throw new Error("NOT_FOUND");
@@ -374,19 +524,17 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
         notes: item.notes ?? input.notes ?? `Recepcion pedido de compra ${po.orderNumber}`,
       });
 
-      if (input.updateBranchCost) {
-        const branchCost = stockResolutionByProductId.get(line.productId)?.conversion
-          ? convertBaseUnitCostToSaleUnitCost({
-              baseUnitCost: movementResult.balance.weightedAverageCost,
-              conversionFactor: stockResolutionByProductId.get(line.productId)!.conversion!.conversionFactor,
-            })
-          : movementResult.balance.weightedAverageCost;
-        await tx.branchProductSetting.upsert({
-          where: { branchId_productId: { branchId: po.branchId, productId: line.productId } },
-          create: { branchId: po.branchId, productId: line.productId, branchCost },
-          update: { branchCost },
-        });
-      }
+      const costUpdate = input.updateGlobalCost === false
+        ? null
+        : await updateGlobalProductCostForReceiptTx(tx, {
+            actorUserId: userId,
+            branchId: po.branchId,
+            productId: line.productId,
+            purchaseOrderId: po.id,
+            purchaseOrderLineId: line.id,
+            receivedQuantity: new Prisma.Decimal(qtyReceived),
+            receivedUnitCost: new Prisma.Decimal(finalUnitCost),
+          });
 
       const pricing = await getEffectiveProductPricing(tx, { branchId: po.branchId, productId: line.productId });
       const policy = await resolvePolicyForProduct({ branchId: po.branchId, productId: line.productId });
@@ -427,6 +575,12 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
             oldWac: previousWac,
             finalUnitCost,
             newWac: movementResult.balance.weightedAverageCost.toString(),
+            previousGlobalCost: costUpdate?.previousGlobalCost?.toString() ?? null,
+            newGlobalCost: costUpdate?.newGlobalCost?.toString() ?? null,
+            previousAverageCost: costUpdate?.previousAverageCost?.toString() ?? null,
+            newAverageCost: costUpdate?.newAverageCost?.toString() ?? null,
+            supplierId: po.supplierId,
+            supplierName: po.supplierNameSnapshot ?? po.supplier ?? null,
             priceReviewRequired,
             warnings: lineWarnings,
           },
@@ -441,9 +595,28 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
         newStock: Number(movementResult.balance.quantityOnHand),
         previousWeightedAverageCost: previousWac,
         newWeightedAverageCost: Number(movementResult.balance.weightedAverageCost),
+        previousGlobalCost: costUpdate?.previousGlobalCost ? Number(costUpdate.previousGlobalCost) : null,
+        newGlobalCost: costUpdate?.newGlobalCost ? Number(costUpdate.newGlobalCost) : null,
+        previousAverageCost: costUpdate?.previousAverageCost ? Number(costUpdate.previousAverageCost) : null,
+        newAverageCost: costUpdate?.newAverageCost ? Number(costUpdate.newAverageCost) : null,
         priceReviewRequired,
         warnings: lineWarnings,
       });
+
+      if (costUpdate) {
+        await tx.purchaseOrderLine.update({
+          where: { id: line.id },
+          data: {
+            previousGlobalCost: costUpdate.previousGlobalCost,
+            newGlobalCost: costUpdate.newGlobalCost,
+            previousAverageCost: costUpdate.previousAverageCost,
+            newAverageCost: costUpdate.newAverageCost,
+            receivedQtySnapshot: costUpdate.receivedQtySnapshot,
+            supplierIdSnapshot: po.supplierId,
+            supplierNameSnapshot: po.supplierNameSnapshot ?? po.supplier ?? null,
+          },
+        });
+      }
     }
 
     const movementTotals = await tx.inventoryMovement.groupBy({
@@ -485,6 +658,8 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
       branchCode: po.branch.code,
       statusAfter: result.statusAfter,
       warnings: result.warnings,
+      supplierId: po.supplierId,
+      supplierName: po.supplierNameSnapshot ?? po.supplier ?? null,
     },
   });
 

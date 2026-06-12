@@ -32,6 +32,8 @@ export async function POST(request: Request) {
       conversionFactorToBase?: number | null;
       tracksPackages?: boolean;
       approximateFactor?: boolean;
+      minimumClosedPackageReserve?: number | null;
+      autoOpenForUnitSale?: boolean;
       categoryId?: string | null;
       members?: StockGroupMemberInput[];
     };
@@ -45,6 +47,8 @@ export async function POST(request: Request) {
         conversionFactorToBase: body.conversionFactorToBase,
         tracksPackages: body.tracksPackages,
         approximateFactor: body.approximateFactor,
+        minimumClosedPackageReserve: body.minimumClosedPackageReserve,
+        autoOpenForUnitSale: body.autoOpenForUnitSale,
         categoryId: body.categoryId ?? null,
         members: body.members ?? [],
       },

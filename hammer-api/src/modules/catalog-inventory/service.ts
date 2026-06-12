@@ -22,6 +22,8 @@ type CatalogStockConversion = {
   conversionFactorToBase: Prisma.Decimal | null;
   tracksPackages: boolean;
   approximateFactor: boolean;
+  minimumClosedPackageReserve: Prisma.Decimal;
+  autoOpenForUnitSale: boolean;
   isPackagePresentation: boolean;
   canonicalProductId: string;
   isCanonical: boolean;
@@ -72,12 +74,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     const totalStock = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand), 0);
     const totalValue = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.inventoryValue), 0);
     const branchesWithStock = productBalances.filter((row: any) => decimalToNumber(row.quantityOnHand) > 0).length;
-    const positiveCostBalances = productBalances.filter((row: any) => decimalToNumber(row.weightedAverageCost) > 0);
-    const weightedCost = totalStock > 0
-      ? totalValue / totalStock
-      : positiveCostBalances.length > 0
-        ? positiveCostBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.weightedAverageCost), 0) / positiveCostBalances.length
-        : 0;
+    const productCost = decimalToNumber(product.averageCost ?? product.globalCost ?? product.lastPurchaseCost);
     const critical = productBalances.some((row: any) => {
       const policy = policyMap.get(`${product.id}:${row.branchId}`);
       const rp = policy ? decimalToNumber(policy.reorderPoint) : CRITICAL_STOCK_FALLBACK;
@@ -89,12 +86,12 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       totalStock,
       branchesWithStock,
       inventoryValue: totalValue,
-      baseCost: weightedCost,
+      baseCost: productCost,
       basePrice: decimalToNumber(product.standardSalePrice),
       isCriticalStock: critical,
       hasZeroStock: totalStock === 0,
       hasNegativeStock: productBalances.some((row: any) => decimalToNumber(row.quantityOnHand) < 0),
-      hasNoCost: weightedCost <= 0 && branchSettings.every((setting: any) => decimalToNumber(setting.branchCost) <= 0),
+      hasNoCost: productCost <= 0,
       hasNoPrice: decimalToNumber(product.standardSalePrice) <= 0 && branchSettings.every((setting: any) => decimalToNumber(setting.branchPrice) <= 0),
     };
   }
@@ -247,6 +244,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       conversionFactorToBase: member.stockGroup.conversionFactorToBase,
       tracksPackages: member.stockGroup.tracksPackages,
       approximateFactor: member.stockGroup.approximateFactor,
+      minimumClosedPackageReserve: member.stockGroup.minimumClosedPackageReserve,
+      autoOpenForUnitSale: member.stockGroup.autoOpenForUnitSale,
       isPackagePresentation: member.isPackagePresentation,
       canonicalProductId: canonical.productId,
       isCanonical: member.isCanonical,
@@ -285,6 +284,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     }, new Prisma.Decimal(0));
     const displayedBaseQty = selectedShared?.quantityOnHand ?? aggregateBaseQty;
     const displayedWac = selectedShared?.weightedAverageCost ?? (aggregateBaseQty.gt(0) ? aggregateInventoryValue.div(aggregateBaseQty) : null);
+    const productCost = decimalToNumber(product.averageCost ?? product.globalCost ?? product.lastPurchaseCost);
     const sharedStock = conversion && displayedBaseQty
         ? formatDualStock({
             baseQuantity: displayedBaseQty,
@@ -295,6 +295,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
             looseUnitQuantity: selectedShared?.looseUnitQuantity ?? null,
             packageUnit: conversion.packageUnit,
             tracksPackages: conversion.tracksPackages,
+            minimumClosedPackageReserve: conversion.minimumClosedPackageReserve,
+            autoOpenForUnitSale: conversion.autoOpenForUnitSale,
           })
         : null;
     return {
@@ -303,7 +305,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         totalStock: Number(displayedBaseQty),
         branchesWithStock: sharedBalances.filter((balance) => decimalToNumber(balance.quantityOnHand) > 0).length,
         inventoryValue: Number(aggregateInventoryValue),
-        baseCost: displayedWac ? Number(displayedWac) : 0,
+        baseCost: productCost,
+        weightedAverageCostEstimate: displayedWac ? Number(displayedWac) : null,
         hasZeroStock: displayedBaseQty.eq(0),
         hasNegativeStock: displayedBaseQty.lt(0),
       } : {}),
@@ -318,6 +321,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         conversionFactorToBase: conversion.conversionFactorToBase,
         tracksPackages: conversion.tracksPackages,
         approximateFactor: conversion.approximateFactor,
+        minimumClosedPackageReserve: conversion.minimumClosedPackageReserve,
+        autoOpenForUnitSale: conversion.autoOpenForUnitSale,
         isPackagePresentation: conversion.isPackagePresentation,
         isCanonical: conversion.isCanonical,
       } : null,
@@ -418,8 +423,13 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
     minStock: input.minStock === undefined ? undefined : input.minStock === null ? null : new Prisma.Decimal(input.minStock),
     maxStock: input.maxStock === undefined ? undefined : input.maxStock === null ? null : new Prisma.Decimal(input.maxStock),
     reorderPoint: input.reorderPoint === undefined ? undefined : input.reorderPoint === null ? null : new Prisma.Decimal(input.reorderPoint),
-    branchCost: input.branchCost === undefined ? undefined : input.branchCost === null ? null : new Prisma.Decimal(input.branchCost),
     branchPrice: input.branchPrice === undefined ? undefined : input.branchPrice === null ? null : new Prisma.Decimal(input.branchPrice),
+    minPrice: input.minPrice === undefined ? undefined : input.minPrice === null ? null : new Prisma.Decimal(input.minPrice),
+    wholesalePrice: input.wholesalePrice === undefined ? undefined : input.wholesalePrice === null ? null : new Prisma.Decimal(input.wholesalePrice),
+    marginPercent: input.marginPercent === undefined ? undefined : input.marginPercent === null ? null : new Prisma.Decimal(input.marginPercent),
+    priceSource: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : "MANUAL",
+    lastPriceUpdateAt: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : new Date(),
+    priceUpdatedByUserId: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : actorUserId,
   };
 
   const setting = await prisma.branchProductSetting.upsert({
@@ -432,10 +442,18 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
     actorUserId,
     branchId: input.branchId,
     module: "catalog-inventory",
-    action: "BRANCH_PRODUCT_SETTING_UPSERT",
+    action: input.branchPrice !== undefined || input.minPrice !== undefined || input.wholesalePrice !== undefined
+      ? "BRANCH_PRICE_UPDATED"
+      : "BRANCH_PRODUCT_SETTING_UPSERT",
     entityType: "BranchProductSetting",
     entityId: setting.id,
-    metadataJson: { productId: input.productId },
+    metadataJson: {
+      productId: input.productId,
+      branchPrice: input.branchPrice ?? null,
+      minPrice: input.minPrice ?? null,
+      wholesalePrice: input.wholesalePrice ?? null,
+      marginPercent: input.marginPercent ?? null,
+    },
   });
 
   return setting;

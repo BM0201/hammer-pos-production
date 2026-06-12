@@ -4,6 +4,7 @@ import {
   calculateSharedStockChange,
   convertBaseQtyToSaleQty,
   convertSaleQtyToBaseQty,
+  formatPackageLooseStock,
   getIronBarsPerQuintal,
 } from "@/modules/inventory/unit-conversion";
 
@@ -64,5 +65,43 @@ describe("iron shared stock conversions", () => {
     assert.equal(change.finalBaseQty.toNumber(), 19);
     assert.equal(change.deltaBaseQty.toNumber(), 3);
     assert.equal(change.movementQuantity.toNumber(), 3);
+  });
+});
+
+describe("package/loose shared stock availability", () => {
+  it("shows auto-openable units while preserving one closed package", () => {
+    const stock = formatPackageLooseStock({
+      closedPackageQuantity: 6,
+      looseUnitQuantity: 0,
+      conversionFactor: 216,
+      packageUnit: "KILO",
+      baseUnit: "UNIDAD",
+      minimumClosedPackageReserve: 1,
+      autoOpenForUnitSale: true,
+    });
+
+    assert.equal(stock.closedPackageQuantity, 6);
+    assert.equal(stock.looseUnitQuantity, 0);
+    assert.equal(stock.autoOpenablePackages, 5);
+    assert.equal(stock.autoOpenableUnitsTotal, 1080);
+    assert.equal(stock.equivalentBaseQuantity, 1296);
+    assert.equal(stock.minimumClosedPackageReserve, 1);
+    assert.equal(stock.autoOpenForUnitSale, true);
+  });
+
+  it("does not expose auto-openable stock when only the closed reserve remains", () => {
+    const stock = formatPackageLooseStock({
+      closedPackageQuantity: 1,
+      looseUnitQuantity: 0,
+      conversionFactor: 216,
+      packageUnit: "KILO",
+      baseUnit: "UNIDAD",
+      minimumClosedPackageReserve: 1,
+      autoOpenForUnitSale: true,
+    });
+
+    assert.equal(stock.autoOpenablePackages, 0);
+    assert.equal(stock.autoOpenableUnitsTotal, 0);
+    assert.equal(stock.equivalentBaseQuantity, 216);
   });
 });

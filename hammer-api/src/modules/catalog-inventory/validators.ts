@@ -16,8 +16,10 @@ export const updateBranchProductSettingSchema = z.object({
   minStock: z.coerce.number().nonnegative().optional().nullable(),
   maxStock: z.coerce.number().nonnegative().optional().nullable(),
   reorderPoint: z.coerce.number().nonnegative().optional().nullable(),
-  branchCost: z.coerce.number().nonnegative().optional().nullable(),
   branchPrice: z.coerce.number().nonnegative().optional().nullable(),
+  minPrice: z.coerce.number().nonnegative().optional().nullable(),
+  wholesalePrice: z.coerce.number().nonnegative().optional().nullable(),
+  marginPercent: z.coerce.number().optional().nullable(),
 }).refine((data) => Object.keys(data).some((key) => !["branchId", "productId"].includes(key)), {
   message: "Debes enviar al menos un campo configurable.",
 });

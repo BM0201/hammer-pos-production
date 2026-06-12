@@ -40,6 +40,7 @@ export async function POST(request: Request) {
     const order = await createPurchaseOrder({
       userId: session.userId,
       branchId: body.branchId,
+      supplierId: body.supplierId,
       supplier: body.supplier,
       notes: body.notes,
       purchaseTaxTreatment: body.purchaseTaxTreatment,

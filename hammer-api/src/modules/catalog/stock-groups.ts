@@ -262,6 +262,8 @@ export async function bootstrapNailStockGroups(input: BootstrapIronInput) {
           conversionFactorToBase: new Prisma.Decimal(suggestion.factor),
           tracksPackages: true,
           approximateFactor: true,
+          minimumClosedPackageReserve: new Prisma.Decimal(1),
+          autoOpenForUnitSale: true,
           categoryId: suggestion.categoryId,
         },
         update: {
@@ -271,6 +273,8 @@ export async function bootstrapNailStockGroups(input: BootstrapIronInput) {
           conversionFactorToBase: new Prisma.Decimal(suggestion.factor),
           tracksPackages: true,
           approximateFactor: true,
+          minimumClosedPackageReserve: new Prisma.Decimal(1),
+          autoOpenForUnitSale: true,
           categoryId: suggestion.categoryId,
           isActive: true,
         },

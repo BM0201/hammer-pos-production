@@ -20,6 +20,8 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
       conversionFactorToBase?: number | null;
       tracksPackages?: boolean;
       approximateFactor?: boolean;
+      minimumClosedPackageReserve?: number | null;
+      autoOpenForUnitSale?: boolean;
       members?: StockGroupMemberInput[];
     };
 
@@ -32,6 +34,8 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
         conversionFactorToBase: body.conversionFactorToBase,
         tracksPackages: body.tracksPackages,
         approximateFactor: body.approximateFactor,
+        minimumClosedPackageReserve: body.minimumClosedPackageReserve,
+        autoOpenForUnitSale: body.autoOpenForUnitSale,
         members: body.members,
       },
       session.userId,
