@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
+import type { Route } from "next";
 
 type PageHeaderProps = {
   title: string;
@@ -9,32 +11,48 @@ type PageHeaderProps = {
 
 export function PageHeader({ title, description, actions, breadcrumbs }: PageHeaderProps) {
   return (
-    <div className="hm-page-band mb-5">
+    <div className="hm-page-band mb-5 relative">
+      {/* Gradient accent line at bottom of band */}
+      <div className="hm-accent-bar absolute bottom-0 left-5 right-5 lg:left-8 lg:right-8" />
+
       {breadcrumbs && breadcrumbs.length > 0 && (
-        <nav className="mb-3 flex flex-wrap items-center gap-1 text-xs text-[var(--color-text-muted)]">
+        <nav className="mb-3 flex flex-wrap items-center gap-1" aria-label="Breadcrumb">
           {breadcrumbs.map((crumb, i) => (
-            <span key={`${crumb.label}-${i}`} className="flex items-center gap-1.5">
+            <span key={`${crumb.label}-${i}`} className="flex items-center gap-1">
               {crumb.href ? (
-                <a href={crumb.href} className="rounded-md px-1.5 py-1 transition-colors hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)]">
+                <Link
+                  href={crumb.href as Route}
+                  className="hm-chip text-[0.6875rem] hover:text-[var(--color-info-700)] hover:border-[var(--color-info-100)] hover:bg-[var(--color-info-50)]"
+                >
                   {crumb.label}
-                </a>
+                </Link>
               ) : (
-                <span className="rounded-md bg-[var(--color-surface-alt)] px-1.5 py-1 font-medium text-[var(--color-text)]">{crumb.label}</span>
+                <span className="hm-chip hm-chip-info text-[0.6875rem] font-semibold">
+                  {crumb.label}
+                </span>
               )}
-              {i < breadcrumbs.length - 1 && <span className="text-[var(--color-text-soft)]">/</span>}
+              {i < breadcrumbs.length - 1 && (
+                <span className="text-[0.625rem] text-[var(--color-text-soft)] select-none">›</span>
+              )}
             </span>
           ))}
         </nav>
       )}
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between pb-3">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text)]">{title}</h1>
+          <h1 className="text-[1.625rem] font-extrabold tracking-tight text-[var(--color-text)] leading-tight">
+            {title}
+          </h1>
           {description && (
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--color-text-muted)]">{description}</p>
+            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-[var(--color-text-muted)]">
+              {description}
+            </p>
           )}
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+        {actions && (
+          <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>
+        )}
       </div>
     </div>
   );

@@ -23,7 +23,7 @@ import { prisma } from "@/lib/prisma";
 import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
-import { cancelSaleOrder } from "@/modules/sales/service";
+import { cancelSaleOrderTx } from "@/modules/sales/service";
 
 type Actor = {
   userId: string;
@@ -434,7 +434,7 @@ async function addDamagedInventoryTx(tx: Prisma.TransactionClient, input: {
     },
     update: { quantity: { increment: input.quantity } },
   });
-  return tx.inventoryMovement.create({
+  const movement = await tx.inventoryMovement.create({
     data: {
       branchId: input.branchId,
       productId: input.productId,
@@ -447,6 +447,23 @@ async function addDamagedInventoryTx(tx: Prisma.TransactionClient, input: {
       userId: input.actorUserId,
     },
   });
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "sales_returns",
+      action: "DAMAGED_INVENTORY_RECEIVED",
+      entityType: "InventoryConditionBalance",
+      entityId: movement.id,
+      metadataJson: toJsonValue({
+        productId: input.productId,
+        quantity: input.quantity.toString(),
+        unitCost: input.unitCost.toString(),
+        referenceId: input.referenceId,
+      }),
+    },
+  });
+  return movement;
 }
 
 export async function executeSaleReturn(returnId: string, input: ExecuteSaleReturnInput, actor: Actor) {
@@ -463,13 +480,49 @@ export async function executeSaleReturn(returnId: string, input: ExecuteSaleRetu
             },
           },
         },
-        saleOrder: { include: { payments: { where: { status: PaymentStatus.POSTED }, orderBy: { paidAt: "desc" } } } },
+        saleOrder: {
+          include: {
+            payments: { where: { status: PaymentStatus.POSTED }, orderBy: { paidAt: "desc" } },
+            branch: { select: { code: true } },
+          },
+        },
       },
     });
     if (saleReturn.status !== SaleReturnStatus.APPROVED) throw new Error("SALE_RETURN_NOT_APPROVED");
     if (input.refundMethod === RefundMethod.CASH && !input.cashSessionId) throw new Error("CASH_SESSION_REQUIRED_FOR_CASH_REFUND");
 
+    // Transporte excluido: refundableAmount se calculó sobre lineSubtotal (no
+    // incluye transportAmount que está a nivel de cabecera de la orden).
     const totalRefundable = saleReturn.items.reduce((sum, item) => sum.add(item.refundableAmount), new Prisma.Decimal(0));
+
+    // Validar que refundableAmount no supere lo efectivamente pagado.
+    const totalPaid = saleReturn.saleOrder.payments.reduce((sum, p) => sum.add(p.amount), new Prisma.Decimal(0));
+    if (totalRefundable.gt(totalPaid)) throw new Error("REFUND_EXCEEDS_AMOUNT_PAID");
+
+    // Validar compatibilidad de método de refund con método original de pago.
+    // CREDIT_NOTE siempre está permitido como alternativa aprobada.
+    if (input.refundMethod !== RefundMethod.CREDIT_NOTE && saleReturn.saleOrder.payments.length > 0) {
+      const originalMethods = new Set(saleReturn.saleOrder.payments.map((p) => p.method));
+      const isMixed = originalMethods.has("MIXED" as never) || originalMethods.size > 1;
+      if (!isMixed) {
+        const originalMethod = saleReturn.saleOrder.payments[0].method;
+        // CASH↔CASH, CARD↔CARD, TRANSFER↔TRANSFER permitidos directamente.
+        // Cualquier cambio de método requiere excepción Master (campo approvedByMasterId
+        // ya proviene de la aprobación de la devolución).
+        if (
+          originalMethod === "CASH" && input.refundMethod !== RefundMethod.CASH ||
+          originalMethod === "CARD" && input.refundMethod !== RefundMethod.CARD ||
+          originalMethod === "TRANSFER" && input.refundMethod !== RefundMethod.TRANSFER
+        ) {
+          if (!saleReturn.approvedByMasterId) {
+            throw new Error("REFUND_METHOD_MISMATCH_REQUIRES_MASTER_EXCEPTION");
+          }
+          // Con aprobación Master registrada, el cambio de método queda auditado.
+        }
+      }
+      // Pago mixto: cualquier método está permitido, queda auditado.
+    }
+
     const inventoryMovementIds: string[] = [];
 
     for (const item of saleReturn.items) {
@@ -510,8 +563,25 @@ export async function executeSaleReturn(returnId: string, input: ExecuteSaleRetu
     let creditNoteId: string | null = null;
     if (input.refundMethod === RefundMethod.CREDIT_NOTE) {
       if (!saleReturn.customerId) throw new Error("CUSTOMER_REQUIRED_FOR_CREDIT_NOTE");
+      // Generar secuencia y número legible dentro de la tx.
+      // @@unique([branchId, sequence]) garantiza que una colisión concurrente
+      // produzca un error de constraint en lugar de un número duplicado.
+      const lastNote = await tx.creditNote.findFirst({
+        where: { branchId: saleReturn.branchId },
+        orderBy: { sequence: "desc" },
+        select: { sequence: true },
+      });
+      const sequence = (lastNote?.sequence ?? 0) + 1;
+      const branchCode = saleReturn.saleOrder.branch.code;
+      const year = new Date().getFullYear();
+      const creditNoteNumber = `NC-${branchCode}-${year}-${String(sequence).padStart(5, "0")}`;
+      const issuedAt = new Date();
+
       const note = await tx.creditNote.create({
         data: {
+          creditNoteNumber,
+          sequence,
+          branchId: saleReturn.branchId,
           customerId: saleReturn.customerId,
           saleOrderId: saleReturn.saleOrderId,
           saleReturnId: saleReturn.id,
@@ -519,11 +589,30 @@ export async function executeSaleReturn(returnId: string, input: ExecuteSaleRetu
           availableAmount: totalRefundable,
           reason: saleReturn.reason,
           status: CreditNoteStatus.AVAILABLE,
+          issuedAt,
           createdByUserId: actor.userId,
           approvedByMasterId: saleReturn.approvedByMasterId,
         },
       });
       creditNoteId = note.id;
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.userId,
+          branchId: saleReturn.branchId,
+          module: "sales_returns",
+          action: "CREDIT_NOTE_CREATED",
+          entityType: "CreditNote",
+          entityId: note.id,
+          metadataJson: toJsonValue({
+            creditNoteNumber,
+            sequence,
+            customerId: saleReturn.customerId,
+            amount: totalRefundable.toString(),
+            saleReturnId: saleReturn.id,
+            approvedByMasterId: saleReturn.approvedByMasterId,
+          }),
+        },
+      });
     } else {
       if (input.refundMethod === RefundMethod.CASH) {
         const session = await tx.cashSession.findUniqueOrThrow({ where: { id: input.cashSessionId! } });
@@ -558,16 +647,41 @@ export async function executeSaleReturn(returnId: string, input: ExecuteSaleRetu
         },
       });
       refundId = refund.id;
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.userId,
+          branchId: saleReturn.branchId,
+          module: "sales_returns",
+          action: "REFUND_POSTED",
+          entityType: "Refund",
+          entityId: refund.id,
+          metadataJson: toJsonValue({
+            method: input.refundMethod,
+            amount: totalRefundable.toString(),
+            saleReturnId: saleReturn.id,
+            cashSessionId: input.cashSessionId ?? null,
+          }),
+        },
+      });
     }
 
-    const updated = await tx.saleReturn.update({
-      where: { id: saleReturn.id },
+    // Opción A: transición atómica — si otro request ya ejecutó esta devolución,
+    // updateMany retorna count=0 y lanzamos error en lugar de sobrescribir.
+    const updateResult = await tx.saleReturn.updateMany({
+      where: { id: saleReturn.id, status: SaleReturnStatus.APPROVED },
       data: { status: SaleReturnStatus.EXECUTED, executedAt: new Date() },
     });
+    if (updateResult.count === 0) throw new Error("SALE_RETURN_ALREADY_EXECUTED");
+
+    const updated = await tx.saleReturn.findUniqueOrThrow({ where: { id: saleReturn.id } });
 
     if (saleReturn.customerId) {
       await recalculateCustomerCreditScoreTx(tx, saleReturn.customerId);
     }
+    // operationalDayId es el día donde se EJECUTA la devolución (día de ajuste).
+    // El día original de la venta se puede rastrear por saleOrder.operationalDayId.
+    // TODO: agregar originalOperationalDayId y adjustmentOperationalDayId en una
+    // migración futura para trazabilidad cross-day completa.
     if (saleReturn.operationalDayId) {
       const day = await tx.operationalDay.findUnique({ where: { id: saleReturn.operationalDayId } });
       if (day?.approvedAt == null) await refreshOperationalDaySummaryTx(tx, saleReturn.operationalDayId);
@@ -699,26 +813,37 @@ export async function rejectSaleCancellation(cancellationId: string, reason: str
 }
 
 export async function executeSaleCancellation(cancellationId: string, actor: Actor) {
+  // Una sola transacción: validación + cancelSaleOrderTx + updateMany atómico + auditoría.
+  // Opción A para concurrencia: updateMany con where:status=APPROVED — si retorna
+  // count=0, otro request ya ejecutó esta anulación y lanzamos error en lugar de
+  // procesar inventario/pagos dos veces.
   return prisma.$transaction(async (tx) => {
     const cancellation = await tx.saleCancellation.findUniqueOrThrow({ where: { id: cancellationId } });
     if (cancellation.status !== SaleCancellationStatus.APPROVED) throw new Error("SALE_CANCELLATION_NOT_APPROVED");
+
+    // El operationalDayId es el día donde se SOLICITÓ la anulación (día de ajuste).
+    // El día de la venta original se puede rastrear por la SaleOrder asociada.
     const day = cancellation.operationalDayId
       ? await tx.operationalDay.findUnique({ where: { id: cancellation.operationalDayId } })
       : null;
-    if (day?.approvedAt) {
-      throw new Error("OPERATIONAL_DAY_ALREADY_APPROVED");
-    }
-  });
-  const result = await cancelSaleOrder({
-    orderId: (await prisma.saleCancellation.findUniqueOrThrow({ where: { id: cancellationId } })).saleOrderId,
-    actorUserId: actor.userId,
-    reason: "Anulacion aprobada por Master",
-  });
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.saleCancellation.update({
-      where: { id: cancellationId },
+    if (day?.approvedAt) throw new Error("OPERATIONAL_DAY_ALREADY_APPROVED");
+
+    // Cancelar la orden (inventario + pagos + status=CANCELLED) dentro de la misma tx.
+    const cancelResult = await cancelSaleOrderTx(tx, {
+      orderId: cancellation.saleOrderId,
+      actorUserId: actor.userId,
+      reason: `Anulacion aprobada por Master — cancelacion ${cancellationId}`,
+    });
+
+    // Transición atómica: evita doble ejecución por doble-click, retry o dos Masters.
+    const updateResult = await tx.saleCancellation.updateMany({
+      where: { id: cancellationId, status: SaleCancellationStatus.APPROVED },
       data: { status: SaleCancellationStatus.EXECUTED, executedAt: new Date() },
     });
+    if (updateResult.count === 0) throw new Error("SALE_CANCELLATION_ALREADY_EXECUTED");
+
+    const updated = await tx.saleCancellation.findUniqueOrThrow({ where: { id: cancellationId } });
+
     await tx.auditLog.create({
       data: {
         actorUserId: actor.userId,
@@ -727,11 +852,12 @@ export async function executeSaleCancellation(cancellationId: string, actor: Act
         action: "SALE_CANCELLATION_EXECUTED",
         entityType: "SaleCancellation",
         entityId: updated.id,
-        metadataJson: toJsonValue({ cancelSaleOrderResult: result }),
+        metadataJson: toJsonValue({ cancelSaleOrderResult: cancelResult }),
       },
     });
-    return { cancellation: updated, result };
-  });
+
+    return { cancellation: updated, result: cancelResult };
+  }, { timeout: 20000 });
 }
 
 async function recalculateCustomerCreditScoreTx(tx: Prisma.TransactionClient, customerId: string) {

@@ -15,7 +15,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return ok(await approveOperationalDayReview({ id, actorUserId: session.userId }));
   } catch (error) {
     if (error instanceof Error && error.message === "OPERATIONAL_DAY_REVIEW_HAS_BLOCKERS") {
-      return fail("OPERATIONAL_DAY_REVIEW_HAS_BLOCKERS", "El dia operativo tiene pendientes antes de aprobar.", 409);
+      return fail(
+        "OPERATIONAL_DAY_REVIEW_HAS_BLOCKERS",
+        "El dia operativo tiene pendientes antes de aprobar.",
+        409,
+        (error as unknown as { blockers?: unknown }).blockers,
+      );
     }
     return toHttpErrorResponse(error);
   }

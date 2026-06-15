@@ -182,12 +182,15 @@
   --shadow-inset: inset 0 1px 2px rgb(0 0 0 / 0.06);
 
   /* ── Transition ── */
-  --ease-smooth: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-strong: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-smooth: var(--ease-out-strong);
 
   /* ── Sidebar collapse ── */
   --sidebar-width-expanded: 16.25rem;
   --sidebar-width-collapsed: 4rem;
-  --sidebar-transition: 250ms ease-in-out;
+  --sidebar-transition: 220ms var(--ease-drawer);
 }
 
 :root { color-scheme: light; }
@@ -195,7 +198,7 @@
 /* ── Base ─────────────────────────────────────────────────────── */
 body {
   margin: 0;
-  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-inter, Inter), system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   background: var(--color-page-bg);
   color: var(--color-text);
   -webkit-font-smoothing: antialiased;
@@ -203,6 +206,9 @@ body {
   text-rendering: optimizeLegibility;
   line-height: 1.5;
 }
+
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
 
 button, input, select, textarea {
   font: inherit;
@@ -260,10 +266,15 @@ a { color: inherit; text-decoration: none; }
   transition: box-shadow 0.25s var(--ease-smooth), transform 0.2s var(--ease-smooth), border-color 0.2s;
 }
 .hm-card:hover { box-shadow: var(--shadow-card-hover); }
-.hm-card-interactive:hover {
-  box-shadow: var(--shadow-lg);
-  transform: translateY(-2px);
-  border-color: var(--color-border-strong);
+.hm-card-interactive:active {
+  transform: scale(0.99);
+  transition-duration: 80ms;
+}
+@media (hover: hover) and (pointer: fine) {
+  .hm-card-interactive:hover {
+    box-shadow: var(--shadow-lg);
+    border-color: var(--color-border-strong);
+  }
 }
 
 /* ── Buttons ── */
@@ -277,7 +288,11 @@ a { color: inherit; text-decoration: none; }
   line-height: 1.25rem;
   border-radius: var(--radius-lg);
   padding: 0.5625rem 1.25rem;
-  transition: all 0.2s var(--ease-smooth);
+  transition:
+    background-color 180ms var(--ease-out-strong),
+    box-shadow       180ms var(--ease-out-strong),
+    transform        120ms var(--ease-out-strong),
+    opacity          150ms ease-out;
   cursor: pointer;
   border: none;
   white-space: nowrap;
@@ -292,20 +307,12 @@ a { color: inherit; text-decoration: none; }
   color: #fff;
   box-shadow: 0 1px 3px rgb(37 99 235 / 0.3);
 }
-.hm-btn-master:hover:not(:disabled) {
-  background: linear-gradient(135deg, var(--color-master-500), var(--color-master-600));
-  box-shadow: 0 3px 8px rgb(37 99 235 / 0.35);
-}
 
 /* Primary – branch (purple for admin) */
 .hm-btn-branch {
   background: linear-gradient(135deg, var(--color-branch-admin-600), var(--color-branch-admin-700));
   color: #fff;
   box-shadow: 0 1px 3px rgb(147 51 234 / 0.3);
-}
-.hm-btn-branch:hover:not(:disabled) {
-  background: linear-gradient(135deg, var(--color-branch-admin-500), var(--color-branch-admin-600));
-  box-shadow: 0 3px 8px rgb(147 51 234 / 0.35);
 }
 
 /* Primary – default (for shared pages) */
@@ -314,10 +321,6 @@ a { color: inherit; text-decoration: none; }
   color: #fff;
   box-shadow: 0 1px 3px rgb(37 99 235 / 0.3);
 }
-.hm-btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, var(--color-info-500), var(--color-info-600));
-  box-shadow: 0 3px 8px rgb(37 99 235 / 0.35);
-}
 
 .hm-btn-secondary {
   background: var(--color-surface);
@@ -325,19 +328,10 @@ a { color: inherit; text-decoration: none; }
   border: 1.5px solid var(--color-border);
   box-shadow: var(--shadow-xs);
 }
-.hm-btn-secondary:hover:not(:disabled) {
-  background: var(--color-surface-muted);
-  border-color: var(--color-border-strong);
-  color: var(--color-text);
-  box-shadow: var(--shadow-card);
-}
 
 .hm-btn-danger {
   background: linear-gradient(135deg, var(--color-danger-500), var(--color-danger-600));
   color: #fff;
-}
-.hm-btn-danger:hover:not(:disabled) {
-  background: linear-gradient(135deg, #f87171, var(--color-danger-500));
 }
 
 .hm-btn-ghost {
@@ -345,9 +339,33 @@ a { color: inherit; text-decoration: none; }
   color: var(--color-text-muted);
   padding: 0.375rem 0.75rem;
 }
-.hm-btn-ghost:hover:not(:disabled) {
-  background: var(--color-surface-alt);
-  color: var(--color-text);
+
+@media (hover: hover) and (pointer: fine) {
+  .hm-btn-master:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--color-master-500), var(--color-master-600));
+    box-shadow: 0 3px 8px rgb(37 99 235 / 0.35);
+  }
+  .hm-btn-branch:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--color-branch-admin-500), var(--color-branch-admin-600));
+    box-shadow: 0 3px 8px rgb(147 51 234 / 0.35);
+  }
+  .hm-btn-primary:hover:not(:disabled) {
+    background: linear-gradient(135deg, var(--color-info-500), var(--color-info-600));
+    box-shadow: 0 3px 8px rgb(37 99 235 / 0.35);
+  }
+  .hm-btn-secondary:hover:not(:disabled) {
+    background: var(--color-surface-muted);
+    border-color: var(--color-border-strong);
+    color: var(--color-text);
+    box-shadow: var(--shadow-card);
+  }
+  .hm-btn-danger:hover:not(:disabled) {
+    background: linear-gradient(135deg, #f87171, var(--color-danger-500));
+  }
+  .hm-btn-ghost:hover:not(:disabled) {
+    background: var(--color-surface-alt);
+    color: var(--color-text);
+  }
 }
 
 .hm-btn-sm { font-size: 0.75rem; padding: 0.375rem 0.75rem; border-radius: var(--radius-md); }
@@ -603,7 +621,7 @@ select.hm-input {
   overflow: hidden;
   border-radius: var(--radius-xl);
   padding: 1.25rem;
-  transition: all 0.25s var(--ease-smooth);
+  transition: box-shadow 0.25s var(--ease-smooth), transform 0.25s var(--ease-smooth);
 }
 
 /* Common ERP surfaces for legacy tables and inline controls */
@@ -657,7 +675,7 @@ select.hm-input {
 
 .erp-tabs button {
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  transition: all 0.2s var(--ease-smooth);
+  transition: color 0.2s var(--ease-smooth), background-color 0.2s var(--ease-smooth);
   padding: 0.5rem 1rem;
   font-size: 0.8125rem;
   font-weight: 500;
@@ -767,6 +785,9 @@ aside[class*="bg-[var(--color-sidebar)]"] {
 /* ══════════════════════════════════════════════════════════════
    SIDEBAR COLLAPSE UTILITIES
    ══════════════════════════════════════════════════════════════ */
+.sidebar-label {
+  transition: opacity 150ms ease-out;
+}
 .sidebar-expanded {
   width: var(--sidebar-width-expanded);
   transition: width var(--sidebar-transition);
@@ -781,6 +802,7 @@ aside[class*="bg-[var(--color-sidebar)]"] {
 .sidebar-collapsed .sidebar-footer-text,
 .sidebar-collapsed .sidebar-brand-text {
   opacity: 0;
+  pointer-events: none;
   width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -822,7 +844,7 @@ aside[class*="bg-[var(--color-sidebar)]"] {
    ANIMATIONS
    ══════════════════════════════════════════════════════════════ */
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 @keyframes fadeIn {
@@ -842,7 +864,7 @@ aside[class*="bg-[var(--color-sidebar)]"] {
   50% { opacity: 0.65; }
 }
 
-.animate-fade-in-up  { animation: fadeInUp 0.4s var(--ease-smooth) both; }
+.animate-fade-in-up  { animation: fadeInUp 0.28s var(--ease-smooth) both; }
 .animate-fade-in     { animation: fadeIn 0.3s ease both; }
 .animate-slide-in    { animation: slideInLeft 0.35s var(--ease-smooth) both; }
 .animate-scale-in    { animation: scaleIn 0.25s var(--ease-smooth) both; }
@@ -1057,7 +1079,7 @@ input[type="password"]::-webkit-strong-password-auto-fill-button {
 nav[aria-label] button,
 .hm-pagination button {
   border-radius: var(--radius-lg);
-  transition: all 0.15s var(--ease-smooth);
+  transition: background-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
   font-weight: 500;
 }
 
@@ -1114,7 +1136,7 @@ a:focus-visible {
   background: var(--color-surface-alt);
   color: var(--color-text-muted);
   border: 1px solid var(--color-border);
-  transition: all 0.15s var(--ease-smooth);
+  transition: background-color 0.15s var(--ease-smooth), border-color 0.15s var(--ease-smooth), color 0.15s var(--ease-smooth);
 }
 .hm-tag:hover {
   background: var(--color-surface-muted);
@@ -1175,4 +1197,366 @@ a:focus-visible {
   .app-shell-content {
     padding: 1.75rem 2rem;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in-up,
+  .animate-fade-in,
+  .animate-slide-in,
+  .animate-scale-in,
+  .animate-slide-down {
+    animation: hm-fade 0.15s ease forwards;
+  }
+  .stagger-children > * {
+    animation: hm-fade 0.15s ease forwards !important;
+    animation-delay: 0ms !important;
+  }
+  .hm-btn,
+  .hm-card {
+    transition-duration: 0.01ms !important;
+  }
+}
+@keyframes hm-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   FACELIFT V2 — Enhanced visual components & utilities
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Gradient text ── */
+.hm-gradient-text {
+  background: linear-gradient(135deg, var(--color-info-700), var(--color-info-400));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Glassmorphism surface ── */
+.hm-glass {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+/* ── KPI Tile (replaces old hm-stat) ── */
+.hm-kpi-tile {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 1.25rem 1.25rem 1.125rem;
+  transition: transform 0.22s var(--ease-smooth), box-shadow 0.22s var(--ease-smooth), border-color 0.22s;
+  cursor: default;
+}
+.hm-kpi-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--color-border-strong);
+}
+.hm-kpi-tile-alert {
+  border-color: color-mix(in srgb, var(--color-warning-200) 70%, transparent);
+  background: color-mix(in srgb, var(--color-warning-50) 40%, white);
+}
+.hm-kpi-tile-ok {
+  border-color: color-mix(in srgb, var(--color-success-200) 60%, transparent);
+  background: color-mix(in srgb, var(--color-success-50) 30%, white);
+}
+
+/* ── Numeric display hierarchy ── */
+.hm-num-2xl {
+  font-size: 2.25rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+.hm-num-xl {
+  font-size: 1.875rem;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+.hm-num-lg {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+/* ── Slide-down animation for toasts/notifications ── */
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+.animate-slide-down { animation: slideDown 0.22s var(--ease-out-strong) both; }
+.animate-slide-up   { animation: slideUp  0.22s var(--ease-out-strong) both; }
+
+/* ── Pill-style tab bar ── */
+.erp-tabs-pill {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--color-surface-alt);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+}
+.erp-tabs-pill button {
+  border-radius: var(--radius-lg);
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  transition: all 0.18s var(--ease-smooth);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.erp-tabs-pill button:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.erp-tabs-pill button.active,
+.erp-tabs-pill button[data-active="true"] {
+  background: var(--color-surface);
+  color: var(--color-info-700);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+
+/* ── Shine sweep on hover (decorative) ── */
+@keyframes cardShine {
+  0%   { transform: translateX(-100%) skewX(-15deg); }
+  100% { transform: translateX(250%)  skewX(-15deg); }
+}
+.hm-shine { position: relative; }
+.hm-shine::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+  transform: translateX(-100%) skewX(-15deg);
+  pointer-events: none;
+}
+.hm-shine:hover::after {
+  animation: cardShine 0.55s var(--ease-out-strong);
+}
+
+/* ── Status pill (inline status badge) ── */
+.hm-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  line-height: 1.5;
+}
+.hm-status-pill-live {
+  background: color-mix(in srgb, var(--color-success-100) 80%, transparent);
+  color: var(--color-success-700);
+  border: 1px solid var(--color-success-200);
+}
+.hm-status-pill-pending {
+  background: color-mix(in srgb, var(--color-warning-100) 80%, transparent);
+  color: var(--color-warning-700);
+  border: 1px solid var(--color-warning-200);
+}
+.hm-status-pill-closed {
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+/* ── Thin separator with gradient fade ── */
+.hm-sep {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border-strong) 20%, var(--color-border-strong) 80%, transparent);
+  border: none;
+  margin: 1.5rem 0;
+}
+
+/* ── Highlight ring (for focused/selected cards) ── */
+.hm-ring {
+  outline: 2px solid var(--color-info-400);
+  outline-offset: 2px;
+}
+
+/* ── Gradient accent bar (for page headers, section dividers) ── */
+.hm-accent-bar {
+  height: 3px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--color-info-500), var(--color-info-300), var(--color-master-400));
+}
+
+/* ── Icon container variants ── */
+.hm-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+  transition: transform 0.2s var(--ease-smooth);
+}
+.hm-icon-wrap-sm  { width: 2rem;    height: 2rem; }
+.hm-icon-wrap-md  { width: 2.5rem;  height: 2.5rem; }
+.hm-icon-wrap-lg  { width: 3rem;    height: 3rem; }
+.hm-icon-wrap-xl  { width: 3.5rem;  height: 3.5rem; border-radius: var(--radius-xl); }
+
+/* ── Avatar initials circle ── */
+.hm-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  line-height: 1;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* ── Chip / tag variants ── */
+.hm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.1875rem 0.5625rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+.hm-chip:hover { background: var(--color-surface-muted); border-color: var(--color-border-strong); color: var(--color-text-secondary); }
+.hm-chip-info    { background: var(--color-info-50);    color: var(--color-info-700);    border-color: var(--color-info-100); }
+.hm-chip-success { background: var(--color-success-50); color: var(--color-success-700); border-color: var(--color-success-100); }
+.hm-chip-warning { background: var(--color-warning-50); color: var(--color-warning-700); border-color: var(--color-warning-100); }
+.hm-chip-danger  { background: var(--color-danger-50);  color: var(--color-danger-700);  border-color: var(--color-danger-100); }
+
+/* ── Pulse dot (live indicator) ── */
+.hm-pulse-dot {
+  position: relative;
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--color-success-500);
+}
+.hm-pulse-dot::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  background: var(--color-success-500);
+  opacity: 0.35;
+  animation: pulseDot 1.8s ease-in-out infinite;
+}
+@keyframes pulseDot {
+  0%, 100% { transform: scale(1);   opacity: 0.35; }
+  50%       { transform: scale(1.6); opacity: 0; }
+}
+
+/* ── Skeleton card ── */
+.hm-skeleton-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.hm-skeleton-line {
+  height: 0.875rem;
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, var(--color-surface-alt) 25%, color-mix(in srgb, var(--color-border) 70%, transparent) 50%, var(--color-surface-alt) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+.hm-skeleton-line-sm  { height: 0.625rem; }
+.hm-skeleton-line-lg  { height: 2rem; }
+.hm-skeleton-line-xl  { height: 3rem; }
+.hm-skeleton-block    { border-radius: var(--radius-xl); background: linear-gradient(90deg, var(--color-surface-alt) 25%, color-mix(in srgb, var(--color-border) 70%, transparent) 50%, var(--color-surface-alt) 75%); background-size: 200% 100%; animation: shimmer 1.6s ease-in-out infinite; }
+.hm-skeleton-circle   { border-radius: 9999px; }
+
+/* ── Sticky footer utility ── */
+.hm-sticky-footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  padding: 0.875rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  box-shadow: 0 -4px 16px rgb(0 0 0 / 0.05);
+}
+
+/* ── Page background with subtle dot grid ── */
+.hm-bg-grid {
+  background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ── Better app-sidebar desktop position stability ── */
+.app-sidebar-desktop {
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  height: 100vh;
+  flex-shrink: 0;
+  overflow: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.app-sidebar-desktop::-webkit-scrollbar { display: none; }
+
+/* ── Icon button (square, no text) ── */
+.hm-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.125rem;
+  height: 2.125rem;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  transition: background-color 0.15s var(--ease-smooth), color 0.15s, border-color 0.15s;
+  cursor: pointer;
+}
+.hm-icon-btn:hover {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+.hm-icon-btn:focus-visible {
+  outline: 2px solid var(--color-info-400);
+  outline-offset: 1px;
+}
+.hm-icon-btn-danger:hover {
+  background: var(--color-danger-50);
+  color: var(--color-danger-600);
+  border-color: var(--color-danger-100);
 }

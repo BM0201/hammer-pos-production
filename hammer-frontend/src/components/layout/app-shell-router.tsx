@@ -10,9 +10,10 @@ import { RoleBadge } from "@/components/ui/role-badge";
 import { Breadcrumbs } from "@/components/layout/breadcrumbs";
 import { AppFooter } from "@/components/layout/app-footer";
 import { BranchSelector } from "@/components/branch-selector";
-import { Building2, ChevronLeft, LogOut } from "lucide-react";
+import { ChevronLeft, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/client/api";
+import { getRoleColor } from "@/lib/role-colors";
 
 type ShellSession = Pick<
   SessionPayload,
@@ -59,7 +60,6 @@ const SECTION_META: Record<string, { title: string; subtitle: string }> = {
 function resolveHeaderMeta(segments: string[]) {
   const root = segments[0] ?? "master";
 
-  // ── Branch POS routes get focused, operation-specific headers ──
   if (root === "branch" && segments[1] === "sales") {
     return { title: "Punto de Venta", subtitle: "Captura de tickets y envio fluido a caja." };
   }
@@ -85,12 +85,14 @@ export function AppShellRouter({
   const canReturnToModules = segments[0] !== "branch" && segments.length > 1;
   const [loggingOut, setLoggingOut] = useState(false);
 
+  const roleCfg = getRoleColor(session.roleCode);
+
   const handleLogout = useCallback(async () => {
     setLoggingOut(true);
     try {
       await apiFetch("/api/auth/logout", { method: "POST" });
     } catch {
-      // Even if the request fails, redirect to login.
+      /* redirect anyway */
     } finally {
       router.push("/login");
     }
@@ -113,7 +115,7 @@ export function AppShellRouter({
           router.replace("/login");
         }
       } catch {
-        // Presence is best-effort; authorization still happens on every API call.
+        /* presence is best-effort */
       }
     };
 
@@ -128,10 +130,6 @@ export function AppShellRouter({
     };
   }, [pathname, router, segments, session.primaryBranchId]);
 
-  // Single unified shell for ALL routes (master, owner, system-admin AND branch
-  // POS/Caja). POS routes previously rendered a separate light-themed sidebar
-  // (PosShellWrapper) which caused visual inconsistency; they now share the same
-  // dark, role-themed AppSidebar + header + breadcrumbs as the rest of the app.
   return (
     <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <AppSidebar
@@ -143,8 +141,18 @@ export function AppShellRouter({
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-surface)]/95 shadow-[0_1px_0_rgba(15,23,42,0.03)] backdrop-blur-sm">
-          <div className="flex min-h-16 items-center justify-between gap-4 px-5 py-3 lg:px-8">
+        {/* ── Sticky top header ── */}
+        <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-surface)]/96 shadow-[0_1px_3px_rgba(15,23,42,0.04)] backdrop-blur-md">
+          {/* Role accent bar — 2px gradient strip tied to current user role */}
+          <div
+            className="h-[2px]"
+            style={{
+              background: `linear-gradient(90deg, var(--color-${roleCfg.cssPrefix}-500), var(--color-${roleCfg.cssPrefix}-300), transparent)`,
+            }}
+          />
+
+          <div className="flex min-h-[3.5rem] items-center justify-between gap-4 px-5 py-2.5 lg:px-8">
+            {/* Left — back btn + title */}
             <div className="ml-12 flex min-w-0 items-center gap-3 md:ml-0">
               {canReturnToModules && (
                 <Button
@@ -158,30 +166,52 @@ export function AppShellRouter({
                   <span className="sr-only">Volver a modulos</span>
                 </Button>
               )}
-              <div className="hidden h-10 w-10 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-info-700)] sm:flex">
-                <Building2 className="h-5 w-5" />
+
+              {/* Role icon dot */}
+              <div
+                className="hidden h-8 w-8 items-center justify-center rounded-lg sm:flex flex-shrink-0"
+                style={{
+                  background: `color-mix(in srgb, var(--color-${roleCfg.cssPrefix}-100) 70%, transparent)`,
+                }}
+              >
+                <div
+                  className="h-3 w-3 rounded-full"
+                  style={{ background: `var(--color-${roleCfg.cssPrefix}-500)` }}
+                />
               </div>
+
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h1 className="truncate text-sm font-semibold text-[var(--color-text)] sm:text-base">
+                  <h1 className="truncate text-sm font-bold text-[var(--color-text)] sm:text-[0.9375rem]">
                     {headerMeta.title}
                   </h1>
                   <RoleBadge roleCode={session.roleCode} size="sm" />
                 </div>
-                <p className="hidden truncate text-xs text-[var(--color-text-muted)] md:block">
+                <p className="hidden truncate text-xs text-[var(--color-text-muted)] md:block leading-tight">
                   {headerMeta.subtitle}
                 </p>
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            {/* Right — branch selector + user + logout */}
+            <div className="flex shrink-0 items-center gap-2 sm:gap-2.5">
               <BranchSelector
                 branchIds={session.branchIds}
                 primaryBranchId={session.primaryBranchId}
               />
-              <span className="hidden max-w-[140px] truncate rounded-md border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-2.5 py-1.5 text-xs text-[var(--color-text-muted)] lg:block">
-                {session.username}
-              </span>
+
+              {/* Username chip */}
+              <div className="hidden max-w-[140px] truncate rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-2.5 py-1.5 lg:flex items-center gap-2">
+                <div
+                  className="h-5 w-5 rounded-full flex items-center justify-center text-[0.5625rem] font-bold text-white flex-shrink-0"
+                  style={{ background: `var(--color-${roleCfg.cssPrefix}-600)` }}
+                >
+                  {session.username.charAt(0).toUpperCase()}
+                </div>
+                <span className="text-xs text-[var(--color-text-muted)] truncate">{session.username}</span>
+              </div>
+
+              {/* Logout */}
               <Button
                 variant="ghost"
                 size="sm"
@@ -189,10 +219,10 @@ export function AppShellRouter({
                 disabled={loggingOut}
                 onClick={handleLogout}
                 title="Cerrar sesion"
-                className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-600)]"
+                className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
                 icon={<LogOut className="h-4 w-4" />}
               >
-                <span className="hidden sm:inline">{loggingOut ? "Saliendo..." : "Salir"}</span>
+                <span className="hidden sm:inline text-xs">{loggingOut ? "Saliendo..." : "Salir"}</span>
               </Button>
             </div>
           </div>

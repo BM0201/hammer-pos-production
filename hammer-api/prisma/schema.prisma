@@ -350,6 +350,7 @@ model Branch {
   brainDecisions              BrainDecision[]
   operationalDays             OperationalDay[]
   userPresences               UserPresence[]
+  creditNotes                 CreditNote[]     @relation("BranchCreditNotes")
 }
 
 model User {
@@ -1387,6 +1388,9 @@ model Refund {
 
 model CreditNote {
   id                 String           @id @default(cuid())
+  creditNoteNumber   String           @unique
+  sequence           Int
+  branchId           String
   customerId         String
   saleOrderId        String?
   saleReturnId       String?
@@ -1394,18 +1398,22 @@ model CreditNote {
   availableAmount    Decimal
   reason             String
   status             CreditNoteStatus @default(DRAFT)
+  issuedAt           DateTime
   createdByUserId    String
   approvedByMasterId String?
   createdAt          DateTime         @default(now())
   expiresAt          DateTime?
 
+  branch           Branch      @relation("BranchCreditNotes", fields: [branchId], references: [id])
   customer         Customer    @relation(fields: [customerId], references: [id])
   saleOrder        SaleOrder?  @relation(fields: [saleOrderId], references: [id])
   saleReturn       SaleReturn? @relation(fields: [saleReturnId], references: [id])
   createdBy        User        @relation("CreditNoteCreatedBy", fields: [createdByUserId], references: [id])
   approvedByMaster User?       @relation("CreditNoteApprovedBy", fields: [approvedByMasterId], references: [id])
 
+  @@unique([branchId, sequence])
   @@index([customerId, status])
+  @@index([branchId, status])
   @@index([saleOrderId])
   @@index([saleReturnId])
   @@index([createdByUserId])

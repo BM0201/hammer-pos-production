@@ -463,6 +463,13 @@ export async function closeOperationalDay(input: {
   });
 }
 
+export type OperationalDayBlocker = {
+  code: string;
+  label: string;
+  count: number;
+  references: Array<{ id: string; ref?: string; status?: string; date?: string }>;
+};
+
 export async function approveOperationalDayReview(input: { id: string; actorUserId: string }) {
   return prisma.$transaction(async (tx) => {
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
@@ -470,32 +477,39 @@ export async function approveOperationalDayReview(input: { id: string; actorUser
     if (day.status !== OperationalDayStatus.CLOSED) throw new Error("OPERATIONAL_DAY_NOT_CLOSED");
 
     const summary = await calculateOperationalSummaryTx(tx, day);
+
+    // Devoluciones/anulaciones acotadas al día operativo (operationalDayId = day.id).
+    // Las que no tienen operationalDayId son de días anteriores y no bloquean este cierre.
+    // Transportes y pagos pendientes se acoten por rango de fecha del día de negocio.
+    const { start, end } = operationalWindow(day.businessDate);
+
     const [
-      pendingReturns,
-      pendingCancellations,
-      pendingTransports,
-      openOrUnreviewedSessions,
-      pendingPayments,
+      pendingReturnRefs,
+      pendingCancellationRefs,
+      pendingTransportRefs,
+      openOrUnreviewedSessionRefs,
+      pendingPaymentRefs,
     ] = await Promise.all([
-      tx.saleReturn.count({
-        where: {
-          branchId: day.branchId,
-          status: { in: ["REQUESTED", "APPROVED"] },
-        },
+      tx.saleReturn.findMany({
+        where: { operationalDayId: day.id, status: { in: ["REQUESTED", "APPROVED"] } },
+        select: { id: true, returnNumber: true, status: true, createdAt: true },
+        take: 20,
       }),
-      tx.saleCancellation.count({
-        where: {
-          branchId: day.branchId,
-          status: { in: ["REQUESTED", "APPROVED"] },
-        },
+      tx.saleCancellation.findMany({
+        where: { operationalDayId: day.id, status: { in: ["REQUESTED", "APPROVED"] } },
+        select: { id: true, saleOrderId: true, status: true, createdAt: true },
+        take: 20,
       }),
-      tx.transportService.count({
+      tx.transportService.findMany({
         where: {
           branchId: day.branchId,
           status: { in: ["PENDING", "IN_TRANSIT"] },
+          createdAt: { gte: start, lt: end },
         },
+        select: { id: true, status: true, createdAt: true },
+        take: 20,
       }),
-      tx.cashSession.count({
+      tx.cashSession.findMany({
         where: {
           operationalDayId: day.id,
           OR: [
@@ -503,24 +517,102 @@ export async function approveOperationalDayReview(input: { id: string; actorUser
             { status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW, requiresReview: true },
           ],
         },
+        select: { id: true, status: true, openedAt: true, physicalCashBox: { select: { code: true } } },
+        take: 20,
       }),
-      tx.saleOrder.count({
+      tx.saleOrder.findMany({
         where: {
           branchId: day.branchId,
           status: SaleOrderStatus.PENDING_PAYMENT,
+          createdAt: { gte: start, lt: end },
         },
+        select: { id: true, orderNumber: true, status: true, createdAt: true },
+        take: 20,
       }),
     ]);
 
-    const blockers = {
-      pendingReturns,
-      pendingCancellations,
-      pendingTransports,
-      openOrUnreviewedSessions,
-      pendingPayments,
-    };
-    if (Object.values(blockers).some((count) => count > 0)) {
-      throw new Error("OPERATIONAL_DAY_REVIEW_HAS_BLOCKERS");
+    const blockerList: OperationalDayBlocker[] = [];
+
+    if (pendingReturnRefs.length > 0) {
+      blockerList.push({
+        code: "PENDING_SALE_RETURN",
+        label: "Hay devoluciones pendientes de ejecutar en este día",
+        count: pendingReturnRefs.length,
+        references: pendingReturnRefs.map((r) => ({
+          id: r.id,
+          ref: r.returnNumber,
+          status: r.status,
+          date: r.createdAt.toISOString(),
+        })),
+      });
+    }
+    if (pendingCancellationRefs.length > 0) {
+      blockerList.push({
+        code: "PENDING_SALE_CANCELLATION",
+        label: "Hay anulaciones pendientes de ejecutar en este día",
+        count: pendingCancellationRefs.length,
+        references: pendingCancellationRefs.map((r) => ({
+          id: r.id,
+          ref: r.saleOrderId,
+          status: r.status,
+          date: r.createdAt.toISOString(),
+        })),
+      });
+    }
+    if (pendingTransportRefs.length > 0) {
+      blockerList.push({
+        code: "PENDING_TRANSPORT",
+        label: "Hay transportes del día pendientes o en tránsito",
+        count: pendingTransportRefs.length,
+        references: pendingTransportRefs.map((r) => ({
+          id: r.id,
+          status: r.status,
+          date: r.createdAt.toISOString(),
+        })),
+      });
+    }
+    if (openOrUnreviewedSessionRefs.length > 0) {
+      blockerList.push({
+        code: "OPEN_OR_UNREVIEWED_CASH_SESSION",
+        label: "Hay cajas abiertas o pendientes de revisión en este día",
+        count: openOrUnreviewedSessionRefs.length,
+        references: openOrUnreviewedSessionRefs.map((r) => ({
+          id: r.id,
+          ref: r.physicalCashBox?.code,
+          status: r.status,
+          date: r.openedAt.toISOString(),
+        })),
+      });
+    }
+    if (pendingPaymentRefs.length > 0) {
+      blockerList.push({
+        code: "PENDING_PAYMENT_ORDER",
+        label: "Hay órdenes del día sin cobrar (PENDING_PAYMENT)",
+        count: pendingPaymentRefs.length,
+        references: pendingPaymentRefs.map((r) => ({
+          id: r.id,
+          ref: r.orderNumber,
+          status: r.status,
+          date: r.createdAt.toISOString(),
+        })),
+      });
+    }
+
+    if (blockerList.length > 0) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: day.branchId,
+          module: "operations",
+          action: "OPERATIONAL_DAY_REVIEW_BLOCKED",
+          entityType: "OperationalDay",
+          entityId: day.id,
+          metadataJson: toJsonValue({ blockers: blockerList }),
+        },
+      });
+      const err = new Error("OPERATIONAL_DAY_REVIEW_HAS_BLOCKERS");
+      (err as unknown as { blockers: OperationalDayBlocker[] }).blockers = blockerList;
+      throw err;
     }
 
     const approved = await tx.operationalDay.update({
@@ -540,7 +632,7 @@ export async function approveOperationalDayReview(input: { id: string; actorUser
         action: "OPERATIONAL_DAY_MASTER_APPROVED",
         entityType: "OperationalDay",
         entityId: day.id,
-        metadataJson: toJsonValue({ summary, blockers }),
+        metadataJson: toJsonValue({ summary }),
       },
     });
 

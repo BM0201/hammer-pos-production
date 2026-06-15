@@ -15,7 +15,7 @@ export type EffectivePricing = {
   lastPurchaseCost: Prisma.Decimal | null;
   effectiveCost: Prisma.Decimal | null;
   priceSource: "BRANCH" | "STANDARD";
-  costSource: "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
+  costSource: "BRANCH" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
 };
 
 type ProductWithOptionalBranchPricing = {
@@ -107,16 +107,28 @@ function resolveEffectivePricing(input: {
   weightedAverageCost: Prisma.Decimal | null;
 }): EffectivePricing {
   const effectivePrice = input.branchPrice ?? input.standardSalePrice;
-  const effectiveCost = input.averageCost ?? input.globalCost ?? input.lastPurchaseCost ?? input.weightedAverageCost ?? null;
-  const costSource = input.averageCost !== null && input.averageCost !== undefined
-    ? "GLOBAL_AVERAGE"
-    : input.globalCost !== null && input.globalCost !== undefined
-      ? "GLOBAL"
-      : input.lastPurchaseCost !== null && input.lastPurchaseCost !== undefined
-        ? "LAST_PURCHASE"
-        : input.weightedAverageCost !== null
-          ? "WAC_ESTIMATE"
-          : "NONE";
+
+  // Prioridad de costo: branchCost > averageCost > globalCost > lastPurchaseCost > WAC > null.
+  // branchCost permite que cada sucursal registre su propio costo de adquisición
+  // (p.ej. proveedor local diferente), lo que produce snapshots de margen correctos.
+  const effectiveCost = input.branchCost
+    ?? input.averageCost
+    ?? input.globalCost
+    ?? input.lastPurchaseCost
+    ?? input.weightedAverageCost
+    ?? null;
+
+  const costSource: EffectivePricing["costSource"] = input.branchCost !== null && input.branchCost !== undefined
+    ? "BRANCH"
+    : input.averageCost !== null && input.averageCost !== undefined
+      ? "GLOBAL_AVERAGE"
+      : input.globalCost !== null && input.globalCost !== undefined
+        ? "GLOBAL"
+        : input.lastPurchaseCost !== null && input.lastPurchaseCost !== undefined
+          ? "LAST_PURCHASE"
+          : input.weightedAverageCost !== null
+            ? "WAC_ESTIMATE"
+            : "NONE";
 
   return {
     productId: input.productId,

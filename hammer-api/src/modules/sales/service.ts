@@ -1097,13 +1097,181 @@ export async function listSaleOrdersForManagement(params: {
 }
 
 /**
+ * Core transaccional de la anulación de orden. Acepta un TransactionClient
+ * para poder ser llamado tanto desde cancelSaleOrder (tx propia) como desde
+ * executeSaleCancellation (tx única que engloba todo el flujo de anulación).
+ *
+ * No abre transacción. El caller es responsable de proveer `tx`.
+ */
+export async function cancelSaleOrderTx(
+  tx: Prisma.TransactionClient,
+  input: { orderId: string; actorUserId: string; reason: string },
+) {
+  const order = await tx.saleOrder.findUnique({
+    where: { id: input.orderId },
+    include: {
+      lines: true,
+      payments: true,
+      branch: { select: { id: true, code: true, name: true } },
+    },
+  });
+  if (!order) throw new Error("NOT_FOUND");
+  if (order.status === SaleOrderStatus.CANCELLED) {
+    throw new Error("INVALID_INPUT: La orden ya está anulada.");
+  }
+  if (!isSaleOrderCancellable(order.status)) {
+    throw new Error(`INVALID_INPUT: No se puede anular una orden en estado ${order.status}.`);
+  }
+
+  // ── 1) Reversión de inventario ───────────────────────────────────────
+  const saleOutMovements = await tx.inventoryMovement.findMany({
+    where: { referenceId: order.id, movementType: InventoryMovementType.SALE_OUT },
+  });
+  const alreadyReversed = await tx.inventoryMovement.count({
+    where: {
+      referenceId: order.id,
+      movementType: InventoryMovementType.RETURN_IN,
+      referenceType: "SALE_CANCELLATION",
+    },
+  });
+
+  const inventoryReversals: { movementId: string; productId: string; quantity: number }[] = [];
+  if (alreadyReversed === 0) {
+    for (const mv of saleOutMovements) {
+      const qty = Number(mv.quantity);
+      const cost = Number(mv.unitCost);
+      if (qty <= 0) continue;
+
+      if (cost > 0) {
+        const res = await createInventoryMovementTx(tx, {
+          actorUserId: input.actorUserId,
+          branchId: mv.branchId,
+          productId: mv.productId,
+          movementType: InventoryMovementType.RETURN_IN,
+          quantity: qty,
+          unitCost: cost,
+          referenceType: "SALE_CANCELLATION",
+          referenceId: order.id,
+          notes: `Reversión por anulación de orden ${order.orderNumber}`,
+        });
+        inventoryReversals.push({ movementId: res.movement.id, productId: mv.productId, quantity: qty });
+      } else {
+        // Costo cero: restauramos cantidad sin alterar WAC.
+        const createdMv = await tx.inventoryMovement.create({
+          data: {
+            branchId: mv.branchId,
+            productId: mv.productId,
+            movementType: InventoryMovementType.RETURN_IN,
+            quantity: mv.quantity,
+            unitCost: mv.unitCost,
+            referenceType: "SALE_CANCELLATION",
+            referenceId: order.id,
+            notes: `Reversión (costo 0) por anulación de orden ${order.orderNumber}`,
+          },
+        });
+        const bal = await tx.inventoryBalance.findUnique({
+          where: { branchId_productId: { branchId: mv.branchId, productId: mv.productId } },
+        });
+        if (bal) {
+          const newQty = bal.quantityOnHand.add(mv.quantity);
+          await tx.inventoryBalance.update({
+            where: { id: bal.id },
+            data: { quantityOnHand: newQty, inventoryValue: newQty.mul(bal.weightedAverageCost) },
+          });
+        } else {
+          await tx.inventoryBalance.create({
+            data: {
+              branchId: mv.branchId,
+              productId: mv.productId,
+              quantityOnHand: mv.quantity,
+              weightedAverageCost: 0,
+              inventoryValue: 0,
+            },
+          });
+        }
+        inventoryReversals.push({ movementId: createdMv.id, productId: mv.productId, quantity: qty });
+      }
+    }
+  }
+
+  // ── 2) Anulación de pagos POSTED ─────────────────────────────────────
+  const voidedPayments: string[] = [];
+  const cashSessionIds = new Set<string>();
+  const operationalDayIds = new Set<string>();
+  for (const p of order.payments) {
+    if (p.status === PaymentStatus.POSTED) {
+      await tx.payment.update({ where: { id: p.id }, data: { status: PaymentStatus.VOIDED } });
+      voidedPayments.push(p.id);
+      cashSessionIds.add(p.cashSessionId);
+    }
+  }
+  for (const cashSessionId of cashSessionIds) {
+    await syncCashSessionSnapshotTx(tx, cashSessionId);
+  }
+  if (order.payments.length > 0) {
+    const sessions = await tx.cashSession.findMany({
+      where: { id: { in: order.payments.map((p) => p.cashSessionId) } },
+      select: { operationalDayId: true },
+    });
+    for (const s of sessions) if (s.operationalDayId) operationalDayIds.add(s.operationalDayId);
+  }
+
+  // ── 3) Cambio de estado a CANCELLED ──────────────────────────────────
+  const cancellationNote = `[ANULADA ${new Date().toISOString()}] ${input.reason}`;
+  const updatedOrder = await tx.saleOrder.update({
+    where: { id: order.id },
+    data: {
+      status: SaleOrderStatus.CANCELLED,
+      notes: order.notes ? `${order.notes}\n${cancellationNote}` : cancellationNote,
+    },
+  });
+
+  // ── 4) Refrescar resumen del día operativo ───────────────────────────
+  for (const dayId of operationalDayIds) {
+    await refreshOperationalDaySummaryTx(tx, dayId);
+  }
+
+  // ── 5) Auditoría ─────────────────────────────────────────────────────
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: order.branchId,
+      module: "sales",
+      action: SALE_AUDIT_EVENTS.ORDER_CANCELLED,
+      entityType: "SaleOrder",
+      entityId: order.id,
+      metadataJson: {
+        orderNumber: order.orderNumber,
+        branchId: order.branchId,
+        branchCode: order.branch.code,
+        previousStatus: order.status,
+        newStatus: SaleOrderStatus.CANCELLED,
+        grandTotal: order.grandTotal.toString(),
+        reason: input.reason,
+        voidedPayments,
+        voidedPaymentsCount: voidedPayments.length,
+        inventoryReversalsCount: inventoryReversals.length,
+        inventoryReversals,
+        cancelledByUserId: input.actorUserId,
+      },
+    },
+  });
+
+  return {
+    id: updatedOrder.id,
+    orderNumber: updatedOrder.orderNumber,
+    status: updatedOrder.status,
+    previousStatus: order.status,
+    reason: input.reason,
+    voidedPaymentsCount: voidedPayments.length,
+    inventoryReversalsCount: inventoryReversals.length,
+  };
+}
+
+/**
  * Anula (CANCELLED) una orden/factura de venta. Operación reservada al rol
- * master/admin (validado en el endpoint). En una sola transacción:
- *   1. Revierte el inventario consumido (movimientos SALE_OUT → RETURN_IN).
- *   2. Anula los pagos POSTED asociados (status → VOIDED).
- *   3. Cambia el estado de la orden a CANCELLED y registra el motivo en notas.
- *   4. Refresca el resumen del día operativo de las cajas afectadas.
- *   5. Registra el evento de auditoría (quién, cuándo, por qué).
+ * master/admin (validado en el endpoint). Wrapper público que abre su propia
+ * transacción y delega en cancelSaleOrderTx.
  */
 export async function cancelSaleOrder(input: {
   orderId: string;
@@ -1114,172 +1282,10 @@ export async function cancelSaleOrder(input: {
   if (reason.length < 3) {
     throw new Error("INVALID_INPUT: Debe indicar un motivo de anulación (mínimo 3 caracteres).");
   }
-
-  return prisma.$transaction(async (tx) => {
-    const order = await tx.saleOrder.findUnique({
-      where: { id: input.orderId },
-      include: {
-        lines: true,
-        payments: true,
-        branch: { select: { id: true, code: true, name: true } },
-      },
-    });
-    if (!order) throw new Error("NOT_FOUND");
-    if (order.status === SaleOrderStatus.CANCELLED) {
-      throw new Error("INVALID_INPUT: La orden ya está anulada.");
-    }
-    if (!isSaleOrderCancellable(order.status)) {
-      throw new Error(`INVALID_INPUT: No se puede anular una orden en estado ${order.status}.`);
-    }
-
-    // ── 1) Reversión de inventario ───────────────────────────────────────
-    // Buscamos los movimientos de salida (SALE_OUT) generados por esta orden.
-    const saleOutMovements = await tx.inventoryMovement.findMany({
-      where: { referenceId: order.id, movementType: InventoryMovementType.SALE_OUT },
-    });
-    // Evitamos doble reversión si ya se anuló previamente (idempotencia defensiva).
-    const alreadyReversed = await tx.inventoryMovement.count({
-      where: {
-        referenceId: order.id,
-        movementType: InventoryMovementType.RETURN_IN,
-        referenceType: "SALE_CANCELLATION",
-      },
-    });
-
-    const inventoryReversals: { movementId: string; productId: string; quantity: number }[] = [];
-    if (alreadyReversed === 0) {
-      for (const mv of saleOutMovements) {
-        const qty = Number(mv.quantity);
-        const cost = Number(mv.unitCost);
-        if (qty <= 0) continue;
-
-        if (cost > 0) {
-          // Caso normal: usamos el motor de inventario (recalcula WAC).
-          const res = await createInventoryMovementTx(tx, {
-            actorUserId: input.actorUserId,
-            branchId: mv.branchId,
-            productId: mv.productId,
-            movementType: InventoryMovementType.RETURN_IN,
-            quantity: qty,
-            unitCost: cost,
-            referenceType: "SALE_CANCELLATION",
-            referenceId: order.id,
-            notes: `Reversión por anulación de orden ${order.orderNumber}`,
-          });
-          inventoryReversals.push({ movementId: res.movement.id, productId: mv.productId, quantity: qty });
-        } else {
-          // Costo cero: el motor WAC rechaza ingresos con costo 0, así que
-          // restauramos la cantidad directamente sin alterar el costo promedio.
-          const createdMv = await tx.inventoryMovement.create({
-            data: {
-              branchId: mv.branchId,
-              productId: mv.productId,
-              movementType: InventoryMovementType.RETURN_IN,
-              quantity: mv.quantity,
-              unitCost: mv.unitCost,
-              referenceType: "SALE_CANCELLATION",
-              referenceId: order.id,
-              notes: `Reversión (costo 0) por anulación de orden ${order.orderNumber}`,
-            },
-          });
-          const bal = await tx.inventoryBalance.findUnique({
-            where: { branchId_productId: { branchId: mv.branchId, productId: mv.productId } },
-          });
-          if (bal) {
-            const newQty = bal.quantityOnHand.add(mv.quantity);
-            await tx.inventoryBalance.update({
-              where: { id: bal.id },
-              data: { quantityOnHand: newQty, inventoryValue: newQty.mul(bal.weightedAverageCost) },
-            });
-          } else {
-            await tx.inventoryBalance.create({
-              data: {
-                branchId: mv.branchId,
-                productId: mv.productId,
-                quantityOnHand: mv.quantity,
-                weightedAverageCost: 0,
-                inventoryValue: 0,
-              },
-            });
-          }
-          inventoryReversals.push({ movementId: createdMv.id, productId: mv.productId, quantity: qty });
-        }
-      }
-    }
-
-    // ── 2) Anulación de pagos POSTED ─────────────────────────────────────
-    const voidedPayments: string[] = [];
-    const cashSessionIds = new Set<string>();
-    const operationalDayIds = new Set<string>();
-    for (const p of order.payments) {
-      if (p.status === PaymentStatus.POSTED) {
-        await tx.payment.update({ where: { id: p.id }, data: { status: PaymentStatus.VOIDED } });
-        voidedPayments.push(p.id);
-        cashSessionIds.add(p.cashSessionId);
-      }
-    }
-    for (const cashSessionId of cashSessionIds) {
-      await syncCashSessionSnapshotTx(tx, cashSessionId);
-    }
-    if (order.payments.length > 0) {
-      const sessions = await tx.cashSession.findMany({
-        where: { id: { in: order.payments.map((p) => p.cashSessionId) } },
-        select: { operationalDayId: true },
-      });
-      for (const s of sessions) if (s.operationalDayId) operationalDayIds.add(s.operationalDayId);
-    }
-
-    // ── 3) Cambio de estado a CANCELLED + registro del motivo ────────────
-    const cancellationNote = `[ANULADA ${new Date().toISOString()}] ${reason}`;
-    const updatedOrder = await tx.saleOrder.update({
-      where: { id: order.id },
-      data: {
-        status: SaleOrderStatus.CANCELLED,
-        notes: order.notes ? `${order.notes}\n${cancellationNote}` : cancellationNote,
-      },
-    });
-
-    // ── 4) Refrescar resumen del día operativo de cajas afectadas ────────
-    for (const dayId of operationalDayIds) {
-      await refreshOperationalDaySummaryTx(tx, dayId);
-    }
-
-    // ── 5) Auditoría (atómica con la transacción) ────────────────────────
-    await tx.auditLog.create({
-      data: {
-        actorUserId: input.actorUserId,
-        branchId: order.branchId,
-        module: "sales",
-        action: SALE_AUDIT_EVENTS.ORDER_CANCELLED,
-        entityType: "SaleOrder",
-        entityId: order.id,
-        metadataJson: {
-          orderNumber: order.orderNumber,
-          branchId: order.branchId,
-          branchCode: order.branch.code,
-          previousStatus: order.status,
-          newStatus: SaleOrderStatus.CANCELLED,
-          grandTotal: order.grandTotal.toString(),
-          reason,
-          voidedPayments,
-          voidedPaymentsCount: voidedPayments.length,
-          inventoryReversalsCount: inventoryReversals.length,
-          inventoryReversals,
-          cancelledByUserId: input.actorUserId,
-        },
-      },
-    });
-
-    return {
-      id: updatedOrder.id,
-      orderNumber: updatedOrder.orderNumber,
-      status: updatedOrder.status,
-      previousStatus: order.status,
-      reason,
-      voidedPaymentsCount: voidedPayments.length,
-      inventoryReversalsCount: inventoryReversals.length,
-    };
-  }, { timeout: 20000 });
+  return prisma.$transaction(
+    (tx) => cancelSaleOrderTx(tx, { ...input, reason }),
+    { timeout: 20000 },
+  );
 }
 
 /**
