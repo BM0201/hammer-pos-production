@@ -463,6 +463,91 @@ export async function closeOperationalDay(input: {
   });
 }
 
+export async function approveOperationalDayReview(input: { id: string; actorUserId: string }) {
+  return prisma.$transaction(async (tx) => {
+    const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
+    if (day.approvedAt) throw new Error("OPERATIONAL_DAY_ALREADY_APPROVED");
+    if (day.status !== OperationalDayStatus.CLOSED) throw new Error("OPERATIONAL_DAY_NOT_CLOSED");
+
+    const summary = await calculateOperationalSummaryTx(tx, day);
+    const [
+      pendingReturns,
+      pendingCancellations,
+      pendingTransports,
+      openOrUnreviewedSessions,
+      pendingPayments,
+    ] = await Promise.all([
+      tx.saleReturn.count({
+        where: {
+          branchId: day.branchId,
+          status: { in: ["REQUESTED", "APPROVED"] },
+        },
+      }),
+      tx.saleCancellation.count({
+        where: {
+          branchId: day.branchId,
+          status: { in: ["REQUESTED", "APPROVED"] },
+        },
+      }),
+      tx.transportService.count({
+        where: {
+          branchId: day.branchId,
+          status: { in: ["PENDING", "IN_TRANSIT"] },
+        },
+      }),
+      tx.cashSession.count({
+        where: {
+          operationalDayId: day.id,
+          OR: [
+            { status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] } },
+            { status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW, requiresReview: true },
+          ],
+        },
+      }),
+      tx.saleOrder.count({
+        where: {
+          branchId: day.branchId,
+          status: SaleOrderStatus.PENDING_PAYMENT,
+        },
+      }),
+    ]);
+
+    const blockers = {
+      pendingReturns,
+      pendingCancellations,
+      pendingTransports,
+      openOrUnreviewedSessions,
+      pendingPayments,
+    };
+    if (Object.values(blockers).some((count) => count > 0)) {
+      throw new Error("OPERATIONAL_DAY_REVIEW_HAS_BLOCKERS");
+    }
+
+    const approved = await tx.operationalDay.update({
+      where: { id: day.id },
+      data: {
+        approvedByMasterId: input.actorUserId,
+        approvedAt: new Date(),
+        summaryJson: toJsonValue(summary),
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: day.branchId,
+        module: "operations",
+        action: "OPERATIONAL_DAY_MASTER_APPROVED",
+        entityType: "OperationalDay",
+        entityId: day.id,
+        metadataJson: toJsonValue({ summary, blockers }),
+      },
+    });
+
+    return approved;
+  });
+}
+
 export async function cancelOperationalDay(input: { id: string; actorUserId: string; note: string; override?: boolean }) {
   return prisma.$transaction(async (tx) => {
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });

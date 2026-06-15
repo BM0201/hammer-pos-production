@@ -131,6 +131,7 @@ enum InventoryMovementType {
   SALE_OUT
   RETURN_IN
   RETURN_OUT
+  RETURN_IN_DAMAGED
   ADJUSTMENT_IN
   ADJUSTMENT_OUT
   TRANSFER_OUT
@@ -206,6 +207,77 @@ enum ManualInvoiceStatus {
   CANCELLED
 }
 
+enum SaleCancellationStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  EXECUTED
+  CANCELLED
+}
+
+enum SaleReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  EXECUTED
+  CANCELLED
+}
+
+enum SaleReturnType {
+  PARTIAL
+  TOTAL
+}
+
+enum ReturnedItemCondition {
+  GOOD
+  DAMAGED
+  NOT_RETURNED
+}
+
+enum ReturnInventoryDestination {
+  SELLABLE
+  DAMAGED
+  NONE
+}
+
+enum RefundMethod {
+  CASH
+  CARD
+  TRANSFER
+  CREDIT_NOTE
+  MIXED
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  POSTED
+  REJECTED
+  CANCELLED
+}
+
+enum CreditNoteStatus {
+  DRAFT
+  APPROVED
+  AVAILABLE
+  PARTIALLY_USED
+  USED
+  VOIDED
+  EXPIRED
+}
+
+enum CustomerRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  BLOCKED
+}
+
+enum InventoryCondition {
+  SELLABLE
+  DAMAGED
+}
+
 enum PrinterMode {
   BROWSER_PRINT
   QZ_TRAY
@@ -240,8 +312,12 @@ model Branch {
   customerScopes              CustomerBranchScope[]
   creditProfiles              CustomerCreditProfile[]
   inventoryBalances           InventoryBalance[]
+  inventoryConditionBalances  InventoryConditionBalance[]
   inventoryMovements          InventoryMovement[]
   saleOrders                  SaleOrder[]
+  saleCancellations           SaleCancellation[]
+  saleReturns                 SaleReturn[]
+  refunds                     Refund[]
   dispatchTickets             DispatchTicket[]         @relation("BranchDispatchTickets")
   approvalRequests            ApprovalRequest[]        @relation("BranchApprovalRequests")
   auditLogs                   AuditLog[]               @relation("BranchAuditLogs")
@@ -299,7 +375,16 @@ model User {
   approvedCashMovements      CashMovement[]            @relation("CashMovementApprovedBy")
   openedOperationalDays      OperationalDay[]         @relation("OperationalDayOpenedBy")
   closedOperationalDays      OperationalDay[]         @relation("OperationalDayClosedBy")
+  approvedOperationalDays    OperationalDay[]         @relation("OperationalDayApprovedBy")
   createdOrders              SaleOrder[]              @relation("SaleOrderCreatedBy")
+  requestedSaleCancellations SaleCancellation[]       @relation("SaleCancellationRequestedBy")
+  approvedSaleCancellations  SaleCancellation[]       @relation("SaleCancellationApprovedBy")
+  requestedSaleReturns       SaleReturn[]             @relation("SaleReturnRequestedBy")
+  approvedSaleReturns        SaleReturn[]             @relation("SaleReturnApprovedBy")
+  postedRefunds              Refund[]                 @relation("RefundPostedBy")
+  approvedRefunds            Refund[]                 @relation("RefundApprovedBy")
+  createdCreditNotes         CreditNote[]             @relation("CreditNoteCreatedBy")
+  approvedCreditNotes        CreditNote[]             @relation("CreditNoteApprovedBy")
   payments                   Payment[]
   preparedDispatchTickets    DispatchTicket[]         @relation("DispatchPreparedBy")
   dispatchTickets            DispatchTicket[]         @relation("DispatchProcessedBy")
@@ -425,6 +510,7 @@ model CashSession {
   payments        Payment[]
   operators       CashSessionOperator[]
   cashMovements   CashMovement[]
+  refunds         Refund[]
 
   @@index([physicalCashBoxId, status])
   @@index([operationalDayId])
@@ -476,8 +562,10 @@ model OperationalDay {
   status                       OperationalDayStatus @default(OPEN)
   openedByUserId               String
   closedByUserId               String?
+  approvedByMasterId           String?
   openedAt                     DateTime             @default(now())
   closedAt                     DateTime?
+  approvedAt                   DateTime?
   salesTotal                   Decimal              @default(0)
   paidOrdersTotal              Decimal              @default(0)
   pendingPaymentTotal          Decimal              @default(0)
@@ -497,12 +585,16 @@ model OperationalDay {
   branch       Branch        @relation(fields: [branchId], references: [id])
   openedBy     User          @relation("OperationalDayOpenedBy", fields: [openedByUserId], references: [id])
   closedBy     User?         @relation("OperationalDayClosedBy", fields: [closedByUserId], references: [id])
+  approvedBy   User?         @relation("OperationalDayApprovedBy", fields: [approvedByMasterId], references: [id])
   cashSessions CashSession[]
+  saleCancellations SaleCancellation[]
+  saleReturns       SaleReturn[]
 
   @@unique([branchId, businessDate])
   @@index([branchId, status])
   @@index([businessDate])
   @@index([status])
+  @@index([approvedByMasterId])
 }
 
 model Customer {
@@ -520,7 +612,11 @@ model Customer {
 
   branchScopes   CustomerBranchScope[]
   creditProfiles CustomerCreditProfile[]
+  creditScore    CustomerCreditScore?
   saleOrders     SaleOrder[]
+  saleReturns    SaleReturn[]
+  refunds        Refund[]
+  creditNotes    CreditNote[]
 }
 
 model CustomerBranchScope {
@@ -630,8 +726,10 @@ model Product {
 
   category               Category                  @relation(fields: [categoryId], references: [id])
   inventoryBalances      InventoryBalance[]
+  inventoryConditionBalances InventoryConditionBalance[]
   inventoryMovements     InventoryMovement[]
   orderLines             SaleOrderLine[]
+  saleReturnItems        SaleReturnItem[]
   transferLines          TransferLine[]
   internalFreightLines   InternalFreightTripLine[]
   purchaseOrderLines     PurchaseOrderLine[]
@@ -856,6 +954,22 @@ model InventoryBalance {
   @@unique([branchId, productId])
 }
 
+model InventoryConditionBalance {
+  id        String             @id @default(cuid())
+  branchId  String
+  productId String
+  condition InventoryCondition
+  quantity  Decimal            @default(0)
+  updatedAt DateTime           @updatedAt
+
+  branch  Branch  @relation(fields: [branchId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([branchId, productId, condition])
+  @@index([branchId, condition])
+  @@index([productId, condition])
+}
+
 model InventoryMovement {
   id                       String                @id @default(cuid())
   branchId                 String
@@ -1018,6 +1132,10 @@ model SaleOrder {
   manualInvoiceRegisteredBy User?              @relation("ManualInvoiceRegisteredBy", fields: [manualInvoiceRegisteredById], references: [id])
   lines                     SaleOrderLine[]
   payments                  Payment[]
+  cancellations             SaleCancellation[] @relation("SaleCancellationOriginalOrder")
+  replacementForCancellations SaleCancellation[] @relation("SaleCancellationReplacementOrder")
+  returns                   SaleReturn[]
+  creditNotes               CreditNote[]
   dispatchTickets           DispatchTicket[]
   transportServices         TransportService[]
   documentPrintLogs         DocumentPrintLog[]
@@ -1046,6 +1164,7 @@ model SaleOrderLine {
 
   saleOrder SaleOrder @relation(fields: [saleOrderId], references: [id])
   product   Product   @relation(fields: [productId], references: [id])
+  returnItems SaleReturnItem[]
 
   @@unique([saleOrderId, productId])
   @@index([saleOrderId])
@@ -1071,6 +1190,7 @@ model Payment {
   cashSession CashSession @relation(fields: [cashSessionId], references: [id])
   receivedBy  User        @relation(fields: [receivedByUserId], references: [id])
   tenders     PaymentTender[]
+  refunds     Refund[]
 
   @@index([cashSessionId, paidAt])
 }
@@ -1130,9 +1250,187 @@ model ApprovalRequest {
   branch      Branch @relation("BranchApprovalRequests", fields: [branchId], references: [id])
   requestedBy User   @relation("ApprovalRequestedBy", fields: [requestedByUserId], references: [id])
   resolvedBy  User?  @relation("ApprovalResolvedBy", fields: [resolvedByUserId], references: [id])
+  saleCancellation SaleCancellation?
+  saleReturn       SaleReturn?
 
   @@index([branchId, status, type])
   @@index([referenceType, referenceId])
+}
+
+model SaleCancellation {
+  id                     String                 @id @default(cuid())
+  saleOrderId            String
+  branchId               String
+  operationalDayId       String?
+  approvalRequestId      String?                @unique
+  requestedByUserId      String
+  approvedByMasterId     String?
+  status                 SaleCancellationStatus @default(REQUESTED)
+  reason                 String
+  hadTransport           Boolean                @default(false)
+  transportWasExecuted   Boolean                @default(false)
+  replacementSaleOrderId String?
+  createdAt              DateTime               @default(now())
+  approvedAt             DateTime?
+  executedAt             DateTime?
+
+  saleOrder            SaleOrder        @relation("SaleCancellationOriginalOrder", fields: [saleOrderId], references: [id])
+  branch               Branch           @relation(fields: [branchId], references: [id])
+  operationalDay       OperationalDay?  @relation(fields: [operationalDayId], references: [id])
+  approvalRequest      ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
+  requestedBy          User             @relation("SaleCancellationRequestedBy", fields: [requestedByUserId], references: [id])
+  approvedByMaster     User?            @relation("SaleCancellationApprovedBy", fields: [approvedByMasterId], references: [id])
+  replacementSaleOrder SaleOrder?       @relation("SaleCancellationReplacementOrder", fields: [replacementSaleOrderId], references: [id])
+  refunds              Refund[]
+
+  @@index([saleOrderId])
+  @@index([branchId, status])
+  @@index([operationalDayId])
+  @@index([requestedByUserId])
+  @@index([approvedByMasterId])
+}
+
+model SaleReturn {
+  id                          String           @id @default(cuid())
+  returnNumber                String           @unique
+  saleOrderId                 String
+  branchId                    String
+  customerId                  String?
+  operationalDayId            String?
+  approvalRequestId           String?          @unique
+  requestedByUserId           String
+  approvedByMasterId          String?
+  status                      SaleReturnStatus @default(REQUESTED)
+  returnType                  SaleReturnType
+  reason                      String
+  affectsClosedOperationalDay Boolean          @default(false)
+  requiresMasterApproval      Boolean          @default(true)
+  createdAt                   DateTime         @default(now())
+  approvedAt                  DateTime?
+  executedAt                  DateTime?
+
+  saleOrder        SaleOrder        @relation(fields: [saleOrderId], references: [id])
+  branch           Branch           @relation(fields: [branchId], references: [id])
+  customer         Customer?        @relation(fields: [customerId], references: [id])
+  operationalDay   OperationalDay?  @relation(fields: [operationalDayId], references: [id])
+  approvalRequest  ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
+  requestedBy      User             @relation("SaleReturnRequestedBy", fields: [requestedByUserId], references: [id])
+  approvedByMaster User?            @relation("SaleReturnApprovedBy", fields: [approvedByMasterId], references: [id])
+  items            SaleReturnItem[]
+  refunds          Refund[]
+  creditNotes      CreditNote[]
+
+  @@index([saleOrderId])
+  @@index([branchId, status])
+  @@index([customerId])
+  @@index([operationalDayId])
+  @@index([requestedByUserId])
+  @@index([approvedByMasterId])
+}
+
+model SaleReturnItem {
+  id                   String                     @id @default(cuid())
+  saleReturnId         String
+  saleOrderLineId      String
+  productId            String
+  quantity             Decimal
+  unitPricePaid        Decimal
+  discountAllocated    Decimal                    @default(0)
+  refundableAmount     Decimal
+  condition            ReturnedItemCondition
+  inventoryDestination ReturnInventoryDestination
+  createdAt            DateTime                   @default(now())
+
+  saleReturn    SaleReturn    @relation(fields: [saleReturnId], references: [id], onDelete: Cascade)
+  saleOrderLine SaleOrderLine @relation(fields: [saleOrderLineId], references: [id])
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@index([saleReturnId])
+  @@index([saleOrderLineId])
+  @@index([productId])
+  @@index([condition, inventoryDestination])
+}
+
+model Refund {
+  id                 String       @id @default(cuid())
+  saleReturnId       String?
+  saleCancellationId String?
+  paymentId          String?
+  cashSessionId      String?
+  branchId           String
+  customerId         String?
+  method             RefundMethod
+  amount             Decimal
+  status             RefundStatus @default(REQUESTED)
+  requiresApproval   Boolean      @default(true)
+  postedByUserId     String?
+  approvedByMasterId String?
+  postedAt           DateTime?
+  createdAt          DateTime     @default(now())
+
+  saleReturn       SaleReturn?       @relation(fields: [saleReturnId], references: [id])
+  saleCancellation SaleCancellation? @relation(fields: [saleCancellationId], references: [id])
+  payment          Payment?          @relation(fields: [paymentId], references: [id])
+  cashSession      CashSession?      @relation(fields: [cashSessionId], references: [id])
+  branch           Branch            @relation(fields: [branchId], references: [id])
+  customer         Customer?         @relation(fields: [customerId], references: [id])
+  postedBy         User?             @relation("RefundPostedBy", fields: [postedByUserId], references: [id])
+  approvedByMaster User?             @relation("RefundApprovedBy", fields: [approvedByMasterId], references: [id])
+
+  @@index([saleReturnId])
+  @@index([saleCancellationId])
+  @@index([paymentId])
+  @@index([cashSessionId])
+  @@index([branchId, status])
+  @@index([customerId])
+}
+
+model CreditNote {
+  id                 String           @id @default(cuid())
+  customerId         String
+  saleOrderId        String?
+  saleReturnId       String?
+  amount             Decimal
+  availableAmount    Decimal
+  reason             String
+  status             CreditNoteStatus @default(DRAFT)
+  createdByUserId    String
+  approvedByMasterId String?
+  createdAt          DateTime         @default(now())
+  expiresAt          DateTime?
+
+  customer         Customer    @relation(fields: [customerId], references: [id])
+  saleOrder        SaleOrder?  @relation(fields: [saleOrderId], references: [id])
+  saleReturn       SaleReturn? @relation(fields: [saleReturnId], references: [id])
+  createdBy        User        @relation("CreditNoteCreatedBy", fields: [createdByUserId], references: [id])
+  approvedByMaster User?       @relation("CreditNoteApprovedBy", fields: [approvedByMasterId], references: [id])
+
+  @@index([customerId, status])
+  @@index([saleOrderId])
+  @@index([saleReturnId])
+  @@index([createdByUserId])
+  @@index([approvedByMasterId])
+}
+
+model CustomerCreditScore {
+  id                  String            @id @default(cuid())
+  customerId          String            @unique
+  score               Int               @default(0)
+  riskLevel           CustomerRiskLevel @default(MEDIUM)
+  totalPurchases      Decimal           @default(0)
+  totalReturns        Decimal           @default(0)
+  returnRate          Decimal           @default(0)
+  unpaidBalance       Decimal           @default(0)
+  latePaymentsCount   Int               @default(0)
+  creditNotesIssued   Int               @default(0)
+  manualInvoicesCount Int               @default(0)
+  lastReviewAt        DateTime?
+  updatedAt           DateTime          @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([riskLevel])
+  @@index([updatedAt])
 }
 
 model Transfer {
