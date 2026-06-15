@@ -187,8 +187,8 @@ export async function buildBranchRealtimeSalesSummary(
           amount: n(lastSale.amount),
           paidAt: lastSale.paidAt.toISOString(),
           method: lastSale.method,
-          cashierName: lastSale.receivedBy.fullName ?? lastSale.receivedBy.username,
-          sellerName: lastSale.saleOrder.createdBy.fullName ?? lastSale.saleOrder.createdBy.username,
+          cashierName: lastSale.receivedBy?.fullName ?? lastSale.receivedBy?.username ?? null,
+          sellerName: lastSale.saleOrder.createdBy?.fullName ?? lastSale.saleOrder.createdBy?.username ?? null,
         }
       : null,
     paymentsByMethod: paymentsByMethod.map((row) => ({

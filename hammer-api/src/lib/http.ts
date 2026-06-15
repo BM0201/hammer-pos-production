@@ -93,6 +93,26 @@ export function toHttpErrorResponse(error: unknown) {
       return errJson("VALIDATION_ERROR", "El producto no está activo.", 400);
     }
 
+    // Operational day errors
+    if (error.message === "OPERATIONAL_DAY_NOT_CLOSED") {
+      return errJson("CONFLICT", "El dia operativo no está cerrado. Debe cerrar el día antes de aprobarlo.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_ALREADY_APPROVED") {
+      return errJson("CONFLICT", "El dia operativo ya fue aprobado anteriormente.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_HAS_BLOCKERS" || error.message === "OPERATIONAL_DAY_HAS_HARD_BLOCKERS") {
+      return errJson("CONFLICT", "El dia operativo tiene pendientes que impiden el cierre.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_CLOSE_NOTE_REQUIRED") {
+      return errJson("VALIDATION_ERROR", "Se requiere una nota para cerrar con advertencias o forzar el cierre.", 400);
+    }
+    if (error.message === "OPERATIONAL_DAY_HAS_REAL_PAYMENTS") {
+      return errJson("CONFLICT", "El dia operativo tiene pagos reales y no puede cancelarse sin override.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_ALREADY_OPEN") {
+      return errJson("CONFLICT", "Ya existe un día operativo abierto para esta sucursal.", 409);
+    }
+
     // Cash session errors
     if (error.message === "CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW") {
       return errJson("CONFLICT", "La caja fue cerrada automaticamente por horario y requiere revision. Abra una nueva caja para continuar.", 409);

@@ -72,6 +72,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json(
       {
+        ok: true,
         data: {
           ventas30dias:         Number(ventas30dias._sum.amount ?? 0),
           ventas30diasCount:    ventas30dias._count._all,

@@ -24,6 +24,8 @@ export const cancelOperationalDaySchema = z.object({
 
 export const masterOperationalDaysSchema = z.object({
   date: z.string().date().optional(),
+  dateFrom: z.string().date().optional(),
+  dateTo: z.string().date().optional(),
   branchId: z.string().cuid().optional(),
   status: z.nativeEnum(OperationalDayStatus).optional(),
   hasIssues: z.coerce.boolean().optional(),

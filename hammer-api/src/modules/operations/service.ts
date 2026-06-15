@@ -667,11 +667,26 @@ export async function cancelOperationalDay(input: { id: string; actorUserId: str
   });
 }
 
-export async function listOperationalDays(filters: { date?: string; branchId?: string; status?: OperationalDayStatus; hasIssues?: boolean }) {
-  const businessDate = filters.date ? businessDateFromInput(filters.date) : undefined;
+export async function listOperationalDays(filters: { date?: string; dateFrom?: string; dateTo?: string; branchId?: string; status?: OperationalDayStatus; hasIssues?: boolean }) {
+  const businessDate  = filters.date     ? businessDateFromInput(filters.date)     : undefined;
+  const dateFromVal   = filters.dateFrom ? businessDateFromInput(filters.dateFrom) : undefined;
+  const dateToVal     = filters.dateTo   ? businessDateFromInput(filters.dateTo)   : undefined;
+
+  let businessDateFilter: { businessDate?: Date | { gte?: Date; lte?: Date } } = {};
+  if (businessDate) {
+    businessDateFilter = { businessDate };
+  } else if (dateFromVal || dateToVal) {
+    businessDateFilter = {
+      businessDate: {
+        ...(dateFromVal ? { gte: dateFromVal } : {}),
+        ...(dateToVal   ? { lte: dateToVal   } : {}),
+      },
+    };
+  }
+
   return prisma.operationalDay.findMany({
     where: {
-      ...(businessDate ? { businessDate } : {}),
+      ...businessDateFilter,
       ...(filters.branchId ? { branchId: filters.branchId } : {}),
       ...(filters.status ? { status: filters.status } : {}),
       ...(filters.hasIssues ? {
@@ -689,7 +704,7 @@ export async function listOperationalDays(filters: { date?: string; branchId?: s
       closedBy: { select: { id: true, username: true, fullName: true } },
     },
     orderBy: [{ businessDate: "desc" }, { openedAt: "desc" }],
-    take: 100,
+    take: 200,
   });
 }
 

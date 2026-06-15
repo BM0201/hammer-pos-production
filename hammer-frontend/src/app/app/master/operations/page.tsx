@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, CheckCircle2, AlertTriangle, Building2, TrendingUp, Activity } from "lucide-react";
+import { RefreshCw, CheckCircle2, AlertTriangle, Building2, TrendingUp, Activity, CalendarRange } from "lucide-react";
 import { OperationalDayPanel } from "@/components/operations/operational-day-panel";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
@@ -62,6 +62,11 @@ export default function MasterOperationsPage() {
   const [isRefreshing, setIsRefreshing]   = useState(false);
   const [approvingId, setApprovingId]     = useState<string | null>(null);
 
+  const today = new Date().toISOString().split("T")[0];
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const [dateFrom, setDateFrom] = useState(sevenDaysAgo);
+  const [dateTo, setDateTo]     = useState(today);
+
   const selectedBranch = useMemo(
     () => branches.find((b) => b.id === selectedBranchId) ?? null,
     [branches, selectedBranchId],
@@ -91,6 +96,8 @@ export default function MasterOperationsPage() {
     setIsRefreshing(true);
     const params = new URLSearchParams();
     if (selectedBranchId) params.set("branchId", selectedBranchId);
+    if (dateFrom) params.set("dateFrom", dateFrom);
+    if (dateTo)   params.set("dateTo",   dateTo);
     try {
       const response = await apiFetch(`/api/master/operations?${params.toString()}`);
       const raw = await response.json();
@@ -103,7 +110,7 @@ export default function MasterOperationsPage() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [selectedBranchId]);
+  }, [selectedBranchId, dateFrom, dateTo]);
 
   useEffect(() => {
     void loadDays();
@@ -176,24 +183,48 @@ export default function MasterOperationsPage() {
 
       {/* Filters */}
       <Card className="p-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            <Building2 className="text-[var(--color-text-muted)]" style={{ width: "1rem", height: "1rem" }} />
-            <span className="text-sm font-semibold text-[var(--color-text)]">Filtrar por sucursal</span>
+            <CalendarRange className="text-[var(--color-text-muted)]" style={{ width: "1rem", height: "1rem" }} />
+            <span className="text-sm font-semibold text-[var(--color-text)]">Filtros</span>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <select
-              className="hm-input rounded-lg text-sm"
-              value={selectedBranchId}
-              onChange={(e) => setSelectedBranchId(e.target.value)}
-            >
-              <option value="">Todas las sucursales</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>{b.code} — {b.name}</option>
-              ))}
-            </select>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="grid gap-1">
+              <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Desde</span>
+              <input
+                type="date"
+                className="hm-input rounded-lg text-sm"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Hasta</span>
+              <input
+                type="date"
+                className="hm-input rounded-lg text-sm"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide flex items-center gap-1">
+                <Building2 style={{ width: "0.75rem", height: "0.75rem" }} />
+                Sucursal
+              </span>
+              <select
+                className="hm-input rounded-lg text-sm"
+                value={selectedBranchId}
+                onChange={(e) => setSelectedBranchId(e.target.value)}
+              >
+                <option value="">Todas</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.code} — {b.name}</option>
+                ))}
+              </select>
+            </label>
             <Button variant="secondary" size="sm" loading={isRefreshing} onClick={loadDays} icon={<RefreshCw className="h-3.5 w-3.5" />}>
-              Actualizar
+              Aplicar
             </Button>
           </div>
         </div>
