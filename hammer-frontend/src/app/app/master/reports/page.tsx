@@ -1,25 +1,17 @@
 "use client";
 
 import { ReportsHub } from "@/components/reports/reports-hub";
+import { PageHeader } from "@/components/ui/page-header";
 
 export default function MasterReportsPage() {
   return (
-    <section className="space-y-6">
-      <div>
-        <div className="flex items-center gap-3 mb-1">
-          <div
-            className="h-8 w-1 rounded-full"
-            style={{
-              background: "linear-gradient(to bottom, var(--color-master-400), var(--color-master-600))",
-            }}
-          />
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-[var(--color-text)]">Reportes & KPIs</h1>
-            <p className="text-sm text-[var(--color-text-muted)]">Generación y exportación de reportes operativos</p>
-          </div>
-        </div>
-      </div>
-      <ReportsHub />
-    </section>
+    <div className="space-y-0">
+      <PageHeader
+        title="Reportes & KPIs"
+        description="Generación, vista previa y exportación de reportes operativos. Datos en tiempo real por sucursal."
+        breadcrumbs={[{ label: "Master", href: "/app/master" }, { label: "Reportes & KPIs" }]}
+      />
+      <ReportsHub masterMode />
+    </div>
   );
 }

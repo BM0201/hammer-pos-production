@@ -1,25 +1,30 @@
 "use client";
 
 import { ReportsHub } from "@/components/reports/reports-hub";
+import { PageHeader } from "@/components/ui/page-header";
+import { LoadingState } from "@/components/ui/loading-state";
+import { getActiveBranchId } from "@/lib/client/active-branch";
+import { useSession } from "@/lib/client/session";
 
 export default function BranchReportsPage() {
+  const sessionState = useSession();
+
+  if (sessionState.status === "loading") {
+    return <LoadingState message="Cargando..." />;
+  }
+
+  const branchId = sessionState.status === "authenticated"
+    ? getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId) ?? ""
+    : "";
+
   return (
-    <section className="space-y-6">
-      <div>
-        <div className="flex items-center gap-3 mb-1">
-          <div
-            className="h-8 w-1 rounded-full"
-            style={{
-              background: "linear-gradient(to bottom, var(--color-branch-admin-400), var(--color-branch-admin-600))",
-            }}
-          />
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-[var(--color-text)]">Reportes</h1>
-            <p className="text-sm text-[var(--color-text-muted)]">Generación y exportación de reportes operativos</p>
-          </div>
-        </div>
-      </div>
-      <ReportsHub />
-    </section>
+    <div className="space-y-0">
+      <PageHeader
+        title="Reportes"
+        description="Vista previa y exportación de reportes operativos de tu sucursal."
+        breadcrumbs={[{ label: "Sucursal", href: "/app/branch" }, { label: "Reportes" }]}
+      />
+      <ReportsHub defaultBranchId={branchId} />
+    </div>
   );
 }
