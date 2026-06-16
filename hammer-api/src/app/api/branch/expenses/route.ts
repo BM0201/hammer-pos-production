@@ -7,8 +7,23 @@ import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created, fail } from "@/lib/api/response";
 import { toApiErrorResponse } from "@/lib/api/errors";
 import { createOperatingExpense, listExpensesByBranch } from "@/modules/pricing/service";
+import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { EXPENSE_CATEGORIES } from "@/modules/pricing/validators";
+
+/** Returns year, month (1-based) and day in America/Managua timezone. */
+function getNicaraguaDateParts() {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Managua",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const [year, month, day] = formatter.format(new Date()).split("-").map(Number);
+  // Last day of the current month (day 0 of next month)
+  const lastDay = new Date(year, month, 0).getDate();
+  return { year, month, day, lastDay };
+}
 
 const createSchema = z.object({
   branchId: z.string().min(1),
@@ -34,6 +49,28 @@ export async function GET(req: NextRequest) {
     requireBranchCapability(session, branchId, CAPABILITIES.OPERATING_EXPENSE_VIEW);
 
     const expenses = await listExpensesByBranch(branchId);
+
+    // Payroll expenses are only visible on the 15th and the last day of the month
+    // (Nicaraguan quincena cycle). Once the PayrollRun for this month is POSTED
+    // (Master approved), payroll expenses are no longer surfaced here.
+    const hasPayroll = expenses.some((e) => e.category === "PAYROLL");
+    if (hasPayroll) {
+      const { year, month, day, lastDay } = getNicaraguaDateParts();
+      const isPayrollDay = day === 15 || day === lastDay;
+
+      if (!isPayrollDay) {
+        return ok(expenses.filter((e) => e.category !== "PAYROLL"));
+      }
+
+      const payrollRun = await prisma.payrollRun.findUnique({
+        where: { branchId_year_month: { branchId, year, month } },
+        select: { status: true },
+      });
+      if (payrollRun?.status === "POSTED") {
+        return ok(expenses.filter((e) => e.category !== "PAYROLL"));
+      }
+    }
+
     return ok(expenses);
   } catch (error) {
     return toApiErrorResponse(error);
