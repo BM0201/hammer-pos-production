@@ -3,6 +3,8 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { isMaster } from "@/modules/rbac/guards";
 import { openCashSessionSchema } from "@/modules/cash-session/validators";
 import { logCashSessionDenied, openCashSession } from "@/modules/cash-session/service";
+import { getCashAutoCloseConfig } from "@/modules/cash-session/auto-close-config";
+import { getCashAutoCloseDeadline } from "@/modules/cash-session/auto-close-service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -10,12 +12,16 @@ import { created, fail } from "@/lib/api/response";
 
 const CONFLICT_REASONS = new Set([
   "CASH_SESSION_ALREADY_OPEN",
+  "CASH_SESSION_RECONCILING",
+  "CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW",
   "CASH_SESSION_CASH_BOX_INVALID",
   "CASH_BOX_INACTIVE",
   "CASH_BOX_BRANCH_MISMATCH",
   "OPERATIONAL_DAY_NOT_OPEN",
   "OPERATIONAL_DAY_ALREADY_CLOSED",
+  "STALE_OPERATIONAL_DAY_OPEN",
   "OPERATIONAL_DAY_STALE",
+  "CASH_SESSION_AFTER_CLOSING_TIME",
 ]);
 
 export async function POST(request: Request) {
@@ -54,6 +60,30 @@ export async function POST(request: Request) {
         reason: "FORBIDDEN_BRANCH",
       });
       return fail("FORBIDDEN", "Forbidden", 403);
+    }
+
+    // Guard: block opening if the auto-close deadline for today has already passed.
+    // Prevents the UX failure where a user opens a session and the cron immediately
+    // sends it to AUTO_CLOSED_PENDING_REVIEW with no clear explanation.
+    if (!isMaster(session)) {
+      const autoCloseConfig = await getCashAutoCloseConfig();
+      if (autoCloseConfig.enabled) {
+        const deadline = getCashAutoCloseDeadline({ id: parsed.data.branchId }, new Date(), autoCloseConfig);
+        if (deadline.enabled && deadline.expired) {
+          await logCashSessionDenied({
+            actorUserId: session.userId,
+            branchId: parsed.data.branchId,
+            entityId: parsed.data.physicalCashBoxId,
+            reason: "CASH_SESSION_AFTER_CLOSING_TIME",
+            metadata: { closeTime: deadline.closeTime, timezone: deadline.timezone },
+          });
+          return fail(
+            "CASH_SESSION_AFTER_CLOSING_TIME",
+            `La hora de cierre operativo (${deadline.closeTime ?? "?"}) ya paso. No se puede abrir una nueva sesion de caja.`,
+            409,
+          );
+        }
+      }
     }
 
     const data = await openCashSession({

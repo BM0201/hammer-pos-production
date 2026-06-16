@@ -120,9 +120,27 @@ export async function openCashSession(input: {
       if (!cashBox.isActive) throw new Error("CASH_BOX_INACTIVE");
       const operationalDay = await ensureOpenOperationalDayTx(tx, input.branchId, input.actorUserId);
 
-      // FIX: Removed manual existingOpen findFirst check — rely solely on the
-      // unique constraint on activeSessionKey for atomicity. This eliminates the
-      // race condition where two concurrent requests could both pass the check.
+      // Block if the same physical box already has a non-OPEN blocking session.
+      // RECONCILING: activeSessionKey is null (no constraint), but the session is
+      //   mid-close and a new OPEN would corrupt the daily summary / dual-session.
+      // AUTO_CLOSED_PENDING_REVIEW: must be reviewed before the box can reopen.
+      const blockingSession = await tx.cashSession.findFirst({
+        where: {
+          physicalCashBoxId: input.physicalCashBoxId,
+          status: { in: [CashSessionStatus.RECONCILING, CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW] },
+        },
+        select: { id: true, status: true },
+      });
+      if (blockingSession) {
+        throw new Error(
+          blockingSession.status === CashSessionStatus.RECONCILING
+            ? "CASH_SESSION_RECONCILING"
+            : "CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW",
+        );
+      }
+
+      // Rely on the unique constraint on activeSessionKey for OPEN sessions.
+      // P2002 is caught below and re-thrown as CASH_SESSION_ALREADY_OPEN.
       const session = await tx.cashSession.create({
         data: {
           physicalCashBoxId: input.physicalCashBoxId,
@@ -374,16 +392,28 @@ export async function requestCloseCashSession(input: {
     // Orders from previous days with status PENDING_PAYMENT must not block
     // today's close — those belong to a past operational day.
     const { start, end } = getOperationalWindowForNow();
-    const unresolvedOrders = await tx.saleOrder.count({
+    const unresolvedOrderList = await tx.saleOrder.findMany({
       where: {
         branchId: session.physicalCashBox.branchId,
         status: SaleOrderStatus.PENDING_PAYMENT,
         createdAt: { gte: start, lt: end },
       },
+      select: {
+        id: true,
+        orderNumber: true,
+        grandTotal: true,
+        createdAt: true,
+        customer: { select: { displayName: true } },
+      },
+      take: 10,
+      orderBy: { createdAt: "asc" },
     });
 
-    if (unresolvedOrders > 0) {
-      throw new Error("CASH_SESSION_UNRESOLVED_ORDERS");
+    if (unresolvedOrderList.length > 0) {
+      const err = Object.assign(new Error("STALE_PENDING_PAYMENT_ORDERS"), {
+        pendingOrders: unresolvedOrderList,
+      });
+      throw err;
     }
 
     const pendingPayments = await tx.payment.count({
@@ -451,16 +481,28 @@ export async function closeCashSession(input: {
     }
 
     const { start: closeStart, end: closeEnd } = getOperationalWindowForNow();
-    const pendingOrders = await tx.saleOrder.count({
+    const pendingOrderList = await tx.saleOrder.findMany({
       where: {
         branchId: session.physicalCashBox.branchId,
         status: SaleOrderStatus.PENDING_PAYMENT,
         createdAt: { gte: closeStart, lt: closeEnd },
       },
+      select: {
+        id: true,
+        orderNumber: true,
+        grandTotal: true,
+        createdAt: true,
+        customer: { select: { displayName: true } },
+      },
+      take: 10,
+      orderBy: { createdAt: "asc" },
     });
 
-    if (pendingOrders > 0) {
-      throw new Error("CASH_SESSION_UNRESOLVED_ORDERS");
+    if (pendingOrderList.length > 0) {
+      const err = Object.assign(new Error("STALE_PENDING_PAYMENT_ORDERS"), {
+        pendingOrders: pendingOrderList,
+      });
+      throw err;
     }
 
     const pendingPayments = await tx.payment.count({

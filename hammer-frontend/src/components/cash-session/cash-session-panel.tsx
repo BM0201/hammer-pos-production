@@ -38,10 +38,16 @@ const SESSION_REASON_MESSAGES: Record<string, string> = {
   CASH_BOX_BRANCH_MISMATCH: "La caja no pertenece a esta sucursal.",
   CASH_SESSION_NOT_OPEN: "La sesión ya no está abierta.",
   CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW: "La caja fue cerrada automaticamente por horario y requiere revision. Abre una nueva caja para continuar.",
+  CASH_SESSION_RECONCILING: "La sesión de caja está en proceso de conciliación. Espera a que se complete antes de abrir una nueva sesión.",
+  CASH_SESSION_AFTER_CLOSING_TIME: "La hora de cierre operativo ya pasó. No se puede abrir una nueva sesión de caja hasta mañana.",
   OPERATIONAL_DAY_NOT_OPEN: "No hay dia operativo abierto para esta sucursal. Un administrador debe abrirlo antes de abrir caja.",
   OPERATIONAL_DAY_ALREADY_CLOSED: "El dia operativo de hoy ya fue cerrado. No se puede abrir caja hasta que un administrador inicie un nuevo dia operativo.",
   OPERATIONAL_DAY_STALE: "El dia operativo abierto pertenece a una fecha anterior y debe cerrarse antes de continuar. Contacta al administrador.",
+  STALE_OPERATIONAL_DAY_OPEN: "Hay un día operativo anterior que sigue abierto. Un administrador Master debe ejecutar limpieza operativa antes de continuar.",
+  OPERATIONAL_DAY_REOPEN_REQUIRED: "El día operativo fue cerrado. Un administrador Master debe reabrirlo para continuar operaciones.",
+  NO_ACTIVE_CASH_BOX_FOR_BRANCH: "La sucursal no tiene caja física activa configurada. Contacta al administrador.",
   CASH_SESSION_UNRESOLVED_ORDERS: "No puedes cerrar caja con órdenes pendientes de pago o despacho.",
+  STALE_PENDING_PAYMENT_ORDERS: "Hay órdenes con pago pendiente de este día que deben resolverse antes de cerrar la caja.",
   CASH_SESSION_NOT_RECONCILING: "La sesión debe estar en conciliación antes de cerrarla.",
   CASH_SESSION_NOT_PENDING_AUTO_REVIEW: "La sesion ya no esta pendiente de revision automatica.",
   APPROVAL_REQUESTED: "Solicitud enviada. Un aprobador debe validar la diferencia antes de cerrar la caja.",
@@ -88,7 +94,10 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
   const [showReviewForm, setShowReviewForm] = useState(false);
   const isReconciling = Boolean(reconcilingSessionId);
 
-  const canOpen = useMemo(() => !!selectedCashBoxId && !activeSession && !reconcilingSessionId, [selectedCashBoxId, activeSession, reconcilingSessionId]);
+  const canOpen = useMemo(
+    () => !!selectedCashBoxId && !activeSession && !reconcilingSessionId && pendingAutoClosedSessions.length === 0,
+    [selectedCashBoxId, activeSession, reconcilingSessionId, pendingAutoClosedSessions.length],
+  );
   const canRequestClose = useMemo(() => activeSession?.status === "OPEN", [activeSession]);
   const canClose = useMemo(() => isReconciling, [isReconciling]);
   const selectedCashBox = useMemo(() => cashBoxes.find((box) => box.id === selectedCashBoxId) ?? null, [cashBoxes, selectedCashBoxId]);

@@ -9,7 +9,12 @@ import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rba
 import { requireCsrf } from "@/modules/security/csrf";
 import { fail, ok } from "@/lib/api/response";
 
-const CONFLICT_REASONS = new Set(["CASH_SESSION_NOT_OPEN", "CASH_SESSION_UNRESOLVED_ORDERS", "CASH_SESSION_HAS_PENDING_PAYMENTS"]);
+const CONFLICT_REASONS = new Set([
+  "CASH_SESSION_NOT_OPEN",
+  "CASH_SESSION_UNRESOLVED_ORDERS",
+  "STALE_PENDING_PAYMENT_ORDERS",
+  "CASH_SESSION_HAS_PENDING_PAYMENTS",
+]);
 
 export async function POST(request: Request) {
   let targetSessionId = "unknown";
@@ -70,6 +75,10 @@ export async function POST(request: Request) {
         entityId: targetSessionId,
         reason: error.message,
       });
+      if (error.message === "STALE_PENDING_PAYMENT_ORDERS") {
+        const details = (error as Error & { pendingOrders?: unknown }).pendingOrders;
+        return fail("STALE_PENDING_PAYMENT_ORDERS", "Hay órdenes con pago pendiente que deben resolverse antes de cerrar la caja.", 409, details);
+      }
       return fail("CONFLICT", error.message, 409);
     }
     return toHttpErrorResponse(error);

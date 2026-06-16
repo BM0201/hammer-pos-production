@@ -76,7 +76,7 @@ export function getOperationalWindowForNow(now = new Date()) {
   return operationalWindow(businessDateFromNow(now));
 }
 
-async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: { id: string; branchId: string; businessDate: Date }) {
+export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: { id: string; branchId: string; businessDate: Date }) {
   const { start, end } = operationalWindow(day.businessDate);
   const salesSummary = await getSalesSummaryForOperationalDayTx(tx, day.id);
   const [
@@ -249,7 +249,7 @@ export async function ensureOpenOperationalDayTx(
     // them invisible in the Command Center and corrupt the daily close flow.
     const todayBusinessDate = businessDateFromNow();
     if (day.businessDate.getTime() !== todayBusinessDate.getTime()) {
-      throw new Error("OPERATIONAL_DAY_STALE");
+      throw new Error("STALE_OPERATIONAL_DAY_OPEN");
     }
     return day;
   }
@@ -864,6 +864,159 @@ export async function getOperationalDayBranchId(id: string) {
   const day = await prisma.operationalDay.findUniqueOrThrow({ where: { id }, select: { branchId: true } });
   return day.branchId;
 }
+
+// ── Derived state ─────────────────────────────────────────────────────────────
+
+export type OperationalDayDerivedState =
+  | "NOT_OPENED_TODAY"
+  | "OPEN_TODAY"
+  | "CLOSING"
+  | "CLOSED_PENDING_MASTER"
+  | "APPROVED_ARCHIVED"
+  | "CANCELLED"
+  | "STALE_OPEN_DAY";
+
+export function deriveOperationalDayState(
+  day: { status: string; businessDate: Date; approvedAt: Date | null } | null,
+): OperationalDayDerivedState {
+  if (!day) return "NOT_OPENED_TODAY";
+  const today = businessDateFromNow();
+  if (day.status === "OPEN") {
+    return day.businessDate.getTime() === today.getTime() ? "OPEN_TODAY" : "STALE_OPEN_DAY";
+  }
+  if (day.status === "CLOSING") return "CLOSING";
+  if (day.status === "CLOSED") return day.approvedAt ? "APPROVED_ARCHIVED" : "CLOSED_PENDING_MASTER";
+  if (day.status === "CANCELLED") return "CANCELLED";
+  return "NOT_OPENED_TODAY";
+}
+
+// ── Live blockers (real-time, no stored-field contamination) ──────────────────
+
+type BranchLiveStatus = {
+  branchId: string;
+  branchCode: string;
+  branchName: string;
+  businessDate: string | null;
+  operationalDayId: string | null;
+  operationalDayStatus: string | null;
+  derivedState: OperationalDayDerivedState;
+  blockers: {
+    openCashSessions: number;
+    reconcilingCashSessions: number;
+    autoClosedPendingReview: number;
+    staleOpenOperationalDays: number;
+  };
+  alerts: {
+    pendingPaymentOrdersToday: number;
+    pendingDispatchToday: number;
+    criticalBrainOpen: number;
+  };
+  totalBlockers: number;
+};
+
+export async function getLiveBlockers(): Promise<{
+  total: number;
+  branches: BranchLiveStatus[];
+  computedAt: string;
+}> {
+  const today = businessDateFromNow();
+  const { start, end } = operationalWindow(today);
+
+  const branches = await prisma.branch.findMany({
+    where: { isActive: true },
+    select: { id: true, code: true, name: true },
+    orderBy: { code: "asc" },
+  });
+
+  const branchResults = await Promise.all(
+    branches.map(async (branch): Promise<BranchLiveStatus> => {
+      const [
+        todayDay,
+        staleOpenDaysCount,
+        openCashSessionsCount,
+        reconcilingCount,
+        autoClosedPendingCount,
+        pendingPaymentCount,
+        pendingDispatchCount,
+        criticalBrainCount,
+      ] = await Promise.all([
+        prisma.operationalDay.findUnique({
+          where: { branchId_businessDate: { branchId: branch.id, businessDate: today } },
+          select: { id: true, status: true, businessDate: true, approvedAt: true },
+        }),
+        // Stale OPEN day from a past date — this is a hard blocker
+        prisma.operationalDay.count({
+          where: { branchId: branch.id, status: OperationalDayStatus.OPEN, businessDate: { not: today } },
+        }),
+        prisma.cashSession.count({
+          where: { status: CashSessionStatus.OPEN, physicalCashBox: { branchId: branch.id } },
+        }),
+        prisma.cashSession.count({
+          where: { status: CashSessionStatus.RECONCILING, physicalCashBox: { branchId: branch.id } },
+        }),
+        prisma.cashSession.count({
+          where: {
+            status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW,
+            requiresReview: true,
+            physicalCashBox: { branchId: branch.id },
+          },
+        }),
+        prisma.saleOrder.count({
+          where: { branchId: branch.id, status: SaleOrderStatus.PENDING_PAYMENT, createdAt: { gte: start, lt: end } },
+        }),
+        prisma.dispatchTicket.count({
+          where: { branchId: branch.id, status: { in: ["PENDING", "IN_PROGRESS"] }, createdAt: { gte: start, lt: end } },
+        }),
+        prisma.brainDecision.count({
+          where: {
+            branchId: branch.id,
+            status: { in: ["OPEN", "APPROVED", "MANUAL_REVIEW", "FAILED"] },
+            severity: { in: [BrainDecisionSeverity.CRITICAL, BrainDecisionSeverity.HIGH] },
+            createdAt: { gte: start, lt: end },
+          },
+        }),
+      ]);
+
+      const blockers = {
+        openCashSessions: openCashSessionsCount,
+        reconcilingCashSessions: reconcilingCount,
+        autoClosedPendingReview: autoClosedPendingCount,
+        staleOpenOperationalDays: staleOpenDaysCount,
+      };
+
+      const totalBlockers =
+        blockers.openCashSessions +
+        blockers.reconcilingCashSessions +
+        blockers.autoClosedPendingReview +
+        blockers.staleOpenOperationalDays;
+
+      return {
+        branchId: branch.id,
+        branchCode: branch.code,
+        branchName: branch.name,
+        businessDate: todayDay?.businessDate.toISOString() ?? null,
+        operationalDayId: todayDay?.id ?? null,
+        operationalDayStatus: todayDay?.status ?? null,
+        derivedState: deriveOperationalDayState(todayDay ?? null),
+        blockers,
+        alerts: {
+          pendingPaymentOrdersToday: pendingPaymentCount,
+          pendingDispatchToday: pendingDispatchCount,
+          criticalBrainOpen: criticalBrainCount,
+        },
+        totalBlockers,
+      };
+    }),
+  );
+
+  return {
+    total: branchResults.reduce((sum, b) => sum + b.totalBlockers, 0),
+    branches: branchResults,
+    computedAt: new Date().toISOString(),
+  };
+}
+
+// ── Reopen operational day ────────────────────────────────────────────────────
 
 export async function reopenOperationalDay(input: { id: string; actorUserId: string; note: string }) {
   return prisma.$transaction(async (tx) => {

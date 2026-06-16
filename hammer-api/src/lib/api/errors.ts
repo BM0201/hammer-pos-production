@@ -37,6 +37,7 @@ const WORKFLOW_MODULE_ERRORS: Record<string, { message: string; status: number }
 const CASH_SESSION_CONFLICTS = new Set([
   "CASH_SESSION_NOT_OPEN",
   "CASH_SESSION_ALREADY_OPEN",
+  "CASH_SESSION_RECONCILING",
   "CASH_SESSION_CASH_BOX_INVALID",
   "CASH_SESSION_NOT_RECONCILING",
   "CASH_SESSION_UNRESOLVED_ORDERS",
@@ -105,12 +106,32 @@ export function toApiErrorResponse(error: unknown) {
     return forbidden("Solo operadores autorizados de esta sesion pueden realizar esta accion.");
   }
 
-  if (message === "OPERATIONAL_DAY_STALE") {
-    return fail("OPERATIONAL_DAY_STALE", "El dia operativo abierto es de una fecha anterior. Contacte al administrador.", 409);
+  if (message === "STALE_OPERATIONAL_DAY_OPEN" || message === "OPERATIONAL_DAY_STALE") {
+    return fail("STALE_OPERATIONAL_DAY_OPEN", "Existe un dia operativo anterior abierto. Un administrador Master debe ejecutar limpieza operativa.", 409);
   }
 
   if (message === "OPERATIONAL_DAY_ALREADY_CLOSED") {
     return fail("OPERATIONAL_DAY_ALREADY_CLOSED", "El dia operativo ya fue cerrado.", 409);
+  }
+
+  if (message === "CASH_SESSION_RECONCILING") {
+    return fail("CASH_SESSION_RECONCILING", "La caja esta en proceso de conciliacion.", 409);
+  }
+
+  if (message === "CASH_SESSION_AFTER_CLOSING_TIME") {
+    return fail("CASH_SESSION_AFTER_CLOSING_TIME", "La hora de cierre operativo ya paso. No se puede abrir una nueva sesion de caja.", 409);
+  }
+
+  if (message === "NO_ACTIVE_CASH_BOX_FOR_BRANCH") {
+    return fail("NO_ACTIVE_CASH_BOX_FOR_BRANCH", "La sucursal no tiene caja fisica activa configurada.", 409);
+  }
+
+  if (message === "STALE_PENDING_PAYMENT_ORDERS") {
+    return fail("STALE_PENDING_PAYMENT_ORDERS", "Hay ordenes con pago pendiente que deben resolverse antes de cerrar la caja.", 409);
+  }
+
+  if (message === "OPERATIONAL_DAY_REOPEN_REQUIRED") {
+    return fail("OPERATIONAL_DAY_REOPEN_REQUIRED", "El dia operativo fue cerrado. Un administrador Master debe reabrirlo.", 409);
   }
 
   // Workflow module errors

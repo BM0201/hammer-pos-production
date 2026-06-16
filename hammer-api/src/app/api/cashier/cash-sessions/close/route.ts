@@ -12,6 +12,7 @@ import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rba
 import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
 import { PaymentStatus, SaleOrderStatus } from "@prisma/client";
+import { getOperationalWindowForNow } from "@/modules/operations/service";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
 
@@ -20,6 +21,7 @@ const CONFLICT_REASONS = new Set([
   "CASH_SESSION_UNRESOLVED_ORDERS",
   "CASH_SESSION_HAS_PENDING_PAYMENTS",
   "CASH_SESSION_DISCREPANCY_REQUIRES_APPROVAL",
+  "STALE_PENDING_PAYMENT_ORDERS",
 ]);
 const CASH_DISCREPANCY_APPROVAL_THRESHOLD = 5;
 
@@ -74,15 +76,33 @@ export async function POST(request: Request) {
       return fail("FORBIDDEN", "Forbidden", 403);
     }
 
-    const pendingOrders = await prisma.saleOrder.count({
+    // Only count orders within today's operational window — historical PENDING_PAYMENT
+    // orders from past days must NOT block today's close (critical: no global count).
+    const { start: windowStart, end: windowEnd } = getOperationalWindowForNow();
+    const stalePendingOrders = await prisma.saleOrder.findMany({
       where: {
         branchId: cashSession.physicalCashBox.branchId,
         status: SaleOrderStatus.PENDING_PAYMENT,
+        createdAt: { gte: windowStart, lt: windowEnd },
       },
+      select: {
+        id: true,
+        orderNumber: true,
+        grandTotal: true,
+        createdAt: true,
+        customer: { select: { displayName: true } },
+      },
+      take: 10,
+      orderBy: { createdAt: "asc" },
     });
 
-    if (pendingOrders > 0) {
-      return fail("CONFLICT", "CASH_SESSION_UNRESOLVED_ORDERS", 409);
+    if (stalePendingOrders.length > 0) {
+      return fail(
+        "STALE_PENDING_PAYMENT_ORDERS",
+        "Hay órdenes con pago pendiente de hoy que deben resolverse antes de cerrar la caja.",
+        409,
+        stalePendingOrders,
+      );
     }
 
     const pendingPayments = await prisma.payment.count({
@@ -167,6 +187,10 @@ export async function POST(request: Request) {
         entityId: targetSessionId,
         reason: error.message,
       });
+      if (error.message === "STALE_PENDING_PAYMENT_ORDERS") {
+        const details = (error as Error & { pendingOrders?: unknown }).pendingOrders;
+        return fail("STALE_PENDING_PAYMENT_ORDERS", "Hay órdenes con pago pendiente que deben resolverse antes de cerrar la caja.", 409, details);
+      }
       return fail("CONFLICT", error.message, 409);
     }
     return toHttpErrorResponse(error);

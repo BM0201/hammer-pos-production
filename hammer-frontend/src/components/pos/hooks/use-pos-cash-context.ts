@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { PosV2Context } from "../types";
+import type { CashSessionProblem, PosV2Context } from "../types";
 
 type BranchConfig = {
   enableCashier: boolean;
@@ -21,6 +21,7 @@ export function usePosCashContext(branchId: string) {
   const [branchConfig, setBranchConfig] = useState<BranchConfig | null>(null);
   const [posContext, setPosContext] = useState<PosV2Context | null>(null);
   const [activeCashSessionId, setActiveCashSessionId] = useState<string | null>(null);
+  const [cashSessionProblem, setCashSessionProblem] = useState<CashSessionProblem | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<string>("CASH");
 
   useEffect(() => {
@@ -31,7 +32,8 @@ export function usePosCashContext(branchId: string) {
         const json = await res.json();
         const data = json?.data ?? json;
         setPosContext(data);
-        setActiveCashSessionId(data?.assignedSessions?.[0]?.id ?? null);
+        setActiveCashSessionId(data?.activeCashSessionId ?? data?.assignedSessions?.[0]?.id ?? null);
+        setCashSessionProblem(data?.cashSessionProblem ?? null);
         setBranchConfig({
           enableCashier: data?.workflow?.enableCashier ?? true,
           enableDispatch: data?.workflow?.enableDispatch ?? true,
@@ -41,6 +43,7 @@ export function usePosCashContext(branchId: string) {
       } catch {
         setPosContext(null);
         setActiveCashSessionId(null);
+        setCashSessionProblem(null);
         setBranchConfig(DEFAULT_CONFIG);
       }
     }
@@ -55,10 +58,14 @@ export function usePosCashContext(branchId: string) {
     Boolean(posContext?.permissions?.canCollectHere) &&
     branchConfig?.paymentWorkflowMode !== "QUEUE_ONLY";
 
+  const hasOpenCashSession = posContext?.hasOpenCashSession ?? (activeCashSessionId !== null);
+
   return {
     posContext,
     branchConfig,
     activeCashSessionId,
+    cashSessionProblem,
+    hasOpenCashSession,
     paymentMethod,
     setPaymentMethod,
     canSendToCashier,

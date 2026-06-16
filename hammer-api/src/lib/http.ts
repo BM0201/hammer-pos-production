@@ -129,8 +129,8 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "OPERATIONAL_DAY_ALREADY_CLOSED") {
       return errJson("CONFLICT", "El dia operativo ya fue cerrado.", 409);
     }
-    if (error.message === "OPERATIONAL_DAY_STALE") {
-      return errJson("OPERATIONAL_DAY_STALE", "El dia operativo abierto es de una fecha anterior. Contacte al administrador para cerrarlo.", 409);
+    if (error.message === "STALE_OPERATIONAL_DAY_OPEN" || error.message === "OPERATIONAL_DAY_STALE") {
+      return errJson("STALE_OPERATIONAL_DAY_OPEN", "Existe un dia operativo anterior abierto. Un administrador Master debe ejecutar limpieza operativa antes de continuar.", 409);
     }
     if (error.message === "CASH_SESSION_NOT_OPEN" || error.message === "CASH_SESSION_ALREADY_OPEN" || error.message === "CASH_SESSION_CASH_BOX_INVALID") {
       return errJson("CONFLICT", error.message, 409);
@@ -149,6 +149,21 @@ export function toHttpErrorResponse(error: unknown) {
     }
     if (error.message === "DIRECT_PAYMENT_DISABLED") {
       return errJson("DIRECT_PAYMENT_DISABLED", "El pago directo no esta habilitado en esta sucursal.", 409);
+    }
+    if (error.message === "CASH_SESSION_RECONCILING") {
+      return errJson("CASH_SESSION_RECONCILING", "La caja esta en proceso de conciliacion. Espera a que se complete el cierre antes de abrir una nueva sesion.", 409);
+    }
+    if (error.message === "CASH_SESSION_AFTER_CLOSING_TIME") {
+      return errJson("CASH_SESSION_AFTER_CLOSING_TIME", "La hora de cierre operativo ya paso. No se puede abrir una nueva sesion de caja.", 409);
+    }
+    if (error.message === "NO_ACTIVE_CASH_BOX_FOR_BRANCH") {
+      return errJson("NO_ACTIVE_CASH_BOX_FOR_BRANCH", "La sucursal no tiene caja fisica activa configurada.", 409);
+    }
+    if (error.message === "STALE_PENDING_PAYMENT_ORDERS") {
+      return errJson("STALE_PENDING_PAYMENT_ORDERS", "Hay ordenes con pago pendiente que deben resolverse antes de cerrar la caja.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_REOPEN_REQUIRED") {
+      return errJson("OPERATIONAL_DAY_REOPEN_REQUIRED", "El dia operativo fue cerrado. Un administrador Master debe reabrirlo para continuar operaciones.", 409);
     }
     if (
       error.message === "CASH_SESSION_NOT_RECONCILING"

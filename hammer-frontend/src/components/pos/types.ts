@@ -79,6 +79,14 @@ export type InventoryBalanceRow = {
   sharedStock?: { saleQuantity: number } | null;
 };
 
+export type CashSessionProblem =
+  | "NO_OPEN_CASH_SESSION"
+  | "USER_NOT_ASSIGNED_TO_OPEN_SESSION"
+  | "SESSION_RECONCILING"
+  | "SESSION_PENDING_REVIEW"
+  | "OPERATIONAL_DAY_CLOSED"
+  | "STALE_OPERATIONAL_DAY_OPEN";
+
 export type PosV2Context = {
   workflow: {
     enableCashier: boolean;
@@ -89,9 +97,13 @@ export type PosV2Context = {
   permissions: {
     canSendToCashier: boolean;
     canCollectHere: boolean;
+    canCollectByRole: boolean;
     canUseCashSession: boolean;
   };
   assignedSessions: Array<{ id: string; physicalCashBox?: { code: string; description?: string | null } }>;
+  hasOpenCashSession: boolean;
+  activeCashSessionId: string | null;
+  cashSessionProblem: CashSessionProblem | null;
   messages?: {
     noCashBoxes?: string | null;
     noAssignedSession?: string | null;
