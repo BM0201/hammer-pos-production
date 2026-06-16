@@ -1,6 +1,7 @@
 "use client";
 
 import { CashSessionPanel } from "@/components/cash-session/cash-session-panel";
+import { GastosLocalesPanel } from "@/components/cash-session/gastos-locales-panel";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 
@@ -34,6 +35,7 @@ export default function BranchCashPage() {
         </p>
       </div>
       <CashSessionPanel branchId={branchId} />
+      <GastosLocalesPanel branchId={branchId} />
     </section>
   );
 }
