@@ -210,7 +210,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
           <div className="px-4 py-5 text-center">
             <p className="text-xs text-[var(--color-text-muted)]">Sin gastos operativos registrados.</p>
             <p className="mt-1 text-[0.65rem] text-[var(--color-text-soft)]">
-              La nómina aparece aquí automáticamente cuando el administrador la publica. Usa "+ Agregar gasto" para servicios, alquiler, etc.
+              La nómina aparece aquí automáticamente cuando el administrador la publica. Usa &quot;+ Agregar gasto&quot; para servicios, alquiler, etc.
             </p>
           </div>
         ) : (
