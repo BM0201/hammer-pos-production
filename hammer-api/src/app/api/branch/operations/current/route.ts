@@ -1,0 +1,24 @@
+import { fail, ok } from "@/lib/api/response";
+import { toHttpErrorResponse } from "@/lib/http";
+import { assertAuthenticated } from "@/modules/auth/access";
+import { getCurrentSession } from "@/modules/auth/service";
+import { getCurrentOperationalDay } from "@/modules/operations/service";
+import { currentOperationalDaySchema } from "@/modules/operations/validators";
+import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { isMaster } from "@/modules/rbac/guards";
+
+export async function GET(request: Request) {
+  try {
+    const session = await getCurrentSession();
+    assertAuthenticated(session);
+    const url = new URL(request.url);
+    const parsed = currentOperationalDaySchema.safeParse({ branchId: url.searchParams.get("branchId") ?? undefined });
+    if (!parsed.success) return fail("VALIDATION_ERROR", "Sucursal invalida.", 400, parsed.error.flatten());
+    if (!isMaster(session) && !canInBranch(session, parsed.data.branchId, CAPABILITIES.OPERATIONS_VIEW)) {
+      return fail("FORBIDDEN", "No tienes permiso para ver la operacion de esta sucursal.", 403);
+    }
+    return ok(await getCurrentOperationalDay(parsed.data.branchId));
+  } catch (error) {
+    return toHttpErrorResponse(error);
+  }
+}

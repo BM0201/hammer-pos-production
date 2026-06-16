@@ -1,0 +1,442 @@
+openapi: 3.0.3
+info:
+  title: H.A.M.M.E.R. POS/ERP API
+  description: |
+    API para el sistema de punto de venta y ERP de ferretería con capacidades de producción.
+    Todos los endpoints retornan el contrato estándar: `{ ok: true, data }` o `{ ok: false, error: { code, message } }`.
+  version: 2.0.0
+  contact:
+    name: H.A.M.M.E.R. Dev Team
+
+servers:
+  - url: http://localhost:4000/api
+    description: Desarrollo local
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: hammer-session
+    csrfToken:
+      type: apiKey
+      in: header
+      name: x-csrf-token
+
+  schemas:
+    SuccessResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: object
+      required: [ok, data]
+
+    ErrorResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "VALIDATION_ERROR"
+            message:
+              type: string
+              example: "Datos inválidos"
+          required: [code, message]
+      required: [ok, error]
+
+    ProductionRecipe:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        outputProductId: { type: string }
+        outputQuantity: { type: number }
+        estimatedCost: { type: number }
+        isActive: { type: boolean }
+        inputs:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string }
+              quantity: { type: number }
+              unit: { type: string }
+
+    ProductionBatch:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        recipeId: { type: string }
+        status:
+          type: string
+          enum: [PLANNED, IN_PROGRESS, COMPLETED, CANCELLED]
+        plannedQuantity: { type: number }
+        producedQuantity: { type: number }
+        estimatedCost: { type: number }
+        realCost: { type: number }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+
+    ProductionPermissions:
+      type: object
+      properties:
+        production.dashboard.view: { type: boolean }
+        production.recipes.view: { type: boolean }
+        production.recipes.create: { type: boolean }
+        production.recipes.edit: { type: boolean }
+        production.batches.view: { type: boolean }
+        production.batches.create: { type: boolean }
+        production.batches.complete: { type: boolean }
+        production.cost.view: { type: boolean }
+
+security:
+  - cookieAuth: []
+
+paths:
+  # ── Auth ──
+  /auth/csrf:
+    get:
+      tags: [Auth]
+      summary: Obtener token CSRF
+      security: []
+      responses:
+        '200':
+          description: Token CSRF
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesión
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+              required: [email, password]
+      responses:
+        '200':
+          description: Sesión iniciada
+        '401':
+          description: Credenciales inválidas
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Cerrar sesión
+      responses:
+        '200':
+          description: Sesión cerrada
+
+  /auth/session:
+    get:
+      tags: [Auth]
+      summary: Obtener sesión actual
+      responses:
+        '200':
+          description: Datos de sesión
+
+  # ── Production Recipes ──
+  /master/production/recipes:
+    get:
+      tags: [Production]
+      summary: Listar recetas de producción
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Búsqueda por nombre/código
+        - name: isActive
+          in: query
+          schema: { type: string, enum: ['true', 'false'] }
+      responses:
+        '200':
+          description: Lista de recetas
+        '403':
+          description: Sin permiso production.recipes.view
+    post:
+      tags: [Production]
+      summary: Crear receta de producción
+      security:
+        - cookieAuth: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                code: { type: string }
+                outputProductId: { type: string }
+                outputQuantity: { type: number }
+                estimatedCost: { type: number }
+                inputs:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      productId: { type: string }
+                      quantity: { type: number }
+                      unit: { type: string }
+              required: [name, code, outputProductId, outputQuantity]
+      responses:
+        '201':
+          description: Receta creada
+        '403':
+          description: Sin permiso production.recipes.create
+
+  /master/production/recipes/{id}:
+    get:
+      tags: [Production]
+      summary: Detalle de receta
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Receta
+    patch:
+      tags: [Production]
+      summary: Editar receta
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Receta actualizada
+        '403':
+          description: Sin permiso production.recipes.edit
+
+  # ── Production Batches ──
+  /master/production/batches:
+    get:
+      tags: [Production]
+      summary: Listar lotes de producción
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [PLANNED, IN_PROGRESS, COMPLETED, CANCELLED] }
+        - name: branchId
+          in: query
+          schema: { type: string }
+        - name: recipeId
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Lista de lotes
+    post:
+      tags: [Production]
+      summary: Crear lote de producción
+      responses:
+        '201':
+          description: Lote creado
+
+  /master/production/batches/{id}:
+    get:
+      tags: [Production]
+      summary: Detalle de lote
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Lote
+    patch:
+      tags: [Production]
+      summary: Actualizar lote
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Lote actualizado
+
+  /master/production/batches/{id}/complete:
+    post:
+      tags: [Production]
+      summary: Completar lote de producción
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Lote completado
+
+  /master/production/calculate:
+    post:
+      tags: [Production]
+      summary: Calcular costo de producción
+      responses:
+        '200':
+          description: Cálculo de costos
+
+  /master/production/permissions:
+    get:
+      tags: [Production]
+      summary: Permisos de producción del usuario actual
+      responses:
+        '200':
+          description: Mapa de permisos
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/ProductionPermissions'
+
+  # ── Catalog ──
+  /catalog/products:
+    get:
+      tags: [Catalog]
+      summary: Listar productos
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: categoryId
+          in: query
+          schema: { type: string }
+        - name: isActive
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Lista de productos
+    post:
+      tags: [Catalog]
+      summary: Crear producto
+      responses:
+        '201':
+          description: Producto creado
+
+  /catalog/categories:
+    get:
+      tags: [Catalog]
+      summary: Listar categorías
+      responses:
+        '200':
+          description: Lista de categorías
+    post:
+      tags: [Catalog]
+      summary: Crear categoría
+      responses:
+        '201':
+          description: Categoría creada
+
+  # ── Inventory ──
+  /inventory/balances:
+    get:
+      tags: [Inventory]
+      summary: Saldos de inventario
+      responses:
+        '200':
+          description: Saldos
+
+  /inventory/movements:
+    get:
+      tags: [Inventory]
+      summary: Historial de movimientos
+      responses:
+        '200':
+          description: Movimientos
+    post:
+      tags: [Inventory]
+      summary: Registrar movimiento
+      responses:
+        '201':
+          description: Movimiento registrado
+
+  # ── Sales ──
+  /sales/orders:
+    get:
+      tags: [Sales]
+      summary: Listar órdenes de venta
+      responses:
+        '200':
+          description: Órdenes
+    post:
+      tags: [Sales]
+      summary: Crear orden de venta
+      responses:
+        '201':
+          description: Orden creada
+
+  # ── Admin ──
+  /master/admin/user-permissions:
+    get:
+      tags: [Admin]
+      summary: Listar permisos de usuario (overrides)
+      parameters:
+        - name: userId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Permisos de usuario
+    post:
+      tags: [Admin]
+      summary: Otorgar/revocar permiso a usuario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId: { type: string }
+                permission: { type: string }
+                granted: { type: boolean }
+              required: [userId, permission]
+      responses:
+        '201':
+          description: Permiso actualizado
+
+tags:
+  - name: Auth
+    description: Autenticación y sesiones
+  - name: Production
+    description: Módulo de producción (recetas, lotes, costos)
+  - name: Catalog
+    description: Productos y categorías
+  - name: Inventory
+    description: Inventario y movimientos
+  - name: Sales
+    description: Ventas y órdenes
+  - name: Admin
+    description: Administración de usuarios y permisos
