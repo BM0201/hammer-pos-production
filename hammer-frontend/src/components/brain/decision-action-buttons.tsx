@@ -1,13 +1,30 @@
 "use client";
 
-export type BrainDecisionAction = "approve" | "execute" | "dismiss" | "snooze" | "manual-review" | "reopen";
+import { Zap } from "lucide-react";
+
+export type BrainDecisionAction = "approve" | "execute" | "approve-and-execute" | "dismiss" | "snooze" | "manual-review" | "reopen";
+
+const AUTO_EXECUTABLE_ACTIONS = new Set([
+  "CREATE_PURCHASE_ORDER_DRAFT",
+  "CREATE_TRANSFER_DRAFT",
+  "CONVERT_REORDER_ALERT_TO_PURCHASE",
+  "CONVERT_REORDER_ALERT_TO_TRANSFER",
+  "RECALCULATE_CASH_SESSION",
+  "REFRESH_OPERATIONAL_DAY",
+]);
+
+export function isAutoExecutable(proposedActionType?: string | null): boolean {
+  return Boolean(proposedActionType && AUTO_EXECUTABLE_ACTIONS.has(proposedActionType));
+}
 
 export function DecisionActionButtons({
   status,
+  proposedActionType,
   busy,
   onAction,
 }: {
   status: string;
+  proposedActionType?: string | null;
   busy: boolean;
   onAction: (action: BrainDecisionAction) => void;
 }) {
@@ -17,15 +34,26 @@ export function DecisionActionButtons({
   const canSnooze = status === "OPEN" || status === "APPROVED" || status === "MANUAL_REVIEW";
   const canDismiss = !["EXECUTED", "DISMISSED", "EXPIRED"].includes(status);
   const canReopen = ["DISMISSED", "EXPIRED", "FAILED"].includes(status);
+  const canApproveAndExecute = canApprove && isAutoExecutable(proposedActionType);
 
   const secondary = "rounded-md border border-[var(--color-border)] px-3 py-2 text-sm font-semibold text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-muted)] disabled:cursor-not-allowed disabled:text-[var(--color-text-soft)]";
   const primary = "rounded-md bg-[var(--color-info-700)] px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-info-600)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-alt)] disabled:text-[var(--color-text-soft)]";
   const success = "rounded-md bg-[var(--color-success-700)] px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-success-600)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-alt)] disabled:text-[var(--color-text-soft)]";
+  const combo = "inline-flex items-center gap-1.5 rounded-md bg-[var(--color-master-700,#4f46e5)] px-3 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[var(--color-master-600,#6366f1)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-alt)] disabled:text-[var(--color-text-soft)]";
   const danger = "rounded-md border border-[var(--color-danger-200)] px-3 py-2 text-sm font-semibold text-[var(--color-danger-700)] transition-colors hover:bg-[var(--color-danger-50)] disabled:cursor-not-allowed disabled:text-[var(--color-text-soft)]";
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <button type="button" disabled={!canApprove || busy} className={primary} onClick={() => onAction("approve")}>Aprobar</button>
+      {canApproveAndExecute ? (
+        <button type="button" disabled={busy} className={combo} onClick={() => onAction("approve-and-execute")}>
+          <Zap className="h-3.5 w-3.5" />
+          Aprobar y Ejecutar
+        </button>
+      ) : (
+        <button type="button" disabled={!canApprove || busy} className={primary} onClick={() => onAction("approve")}>
+          Aprobar
+        </button>
+      )}
       <button type="button" disabled={!canExecute || busy} className={success} onClick={() => onAction("execute")}>Ejecutar</button>
       <button type="button" disabled={!canManualReview || busy} className={secondary} onClick={() => onAction("manual-review")}>Revisión manual</button>
       <button type="button" disabled={!canSnooze || busy} className={secondary} onClick={() => onAction("snooze")}>Posponer</button>

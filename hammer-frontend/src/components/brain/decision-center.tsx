@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -11,6 +11,8 @@ import {
   ScanLine,
   ShieldCheck,
   Sparkles,
+  X,
+  Zap,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money as formatMoney } from "@/lib/format";
@@ -18,6 +20,7 @@ import { BrainFilters, type BrainFilterState } from "@/components/brain/brain-fi
 import { DecisionCard, type BrainDecision } from "@/components/brain/decision-card";
 import { BrainSummary, type BrainKpis } from "@/components/brain/brain-summary";
 import type { BrainDecisionAction } from "@/components/brain/decision-action-buttons";
+import { showToast } from "@/components/ui/toast";
 
 type BranchOption = {
   id: string;
@@ -47,11 +50,17 @@ type BrainResponse = {
 
 type BrainScanMode = "QUICK_SCAN" | "OPERATIONAL_DAY_SCAN" | "ENTITY_SCAN" | "DEEP_SCAN" | "REPAIR_SCAN";
 
+type NoteModal = {
+  action: BrainDecisionAction;
+  decisionId: string;
+  prompt: string;
+};
+
 const initialFilters: BrainFilterState = {
   branchId: "",
   category: "",
   severity: "",
-  status: "OPEN",
+  status: "",
   search: "",
   productId: "",
   targetUserId: "",
@@ -71,7 +80,17 @@ const initialFilters: BrainFilterState = {
   onlyPricingMisconfiguration: "",
 };
 
-const FILTER_STORAGE_KEY = "hammer.brain.filters.v1";
+const STATUS_TABS = [
+  { value: "", label: "Todas" },
+  { value: "OPEN", label: "Abiertas" },
+  { value: "APPROVED", label: "Aprobadas" },
+  { value: "MANUAL_REVIEW", label: "Revisión" },
+  { value: "EXECUTING", label: "Ejecutando" },
+  { value: "EXECUTED", label: "Ejecutadas" },
+  { value: "DISMISSED", label: "Descartadas" },
+];
+
+const FILTER_STORAGE_KEY = "hammer.brain.filters.v2";
 
 function formatDate(value?: string | null) {
   if (!value) return "Sin escaneo reciente";
@@ -108,7 +127,10 @@ export function DecisionCenter() {
   const [data, setData] = useState<BrainResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
+  const [noteModal, setNoteModal] = useState<NoteModal | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const noteTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const query = useMemo(() => {
     const params = new URLSearchParams();
@@ -134,14 +156,13 @@ export function DecisionCenter() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setMessage(null);
     try {
       const response = await apiFetch(`/api/master/brain/decisions?${query}`);
       const raw = await response.json();
       if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar el Brain.");
       setData(unwrapApiData(raw) as BrainResponse);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "No se pudo cargar el Brain.");
+      showToast("error", error instanceof Error ? error.message : "No se pudo cargar el Brain.");
     } finally {
       setLoading(false);
     }
@@ -161,9 +182,16 @@ export function DecisionCenter() {
     void load();
   }, [load]);
 
+  // Focus textarea when modal opens
+  useEffect(() => {
+    if (noteModal) {
+      setTimeout(() => noteTextareaRef.current?.focus(), 50);
+    }
+  }, [noteModal]);
+
   async function scan(dryRun = false) {
     setBusyAction(dryRun ? "dry-run" : "scan");
-    setMessage(null);
+    setScanMessage(null);
     try {
       const entityScope = scanMode === "ENTITY_SCAN"
         ? {
@@ -193,43 +221,95 @@ export function DecisionCenter() {
         }),
       });
       const raw = await response.json();
-      if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo ejecutar el analisis.");
+      if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo ejecutar el análisis.");
       const result = unwrapApiData(raw) as { created: number; updated: number; reopened: number; expired: number; skipped: number; errors?: unknown[]; total?: number; scannedCategories?: string[] };
-      setMessage(`${dryRun ? "Dry run" : scanMode} completado: ${result.created} nuevas, ${result.updated} actualizadas, ${result.reopened} reabiertas, ${result.expired} expiradas, ${result.skipped} omitidas, ${result.total ?? 0} hallazgos${result.errors?.length ? `, ${result.errors.length} avisos` : ""}.`);
+      setScanMessage(`${dryRun ? "Dry run" : scanMode} completado: ${result.created} nuevas, ${result.updated} actualizadas, ${result.reopened} reabiertas, ${result.expired} expiradas, ${result.skipped} omitidas, ${result.total ?? 0} hallazgos${result.errors?.length ? `, ${result.errors.length} avisos` : ""}.`);
       if (!dryRun) await load();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Error ejecutando analisis.");
+      setScanMessage(error instanceof Error ? error.message : "Error ejecutando análisis.");
     } finally {
       setBusyAction(null);
     }
   }
 
-  async function act(decisionId: string, action: BrainDecisionAction) {
-    const note = action === "dismiss" ? window.prompt("Motivo del descarte") ?? undefined : undefined;
-    const reviewNote = action === "manual-review" ? window.prompt("Nota para revision manual") ?? undefined : undefined;
-    const body = action === "snooze"
-      ? { days: 7, note: "Pospuesto desde Centro de Decisiones" }
-      : action === "manual-review"
-        ? { note: reviewNote }
-        : { note };
-
+  async function doAct(decisionId: string, action: BrainDecisionAction, note?: string) {
     setBusyAction(`${decisionId}:${action}`);
-    setMessage(null);
     try {
-      const response = await apiFetch(`/api/master/brain/decisions/${decisionId}/${action}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const raw = await response.json();
-      if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar la accion.");
-      setMessage("Accion aplicada correctamente.");
+      if (action === "approve-and-execute") {
+        // Step 1: approve
+        const approveResp = await apiFetch(`/api/master/brain/decisions/${decisionId}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const approveRaw = await approveResp.json();
+        if (!approveResp.ok) throw new Error(approveRaw?.error?.message ?? "No se pudo aprobar la decisión.");
+
+        // Step 2: execute
+        const executeResp = await apiFetch(`/api/master/brain/decisions/${decisionId}/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const executeRaw = await executeResp.json();
+        if (!executeResp.ok) throw new Error(executeRaw?.error?.message ?? "Decisión aprobada pero no se pudo ejecutar.");
+        const executeResult = unwrapApiData(executeRaw) as { status?: string } | null;
+        if (executeResult?.status === "MANUAL_REVIEW") {
+          showToast("warning", "Decisión aprobada. Requiere revisión manual — no se ejecutó automáticamente.");
+        } else {
+          showToast("success", "Decisión aprobada y ejecutada correctamente.");
+        }
+      } else {
+        const body = action === "snooze"
+          ? { days: 7, note: "Pospuesto desde Centro de Decisiones" }
+          : { note };
+
+        const response = await apiFetch(`/api/master/brain/decisions/${decisionId}/${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const raw = await response.json();
+        if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar la acción.");
+
+        const actionLabels: Record<string, string> = {
+          approve: "Decisión aprobada.",
+          execute: "Decisión ejecutada.",
+          dismiss: "Decisión descartada.",
+          snooze: "Decisión pospuesta 7 días.",
+          "manual-review": "Marcada para revisión manual.",
+          reopen: "Decisión reabierta.",
+        };
+        showToast("success", actionLabels[action] ?? "Acción aplicada.");
+      }
       await load();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Error aplicando accion.");
+      showToast("error", error instanceof Error ? error.message : "Error aplicando acción.");
     } finally {
       setBusyAction(null);
     }
+  }
+
+  function act(decisionId: string, action: BrainDecisionAction) {
+    if (action === "dismiss" || action === "manual-review") {
+      setNoteModal({
+        action,
+        decisionId,
+        prompt: action === "dismiss"
+          ? "¿Por qué se descarta esta decisión?"
+          : "Nota para la revisión manual (opcional):",
+      });
+      setNoteText("");
+      return;
+    }
+    void doAct(decisionId, action);
+  }
+
+  function submitNote() {
+    if (!noteModal) return;
+    const { action, decisionId } = noteModal;
+    setNoteModal(null);
+    void doAct(decisionId, action, noteText || undefined);
   }
 
   const kpis = data?.kpis ?? { openCritical: 0, highRisk: 0, estimatedImpact: 0, reorderSuggested: 0, cashRisks: 0, lowMarginPrices: 0, lateDispatches: 0, manualReview: 0 };
@@ -238,7 +318,7 @@ export function DecisionCenter() {
   const systemState = busyAction === "scan" || busyAction === "dry-run"
     ? { label: "Escaneando", tone: "border-blue-200 bg-blue-50 text-blue-700", icon: Loader2 }
     : kpis.openCritical > 0 || (kpis.manualReview ?? 0) > 0
-      ? { label: "Revision requerida", tone: "border-amber-200 bg-amber-50 text-amber-800", icon: AlertTriangle }
+      ? { label: "Revisión requerida", tone: "border-amber-200 bg-amber-50 text-amber-800", icon: AlertTriangle }
       : { label: "Listo", tone: "border-emerald-200 bg-emerald-50 text-emerald-700", icon: CheckCircle2 };
   const StateIcon = systemState.icon;
   const priorities = decisions
@@ -246,16 +326,17 @@ export function DecisionCenter() {
     .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || asNumber(b.priorityScore) - asNumber(a.priorityScore))
     .slice(0, 6);
   const quickChips = [
-    { id: "critical", label: "Criticas", count: kpis.openCritical, patch: { severity: "CRITICAL", onlyCritical: "" } },
+    { id: "critical", label: "Críticas", count: kpis.openCritical, patch: { severity: "CRITICAL", onlyCritical: "" } },
     { id: "pricing", label: "Pricing", count: kpis.lowMarginPrices, patch: { category: "PRICING", onlyPricing: "" } },
     { id: "inventory", label: "Inventario", count: decisions.filter((decision) => decision.category === "INVENTORY").length, patch: { category: "INVENTORY", onlyInventory: "" } },
-    { id: "reorder", label: "Reposicion", count: kpis.reorderSuggested, patch: { category: "REORDER" } },
+    { id: "reorder", label: "Reposición", count: kpis.reorderSuggested, patch: { category: "REORDER" } },
     { id: "low-margin", label: "Margen bajo", count: kpis.lowMarginPrices, patch: { category: "PRICING", search: "margen" } },
     { id: "below-cost", label: "Bajo costo", count: decisions.filter((decision) => `${decision.title} ${decision.description} ${decision.proposedActionType ?? ""}`.toLowerCase().includes("costo")).length, patch: { category: "PRICING", search: "costo" } },
     { id: "cz-stock", label: "CZ con stock", count: decisions.filter((decision) => `${decision.title} ${decision.description}`.toLowerCase().includes("cz")).length, patch: { search: "CZ" } },
     { id: "transfers", label: "Traslados", count: decisions.filter((decision) => `${decision.title} ${decision.description} ${decision.recommendation}`.toLowerCase().includes("traslado")).length, patch: { search: "traslado" } },
     { id: "cash", label: "Caja", count: kpis.cashRisks, patch: { category: "CASH", onlyCash: "" } },
-    { id: "manual", label: "Revision manual", count: kpis.manualReview ?? 0, patch: { status: "MANUAL_REVIEW" } },
+    { id: "manual", label: "Revisión manual", count: kpis.manualReview ?? 0, patch: { status: "MANUAL_REVIEW" } },
+    { id: "approved", label: "Aprobadas", count: decisions.filter((d) => d.status === "APPROVED").length, patch: { status: "APPROVED" } },
     { id: "today", label: "Nuevas hoy", count: decisions.filter((decision) => new Date(decision.createdAt).toDateString() === new Date().toDateString()).length, patch: { days: "7", sort: "newest" } },
   ];
 
@@ -271,6 +352,39 @@ export function DecisionCenter() {
 
   return (
     <main className="space-y-5">
+      {/* Note collection modal */}
+      {noteModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={() => setNoteModal(null)}>
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-base font-extrabold text-slate-950">
+                {noteModal.action === "dismiss" ? "Descartar decisión" : "Revisión manual"}
+              </h3>
+              <button type="button" onClick={() => setNoteModal(null)} className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <label className="block text-sm text-slate-600">{noteModal.prompt}</label>
+            <textarea
+              ref={noteTextareaRef}
+              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100"
+              rows={3}
+              placeholder="Nota (opcional)…"
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submitNote(); }}
+            />
+            <p className="mt-1 text-xs text-slate-400">Ctrl+Enter para confirmar</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50" onClick={() => setNoteModal(null)}>Cancelar</button>
+              <button type="button" className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-600" onClick={submitNote}>
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <header className="relative overflow-hidden rounded-3xl border border-blue-100 bg-gradient-to-br from-sky-50 via-white to-indigo-50 p-5 shadow-xl shadow-blue-500/10 lg:p-7">
         <div className="grid gap-6 lg:grid-cols-[1fr_auto] lg:items-center">
           <div className="flex min-w-0 gap-4">
@@ -292,7 +406,7 @@ export function DecisionCenter() {
               <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600">
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-3 py-1 shadow-sm">
                   <RadioTower className="h-3.5 w-3.5 text-blue-600" />
-                  Ultimo escaneo: {formatDate(latestScan)}
+                  Último escaneo: {formatDate(latestScan)}
                 </span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-3 py-1 shadow-sm">
                   <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
@@ -311,7 +425,7 @@ export function DecisionCenter() {
             ) : null}
             <button type="button" disabled={Boolean(busyAction)} className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-600/25 transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300" onClick={() => scan(false)}>
               {busyAction === "scan" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
-              {busyAction === "scan" ? "Escaneando..." : scanMode === "QUICK_SCAN" ? "Escaneo rapido" : "Escanear scope"}
+              {busyAction === "scan" ? "Escaneando..." : scanMode === "QUICK_SCAN" ? "Escaneo rápido" : "Escanear scope"}
             </button>
             <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white/90 px-4 py-2.5 text-sm font-bold text-blue-700 shadow-sm transition hover:bg-blue-50" onClick={scrollToPriorities}>
               <ArrowDown className="h-4 w-4" />
@@ -328,8 +442,8 @@ export function DecisionCenter() {
           <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-3">
             Tipo de escaneo
             <select className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={scanMode} onChange={(event) => setScanMode(event.target.value as BrainScanMode)}>
-              <option value="QUICK_SCAN">Escaneo rapido</option>
-              <option value="OPERATIONAL_DAY_SCAN">Dia operativo</option>
+              <option value="QUICK_SCAN">Escaneo rápido</option>
+              <option value="OPERATIONAL_DAY_SCAN">Día operativo</option>
               <option value="ENTITY_SCAN">Entidad</option>
               <option value="DEEP_SCAN">Profundo</option>
               <option value="REPAIR_SCAN">Revalidar abiertos</option>
@@ -340,7 +454,7 @@ export function DecisionCenter() {
             <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} />
           </label>
           <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-3">
-            Dia operativo ID
+            Día operativo ID
             <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={operationalDayId} onChange={(event) => setOperationalDayId(event.target.value)} placeholder="OperationalDay" />
           </label>
           <label className="space-y-1 text-xs font-bold text-slate-500 lg:col-span-2">
@@ -379,7 +493,7 @@ export function DecisionCenter() {
               <Sparkles className="h-4 w-4 text-blue-600" />
               <h2 className="text-lg font-extrabold text-slate-950">Resumen ejecutivo</h2>
             </div>
-            <p className="mt-1 text-sm font-semibold text-blue-700">{data?.priorityMessage ?? "El Brain esta listo para priorizar decisiones operativas."}</p>
+            <p className="mt-1 text-sm font-semibold text-blue-700">{data?.priorityMessage ?? "El Brain está listo para priorizar decisiones operativas."}</p>
             <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
               {(data?.executiveSummary?.length ? data.executiveSummary : ["Sin resumen ejecutivo disponible para los filtros actuales."]).map((line) => (
                 <li key={line} className="flex gap-2">
@@ -391,7 +505,7 @@ export function DecisionCenter() {
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <SummaryPill label="Total" value={data?.totalDecisions ?? decisions.length} />
-            <SummaryPill label="Criticas" value={data?.criticalCount ?? kpis.openCritical} />
+            <SummaryPill label="Críticas" value={data?.criticalCount ?? kpis.openCritical} />
             <SummaryPill label="Alto riesgo" value={data?.highRiskCount ?? kpis.highRisk ?? 0} />
             <SummaryPill label="Impacto" value={formatMoney(data?.estimatedImpactAmount ?? kpis.estimatedImpact)} />
             <SummaryPill label="Pricing" value={data?.categoriesBreakdown?.pricing ?? 0} />
@@ -404,7 +518,7 @@ export function DecisionCenter() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-extrabold text-slate-950">Prioridades de hoy</h2>
-            <p className="text-sm text-slate-500">Las decisiones abiertas mas importantes segun severidad y prioridad.</p>
+            <p className="text-sm text-slate-500">Las decisiones abiertas más importantes según severidad y prioridad.</p>
           </div>
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{priorities.length} visibles</span>
         </div>
@@ -413,11 +527,11 @@ export function DecisionCenter() {
         ) : priorities.length ? (
           <div className="grid gap-3 lg:grid-cols-2">
             {priorities.map((decision) => (
-              <PriorityItem key={decision.id} decision={decision} onOpen={() => setFilters((current) => ({ ...current, search: decision.title }))} />
+              <PriorityItem key={decision.id} decision={decision} onOpen={() => setFilters((current) => ({ ...current, search: decision.title, status: "" }))} />
             ))}
           </div>
         ) : (
-          <EmptyPanel label="No hay prioridades criticas abiertas." />
+          <EmptyPanel label="No hay prioridades críticas abiertas." />
         )}
       </section>
 
@@ -425,7 +539,7 @@ export function DecisionCenter() {
 
       <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
         <div className="mb-2 flex items-center justify-between gap-3">
-          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Chips rapidos</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Chips rápidos</p>
           <button type="button" className="text-xs font-bold text-blue-700 hover:text-blue-600" onClick={resetFilters}>Limpiar filtros</button>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -446,30 +560,59 @@ export function DecisionCenter() {
         </div>
       </section>
 
-      {message ? (
-        <div className={`rounded-xl border px-4 py-3 text-sm ${message.includes("Error") || message.includes("No se pudo") ? "border-red-200 bg-red-50 text-red-800" : "border-blue-200 bg-blue-50 text-blue-800"}`}>
-          {message}
+      {scanMessage ? (
+        <div className={`rounded-xl border px-4 py-3 text-sm ${scanMessage.includes("Error") || scanMessage.includes("No se pudo") ? "border-red-200 bg-red-50 text-red-800" : "border-blue-200 bg-blue-50 text-blue-800"}`}>
+          {scanMessage}
         </div>
       ) : null}
 
       <section className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-extrabold text-slate-950">Decisiones operativas</h2>
             <p className="text-sm text-slate-500">Riesgos, recomendaciones y acciones pendientes.</p>
           </div>
           <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-600">{decisions.length} resultados</span>
         </div>
+
+        {/* Status tabs */}
+        <div className="flex flex-wrap gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 p-1.5">
+          {STATUS_TABS.map((tab) => {
+            const active = filters.status === tab.value;
+            const count = tab.value === ""
+              ? decisions.length
+              : decisions.filter((d) => d.status === tab.value).length;
+            return (
+              <button
+                key={tab.value}
+                type="button"
+                onClick={() => setFilters((f) => ({ ...f, status: tab.value }))}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                  active
+                    ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-200"
+                    : "text-slate-600 hover:bg-white/60 hover:text-slate-900"
+                }`}
+              >
+                {tab.value === "OPEN" ? <Zap className="h-3 w-3" /> : null}
+                {tab.label}
+                {count > 0 ? (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${active ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-600"}`}>
+                    {count}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
         {loading ? (
           <LoadingPanel label="Escaneando riesgos operativos..." />
-        ) : message && !data ? (
-          <ErrorPanel label="No se pudo cargar el Brain." />
         ) : decisions.length ? (
           decisions.map((decision) => (
             <DecisionCard key={decision.id} decision={decision} busy={Boolean(busyAction)} onAction={act} />
           ))
         ) : (
-          <EmptyPanel label="No hay decisiones abiertas." />
+          <EmptyPanel label="No hay decisiones para los filtros actuales." />
         )}
       </section>
     </main>
@@ -512,15 +655,6 @@ function EmptyPanel({ label }: { label: string }) {
   return (
     <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center text-sm text-slate-500">
       <CheckCircle2 className="mx-auto mb-3 h-6 w-6 text-emerald-500" />
-      {label}
-    </div>
-  );
-}
-
-function ErrorPanel({ label }: { label: string }) {
-  return (
-    <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-8 text-center text-sm font-semibold text-red-700">
-      <AlertTriangle className="mx-auto mb-3 h-6 w-6" />
       {label}
     </div>
   );

@@ -657,6 +657,28 @@ export async function executeBrainDecision(id: string, actorUserId: string, note
       afterStatus: nextStatus,
       metadataJson: result as Prisma.InputJsonValue,
     });
+
+    if (result.executed) {
+      await prisma.brainDecisionOutcome.create({
+        data: {
+          decisionId: id,
+          measuredAt: new Date(),
+          outcomeType: "EXECUTION",
+          expectedImpact: decision.impactAmount ? Number(decision.impactAmount) : null,
+          actualImpact: null,
+          successScore: 50,
+          notes: `Decisión ejecutada. Tipo: ${decision.proposedActionType ?? "N/A"}. Pendiente evaluación de impacto real.`,
+          metadataJson: {
+            executedEntityType: result.executedEntityType ?? null,
+            executedEntityId: result.executedEntityId ?? null,
+            actorUserId,
+          },
+        },
+      }).catch(() => {
+        // outcome is non-critical — don't fail the execution if this errors
+      });
+    }
+
     return updated;
   } catch (error) {
     await prisma.brainDecision.update({

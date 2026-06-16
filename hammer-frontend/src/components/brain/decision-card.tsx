@@ -207,7 +207,7 @@ export function DecisionCard({ decision, busy, onAction }: DecisionCardProps) {
             <FileText className="h-4 w-4" />
             Detalle
           </button>
-          <DecisionActionButtons status={decision.status} busy={busy} onAction={(action) => onAction(decision.id, action)} />
+          <DecisionActionButtons status={decision.status} proposedActionType={decision.proposedActionType} busy={busy} onAction={(action) => onAction(decision.id, action)} />
         </div>
       </div>
 

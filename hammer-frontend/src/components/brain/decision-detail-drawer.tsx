@@ -129,7 +129,7 @@ export function DecisionDetailDrawer({
           {onAction ? (
             <section className="rounded-2xl border border-slate-200 bg-white p-4">
               <h3 className="mb-3 text-sm font-extrabold text-slate-950">Acciones disponibles</h3>
-              <DecisionActionButtons status={decision.status} busy={Boolean(busy)} onAction={onAction} />
+              <DecisionActionButtons status={decision.status} proposedActionType={decision.proposedActionType} busy={Boolean(busy)} onAction={onAction} />
             </section>
           ) : null}
 
