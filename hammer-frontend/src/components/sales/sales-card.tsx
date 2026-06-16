@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 
 type HistoryEntry = {
   id: string;
-  type: "sale" | "payment" | "production";
+  type: "sale" | "payment" | "production" | "operational_day";
   date: string;
   reference: string;
   branchName: string;
