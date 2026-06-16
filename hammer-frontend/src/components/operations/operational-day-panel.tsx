@@ -187,7 +187,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   }
 
   const showCloseSection = day.status === "OPEN" || day.status === "CLOSING";
-  const showApproveBtn   = masterMode && day.status === "CLOSED";
+  const showApproveBtn   = masterMode && day.status === "CLOSED" && !day.approvedAt;
 
   return (
     <div className="space-y-5">

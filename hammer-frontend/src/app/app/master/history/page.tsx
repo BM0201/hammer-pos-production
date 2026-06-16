@@ -19,7 +19,7 @@ import "@/styles/responsive.css";
 
 type HistoryEntry = {
   id: string;
-  type: "sale" | "payment" | "production";
+  type: "sale" | "payment" | "production" | "operational_day";
   date: string;
   reference: string;
   branchName: string;
@@ -34,12 +34,14 @@ const TYPE_LABELS: Record<string, string> = {
   sale: "Venta",
   payment: "Pago",
   production: "Producción",
+  operational_day: "Día Operativo",
 };
 
 const TYPE_COLORS: Record<string, string> = {
   sale: "success",
   payment: "info",
   production: "warning",
+  operational_day: "neutral",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -54,6 +56,10 @@ const STATUS_LABELS: Record<string, string> = {
   IN_PROGRESS: "En Proceso",
   COMPLETED: "Completado",
   PENDING: "Pendiente",
+  OPEN: "Abierto",
+  CLOSING: "En cierre",
+  CLOSED: "Cerrado",
+  APPROVED: "Aprobado",
 };
 
 export default function MasterHistoryPage() {
@@ -141,6 +147,7 @@ export default function MasterHistoryPage() {
               <option value="sale">Ventas</option>
               <option value="payment">Pagos</option>
               <option value="production">Producción</option>
+              <option value="operational_day">Días Operativos</option>
             </select>
           </div>
           <div>

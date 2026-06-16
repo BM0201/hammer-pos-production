@@ -12,7 +12,7 @@ import type { Prisma } from "@prisma/client";
 
 type HistoryEntry = {
   id: string;
-  type: "sale" | "payment" | "production";
+  type: "sale" | "payment" | "production" | "operational_day";
   date: string;
   reference: string;
   branchName: string;
@@ -42,7 +42,7 @@ export async function GET(request: Request) {
     const branchId = url.searchParams.get("branchId");
     const startDate = url.searchParams.get("startDate");
     const endDate = url.searchParams.get("endDate");
-    const typeFilter = url.searchParams.get("type"); // sale | payment | production
+    const typeFilter = url.searchParams.get("type"); // sale | payment | production | operational_day
     const page = Math.max(1, Number(url.searchParams.get("page") ?? "1"));
     const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? "30")));
 
@@ -181,6 +181,53 @@ export async function GET(request: Request) {
           amount: Number(b.totalCost),
           status: b.status,
           user: formatActor(b.createdBy),
+        });
+      }
+    }
+
+    // ─── Operational Days ────────────────────────────────
+    if (!typeFilter || typeFilter === "operational_day") {
+      const dayWhere: Prisma.OperationalDayWhereInput = {
+        status: { in: ["CLOSED", "CANCELLED"] },
+      };
+      if (branchId) dayWhere.branchId = branchId;
+      if (startDate || endDate) {
+        dayWhere.closedAt = {};
+        if (startDate) (dayWhere.closedAt as Prisma.DateTimeFilter).gte = new Date(startDate);
+        if (endDate)   (dayWhere.closedAt as Prisma.DateTimeFilter).lte = new Date(endDate);
+      }
+      if (search) {
+        dayWhere.OR = [
+          { branch: { code: { contains: search, mode: "insensitive" } } },
+          { branch: { name: { contains: search, mode: "insensitive" } } },
+        ];
+      }
+
+      const days = await prisma.operationalDay.findMany({
+        where: dayWhere,
+        include: {
+          branch: { select: { name: true, code: true } },
+          closedBy: { select: { fullName: true, username: true } },
+          approvedBy: { select: { fullName: true, username: true } },
+        },
+        orderBy: { businessDate: "desc" },
+        take: limit,
+        skip: (page - 1) * limit,
+      });
+
+      for (const d of days) {
+        const approved = !!d.approvedAt;
+        entries.push({
+          id: d.id,
+          type: "operational_day",
+          date: (d.closedAt ?? d.businessDate).toISOString(),
+          reference: d.businessDate.toISOString().split("T")[0]!,
+          branchName: d.branch.name,
+          branchCode: d.branch.code,
+          description: `Día operativo ${d.branch.code} — ${approved ? "Aprobado" : d.status}`,
+          amount: Number(d.salesTotal ?? 0),
+          status: approved ? "APPROVED" : d.status,
+          user: approved ? formatActor(d.approvedBy) : formatActor(d.closedBy),
         });
       }
     }
