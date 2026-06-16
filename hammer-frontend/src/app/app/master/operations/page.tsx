@@ -21,6 +21,8 @@ type MasterDay = {
   autoClosedPendingReviewCount: number;
   pendingDispatchCount: number;
   criticalBrainDecisionCount: number;
+  approvedAt: string | null;
+  approvedByMasterId: string | null;
   summaryJson?: {
     openingCashTotal?: number;
     cashTenderNetTotal?: number;
@@ -61,6 +63,8 @@ export default function MasterOperationsPage() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing]   = useState(false);
   const [approvingId, setApprovingId]     = useState<string | null>(null);
+  const [reopeningId, setReopeningId]     = useState<string | null>(null);
+  const [tab, setTab]                     = useState<"pending" | "approved" | "all">("pending");
 
   const today = new Date().toISOString().split("T")[0];
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
@@ -80,7 +84,7 @@ export default function MasterOperationsPage() {
       blockers:       days.reduce(
         (s, d) => s + d.openCashSessionsCount + d.autoClosedPendingReviewCount + d.pendingDispatchCount + d.criticalBrainDecisionCount, 0,
       ),
-      closedPending:  days.filter((d) => d.status === "CLOSED").length,
+      closedPending:  days.filter((d) => d.status === "CLOSED" && !d.approvedAt).length,
     }),
     [days],
   );
@@ -98,6 +102,7 @@ export default function MasterOperationsPage() {
     if (selectedBranchId) params.set("branchId", selectedBranchId);
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo)   params.set("dateTo",   dateTo);
+    if (tab !== "all") params.set("reviewState", tab);
     try {
       const response = await apiFetch(`/api/master/operations?${params.toString()}`);
       const raw = await response.json();
@@ -110,7 +115,7 @@ export default function MasterOperationsPage() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [selectedBranchId, dateFrom, dateTo]);
+  }, [selectedBranchId, dateFrom, dateTo, tab]);
 
   useEffect(() => {
     void loadDays();
@@ -139,6 +144,36 @@ export default function MasterOperationsPage() {
       showToast("error", "Error de red al aprobar el día.");
     } finally {
       setApprovingId(null);
+    }
+  }
+
+  async function reopenDay(dayId: string, branchCode: string, wasApproved: boolean) {
+    const prompt = wasApproved
+      ? `Este día ya fue aprobado. Escribe una nota de justificación para reabrir el día de ${branchCode}:`
+      : `Escribe una nota para reabrir el día de ${branchCode} (requerido):`;
+    const note = window.prompt(prompt);
+    if (note === null) return; // cancelled
+    if (!note.trim()) {
+      showToast("warning", "La nota es requerida para reabrir el día.");
+      return;
+    }
+    setReopeningId(dayId);
+    try {
+      const response = await apiFetch(`/api/master/operations/${dayId}/reopen`, {
+        method: "POST",
+        body: JSON.stringify({ note: note.trim() }),
+      });
+      const raw = await response.json();
+      if (!response.ok) {
+        showToast("error", `${branchCode}: ${raw?.error?.message ?? "No se pudo reabrir el día."}`);
+        return;
+      }
+      showToast("success", `Día de ${branchCode} reabierto correctamente.`);
+      await loadDays();
+    } catch {
+      showToast("error", "Error de red al reabrir el día.");
+    } finally {
+      setReopeningId(null);
     }
   }
 
@@ -235,12 +270,33 @@ export default function MasterOperationsPage() {
         <div className="hm-module-card-header">
           <div className="flex items-center gap-2">
             <Activity className="text-[var(--color-text-muted)]" style={{ width: "1rem", height: "1rem" }} />
-            <h2 className="text-sm font-bold text-[var(--color-text)]">Días recientes</h2>
+            <h2 className="text-sm font-bold text-[var(--color-text)]">Días operativos</h2>
             <span className="hm-chip hm-chip-info text-xs">{days.length} día{days.length !== 1 ? "s" : ""}</span>
           </div>
           {isRefreshing && (
             <span className="text-xs text-[var(--color-text-muted)] animate-pulse">Actualizando...</span>
           )}
+        </div>
+
+        {/* Tab bar */}
+        <div className="flex gap-0.5 border-b border-[var(--color-border)] px-4 pt-1">
+          {(["pending", "approved", "all"] as const).map((t) => {
+            const labels = { pending: "Pendientes", approved: "Aprobados", all: "Todos" };
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-t transition-colors ${
+                  tab === t
+                    ? "border border-b-0 border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)]"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                }`}
+              >
+                {labels[t]}
+              </button>
+            );
+          })}
         </div>
 
         <div className="overflow-x-auto">
@@ -264,7 +320,8 @@ export default function MasterOperationsPage() {
             <tbody>
               {days.map((day) => {
                 const alerts = day.openCashSessionsCount + day.autoClosedPendingReviewCount + day.pendingDispatchCount + day.criticalBrainDecisionCount;
-                const canApprove = day.status === "CLOSED";
+                const canApprove = day.status === "CLOSED" && !day.approvedAt;
+                const canReopen  = day.status === "CLOSED";
                 return (
                   <tr key={day.id} className={`border-t border-[var(--color-border)] ${selectedBranchId === day.branch.id ? "bg-[color-mix(in_srgb,var(--color-info-50)_30%,white)]" : ""}`}>
                     <td className="py-2.5 font-semibold text-[var(--color-text)]">
@@ -281,9 +338,13 @@ export default function MasterOperationsPage() {
                       {new Date(day.businessDate).toLocaleDateString("es-NI", { timeZone: "UTC" })}
                     </td>
                     <td>
-                      <Badge variant={STATUS_BADGE[day.status] ?? "neutral"}>
-                        {STATUS_LABEL[day.status] ?? day.status}
-                      </Badge>
+                      {day.approvedAt ? (
+                        <Badge variant="success">Aprobado</Badge>
+                      ) : (
+                        <Badge variant={STATUS_BADGE[day.status] ?? "neutral"}>
+                          {STATUS_LABEL[day.status] ?? day.status}
+                        </Badge>
+                      )}
                     </td>
                     <td className="text-right font-semibold">{money(day.summaryJson?.paidSalesTotal ?? day.salesTotal)}</td>
                     <td className="text-right">{money(day.summaryJson?.expectedCashOnHand ?? 0)}</td>
@@ -323,6 +384,18 @@ export default function MasterOperationsPage() {
                             Aprobar
                           </Button>
                         )}
+                        {canReopen && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            loading={reopeningId === day.id}
+                            onClick={() => reopenDay(day.id, day.branch.code, !!day.approvedAt)}
+                            className="text-xs text-[var(--color-warning-700)]"
+                          >
+                            Reabrir
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -331,7 +404,7 @@ export default function MasterOperationsPage() {
               {days.length === 0 && (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-sm text-[var(--color-text-muted)]">
-                    Sin días operativos registrados.
+                    {tab === "pending" ? "Sin días pendientes de aprobación." : tab === "approved" ? "Sin días aprobados en este rango." : "Sin días operativos registrados."}
                   </td>
                 </tr>
               )}

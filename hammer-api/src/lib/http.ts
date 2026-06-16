@@ -97,6 +97,9 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "OPERATIONAL_DAY_NOT_CLOSED") {
       return errJson("CONFLICT", "El dia operativo no está cerrado. Debe cerrar el día antes de aprobarlo.", 409);
     }
+    if (error.message === "OPERATIONAL_DAY_REOPEN_NOTE_REQUIRED") {
+      return errJson("VALIDATION_ERROR", "Se requiere una nota de justificacion para reabrir un dia ya aprobado.", 400);
+    }
     if (error.message === "OPERATIONAL_DAY_ALREADY_APPROVED") {
       return errJson("CONFLICT", "El dia operativo ya fue aprobado anteriormente.", 409);
     }

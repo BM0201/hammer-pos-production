@@ -98,13 +98,18 @@ async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: 
       where: { operationalDayId: day.id, status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW, requiresReview: true },
     }),
     tx.dispatchTicket.count({
-      where: { branchId: day.branchId, status: { in: [...ACTIVE_DISPATCH_STATUSES] } },
+      where: {
+        branchId: day.branchId,
+        status: { in: [...ACTIVE_DISPATCH_STATUSES] },
+        createdAt: { gte: start, lt: end },
+      },
     }),
     tx.brainDecision.count({
       where: {
         branchId: day.branchId,
         status: { in: ["OPEN", "APPROVED", "MANUAL_REVIEW", "FAILED"] },
         severity: { in: [BrainDecisionSeverity.CRITICAL, BrainDecisionSeverity.HIGH] },
+        createdAt: { gte: start, lt: end },
       },
     }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id }, _sum: { expectedCashAmount: true } }),
@@ -359,13 +364,16 @@ function buildChecklist(summary: Awaited<ReturnType<typeof calculateOperationalS
 }
 
 export async function getCurrentOperationalDay(branchId: string) {
-  const day = await prisma.operationalDay.findFirst({
-    where: { branchId, status: OperationalDayStatus.OPEN },
+  const today = businessDateFromNow();
+  const day = await prisma.operationalDay.findUnique({
+    where: { branchId_businessDate: { branchId, businessDate: today } },
     include: { branch: true, openedBy: { select: { id: true, username: true, fullName: true } } },
-    orderBy: { openedAt: "desc" },
   });
   if (!day) return null;
-  await prisma.$transaction((tx) => refreshOperationalDaySummaryTx(tx, day.id));
+  // Only refresh live summary for OPEN days; finalized days have a stored snapshot
+  if (day.status === OperationalDayStatus.OPEN) {
+    await prisma.$transaction((tx) => refreshOperationalDaySummaryTx(tx, day.id));
+  }
   return prisma.operationalDay.findUnique({
     where: { id: day.id },
     include: {
@@ -695,6 +703,16 @@ export async function approveOperationalDayReview(input: { id: string; actorUser
         approvedByMasterId: input.actorUserId,
         approvedAt: new Date(),
         summaryJson: toJsonValue(summary),
+        salesTotal: decimal(summary.salesTotal),
+        paidOrdersTotal: decimal(summary.paidOrdersTotal),
+        pendingPaymentTotal: decimal(summary.pendingPaymentTotal),
+        expectedCashTotal: decimal(summary.expectedCashTotal),
+        countedCashTotal: decimal(summary.countedCashTotal),
+        cashDifferenceTotal: decimal(summary.cashDifferenceTotal),
+        openCashSessionsCount: summary.openCashSessionsCount,
+        autoClosedPendingReviewCount: summary.autoClosedPendingReviewCount,
+        pendingDispatchCount: summary.pendingDispatchCount,
+        criticalBrainDecisionCount: summary.criticalBrainDecisionCount,
       },
     });
 
@@ -741,37 +759,54 @@ export async function cancelOperationalDay(input: { id: string; actorUserId: str
   });
 }
 
-export async function listOperationalDays(filters: { date?: string; dateFrom?: string; dateTo?: string; branchId?: string; status?: OperationalDayStatus; hasIssues?: boolean }) {
-  const businessDate  = filters.date     ? businessDateFromInput(filters.date)     : undefined;
-  const dateFromVal   = filters.dateFrom ? businessDateFromInput(filters.dateFrom) : undefined;
-  const dateToVal     = filters.dateTo   ? businessDateFromInput(filters.dateTo)   : undefined;
+export async function listOperationalDays(filters: {
+  date?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  branchId?: string;
+  status?: OperationalDayStatus;
+  hasIssues?: boolean;
+  reviewState?: "pending" | "approved" | "all";
+}) {
+  const businessDate = filters.date     ? businessDateFromInput(filters.date)     : undefined;
+  const dateFromVal  = filters.dateFrom ? businessDateFromInput(filters.dateFrom) : undefined;
+  const dateToVal    = filters.dateTo   ? businessDateFromInput(filters.dateTo)   : undefined;
 
-  let businessDateFilter: { businessDate?: Date | { gte?: Date; lte?: Date } } = {};
+  const where: Prisma.OperationalDayWhereInput = {};
+
   if (businessDate) {
-    businessDateFilter = { businessDate };
+    where.businessDate = businessDate;
   } else if (dateFromVal || dateToVal) {
-    businessDateFilter = {
-      businessDate: {
-        ...(dateFromVal ? { gte: dateFromVal } : {}),
-        ...(dateToVal   ? { lte: dateToVal   } : {}),
-      },
+    where.businessDate = {
+      ...(dateFromVal ? { gte: dateFromVal } : {}),
+      ...(dateToVal   ? { lte: dateToVal   } : {}),
     };
   }
 
+  if (filters.branchId) where.branchId = filters.branchId;
+
+  if (filters.reviewState === "pending") {
+    // Pending = not yet approved and not cancelled
+    where.approvedAt = null;
+    // Only override status filter if caller did not specify one explicitly
+    if (!filters.status) where.status = { not: OperationalDayStatus.CANCELLED };
+  } else if (filters.reviewState === "approved") {
+    where.approvedAt = { not: null };
+  } else if (filters.status) {
+    where.status = filters.status;
+  }
+
+  if (filters.hasIssues) {
+    where.OR = [
+      { openCashSessionsCount: { gt: 0 } },
+      { autoClosedPendingReviewCount: { gt: 0 } },
+      { pendingDispatchCount: { gt: 0 } },
+      { criticalBrainDecisionCount: { gt: 0 } },
+    ];
+  }
+
   return prisma.operationalDay.findMany({
-    where: {
-      ...businessDateFilter,
-      ...(filters.branchId ? { branchId: filters.branchId } : {}),
-      ...(filters.status ? { status: filters.status } : {}),
-      ...(filters.hasIssues ? {
-        OR: [
-          { openCashSessionsCount: { gt: 0 } },
-          { autoClosedPendingReviewCount: { gt: 0 } },
-          { pendingDispatchCount: { gt: 0 } },
-          { criticalBrainDecisionCount: { gt: 0 } },
-        ],
-      } : {}),
-    },
+    where,
     include: {
       branch: { select: { id: true, code: true, name: true } },
       openedBy: { select: { id: true, username: true, fullName: true } },
@@ -828,4 +863,47 @@ export async function getDailyReport(id: string) {
 export async function getOperationalDayBranchId(id: string) {
   const day = await prisma.operationalDay.findUniqueOrThrow({ where: { id }, select: { branchId: true } });
   return day.branchId;
+}
+
+export async function reopenOperationalDay(input: { id: string; actorUserId: string; note: string }) {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${input.id} FOR UPDATE`;
+
+    const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
+
+    if (day.status !== OperationalDayStatus.CLOSED) throw new Error("OPERATIONAL_DAY_NOT_CLOSED");
+
+    // Reopening an already-approved day requires a written justification for the audit trail
+    if (day.approvedAt && !input.note?.trim()) throw new Error("OPERATIONAL_DAY_REOPEN_NOTE_REQUIRED");
+
+    const reopened = await tx.operationalDay.update({
+      where: { id: input.id },
+      data: {
+        status: OperationalDayStatus.OPEN,
+        closedAt: null,
+        closedByUserId: null,
+        approvedAt: null,
+        approvedByMasterId: null,
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: day.branchId,
+        module: "operations",
+        action: "OPERATIONAL_DAY_REOPENED",
+        entityType: "OperationalDay",
+        entityId: day.id,
+        metadataJson: toJsonValue({
+          note: input.note,
+          wasApproved: !!day.approvedAt,
+          previousApprovedAt: day.approvedAt,
+          previousApprovedByMasterId: day.approvedByMasterId,
+        }),
+      },
+    });
+
+    return reopened;
+  });
 }

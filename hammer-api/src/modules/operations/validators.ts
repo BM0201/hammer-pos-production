@@ -29,4 +29,5 @@ export const masterOperationalDaysSchema = z.object({
   branchId: z.string().cuid().optional(),
   status: z.nativeEnum(OperationalDayStatus).optional(),
   hasIssues: z.coerce.boolean().optional(),
+  reviewState: z.enum(["pending", "approved", "all"]).optional(),
 });
