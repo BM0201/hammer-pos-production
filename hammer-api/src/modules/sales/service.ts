@@ -505,6 +505,20 @@ export async function updateSaleOrderLine(input: {
   });
 }
 
+export async function updateSaleOrderNotes(input: {
+  saleOrderId: string;
+  notes: string | null;
+  actorUserId: string;
+}) {
+  const order = await prisma.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
+  if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
+  return prisma.saleOrder.update({
+    where: { id: input.saleOrderId },
+    data: { notes: input.notes ?? null },
+    select: { id: true, notes: true },
+  });
+}
+
 export async function removeSaleOrderLine(input: { saleOrderId: string; lineId: string; actorUserId: string }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });

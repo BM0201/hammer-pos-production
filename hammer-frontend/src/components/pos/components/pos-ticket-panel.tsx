@@ -58,6 +58,7 @@ type PosTicketPanelProps = {
   displayedTotalAmount: number;
   sendButtonRef: { current: HTMLButtonElement | null };
   onCompleteTicket: (target: "QUEUE" | "DIRECT") => void;
+  onUpdateNotes: (notes: string) => void;
 };
 
 export function PosTicketPanel({
@@ -94,6 +95,7 @@ export function PosTicketPanel({
   displayedTotalAmount,
   sendButtonRef,
   onCompleteTicket,
+  onUpdateNotes,
 }: PosTicketPanelProps) {
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Tab" && !event.shiftKey) {
@@ -372,6 +374,25 @@ export function PosTicketPanel({
             </div>
           ) : null}
         </div>
+
+          {/* Order notes */}
+          {order && (
+            <div className="mt-3">
+              <label className="block text-xs font-medium text-[var(--color-text-muted)] mb-1">
+                Notas / instrucciones
+              </label>
+              <textarea
+                className="w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm outline-none resize-none focus:border-[var(--color-info-400)] focus:ring-2 focus:ring-[var(--color-info-100)]"
+                rows={2}
+                maxLength={1000}
+                placeholder="Instrucciones especiales, nombre del cliente, referencias..."
+                defaultValue={order.notes ?? ""}
+                disabled={isBusy}
+                data-testid="pos-order-notes"
+                onBlur={(e) => onUpdateNotes(e.currentTarget.value)}
+              />
+            </div>
+          )}
 
         <PosCheckoutBar
           hasTicketLines={hasTicketLines}

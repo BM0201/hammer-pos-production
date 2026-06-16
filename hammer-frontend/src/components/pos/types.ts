@@ -68,6 +68,7 @@ export type TicketOrder = {
   discountTotal: string;
   taxTotal: string;
   transportAmount?: string;
+  notes?: string | null;
   lines?: TicketLine[];
 };
 

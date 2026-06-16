@@ -228,6 +228,26 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
     }
   }
 
+  async function updateOrderNotes(notes: string) {
+    if (!order) return;
+    const { onNotice } = optsRef.current;
+    try {
+      const response = await apiFetch(`/api/sales/orders/${order.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: notes.trim() || null }),
+      });
+      if (!response.ok) {
+        onNotice("No se pudieron guardar las notas.", 6000);
+      }
+      // Order notes update is lightweight — no full reloadOrder needed.
+      // Reflect locally to avoid a round-trip.
+      setOrder((prev) => prev ? { ...prev, notes: notes.trim() || null } : prev);
+    } catch {
+      onNotice("Error al guardar las notas.", 6000);
+    }
+  }
+
   return {
     order,
     isInitialLoading,
@@ -236,6 +256,7 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
     addProduct,
     commitLineQuantity,
     removeLine,
+    updateOrderNotes,
     ticketLines,
     lineDraftQuantities,
     setLineDraftQuantities,

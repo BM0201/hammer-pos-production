@@ -62,7 +62,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   const {
     order, isInitialLoading, isMutatingOrder, reloadOrder,
-    addProduct, commitLineQuantity, removeLine,
+    addProduct, commitLineQuantity, removeLine, updateOrderNotes,
     ticketLines, lineDraftQuantities, setLineDraftQuantities,
     lineQuantityErrors, setLineQuantityErrors, lineUpdatingId,
   } = usePosOrder(branchId, {
@@ -174,6 +174,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
             displayedTotalAmount={displayedTotalAmount}
             sendButtonRef={sendButtonRef}
             onCompleteTicket={completeTicket}
+            onUpdateNotes={updateOrderNotes}
           />
         </div>
       </section>
