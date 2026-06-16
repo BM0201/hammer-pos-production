@@ -4,7 +4,7 @@
  * Query params: branchId, documentType, startDate, endDate, page, limit
  */
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
@@ -13,7 +13,8 @@ import type { Prisma, DocumentType } from "@prisma/client";
 export async function GET(request: Request) {
   try {
     const session = await getCurrentSession();
-    assertMaster(session!);
+    assertAuthenticated(session);
+    assertMaster(session);
 
     const url = new URL(request.url);
     const branchId = url.searchParams.get("branchId");

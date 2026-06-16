@@ -4,7 +4,7 @@
  * Query params: search, branchId, startDate, endDate, type (sale|payment|production), page, limit
  */
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
@@ -34,7 +34,8 @@ function formatActor(user: { fullName?: string | null; username?: string | null 
 export async function GET(request: Request) {
   try {
     const session = await getCurrentSession();
-    assertMaster(session!);
+    assertAuthenticated(session);
+    assertMaster(session);
 
     const url = new URL(request.url);
     const search = url.searchParams.get("search") ?? "";

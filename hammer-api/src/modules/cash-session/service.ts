@@ -118,7 +118,7 @@ export async function openCashSession(input: {
       if (!cashBox || cashBox.branchId !== input.branchId || !cashBox.isActive) {
         throw new Error("CASH_SESSION_CASH_BOX_INVALID");
       }
-      const operationalDay = await ensureOpenOperationalDayTx(tx, input.branchId);
+      const operationalDay = await ensureOpenOperationalDayTx(tx, input.branchId, input.actorUserId);
 
       // FIX: Removed manual existingOpen findFirst check — rely solely on the
       // unique constraint on activeSessionKey for atomicity. This eliminates the
@@ -341,6 +341,15 @@ export async function requestCloseCashSession(input: {
   actorUserId: string;
 }) {
   return prisma.$transaction(async (tx) => {
+    // Lock the row first — prevents two concurrent close-requests from both reading
+    // OPEN, both passing the status guard, and both writing RECONCILING + audit log.
+    // Mirrors the pattern already used in closeCashSession and reviewAutoClosedCashSession.
+    await tx.$queryRaw`
+      SELECT id FROM "CashSession"
+      WHERE id = ${input.cashSessionId}
+      FOR UPDATE
+    `;
+
     const session = await tx.cashSession.findUniqueOrThrow({
       where: { id: input.cashSessionId },
       include: { physicalCashBox: true },
@@ -473,7 +482,7 @@ export async function closeCashSession(input: {
         },
       });
 
-      throw new Error("CASH_SESSION_DISCREPANCY_REQUIRES_APPROVAL");
+      throw new Error("APPROVAL_REQUESTED");
     }
 
     const updated = await tx.cashSession.update({

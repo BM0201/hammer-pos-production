@@ -227,10 +227,54 @@ export async function getOpenOperationalDayForBranchTx(tx: Prisma.TransactionCli
   });
 }
 
-export async function ensureOpenOperationalDayTx(tx: Prisma.TransactionClient, branchId: string) {
+export async function ensureOpenOperationalDayTx(
+  tx: Prisma.TransactionClient,
+  branchId: string,
+  openedByUserId?: string,
+) {
+  // Lock the branch row first to serialize concurrent cash-session opens that
+  // would otherwise race to auto-create the operational day and hit the
+  // @@unique([branchId, businessDate]) constraint.
+  await tx.$queryRaw`SELECT id FROM "Branch" WHERE id = ${branchId} FOR UPDATE`;
+
   const day = await getOpenOperationalDayForBranchTx(tx, branchId);
-  if (!day) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
-  return day;
+  if (day) return day;
+
+  // Auto-open the operational day as a side-effect of the first cash session
+  // opening. No elevated-role check is needed here — the cash session open
+  // route already enforces RBAC; this is purely a bookkeeping side-effect.
+  if (!openedByUserId) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
+
+  const branch = await tx.branch.findUnique({ where: { id: branchId } });
+  if (!branch?.isActive) throw new Error("BRANCH_NOT_ACTIVE");
+
+  const businessDate = businessDateFromNow();
+  const created = await tx.operationalDay.create({
+    data: {
+      branchId,
+      businessDate,
+      openedByUserId,
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: openedByUserId,
+      branchId,
+      module: "operations",
+      action: "OPERATIONAL_DAY_AUTO_OPENED",
+      entityType: "OperationalDay",
+      entityId: created.id,
+      metadataJson: {
+        branchId,
+        businessDate,
+        trigger: "CASH_SESSION_OPEN",
+        timezone: TIMEZONE,
+      },
+    },
+  });
+
+  return created;
 }
 
 function buildChecklist(summary: Awaited<ReturnType<typeof calculateOperationalSummaryTx>>, dayStatus: OperationalDayStatus): OperationalDayClosePreview {
@@ -472,8 +516,14 @@ export type OperationalDayBlocker = {
 
 export async function approveOperationalDayReview(input: { id: string; actorUserId: string }) {
   return prisma.$transaction(async (tx) => {
+    // Lock the row to prevent concurrent duplicate approvals
+    await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${input.id} FOR UPDATE`;
+
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
-    if (day.approvedAt) throw new Error("OPERATIONAL_DAY_ALREADY_APPROVED");
+
+    // Idempotency guard: if already approved, return success without re-running
+    if (day.approvedAt) return day;
+
     if (day.status !== OperationalDayStatus.CLOSED) throw new Error("OPERATIONAL_DAY_NOT_CLOSED");
 
     const summary = await calculateOperationalSummaryTx(tx, day);

@@ -4,6 +4,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { calculatePricingSuggestionForBranch, calculateSuggestedPriceForProduct } from "@/modules/pricing/service";
 import { pricingSuggestionPayloadSchema } from "@/modules/pricing/validators";
+import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
 
 /**
@@ -60,6 +61,7 @@ export async function POST(req: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     assertMaster(session);
+    await requireCsrf(req, session);
 
     const parsed = pricingSuggestionPayloadSchema.safeParse(await req.json());
     if (!parsed.success) {

@@ -4,7 +4,7 @@
  */
 import { z } from "zod";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, notFound, validationFail, noContent } from "@/lib/api/response";
@@ -15,7 +15,8 @@ type RouteParams = { params: Promise<{ id: string }> };
 export async function GET(_request: Request, { params }: RouteParams) {
   try {
     const session = await getCurrentSession();
-    assertMaster(session!);
+    assertAuthenticated(session);
+    assertMaster(session);
 
     const { id } = await params;
     const template = await prisma.documentTemplate.findUnique({
@@ -41,7 +42,8 @@ const updateTemplateSchema = z.object({
 export async function PATCH(request: Request, { params }: RouteParams) {
   try {
     const session = await getCurrentSession();
-    assertMaster(session!);
+    assertAuthenticated(session);
+    assertMaster(session);
     await requireCsrf(request, session);
 
     const { id } = await params;
@@ -81,7 +83,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 export async function DELETE(request: Request, { params }: RouteParams) {
   try {
     const session = await getCurrentSession();
-    assertMaster(session!);
+    assertAuthenticated(session);
+    assertMaster(session);
     await requireCsrf(request, session);
 
     const { id } = await params;
