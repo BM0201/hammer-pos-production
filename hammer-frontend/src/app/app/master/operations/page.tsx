@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle, Activity, Archive, Building2, CalendarRange,
+  Activity, Archive, Building2,
   CheckCircle2, ChevronDown, ChevronRight, RefreshCw, Shield, TrendingUp, Zap,
 } from "lucide-react";
 import { OperationalDayPanel } from "@/components/operations/operational-day-panel";
@@ -289,7 +289,6 @@ function ForceCleanupPanel({
                 <Button
                   variant="primary"
                   size="sm"
-                  loading={step === "executing"}
                   onClick={runExecute}
                   disabled={!note.trim() || !anyActionSelected}
                   className="bg-[var(--color-warning-600)] hover:bg-[var(--color-warning-700)]"

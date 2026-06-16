@@ -107,7 +107,16 @@ export async function buildBranchRealtimeSalesSummary(
     db.payment.aggregate({ where: paymentWhere, _sum: { amount: true }, _count: { _all: true } }),
     db.payment.count({ where: voidedWhere }),
     db.saleOrder.aggregate({
-      where: { branchId: branch.id, status: SaleOrderStatus.PENDING_PAYMENT },
+      // Scope pending-payment orders to the operational window (consistent with
+      // paid/cancelled above and with the Master approval flow). Without this,
+      // stale unpaid orders from previous days inflate pendingPaymentTotal and,
+      // because pending_payments is a HARD close blocker, the operational day
+      // could never be closed.
+      where: {
+        branchId: branch.id,
+        status: SaleOrderStatus.PENDING_PAYMENT,
+        createdAt: { gte: window.start, lt: window.end },
+      },
       _sum: { grandTotal: true },
       _count: { _all: true },
     }),

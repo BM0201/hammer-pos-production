@@ -49,7 +49,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
   // Stable callback — prevents usePosCatalog/usePosPrint from recreating their
   // internal useCallbacks on every BranchPos render, which caused loadTopSelling
   // and the search debounce to re-fire on every state change (typing, add product, etc.)
-  const onNoticeError = useCallback((msg: string) => setNoticeTimed(msg, 10000), []);
+  const onNoticeError = useCallback((msg: string) => setNoticeTimed(msg, 10000), [setNoticeTimed]);
 
   const { printModalOrderId, setPrintModalOrderId, printModalOrderNumber, setPrintModalOrderNumber, autoPrintCompletedOrder } =
     usePosPrint(branchId, onNoticeError);

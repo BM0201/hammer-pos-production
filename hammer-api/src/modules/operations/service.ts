@@ -394,11 +394,40 @@ export async function getCurrentOperationalDay(branchId: string) {
 
 export async function openOperationalDay(input: { branchId: string; businessDate?: string; notes?: string | null; actorUserId: string }) {
   return prisma.$transaction(async (tx) => {
+    // Lock the branch row to serialize concurrent opens that would otherwise
+    // race to create the operational day and hit @@unique([branchId, businessDate]).
+    await tx.$queryRaw`SELECT id FROM "Branch" WHERE id = ${input.branchId} FOR UPDATE`;
+
     const branch = await tx.branch.findUnique({ where: { id: input.branchId } });
     if (!branch?.isActive) throw new Error("BRANCH_NOT_ACTIVE");
-    const openDay = await getOpenOperationalDayForBranchTx(tx, input.branchId);
-    if (openDay) throw new Error("OPERATIONAL_DAY_ALREADY_OPEN");
+
     const businessDate = businessDateFromInput(input.businessDate);
+
+    // Guard 1 — Stale OPEN day from a *previous* businessDate.
+    // getOpenOperationalDayForBranchTx matches any OPEN day regardless of date,
+    // so a leftover day from yesterday silently blocked opening today's day with
+    // a misleading "ya existe un dia abierto". Distinguish the two cases:
+    //  - same businessDate that is OPEN → genuinely already open today.
+    //  - different (older) businessDate that is OPEN → stale; needs Master cleanup.
+    const openDay = await getOpenOperationalDayForBranchTx(tx, input.branchId);
+    if (openDay) {
+      if (openDay.businessDate.getTime() === businessDate.getTime()) {
+        throw new Error("OPERATIONAL_DAY_ALREADY_OPEN");
+      }
+      throw new Error("STALE_OPERATIONAL_DAY_OPEN");
+    }
+
+    // Guard 2 — A day already exists for this businessDate but is NOT open
+    // (CLOSED / CLOSING / CANCELLED). Creating it again would violate the
+    // @@unique([branchId, businessDate]) constraint and surface an opaque P2002.
+    // Return a clear, actionable error instead: the day was already closed and a
+    // Master must reopen it to continue operating.
+    const existingDay = await tx.operationalDay.findUnique({
+      where: { branchId_businessDate: { branchId: input.branchId, businessDate } },
+      select: { id: true, status: true },
+    });
+    if (existingDay) throw new Error("OPERATIONAL_DAY_ALREADY_CLOSED");
+
     const day = await tx.operationalDay.create({
       data: {
         branchId: input.branchId,
