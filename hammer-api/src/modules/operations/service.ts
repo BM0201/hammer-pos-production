@@ -249,6 +249,21 @@ export async function ensureOpenOperationalDayTx(
   if (!branch?.isActive) throw new Error("BRANCH_NOT_ACTIVE");
 
   const businessDate = businessDateFromNow();
+
+  // Guard: if a day already exists for today's businessDate but is not OPEN
+  // (e.g. CLOSED, CLOSING, CANCELLED), attempting create would hit the
+  // @@unique([branchId, businessDate]) constraint with a P2002.
+  // Surface a meaningful error instead.
+  const existingDay = await tx.operationalDay.findUnique({
+    where: { branchId_businessDate: { branchId, businessDate } },
+    select: { id: true, status: true },
+  });
+  if (existingDay) {
+    // Should not happen — getOpenOperationalDayForBranchTx above would have
+    // returned it if OPEN. At this point it must be non-OPEN.
+    throw new Error("OPERATIONAL_DAY_ALREADY_CLOSED");
+  }
+
   const created = await tx.operationalDay.create({
     data: {
       branchId,

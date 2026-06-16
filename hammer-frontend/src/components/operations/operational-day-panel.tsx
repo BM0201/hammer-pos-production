@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
+import { useSession } from "@/lib/client/session";
+import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +45,9 @@ function money(value: string | number | null | undefined) {
 }
 
 export function OperationalDayPanel({ branchId, masterMode = false }: { branchId: string; masterMode?: boolean }) {
+  const sessionState = useSession();
+  const canOpenDay = sessionState.status === "authenticated" &&
+    canInAnyAssignedBranch(sessionState.session, CAPABILITIES.OPERATIONAL_DAY_OPEN);
   const [day, setDay]         = useState<OperationalDay | null>(null);
   const [preview, setPreview] = useState<ClosePreview | null>(null);
   const [report, setReport]   = useState<DailyReport | null>(null);
@@ -169,9 +174,13 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
         <EmptyState
           icon={<Wallet className="h-full w-full" />}
           title="Sin día operativo activo"
-          description="Abre el día antes de registrar ventas, abrir caja o despachar pedidos."
+          description={
+            canOpenDay
+              ? "Abre el día antes de registrar ventas, abrir caja o despachar pedidos."
+              : "No hay un día operativo abierto. Un administrador debe abrirlo antes de que puedas abrir caja."
+          }
           tone="info"
-          action={<Button variant="primary" onClick={openDay}>Abrir día operativo</Button>}
+          action={canOpenDay ? <Button variant="primary" onClick={openDay}>Abrir día operativo</Button> : undefined}
         />
       </div>
     );

@@ -28,7 +28,7 @@ export function DecisionActionButtons({
   busy: boolean;
   onAction: (action: BrainDecisionAction) => void;
 }) {
-  const canApprove = status === "OPEN" || status === "SNOOZED" || status === "FAILED";
+  const canApprove = status === "OPEN" || status === "SNOOZED" || status === "FAILED" || status === "MANUAL_REVIEW";
   const canExecute = status === "APPROVED";
   const canManualReview = status === "OPEN" || status === "APPROVED" || status === "FAILED";
   const canSnooze = status === "OPEN" || status === "APPROVED" || status === "MANUAL_REVIEW";

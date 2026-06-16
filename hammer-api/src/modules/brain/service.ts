@@ -549,7 +549,7 @@ export async function persistBrainDecisions(
 export async function approveBrainDecision(id: string, actorUserId: string, note?: string) {
   const decision = await prisma.brainDecision.findUnique({ where: { id } });
   if (!decision) throw new Error("NOT_FOUND");
-  if (!["OPEN", "SNOOZED", "FAILED"].includes(decision.status)) throw new Error("INVALID_INPUT: Solo se pueden aprobar decisiones abiertas, fallidas o pospuestas.");
+  if (!["OPEN", "SNOOZED", "FAILED", "MANUAL_REVIEW"].includes(decision.status)) throw new Error("INVALID_INPUT: Solo se pueden aprobar decisiones abiertas, fallidas, pospuestas o en revision manual.");
 
   const updated = await prisma.brainDecision.update({
     where: { id },

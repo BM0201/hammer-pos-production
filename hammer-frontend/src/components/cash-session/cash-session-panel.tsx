@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
+import { CashMovementsPanel } from "./cash-movements-panel";
 
 type CashBox = {
   id: string;
@@ -35,6 +36,7 @@ const SESSION_REASON_MESSAGES: Record<string, string> = {
   CASH_SESSION_NOT_OPEN: "La sesión ya no está abierta.",
   CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW: "La caja fue cerrada automaticamente por horario y requiere revision. Abre una nueva caja para continuar.",
   OPERATIONAL_DAY_NOT_OPEN: "No hay dia operativo abierto para esta sucursal. Un administrador debe abrirlo antes de abrir caja.",
+  OPERATIONAL_DAY_ALREADY_CLOSED: "El dia operativo de hoy ya fue cerrado. No se puede abrir caja hasta que un administrador inicie un nuevo dia operativo.",
   CASH_SESSION_UNRESOLVED_ORDERS: "No puedes cerrar caja con órdenes pendientes de pago o despacho.",
   CASH_SESSION_NOT_RECONCILING: "La sesión debe estar en conciliación antes de cerrarla.",
   CASH_SESSION_NOT_PENDING_AUTO_REVIEW: "La sesion ya no esta pendiente de revision automatica.",
@@ -445,6 +447,11 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
             <strong>Monto de apertura:</strong> C$ {Number(activeSession.openingAmount).toFixed(2)}
           </div>
         </div>
+      )}
+
+      {/* Cash movements panel — visible while session is open */}
+      {activeSession && (
+        <CashMovementsPanel cashSessionId={activeSession.id} />
       )}
 
       {/* Request close */}

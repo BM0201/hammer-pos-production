@@ -8,7 +8,7 @@ import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rba
 import { requireCsrf } from "@/modules/security/csrf";
 import { created, fail } from "@/lib/api/response";
 
-const CONFLICT_REASONS = new Set(["CASH_SESSION_ALREADY_OPEN", "CASH_SESSION_CASH_BOX_INVALID", "OPERATIONAL_DAY_NOT_OPEN"]);
+const CONFLICT_REASONS = new Set(["CASH_SESSION_ALREADY_OPEN", "CASH_SESSION_CASH_BOX_INVALID", "OPERATIONAL_DAY_NOT_OPEN", "OPERATIONAL_DAY_ALREADY_CLOSED"]);
 
 export async function POST(request: Request) {
   let parsedBranchId: string | undefined;

@@ -280,6 +280,17 @@ export async function revokeCashSessionOperator(input: {
   });
 }
 
+export async function listCashMovements(cashSessionId: string) {
+  return prisma.cashMovement.findMany({
+    where: { cashSessionId },
+    orderBy: { createdAt: "desc" },
+    include: {
+      createdBy: { select: { id: true, fullName: true, username: true } },
+    },
+    take: 50,
+  });
+}
+
 export async function createCashMovement(input: {
   cashSessionId: string;
   type: CashMovementType;
