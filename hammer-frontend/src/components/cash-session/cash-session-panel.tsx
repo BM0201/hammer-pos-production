@@ -163,10 +163,10 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
     const typedJson = json as { data?: CashSession | null };
     if (typedJson.data?.status === "RECONCILING") {
       setActiveSession(null);
-      setReconcilingSessionId(json.data.id);
+      setReconcilingSessionId(typedJson.data.id);
       publishStatus({
         hasOpenSession: false,
-        cashSessionId: json.data.id,
+        cashSessionId: typedJson.data.id,
         physicalCashBoxId: cashBoxId,
         status: "RECONCILING",
       });
