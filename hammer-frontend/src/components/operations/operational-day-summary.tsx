@@ -25,7 +25,11 @@ export type OperationalDay = {
   openedBy?: { username: string; fullName?: string | null };
   approvedBy?: { username: string; fullName?: string | null };
   cashSessions?: CashSessionRow[];
-  summaryJson?: { paymentsByMethod?: Array<{ method: string; amount: number; count: number }> } | null;
+  summaryJson?: {
+    paymentsByMethod?: Array<{ method: string; amount: number; count: number }>;
+    cashExpensesTotal?: number | string | null;
+    cashOutflowsTotal?: number | string | null;
+  } | null;
 };
 
 export type CashSessionRow = {
@@ -168,8 +172,20 @@ export function OperationalDaySummary({ day }: { day: OperationalDay }) {
         </p>
         <div className="hm-kpi-grid">
           <KpiTile label="Cajas abiertas"      value={day.openCashSessionsCount}          icon={Wallet}
-            tone={day.openCashSessionsCount > 0 ? "alert" : "ok"}
-            subtext={day.openCashSessionsCount > 0 ? "Bloquea el cierre" : "Sin cajas abiertas"}
+            tone={
+              day.openCashSessionsCount === 0
+                ? "ok"
+                : day.status === "CLOSING" || day.status === "CLOSED"
+                  ? "alert"
+                  : "default"
+            }
+            subtext={
+              day.openCashSessionsCount === 0
+                ? "Sin cajas abiertas"
+                : day.status === "CLOSING" || day.status === "CLOSED"
+                  ? "Bloquea el cierre"
+                  : "En uso — operación normal"
+            }
           />
           <KpiTile label="Auto-cierre pendiente" value={day.autoClosedPendingReviewCount} icon={AlertTriangle}
             tone={day.autoClosedPendingReviewCount > 0 ? "alert" : "ok"}
@@ -178,6 +194,14 @@ export function OperationalDaySummary({ day }: { day: OperationalDay }) {
           <KpiTile label="Diferencia de caja"  value={money(day.cashDifferenceTotal)}     icon={XCircle}
             tone={cashDiffTone}
             subtext={Math.abs(diff) > 100 ? "Diferencia alta — requiere nota" : diff !== 0 ? "Diferencia pequeña" : "Sin diferencia"}
+          />
+          <KpiTile label="Gastos / egresos de caja" value={money(day.summaryJson?.cashOutflowsTotal)} icon={Wallet}
+            tone="default"
+            subtext={
+              Number(day.summaryJson?.cashExpensesTotal ?? 0) > 0
+                ? `Gastos: ${money(day.summaryJson?.cashExpensesTotal)}`
+                : "Sin gastos registrados"
+            }
           />
         </div>
       </div>

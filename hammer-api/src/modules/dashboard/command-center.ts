@@ -25,16 +25,17 @@ function num(value: { toNumber: () => number } | null | undefined): number {
   return value ? value.toNumber() : 0;
 }
 
-function movementSignedAmount(type: CashMovementType, amount: number) {
-  if (
+function isCashOutflow(type: CashMovementType) {
+  return (
     type === CashMovementType.CASH_OUT ||
     type === CashMovementType.BANK_DEPOSIT_OUT ||
     type === CashMovementType.EXPENSE_OUT ||
     type === CashMovementType.REFUND_OUT
-  ) {
-    return -amount;
-  }
-  return amount;
+  );
+}
+
+function movementSignedAmount(type: CashMovementType, amount: number) {
+  return isCashOutflow(type) ? -amount : amount;
 }
 
 /** Cash sessions that still require attention (open, reconciling or pending review). */
@@ -225,6 +226,8 @@ export async function getCommandCenterSnapshot() {
       openingCashTotal: number;
       cashTenderNetTotal: number;
       cashMovementsNet: number;
+      cashExpensesTotal: number;
+      cashOutflowsTotal: number;
       cardTenderTotal: number;
       transferTenderTotal: number;
       otherTenderTotal: number;
@@ -239,6 +242,8 @@ export async function getCommandCenterSnapshot() {
       openingCashTotal: 0,
       cashTenderNetTotal: 0,
       cashMovementsNet: 0,
+      cashExpensesTotal: 0,
+      cashOutflowsTotal: 0,
       cardTenderTotal: 0,
       transferTenderTotal: 0,
       otherTenderTotal: 0,
@@ -272,7 +277,12 @@ export async function getCommandCenterSnapshot() {
 
   for (const movement of dayCashMovements) {
     const totals = cashTotalsFor(movement.cashSession.physicalCashBox.branchId);
-    totals.cashMovementsNet += movementSignedAmount(movement.type, num(movement.amount));
+    const amount = num(movement.amount);
+    totals.cashMovementsNet += movementSignedAmount(movement.type, amount);
+    if (isCashOutflow(movement.type)) {
+      totals.cashOutflowsTotal += amount;
+      if (movement.type === CashMovementType.EXPENSE_OUT) totals.cashExpensesTotal += amount;
+    }
   }
 
   // Per-branch aggregates.
@@ -310,6 +320,8 @@ export async function getCommandCenterSnapshot() {
       openingCashTotal: cash.openingCashTotal,
       cashTenderNetTotal: cash.cashTenderNetTotal,
       cashMovementsNet: cash.cashMovementsNet,
+      cashExpensesTotal: cash.cashExpensesTotal,
+      cashOutflowsTotal: cash.cashOutflowsTotal,
       expectedCashOnHand,
       cashNetWithoutOpening: expectedCashOnHand - cash.openingCashTotal,
       cardTenderTotal: cash.cardTenderTotal,
@@ -346,6 +358,8 @@ export async function getCommandCenterSnapshot() {
     openingCashTotal: byBranch.reduce((acc, b) => acc + b.openingCashTotal, 0),
     cashTenderNetTotal: byBranch.reduce((acc, b) => acc + b.cashTenderNetTotal, 0),
     cashMovementsNet: byBranch.reduce((acc, b) => acc + b.cashMovementsNet, 0),
+    cashExpensesTotal: byBranch.reduce((acc, b) => acc + b.cashExpensesTotal, 0),
+    cashOutflowsTotal: byBranch.reduce((acc, b) => acc + b.cashOutflowsTotal, 0),
     expectedCashOnHand: byBranch.reduce((acc, b) => acc + b.expectedCashOnHand, 0),
     cashNetWithoutOpening: byBranch.reduce((acc, b) => acc + b.cashNetWithoutOpening, 0),
     cardTenderTotal: byBranch.reduce((acc, b) => acc + b.cardTenderTotal, 0),

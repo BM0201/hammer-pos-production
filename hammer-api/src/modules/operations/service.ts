@@ -25,16 +25,17 @@ function n(value: Prisma.Decimal | number | string | null | undefined) {
   return Number(value ?? 0);
 }
 
-function movementSignedAmount(type: CashMovementType, amount: number) {
-  if (
+function isCashOutflow(type: CashMovementType) {
+  return (
     type === CashMovementType.CASH_OUT ||
     type === CashMovementType.BANK_DEPOSIT_OUT ||
     type === CashMovementType.EXPENSE_OUT ||
     type === CashMovementType.REFUND_OUT
-  ) {
-    return -amount;
-  }
-  return amount;
+  );
+}
+
+function movementSignedAmount(type: CashMovementType, amount: number) {
+  return isCashOutflow(type) ? -amount : amount;
 }
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue {
@@ -154,6 +155,17 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     .filter((tender) => tender.method !== PaymentMethod.CASH && tender.method !== PaymentMethod.CARD && tender.method !== PaymentMethod.TRANSFER)
     .reduce((sum, tender) => sum + n(tender.amount), 0);
   const cashMovementsNet = cashMovements.reduce((sum, movement) => sum + movementSignedAmount(movement.type, n(movement.amount)), 0);
+  // Break the net movements into gross inflows / outflows so the Master can see
+  // exactly how much was spent or taken out of the box ("gasto de caja").
+  const cashExpensesTotal = cashMovements
+    .filter((movement) => movement.type === CashMovementType.EXPENSE_OUT)
+    .reduce((sum, movement) => sum + n(movement.amount), 0);
+  const cashOutflowsTotal = cashMovements
+    .filter((movement) => isCashOutflow(movement.type))
+    .reduce((sum, movement) => sum + n(movement.amount), 0);
+  const cashInflowsTotal = cashMovements
+    .filter((movement) => !isCashOutflow(movement.type))
+    .reduce((sum, movement) => sum + n(movement.amount), 0);
   const expectedCashOnHand = openingCashTotal + cashTenderNetTotal + cashMovementsNet;
 
   return {
@@ -174,6 +186,9 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     openingCashTotal,
     cashTenderNetTotal,
     cashMovementsNet,
+    cashExpensesTotal,
+    cashOutflowsTotal,
+    cashInflowsTotal,
     expectedCashOnHand,
     cashNetWithoutOpening: expectedCashOnHand - openingCashTotal,
     cardTenderTotal,
@@ -815,10 +830,13 @@ export async function listOperationalDays(filters: {
   if (filters.branchId) where.branchId = filters.branchId;
 
   if (filters.reviewState === "pending") {
-    // Pending = not yet approved and not cancelled
+    // Pending Master approval = the branch has CLOSED the day but it has not been
+    // approved yet. OPEN/CLOSING days are still being operated (not awaiting
+    // approval) and CANCELLED days are discarded, so neither belongs in the
+    // "Bandeja Master — Pendientes de aprobación". Previously this only filtered
+    // by approvedAt=null, which incorrectly surfaced active OPEN days.
     where.approvedAt = null;
-    // Only override status filter if caller did not specify one explicitly
-    if (!filters.status) where.status = { not: OperationalDayStatus.CANCELLED };
+    where.status = filters.status ?? OperationalDayStatus.CLOSED;
   } else if (filters.reviewState === "approved") {
     where.approvedAt = { not: null };
   } else if (filters.status) {
@@ -934,6 +952,7 @@ type BranchLiveStatus = {
     reconcilingCashSessions: number;
     autoClosedPendingReview: number;
     staleOpenOperationalDays: number;
+    staleCashSessions: number;
   };
   alerts: {
     pendingPaymentOrdersToday: number;
@@ -964,6 +983,7 @@ export async function getLiveBlockers(): Promise<{
         staleOpenDaysCount,
         openCashSessionsCount,
         reconcilingCount,
+        staleCashSessionsCount,
         autoClosedPendingCount,
         pendingPaymentCount,
         pendingDispatchCount,
@@ -973,15 +993,40 @@ export async function getLiveBlockers(): Promise<{
           where: { branchId_businessDate: { branchId: branch.id, businessDate: today } },
           select: { id: true, status: true, businessDate: true, approvedAt: true },
         }),
-        // Stale OPEN day from a past date — this is a hard blocker
+        // Stale OPEN day from a past date — this is a genuine stuck state.
         prisma.operationalDay.count({
           where: { branchId: branch.id, status: OperationalDayStatus.OPEN, businessDate: { not: today } },
         }),
+        // OPEN cash sessions that belong to TODAY's operational day. These are a
+        // normal part of an active day (the box is simply in use); they are NOT
+        // "atascadas" and must not be reported as operational blockers.
         prisma.cashSession.count({
-          where: { status: CashSessionStatus.OPEN, physicalCashBox: { branchId: branch.id } },
+          where: {
+            status: CashSessionStatus.OPEN,
+            physicalCashBox: { branchId: branch.id },
+            operationalDay: { businessDate: today },
+          },
         }),
+        // RECONCILING sessions on TODAY's day — also part of the normal close flow.
         prisma.cashSession.count({
-          where: { status: CashSessionStatus.RECONCILING, physicalCashBox: { branchId: branch.id } },
+          where: {
+            status: CashSessionStatus.RECONCILING,
+            physicalCashBox: { branchId: branch.id },
+            operationalDay: { businessDate: today },
+          },
+        }),
+        // Genuinely STUCK cash sessions: still OPEN/RECONCILING but tied to a
+        // previous business date (or orphaned with no operational day). These are
+        // the real "atascadas" that require a Master cleanup.
+        prisma.cashSession.count({
+          where: {
+            status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] },
+            physicalCashBox: { branchId: branch.id },
+            OR: [
+              { operationalDayId: null },
+              { operationalDay: { businessDate: { not: today } } },
+            ],
+          },
         }),
         prisma.cashSession.count({
           where: {
@@ -1011,13 +1056,18 @@ export async function getLiveBlockers(): Promise<{
         reconcilingCashSessions: reconcilingCount,
         autoClosedPendingReview: autoClosedPendingCount,
         staleOpenOperationalDays: staleOpenDaysCount,
+        staleCashSessions: staleCashSessionsCount,
       };
 
+      // "Bloqueos operativos" must reflect ONLY genuinely stuck states that need a
+      // Master to intervene right now: stale OPEN days from previous dates and
+      // cash sessions left open/reconciling on a past day. Cash sessions open on
+      // today's active day and auto-closed sessions pending review are part of the
+      // normal daily workflow (the latter is an expected, automatic process) and
+      // must NOT be flagged as errors here.
       const totalBlockers =
-        blockers.openCashSessions +
-        blockers.reconcilingCashSessions +
-        blockers.autoClosedPendingReview +
-        blockers.staleOpenOperationalDays;
+        blockers.staleOpenOperationalDays +
+        blockers.staleCashSessions;
 
       return {
         branchId: branch.id,

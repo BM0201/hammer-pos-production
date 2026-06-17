@@ -33,6 +33,7 @@ type BranchLiveStatus = {
     reconcilingCashSessions: number;
     autoClosedPendingReview: number;
     staleOpenOperationalDays: number;
+    staleCashSessions: number;
   };
   alerts: {
     pendingPaymentOrdersToday: number;
@@ -63,6 +64,8 @@ type MasterDay = {
     openingCashTotal?: number;
     cashTenderNetTotal?: number;
     cashMovementsNet?: number;
+    cashExpensesTotal?: number;
+    cashOutflowsTotal?: number;
     expectedCashOnHand?: number;
     paidSalesTotal?: number;
     pendingPaymentTotal?: number;
@@ -603,6 +606,7 @@ export default function MasterOperationsPage() {
                 <th>Fecha</th>
                 <th>Estado</th>
                 <th className="text-right">Ventas</th>
+                <th className="text-right">Gastos</th>
                 <th className="text-right">Efectivo esp.</th>
                 <th className="text-right">Acciones</th>
               </tr>
@@ -623,6 +627,9 @@ export default function MasterOperationsPage() {
                     </Badge>
                   </td>
                   <td className="text-right font-semibold">{money(day.summaryJson?.paidSalesTotal ?? day.salesTotal)}</td>
+                  <td className="text-right text-[var(--color-danger-700)]">
+                    {(day.summaryJson?.cashOutflowsTotal ?? 0) > 0 ? `- ${money(day.summaryJson?.cashOutflowsTotal)}` : money(0)}
+                  </td>
                   <td className="text-right">{money(day.summaryJson?.expectedCashOnHand ?? 0)}</td>
                   <td className="text-right">
                     <div className="flex items-center justify-end gap-1.5">
@@ -653,7 +660,7 @@ export default function MasterOperationsPage() {
               ))}
               {pendingDays.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-sm text-[var(--color-text-muted)]">
+                  <td colSpan={7} className="py-8 text-center text-sm text-[var(--color-text-muted)]">
                     <CheckCircle2 className="mx-auto mb-1.5 text-[var(--color-success-600)]" style={{ width: "1.25rem", height: "1.25rem" }} />
                     Sin días pendientes de aprobación.
                   </td>
@@ -717,6 +724,7 @@ export default function MasterOperationsPage() {
                     <th>Fecha</th>
                     <th>Estado</th>
                     <th className="text-right">Ventas</th>
+                    <th className="text-right">Gastos</th>
                     <th className="text-right">Efectivo esp.</th>
                     <th className="text-right">Acciones</th>
                   </tr>
@@ -733,6 +741,9 @@ export default function MasterOperationsPage() {
                       </td>
                       <td><Badge variant="success">Aprobado</Badge></td>
                       <td className="text-right font-semibold">{money(day.summaryJson?.paidSalesTotal ?? day.salesTotal)}</td>
+                      <td className="text-right text-[var(--color-danger-700)]">
+                        {(day.summaryJson?.cashOutflowsTotal ?? 0) > 0 ? `- ${money(day.summaryJson?.cashOutflowsTotal)}` : money(0)}
+                      </td>
                       <td className="text-right">{money(day.summaryJson?.expectedCashOnHand ?? 0)}</td>
                       <td className="text-right">
                         {day.status === "CLOSED" && (
@@ -750,7 +761,7 @@ export default function MasterOperationsPage() {
                   ))}
                   {archivedDays.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-sm text-[var(--color-text-muted)]">
+                      <td colSpan={7} className="py-8 text-center text-sm text-[var(--color-text-muted)]">
                         Sin días aprobados en este rango.
                       </td>
                     </tr>

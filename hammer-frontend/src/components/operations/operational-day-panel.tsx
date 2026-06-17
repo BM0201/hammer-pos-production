@@ -222,7 +222,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
 
       {/* Cash sessions + payments */}
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <CashSessionStatusList sessions={day.cashSessions ?? []} branchId={branchId} />
+        <CashSessionStatusList sessions={day.cashSessions ?? []} branchId={branchId} dayStatus={day.status} />
 
         <Card className="p-4">
           <h2 className="mb-3 text-sm font-bold text-[var(--color-text)]">Ventas y pagos</h2>

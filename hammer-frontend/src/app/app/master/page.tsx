@@ -78,6 +78,8 @@ type BranchBlock = {
   openingCashTotal: number;
   cashTenderNetTotal: number;
   cashMovementsNet: number;
+  cashExpensesTotal: number;
+  cashOutflowsTotal: number;
   expectedCashOnHand: number;
   cashNetWithoutOpening: number;
   cardTenderTotal: number;
@@ -142,6 +144,8 @@ type CommandCenter = {
     openingCashTotal: number;
     cashTenderNetTotal: number;
     cashMovementsNet: number;
+    cashExpensesTotal: number;
+    cashOutflowsTotal: number;
     expectedCashOnHand: number;
     cashNetWithoutOpening: number;
     cardTenderTotal: number;
@@ -1506,6 +1510,7 @@ export default function MasterCommandCenterPage() {
                     <CashMiniRow label="Apertura" value={money(b.openingCashTotal)} />
                     <CashMiniRow label="Efectivo neto" value={money(b.cashTenderNetTotal)} />
                     <CashMiniRow label="Movimientos" value={money(b.cashMovementsNet)} />
+                    <CashMiniRow label="Gastos / egresos" value={b.cashOutflowsTotal > 0 ? `- ${money(b.cashOutflowsTotal)}` : money(0)} />
                     <CashMiniRow label="Sin apertura" value={money(b.cashNetWithoutOpening)} />
                     <CashMiniRow label="Tarjeta" value={money(b.cardTenderTotal)} />
                     <CashMiniRow label="Transferencia" value={money(b.transferTenderTotal)} />

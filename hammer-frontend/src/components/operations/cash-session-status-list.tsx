@@ -15,8 +15,15 @@ function diffColor(diff: number) {
   return "text-[var(--color-warning-700)] font-bold";
 }
 
-function sessionUrgency(session: CashSessionRow): "hard" | "soft" | "ok" {
-  if (session.status === "OPEN") return "hard";
+// Mientras el día operativo está ABIERTO, tener una caja abierta es normal (operación en curso),
+// no es un bloqueo ni un error. Solo cuando el día entra en cierre (CLOSING/CLOSED) una caja
+// que sigue abierta se vuelve realmente urgente porque impide cerrar el día.
+function dayIsClosing(dayStatus?: string) {
+  return dayStatus === "CLOSING" || dayStatus === "CLOSED";
+}
+
+function sessionUrgency(session: CashSessionRow, dayStatus?: string): "hard" | "soft" | "ok" {
+  if (session.status === "OPEN") return dayIsClosing(dayStatus) ? "hard" : "soft";
   if (session.status === "AUTO_CLOSED_PENDING_REVIEW") return "soft";
   return "ok";
 }
@@ -46,10 +53,17 @@ const URGENCY_BORDER: Record<"hard" | "soft" | "ok", string> = {
 type Props = {
   sessions: CashSessionRow[];
   branchId?: string;
+  /** Estado del día operativo. Determina si una caja abierta es normal (día OPEN) o urgente (día en cierre). */
+  dayStatus?: string;
 };
 
-export function CashSessionStatusList({ sessions, branchId }: Props) {
-  const urgentCount = sessions.filter((s) => s.status === "OPEN" || s.status === "AUTO_CLOSED_PENDING_REVIEW").length;
+export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) {
+  const closing = dayIsClosing(dayStatus);
+  // Una caja abierta solo "requiere atención" cuando el día está en cierre.
+  // Mientras el día está abierto, una caja abierta es operación normal en curso.
+  const urgentCount = sessions.filter(
+    (s) => (s.status === "OPEN" && closing) || s.status === "AUTO_CLOSED_PENDING_REVIEW",
+  ).length;
 
   return (
     <div className="hm-module-card">
@@ -76,7 +90,7 @@ export function CashSessionStatusList({ sessions, branchId }: Props) {
         ) : (
           <div className="space-y-3">
             {sessions.map((session) => {
-              const urgency = sessionUrgency(session);
+              const urgency = sessionUrgency(session, dayStatus);
               const diff = Number(session.differenceAmount ?? 0);
               const Icon = urgency === "hard" ? AlertTriangle : urgency === "soft" ? Clock : CheckCircle2;
               const iconColor = urgency === "hard" ? "text-[var(--color-danger-600)]" : urgency === "soft" ? "text-[var(--color-warning-600)]" : "text-[var(--color-success-600)]";
@@ -97,8 +111,16 @@ export function CashSessionStatusList({ sessions, branchId }: Props) {
                         · {session.openedBy?.fullName ?? session.openedBy?.username ?? "usuario"}
                       </span>
                     </div>
-                    <Badge variant={STATUS_BADGE[session.status] ?? "neutral"}>
-                      {STATUS_LABEL[session.status] ?? session.status}
+                    <Badge
+                      variant={
+                        session.status === "OPEN" && !closing
+                          ? "neutral"
+                          : STATUS_BADGE[session.status] ?? "neutral"
+                      }
+                    >
+                      {session.status === "OPEN" && !closing
+                        ? "Abierta · en uso"
+                        : STATUS_LABEL[session.status] ?? session.status}
                     </Badge>
                   </div>
 
@@ -134,7 +156,7 @@ export function CashSessionStatusList({ sessions, branchId }: Props) {
                       )}
                     </div>
                   )}
-                  {session.status === "OPEN" && (
+                  {session.status === "OPEN" && closing && (
                     <div className="flex items-center justify-between gap-2 border-t border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_30%,white)] px-3.5 py-2">
                       <span className="text-xs text-[var(--color-danger-800)] font-medium">Caja activa — debe cerrarse antes de cerrar el día.</span>
                       {branchId && (
@@ -143,6 +165,19 @@ export function CashSessionStatusList({ sessions, branchId }: Props) {
                           className="flex items-center gap-1 text-xs font-semibold text-[var(--color-danger-700)] hover:text-[var(--color-danger-900)] transition-colors"
                         >
                           Ir a cajas <ArrowRight style={{ width: "0.75rem", height: "0.75rem" }} />
+                        </Link>
+                      )}
+                    </div>
+                  )}
+                  {session.status === "OPEN" && !closing && (
+                    <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3.5 py-2">
+                      <span className="text-xs text-[var(--color-text-muted)] font-medium">Caja en uso — operación normal del día.</span>
+                      {branchId && (
+                        <Link
+                          href="/app/branch/cash"
+                          className="flex items-center gap-1 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors"
+                        >
+                          Ver caja <ArrowRight style={{ width: "0.75rem", height: "0.75rem" }} />
                         </Link>
                       )}
                     </div>
