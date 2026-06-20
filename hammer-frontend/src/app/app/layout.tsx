@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { Toaster } from "react-hot-toast";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
 import { AppShellRouter } from "@/components/layout/app-shell-router";
+import { HammerSplash } from "@/components/layout/hammer-splash";
 import type { SessionPayload } from "@/types/auth";
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -58,11 +59,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   }, [router, pathname]);
 
   if (loading || !session) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-[var(--color-page-bg)]">
-        <span className="text-sm text-[var(--color-text-muted)] animate-pulse">Cargando...</span>
-      </div>
-    );
+    return <HammerSplash />;
   }
 
   return (
