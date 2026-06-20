@@ -388,6 +388,14 @@ export function AppSidebar({
     "--sidebar-role-icon": roleIcon,
   };
 
+  /* Hammer animation — replay on expand */
+  const [brandAnimKey, setBrandAnimKey] = useState(0);
+  const prevCollapsed = useRef(true);
+  useEffect(() => {
+    if (prevCollapsed.current && !collapsed) setBrandAnimKey((k) => k + 1);
+    prevCollapsed.current = collapsed;
+  }, [collapsed]);
+
   /* Account popover */
   const [accountOpen, setAccountOpen] = useState(false);
   const accountRef = useRef<HTMLDivElement>(null);
@@ -410,6 +418,7 @@ export function AppSidebar({
         {/* Brand mark (martillo + wordmark) */}
         <Link href={(isMaster ? "/app/master" : homeHref) as Route} onClick={handleNavigation} className="flex items-center gap-2.5 min-w-0">
           <div
+            key={brandAnimKey}
             className="brand-mark flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0"
             style={{ background: "var(--color-brand-500)" }}
           >
