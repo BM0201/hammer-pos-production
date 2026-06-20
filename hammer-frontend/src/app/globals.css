@@ -195,6 +195,27 @@
 
 :root { color-scheme: light; }
 
+/* ── Hammer v7 extended color system ─────────────────────────────── */
+:root {
+  /* 8 semantic roles × bg + -text (APCA Lc ≥ 60 on role bg) */
+  --v7-accent:              #D4380D;   --v7-accent-text:       #791F1F;
+  --v7-success:             #2D7D46;   --v7-success-text:      #1A4D2C;
+  --v7-info:                #2C5F8A;   --v7-info-text:         #1A3A55;
+  --v7-warning:             #A36A0E;   --v7-warning-text:      #5C3B08;
+  --v7-role-admin:          #5B4A8A;   --v7-role-admin-text:   #352B52;
+  --v7-brand-accent:        #B5651D;   --v7-brand-text:        #6B3C11;
+  --v7-cat-inventario:      #5C8A6E;   --v7-cat-text:          #355241;
+  --v7-inactive:            #7A7873;   --v7-inactive-text:     #4A4944;
+
+  /* Adaptive ink — 3 surface variants per level */
+  --v7-ink-2-on-base:         #4A4843;   /* base       #EDECEA */
+  --v7-ink-3-on-base:         #6B6862;
+  --v7-ink-2-on-surface:      #514F49;   /* surface    #E4E2DE */
+  --v7-ink-3-on-surface:      #6B6862;
+  --v7-ink-2-on-surface-hi:   #5C5A54;   /* surface-hi #F5F4F2 */
+  --v7-ink-3-on-surface-hi:   #847F77;
+}
+
 /* ── Base ─────────────────────────────────────────────────────── */
 body {
   margin: 0;

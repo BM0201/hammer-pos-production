@@ -336,7 +336,7 @@ function KpiV7({
   tone?: "ok" | "alert" | "neutral";
   icon: LucideIcon;
 }) {
-  const dotColor = tone === "ok" ? "#2D7D46" : tone === "alert" ? "#D4380D" : "#9B9892";
+  const dotColor = tone === "ok" ? "var(--v7-success)" : tone === "alert" ? "var(--v7-warning)" : "var(--v7-inactive)";
   return (
     <div
       className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4"
@@ -1092,8 +1092,8 @@ export default function MasterCommandCenterPage() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <span className="relative flex h-2 w-2 flex-shrink-0 mt-1">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: "#2D7D46" }} />
-            <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: "#2D7D46" }} />
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: "var(--v7-success)" }} />
+            <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: "var(--v7-success)" }} />
           </span>
           <div>
             <div className="flex items-center gap-2.5">
@@ -1105,8 +1105,8 @@ export default function MasterCommandCenterPage() {
                 style={{
                   fontFamily: "'DM Mono', monospace",
                   borderRadius: 3,
-                  color: "#2D7D46",
-                  background: "#ECFDF3",
+                  color: "var(--v7-success)",
+                  background: "rgba(45,125,70,0.08)",
                   borderColor: "rgba(45,125,70,0.2)",
                 }}
               >
@@ -1236,7 +1236,7 @@ export default function MasterCommandCenterPage() {
                     className="h-full transition-all duration-500"
                     style={{
                       width: `${pct}%`,
-                      background: b.salesToday > 0 ? "linear-gradient(90deg, #A82B08, #D4380D)" : "transparent",
+                      background: b.salesToday > 0 ? "linear-gradient(90deg, rgba(212,56,13,0.65), var(--v7-accent))" : "transparent",
                       borderRadius: 2,
                     }}
                   />
@@ -1270,7 +1270,7 @@ export default function MasterCommandCenterPage() {
                         className="text-[12px] font-semibold"
                         style={{
                           fontFamily: "'DM Mono', monospace",
-                          color: Math.abs(b.operationalDay.cashDifferenceTotal) < 0.01 ? "#2D7D46" : "#D4380D",
+                          color: Math.abs(b.operationalDay.cashDifferenceTotal) < 0.01 ? "var(--v7-success)" : "var(--v7-accent)",
                         }}
                       >
                         {money(b.operationalDay.cashDifferenceTotal)}

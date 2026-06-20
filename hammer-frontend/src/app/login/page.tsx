@@ -7,6 +7,7 @@ import { resolveRoleHome } from "@/modules/rbac/role-routing";
 
 /* ── Palette ──────────────────────────────────────────────────────── */
 const C = {
+  /* ── Structural palette ── */
   base:      "#EDECEA",
   surface:   "#E4E2DE",
   surfaceHi: "#F5F4F2",
@@ -15,10 +16,24 @@ const C = {
   ink:       "#2E2D2A",
   ink2:      "#6B6965",
   ink3:      "#9B9892",
+  /* ── Accent ── */
   accent:    "#D4380D",
   accentHi:  "#E04010",
   accentLo:  "#A82B08",
   accentDim: "rgba(212,56,13,0.10)",
+  /* ── v7 semantic roles ── */
+  success:          "#2D7D46",   successText:    "#1A4D2C",
+  info:             "#2C5F8A",   infoText:       "#1A3A55",
+  warning:          "#A36A0E",   warningText:    "#5C3B08",
+  inactive:         "#7A7873",   inactiveText:   "#4A4944",
+  brandAccent:      "#B5651D",   brandText:      "#6B3C11",
+  catInventario:    "#5C8A6E",   catText:        "#355241",
+  roleAdmin:        "#5B4A8A",   roleAdminText:  "#352B52",
+  /* ── Adaptive ink (3 surface variants per level) ── */
+  ink2OnBase:       "#4A4843",   ink3OnBase:       "#6B6862",
+  ink2OnSurface:    "#514F49",   ink3OnSurface:    "#6B6862",
+  ink2OnSurfaceHi:  "#5C5A54",   ink3OnSurfaceHi:  "#847F77",
+  /* ── Legacy alias ── */
   green:     "#2D7D46",
 } as const;
 
@@ -537,8 +552,8 @@ export default function LoginPage() {
               <line x1="20" y1="7"  x2="33" y2="30" stroke={C.border} strokeWidth="1.5"/>
               <line x1="7"  y1="30" x2="33" y2="30" stroke={C.border} strokeWidth="1.5"/>
               <circle cx="20" cy="7"  r="4.5" fill={C.ink}/>
-              <circle cx="7"  cy="30" r="3.5" fill={C.ink3}/>
-              <circle cx="33" cy="30" r="3.5" fill={C.ink3}/>
+              <circle cx="7"  cy="30" r="3.5" fill={C.ink3OnBase}/>
+              <circle cx="33" cy="30" r="3.5" fill={C.ink3OnBase}/>
               <circle cx="20" cy="7"  r="2"   fill={C.accent}/>
             </svg>
             <div style={{ display: "flex", flexDirection: "column", gap: "1px", lineHeight: 1 }}>
@@ -744,33 +759,33 @@ export default function LoginPage() {
 
         {/* ── Corner BL: sucursal rotante + último acceso ──────────── */}
         <div className="hm-cr" style={{ position: "fixed", bottom: "1.5rem", left: "1.75rem", zIndex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: "10px", color: C.ink3, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: "10px", color: C.ink3OnBase, letterSpacing: "0.05em", textTransform: "uppercase" }}>
             Sucursal
           </span>
           <div style={{ height: "16px", overflow: "hidden" }}>
             <span style={{
-              fontFamily: "'DM Mono', monospace", fontSize: "11px", color: C.ink2,
+              fontFamily: "'DM Mono', monospace", fontSize: "11px", color: C.ink2OnBase,
               letterSpacing: "0.03em", display: "block",
               opacity: sucOpacity, transition: "opacity 400ms ease",
             }}>
               {sucText}
             </span>
           </div>
-          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: "10px", color: C.ink3, letterSpacing: "0.05em", textTransform: "uppercase", marginTop: "6px" }}>
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: "10px", color: C.ink3OnBase, letterSpacing: "0.05em", textTransform: "uppercase", marginTop: "6px" }}>
             Último acceso
           </span>
-          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: "11px", color: C.ink2 }}>
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: "11px", color: C.ink2OnBase }}>
             {lastAcceso}
           </span>
         </div>
 
         {/* ── Corner BR: status pill + copyright ──────────────────── */}
         <div className="hm-cr" style={{ position: "fixed", bottom: "1.5rem", right: "1.75rem", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontFamily: "'DM Mono', monospace", fontSize: "10px", color: C.green, letterSpacing: "0.04em" }}>
-            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: C.green, animation: "hmPulse 2.5s ease-in-out infinite", flexShrink: 0 }} />
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontFamily: "'DM Mono', monospace", fontSize: "10px", color: C.success, letterSpacing: "0.04em" }}>
+            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: C.success, animation: "hmPulse 2.5s ease-in-out infinite", flexShrink: 0 }} />
             SISTEMA OPERATIVO
           </span>
-          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: "11px", color: C.ink2, marginTop: "4px" }}>
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: "11px", color: C.ink2OnBase, marginTop: "4px" }}>
             © 2026 Hammer
           </span>
         </div>
@@ -818,8 +833,8 @@ export default function LoginPage() {
           <line x1="66" y1="64" x2="6"  y2="64" stroke={C.border} strokeWidth="1.5"/>
           <line x1="6"  y1="64" x2="36" y2="12" stroke={C.border} strokeWidth="1.5"/>
           <circle cx="36" cy="12" r="6" fill={C.ink}/>
-          <circle cx="66" cy="64" r="5" fill={C.ink3}/>
-          <circle cx="6"  cy="64" r="5" fill={C.ink3}/>
+          <circle cx="66" cy="64" r="5" fill={C.ink3OnBase}/>
+          <circle cx="6"  cy="64" r="5" fill={C.ink3OnBase}/>
           <circle
             ref={dotRef}
             id="hm-red-dot"
@@ -839,7 +854,7 @@ export default function LoginPage() {
               fontWeight: 500,
               letterSpacing: "0.12em",
               textTransform: "uppercase",
-              color: C.ink3,
+              color: C.ink3OnBase,
               marginBottom: "8px",
               opacity: 0,
             }}
