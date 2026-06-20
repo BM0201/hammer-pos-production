@@ -3,9 +3,8 @@ import { logAuditEvent } from "@/modules/audit/service";
 
 type DiscountType = "PERCENTAGE" | "FIXED_AMOUNT";
 
-function discountModel() {
-  return (prisma as any).discount;
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function discountModel() { return (prisma as any).discount; }
 
 export type CreateDiscountInput = {
   name: string;
