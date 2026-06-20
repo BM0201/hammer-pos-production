@@ -364,9 +364,10 @@ export function AppSidebar({
         <div className="px-2 pt-2 pb-0">
           <button
             onClick={toggleCollapse}
+            style={{ background: "none", border: "none", transition: "background 120ms" }}
             className="w-full flex items-center justify-center gap-2 rounded-md px-3 py-2 text-[0.75rem]
-              bg-transparent border-0 text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover)]
-              hover:text-[var(--color-sidebar-text-active)] transition-colors duration-150"
+              text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover)]
+              hover:text-[var(--color-sidebar-text-active)]"
             title={isCollapsed ? "Expandir sidebar" : "Colapsar sidebar"}
             aria-expanded={!isCollapsed}
           >
@@ -422,8 +423,11 @@ export function AppSidebar({
         />
       )}
 
-      {/* ── User card ── */}
-      <div className={`sidebar-user-card mx-2 mb-3 rounded-lg border border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-active)] ${isCollapsed ? "px-2 py-2.5" : "px-3 py-2.5"}`}>
+      {/* ── User card — background transparent, blends with sidebar ── */}
+      <div
+        className={`mx-2 mb-3 rounded-lg border border-[var(--color-sidebar-border)] ${isCollapsed ? "px-2 py-2.5" : "px-3 py-2.5"}`}
+        style={{ background: "transparent" }}
+      >
         <div className={`flex items-center ${isCollapsed ? "justify-center" : "gap-2.5"}`}>
           <div
             className="flex items-center justify-center w-8 h-8 rounded-lg text-xs font-bold text-white flex-shrink-0"
@@ -445,7 +449,7 @@ export function AppSidebar({
       </div>
 
       {/* ── Navigation sections ── */}
-      <nav className={`flex-1 overflow-y-auto px-2 space-y-4 pb-4`}>
+      <nav className="flex-1 overflow-y-auto px-2 space-y-4 pb-4">
         {sections.map((section) => (
           <div key={section.title}>
             {!isCollapsed && (
@@ -459,6 +463,7 @@ export function AppSidebar({
             <div className="space-y-0.5">
               {section.items.map((item) => {
                 const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const expanded = !isCollapsed && active;
                 const Icon = item.icon;
                 return (
                   <div key={item.href} className="relative sidebar-nav-item">
@@ -466,17 +471,27 @@ export function AppSidebar({
                       href={item.href as Route}
                       onClick={handleNavigation}
                       className={`
-                        hm-sidebar-item group flex items-center gap-2.5 rounded-md text-[0.8125rem] font-semibold
-                        transition-all duration-150
-                        ${isCollapsed ? "px-0 py-2 justify-center" : "px-3 py-2"}
-                        ${active ? "is-active" : ""}
-                        ${!isCollapsed && active ? "hm-sidebar-item-expanded-active" : ""}
+                        hm-sidebar-item group flex items-center gap-2.5 text-[0.8125rem] font-semibold
+                        transition-all duration-150 py-2
+                        ${isCollapsed ? "px-0 justify-center rounded-md" : expanded ? "rounded-r-md" : "rounded-md px-3"}
                       `}
+                      style={{
+                        background: active ? "var(--color-sidebar-active)" : undefined,
+                        color: active
+                          ? (isWarmSidebar ? "#2E2D2A" : "var(--sidebar-role-active-text)")
+                          : undefined,
+                        borderLeft: expanded
+                          ? `2px solid ${isWarmSidebar ? "var(--v7-accent)" : roleActiveBg}`
+                          : undefined,
+                        paddingLeft: expanded ? "calc(0.75rem - 2px)" : (!isCollapsed ? "0.75rem" : undefined),
+                        paddingRight: !isCollapsed ? "0.75rem" : undefined,
+                      }}
                       title={isCollapsed ? item.label : undefined}
                     >
                       <span data-sidebar-icon className={`hm-sidebar-icon-wrap ${active ? "active" : ""}`}>
                         <Icon
                           className="hm-sidebar-icon h-[1.125rem] w-[1.125rem] flex-shrink-0 transition-colors duration-150"
+                          style={active && isWarmSidebar ? { color: "#D4380D" } : undefined}
                         />
                       </span>
                       {!isCollapsed && (
