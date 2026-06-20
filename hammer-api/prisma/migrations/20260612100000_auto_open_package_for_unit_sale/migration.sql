@@ -1,0 +1,6 @@
+ALTER TYPE "InventoryMovementType" ADD VALUE IF NOT EXISTS 'PACKAGE_AUTO_OPENED';
+
+ALTER TABLE "ProductStockGroup"
+  ADD COLUMN "minimumClosedPackageReserve" DECIMAL NOT NULL DEFAULT 1,
+  ADD COLUMN "autoOpenForUnitSale" BOOLEAN NOT NULL DEFAULT true;
+

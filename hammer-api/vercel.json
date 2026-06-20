@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "buildCommand": "npm run vercel-build",
+  "framework": "nextjs",
+  "installCommand": "npm install",
+  "crons": [
+    {
+      "path": "/api/system/cron/operational-automation",
+      "schedule": "*/10 * * * *"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}

@@ -1,0 +1,216 @@
+/**
+ * Responsive Design System
+ * FASE 4 — H.A.M.M.E.R. POS/ERP
+ */
+
+/* ─── Breakpoints ───────────────────────────────────────────────────── */
+:root {
+  --breakpoint-mobile: 360px;
+  --breakpoint-tablet: 768px;
+  --breakpoint-desktop: 1024px;
+  --breakpoint-wide: 1440px;
+}
+
+/* ─── Utilities para Responsive ───────────────────────────────────────── */
+@media (max-width: 767px) {
+  .hide-mobile {
+    display: none !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .hide-tablet {
+    display: none !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .hide-desktop {
+    display: none !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .show-mobile {
+    display: block !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .show-tablet {
+    display: block !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .show-desktop {
+    display: block !important;
+  }
+}
+
+/* ─── Mobile First Touch Targets ───────────────────────────────────── */
+@media (max-width: 767px) {
+  button,
+  a.button,
+  input[type="button"],
+  input[type="submit"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Tabs en mobile */
+  .pos-mobile-tabs {
+    display: flex;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .pos-mobile-tabs button {
+    flex: 1;
+    padding: 12px 8px;
+    font-size: 14px;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+
+  .pos-mobile-tabs button.active {
+    color: var(--color-primary-600);
+    border-bottom-color: var(--color-primary-600);
+  }
+
+  /* Sticky total en mobile */
+  .pos-mobile-total-sticky {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--color-surface);
+    border-top: 2px solid var(--color-border);
+    padding: 12px 16px;
+    box-shadow: 0 -4px 6px rgba(0,0,0,0.1);
+    z-index: 20;
+  }
+}
+
+/* ─── Tablet Optimizations ────────────────────────────────────────── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .pos-tablet-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .pos-tablet-catalog {
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .pos-tablet-ticket {
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+}
+
+/* ─── Desktop Layout ──────────────────────────────────────────────── */
+@media (min-width: 1024px) {
+  .pos-desktop-layout {
+    display: grid;
+    grid-template-columns: 1.05fr 1.4fr;
+    gap: 16px;
+    height: calc(100vh - 10.5rem);
+    min-height: 34rem;
+  }
+}
+
+/* ─── Responsive Tables ───────────────────────────────────────────── */
+@media (max-width: 767px) {
+  table.responsive-hidden {
+    display: none;
+  }
+
+  .card-list-mobile {
+    display: block;
+  }
+}
+
+@media (min-width: 768px) {
+  .card-list-mobile {
+    display: none;
+  }
+}
+
+/* ─── Touch Optimizations ─────────────────────────────────────────── */
+@media (hover: none) and (pointer: coarse) {
+  /* Touch device optimizations */
+  button {
+    padding: 12px 16px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px; /* Prevent zoom on iOS */
+  }
+}
+
+/* ─── Sidebar Responsive ──────────────────────────────────────────── */
+@media (max-width: 767px) {
+  .app-sidebar-desktop {
+    display: none;
+  }
+
+  /* Mobile header with hamburger */
+  .mobile-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    position: sticky;
+    top: 0;
+    z-index: 30;
+  }
+
+  .mobile-hamburger {
+    min-width: 44px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-sidebar-desktop {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    max-height: 100vh;
+    overflow-y: auto;
+  }
+
+  .mobile-header {
+    display: none;
+  }
+}
+
+/* ─── App Shell Padding Responsive ────────────────────────────────── */
+.app-shell-content {
+  padding: 1rem;
+}
+
+@media (min-width: 768px) {
+  .app-shell-content {
+    padding: 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-shell-content {
+    padding: 1.5rem;
+  }
+}
