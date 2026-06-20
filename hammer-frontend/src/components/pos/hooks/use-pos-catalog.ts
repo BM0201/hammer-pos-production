@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
-import { measurePosMetric } from "@/lib/telemetry";
 import type { InventoryBalanceRow, ProductRow } from "../types";
 
 export function usePosCatalog(branchId: string, onNotice: (msg: string) => void) {
@@ -118,7 +117,6 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void)
     const controller = new AbortController();
     searchAbortRef.current = controller;
 
-    const stopMetric = measurePosMetric("search_latency", { queryLength: query.length });
     setLoadingProducts(true);
 
     try {
@@ -128,7 +126,6 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void)
 
       if (!response.ok) {
         onNotice(resolveError({ payload: json, status: response.status, fallback: "No se pudo cargar el catálogo." }));
-        stopMetric(false);
         return;
       }
 
@@ -157,21 +154,17 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void)
 
       // Ignore results from a search that the user has already moved past.
       if (controller.signal.aborted || searchRef.current.trim().toLowerCase() !== cacheKey) {
-        stopMetric(true);
         return;
       }
 
       applySearchRows(rows);
-      stopMetric(true);
     } catch (error) {
       // A cancelled request is expected — never surface it as an error.
       if (controller.signal.aborted || (error as { name?: string })?.name === "AbortError") {
-        stopMetric(false);
         return;
       }
       console.error("[POS][loadProducts]", error);
       onNotice(resolveError({ fallback: "No se pudo cargar el catálogo.", thrownError: error }));
-      stopMetric(false);
     } finally {
       // Only the latest request clears the loading flag.
       if (searchAbortRef.current === controller) {

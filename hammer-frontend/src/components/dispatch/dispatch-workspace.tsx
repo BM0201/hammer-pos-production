@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { measurePosMetric } from "@/lib/telemetry";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -123,7 +122,6 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
   async function markDispatched(orderId: string) {
     if (busyOrderId) return;
 
-    const stopMetric = measurePosMetric("dispatch_latency", { orderId });
     setBusyOrderId(orderId);
     const response = await apiFetch(`/api/warehouse/dispatch/${orderId}/dispatch`, {
       method: "POST",
@@ -135,21 +133,18 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
     if (!response.ok) {
       setMessage(mapPosErrorToSpanish({ payload: json, status: response.status, fallback: "No se pudo completar el despacho." }));
       setBusyOrderId(null);
-      stopMetric(false);
       return;
     }
 
     if (json.status === "REQUESTED") {
       setMessage("Solicitud enviada.");
       setBusyOrderId(null);
-      stopMetric(true);
       return;
     }
 
     setMessage("Despacho registrado correctamente.");
     setBusyOrderId(null);
     await load();
-    stopMetric(true);
   }
 
   function resetTransportForm() {

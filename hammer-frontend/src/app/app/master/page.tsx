@@ -339,8 +339,8 @@ function KpiV7({
   const dotColor = tone === "ok" ? "var(--v7-success)" : tone === "alert" ? "var(--v7-warning)" : "var(--v7-inactive)";
   return (
     <div
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4"
-      style={{ boxShadow: "0 1px 2px rgba(46,45,42,0.06)" }}
+      className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-4"
+      style={{ boxShadow: "var(--shadow-card)" }}
     >
       <div className="flex items-center justify-between mb-2.5">
         <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-secondary)]">
@@ -640,8 +640,8 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
 
   return (
     <div
-      className="rounded-lg border border-[var(--color-border)] overflow-hidden bg-[var(--color-surface-alt)]"
-      style={{ boxShadow: "0 1px 2px rgba(46,45,42,0.05)" }}
+      className="rounded-lg border border-[var(--color-border-strong)] overflow-hidden bg-[var(--color-surface)]"
+      style={{ boxShadow: "var(--shadow-card)" }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-wrap gap-3">
@@ -1175,7 +1175,7 @@ export default function MasterCommandCenterPage() {
               <Link
                 key={item.href}
                 href={item.href as Route}
-                className="group flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3.5 transition-all hover:bg-[var(--color-surface)] hover:shadow-[0_2px_6px_rgba(46,45,42,0.1)]"
+                className="group flex flex-col gap-2 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-3.5 transition-all hover:bg-[var(--color-surface-alt)] hover:shadow-[var(--shadow-card-hover)]"
               >
                 <Icon className="h-[18px] w-[18px] text-[var(--color-text-secondary)]" />
                 <div className="text-[13px] font-semibold text-[var(--color-text)]">{item.label}</div>
@@ -1196,8 +1196,8 @@ export default function MasterCommandCenterPage() {
             return (
               <div
                 key={b.branchId}
-                className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3.5"
-                style={{ boxShadow: "0 1px 2px rgba(46,45,42,0.05)" }}
+                className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-3.5"
+                style={{ boxShadow: "var(--shadow-card)" }}
               >
                 {/* Header row */}
                 <div className="flex items-center justify-between mb-2.5">
@@ -1236,7 +1236,7 @@ export default function MasterCommandCenterPage() {
                     className="h-full transition-all duration-500"
                     style={{
                       width: `${pct}%`,
-                      background: b.salesToday > 0 ? "linear-gradient(90deg, rgba(212,56,13,0.65), var(--v7-accent))" : "transparent",
+                      background: b.salesToday > 0 ? "linear-gradient(90deg, color-mix(in srgb, var(--color-master-600) 65%, transparent), var(--color-master-500))" : "transparent",
                       borderRadius: 2,
                     }}
                   />
@@ -1317,8 +1317,8 @@ export default function MasterCommandCenterPage() {
 
         {/* Cierres de caja */}
         <div
-          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] overflow-hidden"
-          style={{ boxShadow: "0 1px 2px rgba(46,45,42,0.05)" }}
+          className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] overflow-hidden"
+          style={{ boxShadow: "var(--shadow-card)" }}
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-wrap gap-2">
             <div className="flex items-center gap-2">
@@ -1370,8 +1370,8 @@ export default function MasterCommandCenterPage() {
 
         {/* Usuarios conectados */}
         <div
-          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] overflow-hidden"
-          style={{ boxShadow: "0 1px 2px rgba(46,45,42,0.05)" }}
+          className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] overflow-hidden"
+          style={{ boxShadow: "var(--shadow-card)" }}
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-wrap gap-2">
             <div className="flex items-center gap-2">

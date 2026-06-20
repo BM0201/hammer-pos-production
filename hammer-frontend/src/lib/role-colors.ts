@@ -6,7 +6,7 @@
  *
  * | Rol           | Primary Hex | Contrast on #fff |
  * |---------------|-------------|------------------|
- * | MASTER        | #2563eb     | 4.63:1           |
+ * | MASTER        | #c33309     | 5.4:1            |
  * | BRANCH_ADMIN  | #9333ea     | 4.56:1           |
  * | SALES         | #ea580c     | 4.52:1           |
  * | CASHIER       | #d97706     | 3.61:1 (large)   |
@@ -49,7 +49,7 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     key: "master",
     label: "Master",
     cssPrefix: "master",
-    hex600: "#2563eb",
+    hex600: "#c33309",
     badgeClass: "hm-badge-master",
     sectionIconClass: "hm-section-icon-master",
   },

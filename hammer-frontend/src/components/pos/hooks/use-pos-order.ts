@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
-import { measurePosMetric } from "@/lib/telemetry";
 import { apiFetch } from "@/lib/client/api";
 import type { ProductRow, TicketLine, TicketOrder } from "../types";
 
@@ -194,7 +193,6 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
       return;
     }
 
-    const stopMetric = measurePosMetric("add_to_ticket_latency", { productId: product.id });
     let success = false;
     setIsMutatingOrder(true);
 
@@ -224,7 +222,6 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
       onNotice(mapPosErrorToSpanish({ fallback: "No se pudo agregar el producto.", thrownError: error }), 10000);
     } finally {
       setIsMutatingOrder(false);
-      stopMetric(success);
     }
   }
 

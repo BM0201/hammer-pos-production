@@ -404,8 +404,8 @@ export function AppSidebar({
               <span
                 className="ml-1.5 text-[0.6rem] font-semibold uppercase tracking-widest px-1.5 py-0.5 rounded"
                 style={{
-                  background: isWarmSidebar ? "rgba(212,56,13,0.12)" : `color-mix(in srgb, ${roleActiveBg} 30%, transparent)`,
-                  color: isWarmSidebar ? "#D4380D" : roleActiveText,
+                  background: isWarmSidebar ? "color-mix(in srgb, var(--color-master-600) 14%, transparent)" : `color-mix(in srgb, ${roleActiveBg} 30%, transparent)`,
+                  color: isWarmSidebar ? "var(--color-master-700)" : roleActiveText,
                 }}
               >
                 {roleCfg.label}
@@ -481,7 +481,7 @@ export function AppSidebar({
                           ? (isWarmSidebar ? "#2E2D2A" : "var(--sidebar-role-active-text)")
                           : undefined,
                         borderLeft: expanded
-                          ? `2px solid ${isWarmSidebar ? "var(--v7-accent)" : roleActiveBg}`
+                          ? `2px solid ${isWarmSidebar ? "var(--color-master-600)" : roleActiveBg}`
                           : undefined,
                         paddingLeft: expanded ? "calc(0.75rem - 2px)" : (!isCollapsed ? "0.75rem" : undefined),
                         paddingRight: !isCollapsed ? "0.75rem" : undefined,
@@ -491,7 +491,7 @@ export function AppSidebar({
                       <span data-sidebar-icon className={`hm-sidebar-icon-wrap ${active ? "active" : ""}`}>
                         <Icon
                           className="hm-sidebar-icon h-[1.125rem] w-[1.125rem] flex-shrink-0 transition-colors duration-150"
-                          style={active && isWarmSidebar ? { color: "#D4380D" } : undefined}
+                          style={active && isWarmSidebar ? { color: "var(--color-master-600)" } : undefined}
                         />
                       </span>
                       {!isCollapsed && (

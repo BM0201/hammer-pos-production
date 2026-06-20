@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { useCashSessionStatus } from "@/lib/client/use-cash-session-status";
-import { measurePosMetric } from "@/lib/telemetry";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -152,7 +151,6 @@ export function CashierPayments({ branchId }: { branchId: string }) {
     }
 
     const orderId = selected.id;
-    const stopMetric = measurePosMetric("payment_latency", { orderId, method });
     let success = false;
 
     recentlyPaidRef.current.add(orderId);
@@ -201,7 +199,6 @@ export function CashierPayments({ branchId }: { branchId: string }) {
       showToast("error", humanized);
     } finally {
       setIsSubmitting(false);
-      stopMetric(success);
       // Clear the guard after a short delay so the same order can be retried if needed
       setTimeout(() => recentlyPaidRef.current.delete(orderId), 3000);
     }

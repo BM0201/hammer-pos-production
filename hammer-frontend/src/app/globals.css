@@ -43,13 +43,14 @@
   --color-owner-800: #5b21b6;
   --color-owner-900: #4c1d95;
 
-  /* ── MASTER: Rojo Grafito (#D4380D) — único acento, alineado con v7 ── */
+  /* ── MASTER: Rojo Grafito — token principal: --color-master-600 (#c33309) — 5.4:1 on white ── */
   --color-master-50:  #fef3f0;
   --color-master-100: #fde3dc;
   --color-master-200: #fbbfb0;
+  --color-master-300: #f08c71;
   --color-master-400: #e55a33;
   --color-master-500: #d4380d;
-  --color-master-600: #c33309;
+  --color-master-600: #c33309;   /* ← token principal de acento master */
   --color-master-700: #a82b08;   /* Text on light bg — 6.8:1 on white */
   --color-master-800: #8c2306;
   --color-master-900: #6b1a04;
@@ -105,7 +106,7 @@
   --color-branch-800: #6b21a8;
 
   /* ── Neutral surface ── */
-  --color-page-bg:       #f2f1f7;   /* Warm lavender-neutral — premium feel */
+  --color-page-bg:       #ecebf2;   /* Warm lavender-neutral — slightly deeper for card contrast */
   --color-surface:       #ffffff;
   --color-surface-muted: #fafafe;
   --color-surface-alt:   #f4f3f9;
@@ -253,7 +254,7 @@ textarea {
 select:focus,
 textarea:focus {
   border-color: var(--color-master-500);
-  box-shadow: 0 0 0 3px rgb(212 56 13 / 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-master-500) 12%, transparent);
   outline: none;
 }
 
@@ -332,7 +333,7 @@ a { color: inherit; text-decoration: none; }
 .hm-btn-master {
   background: linear-gradient(135deg, var(--color-master-500), var(--color-master-700));
   color: #fff;
-  box-shadow: 0 1px 3px rgb(212 56 13 / 0.30), 0 1px 6px rgb(212 56 13 / 0.15);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--color-master-500) 30%, transparent), 0 1px 6px color-mix(in srgb, var(--color-master-500) 15%, transparent);
 }
 
 /* Primary – branch (purple for admin) */
@@ -370,7 +371,7 @@ a { color: inherit; text-decoration: none; }
 @media (hover: hover) and (pointer: fine) {
   .hm-btn-master:hover:not(:disabled) {
     background: linear-gradient(135deg, var(--color-master-400), var(--color-master-600));
-    box-shadow: 0 4px 12px rgb(212 56 13 / 0.38), 0 1px 4px rgb(212 56 13 / 0.20);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--color-master-500) 38%, transparent), 0 1px 4px color-mix(in srgb, var(--color-master-500) 20%, transparent);
   }
   .hm-btn-branch:hover:not(:disabled) {
     background: linear-gradient(135deg, var(--color-branch-admin-500), var(--color-branch-admin-600));
@@ -496,7 +497,7 @@ select.hm-input {
 }
 .hm-input:focus {
   border-color: var(--color-master-500);
-  box-shadow: 0 0 0 3px rgb(212 56 13 / 0.12), var(--shadow-xs);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-master-500) 12%, transparent), var(--shadow-xs);
   outline: none;
   background: var(--color-surface);
 }
@@ -972,14 +973,14 @@ aside[class*="bg-[var(--color-sidebar)]"] {
   color: #2E2D2A;
 }
 .hm-sidebar-warm .hm-sidebar-item-expanded-active {
-  border-left: 2px solid var(--v7-accent);
+  border-left: 2px solid var(--color-master-600);
 }
 /* User card blends with warm sidebar — no orphan gray */
 .hm-sidebar-warm .sidebar-user-card {
   background: transparent;
 }
 .hm-sidebar-warm .hm-sidebar-item.is-active .hm-sidebar-icon {
-  color: #D4380D;
+  color: var(--color-master-600);
 }
 
 /* ── Sidebar semantic theme classes (role-aware via CSS vars) ── */
