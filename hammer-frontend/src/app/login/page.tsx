@@ -91,6 +91,15 @@ type LoginStep = "credentials" | "mfa";
 export default function LoginPage() {
   const router = useRouter();
 
+  /* Force light theme on login — restore previous theme on unmount */
+  useEffect(() => {
+    const prev = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = "light";
+    return () => {
+      if (prev) document.documentElement.dataset.theme = prev;
+    };
+  }, []);
+
   /* Session check */
   const [checking,   setChecking]   = useState(true);
 
