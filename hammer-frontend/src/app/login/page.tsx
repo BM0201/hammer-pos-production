@@ -237,7 +237,7 @@ export default function LoginPage() {
       }, 700 * (i + 1));
     });
 
-    // Phase 3 — SVG se disuelve sutilmente (sin zoom agresivo)
+    // Phase 3 — SVG y texto se disuelven
     setTimeout(() => {
       svg.style.transition = "opacity 400ms ease";
       svg.style.opacity    = "0";
@@ -246,18 +246,25 @@ export default function LoginPage() {
       suc.style.transition = "opacity 350ms ease";
       suc.style.opacity    = "0";
 
-      // Phase 4 — NAVEGACIÓN AQUÍ, antes de ocultar overlay
-      // El overlay sigue cubriendo la pantalla mientras Next.js carga la nueva página
+      // Phase 4 — NAVEGACIÓN
+      // Pintamos el body con el mismo color de fondo para que cualquier frame
+      // intermedio entre el overlay del login y HammerSplash sea invisible.
+      document.documentElement.style.backgroundColor = "#EDECEA";
+      document.body.style.backgroundColor = "#EDECEA";
+
       onDone();
       localStorage.setItem("hammer_ultimo_acceso", Date.now().toString());
       setLastAcceso(fmtAcceso(Date.now().toString()));
 
+      // El overlay empieza a desvanecerse a los 700ms (antes era 300ms).
+      // Esto da tiempo suficiente a que HammerSplash monte en la nueva página
+      // antes de que el overlay desaparezca, eliminando cualquier corte visual.
       setTimeout(() => {
-        ov.style.transition = "opacity 400ms ease";
+        ov.style.transition = "opacity 500ms ease";
         ov.style.opacity    = "0";
-      }, 300);
+      }, 700);
 
-      // Phase 5 — limpieza (el navegador ya está en la nueva ruta)
+      // Phase 5 — limpieza (el nuevo page ya está renderizado)
       setTimeout(() => {
         ov.style.display   = "none";
         svg.style.cssText  = "";
@@ -266,7 +273,9 @@ export default function LoginPage() {
         if (prog) prog.style.cssText = "";
         dot.setAttribute("cx", "36");
         dot.setAttribute("cy", "12");
-      }, 750);
+        document.documentElement.style.backgroundColor = "";
+        document.body.style.backgroundColor = "";
+      }, 1300);
     }, 2300);
   }
 

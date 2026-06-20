@@ -39,7 +39,13 @@ export function HammerSplash() {
       dot.setAttribute("cy", String(NODES[idx].cy));
     }, 700);
 
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      // Limpia el color de fondo que el login puede haber inyectado
+      // para cubrir frames intermedios en la transición.
+      document.documentElement.style.backgroundColor = "";
+      document.body.style.backgroundColor = "";
+    };
   }, []);
 
   return (
