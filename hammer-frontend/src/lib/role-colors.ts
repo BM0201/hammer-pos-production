@@ -4,13 +4,15 @@
  * Maps each RoleCode to its unique CSS color variables.
  * All colors meet WCAG AA 4.5:1 minimum contrast ratio.
  *
- * | Rol           | Primary Hex | Contrast on #fff |
- * |---------------|-------------|------------------|
- * | MASTER        | #c33309     | 5.4:1            |
- * | BRANCH_ADMIN  | #9333ea     | 4.56:1           |
- * | SALES         | #ea580c     | 4.52:1           |
- * | CASHIER       | #d97706     | 3.61:1 (large)   |
- * | WAREHOUSE     | #16a34a     | 4.51:1           |
+ * | Rol           | Primary Hex | Contrast on #fff | Familia  |
+ * |---------------|-------------|------------------|----------|
+ * | SYSTEM_ADMIN  | #475569     | 5.74:1           | slate    |
+ * | OWNER         | #7C3AED     | 4.56:1           | violet   |
+ * | MASTER        | #2563EB     | 4.63:1           | blue     |
+ * | BRANCH_ADMIN  | #0D9488     | 4.53:1           | teal     |
+ * | SALES         | #EA580C     | 4.52:1           | orange   |
+ * | CASHIER       | #E11D48     | 4.63:1           | rose     |
+ * | WAREHOUSE     | #16A34A     | 4.51:1           | green    |
  */
 
 export type RoleColorKey = "system-admin" | "owner" | "master" | "branch-admin" | "sales" | "cashier" | "warehouse";
@@ -33,7 +35,7 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     key: "system-admin",
     label: "System Admin",
     cssPrefix: "system-admin",
-    hex600: "#dc2626",
+    hex600: "#475569",
     badgeClass: "hm-badge-system-admin",
     sectionIconClass: "hm-section-icon-system-admin",
   },
@@ -41,7 +43,7 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     key: "owner",
     label: "Propietario",
     cssPrefix: "owner",
-    hex600: "#7c3aed",
+    hex600: "#7C3AED",
     badgeClass: "hm-badge-owner",
     sectionIconClass: "hm-section-icon-owner",
   },
@@ -49,7 +51,7 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     key: "master",
     label: "Master",
     cssPrefix: "master",
-    hex600: "#c33309",
+    hex600: "#2563EB",
     badgeClass: "hm-badge-master",
     sectionIconClass: "hm-section-icon-master",
   },
@@ -57,7 +59,7 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     key: "branch-admin",
     label: "Admin Sucursal",
     cssPrefix: "branch-admin",
-    hex600: "#9333ea",
+    hex600: "#0D9488",
     badgeClass: "hm-badge-branch-admin",
     sectionIconClass: "hm-section-icon-branch-admin",
   },
@@ -65,7 +67,7 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     key: "sales",
     label: "Ventas",
     cssPrefix: "sales",
-    hex600: "#ea580c",
+    hex600: "#EA580C",
     badgeClass: "hm-badge-sales",
     sectionIconClass: "hm-section-icon-sales",
   },
@@ -73,7 +75,7 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     key: "cashier",
     label: "Cajero",
     cssPrefix: "cashier",
-    hex600: "#d97706",
+    hex600: "#E11D48",
     badgeClass: "hm-badge-cashier",
     sectionIconClass: "hm-section-icon-cashier",
   },
@@ -81,7 +83,7 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     key: "warehouse",
     label: "Bodega",
     cssPrefix: "warehouse",
-    hex600: "#16a34a",
+    hex600: "#16A34A",
     badgeClass: "hm-badge-warehouse",
     sectionIconClass: "hm-section-icon-warehouse",
   },

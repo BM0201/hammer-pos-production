@@ -3,17 +3,17 @@
 import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import Link from "next/link";
 import type { Route } from "next";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { isMasterRole, isMasterOrAbove, isOwnerRole, isSystemAdminRole, resolveRoleHome } from "@/modules/rbac/role-routing";
 import { getRoleColor } from "@/lib/role-colors";
 import { getEffectiveCapabilitySet, hasEffectiveCapability } from "@/lib/navigation/visible-modules";
 import type { SessionPayload } from "@/types/auth";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { apiFetch } from "@/lib/client/api";
 import {
   LayoutDashboard,
   Users,
-
   Package,
   Boxes,
   ShoppingCart,
@@ -29,6 +29,7 @@ import {
   Store,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   TreePine,
   Menu,
   X,
@@ -42,6 +43,7 @@ import {
   Brain,
   Printer,
   Factory,
+  LogOut,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -277,6 +279,36 @@ function buildNavSections(
 
 /* ────────────────────────────────────────────────────────────── */
 
+function LogoutButton() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const handleLogout = async () => {
+    setLoading(true);
+    try { await apiFetch("/api/auth/logout", { method: "POST" }); } catch {}
+    router.push("/login");
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleLogout}
+      disabled={loading}
+      className="w-full flex items-center gap-2.5 px-3 py-2 text-[0.75rem] transition-colors"
+      style={{
+        background: "transparent",
+        border: "none",
+        cursor: loading ? "not-allowed" : "pointer",
+        color: "var(--color-sidebar-text)",
+        opacity: loading ? 0.6 : 1,
+      }}
+    >
+      <LogOut className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--color-cashier-400, #fb7185)" }} />
+      {loading ? "Saliendo…" : "Cerrar sesión"}
+    </button>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────── */
+
 export function AppSidebar({
   roleCode,
   globalRoles,
@@ -347,7 +379,6 @@ export function AppSidebar({
 
   /* Role-specific color classes */
   const roleGradientFrom = `var(--color-${roleCfg.cssPrefix}-500)`;
-  const roleGradientTo = `var(--color-${roleCfg.cssPrefix}-700)`;
   const roleActiveBg = `var(--color-${roleCfg.cssPrefix}-600)`;
   const roleActiveText = `var(--color-${roleCfg.cssPrefix}-200)`;
   const roleIcon = `var(--color-${roleCfg.cssPrefix}-400)`;
@@ -357,153 +388,99 @@ export function AppSidebar({
     "--sidebar-role-icon": roleIcon,
   };
 
-  /* Shared content renderer to avoid duplication */
-  const renderContent = (isCollapsed: boolean, isMobileView: boolean) => (
-    <>
-      {/* ── Toggle button at TOP (desktop only) ── */}
-      {!isMobileView && (
-        <div className="px-2 pt-2 pb-0">
-          <button
-            onClick={toggleCollapse}
-            style={{ background: "none", border: "none", transition: "background 120ms" }}
-            className="w-full flex items-center justify-center gap-2 rounded-md px-3 py-2 text-[0.75rem]
-              text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover)]
-              hover:text-[var(--color-sidebar-text-active)]"
-            title={isCollapsed ? "Expandir sidebar" : "Colapsar sidebar"}
-            aria-expanded={!isCollapsed}
-          >
-            {isCollapsed ? (
-              <ChevronRight className="h-4 w-4" />
-            ) : (
-              <>
-                <ChevronLeft className="h-4 w-4" />
-                <span className="sidebar-label">Colapsar</span>
-              </>
-            )}
-          </button>
-        </div>
-      )}
+  /* Account popover */
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement>(null);
 
-      {/* ── Brand ── */}
-      <div className={`px-3 pt-3 pb-3 ${isCollapsed ? "flex justify-center" : ""}`}>
-        <Link
-          href={(isMaster ? "/app/master" : homeHref) as Route}
-          className="flex items-center gap-2.5"
-          onClick={handleNavigation}
-        >
+  useEffect(() => {
+    if (!accountOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!accountRef.current?.contains(e.target as Node)) setAccountOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [accountOpen]);
+
+  /* Shared content renderer */
+  const renderContent = (isCollapsed: boolean, isMobileView: boolean) => (
+    <div className="flex flex-col h-full">
+
+      {/* ── 1. Brand bar ── */}
+      <div className={`flex items-center gap-2.5 px-3 py-3 ${isCollapsed ? "justify-center" : "justify-between"}`}>
+        {/* Brand mark (martillo + wordmark) */}
+        <Link href={(isMaster ? "/app/master" : homeHref) as Route} onClick={handleNavigation} className="flex items-center gap-2.5 min-w-0">
           <div
-            className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0"
-            style={{ background: "linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700))" }}
+            className="brand-mark flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0"
+            style={{ background: "var(--color-brand-500)" }}
           >
-            <Hammer className="h-5 w-5 text-white" />
+            <Hammer className="h-4 w-4 text-white" />
           </div>
           {!isCollapsed && (
-            <div className="sidebar-brand-text">
-              <span className="text-[0.9375rem] font-bold tracking-tight text-white">
-                H.A.M.M.E.R.
-              </span>
-              <span
-                className="ml-1.5 text-[0.6rem] font-semibold uppercase tracking-widest px-1.5 py-0.5 rounded"
-                style={{
-                  background: `color-mix(in srgb, ${roleActiveBg} 30%, transparent)`,
-                  color: roleActiveText,
-                }}
-              >
-                {roleCfg.label}
-              </span>
-            </div>
+            <span
+              className="sidebar-label text-[0.875rem] font-semibold tracking-tight truncate"
+              style={{ color: "var(--color-sidebar-text-active)" }}
+            >
+              H.A.M.M.E.R.
+            </span>
           )}
         </Link>
-      </div>
-
-      {/* ── Role accent bar ── */}
-      {!isCollapsed && (
-        <div
-          className="mx-3 mb-2 h-0.5 rounded-full opacity-60"
-          style={{ background: `linear-gradient(90deg, ${roleGradientFrom}, transparent)` }}
-        />
-      )}
-
-      {/* ── User card — background transparent, blends with sidebar ── */}
-      <div
-        className={`mx-2 mb-3 rounded-lg border border-[var(--color-sidebar-border)] ${isCollapsed ? "px-2 py-2.5" : "px-3 py-2.5"}`}
-        style={{ background: "transparent" }}
-      >
-        <div className={`flex items-center ${isCollapsed ? "justify-center" : "gap-2.5"}`}>
-          <div
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-xs font-bold text-white flex-shrink-0"
-            style={{ background: `linear-gradient(135deg, ${roleGradientFrom}, ${roleActiveBg})` }}
+        {/* Collapse toggle (desktop only) */}
+        {!isMobileView && (
+          <button
+            onClick={toggleCollapse}
+            className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-md transition-colors"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--color-sidebar-section)",
+              cursor: "pointer",
+            }}
+            title={isCollapsed ? "Expandir" : "Colapsar"}
+            aria-label={isCollapsed ? "Expandir sidebar" : "Colapsar sidebar"}
           >
-            {username.charAt(0).toUpperCase()}
-          </div>
-          {!isCollapsed && (
-            <div className="min-w-0 sidebar-user-info">
-              <p className="text-xs font-semibold truncate text-white">
-                {username}
-              </p>
-              <p className="text-[0.625rem]" style={{ color: `var(--color-${roleCfg.cssPrefix}-400)` }}>
-                {roleCfg.label}
-              </p>
-            </div>
-          )}
-        </div>
+            {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
+          </button>
+        )}
       </div>
 
-      {/* ── Navigation sections ── */}
-      <nav className="flex-1 overflow-y-auto px-2 space-y-4 pb-4">
+      {/* ── 2. Nav (flex-1, overflow-y auto) ── */}
+      <nav className="flex-1 overflow-y-auto px-2 py-1 space-y-4">
         {sections.map((section) => (
           <div key={section.title}>
             {!isCollapsed && (
               <p
-                className="sidebar-section-title px-3 mb-1.5 text-[0.625rem] font-bold uppercase tracking-[0.12em]"
+                className="sidebar-section-title px-2 mb-1 text-[11px] font-medium tracking-[0.04em]"
                 style={{ color: "var(--color-sidebar-section)" }}
               >
-                {section.title}
+                {section.title.charAt(0) + section.title.slice(1).toLowerCase()}
               </p>
             )}
             <div className="space-y-0.5">
               {section.items.map((item) => {
                 const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-                const expanded = !isCollapsed && active;
                 const Icon = item.icon;
                 return (
                   <div key={item.href} className="relative sidebar-nav-item">
                     <Link
                       href={item.href as Route}
                       onClick={handleNavigation}
-                      className={`
-                        hm-sidebar-item group flex items-center gap-2.5 text-[0.8125rem] font-semibold
-                        transition-all duration-150 py-2
-                        ${isCollapsed ? "px-0 justify-center rounded-md" : expanded ? "rounded-r-md" : "rounded-md px-3"}
-                      `}
+                      className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[0.8125rem] font-medium transition-colors duration-[140ms]"
                       style={{
-                        background: active ? "var(--color-sidebar-active)" : undefined,
-                        color: active ? "var(--sidebar-role-active-text)" : undefined,
-                        borderLeft: expanded ? `2px solid ${roleActiveBg}` : undefined,
-                        paddingLeft: expanded ? "calc(0.75rem - 2px)" : (!isCollapsed ? "0.75rem" : undefined),
-                        paddingRight: !isCollapsed ? "0.75rem" : undefined,
+                        background: active ? "var(--color-sidebar-active)" : "transparent",
+                        color: active ? "var(--color-sidebar-text-active)" : "var(--color-sidebar-text)",
                       }}
                       title={isCollapsed ? item.label : undefined}
                     >
-                      <span data-sidebar-icon className={`hm-sidebar-icon-wrap ${active ? "active" : ""}`}>
-                        <Icon
-                          className="hm-sidebar-icon h-[1.125rem] w-[1.125rem] flex-shrink-0 transition-colors duration-150"
-                          style={undefined}
-                        />
-                      </span>
+                      <Icon
+                        className="h-4 w-4 flex-shrink-0 transition-colors duration-[140ms]"
+                        style={{
+                          color: active ? "var(--sidebar-item-icon-hover)" : "var(--sidebar-item-icon)",
+                        }}
+                      />
                       {!isCollapsed && (
-                        <>
-                          <span className="truncate sidebar-label">{item.label}</span>
-                          {active && (
-                            <span
-                              className="ml-auto h-1.5 w-1.5 rounded-full"
-                              style={{ background: roleIcon }}
-                            />
-                          )}
-                        </>
+                        <span className="sidebar-label truncate">{item.label}</span>
                       )}
                     </Link>
-                    {/* Tooltip for collapsed state */}
                     {isCollapsed && (
                       <span className="sidebar-tooltip">{item.label}</span>
                     )}
@@ -515,20 +492,107 @@ export function AppSidebar({
         ))}
       </nav>
 
-      {/* ── Footer ── */}
-      <div className={`border-t border-[var(--color-sidebar-border)] px-3 py-2 flex items-center ${isCollapsed ? "justify-center" : "justify-between"}`}>
-        {!isCollapsed && (
-          <p className="text-[0.5625rem] sidebar-footer-text" style={{ color: "var(--color-sidebar-section)" }}>
-            H.A.M.M.E.R. V2 POS/ERP
-          </p>
+      {/* ── 3. Account button + popover ── */}
+      <div
+        ref={accountRef}
+        className="relative px-2 pb-2 pt-1 border-t"
+        style={{ borderColor: "var(--color-sidebar-border, #1E293B)" }}
+      >
+        <button
+          type="button"
+          onClick={() => setAccountOpen((v) => !v)}
+          className={`w-full flex items-center gap-2.5 rounded-md px-2 py-2 transition-colors duration-[140ms] ${isCollapsed ? "justify-center" : ""}`}
+          style={{
+            background: accountOpen ? "var(--color-sidebar-hover)" : "transparent",
+            border: "none",
+            cursor: "pointer",
+            color: "var(--color-sidebar-text)",
+          }}
+          aria-expanded={accountOpen}
+          aria-haspopup="true"
+        >
+          {/* Avatar */}
+          <div
+            className="flex items-center justify-center w-7 h-7 rounded-full flex-shrink-0 text-[0.6875rem] font-bold text-white"
+            style={{ background: roleActiveBg }}
+          >
+            {username.charAt(0).toUpperCase()}
+          </div>
+          {!isCollapsed && (
+            <>
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-[0.75rem] font-semibold truncate" style={{ color: "var(--color-sidebar-text-active)" }}>
+                  {username}
+                </p>
+                <p className="text-[0.625rem] truncate" style={{ color: "var(--color-sidebar-section)" }}>
+                  {roleCfg.label}
+                </p>
+              </div>
+              <ChevronUp
+                className="h-3.5 w-3.5 flex-shrink-0 transition-transform duration-150"
+                style={{
+                  color: "var(--color-sidebar-section)",
+                  transform: accountOpen ? "rotate(0deg)" : "rotate(180deg)",
+                }}
+              />
+            </>
+          )}
+        </button>
+
+        {/* Popover */}
+        {accountOpen && (
+          <div
+            className="absolute bottom-full left-2 right-2 mb-1 rounded-lg overflow-hidden"
+            style={{
+              background: "var(--color-sidebar-hover)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              boxShadow: "0 -8px 24px rgba(0,0,0,0.35)",
+              animation: "accountPopIn 150ms cubic-bezier(.23,1,.32,1) both",
+              zIndex: 60,
+            }}
+          >
+            {/* Popover header */}
+            <div
+              className="flex items-center gap-2.5 px-3 py-2.5 border-b"
+              style={{ borderColor: "rgba(255,255,255,0.07)" }}
+            >
+              <div
+                className="flex items-center justify-center w-8 h-8 rounded-full flex-shrink-0 text-[0.75rem] font-bold text-white"
+                style={{ background: roleActiveBg }}
+              >
+                {username.charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="text-[0.75rem] font-semibold truncate" style={{ color: "var(--color-sidebar-text-active)" }}>
+                  {username}
+                </p>
+                <p className="text-[0.625rem]" style={{ color: "var(--color-sidebar-section)" }}>
+                  Cuenta {roleCfg.label}
+                </p>
+              </div>
+            </div>
+
+            {/* Dark mode row */}
+            <div
+              className="flex items-center justify-between px-3 py-2"
+              style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}
+            >
+              <span className="text-[0.75rem]" style={{ color: "var(--color-sidebar-text)" }}>
+                Modo nocturno
+              </span>
+              <ThemeToggle
+                userId={userId}
+                className="flex items-center justify-center w-6 h-6 rounded-md border-0 bg-transparent cursor-pointer transition-colors"
+                style={{ color: "var(--color-sidebar-section)" }}
+              />
+            </div>
+
+            {/* Logout */}
+            <LogoutButton />
+          </div>
         )}
-        <ThemeToggle
-          userId={userId}
-          className="flex items-center justify-center w-6 h-6 rounded-md cursor-pointer border-0 bg-transparent transition-colors hover:bg-[var(--color-sidebar-hover)]"
-          style={{ color: "var(--color-sidebar-section)" }}
-        />
       </div>
-    </>
+    </div>
   );
 
   return (

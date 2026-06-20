@@ -12,7 +12,7 @@ import { AppFooter } from "@/components/layout/app-footer";
 import { BranchSelector } from "@/components/branch-selector";
 import { ChevronLeft, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ThemeToggle, applyUserTheme } from "@/components/ui/theme-toggle";
+import { applyUserTheme } from "@/components/ui/theme-toggle";
 import { apiFetch } from "@/lib/client/api";
 import { getRoleColor } from "@/lib/role-colors";
 
@@ -228,8 +228,6 @@ export function AppShellRouter({
                 </div>
                 <span className="text-xs text-[var(--color-text-muted)] truncate">{session.username}</span>
               </div>
-
-              <ThemeToggle userId={session.userId} />
 
               {/* Logout */}
               <Button

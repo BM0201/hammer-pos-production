@@ -8,112 +8,25 @@
    ═══════════════════════════════════════════════════════════════ */
 
 @theme {
-  /* ── Brand (marca fija — rojo grafito del martillo) ── */
-  --color-brand-500: #D4380D;
-  --color-brand-700: #B22D08;
-
-  /* ── Sidebar (dark slate) ── */
-  --color-sidebar:             #0F172A;
-  --color-sidebar-hover:       #1E293B;
-  --color-sidebar-active:      #334155;
-  --color-sidebar-text:        #E2E8F0;
-  --color-sidebar-text-active: #FFFFFF;
-  --color-sidebar-border:      #1E293B;
-  --color-sidebar-section:     #94A3B8;
-
   /* ══════════════════════════════════════════════════════════════
-     ROLE-SPECIFIC PALETTES (5 unique roles)
-     Each meets WCAG AA 4.5:1 on white & on dark backgrounds.
+     COLOR SYSTEM v8
+     -600 = rellenos/barras/iconos sobre claro
+     -700 = texto sobre claro
+     -50/-100 = fondos tintados de badge
      ══════════════════════════════════════════════════════════════ */
 
-  /* ── SYSTEM_ADMIN: Slate (#475569) — 5.74:1 on white ── */
-  --color-system-admin-50:  #F8FAFC;
-  --color-system-admin-100: #F1F5F9;
-  --color-system-admin-200: #E2E8F0;
-  --color-system-admin-400: #94A3B8;
-  --color-system-admin-500: #64748B;
-  --color-system-admin-600: #475569;
-  --color-system-admin-700: #334155;  /* texto — 9.3:1 on white */
-  --color-system-admin-800: #1E293B;
-  --color-system-admin-900: #0F172A;
+  /* ── MARCA (fija, no es un rol) — escala orange/red ── */
+  --color-brand-50:  #FFF7ED;
+  --color-brand-100: #FFEDD5;
+  --color-brand-200: #FED7AA;
+  --color-brand-400: #FB923C;
+  --color-brand-500: #D4380D;
+  --color-brand-600: #C2330A;
+  --color-brand-700: #B22D08;
+  --color-brand-800: #9A3412;
+  --color-brand-900: #7C2D12;
 
-  /* ── OWNER: Violeta (#7c3aed) ── */
-  --color-owner-50:  #f5f3ff;
-  --color-owner-100: #ede9fe;
-  --color-owner-200: #ddd6fe;
-  --color-owner-400: #a78bfa;
-  --color-owner-500: #8b5cf6;
-  --color-owner-600: #7c3aed;
-  --color-owner-700: #6d28d9;
-  --color-owner-800: #5b21b6;
-  --color-owner-900: #4c1d95;
-
-  /* ── MASTER: Azul (#2563EB) — 4.63:1 on white ── */
-  --color-master-50:  #EFF6FF;
-  --color-master-100: #DBEAFE;
-  --color-master-200: #BFDBFE;
-  --color-master-400: #60A5FA;
-  --color-master-500: #3B82F6;
-  --color-master-600: #2563EB;  /* rellenos / barras / iconos */
-  --color-master-700: #1D4ED8;  /* texto — 5.9:1 on white */
-  --color-master-800: #1E40AF;
-  --color-master-900: #1E3A8A;
-
-  /* ── BRANCH_ADMIN: Teal (#0D9488) — 4.53:1 on white ── */
-  --color-branch-admin-50:  #F0FDFA;
-  --color-branch-admin-100: #CCFBF1;
-  --color-branch-admin-200: #99F6E4;
-  --color-branch-admin-400: #2DD4BF;
-  --color-branch-admin-500: #14B8A6;
-  --color-branch-admin-600: #0D9488;  /* rellenos */
-  --color-branch-admin-700: #0F766E;  /* texto — 6.14:1 on white */
-  --color-branch-admin-800: #115E59;
-  --color-branch-admin-900: #134E4A;
-
-  /* ── SALES: Naranja (#EA580C) — 4.52:1 on white ── */
-  --color-sales-50:  #FFF7ED;
-  --color-sales-100: #FFEDD5;
-  --color-sales-200: #FED7AA;
-  --color-sales-400: #FB923C;
-  --color-sales-500: #F97316;
-  --color-sales-600: #EA580C;
-  --color-sales-700: #C2410C;  /* texto — 6.41:1 on white */
-  --color-sales-800: #9A3412;
-  --color-sales-900: #7C2D12;
-
-  /* ── CASHIER: Rosa (#E11D48) — 4.63:1 on white ── */
-  --color-cashier-50:  #FFF1F2;
-  --color-cashier-100: #FFE4E6;
-  --color-cashier-200: #FECDD3;
-  --color-cashier-400: #FB7185;
-  --color-cashier-500: #F43F5E;
-  --color-cashier-600: #E11D48;  /* rellenos */
-  --color-cashier-700: #BE123C;  /* texto — 6.42:1 on white */
-  --color-cashier-800: #9F1239;
-  --color-cashier-900: #881337;
-
-  /* ── WAREHOUSE: Verde (#16A34A) — 4.51:1 on white ── */
-  --color-warehouse-50:  #F0FDF4;
-  --color-warehouse-100: #DCFCE7;
-  --color-warehouse-200: #BBF7D0;
-  --color-warehouse-400: #4ADE80;
-  --color-warehouse-500: #22C55E;
-  --color-warehouse-600: #16A34A;
-  --color-warehouse-700: #15803D;  /* texto — 6.26:1 on white */
-  --color-warehouse-800: #166534;
-  --color-warehouse-900: #14532D;
-
-  /* ── Legacy branch alias (= branch_admin teal para backward compat) ── */
-  --color-branch-50:  #F0FDFA;
-  --color-branch-100: #CCFBF1;
-  --color-branch-200: #99F6E4;
-  --color-branch-400: #2DD4BF;
-  --color-branch-500: #14B8A6;
-  --color-branch-600: #0D9488;
-  --color-branch-700: #0F766E;
-  --color-branch-800: #115E59;
-
-  /* ── Neutral surface (familia stone) ── */
+  /* ── NEUTRALES (stone cálida) ── */
   --color-page-bg:       #ECEBE7;
   --color-surface:       #FFFFFF;
   --color-surface-muted: #FAFAF9;
@@ -121,6 +34,7 @@
   --color-surface-raised:#F7F6F5;
   --color-border:        #E7E5E4;
   --color-border-strong: #D6D3D1;
+  --color-border-mid:    #D6D3D1;
 
   /* ── Text (stone — todos ≥ 4.5:1 on white) ── */
   --color-text:           #1C1917;  /* 16.8:1 */
@@ -128,36 +42,130 @@
   --color-text-muted:     #57534E;  /* 6.05:1 */
   --color-text-soft:      #78716C;  /* 4.53:1 */
 
-  /* ── Semantic — vibrant & accessible ── */
-  --color-success-50:  #ecfdf5;
-  --color-success-100: #d1fae5;
-  --color-success-200: #a7f3d0;
-  --color-success-500: #10b981;
+  /* ── ROLES ── */
+
+  /* master — blue — -600:#2563EB 4.63:1 — -700:#1D4ED8 texto */
+  --color-master-50:  #EFF6FF;
+  --color-master-100: #DBEAFE;
+  --color-master-200: #BFDBFE;
+  --color-master-400: #60A5FA;
+  --color-master-500: #3B82F6;
+  --color-master-600: #2563EB;
+  --color-master-700: #1D4ED8;
+  --color-master-800: #1E40AF;
+  --color-master-900: #1E3A8A;
+
+  /* owner — violet — -600:#7C3AED 4.56:1 — -700:#6D28D9 texto */
+  --color-owner-50:  #F5F3FF;
+  --color-owner-100: #EDE9FE;
+  --color-owner-200: #DDD6FE;
+  --color-owner-400: #A78BFA;
+  --color-owner-500: #8B5CF6;
+  --color-owner-600: #7C3AED;
+  --color-owner-700: #6D28D9;
+  --color-owner-800: #5B21B6;
+  --color-owner-900: #4C1D95;
+
+  /* system-admin — slate — -600:#475569 5.74:1 — -700:#334155 texto */
+  --color-system-admin-50:  #F8FAFC;
+  --color-system-admin-100: #F1F5F9;
+  --color-system-admin-200: #E2E8F0;
+  --color-system-admin-400: #94A3B8;
+  --color-system-admin-500: #64748B;
+  --color-system-admin-600: #475569;
+  --color-system-admin-700: #334155;
+  --color-system-admin-800: #1E293B;
+  --color-system-admin-900: #0F172A;
+
+  /* branch-admin — teal — -600:#0D9488 4.53:1 — -700:#0F766E texto */
+  --color-branch-admin-50:  #F0FDFA;
+  --color-branch-admin-100: #CCFBF1;
+  --color-branch-admin-200: #99F6E4;
+  --color-branch-admin-400: #2DD4BF;
+  --color-branch-admin-500: #14B8A6;
+  --color-branch-admin-600: #0D9488;
+  --color-branch-admin-700: #0F766E;
+  --color-branch-admin-800: #115E59;
+  --color-branch-admin-900: #134E4A;
+
+  /* sales — orange — -600:#EA580C 4.52:1 — -700:#C2410C texto */
+  --color-sales-50:  #FFF7ED;
+  --color-sales-100: #FFEDD5;
+  --color-sales-200: #FED7AA;
+  --color-sales-400: #FB923C;
+  --color-sales-500: #F97316;
+  --color-sales-600: #EA580C;
+  --color-sales-700: #C2410C;
+  --color-sales-800: #9A3412;
+  --color-sales-900: #7C2D12;
+
+  /* cashier — rose — -600:#E11D48 4.63:1 — -700:#BE123C texto */
+  --color-cashier-50:  #FFF1F2;
+  --color-cashier-100: #FFE4E6;
+  --color-cashier-200: #FECDD3;
+  --color-cashier-400: #FB7185;
+  --color-cashier-500: #F43F5E;
+  --color-cashier-600: #E11D48;
+  --color-cashier-700: #BE123C;
+  --color-cashier-800: #9F1239;
+  --color-cashier-900: #881337;
+
+  /* warehouse — green — -600:#16A34A 4.51:1 — -700:#15803D texto */
+  --color-warehouse-50:  #F0FDF4;
+  --color-warehouse-100: #DCFCE7;
+  --color-warehouse-200: #BBF7D0;
+  --color-warehouse-400: #4ADE80;
+  --color-warehouse-500: #22C55E;
+  --color-warehouse-600: #16A34A;
+  --color-warehouse-700: #15803D;
+  --color-warehouse-800: #166534;
+  --color-warehouse-900: #14532D;
+
+  /* ── SEMÁNTICOS ── */
+
+  /* success — emerald — -600:#059669 — -700:#047857 texto */
+  --color-success-50:  #ECFDF5;
+  --color-success-100: #D1FAE5;
+  --color-success-200: #A7F3D0;
+  --color-success-400: #34D399;
+  --color-success-500: #10B981;
   --color-success-600: #059669;
   --color-success-700: #047857;
+  --color-success-800: #065F46;
+  --color-success-900: #064E3B;
 
-  --color-warning-50:  #fffbeb;
-  --color-warning-100: #fef3c7;
-  --color-warning-200: #fde68a;
-  --color-warning-500: #f59e0b;
-  --color-warning-600: #d97706;
-  --color-warning-700: #b45309;
+  /* warning — amber — -600:#D97706 — -700:#B45309 texto */
+  --color-warning-50:  #FFFBEB;
+  --color-warning-100: #FEF3C7;
+  --color-warning-200: #FDE68A;
+  --color-warning-400: #FBBF24;
+  --color-warning-500: #F59E0B;
+  --color-warning-600: #D97706;
+  --color-warning-700: #B45309;
+  --color-warning-800: #92400E;
+  --color-warning-900: #78350F;
 
-  --color-danger-50:   #fef2f2;
-  --color-danger-100:  #fee2e2;
-  --color-danger-200:  #fecaca;
-  --color-danger-500:  #ef4444;
-  --color-danger-600:  #dc2626;
-  --color-danger-700:  #b91c1c;
+  /* danger — red — -600:#DC2626 — -700:#B91C1C texto */
+  --color-danger-50:  #FEF2F2;
+  --color-danger-100: #FEE2E2;
+  --color-danger-200: #FECACA;
+  --color-danger-400: #F87171;
+  --color-danger-500: #EF4444;
+  --color-danger-600: #DC2626;
+  --color-danger-700: #B91C1C;
+  --color-danger-800: #991B1B;
+  --color-danger-900: #7F1D1D;
 
-  --color-info-50:     #ECFEFF;
-  --color-info-100:    #CFFAFE;
-  --color-info-200:    #A5F3FC;
-  --color-info-400:    #22D3EE;
-  --color-info-500:    #06B6D4;
-  --color-info-600:    #0891B2;
-  --color-info-700:    #0E7490;
-  --color-info-800:    #155E75;
+  /* info — cyan — -600:#0891B2 — -700:#0E7490 texto */
+  --color-info-50:  #ECFEFF;
+  --color-info-100: #CFFAFE;
+  --color-info-200: #A5F3FC;
+  --color-info-400: #22D3EE;
+  --color-info-500: #06B6D4;
+  --color-info-600: #0891B2;
+  --color-info-700: #0E7490;
+  --color-info-800: #155E75;
+  --color-info-900: #164E63;
 
   /* ── Legacy primary → master (azul) para backward compat ── */
   --color-primary-50:  var(--color-master-50);
@@ -168,6 +176,16 @@
   --color-primary-600: var(--color-master-600);
   --color-primary-700: var(--color-master-700);
   --color-surface-hover: var(--color-surface-alt);
+
+  /* ── Sidebar (dark slate) ── */
+  --color-sidebar:             #0F172A;
+  --color-sidebar-hover:       #1E293B;
+  --color-sidebar-active:      #1E293B;
+  --color-sidebar-text:        #E2E8F0;
+  --color-sidebar-text-active: #FFFFFF;
+  --color-sidebar-section:     #94A3B8;
+  --sidebar-item-icon:         #94A3B8;
+  --sidebar-item-icon-hover:   #FFFFFF;
 
   /* ── Radius ── */
   --radius-sm: 0.375rem;
@@ -203,25 +221,24 @@
 
 :root { color-scheme: light; }
 
-/* ── Hammer v7 extended color system ─────────────────────────────── */
+/* ── v8 :root — surface-raised + v7 bridge ─────────────────────────── */
 :root {
-  /* 8 semantic roles × bg + -text (APCA Lc ≥ 60 on role bg) */
-  --v7-accent:              #D4380D;   --v7-accent-text:       #791F1F;
-  --v7-success:             #2D7D46;   --v7-success-text:      #1A4D2C;
-  --v7-info:                #2C5F8A;   --v7-info-text:         #1A3A55;
-  --v7-warning:             #A36A0E;   --v7-warning-text:      #5C3B08;
-  --v7-role-admin:          #5B4A8A;   --v7-role-admin-text:   #352B52;
-  --v7-brand-accent:        #B5651D;   --v7-brand-text:        #6B3C11;
-  --v7-cat-inventario:      #5C8A6E;   --v7-cat-text:          #355241;
-  --v7-inactive:            #7A7873;   --v7-inactive-text:     #4A4944;
-
-  /* Adaptive ink — 3 surface variants per level */
-  --v7-ink-2-on-base:         #4A4843;   /* base       #EDECEA */
-  --v7-ink-3-on-base:         #6B6862;
-  --v7-ink-2-on-surface:      #514F49;   /* surface    #E4E2DE */
-  --v7-ink-3-on-surface:      #6B6862;
-  --v7-ink-2-on-surface-hi:   #5C5A54;   /* surface-hi #F5F4F2 */
-  --v7-ink-3-on-surface-hi:   #847F77;
+  --color-surface-raised: var(--color-surface);
+  /* v7 bridge — apuntan a los nuevos semánticos */
+  --v7-success:             var(--color-success-600);
+  --v7-success-text:        var(--color-success-700);
+  --v7-info:                var(--color-info-600);
+  --v7-info-text:           var(--color-info-700);
+  --v7-warning:             var(--color-warning-600);
+  --v7-warning-text:        var(--color-warning-700);
+  --v7-accent:              var(--color-brand-500);
+  --v7-accent-text:         var(--color-brand-700);
+  --v7-inactive:            var(--color-text-soft);
+  --v7-inactive-text:       var(--color-text-muted);
+  --v7-ink-2-on-surface-hi: var(--color-text-secondary);
+  --v7-ink-3-on-surface-hi: var(--color-text-muted);
+  --v7-ink-2-on-base:       var(--color-text-secondary);
+  --v7-ink-3-on-base:       var(--color-text-muted);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -231,126 +248,59 @@
    ══════════════════════════════════════════════════════════════ */
 [data-theme="dark"] {
   color-scheme: dark;
-
-  /* ── Surfaces (warm charcoal, layered by elevation) ── */
-  --color-page-bg:        #1A1917;
-  --color-surface:        #232120;
-  --color-surface-muted:  #1F1D1B;
-  --color-surface-alt:    #2C2A28;
-  --color-surface-raised: #2C2A28;
-  --color-surface-hover:  #2C2A28;
-  --color-border:         #38352F;
-  --color-border-strong:  #4A463F;
-
-  /* ── Text ── */
-  --color-text:           #F5F3EF;
-  --color-text-secondary: #D6D2CA;
-  --color-text-muted:     #A8A39A;
-  --color-text-soft:      #847F76;
-
-  /* ── Sidebar: unified with warm charcoal base ── */
-  --color-sidebar:             #1A1917;
-  --color-sidebar-hover:       #2C2A28;
-  --color-sidebar-active:      #232120;
-  --color-sidebar-text:        #D6D2CA;
-  --color-sidebar-text-active: #F5F3EF;
-  --color-sidebar-border:      #38352F;
-  --color-sidebar-section:     #847F76;
-  --sidebar-item-icon:         #A8A39A;
-  --sidebar-item-icon-hover:   #F5F3EF;
-
-  /* ── Shadows: raised opacity for dark depth ── */
-  --shadow-xs:         0 1px 2px rgba(0,0,0,0.40);
-  --shadow-card:       0 1px 3px rgba(0,0,0,0.45);
-  --shadow-card-hover: 0 6px 18px -2px rgba(0,0,0,0.55), 0 2px 6px -2px rgba(0,0,0,0.35);
-  --shadow-lg:         0 10px 28px -4px rgba(0,0,0,0.50), 0 4px 8px -4px rgba(0,0,0,0.30);
-  --shadow-xl:         0 20px 48px -8px rgba(0,0,0,0.55), 0 8px 16px -8px rgba(0,0,0,0.35);
-  --shadow-modal:      0 28px 56px -12px rgba(0,0,0,0.70), 0 12px 24px -8px rgba(0,0,0,0.40);
-
-  /* ── Master (blue) — text anchor #60A5FA ── */
-  --color-master-50:  color-mix(in srgb, #60A5FA 14%, #232120);
-  --color-master-100: color-mix(in srgb, #60A5FA 22%, #232120);
-  --color-master-200: color-mix(in srgb, #60A5FA 35%, #232120);
-  --color-master-400: #60A5FA;
-  --color-master-700: #60A5FA;
-
-  /* ── Owner (violet) — text anchor #A78BFA ── */
-  --color-owner-50:  color-mix(in srgb, #A78BFA 14%, #232120);
-  --color-owner-100: color-mix(in srgb, #A78BFA 22%, #232120);
-  --color-owner-200: color-mix(in srgb, #A78BFA 35%, #232120);
-  --color-owner-400: #A78BFA;
-  --color-owner-700: #A78BFA;
-
-  /* ── System admin (slate) — text anchor #94A3B8 ── */
-  --color-system-admin-50:  color-mix(in srgb, #94A3B8 14%, #232120);
-  --color-system-admin-100: color-mix(in srgb, #94A3B8 22%, #232120);
-  --color-system-admin-200: color-mix(in srgb, #94A3B8 35%, #232120);
-  --color-system-admin-400: #94A3B8;
-  --color-system-admin-700: #94A3B8;
-
-  /* ── Branch admin (teal) — text anchor #2DD4BF ── */
-  --color-branch-admin-50:  color-mix(in srgb, #2DD4BF 14%, #232120);
-  --color-branch-admin-100: color-mix(in srgb, #2DD4BF 22%, #232120);
-  --color-branch-admin-200: color-mix(in srgb, #2DD4BF 35%, #232120);
-  --color-branch-admin-400: #2DD4BF;
-  --color-branch-admin-700: #2DD4BF;
-  --color-branch-50:  color-mix(in srgb, #2DD4BF 14%, #232120);
-  --color-branch-100: color-mix(in srgb, #2DD4BF 22%, #232120);
-  --color-branch-400: #2DD4BF;
-  --color-branch-700: #2DD4BF;
-
-  /* ── Sales (orange) — text anchor #FB923C ── */
-  --color-sales-50:  color-mix(in srgb, #FB923C 14%, #232120);
-  --color-sales-100: color-mix(in srgb, #FB923C 22%, #232120);
-  --color-sales-200: color-mix(in srgb, #FB923C 35%, #232120);
-  --color-sales-400: #FB923C;
-  --color-sales-700: #FB923C;
-
-  /* ── Cashier (rose) — text anchor #FB7185 ── */
-  --color-cashier-50:  color-mix(in srgb, #FB7185 14%, #232120);
-  --color-cashier-100: color-mix(in srgb, #FB7185 22%, #232120);
-  --color-cashier-200: color-mix(in srgb, #FB7185 35%, #232120);
-  --color-cashier-400: #FB7185;
-  --color-cashier-700: #FB7185;
-
-  /* ── Warehouse (green) — text anchor #4ADE80 ── */
-  --color-warehouse-50:  color-mix(in srgb, #4ADE80 14%, #232120);
-  --color-warehouse-100: color-mix(in srgb, #4ADE80 22%, #232120);
-  --color-warehouse-200: color-mix(in srgb, #4ADE80 35%, #232120);
-  --color-warehouse-400: #4ADE80;
-  --color-warehouse-700: #4ADE80;
-
-  /* ── Success (emerald) — text anchor #34D399 ── */
-  --color-success-50:  color-mix(in srgb, #34D399 14%, #232120);
-  --color-success-100: color-mix(in srgb, #34D399 22%, #232120);
-  --color-success-200: color-mix(in srgb, #34D399 35%, #232120);
-  --color-success-700: #34D399;
-
-  /* ── Warning (amber) — text anchor #FBBF24 ── */
-  --color-warning-50:  color-mix(in srgb, #FBBF24 14%, #232120);
-  --color-warning-100: color-mix(in srgb, #FBBF24 22%, #232120);
-  --color-warning-200: color-mix(in srgb, #FBBF24 35%, #232120);
-  --color-warning-700: #FBBF24;
-
-  /* ── Danger (red) — text anchor #F87171 ── */
-  --color-danger-50:  color-mix(in srgb, #F87171 14%, #232120);
-  --color-danger-100: color-mix(in srgb, #F87171 22%, #232120);
-  --color-danger-200: color-mix(in srgb, #F87171 35%, #232120);
-  --color-danger-700: #F87171;
-
-  /* ── Info (cyan) — text anchor #22D3EE ── */
-  --color-info-50:  color-mix(in srgb, #22D3EE 14%, #232120);
-  --color-info-100: color-mix(in srgb, #22D3EE 22%, #232120);
-  --color-info-200: color-mix(in srgb, #22D3EE 35%, #232120);
-  --color-info-400: #22D3EE;
-  --color-info-700: #22D3EE;
-
-  /* ── Legacy primary → master aliases ── */
-  --color-primary-50:  color-mix(in srgb, #60A5FA 14%, #232120);
-  --color-primary-100: color-mix(in srgb, #60A5FA 22%, #232120);
-  --color-primary-200: color-mix(in srgb, #60A5FA 35%, #232120);
-  --color-primary-300: #93C5FD;
-  --color-primary-700: #60A5FA;
+  --color-page-bg:#1A1917; --color-surface:#232120; --color-surface-muted:#1F1D1B; --color-surface-alt:#2C2A28;
+  --color-surface-raised:#2C2A28; --color-surface-hover:#2C2A28;
+  --color-border:#38352F; --color-border-strong:#4A463F; --color-border-mid:#4A463F;
+  --color-text:#F5F3EF; --color-text-secondary:#D6D2CA; --color-text-muted:#A8A39A; --color-text-soft:#847F76;
+  --shadow-card:0 1px 3px rgba(0,0,0,.45);
+  --shadow-card-hover:0 6px 18px -2px rgba(0,0,0,.55),0 2px 6px -2px rgba(0,0,0,.35);
+  --shadow-xs:0 1px 2px rgba(0,0,0,.40);
+  --shadow-lg:0 10px 28px -4px rgba(0,0,0,.50),0 4px 8px -4px rgba(0,0,0,.30);
+  --shadow-modal:0 28px 56px -12px rgba(0,0,0,.70),0 12px 24px -8px rgba(0,0,0,.40);
+  /* sidebar oscuro */
+  --color-sidebar:#1A1917; --color-sidebar-hover:#2C2A28; --color-sidebar-active:#232120;
+  --color-sidebar-text:#D6D2CA; --color-sidebar-text-active:#F5F3EF; --color-sidebar-section:#847F76;
+  --sidebar-item-icon:#A8A39A; --sidebar-item-icon-hover:#F5F3EF;
+  /* master text anchor #60A5FA */
+  --color-master-50:color-mix(in srgb,#60A5FA 14%,#232120); --color-master-100:color-mix(in srgb,#60A5FA 22%,#232120);
+  --color-master-200:color-mix(in srgb,#60A5FA 35%,#232120); --color-master-400:#60A5FA; --color-master-700:#60A5FA;
+  /* owner text anchor #A78BFA */
+  --color-owner-50:color-mix(in srgb,#A78BFA 14%,#232120); --color-owner-100:color-mix(in srgb,#A78BFA 22%,#232120);
+  --color-owner-200:color-mix(in srgb,#A78BFA 35%,#232120); --color-owner-400:#A78BFA; --color-owner-700:#A78BFA;
+  /* system-admin text anchor #94A3B8 */
+  --color-system-admin-50:color-mix(in srgb,#94A3B8 14%,#232120); --color-system-admin-100:color-mix(in srgb,#94A3B8 22%,#232120);
+  --color-system-admin-200:color-mix(in srgb,#94A3B8 35%,#232120); --color-system-admin-400:#94A3B8; --color-system-admin-700:#94A3B8;
+  /* branch-admin text anchor #2DD4BF */
+  --color-branch-admin-50:color-mix(in srgb,#2DD4BF 14%,#232120); --color-branch-admin-100:color-mix(in srgb,#2DD4BF 22%,#232120);
+  --color-branch-admin-200:color-mix(in srgb,#2DD4BF 35%,#232120); --color-branch-admin-400:#2DD4BF; --color-branch-admin-700:#2DD4BF;
+  /* sales text anchor #FB923C */
+  --color-sales-50:color-mix(in srgb,#FB923C 14%,#232120); --color-sales-100:color-mix(in srgb,#FB923C 22%,#232120);
+  --color-sales-200:color-mix(in srgb,#FB923C 35%,#232120); --color-sales-400:#FB923C; --color-sales-700:#FB923C;
+  /* cashier text anchor #FB7185 */
+  --color-cashier-50:color-mix(in srgb,#FB7185 14%,#232120); --color-cashier-100:color-mix(in srgb,#FB7185 22%,#232120);
+  --color-cashier-200:color-mix(in srgb,#FB7185 35%,#232120); --color-cashier-400:#FB7185; --color-cashier-700:#FB7185;
+  /* warehouse text anchor #4ADE80 */
+  --color-warehouse-50:color-mix(in srgb,#4ADE80 14%,#232120); --color-warehouse-100:color-mix(in srgb,#4ADE80 22%,#232120);
+  --color-warehouse-200:color-mix(in srgb,#4ADE80 35%,#232120); --color-warehouse-400:#4ADE80; --color-warehouse-700:#4ADE80;
+  /* success text anchor #34D399 */
+  --color-success-50:color-mix(in srgb,#34D399 14%,#232120); --color-success-100:color-mix(in srgb,#34D399 22%,#232120);
+  --color-success-200:color-mix(in srgb,#34D399 35%,#232120); --color-success-700:#34D399;
+  /* warning text anchor #FBBF24 */
+  --color-warning-50:color-mix(in srgb,#FBBF24 14%,#232120); --color-warning-100:color-mix(in srgb,#FBBF24 22%,#232120);
+  --color-warning-200:color-mix(in srgb,#FBBF24 35%,#232120); --color-warning-700:#FBBF24;
+  /* danger text anchor #F87171 */
+  --color-danger-50:color-mix(in srgb,#F87171 14%,#232120); --color-danger-100:color-mix(in srgb,#F87171 22%,#232120);
+  --color-danger-200:color-mix(in srgb,#F87171 35%,#232120); --color-danger-700:#F87171;
+  /* info text anchor #22D3EE */
+  --color-info-50:color-mix(in srgb,#22D3EE 14%,#232120); --color-info-100:color-mix(in srgb,#22D3EE 22%,#232120);
+  --color-info-200:color-mix(in srgb,#22D3EE 35%,#232120); --color-info-400:#22D3EE; --color-info-700:#22D3EE;
+  /* legacy primary → master dark */
+  --color-primary-50:color-mix(in srgb,#60A5FA 14%,#232120); --color-primary-100:color-mix(in srgb,#60A5FA 22%,#232120);
+  --color-primary-200:color-mix(in srgb,#60A5FA 35%,#232120); --color-primary-300:#93C5FD; --color-primary-700:#60A5FA;
+  /* v7 bridge dark overrides */
+  --v7-success:var(--color-success-700); --v7-warning:var(--color-warning-700);
+  --v7-accent:var(--color-brand-500); --v7-inactive:var(--color-text-soft);
+  --v7-ink-2-on-surface-hi:var(--color-text-secondary); --v7-ink-3-on-surface-hi:var(--color-text-muted);
 }
 
 /* ── Dark mode dot-grid (warmer tone at lower opacity) ── */
@@ -1955,6 +1905,33 @@ a:focus-visible {
   border-radius: 9999px;
   margin: 0.5rem 1rem;
   opacity: 0.7;
+}
+
+/* ── Hammer brand animation ── */
+@keyframes hammer-tap {
+  0%   { transform: rotate(0deg); }
+  45%  { transform: rotate(-20deg); }
+  62%  { transform: rotate(0deg); }
+  78%  { transform: rotate(-9deg); }
+  100% { transform: rotate(0deg); }
+}
+.brand-mark svg {
+  display: inline-block;
+  transform-origin: 64% 74%;
+  animation: hammer-tap 900ms cubic-bezier(.23,1,.32,1) .35s 1 both;
+}
+.brand-mark:hover svg {
+  animation: hammer-tap 700ms cubic-bezier(.23,1,.32,1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-mark svg,
+  .brand-mark:hover svg { animation: none; }
+}
+
+/* ── Account popover animation ── */
+@keyframes accountPopIn {
+  from { opacity: 0; transform: scale(.97) translateY(4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 /* ══════════════════════════════════════════════════════════════
