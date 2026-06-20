@@ -365,7 +365,7 @@ export function AppSidebar({
           <button
             onClick={toggleCollapse}
             className="w-full flex items-center justify-center gap-2 rounded-md px-3 py-2 text-[0.75rem]
-              text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover)]
+              bg-transparent border-0 text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover)]
               hover:text-[var(--color-sidebar-text-active)] transition-colors duration-150"
             title={isCollapsed ? "Expandir sidebar" : "Colapsar sidebar"}
             aria-expanded={!isCollapsed}
@@ -423,7 +423,7 @@ export function AppSidebar({
       )}
 
       {/* ── User card ── */}
-      <div className={`mx-2 mb-3 rounded-lg border border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-hover)] ${isCollapsed ? "px-2 py-2.5" : "px-3 py-2.5"}`}>
+      <div className={`sidebar-user-card mx-2 mb-3 rounded-lg border border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-active)] ${isCollapsed ? "px-2 py-2.5" : "px-3 py-2.5"}`}>
         <div className={`flex items-center ${isCollapsed ? "justify-center" : "gap-2.5"}`}>
           <div
             className="flex items-center justify-center w-8 h-8 rounded-lg text-xs font-bold text-white flex-shrink-0"

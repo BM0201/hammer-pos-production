@@ -245,58 +245,121 @@ export function CashierPayments({ branchId }: { branchId: string }) {
 
   return (
     <section className="space-y-4" data-testid="cashier-payments-root">
-      <Card className="flex flex-wrap items-center gap-3 rounded-xl px-4 py-2.5">
-        <span className="text-sm text-[var(--color-text-secondary)]">Estado de caja:</span>
+      <div
+        className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-2.5"
+        style={{ boxShadow: "0 1px 2px rgba(46,45,42,0.05)" }}
+      >
+        <span
+          className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-secondary)]"
+          style={{ fontFamily: "'DM Mono', monospace" }}
+        >
+          Estado de caja
+        </span>
         {cashSessionState.hasOpenSession
           ? <Badge variant="success">ABIERTA</Badge>
           : cashSessionState.status === "RECONCILING"
             ? <Badge variant="warning">EN CONCILIACIÓN</Badge>
             : cashSessionState.status === "AUTO_CLOSED_PENDING_REVIEW"
-              ? <Badge variant="warning">CIERRE AUTOMATICO PENDIENTE</Badge>
-              : <Badge variant="danger">CERRADA</Badge>}
-        <span className="text-xs text-[var(--color-text-soft)]">
-          {cashBoxLabel ? `Caja: ${cashBoxLabel}` : "Sin caja asignada"}
-          {cashSessionState.cashSessionId ? ` · Sesión ${cashSessionState.cashSessionId.slice(0, 8)}...` : ""}
+              ? <Badge variant="warning">CIERRE AUTOMÁTICO PENDIENTE</Badge>
+              : <Badge variant="warning">CERRADA</Badge>}
+        <span
+          className="text-[12px]"
+          style={{ fontFamily: "'DM Mono', monospace", color: "var(--v7-ink-2-on-surface-hi)" }}
+        >
+          {cashBoxLabel ?? "Sin caja asignada"}
+          {cashSessionState.cashSessionId ? ` · ${cashSessionState.cashSessionId.slice(0, 8)}…` : ""}
         </span>
         {!cashSessionState.hasOpenSession ? (
-          <Link href={"/app/branch/cash" as Route} className="text-xs font-semibold text-[var(--color-primary-700)] underline">
-            Ir a Caja para abrir sesión
+          <Link
+            href={"/app/branch/cash" as Route}
+            className="text-xs font-semibold underline"
+            style={{ color: "var(--v7-info)" }}
+          >
+            Ir a Caja
           </Link>
         ) : null}
-        <span className="ml-auto text-xs text-[var(--color-text-soft)]">F1 efectivo · F2 tarjeta · F3 transferencia</span>
-      </Card>
+        <span
+          className="ml-auto text-[11px]"
+          style={{ fontFamily: "'DM Mono', monospace", color: "var(--v7-ink-3-on-surface-hi)" }}
+        >
+          F1 efectivo · F2 tarjeta · F3 transferencia
+        </span>
+      </div>
 
       {operatorRequired ? (
-        <Card className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div
+          className="rounded-lg px-4 py-3 text-sm"
+          style={{
+            background: "rgba(163,106,14,0.08)",
+            border: "1px solid rgba(163,106,14,0.35)",
+            color: "var(--v7-warning-text)",
+          }}
+        >
           Hay una sesión de caja abierta pero <strong>no estás asignado como operador</strong>. Pide al cajero que te asigne para poder cobrar.
-        </Card>
+        </div>
       ) : requiresCashBoxSelection ? (
-        <Card className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Selecciona una caja fisica para continuar.
-        </Card>
+        <div
+          className="rounded-lg px-4 py-3 text-sm"
+          style={{
+            background: "rgba(163,106,14,0.08)",
+            border: "1px solid rgba(163,106,14,0.35)",
+            color: "var(--v7-warning-text)",
+          }}
+        >
+          Selecciona una caja física para continuar.
+        </div>
       ) : !cashSessionState.hasOpenSession ? (
-        <Card className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          La caja está cerrada. Debes abrir una sesión de caja desde la pantalla <strong>Caja</strong> antes de poder cobrar órdenes.
-        </Card>
+        <div
+          className="rounded-lg px-4 py-3 text-sm"
+          style={{
+            background: "rgba(163,106,14,0.08)",
+            border: "1px solid rgba(163,106,14,0.4)",
+            color: "var(--color-text)",
+          }}
+        >
+          La caja está cerrada. Debes abrir una sesión desde la pantalla{" "}
+          <Link
+            href={"/app/branch/cash" as Route}
+            className="font-semibold underline"
+            style={{ color: "var(--v7-info)" }}
+          >
+            Caja
+          </Link>{" "}
+          antes de poder cobrar órdenes.
+        </div>
       ) : null}
 
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-[1fr_1.2fr_1fr]">
-        <Card className="flex flex-col overflow-hidden rounded-2xl" data-testid="cashier-order-list">
+        <Card className="flex flex-col overflow-hidden rounded-lg" data-testid="cashier-order-list">
           <div className="border-b border-[var(--color-border)] px-4 py-3">
             <h2 className="text-sm font-semibold text-[var(--color-text)]">Órdenes para cobro</h2>
             <p className="text-xs text-[var(--color-text-muted)]">{orders.length} orden{orders.length !== 1 ? "es" : ""} pendiente{orders.length !== 1 ? "s" : ""}</p>
           </div>
           <ul className="max-h-[30rem] space-y-2 overflow-y-auto p-3">
-            {isLoadingOrders ? <li className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs text-[var(--color-text-soft)]">Cargando órdenes pendientes…</li> : null}
-            {!isLoadingOrders && orders.length === 0 ? <li className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 text-center text-xs text-[var(--color-text-soft)]">No hay órdenes pendientes de cobro.</li> : null}
+            {isLoadingOrders ? (
+              <li className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs"
+                style={{ fontFamily: "'DM Mono', monospace", color: "var(--v7-ink-3-on-surface-hi)" }}>
+                Cargando órdenes pendientes…
+              </li>
+            ) : null}
+            {!isLoadingOrders && orders.length === 0 ? (
+              <li className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 text-center text-xs"
+                style={{ fontFamily: "'DM Mono', monospace", color: "var(--v7-ink-3-on-surface-hi)" }}>
+                No hay órdenes pendientes de cobro.
+              </li>
+            ) : null}
             {orders.map((order) => (
               <li key={order.id}>
                 <button
-                  className={`w-full rounded-xl border p-3 text-left transition-all duration-150 ${
+                  className={`w-full rounded-lg border p-3 text-left transition-all duration-150 ${
                     selectedOrderId === order.id
-                      ? "border-[var(--color-success-600)] bg-[var(--color-success-50)] shadow-sm"
+                      ? "shadow-sm"
                       : "border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-alt)]"
                   }`}
+                  style={selectedOrderId === order.id ? {
+                    borderColor: "var(--v7-success)",
+                    background: "rgba(45,125,70,0.06)",
+                  } : undefined}
                   onClick={() => setSelectedOrderId(order.id)}
                   disabled={isSubmitting}
                   data-testid={`cashier-order-${order.id}`}
@@ -315,7 +378,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
           </ul>
         </Card>
 
-        <Card className="flex flex-col overflow-hidden rounded-2xl" data-testid="cashier-order-detail">
+        <Card className="flex flex-col overflow-hidden rounded-lg" data-testid="cashier-order-detail">
           <div className="border-b border-[var(--color-border)] px-4 py-3">
             <h2 className="text-sm font-semibold text-[var(--color-text)]">Detalle de orden</h2>
             {selected && <p className="text-xs text-[var(--color-text-muted)]">{selected.orderNumber}</p>}
@@ -352,7 +415,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                   <span className="font-mono font-medium">C$ {subtotalAmt.toFixed(2)}</span>
                 </div>
                 {transportAmt > 0 && (
-                  <div className="flex justify-between text-[var(--color-primary-700)]">
+                  <div className="flex justify-between" style={{ color: "var(--v7-info)" }}>
                     <span>Transporte</span>
                     <span className="font-mono font-medium">C$ {transportAmt.toFixed(2)}</span>
                   </div>
@@ -370,17 +433,17 @@ export function CashierPayments({ branchId }: { branchId: string }) {
           )}
         </Card>
 
-        <Card className="flex flex-col overflow-hidden rounded-2xl" data-testid="cashier-payment-zone">
+        <Card className="flex flex-col overflow-hidden rounded-lg" data-testid="cashier-payment-zone">
           <div className="border-b border-[var(--color-border)] px-4 py-3">
             <h2 className="text-sm font-semibold text-[var(--color-text)]">Cobro rápido</h2>
           </div>
           <div className="flex-1 space-y-4 p-4">
             {selected ? (
               <>
-                <div className="space-y-1 rounded-xl bg-[var(--color-surface-muted)] p-3">
+                <div className="space-y-1 rounded-lg bg-[var(--color-surface-muted)] p-3">
                   <div className="text-xs text-[var(--color-text-muted)]">Orden</div>
                   <div className="text-sm font-semibold text-[var(--color-text)]">{selected.orderNumber}</div>
-                  <div className="mt-1 font-mono text-2xl font-bold text-[var(--color-success-700)]">C$ {Number(selected.grandTotal).toFixed(2)}</div>
+                  <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--v7-success)" }}>C$ {Number(selected.grandTotal).toFixed(2)}</div>
                   {transportAmt > 0 && <div className="text-xs text-[var(--color-text-muted)]">Incluye transporte: C$ {transportAmt.toFixed(2)}</div>}
                 </div>
 
@@ -399,7 +462,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                         onClick={() => setMethod(option.code)}
                         disabled={isSubmitting}
                         data-testid={`cashier-method-${option.code}`}
-                        className="rounded-xl"
+                        className="rounded-lg"
                       >
                         {option.label}
                       </Button>
@@ -421,7 +484,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                     placeholder={referenceRequired ? "Número de autorización / transacción (requerido)" : "Recibo / transacción"}
                     disabled={isSubmitting}
                     data-testid="cashier-reference-input"
-                    className="rounded-xl"
+                    className="rounded-lg"
                   />
                   {referenceRequired && !referenceNumber.trim() && (
                     <p className="mt-1 text-xs text-[var(--color-danger-600)]">
@@ -436,7 +499,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                   disabled={!canSubmitPayment}
                   loading={isSubmitting}
                   data-testid="cashier-submit-payment"
-                  className="w-full rounded-xl py-3 text-base"
+                  className="w-full rounded-lg py-3 text-base"
                 >
                   {isSubmitting ? "Procesando pago…" : `Cobrar C$ ${Number(selected.grandTotal).toFixed(2)}`}
                 </Button>
@@ -450,7 +513,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
         </Card>
       </div>
 
-      {message ? <p className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)]" data-testid="cashier-message">{message}</p> : null}
+      {message ? <p className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm text-[var(--color-text-secondary)]" data-testid="cashier-message">{message}</p> : null}
 
       {/* FASE 3: Modal de impresión post-pago */}
       {printModalOrderId && (

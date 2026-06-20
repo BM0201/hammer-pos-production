@@ -966,10 +966,17 @@ aside[class*="bg-[var(--color-sidebar)]"] {
   background: #2E2D2A;
   color: #F5F4F2;
 }
-/* Active item on warm sidebar: subtle red tint + dark text */
+/* Active item on warm sidebar: flat surface-hi + accent left border */
 .hm-sidebar-warm .hm-sidebar-item.is-active {
-  background: rgba(212, 56, 13, 0.08);
+  background: var(--color-sidebar-active);
   color: #2E2D2A;
+}
+.hm-sidebar-warm .hm-sidebar-item-expanded-active {
+  border-left: 2px solid var(--v7-accent);
+}
+/* User card blends with warm sidebar — no orphan gray */
+.hm-sidebar-warm .sidebar-user-card {
+  background: transparent;
 }
 .hm-sidebar-warm .hm-sidebar-item.is-active .hm-sidebar-icon {
   color: #D4380D;
@@ -1009,7 +1016,7 @@ aside[class*="bg-[var(--color-sidebar)]"] {
 }
 
 .hm-sidebar .hm-sidebar-item.is-active {
-  background: color-mix(in srgb, var(--sidebar-role-active-bg) 20%, transparent);
+  background: var(--color-sidebar-active);
   color: var(--sidebar-role-active-text);
 }
 
@@ -1018,7 +1025,8 @@ aside[class*="bg-[var(--color-sidebar)]"] {
 }
 
 .hm-sidebar .hm-sidebar-item-expanded-active {
-  border-left: 3px solid var(--sidebar-role-active-bg);
+  border-left: 2px solid var(--sidebar-role-active-bg);
+  border-radius: 0;
   padding-left: 0.625rem;
 }
 
