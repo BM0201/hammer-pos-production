@@ -9,6 +9,7 @@ import { isMasterRole, isMasterOrAbove, isOwnerRole, isSystemAdminRole, resolveR
 import { getRoleColor } from "@/lib/role-colors";
 import { getEffectiveCapabilitySet, hasEffectiveCapability } from "@/lib/navigation/visible-modules";
 import type { SessionPayload } from "@/types/auth";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import {
   LayoutDashboard,
   Users,
@@ -286,7 +287,6 @@ export function AppSidebar({
   const pathname = usePathname();
   const sections = buildNavSections({ roleCode, globalRoles, branchMemberships, effectiveCapabilities });
   const isMaster = isMasterOrAbove(roleCode as string, globalRoles as unknown as string[]);
-  const isWarmSidebar = isMaster;
   const roleCfg = getRoleColor(roleCode);
   const homeHref = resolveRoleHome(roleCode as string, globalRoles as unknown as string[]);
 
@@ -352,7 +352,7 @@ export function AppSidebar({
   const roleIcon = `var(--color-${roleCfg.cssPrefix}-400)`;
   const sidebarRoleStyle: SidebarRoleStyle = {
     "--sidebar-role-active-bg": roleActiveBg,
-    "--sidebar-role-active-text": isWarmSidebar ? "var(--color-master-700)" : roleActiveText,
+    "--sidebar-role-active-text": roleActiveText,
     "--sidebar-role-icon": roleIcon,
   };
 
@@ -392,20 +392,20 @@ export function AppSidebar({
         >
           <div
             className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0"
-            style={{ background: `linear-gradient(135deg, ${roleGradientFrom}, ${roleGradientTo})` }}
+            style={{ background: "linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700))" }}
           >
             <Hammer className="h-5 w-5 text-white" />
           </div>
           {!isCollapsed && (
             <div className="sidebar-brand-text">
-              <span className={`text-[0.9375rem] font-bold tracking-tight ${isWarmSidebar ? "text-[#2E2D2A]" : "text-white"}`}>
+              <span className="text-[0.9375rem] font-bold tracking-tight text-white">
                 H.A.M.M.E.R.
               </span>
               <span
                 className="ml-1.5 text-[0.6rem] font-semibold uppercase tracking-widest px-1.5 py-0.5 rounded"
                 style={{
-                  background: isWarmSidebar ? "color-mix(in srgb, var(--color-master-600) 14%, transparent)" : `color-mix(in srgb, ${roleActiveBg} 30%, transparent)`,
-                  color: isWarmSidebar ? "var(--color-master-700)" : roleActiveText,
+                  background: `color-mix(in srgb, ${roleActiveBg} 30%, transparent)`,
+                  color: roleActiveText,
                 }}
               >
                 {roleCfg.label}
@@ -437,7 +437,7 @@ export function AppSidebar({
           </div>
           {!isCollapsed && (
             <div className="min-w-0 sidebar-user-info">
-              <p className={`text-xs font-semibold truncate ${isWarmSidebar ? "text-[#2E2D2A]" : "text-white"}`}>
+              <p className="text-xs font-semibold truncate text-white">
                 {username}
               </p>
               <p className="text-[0.625rem]" style={{ color: `var(--color-${roleCfg.cssPrefix}-400)` }}>
@@ -455,7 +455,7 @@ export function AppSidebar({
             {!isCollapsed && (
               <p
                 className="sidebar-section-title px-3 mb-1.5 text-[0.625rem] font-bold uppercase tracking-[0.12em]"
-                style={{ color: isWarmSidebar ? "#9B9892" : "rgba(255, 255, 255, 0.6)" }}
+                style={{ color: "var(--color-sidebar-section)" }}
               >
                 {section.title}
               </p>
@@ -477,12 +477,8 @@ export function AppSidebar({
                       `}
                       style={{
                         background: active ? "var(--color-sidebar-active)" : undefined,
-                        color: active
-                          ? (isWarmSidebar ? "#2E2D2A" : "var(--sidebar-role-active-text)")
-                          : undefined,
-                        borderLeft: expanded
-                          ? `2px solid ${isWarmSidebar ? "var(--color-master-600)" : roleActiveBg}`
-                          : undefined,
+                        color: active ? "var(--sidebar-role-active-text)" : undefined,
+                        borderLeft: expanded ? `2px solid ${roleActiveBg}` : undefined,
                         paddingLeft: expanded ? "calc(0.75rem - 2px)" : (!isCollapsed ? "0.75rem" : undefined),
                         paddingRight: !isCollapsed ? "0.75rem" : undefined,
                       }}
@@ -491,7 +487,7 @@ export function AppSidebar({
                       <span data-sidebar-icon className={`hm-sidebar-icon-wrap ${active ? "active" : ""}`}>
                         <Icon
                           className="hm-sidebar-icon h-[1.125rem] w-[1.125rem] flex-shrink-0 transition-colors duration-150"
-                          style={active && isWarmSidebar ? { color: "var(--color-master-600)" } : undefined}
+                          style={undefined}
                         />
                       </span>
                       {!isCollapsed && (
@@ -519,10 +515,16 @@ export function AppSidebar({
       </nav>
 
       {/* ── Footer ── */}
-      <div className={`border-t border-[var(--color-sidebar-border)] px-3 py-2 ${isCollapsed ? "text-center" : ""}`}>
-        <p className="text-[0.5625rem] sidebar-footer-text" style={{ color: isWarmSidebar ? "#9B9892" : "rgba(255, 255, 255, 0.7)" }}>
-          {isCollapsed ? "V2" : "H.A.M.M.E.R. V2 POS/ERP"}
-        </p>
+      <div className={`border-t border-[var(--color-sidebar-border)] px-3 py-2 flex items-center ${isCollapsed ? "justify-center" : "justify-between"}`}>
+        {!isCollapsed && (
+          <p className="text-[0.5625rem] sidebar-footer-text" style={{ color: "var(--color-sidebar-section)" }}>
+            H.A.M.M.E.R. V2 POS/ERP
+          </p>
+        )}
+        <ThemeToggle
+          className="flex items-center justify-center w-6 h-6 rounded-md cursor-pointer border-0 bg-transparent transition-colors hover:bg-[var(--color-sidebar-hover)]"
+          style={{ color: "var(--color-sidebar-section)" }}
+        />
       </div>
     </>
   );
@@ -532,7 +534,7 @@ export function AppSidebar({
       {/* ── Mobile hamburger button ── */}
       <button
         onClick={() => setMobileOpen(true)}
-        className={`md:hidden fixed top-3 left-3 z-50 p-2 rounded-lg shadow-lg ${isWarmSidebar ? "bg-[#2E2D2A] text-[#E4E2DE]" : "bg-[var(--color-sidebar)] text-white"}`}
+        className="md:hidden fixed top-3 left-3 z-50 p-2 rounded-lg shadow-lg bg-[var(--color-sidebar)] text-white"
         aria-label="Abrir menú"
         aria-expanded={mobileOpen}
       >
@@ -550,7 +552,7 @@ export function AppSidebar({
       {/* ── Mobile drawer ── */}
       <aside
         className={`
-          hm-sidebar ${isWarmSidebar ? "hm-sidebar-warm" : ""} md:hidden fixed top-0 left-0 z-50 h-full w-[16.25rem] flex flex-col
+          hm-sidebar md:hidden fixed top-0 left-0 z-50 h-full w-[16.25rem] flex flex-col
           bg-[var(--color-sidebar)] select-none
           transition-transform duration-250 ease-in-out
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
@@ -570,7 +572,7 @@ export function AppSidebar({
       {/* ── Desktop sidebar ── */}
       <aside
         className={`
-          app-sidebar-desktop hm-sidebar ${isWarmSidebar ? "hm-sidebar-warm" : ""} hidden md:flex flex-col bg-[var(--color-sidebar)] select-none
+          app-sidebar-desktop hm-sidebar hidden md:flex flex-col bg-[var(--color-sidebar)] select-none
           ${collapsed ? "sidebar-collapsed" : "sidebar-expanded"}
         `}
         ref={desktopSidebarRef}

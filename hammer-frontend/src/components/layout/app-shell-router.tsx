@@ -12,6 +12,7 @@ import { AppFooter } from "@/components/layout/app-footer";
 import { BranchSelector } from "@/components/branch-selector";
 import { ChevronLeft, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { apiFetch } from "@/lib/client/api";
 import { getRoleColor } from "@/lib/role-colors";
 
@@ -204,7 +205,7 @@ export function AppShellRouter({
               </div>
             </div>
 
-            {/* Right — branch selector + user + logout */}
+            {/* Right — branch selector + theme toggle + user + logout */}
             <div className="flex shrink-0 items-center gap-2 sm:gap-2.5">
               <BranchSelector
                 branchIds={session.branchIds}
@@ -221,6 +222,8 @@ export function AppShellRouter({
                 </div>
                 <span className="text-xs text-[var(--color-text-muted)] truncate">{session.username}</span>
               </div>
+
+              <ThemeToggle />
 
               {/* Logout */}
               <Button

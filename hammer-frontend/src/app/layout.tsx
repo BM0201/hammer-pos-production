@@ -25,6 +25,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="es" className={inter.variable} suppressHydrationWarning>
       <body className="min-h-screen" suppressHydrationWarning>
+        {/* Runs before first paint to avoid FOUC on theme reload */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('hammer-theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();`,
+          }}
+        />
         {children}
         <ToastContainer />
       </body>
