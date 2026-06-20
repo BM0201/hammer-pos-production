@@ -283,7 +283,8 @@ export function AppSidebar({
   branchMemberships,
   effectiveCapabilities,
   username,
-}: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships" | "effectiveCapabilities"> & { username: string }) {
+  userId,
+}: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships" | "effectiveCapabilities"> & { username: string; userId: string }) {
   const pathname = usePathname();
   const sections = buildNavSections({ roleCode, globalRoles, branchMemberships, effectiveCapabilities });
   const isMaster = isMasterOrAbove(roleCode as string, globalRoles as unknown as string[]);
@@ -522,6 +523,7 @@ export function AppSidebar({
           </p>
         )}
         <ThemeToggle
+          userId={userId}
           className="flex items-center justify-center w-6 h-6 rounded-md cursor-pointer border-0 bg-transparent transition-colors hover:bg-[var(--color-sidebar-hover)]"
           style={{ color: "var(--color-sidebar-section)" }}
         />

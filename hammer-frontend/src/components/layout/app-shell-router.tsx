@@ -12,13 +12,13 @@ import { AppFooter } from "@/components/layout/app-footer";
 import { BranchSelector } from "@/components/branch-selector";
 import { ChevronLeft, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { ThemeToggle, applyUserTheme } from "@/components/ui/theme-toggle";
 import { apiFetch } from "@/lib/client/api";
 import { getRoleColor } from "@/lib/role-colors";
 
 type ShellSession = Pick<
   SessionPayload,
-  "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId" | "effectiveCapabilities"
+  "userId" | "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId" | "effectiveCapabilities"
 >;
 
 const MODULE_META: Record<string, { title: string; subtitle: string }> = {
@@ -88,6 +88,11 @@ export function AppShellRouter({
 
   const roleCfg = getRoleColor(session.roleCode);
 
+  // Apply this user's stored theme once the session is known
+  useEffect(() => {
+    applyUserTheme(session.userId);
+  }, [session.userId]);
+
   const handleLogout = useCallback(async () => {
     setLoggingOut(true);
     try {
@@ -150,6 +155,7 @@ export function AppShellRouter({
         branchMemberships={session.branchMemberships}
         effectiveCapabilities={session.effectiveCapabilities}
         username={session.username}
+        userId={session.userId}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -223,7 +229,7 @@ export function AppShellRouter({
                 <span className="text-xs text-[var(--color-text-muted)] truncate">{session.username}</span>
               </div>
 
-              <ThemeToggle />
+              <ThemeToggle userId={session.userId} />
 
               {/* Logout */}
               <Button
