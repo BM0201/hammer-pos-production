@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { Suspense, useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
@@ -46,7 +46,7 @@ function getCostDeviation(batch: Batch): { value: number; label: string; color: 
   return { value: deviation, label: `${deviation > 0 ? "+" : ""}${deviation.toFixed(1)}%`, color: "text-[var(--color-danger-600)]" };
 }
 
-export default function BatchesPage() {
+function BatchesContent() {
   const searchParams = useSearchParams();
   const initialStatus = searchParams.get("status") ?? "";
 
@@ -233,5 +233,13 @@ export default function BatchesPage() {
         <Link href="/app/master/production" className="text-sm text-[var(--color-master-600)] hover:underline">← Volver al Dashboard</Link>
       </div>
     </section>
+  );
+}
+
+export default function BatchesPage() {
+  return (
+    <Suspense fallback={null}>
+      <BatchesContent />
+    </Suspense>
   );
 }

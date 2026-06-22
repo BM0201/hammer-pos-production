@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { AlertTriangle, Factory, PackageCheck, Play, Save, Search } from "lucide-react";
@@ -45,7 +45,7 @@ type CostPreview = {
 const money = (value: number | null | undefined) => value == null ? "-" : `C$${value.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qty = (value: number) => value.toLocaleString("es-NI", { maximumFractionDigits: 4 });
 
-export default function NewBatchPage() {
+function NewBatchContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialRecipeId = searchParams.get("recipeId") ?? "";
@@ -277,5 +277,13 @@ export default function NewBatchPage() {
         </aside>
       </div>
     </section>
+  );
+}
+
+export default function NewBatchPage() {
+  return (
+    <Suspense fallback={null}>
+      <NewBatchContent />
+    </Suspense>
   );
 }

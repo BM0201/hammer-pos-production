@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { OrdersAdmin } from "@/components/sales/orders-admin";
@@ -8,7 +8,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 
 type Branch = { id: string; code: string; name: string };
 
-export default function MasterSalesOrdersPage() {
+function MasterSalesOrdersContent() {
   const searchParams = useSearchParams();
   const branchId = searchParams.get("branchId") ?? undefined;
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -76,5 +76,13 @@ export default function MasterSalesOrdersPage() {
 
       <OrdersAdmin branchId={branchId} isMaster={true} />
     </section>
+  );
+}
+
+export default function MasterSalesOrdersPage() {
+  return (
+    <Suspense fallback={null}>
+      <MasterSalesOrdersContent />
+    </Suspense>
   );
 }
