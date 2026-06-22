@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity, Archive, Building2,
+  Activity, Archive, Building2, ScanLine,
   CheckCircle2, ChevronDown, ChevronRight, RefreshCw, Shield, TrendingUp, Zap,
 } from "lucide-react";
 import { OperationalDayPanel } from "@/components/operations/operational-day-panel";
@@ -145,9 +145,13 @@ export default function MasterOperationsPage() {
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const selectedBranch = useMemo(() => branches.find((b) => b.id === selectedBranchId) ?? null, [branches, selectedBranchId]);
 
-  // Force cleanup
+  // Force cleanup (triggered from a branch row)
   const [cleanupBranchId, setCleanupBranchId] = useState<string | null>(null);
   const cleanupBranch = useMemo(() => branches.find((b) => b.id === cleanupBranchId) ?? null, [branches, cleanupBranchId]);
+
+  // Global scanner (dedicated section — pick any branch and scan)
+  const [scanBranchId, setScanBranchId] = useState<string>("");
+  const scanBranch = useMemo(() => branches.find((b) => b.id === scanBranchId) ?? null, [branches, scanBranchId]);
 
   // ── Load branches once ──
   useEffect(() => {
@@ -392,6 +396,50 @@ export default function MasterOperationsPage() {
             </p>
             <OperationalDayPanel branchId={selectedBranchId} masterMode />
           </div>
+        )}
+      </section>
+
+      {/* ═══ SECTION 1.5: Escáner y cierre forzado ══════════════════════════ */}
+      <section className="space-y-3">
+        <div className="flex items-center gap-2">
+          <ScanLine className="text-[var(--color-text-muted)]" style={{ width: "0.875rem", height: "0.875rem" }} />
+          <h2 className="text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
+            Escáner y Cierre Forzado
+          </h2>
+        </div>
+
+        <Card className="p-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="grid gap-1">
+              <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide flex items-center gap-1">
+                <Building2 style={{ width: "0.75rem", height: "0.75rem" }} />
+                Sucursal a escanear
+              </span>
+              <select
+                className="hm-input rounded-lg text-sm"
+                value={scanBranchId}
+                onChange={(e) => setScanBranchId(e.target.value)}
+              >
+                <option value="">Selecciona una sucursal…</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.code} — {b.name}</option>
+                ))}
+              </select>
+            </label>
+            <p className="flex-1 min-w-[12rem] text-[0.6875rem] leading-snug text-[var(--color-text-muted)]">
+              Escanea el día operativo de una sucursal para detectar cierres pendientes, cajas atascadas o días sin
+              cerrar. El escáner te dirá cuál es el problema y podrás forzar y actualizar el cierre desde aquí.
+            </p>
+          </div>
+        </Card>
+
+        {scanBranchId && scanBranch && (
+          <OperationalDayScanner
+            key={scanBranchId}
+            branchId={scanBranchId}
+            branchCode={scanBranch.code}
+            onResolved={async () => { await loadLive(); await loadPending(); }}
+          />
         )}
       </section>
 
