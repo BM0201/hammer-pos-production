@@ -27,8 +27,6 @@ import {
   Building2,
   Globe,
   Store,
-  ChevronLeft,
-  ChevronRight,
   ChevronUp,
   TreePine,
   Menu,
@@ -346,35 +344,15 @@ export function AppSidebar({
     closeDesktopRail();
   }, [pathname, closeDesktopRail, closeMobile]);
 
+  /* Outside clicks are handled by the overlay backdrop (see desktop sidebar
+     markup). Here we only need Escape-to-close while the rail is expanded. */
   useEffect(() => {
     if (collapsed) return;
-
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (desktopSidebarRef.current?.contains(target)) return;
-      closeDesktopRail();
-    };
-
-    const onFocusIn = (event: FocusEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (desktopSidebarRef.current?.contains(target)) return;
-      closeDesktopRail();
-    };
-
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeDesktopRail();
     };
-
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("focusin", onFocusIn);
     document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("focusin", onFocusIn);
-      document.removeEventListener("keydown", onKeyDown);
-    };
+    return () => document.removeEventListener("keydown", onKeyDown);
   }, [collapsed, closeDesktopRail]);
 
   /* Role-specific color classes */
@@ -414,40 +392,59 @@ export function AppSidebar({
 
       {/* ── 1. Brand bar ── */}
       <div className={`flex items-center gap-2.5 px-3 py-3 ${isCollapsed ? "justify-center" : "justify-between"}`}>
-        {/* Brand mark (martillo + wordmark) */}
-        <Link href={(isMaster ? "/app/master" : homeHref) as Route} onClick={handleNavigation} className="flex items-center gap-2.5 min-w-0">
-          <div
-            key={brandAnimKey}
+        {isCollapsed && !isMobileView ? (
+          /* Collapsed rail (desktop): the hammer mark IS the expand button.
+             It only toggles the rail — it never navigates, so clicking to
+             expand can no longer land the user on a nav page. */
+          <button
+            type="button"
+            onClick={toggleCollapse}
             className="brand-mark flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0"
-            style={{ background: "var(--color-brand-500)" }}
+            style={{ background: "var(--color-brand-500)", border: "none", cursor: "pointer" }}
+            title="Expandir menú"
+            aria-label="Expandir menú"
+            aria-expanded={false}
           >
             <Hammer className="h-4 w-4 text-white" />
-          </div>
-          {!isCollapsed && (
-            <span
-              className="sidebar-label text-[0.875rem] font-semibold tracking-tight truncate"
-              style={{ color: "var(--color-sidebar-text-active)" }}
-            >
-              H.A.M.M.E.R.
-            </span>
-          )}
-        </Link>
-        {/* Collapse toggle (desktop only) */}
-        {!isMobileView && (
-          <button
-            onClick={toggleCollapse}
-            className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-md transition-colors"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--color-sidebar-section)",
-              cursor: "pointer",
-            }}
-            title={isCollapsed ? "Expandir" : "Colapsar"}
-            aria-label={isCollapsed ? "Expandir sidebar" : "Colapsar sidebar"}
-          >
-            {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
           </button>
+        ) : (
+          <>
+            {/* Brand mark (martillo + wordmark) → navigates home */}
+            <Link href={(isMaster ? "/app/master" : homeHref) as Route} onClick={handleNavigation} className="flex items-center gap-2.5 min-w-0">
+              <div
+                key={brandAnimKey}
+                className="brand-mark flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0"
+                style={{ background: "var(--color-brand-500)" }}
+              >
+                <Hammer className="h-4 w-4 text-white" />
+              </div>
+              <span
+                className="sidebar-label text-[0.875rem] font-semibold tracking-tight truncate"
+                style={{ color: "var(--color-sidebar-text-active)" }}
+              >
+                H.A.M.M.E.R.
+              </span>
+            </Link>
+            {/* Collapse toggle — hammer icon, desktop only */}
+            {!isMobileView && (
+              <button
+                type="button"
+                onClick={toggleCollapse}
+                className="hammer-toggle flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-md transition-colors"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--color-sidebar-section)",
+                  cursor: "pointer",
+                }}
+                title="Colapsar menú"
+                aria-label="Colapsar menú"
+                aria-expanded={true}
+              >
+                <Hammer className="hammer-toggle-icon h-4 w-4" />
+              </button>
+            )}
+          </>
         )}
       </div>
 
@@ -643,22 +640,47 @@ export function AppSidebar({
         {renderContent(false, true)}
       </aside>
 
-      {/* ── Desktop sidebar ── */}
-      <aside
-        className={`
-          app-sidebar-desktop hm-sidebar hidden md:flex flex-col bg-[var(--color-sidebar)] select-none
-          ${collapsed ? "sidebar-collapsed" : "sidebar-expanded"}
-        `}
-        ref={desktopSidebarRef}
-        style={{
-          width: collapsed ? "var(--sidebar-width-collapsed)" : "var(--sidebar-width-expanded)",
-          transition: "width var(--sidebar-transition)",
-          minWidth: collapsed ? "var(--sidebar-width-collapsed)" : "var(--sidebar-width-expanded)",
-          ...sidebarRoleStyle,
-        }}
+      {/* ── Desktop sidebar ──
+          The flow always reserves the collapsed rail width, so expanding the
+          sidebar never reflows the page content. When expanded the panel floats
+          on top (overlay) and a transparent backdrop captures any outside click
+          to collapse it — this is what prevents a stray click from being routed
+          into a nav item (the old "click expand / outside → Día Operativo o
+          Roles" bug). */}
+      <div
+        className="hidden md:block relative flex-shrink-0"
+        style={{ width: "var(--sidebar-width-collapsed)" }}
       >
-        {renderContent(collapsed, false)}
-      </aside>
+        {/* Backdrop — only while expanded; closes rail without navigating */}
+        {!collapsed && (
+          <div
+            className="fixed inset-0 z-40 animate-fade-in"
+            style={{ background: "rgba(0,0,0,0.04)" }}
+            onClick={closeDesktopRail}
+            aria-hidden="true"
+          />
+        )}
+        <aside
+          className={`
+            app-sidebar-desktop hm-sidebar flex flex-col bg-[var(--color-sidebar)] select-none
+            ${collapsed ? "sidebar-collapsed" : "sidebar-expanded"}
+          `}
+          ref={desktopSidebarRef}
+          style={{
+            position: collapsed ? "sticky" : "fixed",
+            top: 0,
+            left: 0,
+            height: "100vh",
+            width: collapsed ? "var(--sidebar-width-collapsed)" : "var(--sidebar-width-expanded)",
+            transition: "width var(--sidebar-transition)",
+            zIndex: collapsed ? 30 : 50,
+            boxShadow: collapsed ? "none" : "var(--shadow-xl)",
+            ...sidebarRoleStyle,
+          }}
+        >
+          {renderContent(collapsed, false)}
+        </aside>
+      </div>
     </>
   );
 }

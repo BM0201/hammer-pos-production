@@ -1928,6 +1928,22 @@ a:focus-visible {
   .brand-mark:hover svg { animation: none; }
 }
 
+/* ── Hammer expand/collapse toggle ── */
+.hammer-toggle { transition: background-color 140ms ease, color 140ms ease; }
+.hammer-toggle:hover {
+  background: var(--color-sidebar-hover) !important;
+  color: var(--color-sidebar-text-active) !important;
+}
+.hammer-toggle-icon { transition: transform 220ms var(--ease-drawer); }
+/* Tap animation when hovering the collapse toggle */
+.hammer-toggle:hover .hammer-toggle-icon {
+  transform-origin: 64% 74%;
+  animation: hammer-tap 700ms cubic-bezier(.23,1,.32,1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hammer-toggle:hover .hammer-toggle-icon { animation: none; }
+}
+
 /* ── Account popover animation ── */
 @keyframes accountPopIn {
   from { opacity: 0; transform: scale(.97) translateY(4px); }
