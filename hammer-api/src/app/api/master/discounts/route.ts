@@ -1,45 +1,20 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
-import { listDiscounts, createDiscount } from "@/modules/discounts/service";
-import { requireCsrf } from "@/modules/security/csrf";
-import { ok, created, fail } from "@/lib/api/response";
+import { listDiscountSuggestions } from "@/modules/discounts/service";
+import { ok } from "@/lib/api/response";
 
 export async function GET(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     assertMaster(session);
+
     const url = new URL(request.url);
-    const activeParam = url.searchParams.get("active");
-    const params = activeParam !== null ? { active: activeParam === "true" } : undefined;
-    const data = await listDiscounts(params);
+    const limit = Number(url.searchParams.get("limit") ?? "24");
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(50, limit)) : 24;
+    const data = await listDiscountSuggestions(safeLimit);
     return ok(data);
-  } catch (err) {
-    return toHttpErrorResponse(err);
-  }
-}
-
-export async function POST(request: Request) {
-  try {
-    const session = await getCurrentSession();
-    assertAuthenticated(session);
-    await requireCsrf(request, session);
-    assertMaster(session);
-    const body = await request.json();
-
-    if (!body.name?.trim()) {
-      return fail("VALIDATION_ERROR", "El nombre del descuento es requerido", 400);
-    }
-    if (!body.type || !["PERCENTAGE", "FIXED_AMOUNT"].includes(body.type)) {
-      return fail("VALIDATION_ERROR", "Tipo de descuento inválido", 400);
-    }
-    if (typeof body.value !== "number" || body.value <= 0) {
-      return fail("VALIDATION_ERROR", "El valor debe ser un número positivo", 400);
-    }
-
-    const data = await createDiscount({ ...body, createdByUserId: session.userId });
-    return created(data);
   } catch (err) {
     return toHttpErrorResponse(err);
   }
