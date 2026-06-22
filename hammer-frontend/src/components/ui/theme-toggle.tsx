@@ -33,10 +33,25 @@ export function ThemeToggle({
   className?: string;
   style?: React.CSSProperties;
 }) {
-  const [theme, setTheme] = useState<Theme>("light");
+  /* Read the current theme directly from the DOM so the initial render is
+     correct without waiting for a useEffect (avoids the Sun→Moon flash). */
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof document !== "undefined") {
+      return (document.documentElement.dataset.theme as Theme) || "light";
+    }
+    return "light";
+  });
 
+  /* Keep in sync if applyUserTheme or anything else changes data-theme */
   useEffect(() => {
-    setTheme((document.documentElement.dataset.theme as Theme) || "light");
+    const observer = new MutationObserver(() => {
+      setTheme((document.documentElement.dataset.theme as Theme) || "light");
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => observer.disconnect();
   }, []);
 
   const toggle = () => {
