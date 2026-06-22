@@ -378,7 +378,6 @@ export function AppSidebar({
   }, [collapsed, closeDesktopRail]);
 
   /* Role-specific color classes */
-  const roleGradientFrom = `var(--color-${roleCfg.cssPrefix}-500)`;
   const roleActiveBg = `var(--color-${roleCfg.cssPrefix}-600)`;
   const roleActiveText = `var(--color-${roleCfg.cssPrefix}-200)`;
   const roleIcon = `var(--color-${roleCfg.cssPrefix}-400)`;

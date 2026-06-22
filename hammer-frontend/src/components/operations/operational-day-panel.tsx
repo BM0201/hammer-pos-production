@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import type { Route } from "next";
 import { CheckCircle2, RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet, AlertTriangle, Info, ArrowRight } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
@@ -265,7 +266,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
                       </div>
                       {resolveHref && (
                         <Link
-                          href={resolveHref}
+                          href={resolveHref as Route}
                           className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-primary-700)] hover:underline"
                         >
                           Ir a resolver <ArrowRight className="h-3 w-3" />
