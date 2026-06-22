@@ -72,6 +72,29 @@ function mustContain(rel, markers, why) {
 }
 
 /**
+ * Regla 1b: dos rutas distintas NO deben tener contenido idéntico.
+ *
+ * El commit `77429df` sobrescribió varias páginas/route handlers "índice" con
+ * el contenido COPIADO de una ruta hermana (p.ej. `master/page.tsx` quedó
+ * igual a `master/users/page.tsx`; `catalog/products/route.ts` quedó igual al
+ * handler de `sku-suggestion`). El build/typecheck pasaban, pero la ruta
+ * mostraba/servía el contenido equivocado. Esta regla detecta esa clase de
+ * regresión por copy-paste comparando el contenido normalizado de ambos.
+ */
+function mustNotDuplicate(relA, relB, why) {
+  const a = read(relA);
+  const b = read(relB);
+  checked.push(relA);
+  if (a === null || b === null) return; // si alguno falta, otras reglas lo reportan
+  const norm = (s) => s.replace(/\s+/g, " ").trim();
+  if (norm(a) === norm(b)) {
+    errors.push(
+      `✗ ${relA}\n    Tiene contenido IDÉNTICO a ${relB} → probable sobrescritura por copy-paste.\n    ${why}`,
+    );
+  }
+}
+
+/**
  * Regla 2: una página no debe redirigir a su propia ruta (bucle infinito).
  * Deduce la ruta a partir de la ubicación del archivo (App Router).
  */
@@ -130,6 +153,67 @@ mustContain(
   ["AppSidebar", "<header"],
   "AppShellRouter debe montar el sidebar de navegación y el header.",
 );
+
+// ── Páginas "índice" que fueron sobrescritas en 77429df ──────────────────
+// Cada una debe conservar su componente/propósito ÚNICO. Si alguna vuelve a
+// quedar igual a su ruta hermana, mustNotDuplicate lo detecta.
+
+mustContain(
+  "app/app/master/page.tsx",
+  ["Centro de Comando", "useOperationalPolling", "MANAGEMENT_LINKS"],
+  "/app/master es el Centro de Comando (dashboard operativo). No debe ser la página de Usuarios/Personal & Roles (esa vive en master/users).",
+);
+mustContain(
+  "app/app/branch/page.tsx",
+  ["KpiCard", "RoleSummary"],
+  "/app/branch es el dashboard 'Mi Sucursal' con KPIs. No debe ser el workspace de Despacho.",
+);
+mustContain(
+  "app/app/master/production/page.tsx",
+  ["Factory", "BatchSummary"],
+  "/app/master/production es el panel 'Produccion Materiales' (lotes). No debe ser la página de Recetas (production/recipes).",
+);
+mustContain(
+  "app/app/master/audit/page.tsx",
+  ["AuditLogViewer"],
+  "/app/master/audit es la 'Bitácora Global'. No debe ser la página de print-logs (audit/print-logs).",
+);
+mustContain(
+  "app/app/master/catalog-inventory/page.tsx",
+  ["CatalogInventoryAdmin"],
+  "/app/master/catalog-inventory monta CatalogInventoryAdmin. No debe ser Product360 (esa requiere [id]).",
+);
+mustContain(
+  "app/app/system-admin/page.tsx",
+  ["SystemAdminDashboard"],
+  "/app/system-admin es el Dashboard Admin. No debe ser la página de Configuraciones (system-admin/settings).",
+);
+mustContain(
+  "app/app/page.tsx",
+  ["AppIndexPage", "resolveRoleHome"],
+  "/app debe redirigir al home según el rol. No debe renderizar otra página (p.ej. Configuraciones).",
+);
+mustContain(
+  "app/page.tsx",
+  ['redirect("/app")'],
+  "/ (raíz) debe redirigir a /app. No debe ser la página de Sesión Requerida (unauthorized).",
+);
+
+// Pares ruta-índice vs ruta-hermana que NO deben ser idénticos (anti copy-paste).
+mustNotDuplicate("app/app/master/page.tsx", "app/app/master/users/page.tsx",
+  "El Centro de Comando se confundió con la página de Usuarios.");
+mustNotDuplicate("app/app/master/production/page.tsx", "app/app/master/production/recipes/page.tsx",
+  "El panel de Producción se confundió con la página de Recetas.");
+mustNotDuplicate("app/app/master/audit/page.tsx", "app/app/master/audit/print-logs/page.tsx",
+  "La Bitácora se confundió con Print Logs.");
+mustNotDuplicate("app/app/master/catalog-inventory/page.tsx", "app/app/master/catalog-inventory/products/[id]/page.tsx",
+  "Catálogo e Inventario se confundió con Product360.");
+mustNotDuplicate("app/app/system-admin/page.tsx", "app/app/system-admin/settings/page.tsx",
+  "El Dashboard Admin se confundió con Configuraciones.");
+mustNotDuplicate("app/app/page.tsx", "app/app/system-admin/settings/page.tsx",
+  "El índice /app se confundió con Configuraciones.");
+mustNotDuplicate("app/page.tsx", "app/unauthorized/page.tsx",
+  "La raíz / se confundió con la página de Sesión Requerida.");
 
 // Páginas que hacen redirect: que ninguna apunte a sí misma.
 [

@@ -7,6 +7,29 @@ El formato sigue, de forma laxa, [Keep a Changelog](https://keepachangelog.com/e
 
 ### Fixed (Corregido)
 
+- **Revisión profunda: 17 archivos sobrescritos por copy-paste en `77429df` restaurados.**
+  El commit `77429df` ("chore: pending changes…") no solo vació el layout: también
+  sobrescribió múltiples páginas y route handlers "índice" con el contenido COPIADO
+  de una ruta hermana. El build/typecheck pasaban, pero cada ruta mostraba/servía el
+  contenido equivocado. Se restauraron al último estado bueno (`6959cd2`) **sin perder
+  las mejoras posteriores** (fix de login, restauración de layout, fixes de Suspense):
+  - **Páginas (frontend):**
+    - `/app/master` (Centro de Comando) ← estaba duplicando la página de Usuarios.
+    - `/app/branch` (Mi Sucursal, KPIs) ← estaba mostrando el workspace de Despacho.
+    - `/app/master/production` (Producción Materiales) ← duplicaba la página de Recetas.
+    - `/app/master/audit` (Bitácora Global) ← duplicaba Print Logs.
+    - `/app/master/catalog-inventory` (CatalogInventoryAdmin) ← duplicaba Product360.
+    - `/app/system-admin` (Dashboard Admin) ← duplicaba Configuraciones.
+    - `/app` (índice → home por rol) ← duplicaba Configuraciones.
+    - `/` (raíz → redirect a /app) ← duplicaba la página de Sesión Requerida.
+  - **Route handlers (API):**
+    - `catalog/products` (listado + alta de productos) ← solo devolvía sugerencia de SKU.
+    - `master/discounts` (listar + crear descuentos) ← solo devolvía sugerencias.
+    - `cash-closure` (POST cierre automático manual) ← duplicaba `/status`.
+    - `master/brain/decisions/[id]` (GET decisión) ← duplicaba `/snooze`.
+    - `sales/orders/[id]` (PATCH notas de orden) ← duplicaba `/submit`.
+    - `reports/sales` (exportación CSV) ← duplicaba `/summary`.
+    - `timber` (productos de madera) ← duplicaba `/trips`.
 - **`/app/master` y toda el área autenticada se mostraban sin sidebar ni header.**
   El commit `77429df` había vaciado `hammer-frontend/src/app/app/layout.tsx`,
   eliminando `<AppShellRouter>` (sidebar + header + breadcrumbs + footer +

@@ -1,23 +1,23 @@
-import { NextResponse } from "next/server";
-import { resolveReportRequest } from "@/modules/reports/http";
-import { getSalesSummaryAggregated } from "@/modules/reports/sales-analytics";
+import { resolveReportRequest, reportResponse } from "@/modules/reports/http";
+import { toCsv } from "@/modules/reports/serializers";
+import { getSalesReportRows } from "@/modules/reports/service";
 import { toHttpErrorResponse } from "@/lib/http";
+
+const COLUMNS = ["fecha", "sucursal_codigo", "sucursal_nombre", "orden", "estado", "vendedor", "total"];
 
 export async function GET(request: Request) {
   try {
     const resolved = await resolveReportRequest(request);
     if ("error" in resolved) return resolved.error;
 
-    const data = await getSalesSummaryAggregated({
+    const rows = await getSalesReportRows({
+      branchIds: resolved.branchIds,
       dateFrom: resolved.query.dateFrom,
       dateTo: resolved.query.dateTo,
-      branchIds: resolved.branchIds,
+      status: resolved.query.status,
     });
 
-    return NextResponse.json(data, {
-      status: 200,
-      headers: { "cache-control": "no-store" },
-    });
+    return reportResponse(resolved, "reporte-ventas.csv", toCsv(COLUMNS, rows), rows);
   } catch (error) {
     return toHttpErrorResponse(error);
   }
