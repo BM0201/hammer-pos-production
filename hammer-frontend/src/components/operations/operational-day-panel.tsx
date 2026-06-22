@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
-import { CheckCircle2, RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet, AlertTriangle, Info, ArrowRight } from "lucide-react";
+import { CheckCircle2, RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet, AlertTriangle, Info, ArrowRight, Activity } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/client/session";
@@ -17,6 +17,7 @@ import { OperationalDaySummary, type OperationalDay } from "@/components/operati
 import { CashSessionStatusList } from "@/components/operations/cash-session-status-list";
 import { OperationalDayChecklist, type ClosePreview } from "@/components/operations/operational-day-checklist";
 import { CloseDayDialog } from "@/components/operations/close-day-dialog";
+import { OperationalDayScanner } from "@/components/operations/operational-day-scanner";
 
 type PaymentRow = { method: string; _sum: { amount: string | number | null }; _count: { _all: number } };
 
@@ -73,6 +74,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   const [reportLoading, setReportLoading] = useState(false);
   const [approveBlockers, setApproveBlockers] = useState<Blocker[]>([]);
   const [approveWarnings, setApproveWarnings] = useState<Blocker[]>([]);
+  const [showScanner, setShowScanner] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -243,6 +245,16 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
         <Button variant="secondary" size="sm" onClick={loadReport} loading={reportLoading} icon={<BarChart3 className="h-3.5 w-3.5" />}>
           Ver reporte del día
         </Button>
+        {masterMode && (
+          <Button
+            variant={showScanner ? "primary" : "secondary"}
+            size="sm"
+            onClick={() => setShowScanner((v) => !v)}
+            icon={<Activity className="h-3.5 w-3.5" />}
+          >
+            {showScanner ? "Ocultar escáner" : "Escanear y forzar cierre"}
+          </Button>
+        )}
         {showApproveBtn && (
           <Button
             variant="primary"
@@ -261,6 +273,16 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
           <span className="hm-chip text-xs">Día cancelado</span>
         )}
       </div>
+
+      {/* Operational day scanner (master-only): diagnoses stuck cash sessions /
+          stale days and lets the master force-resolve + refresh the close. */}
+      {masterMode && showScanner && (
+        <OperationalDayScanner
+          branchId={branchId}
+          onResolved={async () => { await load(); }}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
 
       {/* Approval blockers / warnings */}
       {(approveBlockers.length > 0 || approveWarnings.length > 0) && (

@@ -6,6 +6,7 @@ import {
   CheckCircle2, ChevronDown, ChevronRight, RefreshCw, Shield, TrendingUp, Zap,
 } from "lucide-react";
 import { OperationalDayPanel } from "@/components/operations/operational-day-panel";
+import { OperationalDayScanner } from "@/components/operations/operational-day-scanner";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
@@ -76,21 +77,6 @@ type MasterDay = {
   branch: Branch;
 };
 
-type ForceCleanupDiagnosis = {
-  staleOpenCashSessions: Array<{ id: string; openedAt: string; physicalCashBoxCode: string; businessDate: string | null }>;
-  autoClosedPendingReviewSessions: Array<{ id: string; autoClosedAt: string | null; physicalCashBoxCode: string; expectedCashAmount: number | null }>;
-  staleOpenOperationalDays: Array<{ id: string; businessDate: string; status: string }>;
-  todayDayId: string | null;
-};
-
-type ForceCleanupResult = {
-  mode: "DRY_RUN" | "EXECUTE";
-  branchId: string;
-  diagnosis: ForceCleanupDiagnosis;
-  actionsTaken: string[];
-  errors: string[];
-};
-
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const money = (v: number | string | null | undefined) =>
@@ -131,182 +117,6 @@ const DERIVED_BADGE: Record<string, "success" | "warning" | "neutral" | "danger"
   CANCELLED:            "danger",
   STALE_OPEN_DAY:       "danger",
 };
-
-// ── Force Cleanup Panel ────────────────────────────────────────────────────────
-
-function ForceCleanupPanel({
-  branchId,
-  branchCode,
-  onClose,
-  onDone,
-}: {
-  branchId: string;
-  branchCode: string;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const [step, setStep] = useState<"idle" | "diagnosing" | "diagnosed" | "executing" | "done">("idle");
-  const [diagnosis, setDiagnosis] = useState<ForceCleanupDiagnosis | null>(null);
-  const [result, setResult] = useState<ForceCleanupResult | null>(null);
-  const [note, setNote] = useState("");
-  const [actions, setActions] = useState({
-    closeStaleOpenCashSessions: true,
-    resolveAutoClosedPendingReview: true,
-    closeStaleOperationalDay: true,
-    refreshOperationalDaySummaries: true,
-  });
-
-  const anyActionSelected = Object.values(actions).some(Boolean);
-
-  async function runDryRun() {
-    setStep("diagnosing");
-    try {
-      const resp = await apiFetch("/api/master/operations/force-cleanup", {
-        method: "POST",
-        body: JSON.stringify({ branchId, mode: "DRY_RUN", note: "", actions }),
-      });
-      const raw = await resp.json();
-      if (!resp.ok) { showToast("error", raw?.error?.message ?? "Error en diagnóstico."); setStep("idle"); return; }
-      const data = unwrapApiData(raw) as ForceCleanupResult;
-      setDiagnosis(data.diagnosis);
-      setStep("diagnosed");
-    } catch { showToast("error", "Error de red."); setStep("idle"); }
-  }
-
-  async function runExecute() {
-    if (!note.trim()) { showToast("warning", "La nota es requerida para ejecutar."); return; }
-    setStep("executing");
-    try {
-      const resp = await apiFetch("/api/master/operations/force-cleanup", {
-        method: "POST",
-        body: JSON.stringify({ branchId, mode: "EXECUTE", note: note.trim(), actions }),
-      });
-      const raw = await resp.json();
-      if (!resp.ok) { showToast("error", raw?.error?.message ?? "Error al ejecutar."); setStep("diagnosed"); return; }
-      const data = unwrapApiData(raw) as ForceCleanupResult;
-      setResult(data);
-      setStep("done");
-      if (data.errors.length === 0) showToast("success", `Limpieza completada en ${branchCode}.`);
-      else showToast("warning", `Completado con ${data.errors.length} error(es). Revisa los detalles.`);
-      onDone();
-    } catch { showToast("error", "Error de red."); setStep("diagnosed"); }
-  }
-
-  return (
-    <div className="rounded-xl border border-[var(--color-warning-300)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,white)] p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Zap className="text-[var(--color-warning-700)]" style={{ width: "1rem", height: "1rem" }} />
-          <span className="text-sm font-bold text-[var(--color-warning-900)]">
-            Limpieza Forzada — {branchCode}
-          </span>
-        </div>
-        <button type="button" onClick={onClose} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancelar</button>
-      </div>
-
-      {/* Action checkboxes */}
-      <div className="grid grid-cols-2 gap-2">
-        {(Object.keys(actions) as Array<keyof typeof actions>).map((key) => {
-          const labels: Record<keyof typeof actions, string> = {
-            closeStaleOpenCashSessions:     "Cerrar cajas abiertas (días anteriores)",
-            resolveAutoClosedPendingReview: "Resolver sesiones auto-cerradas pendientes",
-            closeStaleOperationalDay:       "Cerrar días operativos anteriores OPEN",
-            refreshOperationalDaySummaries: "Refrescar summary del día actual",
-          };
-          return (
-            <label key={key} className="flex items-start gap-2 text-xs text-[var(--color-text)] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={actions[key]}
-                onChange={(e) => setActions((a) => ({ ...a, [key]: e.target.checked }))}
-                className="mt-0.5"
-              />
-              <span>{labels[key]}</span>
-            </label>
-          );
-        })}
-      </div>
-
-      {/* Diagnosis results */}
-      {diagnosis && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2 text-xs">
-          <p className="font-semibold text-[var(--color-text-muted)] uppercase tracking-wide text-[0.6875rem]">Diagnóstico (DRY_RUN)</p>
-          <div className="space-y-1">
-            <p><span className="font-semibold">{diagnosis.staleOpenCashSessions.length}</span> caja(s) abierta(s) en días anteriores</p>
-            <p><span className="font-semibold">{diagnosis.autoClosedPendingReviewSessions.length}</span> sesión(es) auto-cerrada(s) pendiente revisión</p>
-            <p><span className="font-semibold">{diagnosis.staleOpenOperationalDays.length}</span> día(s) operativo(s) OPEN de fechas anteriores</p>
-            {diagnosis.staleOpenCashSessions.length > 0 && (
-              <ul className="ml-3 text-[var(--color-text-secondary)] list-disc">
-                {diagnosis.staleOpenCashSessions.map((s) => (
-                  <li key={s.id}>Caja {s.physicalCashBoxCode} — abierta desde {new Date(s.openedAt).toLocaleString("es-NI")}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-          {diagnosis.staleOpenCashSessions.length === 0 &&
-           diagnosis.autoClosedPendingReviewSessions.length === 0 &&
-           diagnosis.staleOpenOperationalDays.length === 0 && (
-            <p className="text-[var(--color-success-700)] font-semibold">Sin estados atascados detectados. No se requiere limpieza.</p>
-          )}
-        </div>
-      )}
-
-      {/* Result after execute */}
-      {result && step === "done" && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 space-y-2 text-xs">
-          <p className="font-semibold text-[var(--color-text-muted)] uppercase tracking-wide text-[0.6875rem]">Resultado</p>
-          {result.actionsTaken.map((a, i) => <p key={i} className="text-[var(--color-success-700)]">✓ {a}</p>)}
-          {result.errors.map((e, i) => <p key={i} className="text-[var(--color-danger-700)]">✗ {e}</p>)}
-        </div>
-      )}
-
-      {/* Note + buttons */}
-      {step !== "done" && (
-        <div className="space-y-2">
-          {step === "diagnosed" && (
-            <div className="grid gap-1">
-              <label className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
-                Nota de justificación (requerida para ejecutar)
-              </label>
-              <textarea
-                className="hm-input rounded-lg text-xs w-full"
-                rows={2}
-                placeholder="Motivo de la limpieza forzada..."
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
-            </div>
-          )}
-          <div className="flex gap-2">
-            {step === "idle" && (
-              <Button variant="secondary" size="sm" onClick={runDryRun} disabled={!anyActionSelected}>
-                Diagnosticar (DRY_RUN)
-              </Button>
-            )}
-            {step === "diagnosing" && (
-              <Button variant="secondary" size="sm" loading>Diagnosticando...</Button>
-            )}
-            {step === "diagnosed" && (
-              <>
-                <Button variant="secondary" size="sm" onClick={runDryRun}>Re-diagnosticar</Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={runExecute}
-                  disabled={!note.trim() || !anyActionSelected}
-                  className="bg-[var(--color-warning-600)] hover:bg-[var(--color-warning-700)]"
-                >
-                  Ejecutar limpieza
-                </Button>
-              </>
-            )}
-            {step === "executing" && <Button variant="primary" size="sm" loading>Ejecutando...</Button>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 
@@ -563,13 +373,13 @@ export default function MasterOperationsPage() {
           </Card>
         )}
 
-        {/* Force Cleanup panel */}
+        {/* Force Cleanup / scanner panel */}
         {cleanupBranchId && cleanupBranch && (
-          <ForceCleanupPanel
+          <OperationalDayScanner
             branchId={cleanupBranchId}
             branchCode={cleanupBranch.code}
             onClose={() => setCleanupBranchId(null)}
-            onDone={async () => { await loadLive(); await loadPending(); }}
+            onResolved={async () => { await loadLive(); await loadPending(); }}
           />
         )}
 
