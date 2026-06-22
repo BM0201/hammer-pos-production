@@ -87,8 +87,12 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
     prisma.cashSession.findMany({
       where: {
         physicalCashBox: { branchId: input.branchId },
+        // Match every session still flagged as pending review by STATUS, regardless
+        // of the requiresReview flag. This also catches "half-resolved" sessions
+        // left in a broken state by the previous bug (requiresReview=false but
+        // status never advanced past AUTO_CLOSED_PENDING_REVIEW), so a single
+        // force-cleanup run can finalize them.
         status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW,
-        requiresReview: true,
       },
       include: { physicalCashBox: { select: { code: true } } },
       orderBy: { openedAt: "asc" },
@@ -200,16 +204,28 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
             where: { id: session.id },
             include: { physicalCashBox: { select: { branchId: true, code: true } } },
           });
-          if (locked.status !== CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW || !locked.requiresReview) return;
+          if (locked.status !== CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW) return;
 
           // Accept expected cash as the official count. Master takes responsibility via note + audit log.
           const counted = locked.expectedCashAmount ?? decimal(0);
           await tx.cashSession.update({
             where: { id: locked.id },
             data: {
+              // CRITICAL: advance the status to AUTO_CLOSED. Previously only
+              // requiresReview/counted/difference were updated, which left the
+              // session stuck at AUTO_CLOSED_PENDING_REVIEW forever — the command
+              // center classifies by status, so it kept showing as "Pendiente de
+              // revisión" and the OK action (which requires requiresReview=true)
+              // could no longer clear it.
+              status: CashSessionStatus.AUTO_CLOSED,
               requiresReview: false,
               countedCashAmount: counted,
+              closingAmount: counted,
               differenceAmount: decimal(0),
+              closedAt: locked.closedAt ?? locked.autoClosedAt ?? now,
+              reviewedAt: now,
+              reviewedByUserId: input.actorUserId,
+              reviewNote: `Cierre forzado MASTER. ${input.note}`,
             },
           });
 
