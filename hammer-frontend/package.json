@@ -7,6 +7,9 @@
   "description": "H.A.M.M.E.R. POS/ERP — Frontend (UI-only) — Next.js 15",
   "scripts": {
     "dev": "next dev",
+    "validate:critical": "node scripts/validate-critical-files.mjs",
+    "test:unit": "node --test \"tests/unit/**/*.test.mjs\"",
+    "prebuild": "node scripts/validate-critical-files.mjs",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
