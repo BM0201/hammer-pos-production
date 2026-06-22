@@ -17,7 +17,7 @@ export async function GET(request: Request) {
       status: resolved.query.status,
     });
 
-    return reportResponse(resolved, "reporte-ventas.csv", toCsv(COLUMNS, rows), rows);
+    return reportResponse(resolved, "reporte-ventas.csv", toCsv(COLUMNS, rows), rows, "sales");
   } catch (error) {
     return toHttpErrorResponse(error);
   }

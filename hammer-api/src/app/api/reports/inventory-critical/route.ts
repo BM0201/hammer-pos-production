@@ -14,7 +14,7 @@ export async function GET(request: Request) {
       branchIds: resolved.branchIds,
     });
 
-    return reportResponse(resolved, "reporte-inventario-critico.csv", toCsv(COLUMNS, rows), rows);
+    return reportResponse(resolved, "reporte-inventario-critico.csv", toCsv(COLUMNS, rows), rows, "inventory-critical");
   } catch (error) {
     return toHttpErrorResponse(error);
   }

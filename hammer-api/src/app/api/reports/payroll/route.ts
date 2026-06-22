@@ -27,7 +27,7 @@ export async function GET(request: Request) {
       branchIds: resolved.branchIds,
     });
 
-    return reportResponse(resolved, "reporte-nomina.csv", toCsv(COLUMNS, rows), rows);
+    return reportResponse(resolved, "reporte-nomina.csv", toCsv(COLUMNS, rows), rows, "payroll");
   } catch (error: unknown) {
     return toHttpErrorResponse(error);
   }

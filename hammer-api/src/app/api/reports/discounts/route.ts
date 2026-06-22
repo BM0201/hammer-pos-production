@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       actorUsername: resolved.query.actorUsername,
     });
 
-    return reportResponse(resolved, "reporte-descuentos.csv", toCsv(COLUMNS, rows), rows);
+    return reportResponse(resolved, "reporte-descuentos.csv", toCsv(COLUMNS, rows), rows, "discounts");
   } catch (error) {
     return toHttpErrorResponse(error);
   }

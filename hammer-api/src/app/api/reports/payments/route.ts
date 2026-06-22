@@ -18,7 +18,7 @@ export async function GET(request: Request) {
       actorUsername: resolved.query.actorUsername,
     });
 
-    return reportResponse(resolved, "reporte-cobros.csv", toCsv(COLUMNS, rows), rows);
+    return reportResponse(resolved, "reporte-cobros.csv", toCsv(COLUMNS, rows), rows, "payments");
   } catch (error) {
     return toHttpErrorResponse(error);
   }

@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       branchIds: resolved.branchIds,
     });
 
-    return reportResponse(resolved, "reporte-prestamos-empleados.csv", toCsv(COLUMNS, rows), rows);
+    return reportResponse(resolved, "reporte-prestamos-empleados.csv", toCsv(COLUMNS, rows), rows, "employee-loans");
   } catch (error: unknown) {
     return toHttpErrorResponse(error);
   }
