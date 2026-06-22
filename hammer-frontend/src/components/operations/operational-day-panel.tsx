@@ -70,6 +70,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   const [report, setReport]   = useState<DailyReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
   const [approveBlockers, setApproveBlockers] = useState<Blocker[]>([]);
   const [approveWarnings, setApproveWarnings] = useState<Blocker[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -98,7 +99,15 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
     void loadInitial();
   }, [loadInitial]);
 
-  // Auto-refresh every 30s in branch mode (master page has its own interval)
+  // Clear approval blockers/warnings when day changes (after reload/status change)
+  useEffect(() => {
+    setApproveBlockers([]);
+    setApproveWarnings([]);
+  }, [day?.id, day?.status]);
+
+  // Auto-refresh every 30s in branch mode.
+  // In masterMode, the parent page (master/operations) manages its own polling
+  // to avoid double-refresh and maintain a single source of truth for all branches.
   useEffect(() => {
     if (masterMode) return;
     intervalRef.current = setInterval(() => { void load(); }, 30_000);
@@ -126,10 +135,14 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
 
   async function closePreview() {
     if (!day) return;
-    const response = await apiFetch(`/api/branch/operations/${day.id}/close-preview`, { method: "POST" });
-    const raw = await response.json();
-    if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo previsualizar cierre.");
-    setPreview(unwrapApiData(raw) as ClosePreview);
+    try {
+      const response = await apiFetch(`/api/branch/operations/${day.id}/close-preview`, { method: "POST" });
+      const raw = await response.json();
+      if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo previsualizar cierre.");
+      setPreview(unwrapApiData(raw) as ClosePreview);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "Error al previsualizar cierre.");
+    }
   }
 
   async function closeDay(note: string, forceClose: boolean) {
@@ -179,13 +192,20 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
 
   async function loadReport() {
     if (!day) return;
-    const response = await apiFetch(`/api/branch/operations/${day.id}/daily-report`);
-    const raw = await response.json();
-    if (!response.ok) {
-      showToast("error", raw?.error?.message ?? "No se pudo cargar el reporte.");
-      return;
+    setReportLoading(true);
+    try {
+      const response = await apiFetch(`/api/branch/operations/${day.id}/daily-report`);
+      const raw = await response.json();
+      if (!response.ok) {
+        showToast("error", raw?.error?.message ?? "No se pudo cargar el reporte.");
+        return;
+      }
+      setReport(unwrapApiData(raw) as DailyReport);
+    } catch {
+      showToast("error", "Error de red al cargar el reporte.");
+    } finally {
+      setReportLoading(false);
     }
-    setReport(unwrapApiData(raw) as DailyReport);
   }
 
   if (loading) return <LoadingState message="Cargando día operativo..." />;
@@ -220,7 +240,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
         <Button variant="secondary" size="sm" onClick={load} icon={<RefreshCw className="h-3.5 w-3.5" />}>
           Actualizar
         </Button>
-        <Button variant="secondary" size="sm" onClick={loadReport} icon={<BarChart3 className="h-3.5 w-3.5" />}>
+        <Button variant="secondary" size="sm" onClick={loadReport} loading={reportLoading} icon={<BarChart3 className="h-3.5 w-3.5" />}>
           Ver reporte del día
         </Button>
         {showApproveBtn && (

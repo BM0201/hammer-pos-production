@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AlertTriangle, Lock, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ClosePreview } from "@/components/operations/operational-day-checklist";
@@ -17,6 +17,14 @@ export function CloseDayDialog({ preview, disabled, disabledReason, onPreview, o
   const [note, setNote] = useState("");
   const [forceClose, setForceClose] = useState(false);
   const [busy, setBusy] = useState<"preview" | "close" | null>(null);
+
+  // Reset form state when preview is cleared (day reloaded after successful close)
+  useEffect(() => {
+    if (!preview) {
+      setNote("");
+      setForceClose(false);
+    }
+  }, [preview]);
 
   const hasWarnings      = Boolean(preview?.warnings.length);
   const hasBlockers      = Boolean(preview?.blockers.length);
