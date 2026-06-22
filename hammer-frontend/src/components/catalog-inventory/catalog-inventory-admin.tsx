@@ -6,8 +6,8 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  AlertTriangle, BarChart3, Boxes, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, DollarSign,
-  Download, FileSpreadsheet, FileUp, History, Info, Loader2, Package, Pencil,
+  AlertTriangle, BarChart3, Boxes, Building2, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
+  CheckCircle2, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Package, Pencil,
   Plus, RefreshCcw, Save, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
 } from "lucide-react";
@@ -808,53 +808,96 @@ export function CatalogInventoryAdmin() {
 
   return (
     <section className="space-y-5">
-      {/* ── Header card con gradiente ── */}
-      <Card noPadding>
-        <div className="hm-card-header-blue">
-          <h1 className="text-xl font-bold tracking-tight">Catálogo e Inventario</h1>
-          <p className="mt-1 text-sm opacity-90">Centro MASTER para productos, existencias, precios, movimientos, transferencias y reposición.</p>
+      {/* ── Encabezado plano ── */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-xl font-medium" style={{ color: "var(--color-text)" }}>Catálogo e inventario</h1>
+          <p className="text-sm" style={{ color: "var(--color-text-muted)", marginTop: "2px" }}>Productos, precios, existencias y movimientos</p>
         </div>
-        <div className="p-4 sm:p-5">
-          <div className="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(220px,1.5fr)_minmax(180px,1fr)_minmax(180px,1fr)_auto]">
-            <Input className="h-10" placeholder="🔍 Buscar SKU o producto" value={q} onChange={(event) => { setQ(event.target.value); setPage(1); }} />
-            <select className="hm-input h-10" value={branchId} onChange={(event) => { setBranchId(event.target.value); setPage(1); }}>
-              <option value="">Todas las sucursales</option>
-              {data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
-            </select>
-            <select className="hm-input h-10" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
-              <option value="">Todas las categorias</option>
-              {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-            </select>
-            <Button className="h-10 justify-center sm:col-span-2 lg:col-span-1" variant="primary" onClick={() => load().catch((e) => toast.error(e.message))} loading={loading} icon={<Search className="h-4 w-4" />}>Aplicar</Button>
-          </div>
-        </div>
-      </Card>
+        {data && branchId && (() => {
+          const activeBranch = data.branches.find((b) => b.id === branchId);
+          return activeBranch ? (
+            <div className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs" style={{ border: "0.5px solid var(--color-border)", color: "var(--color-text-secondary)" }}>
+              <Building2 className="h-3.5 w-3.5" style={{ color: "var(--color-text-muted)" }} />
+              <span>{activeBranch.name}</span>
+            </div>
+          ) : null;
+        })()}
+      </div>
 
-      {/* ── Tabs ── */}
-      <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-xs)]">
-        <div className="overflow-x-auto">
-          <div className="flex min-w-max gap-0.5 bg-[var(--color-surface-alt)] p-1.5">
-        {TABS.map((item) => {
-          const Icon = item.icon;
-          const isActive = tab === item.id;
-          return (
-            <button
-              key={item.id}
-              ref={isActive ? activeTabRef : null}
-              type="button"
-              onClick={() => setTab(item.id)}
-              className={`inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-lg px-3.5 text-[0.8125rem] font-medium transition-all duration-200 ${
-                isActive
-                  ? "bg-[var(--color-master-600)] text-white shadow-md shadow-blue-900/20"
-                  : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] hover:shadow-sm"
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-          </div>
+      {/* ── Barra de filtros ── */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <div className="relative flex-1" style={{ minWidth: "180px" }}>
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
+          <input
+            className="hm-input h-10 w-full"
+            style={{ paddingLeft: "2rem" }}
+            placeholder="Buscar SKU o producto"
+            value={q}
+            onChange={(event) => { setQ(event.target.value); setPage(1); }}
+          />
+        </div>
+        <select className="hm-input h-10" style={{ minWidth: "160px" }} value={branchId} onChange={(event) => { setBranchId(event.target.value); setPage(1); }}>
+          <option value="">Todas las sucursales</option>
+          {data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
+        </select>
+        <select className="hm-input h-10" style={{ minWidth: "150px" }} value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
+          <option value="">Todas las categorias</option>
+          {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+        </select>
+        <button
+          type="button"
+          disabled={loading}
+          className="h-10 inline-flex items-center gap-2 rounded-lg px-4 text-sm font-medium whitespace-nowrap transition-opacity disabled:opacity-60"
+          style={{
+            background: "color-mix(in srgb, var(--color-master-600) 12%, transparent)",
+            color: "var(--color-master-700)",
+            border: "0.5px solid var(--color-master-600)",
+          }}
+          onClick={() => load().catch((e: Error) => toast.error(e.message))}
+        >
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+          Aplicar
+        </button>
+      </div>
+
+      {/* ── Tabs — subrayado ── */}
+      <div className="overflow-x-auto" style={{ borderBottom: "0.5px solid var(--color-border)" }}>
+        <div className="flex min-w-max">
+          {TABS.map((item) => {
+            const Icon = item.icon;
+            const isActive = tab === item.id;
+            return (
+              <button
+                key={item.id}
+                ref={isActive ? activeTabRef : null}
+                type="button"
+                onClick={() => setTab(item.id)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "0 14px 10px",
+                  fontSize: "0.8125rem",
+                  fontWeight: 500,
+                  whiteSpace: "nowrap",
+                  background: "none",
+                  border: "none",
+                  borderBottom: isActive
+                    ? "2px solid var(--color-master-600)"
+                    : "2px solid transparent",
+                  color: isActive ? "var(--color-master-600)" : "var(--color-text-secondary)",
+                  cursor: "pointer",
+                  transition: "color 140ms ease, border-color 140ms ease",
+                }}
+                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = "var(--color-text)"; }}
+                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = "var(--color-text-secondary)"; }}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -863,19 +906,14 @@ export function CatalogInventoryAdmin() {
       {/* ════════════ TAB: RESUMEN ════════════ */}
       {data && tab === "summary" ? (
         <div className="space-y-5">
-          <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4 stagger-children">
-            <Kpi label="Productos activos" value={data.kpis.activeProducts} />
-            <Kpi label="SKUs sin inventario" value={data.kpis.skusWithoutInventory} />
-            <Kpi label="Stock critico" value={data.kpis.criticalStockProducts} />
-            <Kpi label="Stock cero" value={data.kpis.zeroStockProducts} />
-            <Kpi label="Valor inventario" value={money(data.kpis.totalInventoryValue)} />
-            <Kpi label="Sin costo" value={data.kpis.productsWithoutCost} />
-            <Kpi label="Sin precio" value={data.kpis.productsWithoutPrice} />
-            <Kpi label="Movimientos recientes" value={data.movements.length} />
-          </div>
+          <InventorySummary
+            kpis={data.kpis}
+            onNavigate={(t, f) => { setTab(t); if (f !== undefined) setFilter(f); setPage(1); }}
+          />
           <Card noPadding>
-            <div className="hm-card-header-purple">
-              <h2 className="text-sm font-semibold">Últimos movimientos</h2>
+            <div className="flex items-center gap-2 px-4 py-3" style={{ background: "var(--color-surface-alt)", borderBottom: "0.5px solid var(--color-border)" }}>
+              <History className="h-4 w-4" style={{ color: "var(--color-master-600)" }} />
+              <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>Últimos movimientos</h2>
             </div>
             <div className="p-4">
               <CompactMovements movements={data.movements.slice(0, 10)} />
@@ -1190,8 +1228,9 @@ export function CatalogInventoryAdmin() {
       {/* ════════════ TAB: EXISTENCIAS ════════════ */}
       {data && tab === "stock" ? (
         <Card noPadding>
-          <div className="hm-card-header-teal">
-            <h2 className="text-sm font-semibold flex items-center gap-2"><Boxes className="h-4 w-4" /> Matriz de existencias</h2>
+          <div className="flex items-center gap-2 px-4 py-3" style={{ background: "var(--color-surface-alt)", borderBottom: "0.5px solid var(--color-border)" }}>
+            <Boxes className="h-4 w-4" style={{ color: "var(--color-master-600)" }} />
+            <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>Matriz de existencias</h2>
           </div>
           <div className="p-4 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -1250,6 +1289,212 @@ function Kpi({ label, value }: { label: string; value: string | number }) {
       <p className="text-[0.6875rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">{label}</p>
       <p className="mt-2.5 break-words text-2xl font-bold leading-tight text-[var(--color-text)]">{value}</p>
     </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Inventory Summary — command center for the Resumen tab
+   ═══════════════════════════════════════════════════════════ */
+type InventorySummaryProps = {
+  kpis: CenterData["kpis"];
+  onNavigate: (tab: Tab, filter?: string) => void;
+};
+
+function InventorySummary({ kpis, onNavigate }: InventorySummaryProps) {
+  const total = kpis.activeProducts || 1;
+  const goodStock = Math.max(0, total - kpis.zeroStockProducts - kpis.criticalStockProducts);
+  const criticalPct = Math.round((kpis.criticalStockProducts / total) * 100);
+  const zeroPct = Math.round((kpis.zeroStockProducts / total) * 100);
+  const goodPct = Math.max(0, 100 - criticalPct - zeroPct);
+
+  const qualityIssues = kpis.productsWithoutCost + kpis.productsWithoutPrice;
+  const qualityPct = qualityIssues > 0 ? Math.round((qualityIssues / (total * 2)) * 100) : 0;
+
+  return (
+    <div className="space-y-4">
+      {/* ── Fila superior: 4 métricas clave ── */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {/* Total activos */}
+        <button
+          type="button"
+          className="group text-left rounded-xl p-4 transition-all duration-[140ms]"
+          style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
+          onClick={() => onNavigate("products")}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-master-600)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border)"; }}
+        >
+          <p className="text-[0.6875rem] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Productos activos</p>
+          <p className="mt-2 text-3xl font-bold" style={{ color: "var(--color-text)" }}>{kpis.activeProducts.toLocaleString()}</p>
+          <p className="mt-1 text-xs" style={{ color: "var(--color-master-600)" }}>Ver catálogo →</p>
+        </button>
+
+        {/* Stock crítico */}
+        <button
+          type="button"
+          className="group text-left rounded-xl p-4 transition-all duration-[140ms]"
+          style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
+          onClick={() => onNavigate("products", "LOW_STOCK")}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-warning-500)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border)"; }}
+        >
+          <p className="text-[0.6875rem] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Stock crítico</p>
+          <p className="mt-2 text-3xl font-bold" style={{ color: kpis.criticalStockProducts > 0 ? "var(--color-warning-600)" : "var(--color-text)" }}>
+            {kpis.criticalStockProducts.toLocaleString()}
+          </p>
+          <p className="mt-1 text-xs" style={{ color: "var(--color-warning-500)" }}>
+            {kpis.criticalStockProducts > 0 ? "Requieren reposición →" : "Sin alertas"}
+          </p>
+        </button>
+
+        {/* Stock cero */}
+        <button
+          type="button"
+          className="group text-left rounded-xl p-4 transition-all duration-[140ms]"
+          style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
+          onClick={() => onNavigate("products", "ZERO_STOCK")}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-danger-500)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border)"; }}
+        >
+          <p className="text-[0.6875rem] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Sin stock</p>
+          <p className="mt-2 text-3xl font-bold" style={{ color: kpis.zeroStockProducts > 0 ? "var(--color-danger-600)" : "var(--color-text)" }}>
+            {kpis.zeroStockProducts.toLocaleString()}
+          </p>
+          <p className="mt-1 text-xs" style={{ color: "var(--color-danger-500)" }}>
+            {kpis.zeroStockProducts > 0 ? "Revisar existencias →" : "Todo abastecido"}
+          </p>
+        </button>
+
+        {/* Valor inventario */}
+        <div
+          className="rounded-xl p-4"
+          style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}
+        >
+          <p className="text-[0.6875rem] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Valor inventario</p>
+          <p className="mt-2 text-2xl font-bold leading-tight" style={{ color: "var(--color-text)" }}>{money(kpis.totalInventoryValue)}</p>
+          <p className="mt-1 flex items-center gap-1 text-xs" style={{ color: "var(--color-success-600)" }}>
+            <DollarSign className="h-3 w-3" />
+            Costo promedio ponderado
+          </p>
+        </div>
+      </div>
+
+      {/* ── Barra de distribución de stock ── */}
+      <div className="rounded-xl p-4 space-y-3" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Distribución de stock</p>
+          <p className="text-xs" style={{ color: "var(--color-text-secondary)" }}>{total.toLocaleString()} SKUs totales</p>
+        </div>
+        <div className="flex h-3 w-full overflow-hidden rounded-full gap-0.5">
+          {goodPct > 0 && (
+            <div
+              className="h-full rounded-l-full transition-all duration-[260ms] ease-out"
+              style={{ width: `${goodPct}%`, background: "var(--color-success-500)" }}
+              title={`En buen estado: ${goodStock} SKUs (${goodPct}%)`}
+            />
+          )}
+          {criticalPct > 0 && (
+            <div
+              className="h-full transition-all duration-[260ms] ease-out"
+              style={{ width: `${criticalPct}%`, background: "var(--color-warning-500)" }}
+              title={`Stock crítico: ${kpis.criticalStockProducts} SKUs (${criticalPct}%)`}
+            />
+          )}
+          {zeroPct > 0 && (
+            <div
+              className="h-full rounded-r-full transition-all duration-[260ms] ease-out"
+              style={{ width: `${zeroPct}%`, background: "var(--color-danger-500)" }}
+              title={`Sin stock: ${kpis.zeroStockProducts} SKUs (${zeroPct}%)`}
+            />
+          )}
+          {goodPct === 0 && criticalPct === 0 && zeroPct === 0 && (
+            <div className="h-full w-full rounded-full" style={{ background: "var(--color-border)" }} />
+          )}
+        </div>
+        <div className="flex gap-4 text-xs flex-wrap">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--color-success-500)" }} />
+            <span style={{ color: "var(--color-text-secondary)" }}>Buen stock ({goodPct}%)</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--color-warning-500)" }} />
+            <span style={{ color: "var(--color-text-secondary)" }}>Crítico ({criticalPct}%)</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--color-danger-500)" }} />
+            <span style={{ color: "var(--color-text-secondary)" }}>Sin stock ({zeroPct}%)</span>
+          </span>
+        </div>
+      </div>
+
+      {/* ── Calidad de datos ── */}
+      <div className="rounded-xl p-4 space-y-3" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+        <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Calidad de datos</p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {/* SKUs sin inventario */}
+          <button
+            type="button"
+            className="flex items-start gap-3 rounded-lg p-3 text-left transition-colors duration-[140ms]"
+            style={{ background: "var(--color-surface-alt)", border: "0.5px solid var(--color-border)" }}
+            onClick={() => onNavigate("products", "NO_STOCK")}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-master-400)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border)"; }}
+          >
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" style={{ color: kpis.skusWithoutInventory > 0 ? "var(--color-warning-500)" : "var(--color-text-muted)" }} />
+            <div>
+              <p className="text-lg font-bold leading-none" style={{ color: "var(--color-text)" }}>{kpis.skusWithoutInventory}</p>
+              <p className="mt-0.5 text-xs" style={{ color: "var(--color-text-secondary)" }}>SKUs sin registro</p>
+            </div>
+          </button>
+
+          {/* Sin costo */}
+          <button
+            type="button"
+            className="flex items-start gap-3 rounded-lg p-3 text-left transition-colors duration-[140ms]"
+            style={{ background: "var(--color-surface-alt)", border: "0.5px solid var(--color-border)" }}
+            onClick={() => onNavigate("products", "NO_COST")}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-master-400)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border)"; }}
+          >
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" style={{ color: kpis.productsWithoutCost > 0 ? "var(--color-danger-500)" : "var(--color-text-muted)" }} />
+            <div>
+              <p className="text-lg font-bold leading-none" style={{ color: "var(--color-text)" }}>{kpis.productsWithoutCost}</p>
+              <p className="mt-0.5 text-xs" style={{ color: "var(--color-text-secondary)" }}>Sin costo asignado</p>
+            </div>
+          </button>
+
+          {/* Sin precio */}
+          <button
+            type="button"
+            className="flex items-start gap-3 rounded-lg p-3 text-left transition-colors duration-[140ms]"
+            style={{ background: "var(--color-surface-alt)", border: "0.5px solid var(--color-border)" }}
+            onClick={() => onNavigate("pricing")}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--color-master-400)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--color-border)"; }}
+          >
+            {kpis.productsWithoutPrice === 0 ? (
+              <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" style={{ color: "var(--color-success-500)" }} />
+            ) : (
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" style={{ color: "var(--color-warning-500)" }} />
+            )}
+            <div>
+              <p className="text-lg font-bold leading-none" style={{ color: "var(--color-text)" }}>{kpis.productsWithoutPrice}</p>
+              <p className="mt-0.5 text-xs" style={{ color: "var(--color-text-secondary)" }}>Sin precio de venta</p>
+            </div>
+          </button>
+        </div>
+        {qualityIssues === 0 && (
+          <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "color-mix(in srgb, var(--color-success-500) 10%, transparent)", color: "var(--color-success-600)" }}>
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+            Todos los productos tienen costo y precio configurados
+          </div>
+        )}
+        {qualityIssues > 0 && qualityPct > 0 && (
+          <div className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+            {qualityPct}% del catálogo tiene datos incompletos — afecta márgenes y reportes
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2425,8 +2670,11 @@ function MovementsPanel({
 
   return (
     <Card noPadding>
-      <div className="hm-card-header-purple flex items-center justify-between">
-        <h2 className="text-sm font-semibold flex items-center gap-2"><History className="h-4 w-4" /> Movimientos / Kardex</h2>
+      <div className="flex items-center justify-between px-4 py-3" style={{ background: "var(--color-surface-alt)", borderBottom: "0.5px solid var(--color-border)" }}>
+        <div className="flex items-center gap-2">
+          <History className="h-4 w-4" style={{ color: "var(--color-master-600)" }} />
+          <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>Movimientos / Kardex</h2>
+        </div>
         <div className="flex gap-2">
           <Button variant="primary" size="sm" onClick={() => setShowAdjustment(true)} icon={<Plus className="h-4 w-4" />}>Ajuste manual</Button>
           <Button variant="success" size="sm" onClick={() => setShowOpening(true)} icon={<Package className="h-4 w-4" />}>Carga inicial</Button>
@@ -3261,8 +3509,9 @@ function CategoriesPanel({ categories, onDone }: { categories: Category[]; onDon
   return (
     <div className="space-y-4">
       <Card noPadding>
-        <div className="hm-card-header-purple">
-          <h2 className="text-sm font-semibold flex items-center gap-2"><Tags className="h-4 w-4" /> Crear nueva categoría</h2>
+        <div className="flex items-center gap-2 px-4 py-3" style={{ background: "var(--color-surface-alt)", borderBottom: "0.5px solid var(--color-border)" }}>
+          <Tags className="h-4 w-4" style={{ color: "var(--color-master-600)" }} />
+          <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>Crear nueva categoría</h2>
         </div>
         <div className="p-4">
           <form className="flex items-end gap-3" onSubmit={createCategory}>
@@ -3280,8 +3529,9 @@ function CategoriesPanel({ categories, onDone }: { categories: Category[]; onDon
         </div>
       </Card>
       <Card noPadding>
-        <div className="hm-card-header-teal">
-          <h2 className="text-sm font-semibold flex items-center gap-2"><Tags className="h-4 w-4" /> Categorías ({categories.length})</h2>
+        <div className="flex items-center gap-2 px-4 py-3" style={{ background: "var(--color-surface-alt)", borderBottom: "0.5px solid var(--color-border)" }}>
+          <Tags className="h-4 w-4" style={{ color: "var(--color-master-600)" }} />
+          <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>Categorías ({categories.length})</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="hm-table min-w-[700px] w-full">

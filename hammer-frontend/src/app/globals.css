@@ -303,6 +303,13 @@
   --v7-ink-2-on-surface-hi:var(--color-text-secondary); --v7-ink-3-on-surface-hi:var(--color-text-muted);
 }
 
+/* ── Semantic -500/-600 tokens: override for legibility on charcoal ── */
+[data-theme="dark"] {
+  --color-success-500: #34D399; --color-success-600: #34D399;
+  --color-warning-500: #FBBF24; --color-warning-600: #FBBF24;
+  --color-danger-500:  #F87171; --color-danger-600:  #F87171;
+}
+
 /* ── Dark mode dot-grid (warmer tone at lower opacity) ── */
 [data-theme="dark"] body {
   background-image: radial-gradient(circle, rgb(168 163 154 / 0.07) 1px, transparent 1px);
