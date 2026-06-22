@@ -95,6 +95,7 @@ export const CAPABILITIES = {
   OPERATIONS_MANAGE: "operations.manage",
   OPERATIONAL_DAY_OPEN: "operations.day.open",
   OPERATIONAL_DAY_CLOSE: "operations.day.close",
+  OPERATIONAL_DAY_APPROVE_DELEGATE: "operational_day.approve.delegate",
   DISPATCH_VIEW: "dispatch.view",
   DISPATCH_MARK: "dispatch.mark",
   APPROVAL_REQUEST_CREATE: "approval.request.create",
@@ -198,6 +199,7 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.OPERATIONS_MANAGE,
     CAPABILITIES.OPERATIONAL_DAY_OPEN,
     CAPABILITIES.OPERATIONAL_DAY_CLOSE,
+    CAPABILITIES.OPERATIONAL_DAY_APPROVE_DELEGATE,
     CAPABILITIES.DISPATCH_VIEW,
     // ── Production (view only for branch admin) ──
     // ── Governance & reporting ──

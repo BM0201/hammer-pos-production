@@ -1,15 +1,25 @@
-import { OperationalDayStatus } from "@prisma/client";
+import { OperationalDayStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   openOperationalDay,
   closeOperationalDay,
   businessDateFromNow,
+  computeApprovalBlockers,
 } from "@/modules/operations/service";
 import {
   getOperationalDayAutoConfig,
   type OperationalDayAutoConfig,
   DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG,
 } from "@/modules/operations/auto-day-config";
+import { getApprovalPolicy } from "@/modules/operations/approve-policy-config";
+
+function n(value: Prisma.Decimal | number | string | null | undefined): number {
+  return Number(value ?? 0);
+}
+
+function toJsonValue(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
 
 const DEFAULT_TIMEZONE = "America/Managua";
 
@@ -91,6 +101,7 @@ type AutoDayResult = {
   scanned: number;
   opened: number;
   closed: number;
+  approved?: number;
   skipped: number;
   errors: Array<{ branchId: string; message: string }>;
 };
@@ -198,6 +209,99 @@ export async function autoCloseOperationalDays(input: { now?: Date; dryRun?: boo
       } else {
         result.errors.push({ branchId: day.branchId, message: msg });
       }
+    }
+  }
+
+  return result;
+}
+
+export async function autoApproveOperationalDays(
+  input: { now?: Date; dryRun?: boolean } = {},
+): Promise<AutoDayResult> {
+  const now = input.now ?? new Date();
+  const dryRun = Boolean(input.dryRun);
+
+  const result: AutoDayResult = { scanned: 0, opened: 0, closed: 0, approved: 0, skipped: 0, errors: [] };
+
+  const policy = await getApprovalPolicy();
+  if (!policy.autoApproveEnabled) return result;
+
+  const cutoffTime = new Date(now.getTime() - policy.autoApproveAfterHours * 3600_000);
+
+  const candidates = await prisma.operationalDay.findMany({
+    where: {
+      status: OperationalDayStatus.CLOSED,
+      approvedAt: null,
+      closedAt: { lte: cutoffTime },
+    },
+    select: { id: true, branchId: true },
+    take: 100,
+  });
+
+  result.scanned = candidates.length;
+
+  for (const candidate of candidates) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${candidate.id} FOR UPDATE`;
+        const day = await tx.operationalDay.findUnique({ where: { id: candidate.id } });
+
+        // Idempotency / state re-check after acquiring the lock.
+        if (!day || day.status !== OperationalDayStatus.CLOSED || day.approvedAt) {
+          result.skipped++;
+          return;
+        }
+
+        const { blockers } = await computeApprovalBlockers(tx, day);
+        if (blockers.length > 0) {
+          result.skipped++;
+          return;
+        }
+
+        if (Math.abs(n(day.cashDifferenceTotal)) > policy.autoApproveMaxCashDifference) {
+          result.skipped++;
+          return;
+        }
+
+        if (dryRun) {
+          result.approved!++;
+          return;
+        }
+
+        await tx.operationalDay.update({
+          where: { id: day.id },
+          data: {
+            approvedByMasterId: "SYSTEM",
+            approvedAt: new Date(),
+            approvalSummaryJson: day.summaryJson ?? undefined,
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorUserId: "SYSTEM",
+            branchId: day.branchId,
+            module: "operations",
+            action: "OPERATIONAL_DAY_AUTO_APPROVED",
+            entityType: "OperationalDay",
+            entityId: day.id,
+            metadataJson: toJsonValue({
+              policy: {
+                autoApproveAfterHours: policy.autoApproveAfterHours,
+                autoApproveMaxCashDifference: policy.autoApproveMaxCashDifference,
+              },
+              cashDifferenceTotal: n(day.cashDifferenceTotal),
+            }),
+          },
+        });
+
+        result.approved!++;
+      });
+    } catch (err) {
+      result.errors.push({
+        branchId: candidate.branchId,
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

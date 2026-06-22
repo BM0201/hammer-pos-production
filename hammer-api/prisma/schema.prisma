@@ -603,6 +603,8 @@ model OperationalDay {
   notes                        String?
   closeChecklistJson           Json?
   summaryJson                  Json?
+  closeSummaryJson             Json?
+  approvalSummaryJson          Json?
   createdAt                    DateTime             @default(now())
   updatedAt                    DateTime             @updatedAt
 

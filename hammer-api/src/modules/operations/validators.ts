@@ -17,6 +17,11 @@ export const closeOperationalDaySchema = z.object({
   acknowledgedWarnings: z.array(z.string()).optional().default([]),
 });
 
+export const approveOperationalDaySchema = z.object({
+  forceApprove: z.boolean().optional().default(false),
+  note: z.string().trim().max(1500).optional().nullable(),
+});
+
 export const cancelOperationalDaySchema = z.object({
   note: z.string().trim().min(5).max(1500),
   override: z.boolean().optional().default(false),

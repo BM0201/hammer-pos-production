@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet, AlertTriangle, Info, ArrowRight } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/client/session";
@@ -23,6 +24,21 @@ type DailyReport = {
   paymentsByMethod: PaymentRow[];
   dispatches: Array<{ id: string; status: string }>;
   brain: Array<{ id: string; title: string; severity: string; status: string }>;
+};
+
+type BlockerReference = {
+  id: string;
+  ref?: string;
+  status?: string;
+  date?: string;
+  resolve?: { kind: string; href: string; entityId: string };
+};
+
+type Blocker = {
+  code: string;
+  label: string;
+  count: number;
+  references: BlockerReference[];
 };
 
 const METHOD_ICON: Record<string, React.ElementType> = {
@@ -53,6 +69,8 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   const [report, setReport]   = useState<DailyReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
+  const [approveBlockers, setApproveBlockers] = useState<Blocker[]>([]);
+  const [approveWarnings, setApproveWarnings] = useState<Blocker[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -130,22 +148,25 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
     await load();
   }
 
-  async function approveDay() {
+  const approveDay = useCallback(async () => {
     if (!day) return;
     setApproving(true);
     try {
       const response = await apiFetch(`/api/master/operations/${day.id}/approve`, { method: "POST" });
       const raw = await response.json();
-      if (response.status === 409) {
-        const blockerList = (raw?.data ?? []) as Array<{ label: string; count: number }>;
-        const detail = blockerList.map((b) => `${b.label} (${b.count})`).join(" · ");
-        showToast("warning", `No se puede aprobar: ${detail || (raw?.error?.message ?? "hay bloqueantes pendientes.")}`);
+      if (response.status === 409 && raw?.error?.code === "OPERATIONAL_DAY_REVIEW_HAS_BLOCKERS") {
+        const detail = (raw?.data ?? {}) as { blockers?: Blocker[]; warnings?: Blocker[] };
+        setApproveBlockers(detail.blockers ?? []);
+        setApproveWarnings(detail.warnings ?? []);
+        showToast("warning", "No se puede aprobar: hay pendientes que resolver.");
         return;
       }
       if (!response.ok) {
         showToast("error", raw?.error?.message ?? "No se pudo aprobar el día.");
         return;
       }
+      setApproveBlockers([]);
+      setApproveWarnings([]);
       showToast("success", "Día operativo aprobado.");
       await load();
     } catch {
@@ -153,7 +174,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
     } finally {
       setApproving(false);
     }
-  }
+  }, [day, load]);
 
   async function loadReport() {
     if (!day) return;
@@ -219,6 +240,72 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
           <span className="hm-chip text-xs">Día cancelado</span>
         )}
       </div>
+
+      {/* Approval blockers / warnings */}
+      {(approveBlockers.length > 0 || approveWarnings.length > 0) && (
+        <Card className="space-y-4 border-[var(--color-warning-300)] p-4">
+          {approveBlockers.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-[var(--color-warning-700)]" />
+                <h3 className="text-sm font-bold text-[var(--color-text)]">Pendientes que impiden aprobar</h3>
+              </div>
+              <ul className="space-y-2">
+                {approveBlockers.map((blocker) => {
+                  const resolveHref = blocker.references[0]?.resolve?.href;
+                  return (
+                    <li
+                      key={blocker.code}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2"
+                    >
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="h-3.5 w-3.5 text-[var(--color-warning-700)]" />
+                        <span className="text-xs font-semibold text-[var(--color-text-secondary)]">{blocker.label}</span>
+                        <Badge variant="warning">{blocker.count}</Badge>
+                      </div>
+                      {resolveHref && (
+                        <Link
+                          href={resolveHref}
+                          className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-primary-700)] hover:underline"
+                        >
+                          Ir a resolver <ArrowRight className="h-3 w-3" />
+                        </Link>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={approving}
+                onClick={approveDay}
+                icon={<RefreshCw className="h-3.5 w-3.5" />}
+              >
+                Reintentar aprobación
+              </Button>
+            </div>
+          )}
+
+          {approveWarnings.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Info className="h-4 w-4 text-[var(--color-text-muted)]" />
+                <h3 className="text-sm font-bold text-[var(--color-text)]">Notas informativas</h3>
+              </div>
+              <ul className="space-y-1">
+                {approveWarnings.map((warning) => (
+                  <li key={warning.code} className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+                    <Info className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
+                    <span>{warning.label}</span>
+                    <Badge variant="neutral">{warning.count}</Badge>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Cash sessions + payments */}
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
