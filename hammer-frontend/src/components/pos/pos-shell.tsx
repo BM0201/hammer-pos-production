@@ -34,32 +34,33 @@ type NavItem = {
   href: string;
   label: string;
   icon: ReactNode;
+  group: "venta" | "caja";
 };
 
 function buildPosNav(session: ShellSession): NavItem[] {
   const items: NavItem[] = [];
 
   if (canInAnyAssignedBranch(session, CAPABILITIES.POS_VIEW)) {
-    items.push({ href: "/app/branch/sales/orders", label: "Vender", icon: <ShoppingCart className="h-4 w-4" /> });
+    items.push({ href: "/app/branch/sales/orders", label: "Vender", icon: <ShoppingCart className="h-4 w-4" />, group: "venta" });
   }
   if (canInAnyAssignedBranch(session, CAPABILITIES.PAYMENT_QUEUE_VIEW)) {
-    items.push({ href: "/app/branch/cashier/payments", label: "Cobros", icon: <CreditCard className="h-4 w-4" /> });
+    items.push({ href: "/app/branch/cashier/payments", label: "Cobros", icon: <CreditCard className="h-4 w-4" />, group: "caja" });
   }
   if (
     canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_USE) ||
     canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_OPEN)
   ) {
-    items.push({ href: "/app/branch/cash", label: "Caja", icon: <Wallet className="h-4 w-4" /> });
+    items.push({ href: "/app/branch/cash", label: "Caja", icon: <Wallet className="h-4 w-4" />, group: "caja" });
   }
 
   // Mi día — siempre
-  items.push({ href: "/app/branch", label: "Mi día", icon: <LayoutDashboard className="h-4 w-4" /> });
+  items.push({ href: "/app/branch", label: "Mi día", icon: <LayoutDashboard className="h-4 w-4" />, group: "caja" });
 
   if (canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_CLOSE_REQUEST)) {
-    items.push({ href: "/app/branch/cash", label: "Cierre", icon: <ClipboardList className="h-4 w-4" /> });
+    items.push({ href: "/app/branch/cash", label: "Cierre", icon: <ClipboardList className="h-4 w-4" />, group: "caja" });
   }
 
-  // Deduplicate by href
+  // Deduplicate by href+label
   const seen = new Set<string>();
   return items.filter((item) => {
     if (seen.has(item.href + item.label)) return false;
@@ -150,7 +151,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
           collapsed ? "justify-center px-0" : "px-4",
         ].join(" ")}>
           <span
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-pay)] text-white"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-500)] text-white"
             style={{
               animation: "hammer-tap 900ms cubic-bezier(.36,.07,.19,.97) both",
               transformOrigin: "64% 74%",
@@ -166,32 +167,46 @@ export function PosShell({ session, children }: { session: ShellSession; childre
         </div>
 
         {/* ── Navigation ── */}
-        <nav className="mt-2 flex-1 space-y-0.5 px-2" aria-label="POS navigation">
-          {navItems.map((item) => {
-            // Para /app/branch (Mi día) solo coincide exacto — evita que
-            // todas las subrutas de /app/branch/* lo marquen como activo.
-            const isActive =
-              item.href === "/app/branch"
-                ? pathname === "/app/branch"
-                : pathname === item.href || pathname.startsWith(item.href + "/");
+        <nav className="mt-2 flex-1 px-2" aria-label="POS navigation">
+          {(["venta", "caja"] as const).map((group) => {
+            const groupItems = navItems.filter((i) => i.group === group);
+            if (groupItems.length === 0) return null;
+            const label = group === "venta" ? "Venta" : "Caja";
             return (
-              <Link
-                key={item.href + item.label}
-                href={item.href as Route}
-                className={[
-                  "flex items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-[color-mix(in_srgb,var(--color-pay)_18%,transparent)] text-[var(--color-pay-on-dark)]"
-                    : "text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--color-sidebar-text-active)]",
-                  collapsed ? "justify-center" : "",
-                ].join(" ")}
-                title={collapsed ? item.label : undefined}
-              >
-                <span className={isActive ? "text-[var(--color-pay-on-dark)]" : "text-[var(--color-sidebar-section)]"}>
-                  {item.icon}
-                </span>
-                {!collapsed ? <span>{item.label}</span> : null}
-              </Link>
+              <div key={group} className="mb-1">
+                {!collapsed ? (
+                  <p className="mb-0.5 px-2 text-[0.625rem] font-semibold uppercase tracking-widest text-[var(--color-sidebar-section)]">
+                    {label}
+                  </p>
+                ) : null}
+                <div className="space-y-0.5">
+                  {groupItems.map((item) => {
+                    const isActive =
+                      item.href === "/app/branch"
+                        ? pathname === "/app/branch"
+                        : pathname === item.href || pathname.startsWith(item.href + "/");
+                    return (
+                      <Link
+                        key={item.href + item.label}
+                        href={item.href as Route}
+                        className={[
+                          "flex items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium transition-colors",
+                          isActive
+                            ? "bg-[color-mix(in_srgb,var(--color-pay)_18%,transparent)] text-[var(--color-pay-on-dark)]"
+                            : "text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--color-sidebar-text-active)]",
+                          collapsed ? "justify-center" : "",
+                        ].join(" ")}
+                        title={collapsed ? item.label : undefined}
+                      >
+                        <span className={isActive ? "text-[var(--color-pay-on-dark)]" : "text-[var(--color-sidebar-section)]"}>
+                          {item.icon}
+                        </span>
+                        {!collapsed ? <span>{item.label}</span> : null}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
             );
           })}
         </nav>

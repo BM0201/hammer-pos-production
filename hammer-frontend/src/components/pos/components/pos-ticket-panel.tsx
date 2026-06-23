@@ -1,9 +1,8 @@
 "use client";
 
 import React from "react";
-import { Check, Receipt, Trash2 } from "lucide-react";
+import { Receipt, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import type { TicketLine, TicketOrder } from "../types";
 import { PosCheckoutBar } from "./pos-checkout-bar";
 
@@ -60,13 +59,9 @@ export function PosTicketPanel({
   orderStatusLabel,
   hasTicketLines,
   ticketLines,
-  lineDraftQuantities,
-  lineQuantityErrors,
   lineUpdatingId,
   isSubmittingPayment,
   isBusy,
-  setLineDraftQuantities,
-  setLineQuantityErrors,
   commitLineQuantity,
   removeLine,
   includeTransport,
@@ -109,7 +104,7 @@ export function PosTicketPanel({
       data-testid="pos-ticket-zone"
     >
       <Card noPadding className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm">
-        {/* ── Flat header (no gradient) ── */}
+        {/* Header */}
         <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
           <Receipt className="h-4 w-4 text-[var(--color-text-muted)]" />
           <div>
@@ -121,114 +116,84 @@ export function PosTicketPanel({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2" data-testid="pos-ticket-lines">
-          {/* ── Line items ── */}
+          {/* Line items — stepper design */}
           {hasTicketLines ? (
-            <div className="overflow-x-auto">
-              <table className="hm-table min-w-[34rem] w-full">
-                <thead>
-                  <tr>
-                    <th className="text-[var(--color-text-muted)]">Producto</th>
-                    <th className="text-[var(--color-text-muted)]">Precio c/u</th>
-                    <th className="text-[var(--color-text-muted)]">Cant.</th>
-                    <th className="text-[var(--color-text-muted)]">Subtotal</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {ticketLines.map((line) => {
-                    const qtyError = lineQuantityErrors[line.id];
-                    const qtyValue = lineDraftQuantities[line.id] ?? line.quantity;
+            <div>
+              {ticketLines.map((line) => {
+                const qty = Number(line.quantity);
+                const busy = lineUpdatingId === line.id || isSubmittingPayment;
 
-                    return (
-                      <tr key={line.id} className="border-b border-[var(--color-border)]">
-                        <td className="py-2">
-                          <div className="font-medium text-[var(--color-text)]">{line.product?.name ?? line.productId}</div>
-                          {Number(line.discountAmount) > 0 ? (
-                            <div className="text-[0.65rem] text-[var(--color-text-muted)]">
-                              Desc: -C$ {Number(line.discountAmount).toFixed(2)}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td className="tabular-nums text-[var(--color-text-secondary)]">
-                          C$ {Number(line.unitPrice).toFixed(2)}
-                        </td>
-                        <td>
-                          <div className="flex items-center gap-2">
-                            <input
-                              className={[
-                                "w-20 rounded-lg border px-2 py-1 text-sm",
-                                "bg-[var(--color-surface)] text-[var(--color-text)]",
-                                "placeholder:text-[var(--color-text-soft)]",
-                                qtyError
-                                  ? "border-[var(--color-danger-500)]"
-                                  : "border-[var(--color-border)]",
-                              ].join(" ")}
-                              type="text"
-                              inputMode="decimal"
-                              value={qtyValue}
-                              disabled={lineUpdatingId === line.id || isSubmittingPayment}
-                              data-testid={`pos-line-qty-${line.id}`}
-                              onChange={(event) => {
-                                const next = event.target.value;
-                                setLineDraftQuantities((prev) => ({ ...prev, [line.id]: next }));
-                                if (!next.trim()) {
-                                  setLineQuantityErrors((prev) => ({ ...prev, [line.id]: "La cantidad es obligatoria." }));
-                                  return;
-                                }
-                                setLineQuantityErrors((prev) => {
-                                  const copy = { ...prev };
-                                  delete copy[line.id];
-                                  return copy;
-                                });
-                              }}
-                              onBlur={() => commitLineQuantity(line)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.preventDefault();
-                                  commitLineQuantity(line);
-                                }
-                              }}
-                            />
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              disabled={lineUpdatingId === line.id || isSubmittingPayment}
-                              onClick={() => commitLineQuantity(line)}
-                              data-testid={`pos-line-apply-${line.id}`}
-                              icon={<Check className="h-3.5 w-3.5" />}
-                            >
-                              Aplicar
-                            </Button>
-                          </div>
-                          {qtyError ? (
-                            <p className="mt-1 text-[0.7rem] text-[var(--color-danger-600)]">{qtyError}</p>
-                          ) : null}
-                        </td>
-                        <td className="tabular-nums font-semibold text-[var(--color-text)]">
-                          C$ {Number(line.lineSubtotal).toFixed(2)}
-                        </td>
-                        <td>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={lineUpdatingId === line.id || isSubmittingPayment}
-                            data-testid={`pos-line-remove-${line.id}`}
-                            onClick={() => removeLine(line.id)}
-                            className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
-                            icon={<Trash2 className="h-3.5 w-3.5" />}
-                          >
-                            <span className="sr-only">Eliminar</span>
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                return (
+                  <div
+                    key={line.id}
+                    className="flex items-center gap-2 border-b border-[var(--color-border)] py-2.5"
+                  >
+                    {/* Product info */}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13.5px] font-medium leading-tight text-[var(--color-text)]">
+                        {line.product?.name ?? line.productId}
+                      </div>
+                      <div className="text-[11px] text-[var(--color-text-muted)]">
+                        C$ {Number(line.unitPrice).toFixed(2)} c/u
+                        {Number(line.discountAmount) > 0
+                          ? ` · -C$ ${Number(line.discountAmount).toFixed(2)}`
+                          : ""}
+                      </div>
+                    </div>
+
+                    {/* Stepper */}
+                    <div className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-1">
+                      <button
+                        type="button"
+                        aria-label="Reducir cantidad"
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                        disabled={busy}
+                        onClick={() => {
+                          if (qty <= 1) removeLine(line.id);
+                          else commitLineQuantity(line, qty - 1, true);
+                        }}
+                        data-testid={`pos-line-dec-${line.id}`}
+                      >
+                        −
+                      </button>
+                      <span className="min-w-[20px] text-center text-[13.5px] font-medium tabular-nums text-[var(--color-text)]">
+                        {qty % 1 === 0 ? qty : qty.toFixed(2)}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Aumentar cantidad"
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                        disabled={busy}
+                        onClick={() => commitLineQuantity(line, qty + 1, true)}
+                        data-testid={`pos-line-inc-${line.id}`}
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    {/* Line total */}
+                    <span className="min-w-[64px] text-right text-[13px] font-semibold tabular-nums text-[var(--color-text)]">
+                      C$ {Number(line.lineSubtotal).toFixed(2)}
+                    </span>
+
+                    {/* Remove */}
+                    <button
+                      type="button"
+                      aria-label="Eliminar línea"
+                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-[var(--color-text-soft)] transition-colors hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)] disabled:opacity-40"
+                      disabled={busy}
+                      onClick={() => removeLine(line.id)}
+                      data-testid={`pos-line-remove-${line.id}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           ) : null}
 
-          {/* ── Empty state ── */}
+          {/* Empty state */}
           {order && !hasTicketLines ? (
             <div className="mt-4 rounded-xl border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-muted)] p-8 text-center">
               <p className="text-sm font-semibold text-[var(--color-text)]">Ticket vacío</p>
@@ -236,35 +201,43 @@ export function PosTicketPanel({
             </div>
           ) : null}
 
-          {/* ── Totals ── */}
+          {/* Totals */}
           {hasTicketLines ? (
             <div className="mt-3 space-y-1 border-t border-[var(--color-border)] pt-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-[var(--color-text-secondary)]">Subtotal</span>
-                <span className="tabular-nums text-[var(--color-text-secondary)]">C$ {Number(order?.subtotal ?? 0).toFixed(2)}</span>
+                <span className="tabular-nums text-[var(--color-text-secondary)]">
+                  C$ {Number(order?.subtotal ?? 0).toFixed(2)}
+                </span>
               </div>
               {Number(order?.discountTotal ?? 0) > 0 ? (
                 <div className="flex justify-between">
                   <span className="text-[var(--color-text-secondary)]">Descuento</span>
-                  <span className="tabular-nums text-[var(--color-text-secondary)]">-C$ {Number(order?.discountTotal ?? 0).toFixed(2)}</span>
+                  <span className="tabular-nums text-[var(--color-text-secondary)]">
+                    -C$ {Number(order?.discountTotal ?? 0).toFixed(2)}
+                  </span>
                 </div>
               ) : null}
               {Number(order?.taxTotal ?? 0) > 0 ? (
                 <div className="flex justify-between">
                   <span className="text-[var(--color-text-secondary)]">IVA</span>
-                  <span className="tabular-nums text-[var(--color-text-secondary)]">C$ {Number(order?.taxTotal ?? 0).toFixed(2)}</span>
+                  <span className="tabular-nums text-[var(--color-text-secondary)]">
+                    C$ {Number(order?.taxTotal ?? 0).toFixed(2)}
+                  </span>
                 </div>
               ) : null}
               {includeTransport && transportAmountValue > 0 ? (
                 <div className="flex justify-between">
                   <span className="text-[var(--color-text-secondary)]">Transporte</span>
-                  <span className="tabular-nums text-[var(--color-text-secondary)]">C$ {transportAmountValue.toFixed(2)}</span>
+                  <span className="tabular-nums text-[var(--color-text-secondary)]">
+                    C$ {transportAmountValue.toFixed(2)}
+                  </span>
                 </div>
               ) : null}
             </div>
           ) : null}
 
-          {/* ── Transport toggle ── */}
+          {/* Transport toggle */}
           <label
             className={[
               "mt-3 flex cursor-pointer select-none items-start gap-3 rounded-lg border p-3 transition-colors",
@@ -296,7 +269,9 @@ export function PosTicketPanel({
 
           {includeTransport ? (
             <div className="mt-2 space-y-1">
-              <label className="block text-xs font-medium text-[var(--color-text-muted)]">Monto de transporte (C$)</label>
+              <label className="block text-xs font-medium text-[var(--color-text-muted)]">
+                Monto de transporte (C$)
+              </label>
               <input
                 className={[
                   "w-full rounded-lg border px-3 py-2 text-sm outline-none",
@@ -327,7 +302,7 @@ export function PosTicketPanel({
             </div>
           ) : null}
 
-          {/* ── Notes ── */}
+          {/* Notes */}
           {order ? (
             <div className="mt-3">
               <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
@@ -346,7 +321,7 @@ export function PosTicketPanel({
             </div>
           ) : null}
 
-          {/* ── Backend workflow messages ── */}
+          {/* Backend workflow messages */}
           {posContextMessages?.noCashBoxes ? (
             <div
               className="mt-3 rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3"
@@ -370,7 +345,7 @@ export function PosTicketPanel({
             </div>
           ) : null}
 
-          {/* ── No-action warning ── */}
+          {/* No-action warning */}
           {!canSendToCashier && !canCollectHere ? (
             <div
               className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3"
