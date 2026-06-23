@@ -258,7 +258,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
 
           {/* Theme toggle */}
           <div className="shrink-0">
-            <ThemeToggle />
+            <ThemeToggle userId={session.userId} />
           </div>
         </header>
 
