@@ -41,7 +41,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const [isOpeningSession, setIsOpeningSession] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
 
-  const { realtimeSummary, summaryUpdatedAt, loadRealtimeSummary } = usePosRealtimeSummary(branchId);
+  const { loadRealtimeSummary } = usePosRealtimeSummary(branchId);
   const {
     posContext,
     branchConfig,

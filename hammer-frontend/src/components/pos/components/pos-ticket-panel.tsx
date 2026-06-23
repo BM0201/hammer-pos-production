@@ -216,7 +216,9 @@ export function PosTicketPanel({
                             onClick={() => removeLine(line.id)}
                             className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
                             icon={<Trash2 className="h-3.5 w-3.5" />}
-                          />
+                          >
+                            <span className="sr-only">Eliminar</span>
+                          </Button>
                         </td>
                       </tr>
                     );
