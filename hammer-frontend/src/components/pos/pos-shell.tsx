@@ -168,7 +168,12 @@ export function PosShell({ session, children }: { session: ShellSession; childre
         {/* ── Navigation ── */}
         <nav className="mt-2 flex-1 space-y-0.5 px-2" aria-label="POS navigation">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+            // Para /app/branch (Mi día) solo coincide exacto — evita que
+            // todas las subrutas de /app/branch/* lo marquen como activo.
+            const isActive =
+              item.href === "/app/branch"
+                ? pathname === "/app/branch"
+                : pathname === item.href || pathname.startsWith(item.href + "/");
             return (
               <Link
                 key={item.href + item.label}

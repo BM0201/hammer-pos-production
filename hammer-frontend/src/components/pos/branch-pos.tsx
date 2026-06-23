@@ -161,7 +161,9 @@ export function BranchPos({ branchId }: { branchId: string }) {
   }
 
   // ── Cash session gate ──
-  if (!hasOpenCashSession) {
+  // Solo bloquea si el usuario necesita cobrar directamente y no hay sesión.
+  // Usuarios que solo envían a caja (SALES puro) pueden crear órdenes sin sesión.
+  if (!hasOpenCashSession && canCollectHere && !canSendToCashier) {
     const session = sessionState.status === "authenticated" ? sessionState.session : null;
     const canOpen = session ? canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_OPEN) : false;
 
