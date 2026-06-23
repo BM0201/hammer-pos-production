@@ -1145,8 +1145,12 @@ export default function MasterCommandCenterPage() {
         <KpiV7
           label="Cajas abiertas"
           value={`${totals.openSessions}/${totals.boxesActive}`}
-          helper="sesiones abiertas / cajas activas"
-          tone={totals.openSessions > 0 ? "neutral" : "ok"}
+          helper={
+            totals.reconcilingSessions > 0
+              ? `${totals.reconcilingSessions} en conciliación · ${totals.openSessions} abiertas`
+              : "sesiones abiertas / cajas activas"
+          }
+          tone={totals.reconcilingSessions > 0 ? "alert" : totals.openSessions > 0 ? "neutral" : "ok"}
           icon={Wallet}
         />
         <KpiV7
@@ -1215,6 +1219,8 @@ export default function MasterCommandCenterPage() {
                   </span>
                   {b.pendingReviewSessions > 0 ? (
                     <Badge variant="danger">{b.pendingReviewSessions} por revisar</Badge>
+                  ) : b.reconcilingSessions > 0 ? (
+                    <Badge variant="warning">{b.reconcilingSessions} conciliando</Badge>
                   ) : dayOpen ? (
                     <Badge variant="success">Activa</Badge>
                   ) : (
