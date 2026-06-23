@@ -12,8 +12,6 @@ import {
   LayoutDashboard,
   ClipboardList,
   LogOut,
-  Menu,
-  ChevronRight,
 } from "lucide-react";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { getActiveBranchId } from "@/lib/client/active-branch";
@@ -72,7 +70,7 @@ function buildPosNav(session: ShellSession): NavItem[] {
 export function PosShell({ session, children }: { session: ShellSession; children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [loggingOut, setLoggingOut] = useState(false);
   const roleCfg = getRoleColor(session.roleCode);
 
@@ -145,20 +143,22 @@ export function PosShell({ session, children }: { session: ShellSession; childre
         className="relative flex shrink-0 flex-col overflow-hidden bg-[var(--color-sidebar)]"
         data-testid="pos-sidebar"
       >
-        {/* ── Brand (Hammer) ── */}
+        {/* ── Brand / Toggle ── */}
         <div className={[
           "flex items-center gap-2.5 border-b border-white/10 py-4",
           collapsed ? "justify-center px-0" : "px-4",
         ].join(" ")}>
-          <span
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-500)] text-white"
-            style={{
-              animation: "hammer-tap 900ms cubic-bezier(.36,.07,.19,.97) both",
-              transformOrigin: "64% 74%",
-            }}
+          <button
+            onClick={() => setCollapsed((c) => !c)}
+            aria-label={collapsed ? "Expandir menú" : "Colapsar menú"}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-500)] text-white transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            style={{ transformOrigin: "64% 74%" }}
           >
-            <Hammer className="h-4 w-4" />
-          </span>
+            <Hammer
+              className="h-4 w-4"
+              style={{ animation: "hammer-tap 900ms cubic-bezier(.36,.07,.19,.97) both" }}
+            />
+          </button>
           {!collapsed ? (
             <span className="text-sm font-bold tracking-tight text-[var(--color-sidebar-text-active)]">
               Hammer POS
@@ -258,16 +258,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
           className="flex h-12 shrink-0 items-center gap-3 border-b border-white/10 bg-[var(--color-sidebar)] px-3"
           data-testid="pos-topbar"
         >
-          {/* Collapse toggle */}
-          <button
-            onClick={() => setCollapsed((c) => !c)}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover)] hover:text-[var(--color-sidebar-text-active)] transition-colors"
-            aria-label={collapsed ? "Expandir menú" : "Colapsar menú"}
-          >
-            {collapsed ? <ChevronRight className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-          </button>
-
-          {/* Day stats chips */}
+          {/* Day stats */}
           <div className="flex-1 overflow-hidden">
             <PosSummaryCards
               realtimeSummary={realtimeSummary}
