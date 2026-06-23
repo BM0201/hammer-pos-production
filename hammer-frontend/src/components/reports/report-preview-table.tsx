@@ -45,7 +45,7 @@ const STATUS_LABEL: Record<string, string> = {
   PAID: "Pagado", POSTED: "Cobrado", APPROVED: "Aprobado", DISPATCHED: "Despachado",
   RECEIVED: "Recibido", COMPLETED: "Completado", ACTIVE: "Activo", RECONCILED: "Reconciliado",
   PENDING: "Pendiente", REQUESTED: "Solicitado", IN_TRANSIT: "En tránsito",
-  PARTIALLY_RECEIVED: "Parc. recibido", DRAFT: "Borrador", RECONCILING: "Reconciliando",
+  PARTIALLY_RECEIVED: "Parc. recibido", DRAFT: "Borrador", RECONCILING: "En conciliación",
   PENDING_PAYMENT: "Pend. pago", RETURN_REQUESTED: "Dev. solicitada",
   DISPATCH_PENDING: "Pend. despacho", OPEN: "Abierto", CLOSING: "Cerrando",
   CANCELLED: "Cancelado", VOIDED: "Anulado", REJECTED: "Rechazado",

@@ -24,6 +24,10 @@ function dayIsClosing(dayStatus?: string) {
 
 function sessionUrgency(session: CashSessionRow, dayStatus?: string): "hard" | "soft" | "ok" {
   if (session.status === "OPEN") return dayIsClosing(dayStatus) ? "hard" : "soft";
+  // Una caja en conciliación es un cierre a medias: el cajero ya pidió cerrar pero
+  // no ha confirmado el conteo. Bloquea el cierre del día, así que siempre requiere
+  // atención (urgente cuando el día está en cierre).
+  if (session.status === "RECONCILING") return dayIsClosing(dayStatus) ? "hard" : "soft";
   if (session.status === "AUTO_CLOSED_PENDING_REVIEW") return "soft";
   return "ok";
 }
@@ -32,8 +36,8 @@ const STATUS_LABEL: Record<string, string> = {
   OPEN: "Abierta",
   CLOSED: "Cerrada",
   AUTO_CLOSED_PENDING_REVIEW: "Auto-cerrada pendiente",
-  RECONCILING: "Reconciliando",
-  RECONCILED: "Reconciliada",
+  RECONCILING: "En conciliación",
+  RECONCILED: "Conciliada",
 };
 
 const STATUS_BADGE: Record<string, "danger" | "warning" | "success" | "neutral"> = {
@@ -42,6 +46,16 @@ const STATUS_BADGE: Record<string, "danger" | "warning" | "success" | "neutral">
   AUTO_CLOSED_PENDING_REVIEW: "warning",
   RECONCILING: "warning",
   RECONCILED: "success",
+};
+
+// Explica de dónde sale cada estado para que Master entienda el origen.
+const STATUS_HELP: Record<string, string> = {
+  RECONCILING:
+    "El cajero presionó “Solicitar cierre de sesión”: la caja salió de operación y quedó contando el efectivo, " +
+    "pero todavía no se confirmó el monto final. Si lleva mucho tiempo así, el cierre quedó a medias y bloquea el cierre del día.",
+  AUTO_CLOSED_PENDING_REVIEW:
+    "El sistema cerró la caja automáticamente al pasar la hora límite y espera que Master revise/confirme el efectivo.",
+  OPEN: "Sesión de caja en uso, operando normalmente durante el día.",
 };
 
 const URGENCY_BORDER: Record<"hard" | "soft" | "ok", string> = {
@@ -62,7 +76,10 @@ export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) 
   // Una caja abierta solo "requiere atención" cuando el día está en cierre.
   // Mientras el día está abierto, una caja abierta es operación normal en curso.
   const urgentCount = sessions.filter(
-    (s) => (s.status === "OPEN" && closing) || s.status === "AUTO_CLOSED_PENDING_REVIEW",
+    (s) =>
+      (s.status === "OPEN" && closing) ||
+      s.status === "RECONCILING" ||
+      s.status === "AUTO_CLOSED_PENDING_REVIEW",
   ).length;
 
   return (
@@ -117,6 +134,7 @@ export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) 
                           ? "neutral"
                           : STATUS_BADGE[session.status] ?? "neutral"
                       }
+                      title={STATUS_HELP[session.status]}
                     >
                       {session.status === "OPEN" && !closing
                         ? "Abierta · en uso"
@@ -148,6 +166,22 @@ export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) 
                   {session.status === "AUTO_CLOSED_PENDING_REVIEW" && (
                     <div className="flex flex-col gap-2 border-t border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,white)] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
                       <span className="text-xs text-[var(--color-warning-800)] font-medium">Esta caja fue auto-cerrada y requiere revisión manual.</span>
+                      {branchId && (
+                        <Link
+                          href="/app/branch/cash"
+                          className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-surface)] px-3 py-2 text-xs font-semibold text-[var(--color-warning-700)] hover:bg-[var(--color-warning-50)] transition-colors sm:w-auto w-full"
+                        >
+                          Ir a cajas <ArrowRight style={{ width: "0.75rem", height: "0.75rem" }} />
+                        </Link>
+                      )}
+                    </div>
+                  )}
+                  {session.status === "RECONCILING" && (
+                    <div className="flex flex-col gap-2 border-t border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,white)] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="text-xs text-[var(--color-warning-800)] font-medium">
+                        Cierre a medias: el cajero pidió cerrar y está contando el efectivo, pero falta confirmar el monto final.
+                        El cajero debe terminar el conteo; si no, Master puede forzar el cierre desde Operación Global.
+                      </span>
                       {branchId && (
                         <Link
                           href="/app/branch/cash"

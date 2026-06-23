@@ -274,7 +274,7 @@ function timeAgo(iso: string | null): string {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  OPEN: "Abierta", RECONCILING: "Conciliando",
+  OPEN: "Abierta", RECONCILING: "En conciliación",
   AUTO_CLOSED_PENDING_REVIEW: "Pendiente de revisión",
   AUTO_CLOSED: "Cerrada (auto)", CLOSED: "Cerrada", PERMANENTLY_CLOSED: "Cerrada definitiva",
 };
@@ -1218,9 +1218,19 @@ export default function MasterCommandCenterPage() {
                     {b.branchCode}
                   </span>
                   {b.pendingReviewSessions > 0 ? (
-                    <Badge variant="danger">{b.pendingReviewSessions} por revisar</Badge>
+                    <Badge
+                      variant="danger"
+                      title="Cajas auto-cerradas por horario que esperan que Master revise/confirme el efectivo."
+                    >
+                      {b.pendingReviewSessions} por revisar
+                    </Badge>
                   ) : b.reconcilingSessions > 0 ? (
-                    <Badge variant="warning">{b.reconcilingSessions} conciliando</Badge>
+                    <Badge
+                      variant="warning"
+                      title="Cierre a medias: el cajero presionó “Solicitar cierre” y está contando el efectivo, pero falta confirmar el monto final. Bloquea el cierre del día hasta completarlo."
+                    >
+                      {b.reconcilingSessions} en conciliación
+                    </Badge>
                   ) : dayOpen ? (
                     <Badge variant="success">Activa</Badge>
                   ) : (
