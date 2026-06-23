@@ -123,6 +123,7 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
       include: {
         physicalCashBox: { select: { id: true, code: true, description: true } },
         openedBy: { select: { id: true, username: true, fullName: true } },
+        closedBy: { select: { id: true, username: true, fullName: true } },
         reviewedBy: { select: { id: true, username: true, fullName: true } },
       },
       orderBy: { openedAt: "asc" },
@@ -212,8 +213,10 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
       countedCashAmount: n(session.countedCashAmount),
       differenceAmount: n(session.differenceAmount),
       requiresReview: session.requiresReview,
+      autoClosedBySystem: session.autoClosedBySystem,
       physicalCashBox: session.physicalCashBox,
       openedBy: session.openedBy,
+      closedBy: session.closedBy,
       reviewedBy: session.reviewedBy,
     })),
   };

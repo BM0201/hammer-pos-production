@@ -483,6 +483,11 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
       {/* Session details when open */}
       {activeSession && (
         <div className="rounded-xl border border-[var(--color-success-100)] bg-[var(--color-success-50)] p-4 text-sm space-y-1">
+          {activeSession.openedBy && (
+            <div className="text-[var(--color-success-700)]">
+              <strong>👤 Abierta por:</strong> {activeSession.openedBy.fullName || activeSession.openedBy.username}
+            </div>
+          )}
           <div className="text-[var(--color-success-700)]">
             <strong>⏱ Abierta desde:</strong> {new Date(activeSession.openedAt).toLocaleString()}
           </div>

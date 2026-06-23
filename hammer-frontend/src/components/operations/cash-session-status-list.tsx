@@ -9,6 +9,15 @@ function money(value: string | number | null | undefined) {
   return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
 }
 
+function shortTime(iso?: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("es-NI", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function personName(p?: { fullName?: string | null; username?: string } | null) {
+  return p?.fullName ?? p?.username ?? "—";
+}
+
 function diffColor(diff: number) {
   if (diff < 0) return "text-[var(--color-danger-700)] font-bold";
   if (diff === 0) return "text-[var(--color-success-700)] font-bold";
@@ -160,6 +169,30 @@ export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) 
                         {session.differenceAmount === null ? "—" : money(diff)}
                       </span>
                     </div>
+                  </div>
+
+                  {/* Trazabilidad: quién y cómo abrió/cerró esta sesión.
+                      Cada día operativo puede tener varias sesiones; esto permite
+                      auditar el responsable de cada apertura y cierre. */}
+                  <div className="grid grid-cols-1 gap-x-4 gap-y-0.5 border-t border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3.5 py-2 text-[0.6875rem] text-[var(--color-text-muted)] sm:grid-cols-2">
+                    <span>
+                      <span className="font-semibold text-[var(--color-text-secondary)]">Abrió:</span>{" "}
+                      {personName(session.openedBy)} · {shortTime(session.openedAt)}
+                    </span>
+                    <span>
+                      <span className="font-semibold text-[var(--color-text-secondary)]">
+                        {session.status === "OPEN" ? "Estado:" : "Cerró:"}
+                      </span>{" "}
+                      {session.status === "OPEN"
+                        ? "en operación"
+                        : session.autoClosedBySystem
+                          ? `Sistema (auto) · ${shortTime(session.autoClosedAt ?? session.closedAt)}`
+                          : session.closedBy
+                            ? `${personName(session.closedBy)} · ${shortTime(session.closedAt)}`
+                            : session.status === "RECONCILING"
+                              ? "conciliando (sin confirmar)"
+                              : shortTime(session.closedAt)}
+                    </span>
                   </div>
 
                   {/* CTA for sessions requiring action */}

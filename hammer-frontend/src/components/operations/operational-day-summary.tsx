@@ -43,8 +43,10 @@ export type CashSessionRow = {
   closedAt?: string | null;
   autoClosedAt?: string | null;
   requiresReview: boolean;
+  autoClosedBySystem?: boolean;
   physicalCashBox?: { code: string; description?: string | null };
   openedBy?: { username: string; fullName?: string | null };
+  closedBy?: { username: string; fullName?: string | null } | null;
 };
 
 function money(value: string | number | null | undefined) {
