@@ -13,7 +13,9 @@ import type { SessionPayload } from "@/types/auth";
 function isPosRoute(pathname: string): boolean {
   return (
     pathname.startsWith("/app/branch/sales/orders") ||
-    pathname.startsWith("/app/branch/cashier/payments")
+    pathname.startsWith("/app/branch/cashier/payments") ||
+    pathname.startsWith("/app/branch/cash") ||
+    pathname === "/app/branch"
   );
 }
 
