@@ -1,7 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Banknote, Clock, ReceiptText } from "lucide-react";
-import { Card } from "@/components/ui/card";
 import { money } from "@/lib/format";
 
 type RealtimeSummary = {
@@ -11,47 +11,50 @@ type RealtimeSummary = {
   lastSale?: { orderNumber: string; amount: number } | null;
 } | null;
 
-type PosSummaryCardsProps = {
+type PosSummaryChipsProps = {
   realtimeSummary: RealtimeSummary;
   summaryUpdatedAt: string | null;
   activeCashSessionId: string | null;
 };
 
-export function PosSummaryCards({ realtimeSummary, summaryUpdatedAt, activeCashSessionId }: PosSummaryCardsProps) {
+function Chip({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="grid shrink-0 gap-3 md:grid-cols-5">
-      <Card className="p-3">
-        <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">
-          <Banknote className="h-3.5 w-3.5" /> Ventas del dia
-        </p>
-        <p className="mt-1 text-lg font-bold text-[var(--color-text)]">{money(realtimeSummary?.paidSalesTotal ?? 0)}</p>
-      </Card>
-      <Card className="p-3">
-        <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">
-          <ReceiptText className="h-3.5 w-3.5" /> Cobradas
-        </p>
-        <p className="mt-1 text-lg font-bold text-[var(--color-text)]">{realtimeSummary?.paidSalesCount ?? 0}</p>
-      </Card>
-      <Card className="p-3">
-        <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">
-          <Clock className="h-3.5 w-3.5" /> Por cobrar
-        </p>
-        <p className="mt-1 text-lg font-bold text-[var(--color-text)]">{money(realtimeSummary?.pendingPaymentTotal ?? 0)}</p>
-      </Card>
-      <Card className="p-3 md:col-span-2">
-        <p className="text-[0.68rem] font-semibold uppercase text-[var(--color-text-muted)]">Ultima venta</p>
-        <p className="mt-1 truncate text-sm font-semibold text-[var(--color-text)]">
-          {realtimeSummary?.lastSale
-            ? `${realtimeSummary.lastSale.orderNumber} · ${money(realtimeSummary.lastSale.amount)}`
-            : "Sin ventas cobradas"}
-        </p>
-        <p className="text-[0.68rem] text-[var(--color-text-muted)]">
-          Caja {activeCashSessionId ? "activa" : "sin sesion"}
-          {summaryUpdatedAt
-            ? ` · actualizado ${new Date(summaryUpdatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
-            : ""}
-        </p>
-      </Card>
+    <div className="flex items-center gap-1.5 rounded-lg border border-[var(--color-sidebar-hover)] bg-[color-mix(in_srgb,var(--color-sidebar-text)_6%,transparent)] px-3 py-1.5">
+      <span className="text-[var(--color-sidebar-text)] opacity-60">{icon}</span>
+      <span className="text-[0.65rem] font-medium text-[var(--color-sidebar-text)] opacity-60">{label}</span>
+      <span className="text-xs font-bold tabular-nums text-[var(--color-sidebar-text-active)]">{value}</span>
+    </div>
+  );
+}
+
+export function PosSummaryCards({ realtimeSummary, activeCashSessionId }: PosSummaryChipsProps) {
+  return (
+    <div className="flex items-center gap-2 flex-wrap" data-testid="pos-summary-chips">
+      <Chip
+        icon={<Banknote className="h-3 w-3" />}
+        label="Ventas hoy"
+        value={money(realtimeSummary?.paidSalesTotal ?? 0)}
+      />
+      <Chip
+        icon={<ReceiptText className="h-3 w-3" />}
+        label="Cobradas"
+        value={String(realtimeSummary?.paidSalesCount ?? 0)}
+      />
+      <Chip
+        icon={<Clock className="h-3 w-3" />}
+        label="Por cobrar"
+        value={money(realtimeSummary?.pendingPaymentTotal ?? 0)}
+      />
+      <span
+        className={[
+          "rounded-lg px-2.5 py-1.5 text-[0.65rem] font-semibold",
+          activeCashSessionId
+            ? "bg-[color-mix(in_srgb,var(--color-pay)_20%,transparent)] text-[var(--color-pay-on-dark)]"
+            : "bg-[color-mix(in_srgb,var(--color-sidebar-text)_8%,transparent)] text-[var(--color-sidebar-text)] opacity-50",
+        ].join(" ")}
+      >
+        {activeCashSessionId ? "● Caja activa" : "Caja cerrada"}
+      </span>
     </div>
   );
 }

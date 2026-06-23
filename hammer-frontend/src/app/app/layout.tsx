@@ -5,8 +5,17 @@ import { useRouter, usePathname } from "next/navigation";
 import { Toaster } from "react-hot-toast";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
 import { AppShellRouter } from "@/components/layout/app-shell-router";
+import { PosShell } from "@/components/pos/pos-shell";
 import { HammerSplash } from "@/components/layout/hammer-splash";
 import type { SessionPayload } from "@/types/auth";
+
+/** Routes that bypass the management shell and use PosShell instead. */
+function isPosRoute(pathname: string): boolean {
+  return (
+    pathname.startsWith("/app/branch/sales/orders") ||
+    pathname.startsWith("/app/branch/cashier/payments")
+  );
+}
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -26,17 +35,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       })
       .then((payload) => {
         if (cancelled) return;
-        // Usar unwrapApiData para contrato estándar { ok, data }
         const data = unwrapApiData(payload as ApiResponse<{ authenticated: boolean; user: SessionPayload & { mustChangePassword?: boolean } }>);
         if (data?.authenticated && data.user) {
-          // If user must change password, redirect to change-password page
-          // (unless they're already there)
           if (data.user.mustChangePassword && pathname !== "/app/change-password") {
             router.replace("/app/change-password");
             return;
           }
-
-          // Reconstruct session with required fields (defaults for those not surfaced via API)
           setSession({
             ...data.user,
             sessionVersion: data.user.sessionVersion ?? 0,
@@ -53,14 +57,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [router, pathname]);
 
   if (loading || !session) {
     return <HammerSplash />;
   }
+
+  const usePosShell = isPosRoute(pathname);
 
   return (
     <>
@@ -73,7 +77,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           error: { iconTheme: { primary: "#dc2626", secondary: "#fff" } },
         }}
       />
-      <AppShellRouter session={session}>{children}</AppShellRouter>
+      {usePosShell ? (
+        <PosShell session={session}>{children}</PosShell>
+      ) : (
+        <AppShellRouter session={session}>{children}</AppShellRouter>
+      )}
     </>
   );
 }
