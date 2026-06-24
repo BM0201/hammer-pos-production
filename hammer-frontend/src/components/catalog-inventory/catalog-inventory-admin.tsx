@@ -2249,10 +2249,9 @@ function OpeningBalanceModal({
     };
   }, [activeBranchId, search, fallbackProducts]);
 
-  // Al hacer clic en un resultado: se agrega de inmediato a la tabla y se cierra el dropdown.
+  // Al hacer clic en un resultado: se agrega a la tabla. El dropdown se mantiene abierto
+  // para poder agregar multiples productos sin necesidad de reabrir la busqueda.
   function addProduct(product: ProductRow) {
-    setSearch("");
-    setShowDropdown(false);
     setLines((prev) => {
       if (prev.some((line) => line.productId === product.id)) {
         toast("Ese producto ya esta en la lista.");
@@ -2409,25 +2408,41 @@ function OpeningBalanceModal({
             </div>
           </div>
 
-          {/* Buscador de productos */}
+          {/* Buscador de productos — multi-select: el dropdown se queda abierto */}
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
-            <label className="mb-2 block text-xs font-semibold text-[var(--color-text-muted)]">Buscar producto</label>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-xs font-semibold text-[var(--color-text-muted)]">Buscar y agregar productos</label>
+              {showDropdown && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { setShowDropdown(false); setSearch(""); }}
+                  className="flex items-center gap-1 rounded-lg bg-[var(--color-master-600)] px-2.5 py-1 text-xs font-bold text-white hover:bg-[var(--color-master-700)]"
+                >
+                  <Check className="h-3 w-3" /> Listo
+                </button>
+              )}
+            </div>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[var(--color-text-muted)]" />
               <Input
-                className="pl-9"
+                className="pl-9 pr-4"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Nombre, SKU, codigo de barras o categoria"
                 onFocus={() => setShowDropdown(true)}
                 onBlur={() => setTimeout(() => setShowDropdown(false), 160)}
               />
-              {/* Solo visible mientras el input está enfocado */}
               {showDropdown && (
-                <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl">
+                <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-72 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl">
+                  {lines.length > 0 && (
+                    <div className="sticky top-0 border-b border-[var(--color-border)] bg-[var(--color-master-50)] px-3 py-1.5 text-[11px] font-bold text-[var(--color-master-700)]">
+                      {lines.length} producto{lines.length > 1 ? "s" : ""} en la lista · Clic en &quot;Listo&quot; cuando termines
+                    </div>
+                  )}
                   {searchLoading ? (
                     <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando productos...
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando...
                     </div>
                   ) : searchResults.length > 0 ? searchResults.map((product) => {
                     const row = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
@@ -2443,7 +2458,11 @@ function OpeningBalanceModal({
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={() => addProduct(product)}
                         disabled={alreadyAdded}
-                        className={`block w-full border-b border-[var(--color-border)] px-3 py-2.5 text-left text-xs transition last:border-0 ${alreadyAdded ? "cursor-not-allowed bg-[var(--color-success-50)] opacity-60" : "hover:bg-[var(--color-surface-alt)]"}`}
+                        className={`block w-full border-b border-[var(--color-border)] px-3 py-2.5 text-left text-xs transition last:border-0 ${
+                          alreadyAdded
+                            ? "bg-[var(--color-success-50)] opacity-70"
+                            : "hover:bg-[var(--color-surface-alt)]"
+                        }`}
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
@@ -2466,12 +2485,11 @@ function OpeningBalanceModal({
                       </button>
                     );
                   }) : (
-                    <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados para la busqueda.</div>
+                    <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados.</div>
                   )}
                 </div>
               )}
             </div>
-            <p className="mt-1.5 text-[11px] text-[var(--color-text-soft)]">Haz clic en un producto para agregarlo a la tabla.</p>
           </div>
 
           {/* Tabla editable de la carga */}
@@ -2688,6 +2706,7 @@ function MovementsPanel({
   }
 
   return (
+    <>
     <Card noPadding>
       <div className="flex items-center justify-between px-4 py-3" style={{ background: "var(--color-surface-alt)", borderBottom: "0.5px solid var(--color-border)" }}>
         <div className="flex items-center gap-2">
@@ -2733,11 +2752,13 @@ function MovementsPanel({
           </table>
         </div>
       </div>
+      </Card>
+      {/* Modales fuera del Card para evitar cualquier contexto de apilamiento del shadow/border */}
       {showAdjustment ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <form className="w-full max-w-2xl rounded-xl bg-white shadow-2xl" onSubmit={(event) => submitAdjustment(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar ajuste."))}>
+          <form className="w-full max-w-2xl rounded-xl bg-[var(--color-surface)] shadow-2xl" onSubmit={(event) => submitAdjustment(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar ajuste."))}>
             <div className="border-b border-[var(--color-border)] px-5 py-4">
-              <h3 className="text-sm font-semibold">Registrar ajuste manual</h3>
+              <h3 className="text-sm font-semibold text-[var(--color-text)]">Registrar ajuste manual</h3>
               <p className="text-xs text-[var(--color-text-muted)]">Solo modifica cantidad/volumen. No se edita costo desde Kardex.</p>
             </div>
             <div className="grid gap-3 p-5 md:grid-cols-2">
@@ -2768,7 +2789,7 @@ function MovementsPanel({
               <Input className="md:col-span-2" value={adjustment.reason} onChange={(e) => setAdjustment({ ...adjustment, reason: e.target.value })} placeholder="Motivo obligatorio" />
               <Input className="md:col-span-2" value={adjustment.notes} onChange={(e) => setAdjustment({ ...adjustment, notes: e.target.value })} placeholder="Observacion opcional" />
               <div className="md:col-span-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
-                <div className="font-semibold">Vista previa</div>
+                <div className="font-semibold text-[var(--color-text)]">Vista previa</div>
                 <div className="mt-1 grid gap-1 text-xs text-[var(--color-text-muted)] sm:grid-cols-3">
                   <span>Actual: {qty(currentBaseStock)} {adjustmentProduct?.stockConversion?.baseUnit ?? adjustmentProduct?.unit ?? ""}</span>
                   <span>Cambio base: {qty(direction * changeBaseQty)}</span>
@@ -2797,7 +2818,8 @@ function MovementsPanel({
           onClose={() => setShowOpening(false)}
           onDone={onDone}
         />
-      ) : null}    </Card>
+      ) : null}
+    </>
   );
 }
 
