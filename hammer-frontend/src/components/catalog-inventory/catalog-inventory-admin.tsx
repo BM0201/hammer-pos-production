@@ -2369,7 +2369,7 @@ function OpeningBalanceModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <form
-        className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+        className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-[var(--color-surface)] shadow-2xl"
         onSubmit={(event) => submit(event).catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo registrar la carga inicial."))}
       >
         <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
@@ -2412,46 +2412,47 @@ function OpeningBalanceModal({
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[var(--color-text-muted)]" />
               <Input className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Nombre, SKU, codigo de barras o categoria" />
-            </div>
-            <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-white">
-              {searchLoading ? (
-                <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando productos...</div>
-              ) : searchResults.length > 0 ? searchResults.map((product) => {
-                const row = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
-                const branchStock = product.stockConversion
-                  ? product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand
-                  : product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand;
-                const stock = branchStock === null || branchStock === undefined ? 0 : Number(branchStock);
-                const alreadyAdded = lines.some((line) => line.productId === product.id);
-                return (
-                  <button
-                    key={product.id}
-                    type="button"
-                    onClick={() => addProduct(product)}
-                    disabled={alreadyAdded}
-                    className={`block w-full border-b border-[var(--color-border)] px-3 py-2 text-left text-xs transition ${alreadyAdded ? "cursor-not-allowed bg-emerald-50 opacity-70" : "bg-white hover:bg-amber-50"}`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-[var(--color-text)]">{product.name}</div>
-                        <div className="text-[var(--color-text-muted)]">SKU {product.sku}{product.barcode ? ` - Barra ${product.barcode}` : ""} - {product.category?.name ?? "Sin categoria"} - {product.unit}</div>
-                      </div>
-                      <div className="flex items-center gap-3 text-right text-[var(--color-text-muted)]">
+              {/* Dropdown flotante — no empuja el contenido hacia abajo */}
+              <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg">
+                {searchLoading ? (
+                  <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando productos...</div>
+                ) : searchResults.length > 0 ? searchResults.map((product) => {
+                  const row = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
+                  const branchStock = product.stockConversion
+                    ? product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand
+                    : product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand;
+                  const stock = branchStock === null || branchStock === undefined ? 0 : Number(branchStock);
+                  const alreadyAdded = lines.some((line) => line.productId === product.id);
+                  return (
+                    <button
+                      key={product.id}
+                      type="button"
+                      onClick={() => addProduct(product)}
+                      disabled={alreadyAdded}
+                      className={`block w-full border-b border-[var(--color-border)] px-3 py-2 text-left text-xs transition ${alreadyAdded ? "cursor-not-allowed bg-[var(--color-success-50)] opacity-70" : "bg-[var(--color-surface)] hover:bg-[var(--color-surface-alt)]"}`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div>Stock {qty(stock)}</div>
-                          <div>Precio {formatMoneyOrNd(row?.effectivePrice ?? null)}</div>
-                          <div>Costo {formatMoneyOrNd(row?.effectiveCost ?? null)}</div>
+                          <div className="font-semibold text-[var(--color-text)]">{product.name}</div>
+                          <div className="text-[var(--color-text-muted)]">SKU {product.sku}{product.barcode ? ` - Barra ${product.barcode}` : ""} - {product.category?.name ?? "Sin categoria"} - {product.unit}</div>
                         </div>
-                        {alreadyAdded
-                          ? <Check className="h-4 w-4 text-emerald-600" />
-                          : <Plus className="h-4 w-4 text-amber-600" />}
+                        <div className="flex items-center gap-3 text-right text-[var(--color-text-muted)]">
+                          <div>
+                            <div>Stock {qty(stock)}</div>
+                            <div>Precio {formatMoneyOrNd(row?.effectivePrice ?? null)}</div>
+                            <div>Costo {formatMoneyOrNd(row?.effectiveCost ?? null)}</div>
+                          </div>
+                          {alreadyAdded
+                            ? <Check className="h-4 w-4 text-[var(--color-success-600)]" />
+                            : <Plus className="h-4 w-4 text-[var(--color-warning-600)]" />}
+                        </div>
                       </div>
-                    </div>
-                  </button>
-                );
-              }) : (
-                <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados para la busqueda.</div>
-              )}
+                    </button>
+                  );
+                }) : (
+                  <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados para la busqueda.</div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -2467,7 +2468,7 @@ function OpeningBalanceModal({
                 {lines.map((line) => {
                   const c = computeLine(line);
                   return (
-                    <tr key={line.productId} className={c.priceBelowCost ? "bg-red-50" : !c.validQuantity ? "bg-amber-50" : undefined}>
+                    <tr key={line.productId} className={c.priceBelowCost ? "bg-[var(--color-danger-50)]" : !c.validQuantity ? "bg-[var(--color-warning-50)]" : undefined}>
                       <td><div className="font-medium">{line.name}</div><div className="text-xs text-[var(--color-text-muted)]">{line.categoryName}</div></td>
                       <td className="font-mono text-xs">{line.sku}</td>
                       <td>
@@ -2512,12 +2513,12 @@ function OpeningBalanceModal({
             <Kpi label="Bajo costo" value={summary.belowCost} />
           </div>
           {summary.withoutCost > 0 || summary.withoutPrice > 0 ? (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800">
+            <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-xs text-[var(--color-warning-800)]">
               Hay productos sin costo o sin precio. Quedaran registrados solo con stock, pero deben revisarse luego en Precios y costos.
             </div>
           ) : null}
           {summary.belowCost > 0 ? (
-            <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-700">
+            <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3 text-xs text-[var(--color-danger-700)]">
               Hay productos con precio por debajo del costo. Se pedira confirmacion explicita antes de guardar.
             </div>
           ) : null}
