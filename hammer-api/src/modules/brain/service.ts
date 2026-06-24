@@ -358,6 +358,14 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
                 ? [{ severity: "asc" }, { priorityScore: "desc" }]
         : [{ priorityScore: "desc" }, { severity: "asc" }, { createdAt: "desc" }];
 
+  // KPI health cards show global system health — scoped only by branch, not by
+  // navigation filters (category, search, days, status). Passing the full `where`
+  // caused openCritical/highRisk to drop to 0 when the user typed in the search
+  // box or filtered by a specific category.
+  const kpiWhere: Prisma.BrainDecisionWhereInput = {
+    ...(filters.branchId ? { branchId: filters.branchId } : {}),
+  };
+
   const [decisions, kpis, totalDecisions, criticalCount, highRiskCount, impact, byCategory, byStatus] = await Promise.all([
     prisma.brainDecision.findMany({
       where,
@@ -366,7 +374,7 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
       take: limit + 1,
       ...(filters.cursor ? { cursor: { id: filters.cursor }, skip: 1 } : {}),
     }),
-    getBrainSummary(where),
+    getBrainSummary(kpiWhere),
     prisma.brainDecision.count({ where }),
     prisma.brainDecision.count({ where: { ...where, severity: "CRITICAL" } }),
     prisma.brainDecision.count({ where: { ...where, severity: { in: ["CRITICAL", "HIGH"] } } }),
