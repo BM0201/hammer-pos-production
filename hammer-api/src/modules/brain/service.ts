@@ -300,13 +300,32 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
   const searchCategory = search && Object.values(BrainDecisionCategory).includes(search.toUpperCase() as BrainDecisionCategory)
     ? search.toUpperCase() as BrainDecisionCategory
     : null;
-  const where: Prisma.BrainDecisionWhereInput = {
+  // Factor out search OR conditions to reuse in whereBase
+  const searchOR: Prisma.BrainDecisionWhereInput["OR"] = search ? [
+    { title: { contains: search, mode: "insensitive" } },
+    { description: { contains: search, mode: "insensitive" } },
+    { recommendation: { contains: search, mode: "insensitive" } },
+    ...(searchCategory ? [{ category: searchCategory }] : []),
+    { proposedActionType: { contains: search, mode: "insensitive" } },
+    { product: { is: { sku: { contains: search, mode: "insensitive" } } } },
+    { product: { is: { name: { contains: search, mode: "insensitive" } } } },
+    { branch: { is: { code: { contains: search, mode: "insensitive" } } } },
+    { branch: { is: { name: { contains: search, mode: "insensitive" } } } },
+    { targetUser: { is: { username: { contains: search, mode: "insensitive" } } } },
+    { targetUser: { is: { fullName: { contains: search, mode: "insensitive" } } } },
+    { evidenceJson: { string_contains: search } },
+    { sourceJson: { string_contains: search } },
+    { proposedActionJson: { string_contains: search } },
+  ] : undefined;
+
+  // whereBase excludes the status filter so we can compute per-status counts
+  // across all matching records regardless of which status tab is active.
+  const whereBase: Prisma.BrainDecisionWhereInput = {
     ...(filters.branchId ? { branchId: filters.branchId } : {}),
     ...(filters.productId ? { productId: filters.productId } : {}),
     ...(filters.targetUserId ? { targetUserId: filters.targetUserId } : {}),
     ...(filters.category ? { category: filters.category } : categoryIn.length ? { category: { in: categoryIn } } : {}),
     ...(filters.severity ? { severity: filters.severity } : {}),
-    ...(filters.status ? { status: filters.status } : {}),
     ...(filters.onlyCritical ? { severity: { in: ["CRITICAL", "HIGH"] } } : {}),
     ...(filters.onlyActionable ? { status: { in: ["OPEN", "APPROVED", "MANUAL_REVIEW", "FAILED"] } } : {}),
     ...(filters.onlyWithImpact ? { impactAmount: { gt: 0 } } : {}),
@@ -315,25 +334,14 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
     ...(filters.onlyPricingMisconfiguration ? { proposedActionType: "PRICING_SCOPE_MISCONFIGURATION" } : {}),
     ...(since ? { createdAt: { gte: since } } : {}),
     ...((filters.dateFrom || filters.dateTo) ? { createdAt: { gte: filters.dateFrom, lte: filters.dateTo } } : {}),
-    ...(search ? {
-      OR: [
-        { title: { contains: search, mode: "insensitive" } },
-        { description: { contains: search, mode: "insensitive" } },
-        { recommendation: { contains: search, mode: "insensitive" } },
-        ...(searchCategory ? [{ category: searchCategory }] : []),
-        { proposedActionType: { contains: search, mode: "insensitive" } },
-        { product: { is: { sku: { contains: search, mode: "insensitive" } } } },
-        { product: { is: { name: { contains: search, mode: "insensitive" } } } },
-        { branch: { is: { code: { contains: search, mode: "insensitive" } } } },
-        { branch: { is: { name: { contains: search, mode: "insensitive" } } } },
-        { targetUser: { is: { username: { contains: search, mode: "insensitive" } } } },
-        { targetUser: { is: { fullName: { contains: search, mode: "insensitive" } } } },
-        { evidenceJson: { string_contains: search } },
-        { sourceJson: { string_contains: search } },
-        { proposedActionJson: { string_contains: search } },
-      ],
-    } : {}),
+    ...(searchOR ? { OR: searchOR } : {}),
   };
+
+  const where: Prisma.BrainDecisionWhereInput = {
+    ...whereBase,
+    ...(filters.status ? { status: filters.status } : {}),
+  };
+
   const limit = filters.limit ?? 50;
   const orderBy: Prisma.BrainDecisionOrderByWithRelationInput[] =
     filters.sort === "impact"
@@ -350,7 +358,7 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
                 ? [{ severity: "asc" }, { priorityScore: "desc" }]
         : [{ priorityScore: "desc" }, { severity: "asc" }, { createdAt: "desc" }];
 
-  const [decisions, kpis, totalDecisions, criticalCount, highRiskCount, impact, byCategory] = await Promise.all([
+  const [decisions, kpis, totalDecisions, criticalCount, highRiskCount, impact, byCategory, byStatus] = await Promise.all([
     prisma.brainDecision.findMany({
       where,
       include: includeDecisionRelations(),
@@ -364,12 +372,15 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
     prisma.brainDecision.count({ where: { ...where, severity: { in: ["CRITICAL", "HIGH"] } } }),
     prisma.brainDecision.aggregate({ where, _sum: { impactAmount: true } }),
     prisma.brainDecision.groupBy({ by: ["category"], where, _count: { category: true } }),
+    // Per-status counts use whereBase (no status filter) so tabs always show real totals
+    prisma.brainDecision.groupBy({ by: ["status"], where: whereBase, _count: { status: true } }),
   ]);
 
   const hasMore = decisions.length > limit;
   const page = hasMore ? decisions.slice(0, limit) : decisions;
   const enriched = page.map(enrichDecision);
   const categoriesBreakdown = Object.fromEntries(byCategory.map((row) => [row.category, row._count.category]));
+  const statusCounts = Object.fromEntries(byStatus.map((row) => [row.status, row._count.status]));
   const executive = buildExecutiveSummary({
     totalDecisions,
     criticalCount,
@@ -382,6 +393,7 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
     decisions: enriched,
     nextCursor: hasMore ? page.at(-1)?.id ?? null : null,
     kpis,
+    statusCounts,
     ...executive,
   };
 }

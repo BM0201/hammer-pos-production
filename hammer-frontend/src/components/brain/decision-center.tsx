@@ -47,6 +47,8 @@ type BrainResponse = {
     cash: number;
     config: number;
   };
+  // Bug 1: server provides per-status counts computed WITHOUT the status filter
+  statusCounts?: Record<string, number>;
 };
 
 type BrainScanMode = "QUICK_SCAN" | "OPERATIONAL_DAY_SCAN" | "ENTITY_SCAN" | "DEEP_SCAN" | "REPAIR_SCAN";
@@ -101,11 +103,6 @@ const SEV_CHIP: Record<string, string> = {
 
 const FILTER_STORAGE_KEY = "hammer.brain.filters.v2";
 
-function formatDate(value?: string | null) {
-  if (!value) return "Sin escaneo reciente";
-  return new Date(value).toLocaleString("es-NI", { dateStyle: "medium", timeStyle: "short" });
-}
-
 function decisionTime(decision: BrainDecision) {
   return decision.lastDetectedAt ?? decision.firstDetectedAt ?? decision.createdAt;
 }
@@ -143,7 +140,16 @@ export function DecisionCenter() {
   const [scanMessage, setScanMessage] = useState<string | null>(null);
   const [noteModal, setNoteModal] = useState<NoteModal | null>(null);
   const [noteText, setNoteText] = useState("");
+  // Bug 2: priorities come from a separate query, not derived from the status-filtered decisions array
+  const [priorityDecisions, setPriorityDecisions] = useState<BrainDecision[]>([]);
+  const [loadingPriorities, setLoadingPriorities] = useState(true);
+
   const noteTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // Bug 4: hydration guard — prevents save effect from overwriting localStorage on mount
+  const hydrated = useRef(false);
+  // Bug 6: focus management for note modal
+  const noteOpenTriggerRef = useRef<HTMLElement | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   const query = useMemo(() => {
     const params = new URLSearchParams();
@@ -153,17 +159,45 @@ export function DecisionCenter() {
     return params.toString();
   }, [filters]);
 
-  useEffect(() => {
-    const stored = window.localStorage.getItem(FILTER_STORAGE_KEY);
-    if (!stored) return;
-    try {
-      setFilters({ ...initialFilters, ...JSON.parse(stored) });
-    } catch {
-      window.localStorage.removeItem(FILTER_STORAGE_KEY);
-    }
+  // Bug 2: priority query excludes status filter and always fetches actionable decisions sorted by priority
+  const filtersWithoutStatus = useMemo(() => {
+    const { status: _s, ...rest } = filters;
+    return rest;
+  }, [filters]);
+
+  const priorityQuery = useMemo(() => {
+    const params = new URLSearchParams();
+    Object.entries(filtersWithoutStatus).forEach(([key, value]) => {
+      if (value) params.set(key, value);
+    });
+    params.set("onlyActionable", "true");
+    params.set("sort", "priority");
+    params.set("limit", "6");
+    return params.toString();
+  }, [filtersWithoutStatus]);
+
+  // Bug 6: stable close function so Esc effect can depend on it
+  const closeNoteModal = useCallback(() => {
+    setNoteModal(null);
+    setTimeout(() => noteOpenTriggerRef.current?.focus(), 50);
   }, []);
 
+  // Bug 4: load saved filters on mount only, then mark hydrated
   useEffect(() => {
+    const stored = window.localStorage.getItem(FILTER_STORAGE_KEY);
+    if (stored) {
+      try {
+        setFilters({ ...initialFilters, ...JSON.parse(stored) });
+      } catch {
+        window.localStorage.removeItem(FILTER_STORAGE_KEY);
+      }
+    }
+    hydrated.current = true;
+  }, []);
+
+  // Bug 4: only persist after hydration so mount doesn't overwrite stored value
+  useEffect(() => {
+    if (!hydrated.current) return;
     window.localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(filters));
   }, [filters]);
 
@@ -184,6 +218,22 @@ export function DecisionCenter() {
       setLoading(false);
     }
   }, [query]);
+
+  // Bug 2: separate loader for the priorities panel — never filtered by status
+  const loadPriorities = useCallback(async () => {
+    setLoadingPriorities(true);
+    try {
+      const response = await apiFetch(`/api/master/brain/decisions?${priorityQuery}`);
+      const raw = await response.json();
+      if (!response.ok) return;
+      const result = unwrapApiData(raw) as BrainResponse;
+      setPriorityDecisions(result.decisions);
+    } catch {
+      // non-critical panel, fail silently
+    } finally {
+      setLoadingPriorities(false);
+    }
+  }, [priorityQuery]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
@@ -214,15 +264,22 @@ export function DecisionCenter() {
       .catch(() => setBranches([]));
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadPriorities(); }, [loadPriorities]);
 
   useEffect(() => {
-    if (noteModal) {
-      setTimeout(() => noteTextareaRef.current?.focus(), 50);
-    }
+    if (noteModal) setTimeout(() => noteTextareaRef.current?.focus(), 50);
   }, [noteModal]);
+
+  // Bug 6: Escape key closes the note modal
+  useEffect(() => {
+    if (!noteModal) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") closeNoteModal();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [noteModal, closeNoteModal]);
 
   async function scan(dryRun = false) {
     setBusyAction(dryRun ? "dry-run" : "scan");
@@ -259,7 +316,10 @@ export function DecisionCenter() {
       if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo ejecutar el análisis.");
       const result = unwrapApiData(raw) as { created: number; updated: number; reopened: number; expired: number; skipped: number; errors?: unknown[]; total?: number; scannedCategories?: string[] };
       setScanMessage(`${dryRun ? "Dry run" : scanMode} completado: ${result.created} nuevas, ${result.updated} actualizadas, ${result.reopened} reabiertas, ${result.expired} expiradas, ${result.skipped} omitidas, ${result.total ?? 0} hallazgos${result.errors?.length ? `, ${result.errors.length} avisos` : ""}.`);
-      if (!dryRun) await load();
+      if (!dryRun) {
+        await load();
+        void loadPriorities(); // Bug 2: refresh priorities after scan
+      }
     } catch (error) {
       setScanMessage(error instanceof Error ? error.message : "Error ejecutando análisis.");
     } finally {
@@ -278,7 +338,6 @@ export function DecisionCenter() {
         });
         const approveRaw = await approveResp.json();
         if (!approveResp.ok) throw new Error(approveRaw?.error?.message ?? "No se pudo aprobar la decisión.");
-
         const executeResp = await apiFetch(`/api/master/brain/decisions/${decisionId}/execute`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -296,7 +355,6 @@ export function DecisionCenter() {
         const body = action === "snooze"
           ? { days: 7, note: "Pospuesto desde Centro de Decisiones" }
           : { note };
-
         const response = await apiFetch(`/api/master/brain/decisions/${decisionId}/${action}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -304,7 +362,6 @@ export function DecisionCenter() {
         });
         const raw = await response.json();
         if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar la acción.");
-
         const actionLabels: Record<string, string> = {
           approve: "Decisión aprobada.",
           execute: "Decisión ejecutada.",
@@ -316,6 +373,7 @@ export function DecisionCenter() {
         showToast("success", actionLabels[action] ?? "Acción aplicada.");
       }
       await load();
+      void loadPriorities(); // Bug 2: refresh priorities after any action
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Error aplicando acción.");
     } finally {
@@ -325,6 +383,7 @@ export function DecisionCenter() {
 
   function act(decisionId: string, action: BrainDecisionAction) {
     if (action === "dismiss" || action === "manual-review") {
+      noteOpenTriggerRef.current = document.activeElement as HTMLElement; // Bug 6: capture trigger for focus restore
       setNoteModal({
         action,
         decisionId,
@@ -341,36 +400,51 @@ export function DecisionCenter() {
   function submitNote() {
     if (!noteModal) return;
     const { action, decisionId } = noteModal;
-    setNoteModal(null);
+    closeNoteModal(); // Bug 6: restores focus to trigger element
     void doAct(decisionId, action, noteText || undefined);
   }
 
   const kpis = data?.kpis ?? { openCritical: 0, highRisk: 0, estimatedImpact: 0, reorderSuggested: 0, cashRisks: 0, lowMarginPrices: 0, lateDispatches: 0, manualReview: 0 };
   const decisions = [...(data?.decisions ?? []), ...extraDecisions];
-  const latestScan = decisions.map(decisionTime).sort().at(-1);
+
+  // Bug 3: robust latestScan — filter nulls before comparing, compare as numbers not strings
+  // TODO: server should return lastScanAt so this is always accurate regardless of pagination
+  const latestScan = useMemo(() => {
+    const timestamps = decisions
+      .map(decisionTime)
+      .filter(Boolean)
+      .map((d) => new Date(d!).getTime())
+      .filter(Number.isFinite);
+    if (!timestamps.length) return null;
+    return new Date(Math.max(...timestamps));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decisions]);
+
   const systemState = busyAction === "scan" || busyAction === "dry-run"
-    ? { label: "Escaneando",        tone: "border-[var(--color-info-200)] bg-[var(--color-info-50)] text-[var(--color-info-700)]",       icon: Loader2 }
+    ? { label: "Escaneando",          tone: "border-[var(--color-info-200)] bg-[var(--color-info-50)] text-[var(--color-info-700)]",       icon: Loader2 }
     : kpis.openCritical > 0 || (kpis.manualReview ?? 0) > 0
       ? { label: "Revisión requerida", tone: "border-[var(--color-warning-200)] bg-[var(--color-warning-50)] text-[var(--color-warning-700)]", icon: AlertTriangle }
-      : { label: "Listo",             tone: "border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]", icon: CheckCircle2 };
+      : { label: "Listo",              tone: "border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]", icon: CheckCircle2 };
   const StateIcon = systemState.icon;
-  const priorities = decisions
-    .filter((decision) => ["OPEN", "MANUAL_REVIEW", "APPROVED"].includes(decision.status))
-    .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || asNumber(b.priorityScore) - asNumber(a.priorityScore))
-    .slice(0, 6);
-  const quickChips = [
-    { id: "critical",   label: "Críticas",       count: kpis.openCritical,                                                                                                     patch: { severity: "CRITICAL", onlyCritical: "" } },
-    { id: "pricing",    label: "Pricing",         count: kpis.lowMarginPrices,                                                                                                  patch: { category: "PRICING", onlyPricing: "" } },
-    { id: "inventory",  label: "Inventario",      count: decisions.filter((d) => d.category === "INVENTORY").length,                                                             patch: { category: "INVENTORY", onlyInventory: "" } },
-    { id: "reorder",    label: "Reposición",      count: kpis.reorderSuggested,                                                                                                  patch: { category: "REORDER" } },
-    { id: "low-margin", label: "Margen bajo",     count: kpis.lowMarginPrices,                                                                                                  patch: { category: "PRICING", search: "margen" } },
-    { id: "below-cost", label: "Bajo costo",      count: decisions.filter((d) => `${d.title} ${d.description} ${d.proposedActionType ?? ""}`.toLowerCase().includes("costo")).length, patch: { category: "PRICING", search: "costo" } },
-    { id: "cz-stock",   label: "CZ con stock",    count: decisions.filter((d) => `${d.title} ${d.description}`.toLowerCase().includes("cz")).length,                             patch: { search: "CZ" } },
-    { id: "transfers",  label: "Traslados",       count: decisions.filter((d) => `${d.title} ${d.description} ${d.recommendation}`.toLowerCase().includes("traslado")).length,   patch: { search: "traslado" } },
-    { id: "cash",       label: "Caja",            count: kpis.cashRisks,                                                                                                          patch: { category: "CASH", onlyCash: "" } },
-    { id: "manual",     label: "Revisión manual", count: kpis.manualReview ?? 0,                                                                                                  patch: { status: "MANUAL_REVIEW" } },
-    { id: "approved",   label: "Aprobadas",       count: decisions.filter((d) => d.status === "APPROVED").length,                                                                 patch: { status: "APPROVED" } },
-    { id: "today",      label: "Nuevas hoy",      count: decisions.filter((d) => new Date(d.createdAt).toDateString() === new Date().toDateString()).length,                      patch: { days: "7", sort: "newest" } },
+
+  // Bug 1: statusCounts from server (grouped by status WITHOUT applying the status filter)
+  const statusCounts = data?.statusCounts ?? {};
+  const totalCount = Object.values(statusCounts).reduce((a, b) => a + b, 0);
+
+  // Bug 1: chips use reliable server-side counts; text-search chips hide the badge (count: undefined)
+  const quickChips: Array<{ id: string; label: string; count: number | undefined; patch: Partial<BrainFilterState> }> = [
+    { id: "critical",   label: "Críticas",       count: kpis.openCritical,                                           patch: { severity: "CRITICAL", onlyCritical: "" } },
+    { id: "pricing",    label: "Pricing",         count: kpis.lowMarginPrices,                                        patch: { category: "PRICING", onlyPricing: "" } },
+    { id: "inventory",  label: "Inventario",      count: data?.categoriesBreakdown?.inventory ?? 0,                   patch: { category: "INVENTORY", onlyInventory: "" } },
+    { id: "reorder",    label: "Reposición",      count: kpis.reorderSuggested,                                       patch: { category: "REORDER" } },
+    { id: "low-margin", label: "Margen bajo",     count: kpis.lowMarginPrices,                                        patch: { category: "PRICING", search: "margen" } },
+    { id: "below-cost", label: "Bajo costo",      count: undefined,                                                   patch: { category: "PRICING", search: "costo" } },
+    { id: "cz-stock",   label: "CZ con stock",    count: undefined,                                                   patch: { search: "CZ" } },
+    { id: "transfers",  label: "Traslados",        count: undefined,                                                   patch: { search: "traslado" } },
+    { id: "cash",       label: "Caja",            count: kpis.cashRisks,                                              patch: { category: "CASH", onlyCash: "" } },
+    { id: "manual",     label: "Revisión manual", count: statusCounts["MANUAL_REVIEW"] ?? (kpis.manualReview ?? 0),  patch: { status: "MANUAL_REVIEW" } },
+    { id: "approved",   label: "Aprobadas",       count: statusCounts["APPROVED"],                                    patch: { status: "APPROVED" } },
+    { id: "today",      label: "Nuevas hoy",      count: undefined,                                                   patch: { days: "7", sort: "newest" } },
   ];
 
   function resetFilters() {
@@ -389,15 +463,33 @@ export function DecisionCenter() {
 
   return (
     <main className="space-y-5">
-      {/* Note modal */}
+      {/* Note modal — Bug 6: Esc key (via effect), focus trap, focus restore on close */}
       {noteModal ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
-          onClick={() => setNoteModal(null)}
+          onClick={closeNoteModal}
         >
           <div
+            ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={noteModal.action === "dismiss" ? "Descartar decisión" : "Revisión manual"}
             className="w-full max-w-md rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[var(--shadow-modal)]"
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key !== "Tab") return;
+              const focusable = modalRef.current?.querySelectorAll<HTMLElement>(
+                'button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])',
+              );
+              if (!focusable?.length) return;
+              const first = focusable[0];
+              const last = focusable[focusable.length - 1];
+              if (e.shiftKey) {
+                if (document.activeElement === first) { last.focus(); e.preventDefault(); }
+              } else {
+                if (document.activeElement === last) { first.focus(); e.preventDefault(); }
+              }
+            }}
           >
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-base font-extrabold text-[var(--color-text)]">
@@ -405,7 +497,8 @@ export function DecisionCenter() {
               </h3>
               <button
                 type="button"
-                onClick={() => setNoteModal(null)}
+                aria-label="Cerrar"
+                onClick={closeNoteModal}
                 className="rounded-lg p-1 text-[var(--color-text-muted)] transition hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)]"
               >
                 <X className="h-4 w-4" />
@@ -423,11 +516,7 @@ export function DecisionCenter() {
             />
             <p className="mt-1 text-xs text-[var(--color-text-soft)]">Ctrl+Enter para confirmar</p>
             <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                className="hm-btn hm-btn-secondary hm-btn-sm"
-                onClick={() => setNoteModal(null)}
-              >
+              <button type="button" className="hm-btn hm-btn-secondary hm-btn-sm" onClick={closeNoteModal}>
                 Cancelar
               </button>
               <button type="button" className="hm-btn hm-btn-master hm-btn-sm" onClick={submitNote}>
@@ -464,7 +553,8 @@ export function DecisionCenter() {
               <div className="mt-3 flex flex-wrap gap-2 text-xs">
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-1 text-[var(--color-text-muted)]">
                   <RadioTower className="h-3.5 w-3.5 text-[var(--color-master-600)]" />
-                  Último escaneo: {formatDate(latestScan)}
+                  {/* Bug 3: compare timestamps as numbers, not lexicographic strings */}
+                  Último escaneo: {latestScan ? latestScan.toLocaleString("es-NI", { dateStyle: "medium", timeStyle: "short" }) : "Sin escaneo reciente"}
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-1 text-[var(--color-text-muted)]">
                   <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-success-600)]" />
@@ -526,11 +616,7 @@ export function DecisionCenter() {
             <div className="grid gap-3 lg:grid-cols-12">
               <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] lg:col-span-3">
                 Tipo de escaneo
-                <select
-                  className={inputCls}
-                  value={scanMode}
-                  onChange={(event) => setScanMode(event.target.value as BrainScanMode)}
-                >
+                <select className={inputCls} value={scanMode} onChange={(event) => setScanMode(event.target.value as BrainScanMode)}>
                   <option value="QUICK_SCAN">Escaneo rápido</option>
                   <option value="OPERATIONAL_DAY_SCAN">Día operativo</option>
                   <option value="ENTITY_SCAN">Entidad</option>
@@ -591,9 +677,10 @@ export function DecisionCenter() {
             <p className="mt-1 text-sm font-semibold text-[var(--color-master-700)]">
               {data?.priorityMessage ?? "El Brain está listo para priorizar decisiones operativas."}
             </p>
+            {/* Bug 5: index-based key avoids collision on duplicate text lines */}
             <ul className="mt-3 space-y-2 text-sm leading-6 text-[var(--color-text-secondary)]">
-              {(data?.executiveSummary?.length ? data.executiveSummary : ["Sin resumen ejecutivo disponible para los filtros actuales."]).map((line) => (
-                <li key={line} className="flex gap-2">
+              {(data?.executiveSummary?.length ? data.executiveSummary : ["Sin resumen ejecutivo disponible para los filtros actuales."]).map((line, index) => (
+                <li key={`exec-${index}`} className="flex gap-2">
                   <CheckCircle2 className="mt-1 h-4 w-4 flex-shrink-0 text-[var(--color-success-600)]" />
                   <span>{line}</span>
                 </li>
@@ -611,7 +698,7 @@ export function DecisionCenter() {
         </div>
       </section>
 
-      {/* Priorities */}
+      {/* Priorities — Bug 2: separate query, independent of filters.status */}
       <section id="brain-priorities" className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-card)]">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -619,14 +706,14 @@ export function DecisionCenter() {
             <p className="text-sm text-[var(--color-text-muted)]">Las decisiones abiertas más importantes según severidad y prioridad.</p>
           </div>
           <span className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-1 text-xs font-bold text-[var(--color-text-muted)]">
-            {priorities.length} visibles
+            {priorityDecisions.length} visibles
           </span>
         </div>
-        {loading ? (
+        {loadingPriorities ? (
           <LoadingPanel label="Escaneando riesgos operativos..." />
-        ) : priorities.length ? (
+        ) : priorityDecisions.length ? (
           <div className="grid gap-3 lg:grid-cols-2">
-            {priorities.map((decision) => (
+            {priorityDecisions.map((decision) => (
               <PriorityItem
                 key={decision.id}
                 decision={decision}
@@ -668,9 +755,11 @@ export function DecisionCenter() {
                 onClick={() => toggleQuickChip(chip)}
               >
                 {chip.label}
-                <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${active ? "bg-white/20 text-white" : "bg-[var(--color-surface)] text-[var(--color-text-muted)]"}`}>
-                  {chip.count}
-                </span>
+                {chip.count !== undefined && chip.count > 0 ? (
+                  <span className={`ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${active ? "bg-white/20 text-white" : "bg-[var(--color-surface)] text-[var(--color-text-muted)]"}`}>
+                    {chip.count}
+                  </span>
+                ) : null}
               </button>
             );
           })}
@@ -695,11 +784,11 @@ export function DecisionCenter() {
           </span>
         </div>
 
-        {/* Status tabs */}
+        {/* Status tabs — Bug 1: counts from server statusCounts (no status filter), not from paginated decisions array */}
         <div className="flex flex-wrap gap-1.5 rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1.5">
           {STATUS_TABS.map((tab) => {
             const active = filters.status === tab.value;
-            const count = tab.value === "" ? decisions.length : decisions.filter((d) => d.status === tab.value).length;
+            const count = tab.value === "" ? totalCount : statusCounts[tab.value];
             return (
               <button
                 key={tab.value}
@@ -713,7 +802,7 @@ export function DecisionCenter() {
               >
                 {tab.value === "OPEN" ? <Zap className="h-3 w-3" /> : null}
                 {tab.label}
-                {count > 0 ? (
+                {count !== undefined && count > 0 ? (
                   <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${active ? "bg-[var(--color-master-100)] text-[var(--color-master-700)]" : "bg-[var(--color-border)] text-[var(--color-text-muted)]"}`}>
                     {count}
                   </span>
