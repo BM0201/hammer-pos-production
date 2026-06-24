@@ -2,15 +2,11 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { closeCashSessionSchema } from "@/modules/cash-session/validators";
-import { calculateExpectedCashForSessionTx, closeCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
-import { logAuditEvent } from "@/modules/audit/service";
-import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
+import { closeCashSession, logCashSessionDenied } from "@/modules/cash-session/service";
 import { prisma } from "@/lib/prisma";
 import { isMaster } from "@/modules/rbac/guards";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
-import { approvalService } from "@/modules/approvals/service";
-import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
 import { PaymentStatus, SaleOrderStatus } from "@prisma/client";
 import { getOperationalWindowForNow } from "@/modules/operations/service";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -20,7 +16,6 @@ const CONFLICT_REASONS = new Set([
   "CASH_SESSION_NOT_RECONCILING",
   "CASH_SESSION_UNRESOLVED_ORDERS",
   "CASH_SESSION_HAS_PENDING_PAYMENTS",
-  "CASH_SESSION_DISCREPANCY_REQUIRES_APPROVAL",
   "STALE_PENDING_PAYMENT_ORDERS",
 ]);
 const CASH_DISCREPANCY_APPROVAL_THRESHOLD = 5;
@@ -116,68 +111,27 @@ export async function POST(request: Request) {
       return fail("CONFLICT", "CASH_SESSION_HAS_PENDING_PAYMENTS", 409);
     }
 
-    const { openingAmount, postedCashPayments, refundsOrWithdrawals, cashMovementsNet, cashChange, expectedCash } =
-      await prisma.$transaction((tx) => calculateExpectedCashForSessionTx(tx, cashSession.id, cashSession.openingAmount));
-    const countedCash = Number(parsed.data.closingAmount);
-    const difference = countedCash - expectedCash;
-
-    if (Math.abs(difference) > CASH_DISCREPANCY_APPROVAL_THRESHOLD) {
-      await logAuditEvent({
-        actorUserId: session.userId,
-        branchId: cashSession.physicalCashBox.branchId,
-        module: "cash_session",
-        action: CASH_SESSION_AUDIT_EVENTS.DISCREPANCY_DETECTED,
-        entityType: "CashSession",
-        entityId: cashSession.id,
-        metadataJson: {
-          openingAmount,
-          postedCashPayments,
-          refundsOrWithdrawals,
-          cashMovementsNet,
-          cashChange,
-          expectedCash,
-          countedCash,
-          difference,
-          threshold: CASH_DISCREPANCY_APPROVAL_THRESHOLD,
-        },
-      });
-
-      const approval = await approvalService.createRequest({
-        branchId: cashSession.physicalCashBox.branchId,
-        requestedByUserId: session.userId,
-        type: APPROVAL_REQUEST_TYPES.CASH_SESSION_DISCREPANCY,
-        referenceType: "CASH_SESSION",
-        referenceId: cashSession.id,
-        reason: `Cierre con diferencia de caja (${difference.toFixed(2)}).`,
-        payloadJson: {
-          openingAmount,
-          postedCashPayments,
-          refundsOrWithdrawals,
-          cashMovementsNet,
-          cashChange,
-          expectedCash,
-          countedCash,
-          difference,
-          threshold: CASH_DISCREPANCY_APPROVAL_THRESHOLD,
-        },
-      });
-
-      return ok({
-          status: "REQUESTED",
-          requestId: approval.requestId,
-          created: approval.created,
-          reason: "APPROVAL_REQUESTED",
-          message: "Solicitud enviada.",
-        });
-    }
-
-    const data = await closeCashSession({
+    // For manual closes the cashier has physically counted the drawer.
+    // We always close the session and record the difference for later review
+    // in Día Operativo 360 — no approval gate needed here.
+    const result = await closeCashSession({
       ...parsed.data,
       actorUserId: session.userId,
       allowedThreshold: CASH_DISCREPANCY_APPROVAL_THRESHOLD,
     });
 
-    return ok(data);
+    if (Math.abs(result.difference) > CASH_DISCREPANCY_APPROVAL_THRESHOLD) {
+      return ok({
+        ...result,
+        warning: {
+          code: "CASH_DIFFERENCE_RECORDED" as const,
+          difference: result.difference,
+          threshold: CASH_DISCREPANCY_APPROVAL_THRESHOLD,
+        },
+      });
+    }
+
+    return ok(result);
   } catch (error) {
     if (error instanceof Error && CONFLICT_REASONS.has(error.message)) {
       const session = await getCurrentSession();

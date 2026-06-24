@@ -558,11 +558,10 @@ export async function closeCashSession(input: {
             countedCash,
             difference,
             threshold,
+            manualClose: true,
           },
         },
       });
-
-      throw new Error("APPROVAL_REQUESTED");
     }
 
     const updated = await tx.cashSession.update({

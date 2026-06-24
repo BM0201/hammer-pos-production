@@ -52,7 +52,7 @@ const SESSION_REASON_MESSAGES: Record<string, string> = {
   STALE_PENDING_PAYMENT_ORDERS: "Hay órdenes con pago pendiente de este día que deben resolverse antes de cerrar la caja.",
   CASH_SESSION_NOT_RECONCILING: "La sesión debe estar en conciliación antes de cerrarla.",
   CASH_SESSION_NOT_PENDING_AUTO_REVIEW: "La sesion ya no esta pendiente de revision automatica.",
-  APPROVAL_REQUESTED: "Solicitud enviada. Un aprobador debe validar la diferencia antes de cerrar la caja.",
+  APPROVAL_REQUESTED: "La sesión fue cerrada con diferencia registrada para revisión en Día Operativo 360.",
 };
 
 /**
@@ -324,18 +324,22 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
         return;
       }
 
-      const typedCloseJson = json as { data?: { status?: string }; status?: string };
-      const status = typedCloseJson.data?.status ?? typedCloseJson.status;
-      if (status === "REQUESTED") {
-        setMessage("Solicitud de cierre enviada para aprobacion.");
-        return;
-      }
+      const typedCloseJson = json as {
+        data?: {
+          status?: string;
+          warning?: { code: string; difference: number; threshold: number };
+        };
+        status?: string;
+      };
+      const responseData = typedCloseJson.data;
+      const status = responseData?.status ?? typedCloseJson.status;
+      const warning = responseData?.warning;
+
       if (status === "AUTO_CLOSED_PENDING_REVIEW") {
         setMessage("La caja quedo pendiente de revision por Master.");
         return;
       }
 
-      setMessage("Sesión cerrada correctamente. ✓");
       setActiveSession(null);
       setReconcilingSessionId("");
       publishStatus({
@@ -344,6 +348,13 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
         physicalCashBoxId: selectedCashBoxId || null,
         status: "CLOSED",
       });
+
+      if (warning?.code === "CASH_DIFFERENCE_RECORDED") {
+        const diffFormatted = Math.abs(warning.difference).toFixed(2);
+        setMessage(`Sesión cerrada con diferencia registrada: C$ ${diffFormatted}. Master la revisará en Día Operativo 360. ✓`);
+      } else {
+        setMessage("Sesión cerrada correctamente. ✓");
+      }
     } catch (error) {
       console.error("[CashSession][closeSession]", error);
       setMessage(error instanceof TypeError ? "Error de red. Verifica tu conexión." : "No se pudo cerrar la sesión.");

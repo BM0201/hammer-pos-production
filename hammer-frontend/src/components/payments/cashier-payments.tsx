@@ -278,9 +278,31 @@ export function CashierPayments({ branchId }: { branchId: string }) {
         <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-4 py-3 text-sm text-[var(--color-warning-700)]">
           Selecciona una caja física para continuar.
         </div>
+      ) : cashSessionState.status === "RECONCILING" ? (
+        <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-4 py-3 text-sm text-[var(--color-warning-700)]">
+          La caja está en conciliación. Termina el cierre desde{" "}
+          <Link
+            href={"/app/branch/cash" as Route}
+            className="font-semibold text-[var(--color-info-600)] underline hover:text-[var(--color-info-700)]"
+          >
+            Caja
+          </Link>{" "}
+          antes de cobrar nuevas órdenes.
+        </div>
+      ) : cashSessionState.status === "AUTO_CLOSED_PENDING_REVIEW" ? (
+        <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-4 py-3 text-sm text-[var(--color-warning-700)]">
+          La caja fue cerrada automáticamente y requiere revisión. Ve a{" "}
+          <Link
+            href={"/app/branch/cash" as Route}
+            className="font-semibold text-[var(--color-info-600)] underline hover:text-[var(--color-info-700)]"
+          >
+            Caja
+          </Link>{" "}
+          para revisarla antes de abrir una nueva sesión.
+        </div>
       ) : !cashSessionState.hasOpenSession ? (
         <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-4 py-3 text-sm text-[var(--color-warning-700)]">
-          La caja está cerrada. Debes abrir una sesión desde la pantalla{" "}
+          La caja está cerrada. Debes abrir una sesión desde{" "}
           <Link
             href={"/app/branch/cash" as Route}
             className="font-semibold text-[var(--color-info-600)] underline hover:text-[var(--color-info-700)]"
