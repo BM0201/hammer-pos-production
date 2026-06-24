@@ -2205,6 +2205,7 @@ function OpeningBalanceModal({
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<ProductRow[]>(fallbackProducts.slice(0, 12));
   const [searchLoading, setSearchLoading] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
   const [lines, setLines] = useState<OpeningLine[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -2248,8 +2249,10 @@ function OpeningBalanceModal({
     };
   }, [activeBranchId, search, fallbackProducts]);
 
-  // Al hacer clic en un resultado: se agrega de inmediato a la tabla (o hace foco si ya existe).
+  // Al hacer clic en un resultado: se agrega de inmediato a la tabla y se cierra el dropdown.
   function addProduct(product: ProductRow) {
+    setSearch("");
+    setShowDropdown(false);
     setLines((prev) => {
       if (prev.some((line) => line.productId === product.id)) {
         toast("Ese producto ya esta en la lista.");
@@ -2407,53 +2410,68 @@ function OpeningBalanceModal({
           </div>
 
           {/* Buscador de productos */}
-          <div className="rounded-lg border border-[var(--color-border)] p-3">
-            <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Buscar producto</label>
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+            <label className="mb-2 block text-xs font-semibold text-[var(--color-text-muted)]">Buscar producto</label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[var(--color-text-muted)]" />
-              <Input className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Nombre, SKU, codigo de barras o categoria" />
-              {/* Dropdown flotante — no empuja el contenido hacia abajo */}
-              <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg">
-                {searchLoading ? (
-                  <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando productos...</div>
-                ) : searchResults.length > 0 ? searchResults.map((product) => {
-                  const row = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
-                  const branchStock = product.stockConversion
-                    ? product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand
-                    : product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand;
-                  const stock = branchStock === null || branchStock === undefined ? 0 : Number(branchStock);
-                  const alreadyAdded = lines.some((line) => line.productId === product.id);
-                  return (
-                    <button
-                      key={product.id}
-                      type="button"
-                      onClick={() => addProduct(product)}
-                      disabled={alreadyAdded}
-                      className={`block w-full border-b border-[var(--color-border)] px-3 py-2 text-left text-xs transition ${alreadyAdded ? "cursor-not-allowed bg-[var(--color-success-50)] opacity-70" : "bg-[var(--color-surface)] hover:bg-[var(--color-surface-alt)]"}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-semibold text-[var(--color-text)]">{product.name}</div>
-                          <div className="text-[var(--color-text-muted)]">SKU {product.sku}{product.barcode ? ` - Barra ${product.barcode}` : ""} - {product.category?.name ?? "Sin categoria"} - {product.unit}</div>
-                        </div>
-                        <div className="flex items-center gap-3 text-right text-[var(--color-text-muted)]">
-                          <div>
-                            <div>Stock {qty(stock)}</div>
-                            <div>Precio {formatMoneyOrNd(row?.effectivePrice ?? null)}</div>
-                            <div>Costo {formatMoneyOrNd(row?.effectiveCost ?? null)}</div>
+              <Input
+                className="pl-9"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Nombre, SKU, codigo de barras o categoria"
+                onFocus={() => setShowDropdown(true)}
+                onBlur={() => setTimeout(() => setShowDropdown(false), 160)}
+              />
+              {/* Solo visible mientras el input está enfocado */}
+              {showDropdown && (
+                <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl">
+                  {searchLoading ? (
+                    <div className="flex items-center gap-2 px-3 py-3 text-xs text-[var(--color-text-muted)]">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando productos...
+                    </div>
+                  ) : searchResults.length > 0 ? searchResults.map((product) => {
+                    const row = activeBranch ? buildBranchPricingCostRow(product, activeBranch) : null;
+                    const branchStock = product.stockConversion
+                      ? product.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId)?.quantityOnHand
+                      : product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand;
+                    const stock = branchStock === null || branchStock === undefined ? 0 : Number(branchStock);
+                    const alreadyAdded = lines.some((line) => line.productId === product.id);
+                    return (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => addProduct(product)}
+                        disabled={alreadyAdded}
+                        className={`block w-full border-b border-[var(--color-border)] px-3 py-2.5 text-left text-xs transition last:border-0 ${alreadyAdded ? "cursor-not-allowed bg-[var(--color-success-50)] opacity-60" : "hover:bg-[var(--color-surface-alt)]"}`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-[var(--color-text)]">{product.name}</div>
+                            <div className="text-[var(--color-text-muted)]">
+                              {product.sku}{product.barcode ? ` · ${product.barcode}` : ""} · {product.category?.name ?? "Sin categoria"} · {product.unit}
+                            </div>
                           </div>
-                          {alreadyAdded
-                            ? <Check className="h-4 w-4 text-[var(--color-success-600)]" />
-                            : <Plus className="h-4 w-4 text-[var(--color-warning-600)]" />}
+                          <div className="flex shrink-0 items-center gap-2 text-right text-[var(--color-text-muted)]">
+                            <div>
+                              <div>Stock <strong className="text-[var(--color-text-secondary)]">{qty(stock)}</strong></div>
+                              <div>Precio <strong className="text-[var(--color-text-secondary)]">{formatMoneyOrNd(row?.effectivePrice ?? null)}</strong></div>
+                              <div>Costo <strong className="text-[var(--color-text-secondary)]">{formatMoneyOrNd(row?.effectiveCost ?? null)}</strong></div>
+                            </div>
+                            {alreadyAdded
+                              ? <Check className="h-4 w-4 shrink-0 text-[var(--color-success-600)]" />
+                              : <Plus className="h-4 w-4 shrink-0 text-[var(--color-master-600)]" />}
+                          </div>
                         </div>
-                      </div>
-                    </button>
-                  );
-                }) : (
-                  <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados para la busqueda.</div>
-                )}
-              </div>
+                      </button>
+                    );
+                  }) : (
+                    <div className="px-3 py-3 text-xs text-[var(--color-text-muted)]">Sin resultados para la busqueda.</div>
+                  )}
+                </div>
+              )}
             </div>
+            <p className="mt-1.5 text-[11px] text-[var(--color-text-soft)]">Haz clic en un producto para agregarlo a la tabla.</p>
           </div>
 
           {/* Tabla editable de la carga */}
