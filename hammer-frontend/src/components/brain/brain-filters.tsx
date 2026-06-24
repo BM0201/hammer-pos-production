@@ -85,29 +85,38 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
   const activeAdvanced = advancedFilters.filter((filter) => filters[filter.key] === "true").length;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-lg shadow-slate-200/60">
+    <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-card)]">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <div className="rounded-xl bg-slate-100 p-2 text-slate-600">
+          <div className="rounded-xl bg-[var(--color-surface-alt)] p-2 text-[var(--color-text-muted)]">
             <Filter className="h-4 w-4" />
           </div>
           <div>
-            <h2 className="text-sm font-extrabold text-slate-950">Filtros del Brain</h2>
-            <p className="text-xs text-slate-500">Combina busqueda, estado operativo y categoria.</p>
+            <h2 className="text-sm font-extrabold text-[var(--color-text)]">Filtros del Brain</h2>
+            <p className="text-xs text-[var(--color-text-soft)]">Combina busqueda, estado operativo y categoria.</p>
           </div>
         </div>
-        <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-50" onClick={onReset}>
+        <button
+          type="button"
+          className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs font-bold text-[var(--color-text-muted)] transition hover:bg-[var(--color-surface-alt)]"
+          onClick={onReset}
+        >
           <X className="h-3.5 w-3.5" />
           Limpiar
         </button>
       </div>
 
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-12">
-        <label className="space-y-1 text-xs font-bold text-slate-500 md:col-span-3 xl:col-span-4">
+        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] md:col-span-3 xl:col-span-4">
           Busqueda
           <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={filters.search} onChange={(event) => setValue("search", event.target.value)} placeholder="Titulo, SKU, producto, evidencia, sucursal..." />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-soft)]" />
+            <input
+              className="hm-input pl-9 text-sm"
+              value={filters.search}
+              onChange={(event) => setValue("search", event.target.value)}
+              placeholder="Titulo, SKU, producto, evidencia, sucursal..."
+            />
           </div>
         </label>
 
@@ -133,19 +142,34 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
           {statuses.map((status) => <option key={status} value={status}>{statusLabels[status] ?? status}</option>)}
         </Select>
 
-        <label className="space-y-1 text-xs font-bold text-slate-500 xl:col-span-2">
+        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] xl:col-span-2">
           Tipo de decision
-          <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={filters.actionType} onChange={(event) => setValue("actionType", event.target.value)} placeholder="Ej. REVIEW_PRICE" />
+          <input
+            className="hm-input text-sm"
+            value={filters.actionType}
+            onChange={(event) => setValue("actionType", event.target.value)}
+            placeholder="Ej. REVIEW_PRICE"
+          />
         </label>
 
-        <label className="space-y-1 text-xs font-bold text-slate-500 xl:col-span-2">
+        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] xl:col-span-2">
           Producto/SKU
-          <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={filters.productId} onChange={(event) => setValue("productId", event.target.value)} placeholder="ID producto" />
+          <input
+            className="hm-input text-sm"
+            value={filters.productId}
+            onChange={(event) => setValue("productId", event.target.value)}
+            placeholder="ID producto"
+          />
         </label>
 
-        <label className="space-y-1 text-xs font-bold text-slate-500 xl:col-span-2">
+        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] xl:col-span-2">
           Usuario
-          <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={filters.targetUserId} onChange={(event) => setValue("targetUserId", event.target.value)} placeholder="ID usuario" />
+          <input
+            className="hm-input text-sm"
+            value={filters.targetUserId}
+            onChange={(event) => setValue("targetUserId", event.target.value)}
+            placeholder="ID usuario"
+          />
         </label>
 
         <Select label="Periodo" value={filters.days} onChange={(value) => setValue("days", value)} span="xl:col-span-2">
@@ -166,18 +190,26 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
         </Select>
       </div>
 
-      <button type="button" className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100" onClick={() => setShowMore((value) => !value)}>
+      <button
+        type="button"
+        className="mt-4 inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-xs font-bold text-[var(--color-text-secondary)] transition hover:bg-[var(--color-surface-muted)]"
+        onClick={() => setShowMore((value) => !value)}
+      >
         <ChevronDown className={`h-3.5 w-3.5 transition ${showMore ? "rotate-180" : ""}`} />
         Mas filtros {activeAdvanced ? `(${activeAdvanced})` : ""}
       </button>
 
       {showMore ? (
-        <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-[var(--color-border)] pt-3">
           {advancedFilters.map((filter) => (
             <button
               key={filter.key}
               type="button"
-              className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${filters[filter.key] === "true" ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+              className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
+                filters[filter.key] === "true"
+                  ? "border-[var(--color-master-200)] bg-[var(--color-master-50)] text-[var(--color-master-700)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]"
+              }`}
               onClick={() => toggle(filter.key)}
             >
               {filter.label}
@@ -189,11 +221,27 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
   );
 }
 
-function Select({ label, value, onChange, children, span }: { label: string; value: string; onChange: (value: string) => void; children: ReactNode; span?: string }) {
+function Select({
+  label,
+  value,
+  onChange,
+  children,
+  span,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: ReactNode;
+  span?: string;
+}) {
   return (
-    <label className={`space-y-1 text-xs font-bold text-slate-500 ${span ?? ""}`}>
+    <label className={`space-y-1 text-xs font-bold text-[var(--color-text-muted)] ${span ?? ""}`}>
       {label}
-      <select className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-900 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100" value={value} onChange={(event) => onChange(event.target.value)}>
+      <select
+        className="hm-input text-sm"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
         {children}
       </select>
     </label>

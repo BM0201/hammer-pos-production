@@ -58,7 +58,7 @@ export function DecisionActionButtons({
       {isExecutable ? (
         <button type="button" disabled={!canExecute || busy} className={success} onClick={() => onAction("execute")}>Ejecutar</button>
       ) : status === "APPROVED" ? (
-        <span className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">Requiere acción manual</span>
+        <span className="rounded-md border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-sm font-semibold text-[var(--color-warning-700)]">Requiere acción manual</span>
       ) : null}
       <button type="button" disabled={!canManualReview || busy} className={secondary} onClick={() => onAction("manual-review")}>Revisión manual</button>
       <button type="button" disabled={!canSnooze || busy} className={secondary} onClick={() => onAction("snooze")}>Posponer</button>
