@@ -31,15 +31,23 @@ export function DecisionDetailDrawer({
       if (window.confirm("Crear o preparar borrador de traslado desde esta decision?")) onAction?.("execute");
       return;
     }
+    if (action.includes("RECALCULATE_CASH") || action.includes("REFRESH_OPERATIONAL_DAY")) {
+      if (window.confirm("Ejecutar recalculo desde esta decision?")) onAction?.("execute");
+      return;
+    }
     if (action.includes("PRICE") || action.includes("PRICING") || action.includes("CATEGORY_POLICY")) {
-      window.location.href = "/app/master/expenses";
+      window.location.href = "/app/master/pricing";
       return;
     }
     if (action.includes("INVENTORY") || action.includes("REORDER") || action.includes("STOCK")) {
       window.location.href = "/app/master/reorder";
       return;
     }
-    if (action.includes("CASH") || action.includes("DISCOUNT")) {
+    if (action.includes("CASH") || action.includes("REVIEW_CASH")) {
+      window.location.href = "/app/branch/cash";
+      return;
+    }
+    if (action.includes("DISCOUNT")) {
       window.location.href = "/app/master/discounts";
       return;
     }
@@ -148,9 +156,11 @@ export function DecisionDetailDrawer({
 function labelForAction(action: string) {
   if (action.includes("PURCHASE")) return "Crear borrador compra";
   if (action.includes("TRANSFER")) return "Crear borrador traslado";
+  if (action.includes("RECALCULATE_CASH") || action.includes("REFRESH_OPERATIONAL_DAY")) return "Recalcular";
   if (action.includes("PRICE") || action.includes("PRICING")) return "Abrir pricing";
   if (action.includes("INVENTORY") || action.includes("REORDER") || action.includes("STOCK")) return "Abrir inventario";
-  if (action.includes("CASH") || action.includes("DISCOUNT")) return "Revisar caja/descuentos";
+  if (action.includes("REVIEW_CASH") || action.includes("CASH")) return "Ir a Caja";
+  if (action.includes("DISCOUNT")) return "Revisar descuentos";
   if (action.includes("CONFIG") || action.includes("PRINT")) return "Abrir configuracion";
   return action;
 }

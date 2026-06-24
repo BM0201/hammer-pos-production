@@ -49,7 +49,7 @@ export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<Br
         status: "POSTED",
         saleOrder: ctx.branchId ? { branchId: ctx.branchId } : undefined,
       },
-      select: { saleOrderId: true },
+      select: { saleOrderId: true, method: true, amount: true, referenceNumber: true, paidAt: true },
       take: Math.min(1000, ctx.limits.maxEntities),
     }),
     prisma.cashSession.findMany({
@@ -223,23 +223,44 @@ export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<Br
     });
   }
 
-  const paymentsByOrder = new Map<string, number>();
+  type PaymentRow = { saleOrderId: string; method: string; amount: Prisma.Decimal | null; referenceNumber: string | null; paidAt: Date | null };
+  const paymentsByOrder = new Map<string, PaymentRow[]>();
   for (const payment of payments) {
-    paymentsByOrder.set(payment.saleOrderId, (paymentsByOrder.get(payment.saleOrderId) ?? 0) + 1);
+    const list = paymentsByOrder.get(payment.saleOrderId) ?? [];
+    list.push(payment);
+    paymentsByOrder.set(payment.saleOrderId, list);
   }
 
-  for (const [saleOrderId, count] of paymentsByOrder) {
-    if (count <= 1) continue;
+  for (const [saleOrderId, orderPayments] of paymentsByOrder) {
+    if (orderPayments.length <= 1) continue;
+    // Detect suspicious duplicates: same method + same reference OR same method + same amount within 2 minutes
+    const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
+    const suspicious: PaymentRow[] = [];
+    for (let i = 0; i < orderPayments.length; i++) {
+      for (let j = i + 1; j < orderPayments.length; j++) {
+        const a = orderPayments[i];
+        const b = orderPayments[j];
+        if (a.method !== b.method) continue;
+        const sameRef = a.referenceNumber && b.referenceNumber && a.referenceNumber === b.referenceNumber;
+        const sameAmount = Math.abs(n(a.amount) - n(b.amount)) < 0.01;
+        const closeTime = a.paidAt && b.paidAt && Math.abs(a.paidAt.getTime() - b.paidAt.getTime()) < DUPLICATE_WINDOW_MS;
+        if (sameRef || (sameAmount && closeTime)) {
+          if (!suspicious.includes(a)) suspicious.push(a);
+          if (!suspicious.includes(b)) suspicious.push(b);
+        }
+      }
+    }
+    if (!suspicious.length) continue;
     decisions.push({
       category: "CASH",
       severity: "HIGH",
       title: "Posible pago duplicado",
-      description: `La orden ${saleOrderId} tiene ${count} pagos posteados.`,
-      recommendation: "Validar si fue pago mixto esperado o duplicacion de transaccion.",
-      confidenceScore: 0.7,
-      riskScore: riskScoreFor("HIGH", 0.7),
+      description: `La orden ${saleOrderId} tiene ${suspicious.length} pagos sospechosos del mismo metodo (${suspicious[0].method}) por el mismo monto o referencia.`,
+      recommendation: "Validar si fue un doble cobro accidental. Verificar referencia de transaccion con el banco.",
+      confidenceScore: 0.82,
+      riskScore: riskScoreFor("HIGH", 0.82),
       proposedActionType: "REVIEW_PAYMENT_DUPLICATE",
-      evidenceJson: { saleOrderId, postedPayments: count },
+      evidenceJson: { saleOrderId, totalPayments: orderPayments.length, suspiciousPayments: suspicious.length, method: suspicious[0].method, amounts: suspicious.map((p) => n(p.amount)) },
       sourceJson: { detector: "cash-detector" },
       fingerprintParts: ["cash", "duplicate-payments", saleOrderId],
     });

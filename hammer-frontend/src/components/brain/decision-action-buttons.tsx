@@ -28,13 +28,14 @@ export function DecisionActionButtons({
   busy: boolean;
   onAction: (action: BrainDecisionAction) => void;
 }) {
+  const isExecutable = isAutoExecutable(proposedActionType);
   const canApprove = status === "OPEN" || status === "SNOOZED" || status === "FAILED" || status === "MANUAL_REVIEW";
-  const canExecute = status === "APPROVED";
+  const canExecute = status === "APPROVED" && isExecutable;
   const canManualReview = status === "OPEN" || status === "APPROVED" || status === "FAILED";
   const canSnooze = status === "OPEN" || status === "APPROVED" || status === "MANUAL_REVIEW";
   const canDismiss = !["EXECUTED", "DISMISSED", "EXPIRED"].includes(status);
   const canReopen = ["DISMISSED", "EXPIRED", "FAILED"].includes(status);
-  const canApproveAndExecute = canApprove && isAutoExecutable(proposedActionType);
+  const canApproveAndExecute = canApprove && isExecutable;
 
   const secondary = "rounded-md border border-[var(--color-border)] px-3 py-2 text-sm font-semibold text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-muted)] disabled:cursor-not-allowed disabled:text-[var(--color-text-soft)]";
   const primary = "rounded-md bg-[var(--color-info-700)] px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-info-600)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-alt)] disabled:text-[var(--color-text-soft)]";
@@ -54,7 +55,11 @@ export function DecisionActionButtons({
           Aprobar
         </button>
       )}
-      <button type="button" disabled={!canExecute || busy} className={success} onClick={() => onAction("execute")}>Ejecutar</button>
+      {isExecutable ? (
+        <button type="button" disabled={!canExecute || busy} className={success} onClick={() => onAction("execute")}>Ejecutar</button>
+      ) : status === "APPROVED" ? (
+        <span className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">Requiere acción manual</span>
+      ) : null}
       <button type="button" disabled={!canManualReview || busy} className={secondary} onClick={() => onAction("manual-review")}>Revisión manual</button>
       <button type="button" disabled={!canSnooze || busy} className={secondary} onClick={() => onAction("snooze")}>Posponer</button>
       <button type="button" disabled={!canDismiss || busy} className={danger} onClick={() => onAction("dismiss")}>Descartar</button>

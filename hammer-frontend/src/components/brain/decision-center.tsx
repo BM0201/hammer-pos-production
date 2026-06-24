@@ -125,6 +125,9 @@ export function DecisionCenter() {
   const [dateTo, setDateTo] = useState("");
   const [branches, setBranches] = useState<BranchOption[]>([]);
   const [data, setData] = useState<BrainResponse | null>(null);
+  const [extraDecisions, setExtraDecisions] = useState<BrainDecision[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
@@ -156,17 +159,40 @@ export function DecisionCenter() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setExtraDecisions([]);
+    setNextCursor(null);
     try {
       const response = await apiFetch(`/api/master/brain/decisions?${query}`);
       const raw = await response.json();
       if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar el Brain.");
-      setData(unwrapApiData(raw) as BrainResponse);
+      const result = unwrapApiData(raw) as BrainResponse;
+      setData(result);
+      setNextCursor(result.nextCursor ?? null);
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "No se pudo cargar el Brain.");
     } finally {
       setLoading(false);
     }
   }, [query]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const params = new URLSearchParams(query);
+      params.set("cursor", nextCursor);
+      const response = await apiFetch(`/api/master/brain/decisions?${params.toString()}`);
+      const raw = await response.json();
+      if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar más decisiones.");
+      const result = unwrapApiData(raw) as BrainResponse;
+      setExtraDecisions((current) => [...current, ...result.decisions]);
+      setNextCursor(result.nextCursor ?? null);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "Error cargando más decisiones.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [query, nextCursor, loadingMore]);
 
   useEffect(() => {
     apiFetch("/api/branches")
@@ -313,7 +339,7 @@ export function DecisionCenter() {
   }
 
   const kpis = data?.kpis ?? { openCritical: 0, highRisk: 0, estimatedImpact: 0, reorderSuggested: 0, cashRisks: 0, lowMarginPrices: 0, lateDispatches: 0, manualReview: 0 };
-  const decisions = data?.decisions ?? [];
+  const decisions = [...(data?.decisions ?? []), ...extraDecisions];
   const latestScan = decisions.map(decisionTime).sort().at(-1);
   const systemState = busyAction === "scan" || busyAction === "dry-run"
     ? { label: "Escaneando", tone: "border-blue-200 bg-blue-50 text-blue-700", icon: Loader2 }
@@ -608,9 +634,24 @@ export function DecisionCenter() {
         {loading ? (
           <LoadingPanel label="Escaneando riesgos operativos..." />
         ) : decisions.length ? (
-          decisions.map((decision) => (
-            <DecisionCard key={decision.id} decision={decision} busy={Boolean(busyAction)} onAction={act} />
-          ))
+          <>
+            {decisions.map((decision) => (
+              <DecisionCard key={decision.id} decision={decision} busy={Boolean(busyAction)} onAction={act} />
+            ))}
+            {nextCursor ? (
+              <div className="flex justify-center pt-2">
+                <button
+                  type="button"
+                  disabled={loadingMore}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void loadMore()}
+                >
+                  {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {loadingMore ? "Cargando..." : "Cargar más decisiones"}
+                </button>
+              </div>
+            ) : null}
+          </>
         ) : (
           <EmptyPanel label="No hay decisiones para los filtros actuales." />
         )}

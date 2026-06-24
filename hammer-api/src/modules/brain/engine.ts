@@ -37,6 +37,15 @@ const REPAIR_SCAN_CATEGORIES = new Set<BrainDecisionCategory>([
   BrainDecisionCategory.SYSTEM,
 ]);
 
+const OPERATIONAL_DAY_SCAN_CATEGORIES = new Set<BrainDecisionCategory>([
+  BrainDecisionCategory.CASH,
+  BrainDecisionCategory.SALES,
+  BrainDecisionCategory.INVENTORY,
+  BrainDecisionCategory.DISPATCH,
+  BrainDecisionCategory.REORDER,
+  BrainDecisionCategory.PURCHASING,
+]);
+
 function managuaBusinessDate(now: Date) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Managua",
@@ -75,7 +84,17 @@ function detectorAllowedForMode(category: BrainDecisionCategory, mode: string) {
   if (mode === "QUICK_SCAN") return QUICK_SCAN_CATEGORIES.has(category);
   if (mode === "ENTITY_SCAN") return ENTITY_SCAN_CATEGORIES.has(category);
   if (mode === "REPAIR_SCAN") return REPAIR_SCAN_CATEGORIES.has(category);
+  if (mode === "OPERATIONAL_DAY_SCAN") return OPERATIONAL_DAY_SCAN_CATEGORIES.has(category);
   return true;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`TIMEOUT: ${label} excedió ${ms}ms`)), ms)
+    ),
+  ]);
 }
 
 function normalizeSeverity(severity: string): BrainDecisionSeverity {
@@ -182,7 +201,9 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
     && detectorAllowedForMode(detector.category, mode)
   );
 
-  const settled = await Promise.allSettled(detectors.map((detector) => detector.run()));
+  const settled = await Promise.allSettled(
+    detectors.map((detector) => withTimeout(detector.run(), limits.timeoutMs, detector.key))
+  );
   const errors = settled.flatMap((result, index) => result.status === "rejected"
     ? [{ detector: detectors[index].key, message: result.reason instanceof Error ? result.reason.message : String(result.reason) }]
     : []);

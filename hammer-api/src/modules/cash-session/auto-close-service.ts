@@ -13,6 +13,7 @@ import {
   getCashAutoCloseConfig,
   type CashAutoCloseConfig,
 } from "@/modules/cash-session/auto-close-config";
+import { makeDecisionFingerprint } from "@/modules/brain/scoring";
 
 const DEFAULT_TIMEZONE = "America/Managua";
 const AUTO_CLOSE_REASON = "Cierre automatico por horario operativo.";
@@ -260,8 +261,19 @@ export async function autoCloseExpiredCashSessions(input: {
         });
         await refreshOperationalDaySummaryTx(tx, locked.operationalDayId);
 
+        const autoCloseFingerprint = makeDecisionFingerprint(["cash", "auto-closed-pending-review", locked.id]);
+        const autoCloseEvidence = {
+          cashSessionId: locked.id,
+          physicalCashBoxId: locked.physicalCashBoxId,
+          expectedCash: expected.expectedCash,
+          expectedTotals: expected,
+          paymentTotals,
+          autoClosedAt: updated.autoClosedAt,
+          timezone: deadline.timezone,
+          closeTime: deadline.closeTime,
+        };
         await tx.brainDecision.upsert({
-          where: { fingerprint: `cash:auto-close-review:${locked.id}` },
+          where: { fingerprint: autoCloseFingerprint },
           create: {
             category: BrainDecisionCategory.CASH,
             severity: BrainDecisionSeverity.HIGH,
@@ -273,30 +285,12 @@ export async function autoCloseExpiredCashSessions(input: {
             impactAmount: decimal(expected.expectedCash),
             riskScore: decimal(80),
             proposedActionType: "REVIEW_CASH_SESSION",
-            evidenceJson: {
-              cashSessionId: locked.id,
-              physicalCashBoxId: locked.physicalCashBoxId,
-              expectedCash: expected.expectedCash,
-              expectedTotals: expected,
-              paymentTotals,
-              autoClosedAt: updated.autoClosedAt,
-              timezone: deadline.timezone,
-              closeTime: deadline.closeTime,
-            },
-            fingerprint: `cash:auto-close-review:${locked.id}`,
+            evidenceJson: autoCloseEvidence,
+            fingerprint: autoCloseFingerprint,
           },
           update: {
             status: "OPEN",
-            evidenceJson: {
-              cashSessionId: locked.id,
-              physicalCashBoxId: locked.physicalCashBoxId,
-              expectedCash: expected.expectedCash,
-              expectedTotals: expected,
-              paymentTotals,
-              autoClosedAt: updated.autoClosedAt,
-              timezone: deadline.timezone,
-              closeTime: deadline.closeTime,
-            },
+            evidenceJson: autoCloseEvidence,
           },
         });
 

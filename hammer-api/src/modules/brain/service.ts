@@ -13,6 +13,7 @@ import type { BrainDecisionDraft, BrainDecisionFilters, BrainScanResult, BrainDe
 const terminalStatuses: BrainDecisionStatus[] = ["EXECUTED", "DISMISSED"];
 const activeStatuses: BrainDecisionStatus[] = ["OPEN", "APPROVED", "MANUAL_REVIEW", "SNOOZED", "FAILED"];
 const REOPEN_AFTER_DAYS = 14;
+const STALE_EXECUTING_MINUTES = 10;
 
 function decimal(value: number | null | undefined) {
   return value === null || value === undefined ? undefined : new Prisma.Decimal(value);
@@ -111,6 +112,15 @@ function recommendedActionsFor(decision: DecisionWithRelations) {
   return Array.from(new Set([...proposed, ...(next ? [next] : []), ...commercialActions])).slice(0, 6);
 }
 
+const AUTO_EXECUTABLE_ACTION_TYPES = new Set([
+  "CREATE_PURCHASE_ORDER_DRAFT",
+  "CREATE_TRANSFER_DRAFT",
+  "CONVERT_REORDER_ALERT_TO_PURCHASE",
+  "CONVERT_REORDER_ALERT_TO_TRANSFER",
+  "RECALCULATE_CASH_SESSION",
+  "REFRESH_OPERATIONAL_DAY",
+]);
+
 function enrichDecision(decision: DecisionWithRelations) {
   const evidence = recordValue(decision.evidenceJson);
   const action = recordValue(decision.proposedActionJson);
@@ -138,6 +148,7 @@ function enrichDecision(decision: DecisionWithRelations) {
       marketConflict: evidence.marketConflict ?? calculationSnapshot.marketConflict,
     },
     relatedModule: relatedModuleFor(decision.category),
+    actionMode: decision.proposedActionType && AUTO_EXECUTABLE_ACTION_TYPES.has(decision.proposedActionType) ? "AUTO_EXECUTABLE" as const : "MANUAL_REVIEW" as const,
   };
 }
 
@@ -250,16 +261,17 @@ function updateData(draft: BrainDecisionDraft): Prisma.BrainDecisionUpdateInput 
   };
 }
 
-export async function getBrainSummary() {
+export async function getBrainSummary(baseWhere?: Prisma.BrainDecisionWhereInput) {
+  const w = baseWhere ?? {};
   const [openCritical, highRisk, impact, reorderSuggested, cashRisks, lowMargin, lateDispatch, manualReview] = await Promise.all([
-    prisma.brainDecision.count({ where: { status: "OPEN", severity: "CRITICAL" } }),
-    prisma.brainDecision.count({ where: { status: "OPEN", severity: { in: ["CRITICAL", "HIGH"] } } }),
-    prisma.brainDecision.aggregate({ where: { status: { in: ["OPEN", "APPROVED", "MANUAL_REVIEW"] } }, _sum: { impactAmount: true } }),
-    prisma.brainDecision.count({ where: { status: "OPEN", category: "REORDER" } }),
-    prisma.brainDecision.count({ where: { status: "OPEN", category: "CASH", severity: { in: ["CRITICAL", "HIGH"] } } }),
-    prisma.brainDecision.count({ where: { status: "OPEN", category: "PRICING", severity: { in: ["CRITICAL", "HIGH"] } } }),
-    prisma.brainDecision.count({ where: { status: "OPEN", category: "DISPATCH", severity: { in: ["CRITICAL", "HIGH", "MEDIUM"] } } }),
-    prisma.brainDecision.count({ where: { status: "MANUAL_REVIEW" } }),
+    prisma.brainDecision.count({ where: { ...w, status: "OPEN", severity: "CRITICAL" } }),
+    prisma.brainDecision.count({ where: { ...w, status: "OPEN", severity: { in: ["CRITICAL", "HIGH"] } } }),
+    prisma.brainDecision.aggregate({ where: { ...w, status: { in: ["OPEN", "APPROVED", "MANUAL_REVIEW"] } }, _sum: { impactAmount: true } }),
+    prisma.brainDecision.count({ where: { ...w, status: "OPEN", category: "REORDER" } }),
+    prisma.brainDecision.count({ where: { ...w, status: "OPEN", category: "CASH", severity: { in: ["CRITICAL", "HIGH"] } } }),
+    prisma.brainDecision.count({ where: { ...w, status: "OPEN", category: "PRICING", severity: { in: ["CRITICAL", "HIGH"] } } }),
+    prisma.brainDecision.count({ where: { ...w, status: "OPEN", category: "DISPATCH", severity: { in: ["CRITICAL", "HIGH", "MEDIUM"] } } }),
+    prisma.brainDecision.count({ where: { ...w, status: "MANUAL_REVIEW" } }),
   ]);
 
   return {
@@ -316,9 +328,9 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
         { branch: { is: { name: { contains: search, mode: "insensitive" } } } },
         { targetUser: { is: { username: { contains: search, mode: "insensitive" } } } },
         { targetUser: { is: { fullName: { contains: search, mode: "insensitive" } } } },
-        { evidenceJson: { string_contains: search, mode: "insensitive" } },
-        { sourceJson: { string_contains: search, mode: "insensitive" } },
-        { proposedActionJson: { string_contains: search, mode: "insensitive" } },
+        { evidenceJson: { string_contains: search } },
+        { sourceJson: { string_contains: search } },
+        { proposedActionJson: { string_contains: search } },
       ],
     } : {}),
   };
@@ -346,7 +358,7 @@ export async function listBrainDecisions(filters: BrainDecisionFilters) {
       take: limit + 1,
       ...(filters.cursor ? { cursor: { id: filters.cursor }, skip: 1 } : {}),
     }),
-    getBrainSummary(),
+    getBrainSummary(where),
     prisma.brainDecision.count({ where }),
     prisma.brainDecision.count({ where: { ...where, severity: "CRITICAL" } }),
     prisma.brainDecision.count({ where: { ...where, severity: { in: ["CRITICAL", "HIGH"] } } }),
@@ -478,7 +490,7 @@ export async function persistBrainDecisions(
         continue;
       }
 
-      const nextStatus: BrainDecisionStatus = mayReopen || existing.status === "SNOOZED" || existing.status === "FAILED"
+      const nextStatus: BrainDecisionStatus = mayReopen || existing.status === "SNOOZED" || existing.status === "FAILED" || existing.status === "EXPIRED"
         ? "OPEN"
         : existing.status;
 
@@ -491,19 +503,28 @@ export async function persistBrainDecisions(
           resolvedBy: nextStatus === "OPEN" ? { disconnect: true } : undefined,
         },
       });
+      const isReopened = mayReopen || (nextStatus === "OPEN" && existing.status !== "OPEN");
       await writeActionLog({
         decisionId: existing.id,
         actorUserId,
-        action: mayReopen ? "REOPENED" : "UPDATED",
+        action: isReopened ? "REOPENED" : "UPDATED",
         beforeStatus: existing.status,
         afterStatus: nextStatus,
         metadataJson: { fingerprint },
       });
-      if (mayReopen) reopened++;
+      if (isReopened) reopened++;
       else updated++;
     } catch (error) {
       errors.push({ message: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  if (!options.dryRun) {
+    const staleThreshold = new Date(now.getTime() - STALE_EXECUTING_MINUTES * 60 * 1000);
+    await prisma.brainDecision.updateMany({
+      where: { status: "EXECUTING", updatedAt: { lt: staleThreshold } },
+      data: { status: "FAILED", actionResultJson: { error: "STALE_EXECUTING: proceso interrumpido" } },
+    });
   }
 
   let expired = 0;
