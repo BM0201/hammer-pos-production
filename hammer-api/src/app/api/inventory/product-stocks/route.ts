@@ -15,7 +15,7 @@ export async function GET(request: Request) {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    if (ids.length === 0) return ok({ data: [] });
+    if (ids.length === 0) return ok([]);
 
     const rows = await prisma.inventoryBalance.groupBy({
       by: ["productId"],
@@ -28,7 +28,7 @@ export async function GET(request: Request) {
       return { productId, totalQty: Number(row?._sum.quantityOnHand ?? 0) };
     });
 
-    return ok({ data });
+    return ok(data);
   } catch (error) {
     return toHttpErrorResponse(error);
   }
