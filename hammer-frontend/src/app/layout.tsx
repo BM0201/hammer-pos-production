@@ -31,6 +31,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             __html: `(function(){try{var t=localStorage.getItem('hammer-theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();`,
           }}
         />
+        {/* Register service worker for offline POS support */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}`,
+          }}
+        />
         {children}
         <ToastContainer />
       </body>

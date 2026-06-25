@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { getPosContext, savePosContext } from "@/lib/offline-db";
 import type { CashSessionProblem, PosV2Context } from "../types";
 
 type BranchConfig = {
@@ -32,7 +33,8 @@ export function usePosCashContext(branchId: string) {
         const json = await res.json();
         const data = json?.data ?? json;
         setPosContext(data);
-        setActiveCashSessionId(data?.activeCashSessionId ?? data?.assignedSessions?.[0]?.id ?? null);
+        const sessionId = data?.activeCashSessionId ?? data?.assignedSessions?.[0]?.id ?? null;
+        setActiveCashSessionId(sessionId);
         setCashSessionProblem(data?.cashSessionProblem ?? null);
         setBranchConfig({
           enableCashier: data?.workflow?.enableCashier ?? true,
@@ -40,9 +42,24 @@ export function usePosCashContext(branchId: string) {
           paymentWorkflowMode: data?.workflow?.paymentWorkflowMode ?? "HYBRID",
           dispatchWorkflowMode: data?.workflow?.dispatchWorkflowMode ?? "ENABLED",
         });
+        // Persist context for offline mode (cashSessionId + userId needed to sync)
+        if (sessionId && data?.operatorUserId) {
+          savePosContext({
+            branchId,
+            cashSessionId: sessionId,
+            operatorUserId: data.operatorUserId,
+            savedAt: new Date().toISOString(),
+          }).catch(() => {});
+        }
       } catch {
+        // Network error: fall back to last cached context
+        const cached = await getPosContext(branchId).catch(() => null);
+        if (cached?.cashSessionId) {
+          setActiveCashSessionId(cached.cashSessionId);
+        } else {
+          setActiveCashSessionId(null);
+        }
         setPosContext(null);
-        setActiveCashSessionId(null);
         setCashSessionProblem(null);
         setBranchConfig(DEFAULT_CONFIG);
       }

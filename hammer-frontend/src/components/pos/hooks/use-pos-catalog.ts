@@ -2,9 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
+import { getCatalog, saveCatalog } from "@/lib/offline-db";
+import type { CachedProduct } from "@/lib/offline-db";
 import type { InventoryBalanceRow, ProductRow } from "../types";
 
-export function usePosCatalog(branchId: string, onNotice: (msg: string) => void) {
+function toCachedProduct(row: ProductRow): CachedProduct {
+  return {
+    id: row.id,
+    sku: row.sku,
+    name: row.name,
+    barcode: row.barcode,
+    categoryName: row.categoryName,
+    effectivePrice: Number(row.effectivePrice ?? row.branchPrice ?? row.standardSalePrice ?? 0),
+    unit: row.unit ?? "UND",
+    availableSaleStock: typeof row.availableSaleStock === "number" ? row.availableSaleStock : null,
+  };
+}
+
+export function usePosCatalog(branchId: string, onNotice: (msg: string) => void, isOffline = false) {
   const [search, setSearch] = useState("");
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
@@ -60,6 +75,33 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void)
   }, []);
 
   const loadTopSelling = useCallback(async () => {
+    // Offline: serve from IndexedDB cache
+    if (isOffline) {
+      const cached = await getCatalog(branchId).catch(() => [] as CachedProduct[]);
+      if (cached.length > 0) {
+        // Map cached products to ProductRow shape (enough for the UI)
+        const rows = cached.map(p => ({
+          ...p,
+          standardSalePrice: p.effectivePrice,
+          branchPrice: p.effectivePrice,
+          effectivePrice: p.effectivePrice,
+          priceSource: "CACHE" as const,
+          stockOnHand: p.availableSaleStock ?? 0,
+          availableStock: p.availableSaleStock ?? 0,
+          isActive: true,
+          stockConversion: null,
+          sharedStock: null,
+        } as unknown as ProductRow));
+        seedSharedStock(rows);
+        topProductsRef.current = rows;
+        if (!searchRef.current.trim()) {
+          setProducts(rows);
+          setShowingTopSelling(true);
+        }
+      }
+      return;
+    }
+
     try {
       const params = new URLSearchParams({ isActive: "true", topSelling: "true", limit: "5", branchId });
       const response = await fetch(`/api/catalog/products?${params.toString()}`);
@@ -73,18 +115,40 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void)
       const rows = json.data ?? [];
       seedSharedStock(rows);
       topProductsRef.current = rows;
-      // Only fill the visible list with top-sellers when the user is not
-      // actively searching (read the live value via ref to avoid recreating
-      // this callback on every keystroke).
       if (!searchRef.current.trim()) {
         setProducts(rows);
         setShowingTopSelling(true);
       }
+      // Persist to IndexedDB for offline use
+      saveCatalog(branchId, rows.map(toCachedProduct)).catch(() => {});
     } catch (error) {
+      // Network error: try cached catalog
+      const cached = await getCatalog(branchId).catch(() => [] as CachedProduct[]);
+      if (cached.length > 0) {
+        const rows = cached.map(p => ({
+          ...p,
+          standardSalePrice: p.effectivePrice,
+          branchPrice: p.effectivePrice,
+          effectivePrice: p.effectivePrice,
+          priceSource: "CACHE" as const,
+          stockOnHand: p.availableSaleStock ?? 0,
+          availableStock: p.availableSaleStock ?? 0,
+          isActive: true,
+          stockConversion: null,
+          sharedStock: null,
+        } as unknown as ProductRow));
+        seedSharedStock(rows);
+        topProductsRef.current = rows;
+        if (!searchRef.current.trim()) {
+          setProducts(rows);
+          setShowingTopSelling(true);
+        }
+        return;
+      }
       console.error("[POS][loadTopSelling]", error);
       onNotice(resolveError({ fallback: "No se pudieron cargar los productos más vendidos.", thrownError: error }));
     }
-  }, [branchId, resolveError, seedSharedStock, onNotice]);
+  }, [branchId, isOffline, resolveError, seedSharedStock, onNotice]);
 
   const loadProducts = useCallback(async (rawQuery: string) => {
     const query = rawQuery.trim();
@@ -98,6 +162,44 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void)
       setLoadingProducts(false);
       setShowingTopSelling(true);
       applySearchRows(topProductsRef.current);
+      return;
+    }
+
+    // Offline: search client-side through the IndexedDB catalog
+    if (isOffline) {
+      const cached = await getCatalog(branchId).catch(() => [] as CachedProduct[]);
+      const q = query.toLowerCase();
+      const matches = cached
+        .filter(p =>
+          p.name.toLowerCase().includes(q) ||
+          p.sku.toLowerCase().includes(q) ||
+          (p.barcode ?? "").toLowerCase().includes(q) ||
+          (p.categoryName ?? "").toLowerCase().includes(q),
+        )
+        .sort((a, b) => {
+          const rank = (p: CachedProduct) => {
+            if (p.name.toLowerCase().startsWith(q)) return 0;
+            if (p.sku.toLowerCase().startsWith(q)) return 1;
+            if (p.name.toLowerCase().includes(q)) return 2;
+            return 3;
+          };
+          return rank(a) - rank(b) || a.name.localeCompare(b.name);
+        })
+        .slice(0, 20)
+        .map(p => ({
+          ...p,
+          standardSalePrice: p.effectivePrice,
+          branchPrice: p.effectivePrice,
+          effectivePrice: p.effectivePrice,
+          priceSource: "CACHE" as const,
+          stockOnHand: p.availableSaleStock ?? 0,
+          availableStock: p.availableSaleStock ?? 0,
+          isActive: true,
+          stockConversion: null,
+          sharedStock: null,
+        } as unknown as ProductRow));
+      setShowingTopSelling(false);
+      applySearchRows(matches);
       return;
     }
 
@@ -148,9 +250,10 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void)
         return a.name.localeCompare(b.name);
       });
 
-      // Store in cache (cap size to keep memory bounded).
+      // Store in memory cache and update IndexedDB offline catalog
       if (searchCacheRef.current.size > 100) searchCacheRef.current.clear();
       searchCacheRef.current.set(cacheKey, rows);
+      saveCatalog(branchId, [...topProductsRef.current, ...rows].map(toCachedProduct)).catch(() => {});
 
       // Ignore results from a search that the user has already moved past.
       if (controller.signal.aborted || searchRef.current.trim().toLowerCase() !== cacheKey) {
