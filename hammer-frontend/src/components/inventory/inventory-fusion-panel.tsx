@@ -20,6 +20,7 @@ type FusionMember = {
   conversionFactor: number;
   isCanonical: boolean;
   isPackagePresentation?: boolean;
+  currentTotalStock?: number;
 };
 
 type FusionGroup = {
@@ -255,6 +256,25 @@ export function InventoryFusionPanel() {
     }, 300);
     return () => clearTimeout(handle);
   }, [search]);
+
+  // Cargar stock actual de los productos en la fusión (sin branchId = suma total)
+  const memberIds = members.map((m) => m.productId).join(",");
+  useEffect(() => {
+    if (!memberIds) return;
+    fetch(`/api/inventory/product-stocks?productIds=${memberIds}`)
+      .then((r) => r.json())
+      .then((raw) => {
+        const list: { productId: string; totalQty: number }[] = unwrapApiData(raw) ?? [];
+        setMembers((prev) =>
+          prev.map((m) => {
+            const found = list.find((r) => r.productId === m.productId);
+            return found !== undefined ? { ...m, currentTotalStock: found.totalQty } : m;
+          }),
+        );
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [memberIds]);
 
   const usedProductIds = useMemo(() => new Set(members.map((m) => m.productId)), [members]);
 
@@ -734,7 +754,14 @@ export function InventoryFusionPanel() {
                 <div key={m.productId} className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--color-border)] px-3 py-2">
                   <div className="min-w-[10rem] flex-1">
                     <div className="text-sm font-medium text-[var(--color-text)] truncate">{m.productName}</div>
-                    <div className="text-xs text-[var(--color-text-soft)]">{m.sku}</div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs text-[var(--color-text-soft)]">{m.sku}</span>
+                      {m.currentTotalStock !== undefined && (
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${m.currentTotalStock > 0 ? "bg-[var(--color-success-100)] text-[var(--color-success-700)]" : "bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]"}`}>
+                          {m.currentTotalStock > 0 ? `${m.currentTotalStock} en stock` : "sin stock"}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
@@ -801,6 +828,43 @@ export function InventoryFusionPanel() {
               El producto <strong>principal</strong> tiene factor 1 (lleva el stock). En cada derivado, el
               factor indica <strong>cuántas unidades base equivale 1 unidad de esa presentación</strong>.
             </p>
+
+            {/* Vista previa de migración de balances */}
+            {!editingId && members.length >= 2 && members.some((m) => m.currentTotalStock !== undefined) && (() => {
+              const canonical = members.find((m) => m.isCanonical);
+              if (!canonical) return null;
+              const totalBaseQty = members.reduce((sum, m) => {
+                const qty = m.currentTotalStock ?? 0;
+                return sum + qty * m.conversionFactor;
+              }, 0);
+              const nonCanonicalWithStock = members.filter((m) => !m.isCanonical && (m.currentTotalStock ?? 0) > 0);
+              return (
+                <div className="mt-2 rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 space-y-1.5">
+                  <p className="text-xs font-semibold text-[var(--color-warning-800)]">Vista previa — migración de stock al guardar</p>
+                  <div className="space-y-1">
+                    {members.map((m) => {
+                      const qty = m.currentTotalStock ?? 0;
+                      const baseQty = qty * m.conversionFactor;
+                      return (
+                        <div key={m.productId} className="flex items-center gap-2 text-xs text-[var(--color-warning-700)]">
+                          <span className="font-medium truncate max-w-[10rem]">{m.productName}</span>
+                          <span className="text-[var(--color-warning-500)]">
+                            {qty} {m.saleUnit || "ud"}
+                            {!m.isCanonical && m.conversionFactor > 1 && ` × ${m.conversionFactor} = ${baseQty} ${canonical.saleUnit || "base"}`}
+                          </span>
+                          {!m.isCanonical && <span className="ml-auto text-[var(--color-warning-500)]">→ quedará en 0</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="border-t border-[var(--color-warning-200)] pt-1.5 flex items-center gap-2 text-xs font-bold text-[var(--color-warning-900)]">
+                    <span>Total en {canonical.productName}:</span>
+                    <span>{totalBaseQty.toFixed(2)} {canonical.saleUnit || baseUnit}</span>
+                    {nonCanonicalWithStock.length === 0 && <span className="font-normal text-[var(--color-warning-600)]">(sin cambios — derivados sin stock)</span>}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
