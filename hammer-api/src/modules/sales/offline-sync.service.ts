@@ -132,6 +132,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
       data: {
         saleOrderId: order.id,
         cashSessionId: input.cashSessionId,
+        receivedByUserId: input.actorUserId,
         method: "CASH",
         amount: new Prisma.Decimal(input.grandTotal),
         status: "POSTED",
