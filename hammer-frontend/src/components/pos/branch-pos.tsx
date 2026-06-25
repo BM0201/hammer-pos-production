@@ -189,9 +189,10 @@ export function BranchPos({ branchId }: { branchId: string }) {
         status: "PENDING_SYNC",
       });
       await refreshPendingCount();
+      const newCount = await import("@/lib/offline-db").then(m => m.getPendingCount()).catch(() => 0);
       offlineCart.clear();
       setOfflineCheckoutOpen(false);
-      setNoticeTimed(`Venta guardada offline (${pendingCount + 1} en cola). Se sincronizará al reconectarse.`, 8000);
+      setNoticeTimed(`Venta guardada offline (${newCount} en cola). Se sincronizará al reconectarse.`, 8000);
     } catch {
       setNoticeTimed("No se pudo guardar la venta offline. Intenta de nuevo.", 10000);
     } finally {
@@ -301,7 +302,16 @@ export function BranchPos({ branchId }: { branchId: string }) {
             searchInputRef={searchInputRef}
             isBusy={isBusy}
             onAddProduct={isOffline
-              ? (product) => offlineCart.addProduct(product as unknown as CachedProduct)
+              ? (product) => offlineCart.addProduct({
+                  id: product.id,
+                  sku: product.sku,
+                  name: product.name,
+                  barcode: product.barcode,
+                  categoryName: product.categoryName,
+                  effectivePrice: Number(product.effectivePrice ?? product.branchPrice ?? product.standardSalePrice ?? 0),
+                  unit: product.unit ?? "UND",
+                  availableSaleStock: typeof product.availableSaleStock === "number" ? product.availableSaleStock : null,
+                })
               : addProduct}
             onTabToTicket={() => ticketPanelRef.current?.focus()}
             onClearSearch={() => { setSearch(""); setNoticeTimed(""); }}

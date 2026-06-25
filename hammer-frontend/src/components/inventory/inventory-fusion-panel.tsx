@@ -261,9 +261,11 @@ export function InventoryFusionPanel() {
   const memberIds = members.map((m) => m.productId).join(",");
   useEffect(() => {
     if (!memberIds) return;
-    fetch(`/api/inventory/product-stocks?productIds=${memberIds}`)
+    const controller = new AbortController();
+    fetch(`/api/inventory/product-stocks?productIds=${memberIds}`, { signal: controller.signal })
       .then((r) => r.json())
       .then((raw) => {
+        if (controller.signal.aborted) return;
         const list: { productId: string; totalQty: number }[] = unwrapApiData(raw) ?? [];
         setMembers((prev) =>
           prev.map((m) => {
@@ -273,6 +275,7 @@ export function InventoryFusionPanel() {
         );
       })
       .catch(() => {});
+    return () => controller.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [memberIds]);
 

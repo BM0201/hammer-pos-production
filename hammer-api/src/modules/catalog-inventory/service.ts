@@ -352,7 +352,8 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   }
 
   /* ── KPIs: computed from the current page when no filter, or from all matching when filtered ── */
-  const totalInventoryValue = balances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0);
+  const activeBalances = balances.filter((row) => row.product.isActive);
+  const totalInventoryValue = activeBalances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0);
 
   // Build effective price map from allMetricRows (which has branchProductSettings already loaded).
   // Priority: branch-specific price → standardSalePrice. Products without any price contribute 0.
@@ -366,7 +367,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       if (bp > 0) effectivePriceByProductBranch.set(`${row.id}:${setting.branchId}`, bp);
     }
   }
-  const totalPotentialRevenue = balances.reduce((sum, row) => {
+  const totalPotentialRevenue = activeBalances.reduce((sum, row) => {
     const qty = Math.max(0, decimalToNumber(row.quantityOnHand));
     const effectivePrice = effectivePriceByProductBranch.get(`${row.productId}:${row.branchId}`)
       ?? standardPriceByProduct.get(row.productId)

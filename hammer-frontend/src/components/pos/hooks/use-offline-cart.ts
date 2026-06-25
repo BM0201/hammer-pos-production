@@ -55,7 +55,7 @@ export function useOfflineCart() {
     setNotes("");
   }, []);
 
-  const grandTotal = lines.reduce((s, l) => s + l.lineSubtotal - l.discountAmount, 0);
+  const grandTotal = lines.reduce((s, l) => s + l.lineSubtotal, 0);
 
   return { lines, notes, setNotes, addProduct, updateQuantity, removeLine, clear, grandTotal };
 }
