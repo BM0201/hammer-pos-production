@@ -38,13 +38,13 @@
     "prisma": "6.19.3",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "tsx": "4.22.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "tsx": "^4.22.4",
     "typescript": "5.9.3"
   },
   "engines": {
