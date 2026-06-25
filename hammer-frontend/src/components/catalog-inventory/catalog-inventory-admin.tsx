@@ -453,17 +453,25 @@ export function CatalogInventoryAdmin() {
   const [data, setData] = useState<CenterData | null>(null);
   const [tab, setTab] = useState<Tab>((searchParams.get("tab") as Tab) || "summary");
   const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [branchId, setBranchId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [filter, setFilter] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [stockSearch, setStockSearch] = useState("");
   const activeTabRef = useRef<HTMLButtonElement | null>(null);
 
   /* Scroll active tab into view when tab changes (prevents hidden tab on mobile) */
   useEffect(() => {
     activeTabRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
   }, [tab]);
+
+  /* Debounce the text search so each keystroke doesn't fire an API request */
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQ(q), 350);
+    return () => clearTimeout(timer);
+  }, [q]);
 
   /* ── Inline edit state for product rows ── */
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -477,7 +485,7 @@ export function CatalogInventoryAdmin() {
   const load = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams();
-    if (q.trim()) params.set("q", q.trim());
+    if (debouncedQ.trim()) params.set("q", debouncedQ.trim());
     if (branchId) params.set("branchId", branchId);
     if (categoryId) params.set("categoryId", categoryId);
     if (filter) params.set("filter", filter);
@@ -488,7 +496,7 @@ export function CatalogInventoryAdmin() {
     if (!response.ok) throw new Error(raw.message ?? "No se pudo cargar Catalogo e Inventario.");
     setData(unwrapApiData(raw));
     setLoading(false);
-  }, [branchId, categoryId, filter, q, page]);
+  }, [branchId, categoryId, filter, debouncedQ, page]);
 
   useEffect(() => {
     load().catch((error) => {
@@ -827,11 +835,17 @@ export function CatalogInventoryAdmin() {
 
   const matrix = useMemo(() => {
     const branches = data?.branches ?? [];
-    return (data?.products ?? []).map((product) => {
+    const needle = stockSearch.trim().toLowerCase();
+    const products = needle
+      ? (data?.products ?? []).filter((p) =>
+          p.name.toLowerCase().includes(needle) || p.sku.toLowerCase().includes(needle)
+        )
+      : (data?.products ?? []);
+    return products.map((product) => {
       const byBranch = new Map(product.inventoryBalances.map((balance) => [balance.branchId, Number(balance.quantityOnHand)]));
       return { product, branches: branches.map((branch) => ({ branch, quantity: byBranch.get(branch.id) ?? 0 })) };
     });
-  }, [data]);
+  }, [data, stockSearch]);
 
   return (
     <section className="space-y-5">
@@ -1294,7 +1308,17 @@ export function CatalogInventoryAdmin() {
           </div>
           <div className="p-4 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <select className="hm-input" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }}>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" style={{ color: "var(--color-text-muted)" }} />
+                <input
+                  className="hm-input h-9 pl-8"
+                  style={{ minWidth: "200px" }}
+                  placeholder="Filtrar en esta página..."
+                  value={stockSearch}
+                  onChange={(e) => setStockSearch(e.target.value)}
+                />
+              </div>
+              <select className="hm-input h-9" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }}>
                 {FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
               <Button variant="primary" onClick={() => { setMovementDialog("adjustment"); setTab("movements"); }} icon={<Plus className="h-4 w-4" />}>Ajuste manual</Button>

@@ -115,14 +115,9 @@ export function InventoryAdmin({
   }, [loadBalances, loadMovements]);
 
   useEffect(() => {
-    loadProducts("").catch(() => undefined);
-  }, [loadProducts]);
-
-  useEffect(() => {
     const timer = setTimeout(() => {
       loadProducts(productSearch).catch(() => undefined);
-    }, 150);
-
+    }, 300);
     return () => clearTimeout(timer);
   }, [loadProducts, productSearch]);
 
@@ -172,7 +167,10 @@ export function InventoryAdmin({
             className="hm-input"
             placeholder="🔍 Buscar producto por nombre o SKU"
             value={productSearch}
-            onChange={(e) => setProductSearch(e.target.value)}
+            onChange={(e) => {
+              setProductSearch(e.target.value);
+              setFilterProductId("");
+            }}
           />
           <select className="hm-input" value={filterProductId} onChange={(e) => setFilterProductId(e.target.value)}>
             <option value="">Todos los productos</option>
