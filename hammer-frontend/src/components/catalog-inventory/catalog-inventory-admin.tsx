@@ -470,6 +470,7 @@ export function CatalogInventoryAdmin() {
   const [editDraft, setEditDraft] = useState({ name: "", categoryId: "", sku: "", applySuggestedSku: false });
   const [editSkuPreview, setEditSkuPreview] = useState("");
   const [savingProduct, setSavingProduct] = useState(false);
+  const [generatingSku, setGeneratingSku] = useState(false);
   const [focusedPricingProductId, setFocusedPricingProductId] = useState<string | null>(null);
   const [movementDialog, setMovementDialog] = useState<"adjustment" | "opening" | null>(null);
 
@@ -569,6 +570,32 @@ export function CatalogInventoryAdmin() {
     setEditingProductId(null);
     setEditDraft({ name: "", categoryId: "", sku: "", applySuggestedSku: false });
     setEditSkuPreview("");
+  }
+
+  async function regenerateSku(product: ProductRow) {
+    const name = editDraft.name.trim() || product.name;
+    const catId = editDraft.categoryId || product.category?.id || "";
+    if (!catId) {
+      toast.error("Selecciona una categoría primero para regenerar el SKU.");
+      return;
+    }
+    setGeneratingSku(true);
+    try {
+      const response = await fetch(
+        `/api/catalog/products/sku-suggestion?name=${encodeURIComponent(name)}&categoryId=${encodeURIComponent(catId)}&productId=${encodeURIComponent(product.id)}`
+      );
+      if (!response.ok) throw new Error("No se pudo generar el SKU.");
+      const raw = await response.json();
+      const result = unwrapApiData(raw);
+      if (result.suggestedSku) {
+        setEditSkuPreview(result.suggestedSku);
+        setEditDraft((prev) => ({ ...prev, applySuggestedSku: true }));
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Error al generar SKU.");
+    } finally {
+      setGeneratingSku(false);
+    }
   }
   async function saveProductEdit(product: ProductRow) {
     if (!editDraft.name.trim()) { toast.error("El nombre es obligatorio."); return; }
@@ -1116,29 +1143,62 @@ export function CatalogInventoryAdmin() {
                 {data.products.map((product) => {
                   const isEditing = editingProductId === product.id;
                   const sharedStock = renderSharedStock(product);
+                  const categoryChanged = isEditing && editDraft.categoryId !== (product.category?.id ?? "");
                   return (
                   <tr key={product.id}>
-                    <td className="font-semibold">{product.sku}</td>
+                    <td>
+                      {isEditing ? (
+                        <div className="space-y-1.5 min-w-[160px]">
+                          <div className="font-mono text-xs">
+                            {editDraft.applySuggestedSku && editSkuPreview ? (
+                              <>
+                                <span className="line-through text-[var(--color-text-muted)]">{product.sku}</span>
+                                <span className="ml-1.5 font-semibold" style={{ color: "var(--color-success-600)" }}>→ {editSkuPreview}</span>
+                              </>
+                            ) : (
+                              <span className="font-semibold text-[var(--color-text)]">{product.sku}</span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => regenerateSku(product)}
+                            disabled={generatingSku}
+                            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.68rem] font-medium border transition-colors disabled:opacity-50"
+                            style={{
+                              background: "color-mix(in srgb, var(--color-master-600) 8%, transparent)",
+                              color: "var(--color-master-700)",
+                              borderColor: "color-mix(in srgb, var(--color-master-600) 30%, transparent)",
+                            }}
+                          >
+                            {generatingSku ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCcw className="h-3 w-3" />}
+                            Regenerar SKU
+                          </button>
+                          {editDraft.applySuggestedSku && editSkuPreview ? (
+                            <label className="flex cursor-pointer items-center gap-1.5 text-[0.68rem] text-[var(--color-text-secondary)]">
+                              <input
+                                type="checkbox"
+                                checked={editDraft.applySuggestedSku}
+                                onChange={(e) => setEditDraft({ ...editDraft, applySuggestedSku: e.target.checked })}
+                              />
+                              Aplicar nuevo SKU
+                            </label>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="font-semibold">{product.sku}</span>
+                      )}
+                    </td>
                     <td>
                       {isEditing ? (
                         <div className="space-y-2">
                           <Input className="h-8 min-w-[220px]" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value, applySuggestedSku: false })} />
-                          {editSkuPreview ? (
+                          {editSkuPreview && categoryChanged ? (
                             <div className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[0.68rem] text-amber-800">
-                              <div>La categoria cambio. El SKU actual puede no corresponder a la nueva categoria.</div>
+                              <div>La categoria cambio. El SKU puede no corresponder a la nueva categoria.</div>
                               <div className="mt-1">
-                                Categoria: <strong>{product.category?.name ?? "Sin categoria"}</strong> a{" "}
+                                <strong>{product.category?.name ?? "Sin categoria"}</strong>{" → "}
                                 <strong>{data.categories.find((category) => category.id === editDraft.categoryId)?.name ?? "Sin categoria"}</strong>
                               </div>
-                              <div>SKU actual: <strong className="font-mono">{product.sku}</strong></div>
-                              <label className="mt-1 flex items-center gap-1.5">
-                                <input
-                                  type="checkbox"
-                                  checked={editDraft.applySuggestedSku}
-                                  onChange={(event) => setEditDraft({ ...editDraft, applySuggestedSku: event.target.checked })}
-                                />
-                                Actualizar SKU a <strong className="font-mono">{editSkuPreview}</strong>
-                              </label>
                             </div>
                           ) : null}
                         </div>

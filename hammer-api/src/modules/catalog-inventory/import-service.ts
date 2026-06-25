@@ -141,14 +141,14 @@ async function readRows(input: Pick<PreviewInput, "fileContent" | "fileBase64">)
 
   return matrix.slice(1).map((cells, idx) => ({
     rowNumber: idx + 2,
-    sku: normalizeManualSku(pick(cells, ["sku", "codigo", "code", "itemcode"])),
-    name: pick(cells, ["nombre", "producto", "name", "descripcion"]),
-    categoryCode: pick(cells, ["categoria", "categorias", "category", "categories", "grupodeproductos", "grupo"]) || undefined,
-    unit: (pick(cells, ["unidad", "unit", "uom", "um"]).trim().toUpperCase()) || undefined,
-    branchCode: pick(cells, ["sucursal", "branch", "branchcode"]).toUpperCase() || undefined,
-    quantity: toNumber(pick(cells, ["cantidad", "qty", "quantity", "conteo"])),
-    cost: toNumber(pick(cells, ["costo", "cost", "costounitario", "unitcost", "costprice"])),
-    price: toNumber(pick(cells, ["precio", "price", "standardsaleprice"])),
+    sku: normalizeManualSku(pick(cells, ["sku", "codigo", "code", "itemcode", "productcode", "referencia", "ref", "clave", "articulo"])),
+    name: pick(cells, ["nombre", "producto", "name", "descripcion", "productname", "material", "item", "articulo", "concepto", "nombrematerial", "nombreproducto"]),
+    categoryCode: pick(cells, ["categoria", "categorias", "category", "categories", "grupodeproductos", "grupo", "familia", "rubro", "departamento"]) || undefined,
+    unit: (pick(cells, ["unidad", "unit", "uom", "um", "unidadmedida", "medida"]).trim().toUpperCase()) || undefined,
+    branchCode: pick(cells, ["sucursal", "branch", "branchcode", "bodega", "almacen"]).toUpperCase() || undefined,
+    quantity: toNumber(pick(cells, ["cantidad", "qty", "quantity", "conteo", "cant", "stock", "unidades", "existencia"])),
+    cost: toNumber(pick(cells, ["costo", "cost", "costounitario", "unitcost", "costprice", "costbeftax", "costocompra", "preciocosto", "costounit"])),
+    price: toNumber(pick(cells, ["precio", "price", "standardsaleprice", "precioventa", "pventa", "pvp"])),
   })).filter((row) => row.sku || row.name);
 }
 
@@ -229,12 +229,13 @@ export async function analyzeUnifiedImport(input: Pick<PreviewInput, "fileConten
     if (!categoryByCode.has(code) && !categoryByName.has(code)) missingCategories.push(code);
   }
 
-  // Detect SKUs that don't exist → new products
-  const skuList = rows.filter((r) => r.sku).map((r) => r.sku);
+  // Detect SKUs that don't exist → new products (case-insensitive to tolerate mixed-case in DB)
+  const skuList = [...new Set(rows.filter((r) => r.sku).map((r) => r.sku))];
   const existingProducts = skuList.length > 0
-    ? await prisma.product.findMany({ where: { sku: { in: skuList } }, select: { sku: true } })
+    ? await prisma.$queryRaw<Array<{ sku: string }>>`
+        SELECT sku FROM "Product" WHERE UPPER(sku) = ANY(ARRAY[${Prisma.join(skuList.map((s) => s.toUpperCase()))}])`
     : [];
-  const existingSkuSet = new Set(existingProducts.map((p) => p.sku.toUpperCase()));
+  const existingSkuSet = new Set((existingProducts as Array<{ sku: string }>).map((p) => p.sku.toUpperCase()));
 
   let newProductCount = 0;
   let autoSkuCount = 0;
@@ -327,26 +328,45 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
   const reservedSkus = new Set<string>();
   const skuByRowNumber = new Map<number, string>();
 
+  // Pre-lookup by name for rows without SKU so we reuse existing product SKUs
+  // and avoid creating duplicates on re-import.
+  const noSkuNames = [...new Set(rows.filter((r) => !r.sku && r.name.trim()).map((r) => r.name.trim()))];
+  const existingByNameRaw = noSkuNames.length > 0
+    ? await prisma.$queryRaw<Array<{ id: string; sku: string; name: string }>>`
+        SELECT id, sku, name FROM "Product"
+        WHERE UPPER(name) = ANY(ARRAY[${Prisma.join(noSkuNames.map((n) => n.toUpperCase()))}])`
+    : [];
+  const existingByNameMap = new Map(existingByNameRaw.map((p) => [p.name.toUpperCase(), p]));
+
   for (const row of rows) {
     let sku = "";
     if (row.sku) {
       // Manual SKU already normalized at read time — skip DB call
       sku = row.sku;
     } else if (row.name.trim()) {
-      const categoryName = row.categoryCode ? (categoryByCode.get(row.categoryCode.toUpperCase()) ?? categoryByName.get(row.categoryCode.toUpperCase()))?.name ?? row.categoryCode : defaultCategory?.name ?? null;
-      sku = await generateSkuForProduct(prisma, {
-        productName: row.name,
-        categoryName,
-        sku: row.sku,
-      }, reservedSkus);
+      // If a product with this name already exists, reuse its SKU to avoid duplicates
+      const existingByName = existingByNameMap.get(row.name.trim().toUpperCase());
+      if (existingByName) {
+        sku = existingByName.sku;
+      } else {
+        const categoryName = row.categoryCode ? (categoryByCode.get(row.categoryCode.toUpperCase()) ?? categoryByName.get(row.categoryCode.toUpperCase()))?.name ?? row.categoryCode : defaultCategory?.name ?? null;
+        sku = await generateSkuForProduct(prisma, {
+          productName: row.name,
+          categoryName,
+          sku: row.sku,
+        }, reservedSkus);
+      }
     }
     reservedSkus.add(sku);
     skuByRowNumber.set(row.rowNumber, sku);
   }
 
-  const skuList = Array.from(new Set(skuByRowNumber.values()));
-  const products = await prisma.product.findMany({ where: { sku: { in: skuList } }, select: { id: true, sku: true } });
-  const existingSkus = new Set(products.map((product) => product.sku.toUpperCase()));
+  const skuList = Array.from(new Set(skuByRowNumber.values())).filter(Boolean);
+  const products = skuList.length > 0
+    ? await prisma.$queryRaw<Array<{ id: string; sku: string }>>`
+        SELECT id, sku FROM "Product" WHERE UPPER(sku) = ANY(ARRAY[${Prisma.join(skuList.map((s) => s.toUpperCase()))}])`
+    : [];
+  const existingSkus = new Set((products as Array<{ sku: string }>).map((product) => product.sku.toUpperCase()));
 
   const resolveBranches = (row: RawRow) => {
     if (!needsBranch(importType)) return [null];
@@ -557,26 +577,57 @@ async function productForLineTx(tx: Prisma.TransactionClient, line: {
   defaultCategoryId: string | null;
   defaultUnit: string | null;
   defaultStandardSalePrice: Prisma.Decimal | null;
-}, actorUserId: string, result: ImportResult) {
+}, actorUserId: string, result: ImportResult, categoryMaps?: {
+  byCode: Map<string, { id: string; code: string; name: string; isActive: boolean }>;
+  byName: Map<string, { id: string; code: string; name: string; isActive: boolean }>;
+}) {
   const sku = normalizeManualSku(line.sku);
-  let product = await tx.product.findUnique({ where: { sku }, select: { id: true, sku: true } });
+
+  // Primary lookup: by SKU
+  let product = sku ? await tx.product.findUnique({ where: { sku }, select: { id: true, sku: true } }) : null;
+
+  // Fallback: if no SKU, search by name to avoid creating duplicates
+  if (!product && !sku && line.name?.trim()) {
+    const byName = await tx.product.findFirst({
+      where: { name: { equals: line.name.trim(), mode: "insensitive" } },
+      select: { id: true, sku: true },
+    });
+    if (byName) return byName;
+  }
+
   if (product) return product;
 
   if (!batch.createMissingProducts) {
     throw new ImportLineExecutionError("Producto no existe y createMissingProducts esta deshabilitado.", line.id, line.rowNumber);
   }
-  if (!batch.defaultCategoryId) {
-    throw new ImportLineExecutionError("Categoria default requerida para crear productos.", line.id, line.rowNumber);
+
+  // Resolve category: per-row categoryCode takes priority over the batch default
+  let resolvedCategoryId: string | null = null;
+  if (line.categoryCode && categoryMaps) {
+    const found = categoryMaps.byCode.get(line.categoryCode.toUpperCase()) ?? categoryMaps.byName.get(line.categoryCode.toUpperCase());
+    if (found?.isActive) resolvedCategoryId = found.id;
+  }
+  if (!resolvedCategoryId) resolvedCategoryId = batch.defaultCategoryId;
+
+  if (!resolvedCategoryId) {
+    throw new ImportLineExecutionError(
+      "Categoria requerida para crear producto. Incluye columna 'categoria' en el archivo o selecciona una categoria por defecto.",
+      line.id,
+      line.rowNumber,
+    );
   }
 
-  const category = await tx.category.findUnique({ where: { id: batch.defaultCategoryId }, select: { id: true, isActive: true } });
-  if (!category?.isActive) throw new ImportLineExecutionError("Categoria default invalida o inactiva.", line.id, line.rowNumber);
+  const category = await tx.category.findUnique({ where: { id: resolvedCategoryId }, select: { id: true, isActive: true } });
+  if (!category?.isActive) throw new ImportLineExecutionError("Categoria invalida o inactiva.", line.id, line.rowNumber);
+
+  // Auto-generate SKU from name when SKU column is absent
+  const finalSku = sku || await generateSkuForProduct(tx, { productName: line.name.trim(), categoryName: null, sku: null });
 
   const created = await tx.product.create({
     data: {
-      sku,
+      sku: finalSku,
       name: line.name.trim(),
-      categoryId: batch.defaultCategoryId,
+      categoryId: resolvedCategoryId,
       unit: line.unit?.trim() || batch.defaultUnit || "UN",
       allowsFraction: false,
       isTimber: false,
@@ -592,7 +643,7 @@ async function productForLineTx(tx: Prisma.TransactionClient, line: {
       action: "PRODUCT_CREATE",
       entityType: "Product",
       entityId: created.id,
-      metadataJson: { source: "IMPORT_BATCH", sku },
+      metadataJson: { source: "IMPORT_BATCH", sku: finalSku },
     },
   });
   result.createdProducts += 1;
@@ -881,13 +932,17 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
           const quantity = line.quantity === null ? null : Number(line.quantity);
           const unitCost = line.unitCost === null ? null : Number(line.unitCost);
           const standardSalePrice = line.standardSalePrice === null ? null : Number(line.standardSalePrice);
-          assertPositiveQuantity(quantity, line);
+          if (changesInventory(importType)) assertPositiveQuantity(quantity, line);
           assertNonNegative(unitCost, "Costo", line);
           assertNonNegative(standardSalePrice, "Precio", line);
 
-          let product = await tx.product.findUnique({ where: { sku: normalizeManualSku(line.sku) }, select: { id: true, sku: true } });
+          const lineSku = normalizeManualSku(line.sku);
+          let product = lineSku ? await tx.product.findUnique({ where: { sku: lineSku }, select: { id: true, sku: true } }) : null;
           if (!product && batch.createMissingProducts) {
-            product = await productForLineTx(tx, line, batch, input.actorUserId, result);
+            product = await productForLineTx(tx, line, batch, input.actorUserId, result, {
+              byCode: categoryByCode,
+              byName: categoryByNameExec,
+            });
           }
           if (!product) throw new ImportLineExecutionError("Producto no encontrado.", line.id, line.rowNumber);
 
