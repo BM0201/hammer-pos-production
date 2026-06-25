@@ -303,6 +303,70 @@ export async function createStockGroup(input: CreateStockGroupInput, actorUserId
       });
     }
 
+    // ── Migrar balances existentes al producto canónico ─────────────────────
+    // Cada producto miembro puede tener stock propio antes de la fusión.
+    // Convertimos todo a unidades base (factor del canónico = 1) y lo
+    // consolidamos en el balance del canónico. Los no-canónicos quedan en 0
+    // porque a partir de ahora el sistema lee siempre desde el canónico.
+    const productIds = input.members.map((m) => m.productId);
+    const existingBalances = await tx.inventoryBalance.findMany({
+      where: { productId: { in: productIds } },
+      select: { branchId: true, productId: true, quantityOnHand: true, weightedAverageCost: true },
+    });
+
+    const affectedBranchIds = [...new Set(existingBalances.map((b) => b.branchId))];
+
+    for (const branchId of affectedBranchIds) {
+      let totalBaseQty = new Prisma.Decimal(0);
+      let weightedCostNumerator = new Prisma.Decimal(0);
+
+      for (const member of input.members) {
+        const balance = existingBalances.find((b) => b.branchId === branchId && b.productId === member.productId);
+        if (!balance || balance.quantityOnHand.lte(0)) continue;
+
+        const factor = new Prisma.Decimal(member.conversionFactor);
+        // Convert qty to base units: qty_quintal × 14 = qty_varilla
+        const baseQty = balance.quantityOnHand.mul(factor);
+        // Convert WAC to per-base-unit: wac_quintal / 14 = wac_varilla
+        const wacPerBase = balance.weightedAverageCost.gt(0)
+          ? balance.weightedAverageCost.div(factor)
+          : new Prisma.Decimal(0);
+
+        totalBaseQty = totalBaseQty.add(baseQty);
+        weightedCostNumerator = weightedCostNumerator.add(baseQty.mul(wacPerBase));
+      }
+
+      const newWac = totalBaseQty.gt(0)
+        ? weightedCostNumerator.div(totalBaseQty)
+        : new Prisma.Decimal(0);
+
+      // Consolidar todo en el canónico
+      await tx.inventoryBalance.upsert({
+        where: { branchId_productId: { branchId, productId: canonical.productId } },
+        create: {
+          branchId,
+          productId: canonical.productId,
+          quantityOnHand: totalBaseQty,
+          weightedAverageCost: newWac,
+          inventoryValue: totalBaseQty.mul(newWac),
+        },
+        update: {
+          quantityOnHand: totalBaseQty,
+          weightedAverageCost: newWac,
+          inventoryValue: totalBaseQty.mul(newWac),
+        },
+      });
+
+      // Poner a cero los no-canónicos (su stock pasó al canónico)
+      const nonCanonicalIds = input.members.filter((m) => !m.isCanonical).map((m) => m.productId);
+      if (nonCanonicalIds.length > 0) {
+        await tx.inventoryBalance.updateMany({
+          where: { branchId, productId: { in: nonCanonicalIds } },
+          data: { quantityOnHand: 0, weightedAverageCost: 0, inventoryValue: 0 },
+        });
+      }
+    }
+
     return createdGroup;
   });
 
