@@ -89,6 +89,11 @@ type Movement = {
   referenceType: string;
   referenceId: string;
   notes?: string | null;
+  reason?: string | null;
+  inputUnit?: string | null;
+  inputQuantity?: string | null;
+  baseUnit?: string | null;
+  userName?: string | null;
   product: { id: string; sku: string; name: string };
   branch: Branch;
 };
@@ -2682,6 +2687,52 @@ function OpeningBalanceModal({
   );
 }
 
+/* ─── Kardex helpers ─────────────────────────────────────── */
+const MOV_LABELS: Record<string, { label: string; color: string; bg: string }> = {
+  PURCHASE_IN:        { label: "Compra",          color: "#16a34a", bg: "#f0fdf4" },
+  SALE_OUT:           { label: "Venta",            color: "#dc2626", bg: "#fef2f2" },
+  ADJUSTMENT_IN:      { label: "Ajuste +",         color: "#2563eb", bg: "#eff6ff" },
+  ADJUSTMENT_OUT:     { label: "Ajuste −",         color: "#ea580c", bg: "#fff7ed" },
+  RETURN_IN:          { label: "Devolución +",     color: "#16a34a", bg: "#f0fdf4" },
+  RETURN_OUT:         { label: "Devolución −",     color: "#dc2626", bg: "#fef2f2" },
+  TRANSFER_IN:        { label: "Traslado +",       color: "#7c3aed", bg: "#f5f3ff" },
+  TRANSFER_OUT:       { label: "Traslado −",       color: "#7c3aed", bg: "#f5f3ff" },
+  TIMBER_INTAKE_IN:   { label: "Entrada madera",   color: "#92400e", bg: "#fffbeb" },
+  PRODUCTION_CONSUME: { label: "Consumo prod.",    color: "#dc2626", bg: "#fef2f2" },
+  PRODUCTION_OUTPUT:  { label: "Salida prod.",     color: "#16a34a", bg: "#f0fdf4" },
+  PRODUCTION_WASTE:   { label: "Merma prod.",      color: "#ea580c", bg: "#fff7ed" },
+  PACKAGE_IN:         { label: "Paquete +",        color: "#2563eb", bg: "#eff6ff" },
+  PACKAGE_SALE_OUT:   { label: "Paquete venta",    color: "#dc2626", bg: "#fef2f2" },
+  PACKAGE_OPENED:     { label: "Paquete abierto",  color: "#6b7280", bg: "#f9fafb" },
+  LOOSE_UNIT_SALE_OUT:{ label: "Unidad suelta −",  color: "#dc2626", bg: "#fef2f2" },
+  LOOSE_ADJUSTMENT:   { label: "Ajuste suelto",    color: "#ea580c", bg: "#fff7ed" },
+};
+function movKardexLabel(type: string) {
+  return MOV_LABELS[type] ?? { label: type, color: "#6b7280", bg: "#f9fafb" };
+}
+const REF_LABELS: Record<string, string> = {
+  OPENING_BALANCE:       "Carga inicial",
+  OPENING_BALANCE_BULK:  "Carga inicial masiva",
+  MANUAL_ADJUSTMENT:     "Ajuste manual",
+  SALE:                  "Venta",
+  SALE_RETURN:           "Devolución venta",
+  PURCHASE:              "Compra",
+  TRANSFER:              "Traslado",
+  PRODUCTION:            "Producción",
+  IMPORT:                "Importación",
+  MANUAL:                "Manual",
+};
+function fmtRef(type: string, id: string) {
+  const label = REF_LABELS[type] ?? type;
+  const shortId = id.startsWith("OPENING-BULK-")
+    ? `Lote #${id.split("-").pop()}`
+    : id.length > 16 ? `${id.slice(0, 14)}…` : id;
+  return { label, shortId };
+}
+function isKardexIn(type: string) {
+  return type.endsWith("_IN") || type === "PURCHASE_IN" || type === "PRODUCTION_OUTPUT";
+}
+
 /* ═══════════════════════════════════════════════════════════
    MOVEMENTS PANEL
    ═══════════════════════════════════════════════════════════ */
@@ -2850,17 +2901,86 @@ function MovementsPanel({
             <Button variant="ghost" size="sm" loading={loadingMovements} onClick={() => void loadMovements()} icon={<RefreshCcw className="h-3.5 w-3.5" />}>Actualizar</Button>
           </div>
         </div>
-        <div className="overflow-x-auto">
-          <table className="hm-table min-w-[980px] w-full">
-            <thead><tr><th>Fecha</th><th>Producto</th><th>SKU</th><th>Sucursal</th><th>Tipo</th><th>Entrada</th><th>Salida</th><th>Saldo final</th><th>Unidad</th><th>Usuario</th><th>Referencia</th><th>Motivo / nota</th></tr></thead>
+        <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+          <table className="hm-table min-w-[1100px] w-full">
+            <thead>
+              <tr>
+                <th className="w-[140px]">Fecha</th>
+                <th>Producto</th>
+                <th className="w-[90px]">Sucursal</th>
+                <th className="w-[140px]">Tipo</th>
+                <th className="text-right w-[90px]">Entrada</th>
+                <th className="text-right w-[90px]">Salida</th>
+                <th className="text-right w-[90px]">Costo unit.</th>
+                <th className="w-[70px]">Unidad</th>
+                <th className="w-[120px]">Referencia</th>
+                <th>Motivo / nota</th>
+                <th className="w-[110px]">Usuario</th>
+              </tr>
+            </thead>
             <tbody>
               {pagedMovements.map((item) => {
-                const quantity = Number(item.quantity);
-                const isIn = ["PURCHASE_IN", "RETURN_IN", "ADJUSTMENT_IN", "TRANSFER_IN", "TIMBER_INTAKE_IN"].includes(item.movementType);
-                const visibleType = item.referenceType === "OPENING_BALANCE" ? "Carga inicial" : item.referenceType === "MANUAL_ADJUSTMENT" ? "Ajuste manual" : item.movementType;
-                return <tr key={item.id}><td>{new Date(item.createdAt).toLocaleString("es-NI")}</td><td className="font-medium">{item.product.name}</td><td className="font-mono text-xs">{item.product.sku}</td><td>{item.branch.code}</td><td>{visibleType}</td><td>{isIn ? qty(quantity) : "-"}</td><td>{!isIn ? qty(quantity) : "-"}</td><td className="text-[var(--color-text-muted)]">-</td><td>Unidad</td><td className="text-[var(--color-text-muted)]">-</td><td>{item.referenceType} / {item.referenceId}</td><td>{item.notes ?? "-"}</td></tr>;
+                const qty_ = Number(item.inputQuantity ?? item.quantity);
+                const isIn = isKardexIn(item.movementType);
+                const lbl = movKardexLabel(item.movementType);
+                const ref = fmtRef(item.referenceType, item.referenceId);
+                const unit = item.inputUnit ?? item.baseUnit ?? "UN";
+                const nota = [item.reason, item.notes].filter(Boolean).join(" · ") || null;
+                return (
+                  <tr key={item.id} className="group hover:bg-[var(--color-surface-alt)]">
+                    <td className="whitespace-nowrap text-xs text-[var(--color-text-secondary)]">
+                      {new Date(item.createdAt).toLocaleString("es-NI")}
+                    </td>
+                    <td>
+                      <div className="font-medium text-[var(--color-text)] leading-tight">{item.product.name}</div>
+                      <div className="font-mono text-[10px] text-[var(--color-text-muted)]">{item.product.sku}</div>
+                    </td>
+                    <td>
+                      <span className="inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[10px] font-bold"
+                        style={{ background: "var(--color-master-50)", color: "var(--color-master-700)" }}>
+                        {item.branch.code}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                        style={{ background: lbl.bg, color: lbl.color }}>
+                        {lbl.label}
+                      </span>
+                    </td>
+                    <td className="text-right font-mono font-semibold" style={{ color: "#16a34a" }}>
+                      {isIn ? `+${qty(qty_)}` : ""}
+                    </td>
+                    <td className="text-right font-mono font-semibold" style={{ color: "#dc2626" }}>
+                      {!isIn ? `−${qty(qty_)}` : ""}
+                    </td>
+                    <td className="text-right font-mono text-xs text-[var(--color-text-secondary)]">
+                      {money(item.unitCost)}
+                    </td>
+                    <td className="text-xs text-[var(--color-text-muted)] font-mono">{unit}</td>
+                    <td>
+                      <div className="text-[11px] font-medium text-[var(--color-text-secondary)]">{ref.label}</div>
+                      <div className="font-mono text-[10px] text-[var(--color-text-muted)]">{ref.shortId}</div>
+                    </td>
+                    <td className="max-w-[180px]">
+                      {nota ? (
+                        <span className="text-xs text-[var(--color-text-secondary)] line-clamp-2" title={nota}>{nota}</span>
+                      ) : (
+                        <span className="text-xs text-[var(--color-text-muted)]">—</span>
+                      )}
+                    </td>
+                    <td className="text-xs text-[var(--color-text-secondary)]">
+                      {item.userName ?? <span className="text-[var(--color-text-muted)]">Sistema</span>}
+                    </td>
+                  </tr>
+                );
               })}
-              {pagedMovements.length === 0 ? <tr><td colSpan={12} className="py-8 text-center text-sm text-[var(--color-text-muted)]">{loadingMovements ? "Cargando movimientos..." : "Sin movimientos para los filtros seleccionados."}</td></tr> : null}
+              {pagedMovements.length === 0 ? (
+                <tr>
+                  <td colSpan={11} className="py-10 text-center text-sm text-[var(--color-text-muted)]">
+                    {loadingMovements ? "Cargando movimientos…" : "Sin movimientos para los filtros seleccionados."}
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>

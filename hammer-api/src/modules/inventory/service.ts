@@ -131,13 +131,22 @@ export async function listInventoryMovementsPaginated(params: InventoryMovementP
   const [rows, total] = await Promise.all([
     prisma.inventoryMovement.findMany({
       where,
-      include: {
-        product: {
-          select: { id: true, sku: true, name: true },
-        },
-        branch: {
-          select: { id: true, code: true, name: true },
-        },
+      select: {
+        id: true,
+        createdAt: true,
+        movementType: true,
+        quantity: true,
+        unitCost: true,
+        referenceType: true,
+        referenceId: true,
+        notes: true,
+        reason: true,
+        inputUnit: true,
+        inputQuantity: true,
+        baseUnit: true,
+        userId: true,
+        product: { select: { id: true, sku: true, name: true } },
+        branch: { select: { id: true, code: true, name: true } },
       },
       orderBy: { createdAt: "desc" },
       skip,
@@ -146,8 +155,19 @@ export async function listInventoryMovementsPaginated(params: InventoryMovementP
     prisma.inventoryMovement.count({ where }),
   ]);
 
+  const userIds = [...new Set(rows.map((r) => r.userId).filter(Boolean))] as string[];
+  const userMap = userIds.length > 0
+    ? new Map(
+        (await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, fullName: true } }))
+          .map((u) => [u.id, u.fullName])
+      )
+    : new Map<string, string>();
+
   return {
-    rows,
+    rows: rows.map((r) => ({
+      ...r,
+      userName: r.userId ? (userMap.get(r.userId) ?? null) : null,
+    })),
     pagination: {
       page,
       limit,

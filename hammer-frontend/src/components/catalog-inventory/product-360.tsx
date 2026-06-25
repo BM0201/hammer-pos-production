@@ -654,33 +654,58 @@ function KardexTab({
                   <th>Sucursal</th>
                   <th>Tipo</th>
                   <th className="text-right">Cantidad</th>
-                  <th className="text-right">Costo Unit.</th>
+                  <th className="text-right">Costo unit.</th>
+                  <th className="text-right">Valor total</th>
                   <th>Referencia</th>
+                  <th>Nota</th>
                 </tr>
               </thead>
               <tbody>
                 {sorted.map((m) => {
                   const ml = movementLabel(m.movementType);
                   const isNegative = isOutboundMovement(m.movementType);
+                  const qtyVal = Number(m.quantity);
+                  const costVal = Number(m.unitCost);
+                  const totalVal = qtyVal * costVal;
+                  const refLabel = {
+                    OPENING_BALANCE: "Carga inicial",
+                    OPENING_BALANCE_BULK: "Carga masiva",
+                    MANUAL_ADJUSTMENT: "Ajuste manual",
+                    SALE: "Venta",
+                    SALE_RETURN: "Devolución",
+                    PURCHASE: "Compra",
+                    TRANSFER: "Traslado",
+                    MANUAL: "Manual",
+                  }[m.referenceType] ?? m.referenceType;
+                  const refShort = m.referenceId.startsWith("OPENING-BULK-")
+                    ? `Lote·${m.referenceId.split("-").pop()}`
+                    : m.referenceId.length > 18 ? `${m.referenceId.slice(0, 16)}…` : m.referenceId;
+                  const nota = m.notes?.trim() || null;
                   return (
-                    <tr key={m.id}>
+                    <tr key={m.id} className="group hover:bg-[var(--color-surface-alt)]">
                       <td><MovementIcon type={m.movementType} /></td>
-                      <td className="whitespace-nowrap text-[var(--color-text-secondary)]">{fmtDateTime(m.createdAt)}</td>
+                      <td className="whitespace-nowrap text-[var(--color-text-secondary)] text-xs">{fmtDateTime(m.createdAt)}</td>
                       <td>
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="flex items-center justify-center w-6 h-6 rounded bg-[var(--color-master-50)] text-[var(--color-master-700)] text-[10px] font-bold">
-                            {m.branch.code}
-                          </span>
+                        <span className="flex items-center justify-center w-6 h-6 rounded bg-[var(--color-master-50)] text-[var(--color-master-700)] text-[10px] font-bold">
+                          {m.branch.code}
                         </span>
                       </td>
                       <td><Badge variant={ml.color}>{ml.label}</Badge></td>
-                      <td className={`text-right font-mono font-semibold ${isNegative ? "text-red-600" : "text-emerald-600"}`}>
-                        {isNegative ? "−" : "+"}{qty(m.quantity)}
+                      <td className={`text-right font-mono font-semibold text-sm ${isNegative ? "text-red-600" : "text-emerald-600"}`}>
+                        {isNegative ? "−" : "+"}{qty(qtyVal)}
                       </td>
-                      <td className="text-right font-mono">{money(m.unitCost)}</td>
+                      <td className="text-right font-mono text-xs text-[var(--color-text-secondary)]">{money(costVal)}</td>
+                      <td className="text-right font-mono text-xs font-semibold text-[var(--color-text)]">{money(totalVal)}</td>
                       <td>
-                        <span className="text-xs text-[var(--color-text-muted)]">{m.referenceType}</span>
-                        <span className="text-xs text-[var(--color-text-secondary)] ml-1 font-mono">{m.referenceId.slice(0, 8)}</span>
+                        <div className="text-[11px] font-medium text-[var(--color-text-secondary)]">{refLabel}</div>
+                        <div className="font-mono text-[10px] text-[var(--color-text-muted)]">{refShort}</div>
+                      </td>
+                      <td className="max-w-[160px]">
+                        {nota ? (
+                          <span className="text-xs text-[var(--color-text-secondary)] line-clamp-2" title={nota}>{nota}</span>
+                        ) : (
+                          <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
+                        )}
                       </td>
                     </tr>
                   );
