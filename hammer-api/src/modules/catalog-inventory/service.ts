@@ -353,10 +353,25 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
 
   /* ── KPIs: computed from the current page when no filter, or from all matching when filtered ── */
   const totalInventoryValue = balances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0);
+
+  // Build effective price map from allMetricRows (which has branchProductSettings already loaded).
+  // Priority: branch-specific price → standardSalePrice. Products without any price contribute 0.
+  const effectivePriceByProductBranch = new Map<string, number>(); // "productId:branchId" → price
+  const standardPriceByProduct = new Map<string, number>();       // productId → standardSalePrice
+  for (const row of allMetricRows) {
+    const stdPrice = decimalToNumber((row as any).standardSalePrice);
+    if (stdPrice > 0) standardPriceByProduct.set(row.id, stdPrice);
+    for (const setting of (row as any).branchProductSettings ?? []) {
+      const bp = decimalToNumber(setting.branchPrice);
+      if (bp > 0) effectivePriceByProductBranch.set(`${row.id}:${setting.branchId}`, bp);
+    }
+  }
   const totalPotentialRevenue = balances.reduce((sum, row) => {
     const qty = Math.max(0, decimalToNumber(row.quantityOnHand));
-    const price = Math.max(0, decimalToNumber(row.product.standardSalePrice));
-    return sum + qty * price;
+    const effectivePrice = effectivePriceByProductBranch.get(`${row.productId}:${row.branchId}`)
+      ?? standardPriceByProduct.get(row.productId)
+      ?? Math.max(0, decimalToNumber(row.product.standardSalePrice));
+    return sum + qty * effectivePrice;
   }, 0);
   const grossMarginValue = totalPotentialRevenue - totalInventoryValue;
   const grossMarginPercent = totalPotentialRevenue > 0

@@ -1544,68 +1544,69 @@ function InventorySummary({ kpis, onNavigate }: InventorySummaryProps) {
           {/* HABER — valor de venta */}
           <div className="rounded-lg p-3 space-y-1" style={{ background: "var(--color-surface-alt)", border: "0.5px solid var(--color-border)" }}>
             <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Valor de venta potencial</p>
-            <p className="text-xl font-bold tabular-nums" style={{ color: "var(--color-info-600)" }}>{money(kpis.totalPotentialRevenue)}</p>
+            <p className="text-xl font-bold tabular-nums" style={{ color: "var(--color-info-600)" }}>{money(kpis.totalPotentialRevenue ?? 0)}</p>
             <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Cantidad × precio de venta vigente</p>
           </div>
 
           {/* RESULTADO — margen */}
-          <div
-            className="rounded-lg p-3 space-y-1"
-            style={{
-              background: kpis.grossMarginValue >= 0 ? "var(--color-success-50)" : "var(--color-danger-50)",
-              border: `0.5px solid ${kpis.grossMarginValue >= 0 ? "var(--color-success-200)" : "var(--color-danger-200)"}`,
-            }}
-          >
-            <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Ganancia bruta potencial</p>
-            <p
-              className="text-xl font-bold tabular-nums"
-              style={{ color: kpis.grossMarginValue >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}
-            >
-              {money(kpis.grossMarginValue)}
-            </p>
-            <p className="text-[11px] font-semibold" style={{ color: kpis.grossMarginValue >= 0 ? "var(--color-success-600)" : "var(--color-danger-600)" }}>
-              {kpis.grossMarginPercent !== null ? `${kpis.grossMarginPercent.toFixed(1)}% de margen bruto` : "Sin datos de precio"}
-            </p>
-          </div>
+          {(() => {
+            const margin = kpis.grossMarginValue ?? 0;
+            const pct = kpis.grossMarginPercent != null ? kpis.grossMarginPercent : null;
+            const positive = margin >= 0;
+            return (
+              <div
+                className="rounded-lg p-3 space-y-1"
+                style={{
+                  background: positive ? "var(--color-success-50)" : "var(--color-danger-50)",
+                  border: `0.5px solid ${positive ? "var(--color-success-200)" : "var(--color-danger-200)"}`,
+                }}
+              >
+                <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Ganancia bruta potencial</p>
+                <p className="text-xl font-bold tabular-nums" style={{ color: positive ? "var(--color-success-700)" : "var(--color-danger-700)" }}>
+                  {money(margin)}
+                </p>
+                <p className="text-[11px] font-semibold" style={{ color: positive ? "var(--color-success-600)" : "var(--color-danger-600)" }}>
+                  {pct != null ? `${pct.toFixed(1)}% de margen bruto` : "Sin datos de precio"}
+                </p>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Barra de margen visual */}
-        {kpis.grossMarginPercent !== null && kpis.totalPotentialRevenue > 0 && (
-          <div className="space-y-1.5">
-            <div className="flex h-2 w-full overflow-hidden rounded-full" style={{ background: "var(--color-surface-raised)" }}>
-              <div
-                className="h-full rounded-l-full transition-all duration-[400ms] ease-out"
-                style={{
-                  width: `${Math.min(100, Math.max(0, (kpis.totalInventoryValue / kpis.totalPotentialRevenue) * 100))}%`,
-                  background: "var(--color-info-400)",
-                }}
-                title={`Costo: ${money(kpis.totalInventoryValue)}`}
-              />
-              <div
-                className="h-full rounded-r-full transition-all duration-[400ms] ease-out"
-                style={{
-                  width: `${Math.min(100, Math.max(0, kpis.grossMarginPercent))}%`,
-                  background: "var(--color-success-500)",
-                }}
-                title={`Margen: ${money(kpis.grossMarginValue)}`}
-              />
-            </div>
-            <div className="flex gap-4 text-[10px] flex-wrap">
-              <span className="flex items-center gap-1">
-                <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--color-info-400)" }} />
-                <span style={{ color: "var(--color-text-secondary)" }}>
-                  Costo ({(100 - kpis.grossMarginPercent).toFixed(1)}%)
+        {(() => {
+          const pct = kpis.grossMarginPercent != null ? kpis.grossMarginPercent : null;
+          const revenue = kpis.totalPotentialRevenue ?? 0;
+          if (pct == null || revenue <= 0) return null;
+          const costPct = Math.min(100, Math.max(0, (kpis.totalInventoryValue / revenue) * 100));
+          const marginPct = Math.min(100, Math.max(0, pct));
+          return (
+            <div className="space-y-1.5">
+              <div className="flex h-2 w-full overflow-hidden rounded-full" style={{ background: "var(--color-surface-raised)" }}>
+                <div
+                  className="h-full rounded-l-full transition-all duration-[400ms] ease-out"
+                  style={{ width: `${costPct}%`, background: "var(--color-info-400)" }}
+                  title={`Costo: ${money(kpis.totalInventoryValue)}`}
+                />
+                <div
+                  className="h-full rounded-r-full transition-all duration-[400ms] ease-out"
+                  style={{ width: `${marginPct}%`, background: "var(--color-success-500)" }}
+                  title={`Margen: ${money(kpis.grossMarginValue ?? 0)}`}
+                />
+              </div>
+              <div className="flex gap-4 text-[10px] flex-wrap">
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--color-info-400)" }} />
+                  <span style={{ color: "var(--color-text-secondary)" }}>Costo ({(100 - pct).toFixed(1)}%)</span>
                 </span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--color-success-500)" }} />
-                <span style={{ color: "var(--color-text-secondary)" }}>
-                  Margen ({kpis.grossMarginPercent.toFixed(1)}%)
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--color-success-500)" }} />
+                  <span style={{ color: "var(--color-text-secondary)" }}>Margen ({pct.toFixed(1)}%)</span>
                 </span>
-              </span>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
           Ganancia bruta = valor de venta − costo de inventario. No incluye gastos operativos (ver módulo de Gastos para ganancia neta).
