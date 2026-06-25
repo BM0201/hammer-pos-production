@@ -144,7 +144,7 @@ export async function POST(request: Request) {
       await logAuditEvent({
         actorUserId: session.userId,
         branchId: branch.id,
-        module: "cash-session",
+        module: "cash_session",
         action: "CASH_BOX_CONSOLIDATED",
         entityType: "PhysicalCashBox",
         entityId: keep.id,

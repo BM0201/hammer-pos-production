@@ -18,27 +18,14 @@ export async function logAuditEvent(input: AuditInput): Promise<void> {
     let actorUserId = input.actorUserId ?? undefined;
     let branchId = input.branchId ?? undefined;
 
-    // Validate FK references exist before inserting
-    if (actorUserId) {
-      const userExists = await prisma.user.findUnique({
-        where: { id: actorUserId },
-        select: { id: true },
-      });
-      if (!userExists) {
-        console.warn(`[audit] User ${actorUserId} not found – logging without actor`);
-        actorUserId = undefined;
-      }
-    }
-
-    if (branchId) {
-      const branchExists = await prisma.branch.findUnique({
-        where: { id: branchId },
-        select: { id: true },
-      });
-      if (!branchExists) {
-        console.warn(`[audit] Branch ${branchId} not found – logging without branch`);
-        branchId = undefined;
-      }
+    // Validate FK references in parallel to avoid sequential round-trips
+    if (actorUserId || branchId) {
+      const [userExists, branchExists] = await Promise.all([
+        actorUserId ? prisma.user.findUnique({ where: { id: actorUserId }, select: { id: true } }) : Promise.resolve(null),
+        branchId ? prisma.branch.findUnique({ where: { id: branchId }, select: { id: true } }) : Promise.resolve(null),
+      ]);
+      if (actorUserId && !userExists) actorUserId = undefined;
+      if (branchId && !branchExists) branchId = undefined;
     }
 
     await prisma.auditLog.create({
@@ -95,12 +82,21 @@ export async function listAuditLogs(input: AuditQueryInput) {
         ? { branchId: { in: input.allowedBranchIds } }
         : {}),
     ...(input.module ? { module: input.module } : {}),
-    ...(input.action ? { action: input.action } : {}),
+    ...(input.action ? { action: { contains: input.action, mode: "insensitive" } } : {}),
     ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}),
     ...(input.entityType ? { entityType: input.entityType } : {}),
     ...(input.entityId ? { entityId: input.entityId } : {}),
     ...(input.actorUsername
       ? { actor: { username: { contains: input.actorUsername, mode: "insensitive" } } }
+      : {}),
+    ...(input.result
+      ? {
+          OR: [
+            { metadataJson: { path: ["reason"], string_contains: input.result } },
+            { metadataJson: { path: ["status"], string_contains: input.result } },
+            { metadataJson: { path: ["action"], string_contains: input.result } },
+          ],
+        }
       : {}),
   };
 
@@ -118,18 +114,5 @@ export async function listAuditLogs(input: AuditQueryInput) {
     prisma.auditLog.count({ where }),
   ]);
 
-  let filtered = rows;
-  if (input.result) {
-    filtered = rows.filter((row) => {
-      const metadata = (row.metadataJson ?? {}) as Record<string, unknown>;
-      const reason = typeof metadata.reason === "string" ? metadata.reason : "";
-      const status = typeof metadata.status === "string" ? metadata.status : "";
-      return (
-        reason.toLowerCase().includes(input.result!.toLowerCase()) ||
-        status.toLowerCase().includes(input.result!.toLowerCase())
-      );
-    });
-  }
-
-  return { rows: filtered, total };
+  return { rows, total };
 }

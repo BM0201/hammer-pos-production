@@ -15,24 +15,54 @@ type AuditRow = {
   actor: { id: string; username: string; fullName: string } | null;
 };
 
-const MODULE_OPTIONS = [
-  "auth", "mfa", "sales", "cash_session", "dispatch",
-  "inventory", "approvals", "payments", "users", "transfers", "purchases",
-] as const;
+const MODULE_OPTIONS: { value: string; label: string }[] = [
+  { value: "approvals",        label: "Aprobaciones" },
+  { value: "auth",             label: "Autenticación" },
+  { value: "mfa",              label: "Autenticación 2FA" },
+  { value: "brain",            label: "Brain / Decisiones" },
+  { value: "branch-config",    label: "Configuración de sucursal" },
+  { value: "branches",         label: "Sucursales" },
+  { value: "catalog",          label: "Catálogo" },
+  { value: "catalog-inventory",label: "Catálogo · Inventario" },
+  { value: "cash_session",     label: "Caja (sesiones)" },
+  { value: "cash_closure",     label: "Cierre de caja" },
+  { value: "discounts",        label: "Descuentos" },
+  { value: "dispatch",         label: "Despacho" },
+  { value: "expenses",         label: "Gastos" },
+  { value: "internal-freight", label: "Flete interno" },
+  { value: "inventory",        label: "Inventario" },
+  { value: "operations",       label: "Día operacional" },
+  { value: "payments",         label: "Pagos" },
+  { value: "payroll",          label: "Nómina" },
+  { value: "pricing",          label: "Precios" },
+  { value: "printing",         label: "Impresión" },
+  { value: "production",       label: "Producción" },
+  { value: "purchase-orders",  label: "Órdenes de compra" },
+  { value: "reorder",          label: "Reorden" },
+  { value: "sales",            label: "Ventas" },
+  { value: "sales_returns",    label: "Devoluciones" },
+  { value: "sales_cancellations", label: "Anulaciones" },
+  { value: "suppliers",        label: "Proveedores" },
+  { value: "system-admin",     label: "Administración del sistema" },
+  { value: "timber",           label: "Madera" },
+  { value: "transfers",        label: "Traslados" },
+  { value: "transport",        label: "Transporte" },
+  { value: "users",            label: "Usuarios" },
+  { value: "analytics",        label: "Analítica" },
+];
+
+const MODULE_LABEL = new Map(MODULE_OPTIONS.map(({ value, label }) => [value, label]));
 
 function buildSummary(row: AuditRow): string {
   const meta = row.metadataJson ?? {};
-  const reason = typeof meta.reason === "string" ? meta.reason : null;
-  const status = typeof meta.status === "string" ? meta.status : null;
-  const amount = typeof meta.amount === "number" ? meta.amount : null;
-  const parts = [
-    reason ? `Motivo: ${reason}` : null,
-    status ? `Estado: ${status}` : null,
-    amount !== null ? `Monto: ${amount}` : null,
-  ].filter(Boolean);
-
-  if (parts.length > 0) return parts.join(" · ");
-  return `${row.entityType}#${row.entityId}`;
+  const parts: string[] = [];
+  if (typeof meta.reason === "string") parts.push(meta.reason);
+  if (typeof meta.status === "string") parts.push(meta.status);
+  if (typeof meta.amount === "number") parts.push(`C$${meta.amount}`);
+  if (typeof meta.method === "string") parts.push(meta.method);
+  if (typeof meta.returnNumber === "string") parts.push(meta.returnNumber);
+  if (typeof meta.orderNumber === "string") parts.push(meta.orderNumber);
+  return parts.length > 0 ? parts.join(" · ") : `${row.entityType}#${row.entityId.slice(0, 12)}`;
 }
 
 function isSensitive(row: AuditRow): boolean {
@@ -127,11 +157,11 @@ export function AuditLogViewer({ branchFixed = false, defaultBranchId }: { branc
         <input className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-sm" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         <select className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-sm" value={module} onChange={(e) => setModule(e.target.value)}>
           <option value="">Módulo (todos)</option>
-          {MODULE_OPTIONS.map((value) => (
-            <option key={value} value={value}>{value}</option>
+          {MODULE_OPTIONS.map(({ value, label }) => (
+            <option key={value} value={value}>{label}</option>
           ))}
         </select>
-        <input className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-sm" placeholder="Acción exacta" value={action} onChange={(e) => setAction(e.target.value)} />
+        <input className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-sm" placeholder="Acción (ej: LOGIN, SALE_CREATED)" value={action} onChange={(e) => setAction(e.target.value)} />
         {!branchFixed ? (
           <input className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-sm" placeholder="Sucursal ID (opcional)" value={branchId} onChange={(e) => setBranchId(e.target.value)} />
         ) : null}
@@ -158,8 +188,12 @@ export function AuditLogViewer({ branchFixed = false, defaultBranchId }: { branc
               <tr key={row.id} className={isSensitive(row) ? "bg-[var(--color-warning-50)]" : ""}>
                 <td className="px-2 py-2">{new Date(row.occurredAt).toLocaleString()}</td>
                 <td className="px-2 py-2">{row.branch ? `${row.branch.code}` : "—"}</td>
-                <td className="px-2 py-2">{row.module}</td>
-                <td className="px-2 py-2">{row.action}</td>
+                <td className="px-2 py-2">
+                  <span className="text-xs font-medium text-[var(--color-text-secondary)]">
+                    {MODULE_LABEL.get(row.module) ?? row.module}
+                  </span>
+                </td>
+                <td className="px-2 py-2 font-mono text-xs">{row.action}</td>
                 <td className="px-2 py-2">{formatActor(row.actor)}</td>
                 <td className="px-2 py-2">{buildSummary(row)}</td>
                 <td className="px-2 py-2">{row.entityType}/{row.entityId}</td>

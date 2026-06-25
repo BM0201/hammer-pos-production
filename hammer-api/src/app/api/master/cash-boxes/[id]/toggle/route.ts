@@ -55,7 +55,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     await logAuditEvent({
       actorUserId: session.userId,
       branchId: cashBox.branchId,
-      module: "cash-session",
+      module: "cash_session",
       action: updated.isActive ? "CASH_BOX_ACTIVATED" : "CASH_BOX_DEACTIVATED",
       entityType: "PhysicalCashBox",
       entityId: id,
