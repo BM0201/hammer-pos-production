@@ -134,7 +134,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
         cashSessionId: input.cashSessionId,
         method: "CASH",
         amount: new Prisma.Decimal(input.grandTotal),
-        status: "COMPLETED",
+        status: "POSTED",
       },
     });
 
