@@ -75,73 +75,64 @@ type Preset = {
 };
 
 const PRESETS: Preset[] = [
-  // ── Hierro 3/8" variantes ────────────────────────────────────────────────
+  // ── Hierro 3/8" variantes — factor siempre 14 (el calibre lo determina, no el tipo de prensado) ──
   {
     key: "hierro_3_8_std",
     label: 'Hierro 3/8" STD (14 varillas)',
     name: 'Hierro 3/8" STD - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 14, hint: "1 quintal = 14 varillas (STD)" }],
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 14, hint: "1 quintal = 14 varillas" }],
     description: "3/8\" estándar. Principal: varilla. Derivado: quintal (1 Q = 14 varillas).",
   },
   {
     key: "hierro_3_8_9v",
-    label: 'Hierro 3/8" 9V (9 varillas)',
+    label: 'Hierro 3/8" 9V (14 varillas)',
     name: 'Hierro 3/8" 9V - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 9, hint: "1 quintal = 9 varillas (9V)" }],
-    description: "3/8\" variante 9V. Principal: varilla. Derivado: quintal (1 Q = 9 varillas).",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 14, hint: "1 quintal = 14 varillas (9V es tipo de prensado, no cuenta de varillas)" }],
+    description: "3/8\" variante 9V. Factor igual al calibre: 1 Q = 14 varillas.",
   },
   {
     key: "hierro_3_8_8mm",
-    label: 'Hierro 3/8" 8MM',
+    label: 'Hierro 3/8" 8MM (14 varillas)',
     name: 'Hierro 3/8" 8MM - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 14, hint: "1 quintal = 14 varillas (ajustar si difiere)" }],
-    description: "3/8\" 8mm. Verifique el factor real por quintal para esta variante.",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 14, hint: "1 quintal = 14 varillas" }],
+    description: "3/8\" 8mm. Factor igual al calibre: 1 Q = 14 varillas.",
   },
-  // ── Hierro 1/2" variantes ────────────────────────────────────────────────
+  // ── Hierro 1/2" variantes — factor siempre 8 ─────────────────────────────
   {
     key: "hierro_1_2_std",
     label: 'Hierro 1/2" STD (8 varillas)',
     name: 'Hierro 1/2" STD - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 8, hint: "1 quintal = 8 varillas (STD)" }],
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 8, hint: "1 quintal = 8 varillas" }],
     description: "1/2\" estándar. Principal: varilla. Derivado: quintal (1 Q = 8 varillas).",
   },
   {
     key: "hierro_1_2_12v",
-    label: 'Hierro 1/2" 12V (12 varillas)',
+    label: 'Hierro 1/2" 12V (8 varillas)',
     name: 'Hierro 1/2" 12V - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 12, hint: "1 quintal = 12 varillas (12V)" }],
-    description: "1/2\" variante 12V. Principal: varilla. Derivado: quintal (1 Q = 12 varillas).",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 8, hint: "1 quintal = 8 varillas (12V es tipo de prensado, no cuenta de varillas)" }],
+    description: "1/2\" variante 12V. Factor igual al calibre: 1 Q = 8 varillas.",
   },
-  // ── Hierro 1/4" variantes ────────────────────────────────────────────────
+  // ── Hierro 1/4" variantes — factor siempre 30 ────────────────────────────
   {
     key: "hierro_1_4_std",
     label: 'Hierro 1/4" STD (30 varillas)',
     name: 'Hierro 1/4" STD - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 30, hint: "1 quintal = 30 varillas (STD)" }],
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 30, hint: "1 quintal = 30 varillas" }],
     description: "1/4\" estándar. Principal: varilla. Derivado: quintal (1 Q = 30 varillas).",
   },
   {
     key: "hierro_1_4_semi",
-    label: 'Hierro 1/4" Semi-STD (ajustar)',
+    label: 'Hierro 1/4" Semi-STD (30 varillas)',
     name: 'Hierro 1/4" Semi-STD - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 30, hint: "Ajuste el factor real de esta variante" }],
-    description: "1/4\" semi-estándar. Ajuste el factor de conversión según el conteo real.",
-  },
-  // ── Otros materiales ─────────────────────────────────────────────────────
-  {
-    key: "alambre",
-    label: "Alambre",
-    name: "Alambre - stock compartido",
-    baseUnit: "LIBRA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 100, hint: "1 quintal = 100 libras" }],
-    description: "Principal: libra. Derivado: quintal (1 quintal = 100 libras).",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 30, hint: "1 quintal = 30 varillas" }],
+    description: "1/4\" semi-estándar. Factor igual al calibre: 1 Q = 30 varillas.",
   },
   {
     key: "clavo_4",
