@@ -75,30 +75,66 @@ type Preset = {
 };
 
 const PRESETS: Preset[] = [
+  // ── Hierro 3/8" variantes ────────────────────────────────────────────────
   {
-    key: "hierro_3_8",
-    label: 'Hierro 3/8"',
-    name: 'Hierro 3/8" - stock compartido',
+    key: "hierro_3_8_std",
+    label: 'Hierro 3/8" STD (14 varillas)',
+    name: 'Hierro 3/8" STD - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 14, hint: "1 quintal = 14 varillas" }],
-    description: "Principal: varilla. Derivado: quintal (1 quintal = 14 varillas).",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 14, hint: "1 quintal = 14 varillas (STD)" }],
+    description: "3/8\" estándar. Principal: varilla. Derivado: quintal (1 Q = 14 varillas).",
   },
   {
-    key: "hierro_1_2",
-    label: 'Hierro 1/2"',
-    name: 'Hierro 1/2" - stock compartido',
+    key: "hierro_3_8_9v",
+    label: 'Hierro 3/8" 9V (9 varillas)',
+    name: 'Hierro 3/8" 9V - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 8, hint: "1 quintal = 8 varillas" }],
-    description: "Principal: varilla. Derivado: quintal (1 quintal = 8 varillas).",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 9, hint: "1 quintal = 9 varillas (9V)" }],
+    description: "3/8\" variante 9V. Principal: varilla. Derivado: quintal (1 Q = 9 varillas).",
   },
   {
-    key: "hierro_1_4",
-    label: 'Hierro 1/4"',
-    name: 'Hierro 1/4" - stock compartido',
+    key: "hierro_3_8_8mm",
+    label: 'Hierro 3/8" 8MM',
+    name: 'Hierro 3/8" 8MM - stock compartido',
     baseUnit: "VARILLA",
-    derived: [{ saleUnit: "QUINTAL", conversionFactor: 30, hint: "1 quintal = 30 varillas" }],
-    description: "Principal: varilla. Derivado: quintal (1 quintal = 30 varillas).",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 14, hint: "1 quintal = 14 varillas (ajustar si difiere)" }],
+    description: "3/8\" 8mm. Verifique el factor real por quintal para esta variante.",
   },
+  // ── Hierro 1/2" variantes ────────────────────────────────────────────────
+  {
+    key: "hierro_1_2_std",
+    label: 'Hierro 1/2" STD (8 varillas)',
+    name: 'Hierro 1/2" STD - stock compartido',
+    baseUnit: "VARILLA",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 8, hint: "1 quintal = 8 varillas (STD)" }],
+    description: "1/2\" estándar. Principal: varilla. Derivado: quintal (1 Q = 8 varillas).",
+  },
+  {
+    key: "hierro_1_2_12v",
+    label: 'Hierro 1/2" 12V (12 varillas)',
+    name: 'Hierro 1/2" 12V - stock compartido',
+    baseUnit: "VARILLA",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 12, hint: "1 quintal = 12 varillas (12V)" }],
+    description: "1/2\" variante 12V. Principal: varilla. Derivado: quintal (1 Q = 12 varillas).",
+  },
+  // ── Hierro 1/4" variantes ────────────────────────────────────────────────
+  {
+    key: "hierro_1_4_std",
+    label: 'Hierro 1/4" STD (30 varillas)',
+    name: 'Hierro 1/4" STD - stock compartido',
+    baseUnit: "VARILLA",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 30, hint: "1 quintal = 30 varillas (STD)" }],
+    description: "1/4\" estándar. Principal: varilla. Derivado: quintal (1 Q = 30 varillas).",
+  },
+  {
+    key: "hierro_1_4_semi",
+    label: 'Hierro 1/4" Semi-STD (ajustar)',
+    name: 'Hierro 1/4" Semi-STD - stock compartido',
+    baseUnit: "VARILLA",
+    derived: [{ saleUnit: "QUINTAL", conversionFactor: 30, hint: "Ajuste el factor real de esta variante" }],
+    description: "1/4\" semi-estándar. Ajuste el factor de conversión según el conteo real.",
+  },
+  // ── Otros materiales ─────────────────────────────────────────────────────
   {
     key: "alambre",
     label: "Alambre",
@@ -559,8 +595,10 @@ export function InventoryFusionPanel() {
         </div>
 
         {/* Plantillas comunes */}
-        <div>
-          <p className="text-xs font-medium text-[var(--color-text-secondary)] mb-2">Plantillas comunes (precargan nombre y factores):</p>
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-[var(--color-text-secondary)]">
+            Plantillas (precargan nombre y factor — siempre puede editarlo antes de guardar):
+          </p>
           <div className="flex flex-wrap gap-2">
             {PRESETS.map((preset) => (
               <button
@@ -574,6 +612,11 @@ export function InventoryFusionPanel() {
               </button>
             ))}
           </div>
+          <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+            <strong>Hierro:</strong> cada variante tiene su propia fusión y factor (ej. "9V" = 9 varillas/quintal,
+            "12V" = 12 varillas/quintal). El factor configurado aquí se usa <em>siempre</em> en ventas e inventario —
+            nunca se detecta del nombre del producto.
+          </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">

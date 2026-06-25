@@ -28,8 +28,18 @@ type IronCandidate = {
 };
 
 function ironGroupName(code: string) {
-  const measure = code.replace("HIERRO_", "").replace("_", "/");
-  return `Hierro ${measure} - stock compartido`;
+  // Code format: HIERRO_<gauge>_<variant> or HIERRO_<gauge>
+  // gauge: 1_2, 3_8, 1_4  →  1/2, 3/8, 1/4
+  const withoutPrefix = code.replace("HIERRO_", "");
+  // First two segments are always the gauge (e.g., "1_2", "3_8", "1_4")
+  const gaugeCodes: Record<string, string> = { "1_2": "1/2", "3_8": "3/8", "1_4": "1/4" };
+  const gaugeKey = withoutPrefix.match(/^(\d_\d)/)?.[1];
+  const gauge = gaugeKey ? (gaugeCodes[gaugeKey] ?? gaugeKey.replace("_", "/")) : withoutPrefix.replace(/_/g, "/");
+  const variantSuffix = gaugeKey ? withoutPrefix.slice(gaugeKey.length).replace(/^_/, "") : "";
+  const variantLabel = variantSuffix
+    ? ` ${variantSuffix.replace(/_/g, ".").replace("STD", "STD").replace("SEMI", "Semi-STD")}`
+    : "";
+  return `Hierro ${gauge}"${variantLabel} - stock compartido`;
 }
 
 export async function bootstrapIronStockGroups(input: BootstrapIronInput) {

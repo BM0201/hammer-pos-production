@@ -26,28 +26,89 @@ function normalize(value: string) {
   return value.toUpperCase().replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Extracts the bars-per-quintal factor from a product name.
+ *
+ * Priority order:
+ *  1. Explicit "XV" suffix (e.g., "9V" → 9, "12V" → 12, "14V" → 14).
+ *     Products like "HIERRO DE 3/8 9V" have exactly 9 bars/quintal,
+ *     which differs from the 3/8 STD default of 14.
+ *  2. Standard defaults by gauge: 1/4 → 30, 3/8 → 14, 1/2 → 8.
+ */
 export function getIronBarsPerQuintal(productName: string): number | null {
   const name = normalize(productName);
+
+  // Explicit bar count: e.g. "9V", "12V" (word boundary so "12V" ≠ "12VAR...")
+  const vMatch = name.match(/\b(\d{1,3})V\b/);
+  if (vMatch && vMatch[1]) {
+    const count = parseInt(vMatch[1], 10);
+    if (count >= 1 && count <= 100) return count;
+  }
+
+  // Standard defaults by gauge
   if (name.includes("1/2")) return 8;
   if (name.includes("3/8")) return 14;
   if (name.includes("1/4")) return 30;
   return null;
 }
 
+/**
+ * Determines the sale unit from the product name.
+ * Products named "VARILLA HIERRO …" are the canonical unit (1 VARILLA = base).
+ * Products named "QUINTAL HIERRO …" are explicitly the quintal presentation.
+ * Anything else starting with "HIERRO" defaults to QUINTAL (sold by quintal).
+ */
 export function detectIronSaleUnit(productName: string): "VARILLA" | "QUINTAL" | null {
   const name = normalize(productName);
-  if (name.startsWith("VARILLA HIERRO")) return "VARILLA";
-  if (name.startsWith("HIERRO")) return "QUINTAL";
+  if (name.startsWith("VARILLA HIERRO") || name.startsWith("VARILLA DE HIERRO")) return "VARILLA";
+  if (name.startsWith("QUINTAL HIERRO") || name.startsWith("QUINTAL DE HIERRO")) return "QUINTAL";
+  if (name.includes("HIERRO")) return "QUINTAL";
   return null;
 }
 
+/**
+ * Derives the stock-group code for an iron product.
+ *
+ * Rules (most-specific first):
+ *  - Explicit "XV" → HIERRO_<gauge>_<X>V  (e.g., HIERRO_3_8_9V)
+ *  - MM dimension  → HIERRO_<gauge>_<N>MM (e.g., HIERRO_3_8_8MM)
+ *  - "STD"         → HIERRO_<gauge>_STD   (e.g., HIERRO_3_8_STD)
+ *  - "SEMI"        → HIERRO_<gauge>_SEMI  (e.g., HIERRO_1_4_SEMI)
+ *  - fallback      → HIERRO_<gauge>       (generic, for any un-suffixed variant)
+ *
+ * This ensures that different physical variants (9V vs 14V vs 8MM)
+ * are placed in SEPARATE fusion groups with their own conversion factors,
+ * rather than all being merged into a single HIERRO_3_8 group.
+ */
 export function ironStockGroupCode(productName: string): string | null {
   const name = normalize(productName);
   if (!name.includes("HIERRO")) return null;
-  if (name.includes("1/2")) return "HIERRO_1_2";
-  if (name.includes("3/8")) return "HIERRO_3_8";
-  if (name.includes("1/4")) return "HIERRO_1_4";
-  return null;
+
+  const sizeCode = name.includes("1/2") ? "1_2"
+    : name.includes("3/8") ? "3_8"
+    : name.includes("1/4") ? "1_4"
+    : null;
+  if (!sizeCode) return null;
+
+  // 1. Explicit V suffix (most specific)
+  const vMatch = name.match(/\b(\d{1,3})V\b/);
+  if (vMatch && vMatch[1]) {
+    const count = parseInt(vMatch[1], 10);
+    if (count >= 1 && count <= 100) return `HIERRO_${sizeCode}_${count}V`;
+  }
+
+  // 2. MM dimension (e.g., 8MM, 5.5MM, 6MM → safe slug)
+  const mmMatch = name.match(/\b(\d+(?:[._]\d+)?)MM\b/);
+  if (mmMatch && mmMatch[1]) {
+    const slug = mmMatch[1].replace(".", "_");
+    return `HIERRO_${sizeCode}_${slug}MM`;
+  }
+
+  // 3. Named variants
+  if (name.includes("SEMI")) return `HIERRO_${sizeCode}_SEMI`;
+  if (name.includes("STD"))  return `HIERRO_${sizeCode}_STD`;
+
+  return `HIERRO_${sizeCode}`;
 }
 
 export const NAIL_PACKAGE_PRESETS = [
