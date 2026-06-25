@@ -352,12 +352,26 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   }
 
   /* ── KPIs: computed from the current page when no filter, or from all matching when filtered ── */
+  const totalInventoryValue = balances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0);
+  const totalPotentialRevenue = balances.reduce((sum, row) => {
+    const qty = Math.max(0, decimalToNumber(row.quantityOnHand));
+    const price = Math.max(0, decimalToNumber(row.product.standardSalePrice));
+    return sum + qty * price;
+  }, 0);
+  const grossMarginValue = totalPotentialRevenue - totalInventoryValue;
+  const grossMarginPercent = totalPotentialRevenue > 0
+    ? Math.round((grossMarginValue / totalPotentialRevenue) * 1000) / 10
+    : null;
+
   const kpis = {
     activeProducts: allMetricRows.filter((row) => row.isActive).length,
     skusWithoutInventory: allMetricRows.filter((row) => row.isActive && row.inventoryBalances.length === 0).length,
     criticalStockProducts: allMetricRows.filter((row) => row.isActive && row.isCriticalStock).length,
     zeroStockProducts: allMetricRows.filter((row) => row.isActive && row.hasZeroStock).length,
-    totalInventoryValue: balances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0),
+    totalInventoryValue,
+    totalPotentialRevenue,
+    grossMarginValue,
+    grossMarginPercent,
     productsWithoutCost: allMetricRows.filter((row) => row.isActive && row.hasNoCost).length,
     productsWithoutPrice: 0,
   };
