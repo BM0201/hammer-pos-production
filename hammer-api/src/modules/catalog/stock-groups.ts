@@ -170,9 +170,8 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
             isCanonical: product.isCanonical,
           },
           update: {
-            // conversionFactor intentionally NOT updated here — it was set on first run
-            // and renaming the product should not silently change the stored factor.
             saleUnit: product.saleUnit,
+            conversionFactor: new Prisma.Decimal(product.conversionFactor),
             isCanonical: product.isCanonical,
             isActive: true,
           },

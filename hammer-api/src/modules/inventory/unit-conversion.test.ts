@@ -7,14 +7,36 @@ import {
   formatDualStock,
   formatPackageLooseStock,
   getIronBarsPerQuintal,
+  ironStockGroupCode,
 } from "@/modules/inventory/unit-conversion";
 
 describe("iron shared stock conversions", () => {
-  it("maps iron quintal products to the correct bar counts", () => {
+  it("maps iron quintal products to the correct bar counts by gauge", () => {
     assert.equal(getIronBarsPerQuintal("HIERRO CORRUGADO 1/2"), 8);
     assert.equal(getIronBarsPerQuintal("HIERRO CORRUGADO 3/8"), 14);
     assert.equal(getIronBarsPerQuintal("HIERRO CORRUGADO 1/4"), 30);
     assert.equal(getIronBarsPerQuintal("HIERRO LISO"), null);
+  });
+
+  it("pressing-type suffixes (9V, 12V) do NOT change the bar count — gauge is the only factor", () => {
+    // "9V" and "12V" are pressing-type identifiers, not bar counts.
+    // A 3/8 iron always has 14 bars/quintal regardless of pressing type.
+    // A 1/2 iron always has 8 bars/quintal regardless of pressing type.
+    assert.equal(getIronBarsPerQuintal("HIERRO DE 3/8 9V"), 14);
+    assert.equal(getIronBarsPerQuintal("HIERRO DE 1/2 12V"), 8);
+    assert.equal(getIronBarsPerQuintal("HIERRO 3/8 8MM"), 14);
+    assert.equal(getIronBarsPerQuintal("HIERRO DE 1/4 5.5MM SEMI STD"), 30);
+  });
+
+  it("variant suffixes create separate stock-group codes without changing the bar factor", () => {
+    // Different pressing types → separate stock groups (they don't share physical inventory)
+    // but the SAME conversion factor applies to each group (gauge-based).
+    assert.equal(ironStockGroupCode("HIERRO DE 3/8 9V"), "HIERRO_3_8_9V");
+    assert.equal(ironStockGroupCode("HIERRO DE 1/2 12V"), "HIERRO_1_2_12V");
+    assert.equal(ironStockGroupCode("HIERRO 3/8 8MM"), "HIERRO_3_8_8MM");
+    assert.equal(ironStockGroupCode("HIERRO DE 3/8 STD"), "HIERRO_3_8_STD");
+    // MM dimension takes priority over SEMI/STD named variants
+    assert.equal(ironStockGroupCode("HIERRO DE 1/4 5.5MM SEMI STD"), "HIERRO_1_4_5_5MM");
   });
 
   it("converts between quintales and varillas using the shared factor", () => {

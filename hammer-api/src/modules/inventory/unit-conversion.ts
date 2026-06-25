@@ -27,25 +27,15 @@ function normalize(value: string) {
 }
 
 /**
- * Extracts the bars-per-quintal factor from a product name.
+ * Returns the bars-per-quintal conversion factor for an iron product.
+ * The factor is determined exclusively by the gauge — any suffix like
+ * "9V", "12V", "STD", "8MM" in the product name is a pressing-type
+ * or size identifier and does NOT change the conversion factor.
  *
- * Priority order:
- *  1. Explicit "XV" suffix (e.g., "9V" → 9, "12V" → 12, "14V" → 14).
- *     Products like "HIERRO DE 3/8 9V" have exactly 9 bars/quintal,
- *     which differs from the 3/8 STD default of 14.
- *  2. Standard defaults by gauge: 1/4 → 30, 3/8 → 14, 1/2 → 8.
+ * Standard conversions: 1/4" → 30 bars, 3/8" → 14 bars, 1/2" → 8 bars.
  */
 export function getIronBarsPerQuintal(productName: string): number | null {
   const name = normalize(productName);
-
-  // Explicit bar count: e.g. "9V", "12V" (word boundary so "12V" ≠ "12VAR...")
-  const vMatch = name.match(/\b(\d{1,3})V\b/);
-  if (vMatch && vMatch[1]) {
-    const count = parseInt(vMatch[1], 10);
-    if (count >= 1 && count <= 100) return count;
-  }
-
-  // Standard defaults by gauge
   if (name.includes("1/2")) return 8;
   if (name.includes("3/8")) return 14;
   if (name.includes("1/4")) return 30;
@@ -68,17 +58,16 @@ export function detectIronSaleUnit(productName: string): "VARILLA" | "QUINTAL" |
 
 /**
  * Derives the stock-group code for an iron product.
+ * Different physical variants (9V, STD, 8MM, SEMI) get SEPARATE groups
+ * so they don't share inventory with each other — but all variants of the
+ * same gauge use the same conversion factor (see getIronBarsPerQuintal).
  *
  * Rules (most-specific first):
- *  - Explicit "XV" → HIERRO_<gauge>_<X>V  (e.g., HIERRO_3_8_9V)
+ *  - Explicit "XV" → HIERRO_<gauge>_<X>V  (e.g., HIERRO_3_8_9V)   ← pressing type identifier
  *  - MM dimension  → HIERRO_<gauge>_<N>MM (e.g., HIERRO_3_8_8MM)
  *  - "STD"         → HIERRO_<gauge>_STD   (e.g., HIERRO_3_8_STD)
  *  - "SEMI"        → HIERRO_<gauge>_SEMI  (e.g., HIERRO_1_4_SEMI)
  *  - fallback      → HIERRO_<gauge>       (generic, for any un-suffixed variant)
- *
- * This ensures that different physical variants (9V vs 14V vs 8MM)
- * are placed in SEPARATE fusion groups with their own conversion factors,
- * rather than all being merged into a single HIERRO_3_8 group.
  */
 export function ironStockGroupCode(productName: string): string | null {
   const name = normalize(productName);
