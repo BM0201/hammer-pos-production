@@ -107,14 +107,6 @@ function decisionTime(decision: BrainDecision) {
   return decision.lastDetectedAt ?? decision.firstDetectedAt ?? decision.createdAt;
 }
 
-function severityRank(severity: string) {
-  return { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, INFO: 1 }[severity] ?? 0;
-}
-
-function asNumber(value: string | number | null | undefined) {
-  const parsed = Number(value ?? 0);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
 
 function scrollToPriorities() {
   document.getElementById("brain-priorities")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -160,10 +152,10 @@ export function DecisionCenter() {
   }, [filters]);
 
   // Bug 2: priority query excludes status filter and always fetches actionable decisions sorted by priority
-  const filtersWithoutStatus = useMemo(() => {
-    const { status: _s, ...rest } = filters;
-    return rest;
-  }, [filters]);
+  const filtersWithoutStatus = useMemo(
+    () => Object.fromEntries(Object.entries(filters).filter(([k]) => k !== "status")) as Omit<BrainFilterState, "status">,
+    [filters]
+  );
 
   const priorityQuery = useMemo(() => {
     const params = new URLSearchParams();
@@ -405,7 +397,10 @@ export function DecisionCenter() {
   }
 
   const kpis = data?.kpis ?? { openCritical: 0, highRisk: 0, estimatedImpact: 0, reorderSuggested: 0, cashRisks: 0, lowMarginPrices: 0, lateDispatches: 0, manualReview: 0 };
-  const decisions = [...(data?.decisions ?? []), ...extraDecisions];
+  const decisions = useMemo(
+    () => [...(data?.decisions ?? []), ...extraDecisions],
+    [data?.decisions, extraDecisions]
+  );
 
   // Bug 3: robust latestScan — filter nulls before comparing, compare as numbers not strings
   // TODO: server should return lastScanAt so this is always accurate regardless of pagination
@@ -417,7 +412,6 @@ export function DecisionCenter() {
       .filter(Number.isFinite);
     if (!timestamps.length) return null;
     return new Date(Math.max(...timestamps));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decisions]);
 
   const systemState = busyAction === "scan" || busyAction === "dry-run"

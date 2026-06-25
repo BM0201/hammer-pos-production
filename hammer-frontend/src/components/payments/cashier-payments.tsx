@@ -151,7 +151,6 @@ export function CashierPayments({ branchId }: { branchId: string }) {
     }
 
     const orderId = selected.id;
-    let success = false;
 
     recentlyPaidRef.current.add(orderId);
     setIsSubmitting(true);
@@ -191,7 +190,6 @@ export function CashierPayments({ branchId }: { branchId: string }) {
 
       await load();
       referenceRef.current?.focus();
-      success = true;
     } catch (error) {
       console.error("[CASHIER][paySelected]", error);
       const humanized = mapPosErrorToSpanish({ fallback: "No se pudo registrar el pago.", thrownError: error });

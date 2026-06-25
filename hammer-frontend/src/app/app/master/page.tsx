@@ -18,7 +18,6 @@ import {
   History,
   AlertTriangle,
   CheckCircle2,
-  Banknote,
   Settings,
   Activity,
   FileText,
@@ -478,17 +477,6 @@ function TotalRow({ label, value }: { label: string; value: number }) {
     <div className="flex items-center justify-between text-[var(--color-text-secondary)]">
       <span>{label}</span>
       <span className="font-mono">{money(value)}</span>
-    </div>
-  );
-}
-
-function CashMiniRow({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
-  return (
-    <div className="flex min-w-0 items-center justify-between gap-2">
-      <span className="truncate text-[var(--color-text-muted)]">{label}</span>
-      <span className={`shrink-0 font-mono ${strong ? "font-semibold text-[var(--color-text)]" : "text-[var(--color-text-secondary)]"}`}>
-        {value}
-      </span>
     </div>
   );
 }

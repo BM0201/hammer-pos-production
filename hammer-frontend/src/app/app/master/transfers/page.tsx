@@ -565,7 +565,6 @@ function DraftPanel({
 function RecommendationsTab({
   branches,
   centralBranchId,
-  products: _products,
   onCreateTransfer,
 }: {
   branches: Branch[];

@@ -193,7 +193,6 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
       return;
     }
 
-    let success = false;
     setIsMutatingOrder(true);
 
     try {
@@ -216,7 +215,6 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
       await reloadOrder();
       onNotice(`Producto agregado: ${product.name}.`);
       onProductAdded?.();
-      success = true;
     } catch (error) {
       console.error("[POS][addProduct]", error);
       onNotice(mapPosErrorToSpanish({ fallback: "No se pudo agregar el producto.", thrownError: error }), 10000);

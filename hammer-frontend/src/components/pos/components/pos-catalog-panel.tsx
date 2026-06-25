@@ -33,7 +33,6 @@ export function PosCatalogPanel({
   stockByProductId,
   activeProductIndex,
   setActiveProductIndex,
-  catalogScrollTop,
   setCatalogScrollTop,
   catalogViewportRef,
   searchInputRef,
