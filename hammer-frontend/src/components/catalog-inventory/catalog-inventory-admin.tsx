@@ -2389,40 +2389,69 @@ function OpeningBalanceModal({
     if (summary.belowCost > 0 && !window.confirm("Hay productos con precio por debajo del costo. Confirma explicitamente que deseas continuar.")) {
       return;
     }
+    const allApiLines = lines.map((line) => {
+      const costo = numberOrNull(line.costo);
+      const precio = numberOrNull(line.precioVenta);
+      const hasCost = costo != null && costo > 0;
+      const hasPrice = precio != null && precio > 0;
+      return {
+        productId: line.productId,
+        quantity: Number(line.cantidad),
+        unit: line.unit,
+        unitCost: hasCost ? costo : null,
+        costMode: hasCost ? "SET_WAC" : "QUANTITY_ONLY",
+        salePrice: hasPrice ? precio : null,
+        priceMode: hasPrice ? "SET_BRANCH_PRICE" : "NO_PRICE_CHANGE",
+      };
+    });
+
+    // Split into chunks of 15 to avoid Vercel serverless timeouts on large loads
+    const CHUNK_SIZE = 15;
+    const chunks: typeof allApiLines[] = [];
+    for (let i = 0; i < allApiLines.length; i += CHUNK_SIZE) {
+      chunks.push(allApiLines.slice(i, i + CHUNK_SIZE));
+    }
+
     setSubmitting(true);
+    const progressToastId = "opening-balance-bulk";
+    toast.loading(
+      chunks.length > 1 ? `Procesando lote 1 de ${chunks.length}...` : "Guardando carga inicial...",
+      { id: progressToastId }
+    );
+
     try {
-      const response = await apiFetch("/api/inventory/opening-balance/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          branchId: activeBranchId,
-          mode,
-          reason: reason.trim(),
-          notes: notes.trim() || undefined,
-          lines: lines.map((line) => {
-            const costo = numberOrNull(line.costo);
-            const precio = numberOrNull(line.precioVenta);
-            const hasCost = costo != null && costo > 0;
-            const hasPrice = precio != null && precio > 0;
-            return {
-              productId: line.productId,
-              quantity: Number(line.cantidad),
-              unit: line.unit,
-              unitCost: hasCost ? costo : null,
-              costMode: hasCost ? "SET_WAC" : "QUANTITY_ONLY",
-              salePrice: hasPrice ? precio : null,
-              priceMode: hasPrice ? "SET_BRANCH_PRICE" : "NO_PRICE_CHANGE",
-            };
+      let totalProcessed = 0;
+      let totalSkipped = 0;
+
+      for (let i = 0; i < chunks.length; i++) {
+        if (chunks.length > 1) {
+          toast.loading(`Procesando lote ${i + 1} de ${chunks.length}...`, { id: progressToastId });
+        }
+        const response = await apiFetch("/api/inventory/opening-balance/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            branchId: activeBranchId,
+            mode,
+            reason: reason.trim(),
+            notes: notes.trim() || undefined,
+            lines: chunks[i],
           }),
-        }),
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar la carga inicial.");
-      const result = unwrapApiData(payload);
-      toast.success(`Carga inicial completa: ${result.processed} procesados, ${result.skipped} sin cambio.`);
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar la carga inicial.");
+        const result = unwrapApiData(payload);
+        totalProcessed += result.processed;
+        totalSkipped += result.skipped;
+      }
+
+      toast.success(`Carga inicial completa: ${totalProcessed} procesados, ${totalSkipped} sin cambio.`, { id: progressToastId });
       setLines([]);
       onClose();
       await onDone();
+    } catch (error) {
+      toast.dismiss(progressToastId);
+      throw error;
     } finally {
       setSubmitting(false);
     }

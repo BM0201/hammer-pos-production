@@ -1435,11 +1435,13 @@ export async function createOpeningBalanceBulk(input: {
   }>;
 }) {
   const batchReference = `OPENING-BULK-${Date.now()}`;
-  return prisma.$transaction(async (tx) => {
-    const lines = [];
-    for (let index = 0; index < input.lines.length; index += 1) {
-      const line = input.lines[index];
-      const result = await createOpeningBalanceTx(tx, {
+  const lines = [];
+  // Each product runs in its own mini-transaction to avoid a single long-lived
+  // transaction that causes 504 timeouts on Vercel serverless functions.
+  for (let index = 0; index < input.lines.length; index += 1) {
+    const line = input.lines[index];
+    const result = await prisma.$transaction((tx) =>
+      createOpeningBalanceTx(tx, {
         actorUserId: input.actorUserId,
         branchId: input.branchId,
         productId: line.productId,
@@ -1458,66 +1460,66 @@ export async function createOpeningBalanceBulk(input: {
         createNoopMovement: false,
         skipLineAudit: true,
         bulkReference: batchReference,
-      });
-      lines.push(result);
-    }
+      })
+    );
+    lines.push(result);
+  }
 
-    const processed = lines.filter((line) => line.movementId !== null).length;
-    const skipped = lines.length - processed;
-    const summary = {
-      totalProducts: lines.length,
-      totalInventoryValue: lines.reduce((sum, line) => sum + (Number(line.newBaseStock) * Number(line.weightedAverageCost)), 0),
-      productsWithoutCost: lines.filter((line) => line.newCost === null || line.newCost <= 0).length,
-      productsWithoutPrice: lines.filter((line) => line.newPrice === null || line.newPrice <= 0).length,
-      productsBelowCost: lines.filter((line) => line.newCost !== null && line.newPrice < line.newCost).length,
-      lowMarginProducts: lines.filter((line) => {
-        if (line.newCost === null || line.newPrice <= 0 || line.newPrice < line.newCost) return false;
-        const margin = ((line.newPrice - line.newCost) / line.newPrice) * 100;
-        return margin < 20;
-      }).length,
-    };
+  const processed = lines.filter((line) => line.movementId !== null).length;
+  const skipped = lines.length - processed;
+  const summary = {
+    totalProducts: lines.length,
+    totalInventoryValue: lines.reduce((sum, line) => sum + (Number(line.newBaseStock) * Number(line.weightedAverageCost)), 0),
+    productsWithoutCost: lines.filter((line) => line.newCost === null || line.newCost <= 0).length,
+    productsWithoutPrice: lines.filter((line) => line.newPrice === null || line.newPrice <= 0).length,
+    productsBelowCost: lines.filter((line) => line.newCost !== null && line.newPrice < line.newCost).length,
+    lowMarginProducts: lines.filter((line) => {
+      if (line.newCost === null || line.newPrice <= 0 || line.newPrice < line.newCost) return false;
+      const margin = ((line.newPrice - line.newCost) / line.newPrice) * 100;
+      return margin < 20;
+    }).length,
+  };
 
-    await tx.auditLog.create({
-      data: {
-        actorUserId: input.actorUserId,
-        branchId: input.branchId,
-        module: "inventory",
-        action: "OPENING_BALANCE_BULK_CREATE",
-        entityType: "InventoryMovement",
-        entityId: batchReference,
-        metadataJson: {
-          batchReference,
-          mode: input.mode,
-          reason: input.reason,
-          notes: input.notes ?? null,
-          lineCount: input.lines.length,
-          processed,
-          skipped,
-          productIds: input.lines.map((line) => line.productId),
-          summary,
-          changes: lines.map((line) => ({
-            productId: line.productId,
-            inventoryProductId: line.inventoryProductId,
-            movementId: line.movementId,
-            previousBaseStock: line.previousBaseStock,
-            newBaseStock: line.newBaseStock,
-            adjustmentBaseDelta: line.adjustmentBaseDelta,
-            movementType: line.movementType,
-            stockConversion: line.stockConversion,
-          })),
-        },
+  await prisma.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "inventory",
+      action: "OPENING_BALANCE_BULK_CREATE",
+      entityType: "InventoryMovement",
+      entityId: batchReference,
+      metadataJson: {
+        batchReference,
+        mode: input.mode,
+        reason: input.reason,
+        notes: input.notes ?? null,
+        lineCount: input.lines.length,
+        processed,
+        skipped,
+        productIds: input.lines.map((line) => line.productId),
+        summary,
+        changes: lines.map((line) => ({
+          productId: line.productId,
+          inventoryProductId: line.inventoryProductId,
+          movementId: line.movementId,
+          previousBaseStock: line.previousBaseStock,
+          newBaseStock: line.newBaseStock,
+          adjustmentBaseDelta: line.adjustmentBaseDelta,
+          movementType: line.movementType,
+          stockConversion: line.stockConversion,
+        })),
       },
-    });
-
-    return {
-      ok: true,
-      batchReference,
-      processed,
-      skipped,
-      summary,
-      lines,
-    };
+    },
   });
+
+  return {
+    ok: true,
+    batchReference,
+    processed,
+    skipped,
+    summary,
+    lines,
+  };
 }
 
 export async function requestStockAdjustment(input: {

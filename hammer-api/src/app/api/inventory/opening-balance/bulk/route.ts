@@ -9,6 +9,8 @@ import { canPostMovement } from "@/modules/inventory/policy";
 import { openingBalanceBulkSchema } from "@/modules/inventory/validators";
 import { createOpeningBalanceBulk } from "@/modules/inventory/service";
 
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     const session = await getCurrentSession();
