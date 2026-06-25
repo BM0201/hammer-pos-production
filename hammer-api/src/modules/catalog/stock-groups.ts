@@ -23,8 +23,10 @@ type IronCandidate = {
   groupName: string;
   saleUnit: "VARILLA" | "QUINTAL";
   conversionFactor: number;
+  existingConversionFactor: number | null;
   isCanonical: boolean;
   alreadyGrouped: boolean;
+  factorMismatch: boolean;
 };
 
 function ironGroupName(code: string) {
@@ -50,7 +52,10 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
       sku: true,
       name: true,
       categoryId: true,
-      stockGroupMemberships: { where: { isActive: true }, select: { id: true } },
+      stockGroupMemberships: {
+        where: { isActive: true },
+        select: { id: true, conversionFactor: true, stockGroupId: true },
+      },
     },
     orderBy: { name: "asc" },
   });
@@ -60,6 +65,9 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
     const saleUnit = detectIronSaleUnit(product.name);
     const barsPerQuintal = getIronBarsPerQuintal(product.name);
     if (!groupCode || !saleUnit || !barsPerQuintal) return [];
+    const nameFactor = saleUnit === "VARILLA" ? 1 : barsPerQuintal;
+    const existingMember = product.stockGroupMemberships[0];
+    const existingConversionFactor = existingMember ? Number(existingMember.conversionFactor) : null;
     return [{
       productId: product.id,
       sku: product.sku,
@@ -68,9 +76,11 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
       groupCode,
       groupName: ironGroupName(groupCode),
       saleUnit,
-      conversionFactor: saleUnit === "VARILLA" ? 1 : barsPerQuintal,
+      conversionFactor: nameFactor,
+      existingConversionFactor,
       isCanonical: saleUnit === "VARILLA",
       alreadyGrouped: product.stockGroupMemberships.length > 0,
+      factorMismatch: existingConversionFactor !== null && existingConversionFactor !== nameFactor,
     }];
   });
 
@@ -92,9 +102,14 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
       name: row.name,
       saleUnit: row.saleUnit,
       conversionFactor: row.conversionFactor,
+      existingConversionFactor: row.existingConversionFactor,
+      factorMismatch: row.factorMismatch,
       isCanonical: row.isCanonical,
       alreadyGrouped: row.alreadyGrouped,
     })),
+    factorMismatches: rows.filter((row) => row.factorMismatch).map((row) =>
+      `${row.sku}: factor en DB=${row.existingConversionFactor}, detectado por nombre=${row.conversionFactor} (no se sobreescribira en re-bootstrap)`
+    ),
     canApply: rows.some((row) => row.saleUnit === "VARILLA") && rows.some((row) => row.saleUnit === "QUINTAL"),
   }));
 
@@ -155,8 +170,9 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
             isCanonical: product.isCanonical,
           },
           update: {
+            // conversionFactor intentionally NOT updated here — it was set on first run
+            // and renaming the product should not silently change the stored factor.
             saleUnit: product.saleUnit,
-            conversionFactor: new Prisma.Decimal(product.conversionFactor),
             isCanonical: product.isCanonical,
             isActive: true,
           },
