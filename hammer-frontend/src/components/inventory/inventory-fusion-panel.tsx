@@ -613,9 +613,9 @@ export function InventoryFusionPanel() {
             ))}
           </div>
           <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
-            <strong>Hierro:</strong> cada variante tiene su propia fusión y factor (ej. "9V" = 9 varillas/quintal,
-            "12V" = 12 varillas/quintal). El factor configurado aquí se usa <em>siempre</em> en ventas e inventario —
-            nunca se detecta del nombre del producto.
+            <strong>Hierro:</strong> el factor depende solo del calibre (3/8&quot; = 14 varillas, 1/2&quot; = 8 varillas, 1/4&quot; = 30 varillas).
+            Los sufijos del nombre (9V, 12V, STD, 8MM) son identificadores de variante &mdash; no cambian el factor.
+            El factor configurado aquí se usa <em>siempre</em> en ventas e inventario.
           </p>
         </div>
 
