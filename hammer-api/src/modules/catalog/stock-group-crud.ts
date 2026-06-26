@@ -260,7 +260,7 @@ export async function rebuildStockGroupBalancesTx(
     let newLoose = new Prisma.Decimal(0);
     let newWac: Prisma.Decimal;
     let branchWarnings: string[] = [];
-    const previousBalances: Record<string, unknown> = {};
+    const previousBalances: Record<string, { qoh: string; closed: string; loose: string; wac: string }> = {};
 
     for (const m of group.products) {
       const b = balanceByProduct.get(m.productId);
@@ -805,7 +805,7 @@ export async function deleteStockGroup(id: string, actorUserId: string) {
       include: {
         products: {
           where: { isActive: true, isCanonical: true },
-          select: { productId: true },
+          select: { productId: true, isCanonical: true },
         },
       },
     });
