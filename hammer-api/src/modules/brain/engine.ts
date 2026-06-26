@@ -207,11 +207,18 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
   const errors = settled.flatMap((result, index) => result.status === "rejected"
     ? [{ detector: detectors[index].key, message: result.reason instanceof Error ? result.reason.message : String(result.reason) }]
     : []);
-  const detectorResults = settled
+
+  // J: collect all results before capping so we can emit a partial-scan warning
+  const allResults = settled
     .flatMap((result) => result.status === "fulfilled" ? result.value : [])
     .filter((draft) => !input.severity || draft.severity === input.severity)
-    .filter((draft) => mode !== "QUICK_SCAN" || ["CRITICAL", "HIGH"].includes(draft.severity))
-    .slice(0, limits.maxIssues);
+    .filter((draft) => mode !== "QUICK_SCAN" || ["CRITICAL", "HIGH"].includes(draft.severity));
+
+  const partialWarning = allResults.length > limits.maxIssues
+    ? [{ detector: "engine", message: `SCAN_PARTIAL: ${allResults.length} hallazgos detectados; se procesaron solo los primeros ${limits.maxIssues}. Use filtros mas especificos o reduzca el rango de fechas.` }]
+    : [];
+
+  const detectorResults = allResults.slice(0, limits.maxIssues);
 
   return persistBrainDecisions(detectorResults, input.actorUserId, {
     dryRun: input.dryRun,
@@ -219,5 +226,5 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
     scannedCategories: detectors.map((detector) => detector.category),
     scope: ctx.scope,
     limits,
-  }).then((result) => ({ ...result, errors: [...result.errors, ...errors] }));
+  }).then((result) => ({ ...result, errors: [...result.errors, ...errors, ...partialWarning] }));
 }

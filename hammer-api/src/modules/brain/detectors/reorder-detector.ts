@@ -23,8 +23,12 @@ export async function detectReorderDecisions(ctx: BrainDetectorContext): Promise
       },
       take: 500,
     }),
+    // H: filter inactive products and inactive branches
     prisma.inventoryBalance.findMany({
-      where: ctx.branchId ? { branchId: ctx.branchId } : {},
+      where: {
+        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+        product: { is: { isActive: true } },
+      },
       include: {
         branch: { select: { id: true, code: true, name: true, isActive: true } },
         product: { select: { id: true, sku: true, name: true } },
@@ -33,11 +37,23 @@ export async function detectReorderDecisions(ctx: BrainDetectorContext): Promise
     }),
   ]);
 
+  const balancesByKey = new Map(balances.map((b) => [`${b.branchId}:${b.productId}`, b]));
+  const balancesByProduct = new Map<string, typeof balances>();
+  for (const balance of balances) {
+    if (!balancesByProduct.has(balance.productId)) balancesByProduct.set(balance.productId, []);
+    balancesByProduct.get(balance.productId)!.push(balance);
+  }
+
+  // I: build policy map so transfer candidates can check source branch safety floor
+  const policiesByKey = new Map(policies.map((p) => [`${p.branchId}:${p.productId}`, p]));
+
   for (const alert of alerts) {
-    const severity = n(alert.currentQuantity) <= n(alert.reorderPoint) / 2 ? "HIGH" : "MEDIUM";
+    // F: impactAmount should use WAC or sale price, not currentQuantity
+    const alertBalance = balancesByKey.get(`${alert.branchId}:${alert.productId}`);
+    const wac = n(alertBalance?.weightedAverageCost);
     decisions.push({
       category: "REORDER",
-      severity,
+      severity: n(alert.currentQuantity) <= n(alert.reorderPoint) / 2 ? "HIGH" : "MEDIUM",
       title: `Reposicion sugerida: ${alert.product.sku} - ${alert.product.name}`,
       description: alert.reason,
       recommendation: alert.alertType === "TRANSFER"
@@ -48,8 +64,8 @@ export async function detectReorderDecisions(ctx: BrainDetectorContext): Promise
       branchId: alert.branchId,
       productId: alert.productId,
       confidenceScore: 0.88,
-      impactAmount: n(alert.suggestedQuantity) * n(alert.currentQuantity),
-      riskScore: riskScoreFor(severity, 0.88),
+      impactAmount: n(alert.suggestedQuantity) * Math.max(wac, 0),
+      riskScore: riskScoreFor(n(alert.currentQuantity) <= n(alert.reorderPoint) / 2 ? "HIGH" : "MEDIUM", 0.88),
       proposedActionType: alert.alertType === "TRANSFER" ? "CONVERT_REORDER_ALERT_TO_TRANSFER" : "CONVERT_REORDER_ALERT_TO_PURCHASE",
       proposedActionJson: { reorderAlertId: alert.id, alertType: alert.alertType, suggestedQuantity: n(alert.suggestedQuantity) },
       evidenceJson: {
@@ -64,26 +80,17 @@ export async function detectReorderDecisions(ctx: BrainDetectorContext): Promise
     });
   }
 
-  const balancesByKey = new Map(balances.map((b) => [`${b.branchId}:${b.productId}`, b]));
-  const balancesByProduct = new Map<string, typeof balances>();
-  for (const balance of balances) {
-    if (!balancesByProduct.has(balance.productId)) balancesByProduct.set(balance.productId, []);
-    balancesByProduct.get(balance.productId)!.push(balance);
-  }
-
   for (const policy of policies) {
     const balance = balancesByKey.get(`${policy.branchId}:${policy.productId}`);
     const current = n(balance?.quantityOnHand);
     const reorderPoint = n(policy.reorderPoint);
     if (current > reorderPoint) continue;
 
-    const candidates = (balancesByProduct.get(policy.productId) ?? [])
-      .filter((b) => b.branchId !== policy.branchId && b.branch.isActive && n(b.quantityOnHand) > n(policy.targetQuantity))
-      .sort((a, b) => n(b.quantityOnHand) - n(a.quantityOnHand));
     const recentSales = await prisma.saleOrderLine.findMany({
       where: {
         productId: policy.productId,
-        createdAt: { gte: ctx.since, lte: ctx.now },
+        // J: use dateTo so DEEP_SCAN respects the specified end date
+        createdAt: { gte: ctx.since, lte: ctx.dateTo },
         saleOrder: { branchId: policy.branchId },
       },
       select: { createdAt: true, quantity: true },
@@ -102,6 +109,19 @@ export async function detectReorderDecisions(ctx: BrainDetectorContext): Promise
       safetyStock: n(policy.safetyStock),
       unitCost: n(balance?.weightedAverageCost),
     });
+
+    // I: only suggest transfer from branches that have enough stock above their own safety floor
+    const candidates = (balancesByProduct.get(policy.productId) ?? [])
+      .filter((b) => {
+        if (b.branchId === policy.branchId || !b.branch.isActive) return false;
+        const sourcePolicy = policiesByKey.get(`${b.branchId}:${policy.productId}`);
+        const sourceFloor = sourcePolicy
+          ? Math.max(n(sourcePolicy.reorderPoint), n(sourcePolicy.minQuantity))
+          : 0;
+        // Source must have enough that after fulfilling destination target they stay above their floor
+        return n(b.quantityOnHand) - n(policy.targetQuantity) > sourceFloor;
+      })
+      .sort((a, b) => n(b.quantityOnHand) - n(a.quantityOnHand));
 
     decisions.push({
       category: "REORDER",

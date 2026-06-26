@@ -21,8 +21,13 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
   const decisions: BrainDecisionDraft[] = [];
 
   const [balances, branchSettings] = await Promise.all([
+    // H: filter inactive products and inactive branches
     prisma.inventoryBalance.findMany({
-      where: ctx.branchId ? { branchId: ctx.branchId } : {},
+      where: {
+        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+        product: { is: { isActive: true } },
+        branch: { is: { isActive: true } },
+      },
       include: {
         branch: { select: { id: true, code: true, name: true } },
         product: { select: { id: true, sku: true, name: true, standardSalePrice: true, updatedAt: true } },
@@ -31,7 +36,11 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
       orderBy: { updatedAt: "desc" },
     }),
     prisma.branchProductSetting.findMany({
-      where: ctx.branchId ? { branchId: ctx.branchId } : {},
+      where: {
+        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+        product: { is: { isActive: true } },
+        branch: { is: { isActive: true } },
+      },
       include: {
         branch: { select: { id: true, code: true, name: true } },
         product: { select: { id: true, sku: true, name: true, standardSalePrice: true } },
@@ -71,32 +80,43 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
         suggestedPrice,
         recentUnits: n(balance.quantityOnHand),
       });
+      const isBelowCost = price <= cost;
+      // G: when price < cost, impactAmount = stock × (cost – price) = real daily loss exposure.
+      // When margin is just below policy, impactAmount = stock × (price – cost) = at-risk margin value.
+      const unitLoss = isBelowCost ? Math.max(0, cost - price) : Math.max(0, price - cost);
+      const stockQty = n(balance.quantityOnHand);
       decisions.push({
         category: "PRICING",
-        severity: price <= cost ? "CRITICAL" : severity,
+        severity: isBelowCost ? "CRITICAL" : severity,
         title: `Margen bajo: ${balance.product.sku} - ${balance.product.name}`,
         description: `${balance.branch.code} opera con margen efectivo de ${margin.toFixed(1)}%, por debajo de la politica (${minMargin.toFixed(1)}%).`,
-        recommendation: price <= cost
+        recommendation: isBelowCost
           ? "Precio efectivo debajo del costo efectivo: revisar costo/precio antes de vender."
           : "Validar costo reciente y recalcular precio con politica de categoria e inteligencia ABC-XYZ.",
         branchId: balance.branchId,
         productId: balance.productId,
         confidenceScore: 0.82,
-        impactAmount: n(balance.quantityOnHand) * Math.max(0, price - cost),
-        riskScore: riskScoreFor(price <= cost ? "CRITICAL" : severity, 0.82),
-        proposedActionType: price <= cost ? "REVIEW_PRICE_BELOW_COST" : "REVIEW_PRICE_MARGIN_POLICY",
+        impactAmount: stockQty * unitLoss,
+        riskScore: riskScoreFor(isBelowCost ? "CRITICAL" : severity, 0.82),
+        proposedActionType: isBelowCost ? "REVIEW_PRICE_BELOW_COST" : "REVIEW_PRICE_MARGIN_POLICY",
         proposedActionJson: {
           productId: balance.productId,
           branchId: balance.branchId,
           currentPrice: price,
           suggestedPrice,
-          reason: price <= cost ? "PRICE_BELOW_EFFECTIVE_COST" : "LOW_MARGIN_POLICY",
+          reason: isBelowCost ? "PRICE_BELOW_EFFECTIVE_COST" : "LOW_MARGIN_POLICY",
           calculationSnapshot: suggestion,
         },
         evidenceJson: {
           price,
           effectivePrice: price,
           effectiveCost: cost,
+          // G: explicit loss fields so UI can show per-unit and total exposure
+          cost,
+          currentPrice: price,
+          suggestedPrice,
+          unitLoss: cost - price,
+          stockAtRisk: stockQty,
           priceSource: effective.priceSource,
           costSource: effective.costSource,
           policyMinMarginPercent: minMargin,
@@ -104,7 +124,7 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
           commercialClass: commercial.combinedClass,
           riskLevel: commercial.riskLevel,
           marginPct: margin.toFixed(1),
-          stock: n(balance.quantityOnHand),
+          stock: stockQty,
           priceSimulation,
           commercialActions: commercial.recommendedActions,
         },

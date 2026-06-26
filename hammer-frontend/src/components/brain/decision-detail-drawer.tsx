@@ -181,6 +181,7 @@ export function DecisionDetailDrawer({
               <DecisionActionButtons
                 status={decision.status}
                 proposedActionType={decision.proposedActionType}
+                actionMode={decision.actionMode}
                 busy={Boolean(busy)}
                 onAction={onAction}
               />

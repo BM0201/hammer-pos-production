@@ -12,8 +12,12 @@ export async function detectInventoryDecisions(ctx: BrainDetectorContext): Promi
   const decisions: BrainDecisionDraft[] = [];
 
   const [balances, products, recentLines, recentOpeningMovements] = await Promise.all([
+    // H: filter inactive products so negative/zero-stock alerts are only for active items
     prisma.inventoryBalance.findMany({
-      where: ctx.branchId ? { branchId: ctx.branchId } : {},
+      where: {
+        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+        product: { is: { isActive: true } },
+      },
       include: {
         branch: { select: { id: true, code: true, name: true } },
         product: {
@@ -39,7 +43,8 @@ export async function detectInventoryDecisions(ctx: BrainDetectorContext): Promi
     prisma.saleOrderLine.findMany({
       where: {
         saleOrder: {
-          createdAt: { gte: ctx.since },
+          // J: use dateTo so DEEP_SCAN only counts sales within the specified range
+          createdAt: { gte: ctx.since, lte: ctx.dateTo },
           ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
         },
       },

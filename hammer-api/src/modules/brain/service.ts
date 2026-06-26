@@ -535,7 +535,13 @@ export async function persistBrainDecisions(
       if (isReopened) reopened++;
       else updated++;
     } catch (error) {
-      errors.push({ message: error instanceof Error ? error.message : String(error) });
+      // D: P2002 = unique constraint violation on fingerprint — a concurrent scan already created
+      // this decision. Treat as skipped, not an error.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        skipped++;
+      } else {
+        errors.push({ message: error instanceof Error ? error.message : String(error) });
+      }
     }
   }
 
@@ -658,15 +664,24 @@ export async function reopenBrainDecision(id: string, actorUserId: string, note?
 }
 
 export async function executeBrainDecision(id: string, actorUserId: string, note?: string) {
-  const decision = await prisma.brainDecision.findUnique({ where: { id } });
-  if (!decision) throw new Error("NOT_FOUND");
-  if (decision.status === "EXECUTED" || decision.status === "MANUAL_REVIEW") {
-    return prisma.brainDecision.findUniqueOrThrow({ where: { id }, include: includeDecisionRelations() });
-  }
-  if (decision.status !== "APPROVED") throw new Error("INVALID_INPUT: Primero debe aprobarse la decision.");
+  // A: atomic compare-and-swap APPROVED → EXECUTING prevents concurrent double-execution
+  const claimed = await prisma.brainDecision.updateMany({
+    where: { id, status: "APPROVED" },
+    data: { status: "EXECUTING" },
+  });
 
-  await prisma.brainDecision.update({ where: { id }, data: { status: "EXECUTING" } });
-  await writeActionLog({ decisionId: id, actorUserId, action: "EXECUTION_STARTED", note, beforeStatus: decision.status, afterStatus: "EXECUTING" });
+  if (claimed.count === 0) {
+    const decision = await prisma.brainDecision.findUnique({ where: { id } });
+    if (!decision) throw new Error("NOT_FOUND");
+    if (decision.status === "EXECUTED" || decision.status === "MANUAL_REVIEW") {
+      return prisma.brainDecision.findUniqueOrThrow({ where: { id }, include: includeDecisionRelations() });
+    }
+    if (decision.status === "EXECUTING") throw new Error("CONFLICT: Esta decision ya esta siendo ejecutada por otro proceso.");
+    throw new Error("INVALID_INPUT: Primero debe aprobarse la decision.");
+  }
+
+  const decision = await prisma.brainDecision.findUniqueOrThrow({ where: { id } });
+  await writeActionLog({ decisionId: id, actorUserId, action: "EXECUTION_STARTED", note, beforeStatus: "APPROVED", afterStatus: "EXECUTING" });
 
   try {
     const result = await executeDecisionAction({

@@ -140,7 +140,26 @@ export async function executeDecisionAction(input: ExecuteInput): Promise<Execut
   }
 
   if (action === "CONVERT_REORDER_ALERT_TO_PURCHASE" && reorderAlertId) {
+    // B: check idempotency first — a previous run may have created the PO but crashed before
+    // updating BrainDecision status to EXECUTED, causing a retry that would double-create.
+    const existingForAlert = await existingPurchaseOrder(input.idempotencyKey);
+    if (existingForAlert) {
+      return {
+        executed: true,
+        action,
+        executedEntityType: "PurchaseOrder",
+        executedEntityId: existingForAlert.id,
+        orderNumber: existingForAlert.orderNumber,
+        idempotent: true,
+      };
+    }
     const result = await convertAlertToPurchaseOrder(reorderAlertId, input.actorUserId);
+    // Tag with idempotency key so the check above works on any future retry
+    const currentPo = await prisma.purchaseOrder.findUnique({ where: { id: result.purchaseOrder.id }, select: { notes: true } }).catch(() => null);
+    await prisma.purchaseOrder.update({
+      where: { id: result.purchaseOrder.id },
+      data: { notes: [currentPo?.notes, `Brain idempotency: ${input.idempotencyKey}`].filter(Boolean).join(" ") },
+    }).catch(() => {});
     return {
       executed: true,
       action,
@@ -152,7 +171,24 @@ export async function executeDecisionAction(input: ExecuteInput): Promise<Execut
   }
 
   if (action === "CONVERT_REORDER_ALERT_TO_TRANSFER" && reorderAlertId) {
+    // B: same idempotency pattern for transfer conversions
+    const existingForAlert = await existingTransfer(input.idempotencyKey);
+    if (existingForAlert) {
+      return {
+        executed: true,
+        action,
+        executedEntityType: "Transfer",
+        executedEntityId: existingForAlert.id,
+        transferNumber: existingForAlert.transferNumber,
+        idempotent: true,
+      };
+    }
     const result = await convertAlertToTransfer(reorderAlertId, input.actorUserId);
+    const currentTx = await prisma.transfer.findUnique({ where: { id: result.transfer.id }, select: { notes: true } }).catch(() => null);
+    await prisma.transfer.update({
+      where: { id: result.transfer.id },
+      data: { notes: [currentTx?.notes, `Brain idempotency: ${input.idempotencyKey}`].filter(Boolean).join(" ") },
+    }).catch(() => {});
     return {
       executed: true,
       action,

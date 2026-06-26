@@ -16,6 +16,7 @@ export async function detectPurchasingDecisions(ctx: BrainDetectorContext): Prom
       where: {
         status: { in: ["DRAFT", "APPROVED"] },
         createdAt: { lt: staleDate },
+        branch: { isActive: true },
         ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
       },
       include: { branch: { select: { id: true, code: true, name: true } }, lines: true },
@@ -23,7 +24,12 @@ export async function detectPurchasingDecisions(ctx: BrainDetectorContext): Prom
       orderBy: { createdAt: "asc" },
     }),
     prisma.inventoryBalance.findMany({
-      where: { quantityOnHand: { lte: 0 }, ...(ctx.branchId ? { branchId: ctx.branchId } : {}) },
+      where: {
+        quantityOnHand: { lte: 0 },
+        product: { is: { isActive: true } },
+        branch: { is: { isActive: true } },
+        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+      },
       include: {
         branch: { select: { id: true, code: true, name: true } },
         product: { select: { id: true, sku: true, name: true, standardSalePrice: true } },
@@ -53,23 +59,26 @@ export async function detectPurchasingDecisions(ctx: BrainDetectorContext): Prom
   }
 
   for (const balance of criticalBalances) {
+    const wac = n(balance.weightedAverageCost);
+    // C: Use REVIEW_PURCHASE_NEED instead of CREATE_PURCHASE_ORDER_DRAFT.
+    // Auto-creating purchase orders without validated reorder policy, supplier or cost is dangerous.
     decisions.push({
       category: "PURCHASING",
       severity: n(balance.quantityOnHand) < 0 ? "CRITICAL" : "HIGH",
       title: `Compra sugerida por stock critico: ${balance.product.sku}`,
       description: `${balance.branch.code} tiene ${n(balance.quantityOnHand)} unidades de ${balance.product.name}.`,
-      recommendation: "Crear pedido de compra en borrador o transferir desde otra sucursal si hay excedente.",
+      recommendation: "Revisar politica de reorden, costo y proveedor antes de crear orden. Transferir desde otra sucursal si hay excedente.",
       branchId: balance.branchId,
       productId: balance.productId,
       confidenceScore: 86,
-      impactAmount: Math.max(n(balance.product.standardSalePrice), n(balance.weightedAverageCost)),
+      impactAmount: Math.max(n(balance.product.standardSalePrice), wac),
       riskScore: riskScoreFor(n(balance.quantityOnHand) < 0 ? "CRITICAL" : "HIGH", 86),
-      proposedActionType: "CREATE_PURCHASE_ORDER_DRAFT",
+      proposedActionType: "REVIEW_PURCHASE_NEED",
       proposedActionJson: {
         branchId: balance.branchId,
-        lines: [{ productId: balance.productId, quantity: 10, unitCost: n(balance.weightedAverageCost) }],
+        suggestedLines: [{ productId: balance.productId, unitCost: wac }],
       },
-      evidenceJson: { quantityOnHand: n(balance.quantityOnHand), weightedAverageCost: n(balance.weightedAverageCost) },
+      evidenceJson: { quantityOnHand: n(balance.quantityOnHand), weightedAverageCost: wac },
       sourceJson: { detector: "purchasing-detector", balanceId: balance.id },
       fingerprintParts: ["purchasing", "critical-stock-purchase", balance.branchId, balance.productId],
     });

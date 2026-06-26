@@ -41,6 +41,7 @@ export type BrainDecision = {
   proposedActionJson?: unknown;
   actionResultJson?: unknown;
   proposedActionType?: string | null;
+  actionMode?: "AUTO_EXECUTABLE" | "MANUAL_REVIEW" | null;
   createdAt: string;
   firstDetectedAt?: string | null;
   lastDetectedAt?: string | null;
@@ -240,6 +241,7 @@ export function DecisionCard({ decision, busy, onAction }: DecisionCardProps) {
           <DecisionActionButtons
             status={decision.status}
             proposedActionType={decision.proposedActionType}
+            actionMode={decision.actionMode}
             busy={busy}
             onAction={(action) => onAction(decision.id, action)}
           />

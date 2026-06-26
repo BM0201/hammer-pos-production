@@ -90,6 +90,10 @@ const STATUS_TABS = [
   { value: "MANUAL_REVIEW", label: "Revisión" },
   { value: "EXECUTING", label: "Ejecutando" },
   { value: "EXECUTED", label: "Ejecutadas" },
+  // K: SNOOZED, FAILED and EXPIRED were missing — users need to see and reopen them
+  { value: "SNOOZED", label: "Pospuestas" },
+  { value: "FAILED", label: "Fallidas" },
+  { value: "EXPIRED", label: "Expiradas" },
   { value: "DISMISSED", label: "Descartadas" },
 ];
 
@@ -107,6 +111,14 @@ function decisionTime(decision: BrainDecision) {
   return decision.lastDetectedAt ?? decision.firstDetectedAt ?? decision.createdAt;
 }
 
+// E: Managua is UTC-6 (no DST). End of local day YYYY-MM-DD = start of next day UTC minus 1 ms.
+function managuaDateToUtcEnd(yyyymmdd: string) {
+  const d = new Date(`${yyyymmdd}T06:00:00.000Z`); // midnight local = 06:00 UTC
+  d.setUTCDate(d.getUTCDate() + 1);
+  d.setUTCMilliseconds(d.getUTCMilliseconds() - 1);
+  return d.toISOString();
+}
+
 
 function scrollToPriorities() {
   document.getElementById("brain-priorities")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -116,7 +128,10 @@ export function DecisionCenter() {
   const [filters, setFilters] = useState(initialFilters);
   const [scanMode, setScanMode] = useState<BrainScanMode>("QUICK_SCAN");
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [businessDate, setBusinessDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // E: compute business date in Managua timezone (UTC-6, no DST) — not UTC
+  const [businessDate, setBusinessDate] = useState(() =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "America/Managua" }).format(new Date())
+  );
   const [operationalDayId, setOperationalDayId] = useState("");
   const [cashSessionId, setCashSessionId] = useState("");
   const [saleOrderId, setSaleOrderId] = useState("");
@@ -296,8 +311,9 @@ export function DecisionCenter() {
           ...entityScope,
           category: filters.category || undefined,
           severity: filters.severity || undefined,
-          dateFrom: scanMode === "DEEP_SCAN" && dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`).toISOString() : undefined,
-          dateTo: scanMode === "DEEP_SCAN" && dateTo ? new Date(`${dateTo}T23:59:59.999Z`).toISOString() : undefined,
+          // E: Managua is UTC-6 (no DST). Local midnight = 06:00 UTC same day.
+          dateFrom: scanMode === "DEEP_SCAN" && dateFrom ? `${dateFrom}T06:00:00.000Z` : undefined,
+          dateTo: scanMode === "DEEP_SCAN" && dateTo ? managuaDateToUtcEnd(dateTo) : undefined,
           maxIssues: scanMode === "QUICK_SCAN" ? 50 : 150,
           maxEntities: scanMode === "QUICK_SCAN" ? 250 : 1000,
           days: Number(filters.days || 30),

@@ -20,21 +20,25 @@ export function isAutoExecutable(proposedActionType?: string | null): boolean {
 export function DecisionActionButtons({
   status,
   proposedActionType,
+  // K: actionMode from backend enrichDecision; falls back to local isAutoExecutable check
+  actionMode,
   busy,
   onAction,
 }: {
   status: string;
   proposedActionType?: string | null;
+  actionMode?: "AUTO_EXECUTABLE" | "MANUAL_REVIEW" | string | null;
   busy: boolean;
   onAction: (action: BrainDecisionAction) => void;
 }) {
-  const isExecutable = isAutoExecutable(proposedActionType);
+  const isExecutable = actionMode === "AUTO_EXECUTABLE" || isAutoExecutable(proposedActionType);
   const canApprove = status === "OPEN" || status === "SNOOZED" || status === "FAILED" || status === "MANUAL_REVIEW";
   const canExecute = status === "APPROVED" && isExecutable;
   const canManualReview = status === "OPEN" || status === "APPROVED" || status === "FAILED";
   const canSnooze = status === "OPEN" || status === "APPROVED" || status === "MANUAL_REVIEW";
   const canDismiss = !["EXECUTED", "DISMISSED", "EXPIRED"].includes(status);
-  const canReopen = ["DISMISSED", "EXPIRED", "FAILED"].includes(status);
+  // K: SNOOZED decisions can be explicitly reopened (e.g. urgent situation changed)
+  const canReopen = ["DISMISSED", "EXPIRED", "FAILED", "SNOOZED"].includes(status);
   const canApproveAndExecute = canApprove && isExecutable;
 
   const secondary = "rounded-md border border-[var(--color-border)] px-3 py-2 text-sm font-semibold text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-muted)] disabled:cursor-not-allowed disabled:text-[var(--color-text-soft)]";
