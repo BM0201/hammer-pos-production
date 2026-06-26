@@ -8,7 +8,11 @@ import {
   ironStockGroupCode,
   NAIL_PACKAGE_PRESETS,
 } from "@/modules/inventory/unit-conversion";
-import { rebuildStockGroupBalancesTx } from "@/modules/catalog/stock-group-crud";
+import {
+  previewEquivalentStockGroupMigrationTx,
+  applyEquivalentStockGroupMigrationTx,
+  type BranchMigrationPreview,
+} from "@/modules/catalog/equivalent-stock-migration";
 
 type BootstrapIronInput = {
   actorUserId: string;
@@ -127,7 +131,10 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
   const result = await prisma.$transaction(async (tx) => {
     let groupsUpserted = 0;
     let membersUpserted = 0;
+    let groupsMigrated = 0;
+    let groupsNeedingResolution = 0;
     const warnings: string[] = [];
+    const conflicts: Array<{ groupCode: string; branches: BranchMigrationPreview[] }> = [];
 
     for (const suggestion of suggestions) {
       if (!suggestion.canApply) {
@@ -180,17 +187,34 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
         membersUpserted += 1;
       }
 
-      // Migrate any stock that was in the QUINTAL product to the canonical VARILLA.
-      // rebuildStockGroupBalancesTx is idempotent — safe to run on new or existing groups.
-      await rebuildStockGroupBalancesTx(tx, {
-        stockGroupId: group.id,
-        actorUserId: input.actorUserId,
-        reason: `bootstrapIronStockGroups group=${suggestion.groupCode}`,
-        mode: "BOOTSTRAP_IRON",
-      });
+      // Reinterpretación de equivalencia (NO suma): el quintal y la varilla son la
+      // MISMA existencia física. Se calcula un preview por sucursal y:
+      //   - sin conflicto → se aplica la resolución recomendada
+      //     (USE_DERIVED_ONLY: 8 quintales → 112 varillas; o USE_CANONICAL_ONLY).
+      //   - con conflicto (ambas presentaciones con stock) → NO se aplica
+      //     automáticamente; requiere resolución manual para evitar doble conteo.
+      const preview = await previewEquivalentStockGroupMigrationTx(tx, { stockGroupId: group.id });
+      if (preview.hasAnyConflict) {
+        groupsNeedingResolution += 1;
+        const conflictBranches = preview.branches.filter((b) => b.hasConflict);
+        conflicts.push({ groupCode: suggestion.groupCode, branches: conflictBranches });
+        warnings.push(
+          `${suggestion.groupCode}: Hay stock en varilla y quintal (${conflictBranches
+            .map((b) => b.branchCode)
+            .join(", ")}). Requiere resolución manual para evitar doble conteo.`,
+        );
+      } else {
+        await applyEquivalentStockGroupMigrationTx(tx, {
+          stockGroupId: group.id,
+          actorUserId: input.actorUserId,
+          conflictResolution: "RECOMMENDED",
+          reason: `bootstrapIronStockGroups group=${suggestion.groupCode}`,
+        });
+        groupsMigrated += 1;
+      }
     }
 
-    return { groupsUpserted, membersUpserted, warnings };
+    return { groupsUpserted, membersUpserted, groupsMigrated, groupsNeedingResolution, warnings, conflicts };
   });
 
   await logAuditEvent({
@@ -203,8 +227,12 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
       detectedProducts: candidates.length,
       groupsUpserted: result.groupsUpserted,
       membersUpserted: result.membersUpserted,
+      groupsMigrated: result.groupsMigrated,
+      groupsNeedingResolution: result.groupsNeedingResolution,
       warnings: result.warnings,
-      note: "Balances rebuilt per branch: QUINTAL stock migrated to canonical VARILLA.",
+      note:
+        "Equivalencia reinterpretada por sucursal: el quintal se convierte a varillas y queda en cero; " +
+        "grupos con stock en ambas presentaciones quedan pendientes de resolución manual (no se sumó).",
     },
   });
 
@@ -214,6 +242,9 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
     detectedProducts: candidates.length,
     groupsUpserted: result.groupsUpserted,
     membersUpserted: result.membersUpserted,
+    groupsMigrated: result.groupsMigrated,
+    groupsNeedingResolution: result.groupsNeedingResolution,
+    conflicts: result.conflicts,
     groups: suggestions,
     warnings: result.warnings,
   };

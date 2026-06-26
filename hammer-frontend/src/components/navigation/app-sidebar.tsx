@@ -31,7 +31,7 @@ import {
   TreePine,
   Menu,
   X,
-  Receipt,
+  Landmark,
   PieChart,
   ClipboardPlus,
   ArrowLeftRight,
@@ -86,7 +86,6 @@ function buildNavSections(
         items: [
           { href: "/app/master/catalog-inventory", label: "Catalogo e Inventario", icon: Boxes, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE, CAPABILITIES.INVENTORY_VIEW] },
           { href: "/app/master/discounts", label: "Descuentos", icon: Tag, capabilities: [CAPABILITIES.PRICING_VIEW, CAPABILITIES.PRICING_EDIT_GLOBAL] },
-          { href: "/app/master/expenses", label: "Gastos & Precios", icon: Receipt, capabilities: [CAPABILITIES.PRICING_VIEW] },
         ],
       },
       {
@@ -103,6 +102,7 @@ function buildNavSections(
         title: "CONTROL",
         items: [
           { href: "/app/master/users", label: "Personal & Roles", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
+          { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark, capabilities: [CAPABILITIES.FINANCE_VIEW, CAPABILITIES.PRICING_VIEW] },
           { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
           { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
           { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },
@@ -142,7 +142,6 @@ function buildNavSections(
         items: [
           { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes },
           { href: "/app/master/discounts", label: "Descuentos", icon: Tag },
-          { href: "/app/master/expenses", label: "Gastos & Precios", icon: Receipt },
         ],
       },
       {
@@ -159,6 +158,7 @@ function buildNavSections(
         title: "CONTROL",
         items: [
           { href: "/app/master/users", label: "Personal & Roles", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
+          { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark, capabilities: [CAPABILITIES.FINANCE_VIEW, CAPABILITIES.PRICING_VIEW] },
           { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
           { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
           { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },
@@ -190,7 +190,6 @@ function buildNavSections(
         items: [
           { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes },
           { href: "/app/master/discounts", label: "Descuentos", icon: Tag },
-          { href: "/app/master/expenses", label: "Gastos & Precios", icon: Receipt },
         ],
       },
       {
@@ -208,6 +207,7 @@ function buildNavSections(
         title: "CONTROL",
         items: [
           { href: "/app/master/users", label: "Personal & Roles", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
+          { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark, capabilities: [CAPABILITIES.FINANCE_VIEW, CAPABILITIES.PRICING_VIEW] },
           { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
           { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
           { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },

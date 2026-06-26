@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { Link2, PackageOpen, Plus, Trash2, X, Search, Wrench } from "lucide-react";
+import { Link2, PackageOpen, Plus, Trash2, X, Search, Wrench, Scale } from "lucide-react";
 
 /* ───────────────────────── Tipos ───────────────────────── */
 
@@ -61,6 +61,38 @@ type FusionGroup = {
     isCanonical: boolean;
     isPackagePresentation?: boolean;
   }[];
+};
+
+type MigrationResolution =
+  | "USE_DERIVED_ONLY"
+  | "USE_CANONICAL_ONLY"
+  | "SUM_BOTH"
+  | "MANUAL_BASE_QTY";
+
+type BranchMigrationPreview = {
+  branchId: string;
+  branchCode: string;
+  canonicalProductId: string;
+  derivedProductId: string | null;
+  canonicalQty: number;
+  derivedQty: number;
+  factor: number;
+  derivedAsBaseQty: number;
+  resultIfUseDerivedOnly: number;
+  resultIfUseCanonicalOnly: number;
+  resultIfSumBoth: number;
+  hasConflict: boolean;
+  recommendedResolution: MigrationResolution;
+  warning: string | null;
+};
+
+type EquivalenceMigrationPreview = {
+  stockGroupId: string;
+  stockGroupCode: string;
+  baseUnit: string;
+  canonicalProductId: string;
+  hasAnyConflict: boolean;
+  branches: BranchMigrationPreview[];
 };
 
 /* ─────────────── Casos comunes preconfigurados ─────────────── */
@@ -210,6 +242,14 @@ export function InventoryFusionPanel() {
   const [openingReason, setOpeningReason] = useState("Apertura para venta unitaria");
   const [opening, setOpening] = useState(false);
   const [normalizingNails, setNormalizingNails] = useState(false);
+
+  // Reinterpretación de equivalencia (hierro/quintal/varilla) sin doble conteo
+  const [migrationGroup, setMigrationGroup] = useState<FusionGroup | null>(null);
+  const [migrationPreview, setMigrationPreview] = useState<EquivalenceMigrationPreview | null>(null);
+  const [migrationLoading, setMigrationLoading] = useState(false);
+  const [migrationResolution, setMigrationResolution] = useState<MigrationResolution | "">("");
+  const [migrationManualByBranch, setMigrationManualByBranch] = useState<Record<string, number | "">>({});
+  const [migrating, setMigrating] = useState(false);
 
   // Buscador de productos
   const [search, setSearch] = useState("");
@@ -535,6 +575,77 @@ export function InventoryFusionPanel() {
       showToast("error", "Error de red al abrir el kilo/caja.");
     } finally {
       setOpening(false);
+    }
+  }
+
+  async function startMigration(group: FusionGroup) {
+    setMigrationGroup(group);
+    setMigrationPreview(null);
+    setMigrationResolution("");
+    setMigrationManualByBranch({});
+    setMigrationLoading(true);
+    try {
+      const res = await fetch(`/api/inventory/stock-groups/${group.id}/equivalence-migration`);
+      const raw = await res.json();
+      if (!res.ok) {
+        showToast("error", raw?.error?.message ?? "No se pudo calcular la reinterpretación.");
+        setMigrationGroup(null);
+        return;
+      }
+      const preview: EquivalenceMigrationPreview = unwrapApiData(raw);
+      setMigrationPreview(preview);
+      // Sin conflicto: aplica la resolución recomendada por sucursal.
+      setMigrationResolution(preview.hasAnyConflict ? "" : "USE_DERIVED_ONLY");
+    } catch {
+      showToast("error", "Error de red al calcular la reinterpretación.");
+      setMigrationGroup(null);
+    } finally {
+      setMigrationLoading(false);
+    }
+  }
+
+  async function confirmMigration() {
+    if (!migrationGroup || !migrationPreview) return;
+    const hasConflict = migrationPreview.hasAnyConflict;
+    // Sin conflicto → RECOMMENDED (cada sucursal usa su recomendación).
+    // Con conflicto → exige una resolución explícita.
+    const resolution = hasConflict ? migrationResolution : "RECOMMENDED";
+    if (hasConflict && !migrationResolution) {
+      showToast("error", "Seleccione una opción para resolver el posible doble conteo.");
+      return;
+    }
+    let manualBaseQtyByBranch: Record<string, number> | undefined;
+    if (resolution === "MANUAL_BASE_QTY") {
+      manualBaseQtyByBranch = {};
+      for (const branch of migrationPreview.branches) {
+        const value = migrationManualByBranch[branch.branchId];
+        if (value === "" || value === undefined || !(Number(value) >= 0)) {
+          showToast("error", `Ingrese el conteo real para la sucursal ${branch.branchCode}.`);
+          return;
+        }
+        manualBaseQtyByBranch[branch.branchId] = Number(value);
+      }
+    }
+    setMigrating(true);
+    try {
+      const res = await apiFetch(`/api/inventory/stock-groups/${migrationGroup.id}/equivalence-migration`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolution, manualBaseQtyByBranch }),
+      });
+      const raw = await res.json();
+      if (!res.ok) {
+        showToast("error", raw?.error?.message ?? "No se pudo reinterpretar el stock.");
+        return;
+      }
+      showToast("success", "Stock reinterpretado: una sola unidad base, sin doble conteo.");
+      setMigrationGroup(null);
+      setMigrationPreview(null);
+      await loadGroups();
+    } catch {
+      showToast("error", "Error de red al reinterpretar el stock.");
+    } finally {
+      setMigrating(false);
     }
   }
 
@@ -905,9 +1016,18 @@ export function InventoryFusionPanel() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {group.tracksPackages && (
+                  {group.tracksPackages ? (
                     <Button variant="secondary" size="sm" onClick={() => startOpenPackage(group)}>
                       <PackageOpen className="h-4 w-4" /> Abrir kilo/caja
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => startMigration(group)}
+                      title="Reinterpreta el inventario: una sola unidad base, sin sumar quintal + varilla (evita doble conteo)."
+                    >
+                      <Scale className="h-4 w-4" /> Reinterpretar stock
                     </Button>
                   )}
                   <Button variant="secondary" size="sm" onClick={() => startEdit(group)}>Editar</Button>
@@ -1062,6 +1182,167 @@ export function InventoryFusionPanel() {
             <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-3">
               <Button variant="ghost" onClick={() => setOpeningGroup(null)} disabled={opening}>Cancelar</Button>
               <Button onClick={confirmOpenPackage} loading={opening} disabled={opening}>Confirmar</Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {migrationGroup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-lg bg-[var(--color-surface)] shadow-xl border border-[var(--color-border)]">
+            <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3">
+              <h2 className="text-sm font-semibold text-[var(--color-text)] flex items-center gap-2">
+                <Scale className="h-4 w-4" /> Reinterpretar stock — {migrationGroup.name}
+              </h2>
+              <button type="button" onClick={() => setMigrationGroup(null)} className="text-[var(--color-text-soft)] hover:text-[var(--color-text)]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              {migrationLoading && (
+                <div className="text-sm text-[var(--color-text-muted)]">Calculando equivalencias…</div>
+              )}
+
+              {!migrationLoading && migrationPreview && !migrationPreview.hasAnyConflict && (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-[var(--color-success-300)] bg-[var(--color-success-50)] p-3 text-sm text-[var(--color-success-800)] space-y-1">
+                    <p className="font-semibold">Sin conflicto — se reinterpreta el mismo inventario.</p>
+                    <p>
+                      El stock se guardará como una sola unidad base ({migrationPreview.baseUnit}). El producto
+                      en quintal/presentación quedará como <strong>presentación de venta/consulta</strong>, no como
+                      inventario separado. No se suma: el volumen físico no cambia.
+                    </p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-xs">
+                      <thead className="text-[var(--color-text-soft)]">
+                        <tr className="border-b border-[var(--color-border)]">
+                          <th className="py-2 pr-3 text-left font-medium">Sucursal</th>
+                          <th className="py-2 pr-3 text-right font-medium">Varilla (base)</th>
+                          <th className="py-2 pr-3 text-right font-medium">Quintal</th>
+                          <th className="py-2 pr-3 text-right font-medium">Equivalente</th>
+                          <th className="py-2 pr-3 text-right font-medium">Se guardará</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--color-border)]">
+                        {migrationPreview.branches.map((b) => {
+                          const result = b.recommendedResolution === "USE_DERIVED_ONLY"
+                            ? b.resultIfUseDerivedOnly
+                            : b.resultIfUseCanonicalOnly;
+                          return (
+                            <tr key={b.branchId}>
+                              <td className="py-2 pr-3 font-medium text-[var(--color-text)]">{b.branchCode}</td>
+                              <td className="py-2 pr-3 text-right">{b.canonicalQty}</td>
+                              <td className="py-2 pr-3 text-right">{b.derivedQty}</td>
+                              <td className="py-2 pr-3 text-right">{b.derivedAsBaseQty} {migrationPreview.baseUnit}</td>
+                              <td className="py-2 pr-3 text-right font-semibold">{result} {migrationPreview.baseUnit}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {!migrationLoading && migrationPreview && migrationPreview.hasAnyConflict && (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-[var(--color-danger-300)] bg-[var(--color-danger-50)] p-3 text-sm text-[var(--color-danger-800)]">
+                    <p className="font-semibold">Posible doble conteo detectado.</p>
+                    <p>Hay stock en varilla y en quintal. Seleccione cuál es la fuente real para no inflar el inventario.</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-xs">
+                      <thead className="text-[var(--color-text-soft)]">
+                        <tr className="border-b border-[var(--color-border)]">
+                          <th className="py-2 pr-3 text-left font-medium">Sucursal</th>
+                          <th className="py-2 pr-3 text-right font-medium">Stock varilla</th>
+                          <th className="py-2 pr-3 text-right font-medium">Stock quintal</th>
+                          <th className="py-2 pr-3 text-right font-medium">Equiv. en varillas</th>
+                          <th className="py-2 pr-3 text-right font-medium">Si usa quintal</th>
+                          <th className="py-2 pr-3 text-right font-medium">Si usa varilla</th>
+                          <th className="py-2 pr-3 text-right font-medium">Si suma ambos</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--color-border)]">
+                        {migrationPreview.branches.map((b) => (
+                          <tr key={b.branchId} className={b.hasConflict ? "bg-[var(--color-danger-50)]" : ""}>
+                            <td className="py-2 pr-3 font-medium text-[var(--color-text)]">{b.branchCode}</td>
+                            <td className="py-2 pr-3 text-right">{b.canonicalQty}</td>
+                            <td className="py-2 pr-3 text-right">{b.derivedQty}</td>
+                            <td className="py-2 pr-3 text-right">{b.derivedAsBaseQty}</td>
+                            <td className="py-2 pr-3 text-right">{b.resultIfUseDerivedOnly}</td>
+                            <td className="py-2 pr-3 text-right">{b.resultIfUseCanonicalOnly}</td>
+                            <td className="py-2 pr-3 text-right">{b.resultIfSumBoth}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-[var(--color-text-secondary)]">Fuente real del inventario:</p>
+                    {([
+                      { value: "USE_DERIVED_ONLY", label: "Usar quintal como fuente real" },
+                      { value: "USE_CANONICAL_ONLY", label: "Usar varilla como fuente real" },
+                      { value: "SUM_BOTH", label: "Sumar ambos (son existencias físicas diferentes)" },
+                      { value: "MANUAL_BASE_QTY", label: "Ingresar conteo real manual (en unidad base)" },
+                    ] as Array<{ value: MigrationResolution; label: string }>).map((opt) => (
+                      <label key={opt.value} className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+                        <input
+                          type="radio"
+                          name="migrationResolution"
+                          checked={migrationResolution === opt.value}
+                          onChange={() => setMigrationResolution(opt.value)}
+                        />
+                        {opt.label}
+                      </label>
+                    ))}
+                  </div>
+
+                  {migrationResolution === "MANUAL_BASE_QTY" && (
+                    <div className="space-y-2 rounded-lg border border-[var(--color-border)] p-3">
+                      <p className="text-xs font-medium text-[var(--color-text-secondary)]">
+                        Conteo real por sucursal (en {migrationPreview.baseUnit}):
+                      </p>
+                      {migrationPreview.branches.map((b) => (
+                        <div key={b.branchId} className="flex items-center gap-2 text-sm">
+                          <span className="w-28 text-[var(--color-text-soft)]">{b.branchCode}</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            className="w-32 rounded-md border border-[var(--color-border)] px-2 py-1 text-sm bg-[var(--color-surface)] text-[var(--color-text)]"
+                            value={migrationManualByBranch[b.branchId] ?? ""}
+                            onChange={(e) =>
+                              setMigrationManualByBranch((prev) => ({
+                                ...prev,
+                                [b.branchId]: e.target.value === "" ? "" : Number(e.target.value),
+                              }))
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-3">
+              <Button variant="ghost" onClick={() => setMigrationGroup(null)} disabled={migrating}>Cancelar</Button>
+              <Button
+                onClick={confirmMigration}
+                loading={migrating}
+                disabled={
+                  migrating ||
+                  migrationLoading ||
+                  !migrationPreview ||
+                  (migrationPreview.hasAnyConflict && !migrationResolution)
+                }
+              >
+                {migrationPreview?.hasAnyConflict ? "Aplicar resolución" : "Reinterpretar stock"}
+              </Button>
             </div>
           </div>
         </div>

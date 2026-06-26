@@ -8,6 +8,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { isMasterOrAbove } from "@/modules/rbac/role-routing";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +27,17 @@ type DailyReport = {
   paymentsByMethod: PaymentRow[];
   dispatches: Array<{ id: string; status: string }>;
   brain: Array<{ id: string; title: string; severity: string; status: string }>;
+  operations?: {
+    returns?: Array<{ id: string }>;
+    cancellations?: Array<{ id: string }>;
+    transports?: Array<{ id: string }>;
+  };
+  legacyFallback?: { ordersWithoutOperationalDay: number; paymentsWithoutOperationalDay: number };
 };
+
+type OperationalDayState = "NO_DAY" | "OPEN_TODAY" | "STALE_OPEN_DAY" | "CLOSED_TODAY" | "CLOSING" | "ERROR";
+type StaleDayInfo = { id: string; status: string; businessDate: string } | null;
+type CurrentEnvelope = { day: OperationalDay | null; state: OperationalDayState; staleDay: StaleDayInfo };
 
 type BlockerReference = {
   id: string;
@@ -66,7 +77,11 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   const sessionState = useSession();
   const canOpenDay = sessionState.status === "authenticated" &&
     canInAnyAssignedBranch(sessionState.session, CAPABILITIES.OPERATIONAL_DAY_OPEN);
+  const isMaster = sessionState.status === "authenticated" &&
+    isMasterOrAbove(sessionState.session.roleCode as string, sessionState.session.globalRoles as unknown as string[]);
   const [day, setDay]         = useState<OperationalDay | null>(null);
+  const [dayState, setDayState] = useState<OperationalDayState>("NO_DAY");
+  const [staleDay, setStaleDay] = useState<StaleDayInfo>(null);
   const [preview, setPreview] = useState<ClosePreview | null>(null);
   const [report, setReport]   = useState<DailyReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,7 +100,17 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
         showToast("error", raw?.error?.message ?? "No se pudo cargar la operación.");
         return;
       }
-      setDay(unwrapApiData(raw) as OperationalDay | null);
+      const envelope = unwrapApiData(raw) as CurrentEnvelope | OperationalDay | null;
+      // Back-compat: si llega el día directo (forma antigua) lo tratamos como tal.
+      if (envelope && typeof envelope === "object" && "state" in envelope) {
+        setDay(envelope.day);
+        setDayState(envelope.state);
+        setStaleDay(envelope.staleDay);
+      } else {
+        setDay((envelope as OperationalDay | null) ?? null);
+        setDayState(envelope ? "OPEN_TODAY" : "NO_DAY");
+        setStaleDay(null);
+      }
     } catch {
       showToast("error", "Error de red al cargar el día operativo.");
     }
@@ -212,29 +237,53 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
 
   if (loading) return <LoadingState message="Cargando día operativo..." />;
 
+  const staleBanner = dayState === "STALE_OPEN_DAY" && staleDay ? (
+    <Card className="border-[var(--color-danger-300)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,white)] p-4">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="mt-0.5 flex-shrink-0 text-[var(--color-danger-600)]" style={{ width: "1rem", height: "1rem" }} />
+        <div className="space-y-1">
+          <p className="text-sm font-bold text-[var(--color-danger-800)]">Día operativo anterior sin cerrar</p>
+          <p className="text-xs text-[var(--color-danger-700)] leading-relaxed">
+            Hay un día operativo de una fecha anterior ({new Date(staleDay.businessDate).toLocaleDateString("es-NI", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })})
+            que sigue <strong>abierto</strong>. No se puede abrir el día de hoy hasta resolverlo.
+            {isMaster
+              ? " Usa el escáner / limpieza operativa (Master) para cerrarlo o reabrirlo."
+              : " Un administrador Master debe ejecutar la limpieza operativa antes de continuar."}
+          </p>
+        </div>
+      </div>
+    </Card>
+  ) : null;
+
   if (!day) {
     return (
-      <div className="hm-module-card p-6">
-        <EmptyState
-          icon={<Wallet className="h-full w-full" />}
-          title="Sin día operativo activo"
-          description={
-            canOpenDay
-              ? "Abre el día antes de registrar ventas, abrir caja o despachar pedidos."
-              : "No hay un día operativo abierto. Un administrador debe abrirlo antes de que puedas abrir caja."
-          }
-          tone="info"
-          action={canOpenDay ? <Button variant="primary" onClick={openDay}>Abrir día operativo</Button> : undefined}
-        />
+      <div className="space-y-4">
+        {staleBanner}
+        {!staleBanner && (
+          <div className="hm-module-card p-6">
+            <EmptyState
+              icon={<Wallet className="h-full w-full" />}
+              title="Sin día operativo activo"
+              description={
+                canOpenDay
+                  ? "Abre el día antes de registrar ventas, abrir caja o despachar pedidos."
+                  : "No hay un día operativo abierto. Un administrador debe abrirlo antes de que puedas abrir caja."
+              }
+              tone="info"
+              action={canOpenDay ? <Button variant="primary" onClick={openDay}>Abrir día operativo</Button> : undefined}
+            />
+          </div>
+        )}
       </div>
     );
   }
 
-  const showCloseSection = day.status === "OPEN" || day.status === "CLOSING";
+  const showCloseSection = day.status === "OPEN" || day.status === "CLOSING" || day.status === "REOPENED_FOR_ADJUSTMENT";
   const showApproveBtn   = masterMode && day.status === "CLOSED" && !day.approvedAt;
 
   return (
     <div className="space-y-5">
+      {staleBanner}
       <OperationalDaySummary day={day} />
 
       {/* Toolbar */}
@@ -397,7 +446,8 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
           <OperationalDayChecklist preview={preview} onPreview={closePreview} />
           <CloseDayDialog
             preview={preview}
-            disabled={day.status !== "OPEN"}
+            isMaster={isMaster}
+            disabled={day.status !== "OPEN" && day.status !== "REOPENED_FOR_ADJUSTMENT"}
             disabledReason={day.status === "CLOSING" ? "El día ya está en proceso de cierre." : undefined}
             onPreview={closePreview}
             onCloseDay={closeDay}
@@ -413,12 +463,26 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
               <BarChart3 className="text-[var(--color-text-muted)]" style={{ width: "1rem", height: "1rem" }} />
               <h2 className="text-sm font-bold text-[var(--color-text)]">Reporte diario</h2>
             </div>
-            <div className="flex gap-3 text-xs text-[var(--color-text-muted)]">
+            <div className="flex flex-wrap gap-3 text-xs text-[var(--color-text-muted)]">
               <span>{report.orders.length} órdenes</span>
               <span>{report.dispatches.length} despachos</span>
+              {(report.operations?.returns?.length ?? 0) > 0 && <span>{report.operations!.returns!.length} devoluciones</span>}
+              {(report.operations?.cancellations?.length ?? 0) > 0 && <span>{report.operations!.cancellations!.length} anulaciones</span>}
               <span>{report.brain.length} decisiones Brain</span>
             </div>
           </div>
+
+          {/* Aviso de datos legacy sin operationalDayId (pendientes de backfill) */}
+          {((report.legacyFallback?.ordersWithoutOperationalDay ?? 0) > 0 ||
+            (report.legacyFallback?.paymentsWithoutOperationalDay ?? 0) > 0) && (
+            <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-[var(--color-warning-300)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)] px-3 py-2">
+              <Info className="mt-0.5 flex-shrink-0 text-[var(--color-warning-700)]" style={{ width: "0.875rem", height: "0.875rem" }} />
+              <p className="text-xs text-[var(--color-warning-800)]">
+                Hay {report.legacyFallback?.ordersWithoutOperationalDay ?? 0} órdenes y {report.legacyFallback?.paymentsWithoutOperationalDay ?? 0} pagos
+                de esta ventana sin día operativo asignado (datos legacy). Se incluyen por fecha hasta aplicar la migración de backfill.
+              </p>
+            </div>
+          )}
 
           <div className="p-4">
             {/* Payments by method table */}

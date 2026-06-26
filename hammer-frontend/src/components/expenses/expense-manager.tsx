@@ -290,7 +290,18 @@ const FREIGHT_STATUS_LABELS: Record<string, string> = {
 
 /* ══════════════════════════════════════════════════════════════ */
 
-export function ExpenseManager() {
+type ExpenseManagerTab = "expenses" | "pricing" | "policies" | "freight";
+
+/**
+ * TODO(finance-extract): la lógica de este componente se reutiliza dentro de
+ * Finanzas & Contabilidad (FinanceAccountingManager) vía `forcedTab` + `hideTabBar`,
+ * para servir un solo tab a la vez (Gastos, Precios, Fletes, Configuración) sin
+ * duplicar código. La meta final es extraerla a components/finance/*-panel.tsx.
+ */
+export function ExpenseManager({
+  forcedTab,
+  hideTabBar = false,
+}: { forcedTab?: ExpenseManagerTab; hideTabBar?: boolean } = {}) {
   /* ── State ── */
   const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string>("");
@@ -298,7 +309,10 @@ export function ExpenseManager() {
   const [summary, setSummary] = useState<ExpenseSummary | null>(null);
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"expenses" | "pricing" | "policies" | "freight">("expenses");
+  const [internalTab, setInternalTab] = useState<ExpenseManagerTab>(forcedTab ?? "expenses");
+  // Cuando el contenedor (Finanzas) fija un tab, este componente lo respeta y oculta su barra.
+  const activeTab: ExpenseManagerTab = forcedTab ?? internalTab;
+  const setActiveTab = setInternalTab;
 
   /* Form state */
   const [newExpense, setNewExpense] = useState({
@@ -880,7 +894,8 @@ export function ExpenseManager() {
         </div>
       )}
 
-      {/* ── Tabs ── */}
+      {/* ── Tabs ── (ocultas cuando Finanzas controla el tab) */}
+      {!hideTabBar && (
       <div className="flex gap-1 bg-[var(--color-surface-raised)] rounded-lg p-1 overflow-x-auto">
         {(["expenses", "pricing", "policies", "freight"] as const).map((tab) => {
           const labels = {
@@ -906,6 +921,7 @@ export function ExpenseManager() {
           );
         })}
       </div>
+      )}
 
       {loading && (
         <div className="text-center py-8 text-[var(--color-text-muted)]">

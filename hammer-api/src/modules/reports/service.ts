@@ -1,5 +1,6 @@
 import { ApprovalStatus, PaymentMethod, PaymentStatus, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
 type ReportFilters = {
   branchIds?: string[];
@@ -250,6 +251,9 @@ export async function getInventoryCriticalReportRows(filters: ReportFilters) {
     where: {
       ...branchWhere(filters),
       quantityOnHand: { lte: 5 },
+      // No alertar por productos derivados de una fusión (su balance está en cero
+      // por diseño; el stock real vive en el canónico). Evita falsos críticos.
+      product: excludeDerivedStockGroupMembers(),
     },
     include: {
       branch: { select: { code: true, name: true } },

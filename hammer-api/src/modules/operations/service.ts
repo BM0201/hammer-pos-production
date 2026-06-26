@@ -44,20 +44,55 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
-function localDateParts(date: Date) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TIMEZONE,
+/** Hora (0–23) a la que termina el día de negocio. 0 = medianoche (comportamiento por defecto). */
+export const DEFAULT_BUSINESS_DAY_ENDS_AT_HOURS = 0;
+
+function localWallClockParts(date: Date, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  });
-  const [year, month, day] = formatter.format(date).split("-").map(Number);
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute"), second: get("second") };
+}
+
+function localDateParts(date: Date) {
+  const { year, month, day } = localWallClockParts(date, TIMEZONE);
   return { year, month, day };
 }
 
+/**
+ * Fecha de negocio (a las 00:00 UTC) a la que pertenece un instante, según la
+ * zona horaria y la hora de corte del día de negocio.
+ *
+ * ERP real: si businessDayEndsAt = 3 (03:00), una venta a las 02:30 AM pertenece
+ * al día anterior, porque el día de negocio aún no había cerrado. Con
+ * businessDayEndsAt = 0 (default) es simplemente la fecha calendario local.
+ *
+ * Pura y exportada para tests (no usa `new Date()` salvo el instante recibido).
+ */
+export function businessDateFromInstant(
+  instant: Date,
+  timezone: string = TIMEZONE,
+  businessDayEndsAt: number = DEFAULT_BUSINESS_DAY_ENDS_AT_HOURS,
+): Date {
+  const { year, month, day, hour } = localWallClockParts(instant, timezone);
+  let utcMidnight = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+  // Antes de la hora de corte → todavía es el día de negocio anterior.
+  if (businessDayEndsAt > 0 && hour < businessDayEndsAt) {
+    utcMidnight -= 24 * 60 * 60 * 1000;
+  }
+  return new Date(utcMidnight);
+}
+
 export function businessDateFromNow(now = new Date()) {
-  const { year, month, day } = localDateParts(now);
-  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  return businessDateFromInstant(now, TIMEZONE, DEFAULT_BUSINESS_DAY_ENDS_AT_HOURS);
 }
 
 export function businessDateFromInput(input?: string) {
@@ -79,7 +114,7 @@ export function getOperationalWindowForNow(now = new Date()) {
   return operationalWindow(businessDateFromNow(now));
 }
 
-export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: { id: string; branchId: string; businessDate: Date }) {
+export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient, day: { id: string; branchId: string; businessDate: Date; closedAt?: Date | null }) {
   const { start, end } = operationalWindow(day.businessDate);
   const salesSummary = await getSalesSummaryForOperationalDayTx(tx, day.id);
   const [
@@ -104,7 +139,11 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
       where: {
         branchId: day.branchId,
         status: { in: [...ACTIVE_DISPATCH_STATUSES] },
-        createdAt: { gte: start, lt: end },
+        // Híbrido: por operationalDayId si está poblado; si no, ventana legacy.
+        OR: [
+          { operationalDayId: day.id },
+          { operationalDayId: null, createdAt: { gte: start, lt: end } },
+        ],
       },
     }),
     tx.brainDecision.count({
@@ -144,17 +183,70 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     }),
   ]);
 
+  // ── Fuente de verdad: preferir operationalDayId; ventana horaria = fallback legacy ──
+  const [dayTendersById, salesIdCount, salesWindowCount, paymentsIdCount, paymentsWindowCount] = await Promise.all([
+    tx.paymentTender.findMany({
+      where: {
+        operationalDayId: day.id,
+        payment: { status: PaymentStatus.POSTED, saleOrder: { status: { not: SaleOrderStatus.CANCELLED } } },
+      },
+      select: { method: true, amount: true, changeAmount: true },
+    }),
+    tx.saleOrder.count({ where: { operationalDayId: day.id } }),
+    tx.saleOrder.count({ where: { branchId: day.branchId, createdAt: { gte: start, lt: end } } }),
+    tx.payment.count({ where: { operationalDayId: day.id, status: PaymentStatus.POSTED } }),
+    tx.payment.count({ where: { status: PaymentStatus.POSTED, paidAt: { gte: start, lt: end }, saleOrder: { branchId: day.branchId } } }),
+  ]);
+
+  // Si hay tenders atados al operationalDayId, esa es la fuente; si no, ventana legacy.
+  const useIdTenders = dayTendersById.length > 0;
+  const effectiveTenders = useIdTenders ? dayTendersById : dayTenders;
+  const sourceMode: "OPERATIONAL_DAY_ID" | "MIXED" | "LEGACY_TIME_WINDOW" =
+    paymentsIdCount > 0
+      ? paymentsIdCount < paymentsWindowCount
+        ? "MIXED"
+        : "OPERATIONAL_DAY_ID"
+      : "LEGACY_TIME_WINDOW";
+  const legacyFallbackCounts = {
+    salesById: salesIdCount,
+    salesByWindow: salesWindowCount,
+    paymentsById: paymentsIdCount,
+    paymentsByWindow: paymentsWindowCount,
+  };
+  const summaryWarnings: string[] = [];
+  if (sourceMode === "LEGACY_TIME_WINDOW" && paymentsWindowCount > 0) {
+    summaryWarnings.push("LEGACY_TIME_WINDOW: pagos sin operationalDayId; totales por ventana horaria (legacy).");
+  }
+  if (sourceMode === "MIXED") {
+    summaryWarnings.push(`MIXED: ${paymentsIdCount}/${paymentsWindowCount} pagos con operationalDayId; el resto por ventana.`);
+  }
+
+  // Totales por método usando PaymentTender de la fuente elegida.
+  const totalsByPaymentMethod = effectiveTenders.reduce<Record<string, { amount: number; changeAmount: number; net: number }>>(
+    (acc, tender) => {
+      const key = tender.method;
+      const amount = n(tender.amount);
+      const change = n(tender.changeAmount);
+      acc[key] = acc[key] ?? { amount: 0, changeAmount: 0, net: 0 };
+      acc[key].amount += amount;
+      acc[key].changeAmount += change;
+      acc[key].net += amount - change;
+      return acc;
+    },
+    {},
+  );
+
   const openingCashTotal = cashSessions.reduce((sum, session) => sum + n(session.openingAmount), 0);
-  const cashTenderNetTotal = dayTenders
+  const cashTenderNetTotal = effectiveTenders
     .filter((tender) => tender.method === PaymentMethod.CASH)
     .reduce((sum, tender) => sum + n(tender.amount) - n(tender.changeAmount), 0);
-  const cardTenderTotal = dayTenders
+  const cardTenderTotal = effectiveTenders
     .filter((tender) => tender.method === PaymentMethod.CARD)
     .reduce((sum, tender) => sum + n(tender.amount), 0);
-  const transferTenderTotal = dayTenders
+  const transferTenderTotal = effectiveTenders
     .filter((tender) => tender.method === PaymentMethod.TRANSFER)
     .reduce((sum, tender) => sum + n(tender.amount), 0);
-  const otherTenderTotal = dayTenders
+  const otherTenderTotal = effectiveTenders
     .filter((tender) => tender.method !== PaymentMethod.CASH && tender.method !== PaymentMethod.CARD && tender.method !== PaymentMethod.TRANSFER)
     .reduce((sum, tender) => sum + n(tender.amount), 0);
   const cashMovementsNet = cashMovements.reduce((sum, movement) => sum + movementSignedAmount(movement.type, n(movement.amount)), 0);
@@ -171,8 +263,67 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     .reduce((sum, movement) => sum + n(movement.amount), 0);
   const expectedCashOnHand = openingCashTotal + cashTenderNetTotal + cashMovementsNet;
 
+  // ── H: vuelto entregado, devoluciones, movimientos de caja y expected vs counted por caja ──
+  const changeAmountTotal = effectiveTenders.reduce((sum, tender) => sum + n(tender.changeAmount), 0);
+
+  // Devoluciones del día: por operationalDayId; fallback a las ligadas a una caja del día.
+  const refunds = await tx.refund.findMany({
+    where: {
+      OR: [
+        { operationalDayId: day.id },
+        { operationalDayId: null, cashSession: { operationalDayId: day.id } },
+      ],
+    },
+    select: { method: true, amount: true, status: true },
+  });
+  const refundsByMethod = refunds.reduce<Record<string, number>>((acc, r) => {
+    acc[r.method] = (acc[r.method] ?? 0) + n(r.amount);
+    return acc;
+  }, {});
+  const refundsSummary = {
+    total: refunds.reduce((sum, r) => sum + n(r.amount), 0),
+    count: refunds.length,
+    byMethod: refundsByMethod,
+  };
+
+  const cashMovementsSummary = {
+    net: cashMovementsNet,
+    inflows: cashInflowsTotal,
+    outflows: cashOutflowsTotal,
+    expenses: cashExpensesTotal,
+  };
+
+  // Ventas offline sincronizadas DESPUÉS del cierre del día = pendientes de revisión
+  // (no se metieron en el día de hoy solo por sincronizar; entraron tarde a un día ya cerrado).
+  // En un día OPEN no aplica (sincronizar contra el día en curso es normal) → 0.
+  const lateOfflineSyncCount = day.closedAt
+    ? await tx.saleOrder.count({
+        where: { operationalDayId: day.id, offlineClientId: { not: null }, syncedAt: { gt: day.closedAt } },
+      })
+    : 0;
+
+  const expectedVsCountedByCashSession = cashSessions.map((session) => ({
+    cashSessionId: session.id,
+    physicalCashBoxCode: session.physicalCashBox?.code ?? null,
+    status: session.status,
+    expected: n(session.expectedCashAmount),
+    counted: n(session.countedCashAmount),
+    difference: n(session.differenceAmount),
+    requiresReview: session.requiresReview,
+  }));
+
   return {
     window: { start, end, timezone: TIMEZONE },
+    // Trazabilidad de la fuente del cálculo (ERP): operationalDayId vs ventana legacy.
+    sourceMode,
+    legacyFallbackCounts,
+    warnings: summaryWarnings,
+    totalsByPaymentMethod,
+    changeAmountTotal,
+    refunds: refundsSummary,
+    cashMovements: cashMovementsSummary,
+    expectedVsCountedByCashSession,
+    lateOfflineSyncCount,
     salesTotal: salesSummary.paidSalesTotal,
     paidOrdersTotal: salesSummary.paidSalesTotal,
     paidSalesTotal: salesSummary.paidSalesTotal,
@@ -342,6 +493,109 @@ export async function ensureOpenOperationalDayTx(
   return created;
 }
 
+// ── Estado del día operativo actual ───────────────────────────────────────────
+
+export type CurrentOperationalDayState =
+  | "NO_DAY"
+  | "OPEN_TODAY"
+  | "STALE_OPEN_DAY"
+  | "CLOSED_TODAY"
+  | "CLOSING"
+  | "ERROR";
+
+type OperationalDayStateInfo = {
+  id: string;
+  status: OperationalDayStatus;
+  businessDate: Date;
+  approvedAt: Date | null;
+  openedAt: Date;
+};
+
+/**
+ * Estado del día operativo de una sucursal AHORA (no devuelve null cuando hay un
+ * día viejo abierto: devuelve STALE_OPEN_DAY con los datos del día viejo).
+ */
+export async function getCurrentOperationalDayState(branchId: string): Promise<{
+  state: CurrentOperationalDayState;
+  day: OperationalDayStateInfo | null;
+  staleDay: OperationalDayStateInfo | null;
+}> {
+  try {
+    const today = businessDateFromNow();
+    const select = { id: true, status: true, businessDate: true, approvedAt: true, openedAt: true } as const;
+    const [todayDay, anyOpenDay] = await Promise.all([
+      prisma.operationalDay.findUnique({
+        where: { branchId_businessDate: { branchId, businessDate: today } },
+        select,
+      }),
+      prisma.operationalDay.findFirst({
+        where: { branchId, status: OperationalDayStatus.OPEN },
+        orderBy: { openedAt: "desc" },
+        select,
+      }),
+    ]);
+
+    // Día viejo abierto (de una fecha anterior) → estado atascado real.
+    if (anyOpenDay && anyOpenDay.businessDate.getTime() !== today.getTime()) {
+      return { state: "STALE_OPEN_DAY", day: anyOpenDay, staleDay: anyOpenDay };
+    }
+    if (!todayDay) return { state: "NO_DAY", day: null, staleDay: null };
+
+    let state: CurrentOperationalDayState;
+    switch (todayDay.status) {
+      case OperationalDayStatus.OPEN:
+        state = "OPEN_TODAY";
+        break;
+      case OperationalDayStatus.CLOSING:
+        state = "CLOSING";
+        break;
+      case OperationalDayStatus.CLOSED:
+      case OperationalDayStatus.CANCELLED:
+      case OperationalDayStatus.REOPENED_FOR_ADJUSTMENT:
+        // Reabierto para ajuste = finalizado en revisión, NO operación normal.
+        state = "CLOSED_TODAY";
+        break;
+      default:
+        state = "ERROR";
+    }
+    return { state, day: todayDay, staleDay: null };
+  } catch {
+    return { state: "ERROR", day: null, staleDay: null };
+  }
+}
+
+/**
+ * Resuelve el día operativo OPEN al que debe asentarse una operación nueva
+ * (venta/pago). Decisión de negocio: mantener auto-apertura + warn cuando no hay
+ * día OPEN (no bloquea el POS). Un día OPEN viejo (stale) bloquea salvo override
+ * Master explícito.
+ *
+ * Debe ejecutarse dentro de una transacción.
+ */
+export async function resolveOpenOperationalDayForOperationTx(
+  tx: Prisma.TransactionClient,
+  branchId: string,
+  occurredAt: Date = new Date(),
+  options?: { openedByUserId?: string; allowStaleOverride?: boolean },
+): Promise<{ operationalDayId: string; autoOpened: boolean; warnings: string[] }> {
+  const open = await getOpenOperationalDayForBranchTx(tx, branchId);
+  const today = businessDateFromNow();
+  if (open) {
+    const isStale = open.businessDate.getTime() !== today.getTime();
+    if (isStale && !options?.allowStaleOverride) {
+      throw new Error("STALE_OPERATIONAL_DAY_OPEN");
+    }
+    return {
+      operationalDayId: open.id,
+      autoOpened: false,
+      warnings: isStale ? ["STALE_OPERATIONAL_DAY_OVERRIDE"] : [],
+    };
+  }
+  // Sin día OPEN → auto-apertura del día de hoy (Managua) + warn.
+  const created = await ensureOpenOperationalDayTx(tx, branchId, options?.openedByUserId);
+  return { operationalDayId: created.id, autoOpened: true, warnings: ["OPERATIONAL_DAY_AUTO_OPENED"] };
+}
+
 function buildChecklist(summary: Awaited<ReturnType<typeof calculateOperationalSummaryTx>>, dayStatus: OperationalDayStatus): OperationalDayClosePreview {
   const items: ChecklistItem[] = [
     {
@@ -410,7 +664,7 @@ export async function getCurrentOperationalDay(branchId: string) {
   if (day.status === OperationalDayStatus.OPEN) {
     await prisma.$transaction((tx) => refreshOperationalDaySummaryTx(tx, day.id));
   }
-  return prisma.operationalDay.findUnique({
+  const full = await prisma.operationalDay.findUnique({
     where: { id: day.id },
     include: {
       branch: true,
@@ -426,9 +680,21 @@ export async function getCurrentOperationalDay(branchId: string) {
       },
     },
   });
+  if (!full) return null;
+
+  // Campo transitorio (no persistido): ventas offline sincronizadas tras el cierre,
+  // pendientes de revisión. Se calcula EN VIVO para que un día CLOSED-pendiente lo
+  // muestre aunque su snapshot de cierre no se haya regenerado.
+  const lateOfflineSyncCount = full.closedAt
+    ? await prisma.saleOrder.count({
+        where: { operationalDayId: full.id, offlineClientId: { not: null }, syncedAt: { gt: full.closedAt } },
+      })
+    : 0;
+
+  return { ...full, lateOfflineSyncCount };
 }
 
-export async function openOperationalDay(input: { branchId: string; businessDate?: string; notes?: string | null; actorUserId: string }) {
+export async function openOperationalDay(input: { branchId: string; businessDate?: string; notes?: string | null; actorUserId: string; isMaster?: boolean }) {
   return prisma.$transaction(async (tx) => {
     // Lock the branch row to serialize concurrent opens that would otherwise
     // race to create the operational day and hit @@unique([branchId, businessDate]).
@@ -438,6 +704,22 @@ export async function openOperationalDay(input: { branchId: string; businessDate
     if (!branch?.isActive) throw new Error("BRANCH_NOT_ACTIVE");
 
     const businessDate = businessDateFromInput(input.businessDate);
+
+    // I: reglas de apertura por rol/fecha (Managua).
+    //  - No-Master solo puede abrir el día de HOY.
+    //  - Master puede abrir otra fecha (pasada o futura) SOLO con nota obligatoria.
+    //  - Fecha futura nunca para no-Master (override Master con nota).
+    const today = businessDateFromNow();
+    const isToday = businessDate.getTime() === today.getTime();
+    const isFuture = businessDate.getTime() > today.getTime();
+    if (!isToday) {
+      if (!input.isMaster) {
+        throw new Error(isFuture ? "OPERATIONAL_DAY_OPEN_FUTURE_NOT_ALLOWED" : "OPERATIONAL_DAY_OPEN_DATE_NOT_TODAY");
+      }
+      if (!input.notes?.trim()) {
+        throw new Error("OPERATIONAL_DAY_OPEN_DATE_NOTE_REQUIRED");
+      }
+    }
 
     // Guard 1 — Stale OPEN day from a *previous* businessDate.
     // getOpenOperationalDayForBranchTx matches any OPEN day regardless of date,
@@ -515,101 +797,202 @@ export async function closePreviewOperationalDay(id: string, actorUserId?: strin
   });
 }
 
+/**
+ * Revierte un día atascado en CLOSING de vuelta a OPEN (best-effort). Solo actúa si
+ * el día sigue en CLOSING (condición en updateMany) para no pisar un estado válido.
+ */
+async function revertClosingToOpenTx(
+  actorUserId: string,
+  dayId: string,
+  reason: string,
+) {
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${dayId} FOR UPDATE`;
+    const day = await tx.operationalDay.findUnique({ where: { id: dayId }, select: { branchId: true, businessDate: true, status: true } });
+    if (!day || day.status !== OperationalDayStatus.CLOSING) return;
+    // Un día de HOY vuelve a OPEN (reanuda operación). Un día pasado que se estaba
+    // re-finalizando tras un ajuste vuelve a REOPENED_FOR_ADJUSTMENT (no a OPEN, que
+    // crearía un día viejo abierto / stale).
+    const isToday = day.businessDate.getTime() === businessDateFromNow().getTime();
+    const revertTo = isToday ? OperationalDayStatus.OPEN : OperationalDayStatus.REOPENED_FOR_ADJUSTMENT;
+    await tx.operationalDay.update({ where: { id: dayId }, data: { status: revertTo } });
+    await tx.auditLog.create({
+      data: {
+        actorUserId,
+        branchId: day.branchId,
+        module: "operations",
+        action: "OPERATIONAL_DAY_CLOSE_FAILED_REVERTED",
+        entityType: "OperationalDay",
+        entityId: dayId,
+        metadataJson: { reason, revertedFrom: "CLOSING", revertedTo: revertTo },
+      },
+    });
+  });
+}
+
+/**
+ * Cierre de día operativo con máquina de estados real OPEN → CLOSING → CLOSED.
+ *
+ * Fase 1 (atómica): bloquea el día (FOR UPDATE) y reclama la transición OPEN→CLOSING
+ *   con updateMany condicional. Esto evita el doble cierre concurrente (el segundo
+ *   intento bloquea en el lock y luego ve CLOSING/CLOSED) y CONGELA el día (las
+ *   ventas nuevas exigen día OPEN) mientras se calcula el cierre.
+ * Fase 2: recalcula summary por operationalDayId, valida blockers/nota y finaliza
+ *   CLOSING→CLOSED guardando snapshots inmutables. Si algo falla (blocker, nota,
+ *   error), se revierte CLOSING→OPEN y se audita el fallo.
+ */
 export async function closeOperationalDay(input: {
   id: string;
   actorUserId: string;
   note?: string | null;
   forceClose?: boolean;
   isMaster?: boolean;
+  acknowledgedWarnings?: string[];
 }) {
-  return prisma.$transaction(async (tx) => {
+  // ── Fase 1: reclamar CLOSING atómicamente ──────────────────────────────────
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${input.id} FOR UPDATE`;
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
-    const summary = await calculateOperationalSummaryTx(tx, day);
-    const preview = buildChecklist(summary, day.status);
-    const hasWarnings = preview.warnings.length > 0;
-    const hardBlockers = preview.blockers.filter((item) => isHardOperationalDayCloseBlocker(item.key));
-    if (hardBlockers.length > 0) {
-      throw new Error("OPERATIONAL_DAY_HAS_HARD_BLOCKERS");
-    }
-    if (preview.blockers.length > 0 && !(input.forceClose && input.isMaster)) {
-      throw new Error("OPERATIONAL_DAY_HAS_BLOCKERS");
-    }
-    if ((hasWarnings || input.forceClose) && !input.note?.trim()) {
-      throw new Error("OPERATIONAL_DAY_CLOSE_NOTE_REQUIRED");
-    }
+    if (day.status === OperationalDayStatus.CLOSED) throw new Error("OPERATIONAL_DAY_ALREADY_CLOSED");
+    if (day.status === OperationalDayStatus.CANCELLED) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
+    if (day.status === OperationalDayStatus.CLOSING) throw new Error("OPERATIONAL_DAY_CLOSING_IN_PROGRESS");
+    // Cerrable desde OPEN o desde REOPENED_FOR_ADJUSTMENT (re-finalizar tras un ajuste Master).
+    const closeableSources = [OperationalDayStatus.OPEN, OperationalDayStatus.REOPENED_FOR_ADJUSTMENT];
+    if (!closeableSources.includes(day.status)) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
 
-    const closed = await tx.operationalDay.update({
-      where: { id: input.id },
-      data: {
-        status: OperationalDayStatus.CLOSED,
-        closedByUserId: input.actorUserId,
-        closedAt: new Date(),
-        notes: input.note ?? day.notes,
-        closeChecklistJson: toJsonValue(preview),
-        summaryJson: toJsonValue(summary),
-        // Immutable close snapshot — never overwritten after this point.
-        closeSummaryJson: toJsonValue(summary),
-        salesTotal: decimal(summary.salesTotal),
-        paidOrdersTotal: decimal(summary.paidOrdersTotal),
-        pendingPaymentTotal: decimal(summary.pendingPaymentTotal),
-        expectedCashTotal: decimal(summary.expectedCashTotal),
-        countedCashTotal: decimal(summary.countedCashTotal),
-        cashDifferenceTotal: decimal(summary.cashDifferenceTotal),
-        openCashSessionsCount: summary.openCashSessionsCount,
-        autoClosedPendingReviewCount: summary.autoClosedPendingReviewCount,
-        pendingDispatchCount: summary.pendingDispatchCount,
-        criticalBrainDecisionCount: summary.criticalBrainDecisionCount,
-      },
+    const claimed = await tx.operationalDay.updateMany({
+      where: { id: input.id, status: { in: closeableSources } },
+      data: { status: OperationalDayStatus.CLOSING },
     });
+    if (claimed.count !== 1) throw new Error("OPERATIONAL_DAY_CLOSING_IN_PROGRESS");
 
     await tx.auditLog.create({
       data: {
         actorUserId: input.actorUserId,
         branchId: day.branchId,
         module: "operations",
-        action: "OPERATIONAL_DAY_CLOSED",
+        action: "OPERATIONAL_DAY_CLOSING_STARTED",
         entityType: "OperationalDay",
         entityId: day.id,
-        metadataJson: toJsonValue({
-          note: input.note ?? null,
-          forceClose: Boolean(input.forceClose),
-          checklist: preview,
-          summary,
-        }),
+        metadataJson: { forceClose: Boolean(input.forceClose) },
       },
     });
-
-    if (preview.warnings.length > 0 || Math.abs(summary.cashDifferenceTotal) > 100) {
-      await tx.brainDecision.upsert({
-        where: { fingerprint: `operations:closed-with-warnings:${day.id}` },
-        create: {
-          category: BrainDecisionCategory.SYSTEM,
-          severity: preview.blockers.length > 0 ? BrainDecisionSeverity.HIGH : BrainDecisionSeverity.MEDIUM,
-          status: "OPEN",
-          title: "Dia operativo cerrado con advertencias",
-          description: "El dia operativo se cerro con pendientes o diferencias que requieren seguimiento.",
-          recommendation: "Revisar checklist, auditoria y resolver decisiones asociadas.",
-          branchId: day.branchId,
-          confidenceScore: decimal(100),
-          riskScore: decimal(70),
-          priorityScore: decimal(70),
-          proposedActionType: "REVIEW_OPERATIONAL_DAY",
-          evidenceJson: toJsonValue({ operationalDayId: day.id, checklist: preview, summary }),
-          fingerprint: `operations:closed-with-warnings:${day.id}`,
-          idempotencyKey: `brain:operations:closed-with-warnings:${day.id}`,
-        },
-        update: { status: "OPEN", evidenceJson: toJsonValue({ operationalDayId: day.id, checklist: preview, summary }) },
-      });
-    }
-
-    return closed;
   });
+
+  // ── Fase 2: calcular + validar + finalizar (con reversión ante error) ──────
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${input.id} FOR UPDATE`;
+      const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
+      if (day.status !== OperationalDayStatus.CLOSING) throw new Error("OPERATIONAL_DAY_NOT_CLOSING");
+
+      const summary = await calculateOperationalSummaryTx(tx, day);
+      const preview = buildChecklist(summary, day.status);
+      const hasWarnings = preview.warnings.length > 0;
+      const hardBlockers = preview.blockers.filter((item) => isHardOperationalDayCloseBlocker(item.key));
+      if (hardBlockers.length > 0) {
+        throw new Error("OPERATIONAL_DAY_HAS_HARD_BLOCKERS");
+      }
+      if (preview.blockers.length > 0 && !(input.forceClose && input.isMaster)) {
+        throw new Error("OPERATIONAL_DAY_HAS_BLOCKERS");
+      }
+      // M: las advertencias relevantes deben reconocerse (acknowledgedWarnings) O
+      // justificarse con nota. Un forceClose siempre exige nota.
+      const warningKeys = preview.warnings.map((w) => w.key);
+      const acked = new Set(input.acknowledgedWarnings ?? []);
+      const allWarningsAcknowledged = warningKeys.every((k) => acked.has(k));
+      if (hasWarnings && !allWarningsAcknowledged && !input.note?.trim()) {
+        throw new Error("OPERATIONAL_DAY_CLOSE_NOTE_REQUIRED");
+      }
+      if (input.forceClose && !input.note?.trim()) {
+        throw new Error("OPERATIONAL_DAY_CLOSE_NOTE_REQUIRED");
+      }
+
+      const closed = await tx.operationalDay.update({
+        where: { id: input.id },
+        data: {
+          status: OperationalDayStatus.CLOSED,
+          closedByUserId: input.actorUserId,
+          closedAt: new Date(),
+          notes: input.note ?? day.notes,
+          closeChecklistJson: toJsonValue({ ...preview, acknowledgedWarnings: input.acknowledgedWarnings ?? [] }),
+          summaryJson: toJsonValue(summary),
+          // Immutable close snapshot — never overwritten after this point.
+          closeSummaryJson: toJsonValue(summary),
+          salesTotal: decimal(summary.salesTotal),
+          paidOrdersTotal: decimal(summary.paidOrdersTotal),
+          pendingPaymentTotal: decimal(summary.pendingPaymentTotal),
+          expectedCashTotal: decimal(summary.expectedCashTotal),
+          countedCashTotal: decimal(summary.countedCashTotal),
+          cashDifferenceTotal: decimal(summary.cashDifferenceTotal),
+          openCashSessionsCount: summary.openCashSessionsCount,
+          autoClosedPendingReviewCount: summary.autoClosedPendingReviewCount,
+          pendingDispatchCount: summary.pendingDispatchCount,
+          criticalBrainDecisionCount: summary.criticalBrainDecisionCount,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: day.branchId,
+          module: "operations",
+          action: "OPERATIONAL_DAY_CLOSED",
+          entityType: "OperationalDay",
+          entityId: day.id,
+          metadataJson: toJsonValue({
+            note: input.note ?? null,
+            forceClose: Boolean(input.forceClose),
+            sourceMode: summary.sourceMode,
+            acknowledgedWarnings: input.acknowledgedWarnings ?? [],
+            checklist: preview,
+            summary,
+          }),
+        },
+      });
+
+      if (preview.warnings.length > 0 || Math.abs(summary.cashDifferenceTotal) > 100) {
+        await tx.brainDecision.upsert({
+          where: { fingerprint: `operations:closed-with-warnings:${day.id}` },
+          create: {
+            category: BrainDecisionCategory.SYSTEM,
+            severity: preview.blockers.length > 0 ? BrainDecisionSeverity.HIGH : BrainDecisionSeverity.MEDIUM,
+            status: "OPEN",
+            title: "Dia operativo cerrado con advertencias",
+            description: "El dia operativo se cerro con pendientes o diferencias que requieren seguimiento.",
+            recommendation: "Revisar checklist, auditoria y resolver decisiones asociadas.",
+            branchId: day.branchId,
+            confidenceScore: decimal(100),
+            riskScore: decimal(70),
+            priorityScore: decimal(70),
+            proposedActionType: "REVIEW_OPERATIONAL_DAY",
+            evidenceJson: toJsonValue({ operationalDayId: day.id, checklist: preview, summary }),
+            fingerprint: `operations:closed-with-warnings:${day.id}`,
+            idempotencyKey: `brain:operations:closed-with-warnings:${day.id}`,
+          },
+          update: { status: "OPEN", evidenceJson: toJsonValue({ operationalDayId: day.id, checklist: preview, summary }) },
+        });
+      }
+
+      return closed;
+    });
+  } catch (error) {
+    // El día quedó en CLOSING por un fallo/blocker → revertir a OPEN.
+    await revertClosingToOpenTx(
+      input.actorUserId,
+      input.id,
+      error instanceof Error ? error.message : "UNKNOWN_CLOSE_ERROR",
+    );
+    throw error;
+  }
 }
 
 export type OperationalDayBlocker = {
   code: string;
   label: string;
+  /** Conteo REAL (count()), no limitado por el tamaño del sample. */
   count: number;
+  /** Muestra de referencias (hasta `sampleLimit`). */
   references: Array<{
     id: string;
     ref?: string;
@@ -617,7 +1000,11 @@ export type OperationalDayBlocker = {
     date?: string;
     resolve?: { kind: string; href: string; entityId: string };
   }>;
+  sampleLimit: number;
+  hasMore: boolean;
 };
+
+const BLOCKER_SAMPLE_LIMIT = 20;
 
 /**
  * Computes the approval blockers (and credit-receivable warnings) for a closed
@@ -633,54 +1020,71 @@ export async function computeApprovalBlockers(
   tx: Prisma.TransactionClient,
   day: { id: string; branchId: string; businessDate: Date },
 ): Promise<{ blockers: OperationalDayBlocker[]; warnings: OperationalDayBlocker[] }> {
-  // Devoluciones/anulaciones acotadas al día operativo (operationalDayId = day.id).
-  // Las que no tienen operationalDayId son de días anteriores y no bloquean este cierre.
-  // Transportes y pagos pendientes se acotan por rango de fecha del día de negocio.
+  // Fuente de verdad por operationalDayId. Devoluciones/anulaciones/pagos pendientes
+  // se acotan al día (operationalDayId = day.id). Transportes aún no tienen el id
+  // poblado en datos legacy → se mantienen por ventana como fallback.
+  // M: se hace count() REAL para el total y findMany(take 20) solo como muestra.
   const { start, end } = operationalWindow(day.businessDate);
 
+  const returnWhere: Prisma.SaleReturnWhereInput = { operationalDayId: day.id, status: { in: ["REQUESTED", "APPROVED"] } };
+  const cancellationWhere: Prisma.SaleCancellationWhereInput = { operationalDayId: day.id, status: { in: ["REQUESTED", "APPROVED"] } };
+  const transportWhere: Prisma.TransportServiceWhereInput = {
+    branchId: day.branchId,
+    status: { in: ["PENDING", "IN_TRANSIT"] },
+    createdAt: { gte: start, lt: end },
+  };
+  const sessionWhere: Prisma.CashSessionWhereInput = {
+    operationalDayId: day.id,
+    OR: [
+      { status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] } },
+      { status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW, requiresReview: true },
+    ],
+  };
+  // Pagos pendientes del día: por operationalDayId (no por ventana).
+  const pendingBaseWhere: Prisma.SaleOrderWhereInput = { operationalDayId: day.id, status: SaleOrderStatus.PENDING_PAYMENT };
+  const creditFilter: Prisma.SaleOrderWhereInput = { customer: { creditProfiles: { some: { isActive: true } } } };
+
   const [
+    pendingReturnCount,
     pendingReturnRefs,
+    pendingCancellationCount,
     pendingCancellationRefs,
+    pendingTransportCount,
     pendingTransportRefs,
+    openSessionCount,
     openOrUnreviewedSessionRefs,
-    pendingPaymentOrders,
+    pendingPaymentTotalCount,
+    creditPendingCount,
+    pendingPaymentSample,
   ] = await Promise.all([
+    tx.saleReturn.count({ where: returnWhere }),
     tx.saleReturn.findMany({
-      where: { operationalDayId: day.id, status: { in: ["REQUESTED", "APPROVED"] } },
+      where: returnWhere,
       select: { id: true, returnNumber: true, status: true, createdAt: true },
-      take: 20,
+      take: BLOCKER_SAMPLE_LIMIT,
     }),
+    tx.saleCancellation.count({ where: cancellationWhere }),
     tx.saleCancellation.findMany({
-      where: { operationalDayId: day.id, status: { in: ["REQUESTED", "APPROVED"] } },
+      where: cancellationWhere,
       select: { id: true, saleOrderId: true, status: true, createdAt: true },
-      take: 20,
+      take: BLOCKER_SAMPLE_LIMIT,
     }),
+    tx.transportService.count({ where: transportWhere }),
     tx.transportService.findMany({
-      where: {
-        branchId: day.branchId,
-        status: { in: ["PENDING", "IN_TRANSIT"] },
-        createdAt: { gte: start, lt: end },
-      },
+      where: transportWhere,
       select: { id: true, status: true, createdAt: true },
-      take: 20,
+      take: BLOCKER_SAMPLE_LIMIT,
     }),
+    tx.cashSession.count({ where: sessionWhere }),
     tx.cashSession.findMany({
-      where: {
-        operationalDayId: day.id,
-        OR: [
-          { status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] } },
-          { status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW, requiresReview: true },
-        ],
-      },
+      where: sessionWhere,
       select: { id: true, status: true, openedAt: true, physicalCashBox: { select: { code: true } } },
-      take: 20,
+      take: BLOCKER_SAMPLE_LIMIT,
     }),
+    tx.saleOrder.count({ where: pendingBaseWhere }),
+    tx.saleOrder.count({ where: { ...pendingBaseWhere, ...creditFilter } }),
     tx.saleOrder.findMany({
-      where: {
-        branchId: day.branchId,
-        status: SaleOrderStatus.PENDING_PAYMENT,
-        createdAt: { gte: start, lt: end },
-      },
+      where: pendingBaseWhere,
       select: {
         id: true,
         orderNumber: true,
@@ -689,109 +1093,119 @@ export async function computeApprovalBlockers(
         customerId: true,
         customer: {
           select: {
-            creditProfiles: {
-              where: { isActive: true },
-              select: { id: true },
-              take: 1,
-            },
+            creditProfiles: { where: { isActive: true }, select: { id: true }, take: 1 },
           },
         },
       },
-      take: 40,
+      take: BLOCKER_SAMPLE_LIMIT,
     }),
   ]);
 
-  // Crédito legítimo: una orden PENDING_PAYMENT cuyo cliente tiene un perfil de
-  // crédito activo (CustomerCreditProfile.isActive=true) es una cuenta por cobrar
-  // a crédito y NO bloquea la aprobación. Las demás son ventas de contado sin cobrar.
-  const cashPending = pendingPaymentOrders.filter((o) => !o.customer?.creditProfiles?.length);
-  const creditPending = pendingPaymentOrders.filter((o) => (o.customer?.creditProfiles?.length ?? 0) > 0);
+  // Crédito legítimo: PENDING_PAYMENT con perfil de crédito activo = cuenta por
+  // cobrar a crédito (warning, no bloquea). El resto = ventas de contado sin cobrar.
+  const cashPendingCount = Math.max(0, pendingPaymentTotalCount - creditPendingCount);
+  const cashSample = pendingPaymentSample.filter((o) => !o.customer?.creditProfiles?.length);
+  const creditSample = pendingPaymentSample.filter((o) => (o.customer?.creditProfiles?.length ?? 0) > 0);
 
   const blockers: OperationalDayBlocker[] = [];
   const warnings: OperationalDayBlocker[] = [];
 
-  if (pendingReturnRefs.length > 0) {
-    blockers.push({
-      code: "PENDING_SALE_RETURN",
-      label: "Hay devoluciones pendientes de ejecutar en este día",
-      count: pendingReturnRefs.length,
-      references: pendingReturnRefs.map((r) => ({
+  const mk = (
+    code: string,
+    label: string,
+    count: number,
+    references: OperationalDayBlocker["references"],
+  ): OperationalDayBlocker => ({
+    code,
+    label,
+    count,
+    references,
+    sampleLimit: BLOCKER_SAMPLE_LIMIT,
+    hasMore: count > references.length,
+  });
+
+  if (pendingReturnCount > 0) {
+    blockers.push(mk(
+      "PENDING_SALE_RETURN",
+      "Hay devoluciones pendientes de ejecutar en este día",
+      pendingReturnCount,
+      pendingReturnRefs.map((r) => ({
         id: r.id,
         ref: r.returnNumber,
         status: r.status,
         date: r.createdAt.toISOString(),
         resolve: { kind: "SALE_RETURN", href: "/app/master/sales/orders", entityId: r.id },
       })),
-    });
+    ));
   }
-  if (pendingCancellationRefs.length > 0) {
-    blockers.push({
-      code: "PENDING_SALE_CANCELLATION",
-      label: "Hay anulaciones pendientes de ejecutar en este día",
-      count: pendingCancellationRefs.length,
-      references: pendingCancellationRefs.map((r) => ({
+  if (pendingCancellationCount > 0) {
+    blockers.push(mk(
+      "PENDING_SALE_CANCELLATION",
+      "Hay anulaciones pendientes de ejecutar en este día",
+      pendingCancellationCount,
+      pendingCancellationRefs.map((r) => ({
         id: r.id,
         ref: r.saleOrderId,
         status: r.status,
         date: r.createdAt.toISOString(),
         resolve: { kind: "SALE_CANCELLATION", href: "/app/master/sales/orders", entityId: r.saleOrderId },
       })),
-    });
+    ));
   }
-  if (pendingTransportRefs.length > 0) {
-    blockers.push({
-      code: "PENDING_TRANSPORT",
-      label: "Hay transportes del día pendientes o en tránsito",
-      count: pendingTransportRefs.length,
-      references: pendingTransportRefs.map((r) => ({
+  if (pendingTransportCount > 0) {
+    blockers.push(mk(
+      "PENDING_TRANSPORT",
+      "Hay transportes del día pendientes o en tránsito",
+      pendingTransportCount,
+      pendingTransportRefs.map((r) => ({
         id: r.id,
         status: r.status,
         date: r.createdAt.toISOString(),
         resolve: { kind: "TRANSPORT", href: "/app/branch/dispatch", entityId: r.id },
       })),
-    });
+    ));
   }
-  if (openOrUnreviewedSessionRefs.length > 0) {
-    blockers.push({
-      code: "OPEN_OR_UNREVIEWED_CASH_SESSION",
-      label: "Hay cajas abiertas o pendientes de revisión en este día",
-      count: openOrUnreviewedSessionRefs.length,
-      references: openOrUnreviewedSessionRefs.map((r) => ({
+  if (openSessionCount > 0) {
+    blockers.push(mk(
+      "OPEN_OR_UNREVIEWED_CASH_SESSION",
+      "Hay cajas abiertas o pendientes de revisión en este día",
+      openSessionCount,
+      openOrUnreviewedSessionRefs.map((r) => ({
         id: r.id,
         ref: r.physicalCashBox?.code,
         status: r.status,
         date: r.openedAt.toISOString(),
         resolve: { kind: "CASH_SESSION", href: "/app/branch/cashier", entityId: r.id },
       })),
-    });
+    ));
   }
-  if (cashPending.length > 0) {
-    blockers.push({
-      code: "PENDING_PAYMENT_ORDER",
-      label: "Hay órdenes del día sin cobrar (PENDING_PAYMENT)",
-      count: cashPending.length,
-      references: cashPending.map((r) => ({
+  if (cashPendingCount > 0) {
+    blockers.push(mk(
+      "PENDING_PAYMENT_ORDER",
+      "Hay órdenes del día sin cobrar (PENDING_PAYMENT)",
+      cashPendingCount,
+      cashSample.map((r) => ({
         id: r.id,
         ref: r.orderNumber,
         status: r.status,
         date: r.createdAt.toISOString(),
         resolve: { kind: "SALE_ORDER", href: "/app/master/sales/orders", entityId: r.id },
       })),
-    });
+    ));
   }
-  if (creditPending.length > 0) {
-    warnings.push({
-      code: "OPEN_CREDIT_RECEIVABLE",
-      label: "Hay ventas a crédito pendientes de pago (no bloquean la aprobación)",
-      count: creditPending.length,
-      references: creditPending.map((r) => ({
+  if (creditPendingCount > 0) {
+    warnings.push(mk(
+      "OPEN_CREDIT_RECEIVABLE",
+      "Hay ventas a crédito pendientes de pago (no bloquean la aprobación)",
+      creditPendingCount,
+      creditSample.map((r) => ({
         id: r.id,
         ref: r.orderNumber,
         status: r.status,
         date: r.createdAt.toISOString(),
         resolve: { kind: "SALE_ORDER", href: "/app/master/sales/orders", entityId: r.id },
       })),
-    });
+    ));
   }
 
   return { blockers, warnings };
@@ -827,6 +1241,45 @@ async function logBlockedAttempt(
   });
 }
 
+/**
+ * Compara el summary recalculado contra el snapshot inmutable del cierre
+ * (closeSummaryJson). Devuelve las diferencias por campo, warnings legibles y si
+ * hay alguna diferencia material (> C$0.01).
+ */
+function computeApprovalReconciliation(
+  summary: {
+    salesTotal: number;
+    paidOrdersTotal: number;
+    pendingPaymentTotal: number;
+    cashDifferenceTotal: number;
+    countedCashTotal: number;
+  },
+  closeSummary: Record<string, number> | null,
+): { diffs: Record<string, number> | null; warnings: string[]; material: boolean } {
+  if (!closeSummary) return { diffs: null, warnings: [], material: false };
+  const fields = [
+    "salesTotal",
+    "paidOrdersTotal",
+    "pendingPaymentTotal",
+    "cashDifferenceTotal",
+    "countedCashTotal",
+  ] as const;
+  const diffs: Record<string, number> = {};
+  const warnings: string[] = [];
+  let material = false;
+  for (const f of fields) {
+    const cur = n(summary[f]);
+    const prev = n(closeSummary[f] ?? 0);
+    const d = cur - prev;
+    diffs[f] = d;
+    if (Math.abs(d) > 0.01) {
+      material = true;
+      warnings.push(`${f}: cierre=${prev.toFixed(2)} → aprobación=${cur.toFixed(2)} (Δ ${d.toFixed(2)})`);
+    }
+  }
+  return { diffs, warnings, material };
+}
+
 export async function approveOperationalDayReview(input: {
   id: string;
   actorUserId: string;
@@ -845,16 +1298,68 @@ export async function approveOperationalDayReview(input: {
 
     if (day.status !== OperationalDayStatus.CLOSED) throw new Error("OPERATIONAL_DAY_NOT_CLOSED");
 
+    // F: recalcular summary ANTES de aprobar (nunca usar los totales viejos).
     const summary = await calculateOperationalSummaryTx(tx, day);
 
     const { blockers: blockerList, warnings: warningList } = await computeApprovalBlockers(tx, day);
+
+    // F: comparar el summary recalculado contra el snapshot inmutable del cierre.
+    // Diferencias materiales (p.ej. una venta offline tardía entró tras el cierre)
+    // se reportan como warnings de reconciliación.
+    const closeSummary = day.closeSummaryJson as Record<string, number> | null;
+    const reconciliation = computeApprovalReconciliation(summary, closeSummary);
+    const delta = reconciliation.diffs;
+
+    // F.7: no aprobar si la fuente es MIXED y hay diferencias materiales contra el
+    // cierre, salvo override Master explícito con nota.
+    const criticalReconciliation = summary.sourceMode === "MIXED" && reconciliation.material;
+    if (criticalReconciliation && !(input.forceApprove && input.isMaster && input.note?.trim())) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: day.branchId,
+          module: "operations",
+          action: "OPERATIONAL_DAY_APPROVE_RECONCILIATION_REQUIRED",
+          entityType: "OperationalDay",
+          entityId: day.id,
+          metadataJson: toJsonValue({ sourceMode: summary.sourceMode, reconciliation, warnings: warningList }),
+        },
+      });
+      const err = new Error("OPERATIONAL_DAY_APPROVE_REQUIRES_RECONCILIATION");
+      (err as unknown as { reconciliation: typeof reconciliation }).reconciliation = reconciliation;
+      throw err;
+    }
+
+    // G/F: no aprobar un día con ventas offline sincronizadas tras el cierre
+    // (pendientes de revisión) salvo override Master explícito con nota.
+    if (summary.lateOfflineSyncCount > 0 && !(input.forceApprove && input.isMaster && input.note?.trim())) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: day.branchId,
+          module: "operations",
+          action: "OPERATIONAL_DAY_APPROVE_LATE_OFFLINE_PENDING",
+          entityType: "OperationalDay",
+          entityId: day.id,
+          metadataJson: toJsonValue({ lateOfflineSyncCount: summary.lateOfflineSyncCount }),
+        },
+      });
+      const err = new Error("OPERATIONAL_DAY_APPROVE_LATE_OFFLINE_PENDING");
+      (err as unknown as { lateOfflineSyncCount: number }).lateOfflineSyncCount = summary.lateOfflineSyncCount;
+      throw err;
+    }
 
     const approveData = {
       approvedByMasterId: input.actorUserId,
       approvedAt: new Date(),
       summaryJson: toJsonValue(summary),
-      // Immutable approval snapshot — captured at the moment of approval.
-      approvalSummaryJson: toJsonValue(summary),
+      // Immutable approval snapshot — incluye la reconciliación contra el cierre.
+      approvalSummaryJson: toJsonValue({
+        ...summary,
+        reconciliation: reconciliation.diffs,
+        reconciliationWarnings: reconciliation.warnings,
+        reconciledAgainstClose: Boolean(closeSummary),
+      }),
       salesTotal: decimal(summary.salesTotal),
       paidOrdersTotal: decimal(summary.paidOrdersTotal),
       pendingPaymentTotal: decimal(summary.pendingPaymentTotal),
@@ -866,15 +1371,6 @@ export async function approveOperationalDayReview(input: {
       pendingDispatchCount: summary.pendingDispatchCount,
       criticalBrainDecisionCount: summary.criticalBrainDecisionCount,
     };
-
-    // Delta vs. the immutable close snapshot — recorded for the audit trail.
-    const closeSummary = day.closeSummaryJson as Record<string, number> | null;
-    const delta = closeSummary
-      ? {
-          salesTotal: n(summary.salesTotal) - (closeSummary.salesTotal ?? 0),
-          cashDifferenceTotal: n(summary.cashDifferenceTotal) - (closeSummary.cashDifferenceTotal ?? 0),
-        }
-      : null;
 
     if (blockerList.length > 0) {
       const hardBlockers = blockerList.filter((b) => isHardApproveBlocker(b.code));
@@ -962,12 +1458,69 @@ export async function approveOperationalDayReview(input: {
 
 export async function cancelOperationalDay(input: { id: string; actorUserId: string; note: string; override?: boolean }) {
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${input.id} FOR UPDATE`;
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
+
+    // Un día aprobado NUNCA se cancela (ni con override): su snapshot es definitivo.
+    if (day.approvedAt) throw new Error("OPERATIONAL_DAY_ALREADY_APPROVED");
+    if (day.status === OperationalDayStatus.CANCELLED) throw new Error("OPERATIONAL_DAY_ALREADY_CANCELLED");
+    if (day.status === OperationalDayStatus.CLOSING) throw new Error("OPERATIONAL_DAY_CLOSING_IN_PROGRESS");
+
+    // Actividad real del día (por operationalDayId; transportes/despachos por ventana
+    // como fallback hasta que tengan el id poblado). Si existe, no se cancela salvo override.
     const { start, end } = operationalWindow(day.businessDate);
-    const realPayments = await tx.payment.count({
-      where: { paidAt: { gte: start, lt: end }, saleOrder: { branchId: day.branchId } },
-    });
-    if (realPayments > 0 && !input.override) throw new Error("OPERATIONAL_DAY_HAS_REAL_PAYMENTS");
+    const [
+      postedPayments,
+      executedReturns,
+      executedCancellations,
+      executedDispatches,
+      executedTransports,
+      cashMovementsCount,
+      closedCashSessions,
+    ] = await Promise.all([
+      tx.payment.count({ where: { operationalDayId: day.id, status: PaymentStatus.POSTED } }),
+      tx.saleReturn.count({ where: { operationalDayId: day.id, executedAt: { not: null } } }),
+      tx.saleCancellation.count({ where: { operationalDayId: day.id, executedAt: { not: null } } }),
+      tx.dispatchTicket.count({ where: { branchId: day.branchId, status: "DISPATCHED", createdAt: { gte: start, lt: end } } }),
+      tx.transportService.count({ where: { branchId: day.branchId, status: "DELIVERED", createdAt: { gte: start, lt: end } } }),
+      tx.cashMovement.count({ where: { cashSession: { operationalDayId: day.id } } }),
+      tx.cashSession.count({ where: { operationalDayId: day.id, status: CashSessionStatus.CLOSED } }),
+    ]);
+
+    const cancelChecklist = {
+      postedPayments,
+      executedReturns,
+      executedCancellations,
+      executedDispatches,
+      executedTransports,
+      cashMovements: cashMovementsCount,
+      closedCashSessions,
+    };
+    const hasRealActivity =
+      postedPayments > 0 ||
+      executedReturns > 0 ||
+      executedCancellations > 0 ||
+      executedDispatches > 0 ||
+      executedTransports > 0 ||
+      cashMovementsCount > 0;
+
+    if (hasRealActivity && !input.override) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: day.branchId,
+          module: "operations",
+          action: "OPERATIONAL_DAY_CANCEL_BLOCKED",
+          entityType: "OperationalDay",
+          entityId: day.id,
+          metadataJson: toJsonValue({ checklist: cancelChecklist, note: input.note }),
+        },
+      });
+      const err = new Error("OPERATIONAL_DAY_HAS_REAL_ACTIVITY");
+      (err as unknown as { checklist: typeof cancelChecklist }).checklist = cancelChecklist;
+      throw err;
+    }
+
     const cancelled = await tx.operationalDay.update({
       where: { id: day.id },
       data: { status: OperationalDayStatus.CANCELLED, closedByUserId: input.actorUserId, closedAt: new Date(), notes: input.note },
@@ -980,7 +1533,7 @@ export async function cancelOperationalDay(input: { id: string; actorUserId: str
         action: "OPERATIONAL_DAY_CANCELLED",
         entityType: "OperationalDay",
         entityId: day.id,
-        metadataJson: { note: input.note, override: Boolean(input.override), realPayments },
+        metadataJson: toJsonValue({ note: input.note, override: Boolean(input.override), checklist: cancelChecklist }),
       },
     });
     return cancelled;
@@ -1059,7 +1612,77 @@ export async function getDailyReport(id: string) {
     },
   });
   const { start, end } = operationalWindow(day.businessDate);
-  const [orders, paymentsByMethod, dispatches, brain, audit] = await Promise.all([
+
+  // Híbrido (operacional): por operationalDayId, o legacy sin id dentro de la ventana.
+  const ordersByDayWhere: Prisma.SaleOrderWhereInput = {
+    branchId: day.branchId,
+    OR: [{ operationalDayId: day.id }, { operationalDayId: null, createdAt: { gte: start, lt: end } }],
+  };
+  const paymentsByDayWhere: Prisma.PaymentWhereInput = {
+    status: PaymentStatus.POSTED,
+    saleOrder: { branchId: day.branchId },
+    OR: [{ operationalDayId: day.id }, { operationalDayId: null, paidAt: { gte: start, lt: end } }],
+  };
+
+  const [
+    // (1) Operaciones por operationalDayId (híbrido con legacy)
+    orders,
+    paymentsByMethod,
+    dispatches,
+    returns,
+    cancellations,
+    transports,
+    // (2) Actividad cronológica por ventana Managua (vista temporal pura)
+    chronoOrders,
+    chronoPaymentsByMethod,
+    // (3) Legacy fallback: filas en la ventana SIN operationalDayId (no migradas)
+    legacyOrdersCount,
+    legacyPaymentsCount,
+    // Brain + auditoría
+    brain,
+    audit,
+  ] = await Promise.all([
+    prisma.saleOrder.findMany({
+      where: ordersByDayWhere,
+      select: { id: true, orderNumber: true, status: true, grandTotal: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: 200,
+    }),
+    prisma.payment.groupBy({
+      by: ["method"],
+      where: paymentsByDayWhere,
+      _sum: { amount: true },
+      _count: { _all: true },
+    }),
+    prisma.dispatchTicket.findMany({
+      where: {
+        branchId: day.branchId,
+        OR: [{ operationalDayId: day.id }, { operationalDayId: null, createdAt: { gte: start, lt: end } }],
+      },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    }),
+    prisma.saleReturn.findMany({
+      where: { operationalDayId: day.id },
+      select: { id: true, returnNumber: true, status: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    }),
+    prisma.saleCancellation.findMany({
+      where: { operationalDayId: day.id },
+      select: { id: true, saleOrderId: true, status: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    }),
+    prisma.transportService.findMany({
+      where: {
+        branchId: day.branchId,
+        OR: [{ operationalDayId: day.id }, { operationalDayId: null, createdAt: { gte: start, lt: end } }],
+      },
+      select: { id: true, status: true, price: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    }),
     prisma.saleOrder.findMany({
       where: { branchId: day.branchId, createdAt: { gte: start, lt: end } },
       select: { id: true, orderNumber: true, status: true, grandTotal: true, createdAt: true },
@@ -1072,10 +1695,11 @@ export async function getDailyReport(id: string) {
       _sum: { amount: true },
       _count: { _all: true },
     }),
-    prisma.dispatchTicket.findMany({
-      where: { branchId: day.branchId, createdAt: { gte: start, lt: end } },
-      orderBy: { createdAt: "asc" },
-      take: 100,
+    prisma.saleOrder.count({
+      where: { branchId: day.branchId, operationalDayId: null, createdAt: { gte: start, lt: end } },
+    }),
+    prisma.payment.count({
+      where: { status: PaymentStatus.POSTED, operationalDayId: null, paidAt: { gte: start, lt: end }, saleOrder: { branchId: day.branchId } },
     }),
     prisma.brainDecision.findMany({
       where: { branchId: day.branchId, createdAt: { gte: start, lt: end } },
@@ -1088,7 +1712,23 @@ export async function getDailyReport(id: string) {
       take: 200,
     }),
   ]);
-  return { day, orders, paymentsByMethod, dispatches, brain, audit, window: { start, end, timezone: TIMEZONE } };
+
+  return {
+    day,
+    // Vista primaria (back-compat): operaciones del día (híbrido id/legacy).
+    orders,
+    paymentsByMethod,
+    dispatches,
+    brain,
+    audit,
+    window: { start, end, timezone: TIMEZONE },
+    // (1) Operaciones por operationalDayId — la fuente de verdad.
+    operations: { orders, paymentsByMethod, dispatches, returns, cancellations, transports },
+    // (2) Actividad cronológica por ventana Managua (para contraste temporal).
+    chronological: { orders: chronoOrders, paymentsByMethod: chronoPaymentsByMethod, window: { start, end, timezone: TIMEZONE } },
+    // (3) Legacy fallback — filas en la ventana sin operationalDayId (pendientes de backfill).
+    legacyFallback: { ordersWithoutOperationalDay: legacyOrdersCount, paymentsWithoutOperationalDay: legacyPaymentsCount },
+  };
 }
 
 export async function getOperationalDayBranchId(id: string) {
@@ -1117,6 +1757,7 @@ export function deriveOperationalDayState(
   }
   if (day.status === "CLOSING") return "CLOSING";
   if (day.status === "CLOSED") return day.approvedAt ? "APPROVED_ARCHIVED" : "CLOSED_PENDING_MASTER";
+  if (day.status === "REOPENED_FOR_ADJUSTMENT") return "CLOSED_PENDING_MASTER";
   if (day.status === "CANCELLED") return "CANCELLED";
   return "NOT_OPENED_TODAY";
 }
@@ -1289,17 +1930,45 @@ export async function reopenOperationalDay(input: { id: string; actorUserId: str
 
     if (day.status !== OperationalDayStatus.CLOSED) throw new Error("OPERATIONAL_DAY_NOT_CLOSED");
 
-    // Reopening an already-approved day requires a written justification for the audit trail
-    if (day.approvedAt && !input.note?.trim()) throw new Error("OPERATIONAL_DAY_REOPEN_NOTE_REQUIRED");
+    // J: nota SIEMPRE obligatoria (no solo si estaba aprobado).
+    if (!input.note?.trim()) throw new Error("OPERATIONAL_DAY_REOPEN_NOTE_REQUIRED");
+
+    // J: no reabrir si la sucursal ya tiene otro día ACTIVO (OPEN/CLOSING/REOPENED_FOR_ADJUSTMENT).
+    // Dos días activos romperían el invariante de "un solo día operativo en curso".
+    const otherActive = await tx.operationalDay.findFirst({
+      where: {
+        branchId: day.branchId,
+        id: { not: day.id },
+        status: { in: [OperationalDayStatus.OPEN, OperationalDayStatus.CLOSING, OperationalDayStatus.REOPENED_FOR_ADJUSTMENT] },
+      },
+      select: { id: true, businessDate: true, status: true },
+    });
+    if (otherActive) {
+      const err = new Error("OPERATIONAL_DAY_REOPEN_BLOCKED_ACTIVE_DAY_EXISTS");
+      (err as unknown as { activeDay: typeof otherActive }).activeDay = otherActive;
+      throw err;
+    }
+
+    // J: decidir el estado destino.
+    //  - Si es el día de HOY → OPEN (se reanuda la operación normal).
+    //  - Si es un día PASADO → REOPENED_FOR_ADJUSTMENT (ajuste Master controlado,
+    //    NO operación normal: las ventas nuevas exigen OPEN, así que no se crean
+    //    ventas en un día pasado solo por reabrirlo). Se conserva closeSummaryJson
+    //    como histórico; se limpia la aprobación para exigir re-aprobación.
+    const today = businessDateFromNow();
+    const isToday = day.businessDate.getTime() === today.getTime();
+    const targetStatus = isToday ? OperationalDayStatus.OPEN : OperationalDayStatus.REOPENED_FOR_ADJUSTMENT;
 
     const reopened = await tx.operationalDay.update({
       where: { id: input.id },
       data: {
-        status: OperationalDayStatus.OPEN,
-        closedAt: null,
-        closedByUserId: null,
+        status: targetStatus,
+        // Solo se reanuda como operación (limpia cierre) cuando vuelve a OPEN hoy.
+        closedAt: isToday ? null : day.closedAt,
+        closedByUserId: isToday ? null : day.closedByUserId,
         approvedAt: null,
         approvedByMasterId: null,
+        notes: input.note,
       },
     });
 
@@ -1313,9 +1982,14 @@ export async function reopenOperationalDay(input: { id: string; actorUserId: str
         entityId: day.id,
         metadataJson: toJsonValue({
           note: input.note,
+          targetStatus,
+          isToday,
           wasApproved: !!day.approvedAt,
+          // J: conservar los snapshots previos en la auditoría antes de sobrescribir la aprobación.
           previousApprovedAt: day.approvedAt,
           previousApprovedByMasterId: day.approvedByMasterId,
+          previousCloseSummaryJson: day.closeSummaryJson ?? null,
+          previousApprovalSummaryJson: day.approvalSummaryJson ?? null,
         }),
       },
     });

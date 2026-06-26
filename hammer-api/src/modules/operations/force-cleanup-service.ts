@@ -278,6 +278,16 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
           if (locked.status !== OperationalDayStatus.OPEN) return;
 
           const summary = await calculateOperationalSummaryTx(tx, locked);
+          const previousState = locked.status;
+          // L: checklist de cierre forzado con marcadores requeridos.
+          const closeChecklist = {
+            forcedCleanup: true,
+            reason: input.note,
+            previousState,
+            sourceMode: summary.sourceMode,
+            forcedAt: now.toISOString(),
+            forcedByUserId: input.actorUserId,
+          };
 
           await tx.operationalDay.update({
             where: { id: locked.id },
@@ -287,6 +297,9 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
               closedByUserId: input.actorUserId,
               notes: input.note,
               summaryJson: toJsonValue(summary),
+              // Snapshot inmutable del cierre (igual que el cierre normal).
+              closeSummaryJson: toJsonValue(summary),
+              closeChecklistJson: toJsonValue(closeChecklist),
               salesTotal: decimal(summary.salesTotal),
               paidOrdersTotal: decimal(summary.paidOrdersTotal),
               pendingPaymentTotal: decimal(summary.pendingPaymentTotal),
@@ -308,7 +321,13 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
               action: "FORCE_CLEANUP_STALE_DAY_CLOSED",
               entityType: "OperationalDay",
               entityId: locked.id,
-              metadataJson: toJsonValue({ note: input.note, businessDate: locked.businessDate }),
+              metadataJson: toJsonValue({
+                note: input.note,
+                businessDate: locked.businessDate,
+                forcedCleanup: true,
+                previousState,
+                sourceMode: summary.sourceMode,
+              }),
             },
           });
         });

@@ -93,9 +93,11 @@ function timeAgo(date: Date | null) {
 
 const STATUS_LABEL: Record<string, string> = {
   OPEN: "Abierto", CLOSING: "En cierre", CLOSED: "Cerrado", CANCELLED: "Cancelado",
+  REOPENED_FOR_ADJUSTMENT: "Reabierto (ajuste)",
 };
 const STATUS_BADGE: Record<string, "success" | "warning" | "neutral" | "danger"> = {
   OPEN: "success", CLOSING: "warning", CLOSED: "neutral", CANCELLED: "danger",
+  REOPENED_FOR_ADJUSTMENT: "warning",
 };
 
 const DERIVED_LABEL: Record<string, string> = {

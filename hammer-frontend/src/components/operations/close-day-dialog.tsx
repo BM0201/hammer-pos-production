@@ -9,11 +9,12 @@ type Props = {
   preview: ClosePreview | null;
   disabled?: boolean;
   disabledReason?: string;
+  isMaster?: boolean;
   onPreview: () => Promise<void>;
   onCloseDay: (note: string, forceClose: boolean) => Promise<void>;
 };
 
-export function CloseDayDialog({ preview, disabled, disabledReason, onPreview, onCloseDay }: Props) {
+export function CloseDayDialog({ preview, disabled, disabledReason, isMaster = false, onPreview, onCloseDay }: Props) {
   const [note, setNote] = useState("");
   const [forceClose, setForceClose] = useState(false);
   const [busy, setBusy] = useState<"preview" | "close" | null>(null);
@@ -31,7 +32,8 @@ export function CloseDayDialog({ preview, disabled, disabledReason, onPreview, o
   const hasHardBlockers  = Boolean(preview?.blockers.some((item) =>
     item.key === "open_cash_sessions" || item.key === "auto_closed_pending_review" || item.key === "pending_payments"
   ));
-  const canForceClose    = hasBlockers && !hasHardBlockers;
+  // Forzar cierre es exclusivo de MASTER (N): no-Master no ve ni puede activar la opción.
+  const canForceClose    = hasBlockers && !hasHardBlockers && isMaster;
   const needsNote        = hasWarnings || forceClose;
   const noteOk           = !needsNote || note.trim().length >= 5;
 
@@ -47,7 +49,8 @@ export function CloseDayDialog({ preview, disabled, disabledReason, onPreview, o
     if (disabled) return "No está disponible en el estado actual del día.";
     if (!preview) return "Previsualiza primero para calcular el checklist.";
     if (hasHardBlockers) return "Hay bloqueantes duros que deben resolverse: cajas abiertas, cierres automáticos pendientes o pagos pendientes.";
-    if (hasBlockers && !forceClose) return "Hay bloqueantes. Activa «Forzar cierre» si tienes permiso MASTER para continuar.";
+    if (hasBlockers && !isMaster) return "Hay bloqueantes. Solo un administrador MASTER puede forzar el cierre.";
+    if (hasBlockers && !forceClose) return "Hay bloqueantes. Activa «Forzar cierre» (MASTER) para continuar.";
     if (!noteOk) return "La nota de cierre debe tener al menos 5 caracteres.";
     return null;
   }

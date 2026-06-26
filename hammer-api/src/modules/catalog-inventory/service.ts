@@ -385,6 +385,10 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     criticalStockProducts: allMetricRows.filter((row) => row.isActive && row.isCriticalStock).length,
     zeroStockProducts: allMetricRows.filter((row) => row.isActive && row.hasZeroStock).length,
     totalInventoryValue,
+    // @deprecated Métricas financieras movidas a Finanzas & Contabilidad
+    // (modules/finance/service.ts → getFinanceSummary). El frontend de Inventario
+    // ya NO las consume; se mantienen aquí solo por compatibilidad temporal y se
+    // eliminarán cuando ningún consumidor legacy las use.
     totalPotentialRevenue,
     grossMarginValue,
     grossMarginPercent,

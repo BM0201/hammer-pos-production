@@ -26,6 +26,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       note: parsed.data.note,
       forceClose: parsed.data.forceClose,
       isMaster: isMaster(session),
+      acknowledgedWarnings: parsed.data.acknowledgedWarnings,
     }));
   } catch (error) {
     if (error instanceof Error && error.message === "OPERATIONAL_DAY_HAS_BLOCKERS") {

@@ -5,6 +5,7 @@ import {
   closeOperationalDay,
   businessDateFromNow,
   computeApprovalBlockers,
+  calculateOperationalSummaryTx,
 } from "@/modules/operations/service";
 import {
   getOperationalDayAutoConfig,
@@ -258,7 +259,23 @@ export async function autoApproveOperationalDays(
           return;
         }
 
-        if (Math.abs(n(day.cashDifferenceTotal)) > policy.autoApproveMaxCashDifference) {
+        // F: recalcular el summary ANTES de auto-aprobar (no usar el cashDifferenceTotal viejo).
+        const summary = await calculateOperationalSummaryTx(tx, day);
+
+        // No auto-aprobar si la fuente es MIXED (legacy fallback crítico: parte por
+        // operationalDayId, parte por ventana) — requiere revisión Master.
+        if (summary.sourceMode === "MIXED") {
+          result.skipped++;
+          return;
+        }
+
+        // No auto-aprobar si hay ventas offline sincronizadas tras el cierre (pendientes de revisión).
+        if (summary.lateOfflineSyncCount > 0) {
+          result.skipped++;
+          return;
+        }
+
+        if (Math.abs(n(summary.cashDifferenceTotal)) > policy.autoApproveMaxCashDifference) {
           result.skipped++;
           return;
         }
@@ -273,7 +290,15 @@ export async function autoApproveOperationalDays(
           data: {
             approvedByMasterId: "SYSTEM",
             approvedAt: new Date(),
-            approvalSummaryJson: day.summaryJson ?? undefined,
+            // Snapshot RECALCULADO al momento de aprobar (no el viejo summaryJson).
+            summaryJson: toJsonValue(summary),
+            approvalSummaryJson: toJsonValue(summary),
+            salesTotal: new Prisma.Decimal(summary.salesTotal),
+            paidOrdersTotal: new Prisma.Decimal(summary.paidOrdersTotal),
+            pendingPaymentTotal: new Prisma.Decimal(summary.pendingPaymentTotal),
+            expectedCashTotal: new Prisma.Decimal(summary.expectedCashTotal),
+            countedCashTotal: new Prisma.Decimal(summary.countedCashTotal),
+            cashDifferenceTotal: new Prisma.Decimal(summary.cashDifferenceTotal),
           },
         });
 
@@ -290,7 +315,8 @@ export async function autoApproveOperationalDays(
                 autoApproveAfterHours: policy.autoApproveAfterHours,
                 autoApproveMaxCashDifference: policy.autoApproveMaxCashDifference,
               },
-              cashDifferenceTotal: n(day.cashDifferenceTotal),
+              sourceMode: summary.sourceMode,
+              cashDifferenceTotal: n(summary.cashDifferenceTotal),
             }),
           },
         });

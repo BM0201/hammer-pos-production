@@ -464,24 +464,33 @@ export async function postSaleOrderPayment(input: {
 
       const now = new Date();
 
+      // Fuente de verdad operacional: el pago hereda el día operativo de la orden
+      // (asignado al crear la venta dentro de un día OPEN); si la orden es legacy
+      // sin día, cae al día de la sesión de caja. PaymentTender lo propaga para los
+      // reportes por método.
+      const paymentOperationalDayId = order.operationalDayId ?? session.operationalDayId ?? null;
+
       let payment: Awaited<ReturnType<typeof tx.payment.create>>;
       try {
         payment = await tx.payment.create({
           data: {
             saleOrderId: order.id,
             cashSessionId: session.id,
+            operationalDayId: paymentOperationalDayId,
             receivedByUserId: input.actorUserId,
             method: tenderSummary.method,
             status: PaymentStatus.POSTED,
             amount: requestedAmount,
             referenceNumber: tenderSummary.referenceNumber,
             paidAt: now,
+            postedAt: now,
             createdAt: now,
           },
         });
         await tx.paymentTender.createMany({
           data: tenderSummary.tenders.map((tender) => ({
             paymentId: payment.id,
+            operationalDayId: paymentOperationalDayId,
             method: tender.method,
             amount: new Prisma.Decimal(tender.amount),
             receivedAmount: tender.receivedAmount === null || tender.receivedAmount === undefined ? null : new Prisma.Decimal(tender.receivedAmount),
@@ -540,6 +549,7 @@ export async function postSaleOrderPayment(input: {
           data: {
             saleOrderId: order.id,
             branchId: order.branchId,
+            operationalDayId: paymentOperationalDayId,
             status: DispatchStatus.DISPATCHED,
             preparedByUserId: input.actorUserId,
             dispatchedByUserId: input.actorUserId,

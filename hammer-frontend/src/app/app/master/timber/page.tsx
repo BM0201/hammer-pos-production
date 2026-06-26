@@ -41,7 +41,7 @@ export default function TimberPage() {
             <p className="text-xs text-[var(--color-text-muted)]">Cubicación y precios en tiempo real</p>
           </div>
           <div className="ml-auto">
-            <Link href="/app/master/expenses">
+            <Link href={"/app/master/finance?tab=pricing"}>
               <Button variant="ghost" size="sm" icon={<Settings2 className="h-4 w-4" />}>
                 Precios
               </Button>

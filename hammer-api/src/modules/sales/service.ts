@@ -164,10 +164,17 @@ export async function createDraftSaleOrder(input: {
     throw new Error("OPERATIONAL_DAY_STALE");
   }
 
+  const nowInstant = new Date();
   const order = await prisma.saleOrder.create({
     data: {
       orderNumber: makeOrderNumber(branch.code),
       branchId: input.branchId,
+      // Fuente de verdad operacional: la venta se asienta al día OPEN resuelto,
+      // no a una ventana de fecha. saleOccurredAt/postedAt registran cuándo ocurrió
+      // y cuándo se asentó (clave para offline y cierre por operationalDayId).
+      operationalDayId: operationalDay.id,
+      saleOccurredAt: nowInstant,
+      postedAt: nowInstant,
       customerId: input.customerId ?? null,
       createdByUserId: input.actorUserId,
       status: SaleOrderStatus.DRAFT,
@@ -894,23 +901,29 @@ export async function submitDirectSale(input: {
     });
     if (!tenderSummary.total.eq(grandTotal)) throw new Error("INVALID_PAYMENT_AMOUNT");
 
+    // Fuente de verdad operacional: el pago hereda el día de la orden (o de la sesión).
+    const directSaleOperationalDayId = order.operationalDayId ?? session.operationalDayId ?? null;
+
     // Create payment
     const payment = await tx.payment.create({
       data: {
         saleOrderId: order.id,
         cashSessionId: session.id,
+        operationalDayId: directSaleOperationalDayId,
         receivedByUserId: input.actorUserId,
         method: tenderSummary.method,
         status: PaymentStatus.POSTED,
         amount: grandTotal,
         referenceNumber: tenderSummary.referenceNumber,
         paidAt: now,
+        postedAt: now,
         createdAt: now,
       },
     });
     await tx.paymentTender.createMany({
       data: tenderSummary.tenders.map((tender) => ({
         paymentId: payment.id,
+        operationalDayId: directSaleOperationalDayId,
         method: tender.method,
         amount: new Prisma.Decimal(tender.amount),
         receivedAmount: tender.receivedAmount === null || tender.receivedAmount === undefined ? null : new Prisma.Decimal(tender.receivedAmount),

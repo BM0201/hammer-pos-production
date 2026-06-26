@@ -15,7 +15,7 @@ import {
   getSharedInventoryBalance,
   resolveInventoryProductForMovement,
 } from "@/modules/inventory/unit-conversion";
-import { branchProductScopeFilter } from "@/modules/catalog/service";
+import { branchProductScopeFilter, excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
 export const INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD = 25;
 
@@ -26,13 +26,20 @@ export async function listInventoryBalances(params: { branchId: string; productI
 
   // When listing all balances for a branch (no specific productId), apply the
   // branch-scope filter so that products with zero stock and no history/assignment
-  // are excluded from the operational inventory view.
+  // are excluded from the operational inventory view. Además, se excluyen los
+  // miembros DERIVADOS de una fusión (su stock vive en el canónico y su balance
+  // propio está en cero) para evitar mostrarlos como stock independiente / doble conteo.
   const scopeFilter: Prisma.InventoryBalanceWhereInput = params.productId
     ? {}
     : {
-        OR: [
-          { quantityOnHand: { gt: 0 } },
-          { product: branchProductScopeFilter(params.branchId) },
+        AND: [
+          {
+            OR: [
+              { quantityOnHand: { gt: 0 } },
+              { product: branchProductScopeFilter(params.branchId) },
+            ],
+          },
+          { product: excludeDerivedStockGroupMembers() },
         ],
       };
 

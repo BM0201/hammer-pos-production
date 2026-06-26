@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     if (!isMaster(session) && !canInBranch(session, parsed.data.branchId, CAPABILITIES.OPERATIONAL_DAY_OPEN)) {
       return fail("FORBIDDEN", "No tienes permiso para abrir el dia operativo.", 403);
     }
-    return created(await openOperationalDay({ ...parsed.data, actorUserId: session.userId }));
+    return created(await openOperationalDay({ ...parsed.data, actorUserId: session.userId, isMaster: isMaster(session) }));
   } catch (error) {
     if (error instanceof Error && error.message === "OPERATIONAL_DAY_ALREADY_OPEN") {
       return fail("CONFLICT", "Ya existe un dia operativo abierto para esta sucursal.", 409);

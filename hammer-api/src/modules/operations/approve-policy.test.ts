@@ -147,12 +147,22 @@ type FakeData = {
 
 function makeFakeTx(data: FakeData): Prisma.TransactionClient {
   const findMany = (rows: unknown[] | undefined) => async () => rows ?? [];
+  const count = (rows: unknown[] | undefined) => async () => (rows ?? []).length;
+  // saleOrder.count debe respetar el filtro de crédito para distinguir contado vs crédito.
+  const saleOrderCount = async (args?: { where?: Record<string, unknown> }) => {
+    const rows = (data.saleOrder ?? []) as Array<{ customer?: { creditProfiles?: unknown[] } | null }>;
+    const wantsCredit = Boolean(
+      (args?.where as { customer?: { creditProfiles?: { some?: unknown } } } | undefined)?.customer?.creditProfiles?.some,
+    );
+    if (wantsCredit) return rows.filter((r) => (r.customer?.creditProfiles?.length ?? 0) > 0).length;
+    return rows.length;
+  };
   return {
-    saleReturn: { findMany: findMany(data.saleReturn) },
-    saleCancellation: { findMany: findMany(data.saleCancellation) },
-    transportService: { findMany: findMany(data.transportService) },
-    cashSession: { findMany: findMany(data.cashSession) },
-    saleOrder: { findMany: findMany(data.saleOrder) },
+    saleReturn: { findMany: findMany(data.saleReturn), count: count(data.saleReturn) },
+    saleCancellation: { findMany: findMany(data.saleCancellation), count: count(data.saleCancellation) },
+    transportService: { findMany: findMany(data.transportService), count: count(data.transportService) },
+    cashSession: { findMany: findMany(data.cashSession), count: count(data.cashSession) },
+    saleOrder: { findMany: findMany(data.saleOrder), count: saleOrderCount },
   } as unknown as Prisma.TransactionClient;
 }
 

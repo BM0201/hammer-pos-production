@@ -18,8 +18,17 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!parsed.success) return fail("VALIDATION_ERROR", "Datos invalidos.", 400, parsed.error.flatten());
     return ok(await cancelOperationalDay({ id, actorUserId: session.userId, ...parsed.data }));
   } catch (error) {
-    if (error instanceof Error && error.message === "OPERATIONAL_DAY_HAS_REAL_PAYMENTS") {
-      return fail("CONFLICT", "No se puede cancelar un dia con pagos reales sin override.", 409);
+    if (
+      error instanceof Error &&
+      (error.message === "OPERATIONAL_DAY_HAS_REAL_ACTIVITY" || error.message === "OPERATIONAL_DAY_HAS_REAL_PAYMENTS")
+    ) {
+      const checklist = (error as unknown as { checklist?: unknown }).checklist ?? null;
+      return fail(
+        "CONFLICT",
+        "No se puede cancelar un dia con actividad real (pagos, devoluciones o movimientos) sin override.",
+        409,
+        checklist,
+      );
     }
     return toHttpErrorResponse(error);
   }

@@ -34,6 +34,7 @@ enum OperationalDayStatus {
   CLOSING
   CLOSED
   CANCELLED
+  REOPENED_FOR_ADJUSTMENT
 }
 
 enum SaleOrderStatus {
@@ -332,13 +333,13 @@ model Branch {
   saleCancellations           SaleCancellation[]
   saleReturns                 SaleReturn[]
   refunds                     Refund[]
-  dispatchTickets             DispatchTicket[]         @relation("BranchDispatchTickets")
-  approvalRequests            ApprovalRequest[]        @relation("BranchApprovalRequests")
-  auditLogs                   AuditLog[]               @relation("BranchAuditLogs")
-  outgoingTransfers           Transfer[]               @relation("TransferFromBranch")
-  incomingTransfers           Transfer[]               @relation("TransferToBranch")
-  internalFreightOrigins      InternalFreightRoute[]   @relation("InternalFreightRouteOrigin")
-  internalFreightDestinations InternalFreightRoute[]   @relation("InternalFreightRouteDestination")
+  dispatchTickets             DispatchTicket[]              @relation("BranchDispatchTickets")
+  approvalRequests            ApprovalRequest[]             @relation("BranchApprovalRequests")
+  auditLogs                   AuditLog[]                    @relation("BranchAuditLogs")
+  outgoingTransfers           Transfer[]                    @relation("TransferFromBranch")
+  incomingTransfers           Transfer[]                    @relation("TransferToBranch")
+  internalFreightOrigins      InternalFreightRoute[]        @relation("InternalFreightRouteOrigin")
+  internalFreightDestinations InternalFreightRoute[]        @relation("InternalFreightRouteDestination")
   purchaseOrders              PurchaseOrder[]
   timberTrips                 TimberTrip[]
   operatingExpenses           OperatingExpense[]
@@ -355,18 +356,18 @@ model Branch {
   transportServices           TransportService[]
   moduleConfig                BranchModuleConfig?
   reorderPolicies             StockReorderPolicy[]
-  reorderAlerts               ReorderAlert[]           @relation("ReorderAlertBranch")
-  reorderAlertSources         ReorderAlert[]           @relation("ReorderAlertSourceBranch")
-  suggestionBatches           ReorderSuggestionBatch[] @relation("SuggestionBatchBranch")
-  suggestionBatchSources      ReorderSuggestionBatch[] @relation("SuggestionBatchSourceBranch")
-  productionBatches           ProductionBatch[]        @relation("ProductionBatches")
+  reorderAlerts               ReorderAlert[]                @relation("ReorderAlertBranch")
+  reorderAlertSources         ReorderAlert[]                @relation("ReorderAlertSourceBranch")
+  suggestionBatches           ReorderSuggestionBatch[]      @relation("SuggestionBatchBranch")
+  suggestionBatchSources      ReorderSuggestionBatch[]      @relation("SuggestionBatchSourceBranch")
+  productionBatches           ProductionBatch[]             @relation("ProductionBatches")
   printSettings               PrintSettings?
   brainDecisions              BrainDecision[]
   operationalDays             OperationalDay[]
   userPresences               UserPresence[]
-  creditNotes                 CreditNote[]             @relation("BranchCreditNotes")
-  replenishmentDrafts         ReplenishmentDraft[]     @relation("BranchReplenishmentDrafts")
-  replenishmentDraftItems     ReplenishmentDraftItem[] @relation("ReplenishmentDraftItemBranch")
+  creditNotes                 CreditNote[]                  @relation("BranchCreditNotes")
+  replenishmentDrafts         ReplenishmentDraft[]          @relation("BranchReplenishmentDrafts")
+  replenishmentDraftItems     ReplenishmentDraftItem[]      @relation("ReplenishmentDraftItemBranch")
 }
 
 model User {
@@ -381,63 +382,63 @@ model User {
   sessionVersion     Int       @default(0) /// Incremented on password/role changes to invalidate existing tokens
   /// MFA/TOTP — secreto cifrado en producción (AES-256-GCM con MFA_ENCRYPTION_KEY)
   mfaEnabled         Boolean   @default(false)
-  mfaSecret          String?   /// Base32 TOTP secret (nullable = MFA not configured)
-  mfaRecoveryCodes   Json?     /// Array of SHA-256 hashed backup codes
+  mfaSecret          String? /// Base32 TOTP secret (nullable = MFA not configured)
+  mfaRecoveryCodes   Json? /// Array of SHA-256 hashed backup codes
   mfaEnabledAt       DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  userBranchRoles            UserBranchRole[]
-  openedSessions             CashSession[]            @relation("CashSessionOpenedBy")
-  closedSessions             CashSession[]            @relation("CashSessionClosedBy")
-  reviewedCashSessions       CashSession[]            @relation("CashSessionReviewedBy")
-  cashSessionOperators       CashSessionOperator[]     @relation("CashSessionOperatorUser")
-  assignedCashOperators      CashSessionOperator[]     @relation("CashSessionOperatorAssignedBy")
-  createdCashMovements       CashMovement[]            @relation("CashMovementCreatedBy")
-  approvedCashMovements      CashMovement[]            @relation("CashMovementApprovedBy")
-  openedOperationalDays      OperationalDay[]         @relation("OperationalDayOpenedBy")
-  closedOperationalDays      OperationalDay[]         @relation("OperationalDayClosedBy")
-  approvedOperationalDays    OperationalDay[]         @relation("OperationalDayApprovedBy")
-  createdOrders              SaleOrder[]              @relation("SaleOrderCreatedBy")
-  requestedSaleCancellations SaleCancellation[]       @relation("SaleCancellationRequestedBy")
-  approvedSaleCancellations  SaleCancellation[]       @relation("SaleCancellationApprovedBy")
-  requestedSaleReturns       SaleReturn[]             @relation("SaleReturnRequestedBy")
-  approvedSaleReturns        SaleReturn[]             @relation("SaleReturnApprovedBy")
-  postedRefunds              Refund[]                 @relation("RefundPostedBy")
-  approvedRefunds            Refund[]                 @relation("RefundApprovedBy")
-  createdCreditNotes         CreditNote[]             @relation("CreditNoteCreatedBy")
-  approvedCreditNotes        CreditNote[]             @relation("CreditNoteApprovedBy")
-  payments                   Payment[]
-  preparedDispatchTickets    DispatchTicket[]         @relation("DispatchPreparedBy")
-  dispatchTickets            DispatchTicket[]         @relation("DispatchProcessedBy")
-  requestedApprovals         ApprovalRequest[]        @relation("ApprovalRequestedBy")
-  resolvedApprovals          ApprovalRequest[]        @relation("ApprovalResolvedBy")
-  requestedTransfers         Transfer[]               @relation("TransferRequestedBy")
-  approvedTransfers          Transfer[]               @relation("TransferApprovedBy")
-  auditLogs                  AuditLog[]
-  purchaseOrders             PurchaseOrder[]          @relation("PurchaseOrderCreatedBy")
-  createdDiscounts           Discount[]               @relation("DiscountCreatedBy")
-  updatedBranchRoleConfigs   BranchRoleConfig[]       @relation("BranchRoleConfigUpdatedBy")
-  updatedSystemSettings      SystemSetting[]          @relation("SystemSettingUpdatedBy")
-  createdTransportServices   TransportService[]       @relation("TransportServiceCreatedBy")
-  updatedBranchModuleConfigs BranchModuleConfig[]     @relation("BranchModuleConfigUpdatedBy")
-  updatedReorderPolicies     StockReorderPolicy[]     @relation("ReorderPolicyUpdatedBy")
-  resolvedReorderAlerts      ReorderAlert[]           @relation("ReorderAlertResolvedBy")
-  reviewedSuggestionBatches  ReorderSuggestionBatch[] @relation("SuggestionBatchReviewedBy")
-  createdRecipes             ProductionRecipe[]       @relation("RecipeCreator")
-  createdBatches             ProductionBatch[]        @relation("BatchCreator")
-  userPermissions            UserPermission[]
-  grantedPermissions         UserPermission[]         @relation("PermissionGrantedBy")
-  registeredManualInvoices   SaleOrder[]              @relation("ManualInvoiceRegisteredBy")
-  documentPrintLogs          DocumentPrintLog[]       @relation("DocumentPrintedBy")
-  createdDocumentTemplates   DocumentTemplate[]       @relation("DocumentTemplateCreatedBy")
-  resolvedBrainDecisions     BrainDecision[]          @relation("BrainDecisionResolvedBy")
-  brainDecisionActionLogs    BrainDecisionActionLog[] @relation("BrainDecisionActionActor")
-  legacyBrainDecisions       BrainDecision[]          @relation("BrainDecisionLegacyUser")
-  targetedBrainDecisions     BrainDecision[]          @relation("BrainDecisionTargetUser")
-  presences                        UserPresence[]
-  createdReplenishmentDrafts       ReplenishmentDraft[] @relation("ReplenishmentDraftCreatedBy")
-  approvedReplenishmentDrafts      ReplenishmentDraft[] @relation("ReplenishmentDraftApprovedBy")
+  userBranchRoles             UserBranchRole[]
+  openedSessions              CashSession[]            @relation("CashSessionOpenedBy")
+  closedSessions              CashSession[]            @relation("CashSessionClosedBy")
+  reviewedCashSessions        CashSession[]            @relation("CashSessionReviewedBy")
+  cashSessionOperators        CashSessionOperator[]    @relation("CashSessionOperatorUser")
+  assignedCashOperators       CashSessionOperator[]    @relation("CashSessionOperatorAssignedBy")
+  createdCashMovements        CashMovement[]           @relation("CashMovementCreatedBy")
+  approvedCashMovements       CashMovement[]           @relation("CashMovementApprovedBy")
+  openedOperationalDays       OperationalDay[]         @relation("OperationalDayOpenedBy")
+  closedOperationalDays       OperationalDay[]         @relation("OperationalDayClosedBy")
+  approvedOperationalDays     OperationalDay[]         @relation("OperationalDayApprovedBy")
+  createdOrders               SaleOrder[]              @relation("SaleOrderCreatedBy")
+  requestedSaleCancellations  SaleCancellation[]       @relation("SaleCancellationRequestedBy")
+  approvedSaleCancellations   SaleCancellation[]       @relation("SaleCancellationApprovedBy")
+  requestedSaleReturns        SaleReturn[]             @relation("SaleReturnRequestedBy")
+  approvedSaleReturns         SaleReturn[]             @relation("SaleReturnApprovedBy")
+  postedRefunds               Refund[]                 @relation("RefundPostedBy")
+  approvedRefunds             Refund[]                 @relation("RefundApprovedBy")
+  createdCreditNotes          CreditNote[]             @relation("CreditNoteCreatedBy")
+  approvedCreditNotes         CreditNote[]             @relation("CreditNoteApprovedBy")
+  payments                    Payment[]
+  preparedDispatchTickets     DispatchTicket[]         @relation("DispatchPreparedBy")
+  dispatchTickets             DispatchTicket[]         @relation("DispatchProcessedBy")
+  requestedApprovals          ApprovalRequest[]        @relation("ApprovalRequestedBy")
+  resolvedApprovals           ApprovalRequest[]        @relation("ApprovalResolvedBy")
+  requestedTransfers          Transfer[]               @relation("TransferRequestedBy")
+  approvedTransfers           Transfer[]               @relation("TransferApprovedBy")
+  auditLogs                   AuditLog[]
+  purchaseOrders              PurchaseOrder[]          @relation("PurchaseOrderCreatedBy")
+  createdDiscounts            Discount[]               @relation("DiscountCreatedBy")
+  updatedBranchRoleConfigs    BranchRoleConfig[]       @relation("BranchRoleConfigUpdatedBy")
+  updatedSystemSettings       SystemSetting[]          @relation("SystemSettingUpdatedBy")
+  createdTransportServices    TransportService[]       @relation("TransportServiceCreatedBy")
+  updatedBranchModuleConfigs  BranchModuleConfig[]     @relation("BranchModuleConfigUpdatedBy")
+  updatedReorderPolicies      StockReorderPolicy[]     @relation("ReorderPolicyUpdatedBy")
+  resolvedReorderAlerts       ReorderAlert[]           @relation("ReorderAlertResolvedBy")
+  reviewedSuggestionBatches   ReorderSuggestionBatch[] @relation("SuggestionBatchReviewedBy")
+  createdRecipes              ProductionRecipe[]       @relation("RecipeCreator")
+  createdBatches              ProductionBatch[]        @relation("BatchCreator")
+  userPermissions             UserPermission[]
+  grantedPermissions          UserPermission[]         @relation("PermissionGrantedBy")
+  registeredManualInvoices    SaleOrder[]              @relation("ManualInvoiceRegisteredBy")
+  documentPrintLogs           DocumentPrintLog[]       @relation("DocumentPrintedBy")
+  createdDocumentTemplates    DocumentTemplate[]       @relation("DocumentTemplateCreatedBy")
+  resolvedBrainDecisions      BrainDecision[]          @relation("BrainDecisionResolvedBy")
+  brainDecisionActionLogs     BrainDecisionActionLog[] @relation("BrainDecisionActionActor")
+  legacyBrainDecisions        BrainDecision[]          @relation("BrainDecisionLegacyUser")
+  targetedBrainDecisions      BrainDecision[]          @relation("BrainDecisionTargetUser")
+  presences                   UserPresence[]
+  createdReplenishmentDrafts  ReplenishmentDraft[]     @relation("ReplenishmentDraftCreatedBy")
+  approvedReplenishmentDrafts ReplenishmentDraft[]     @relation("ReplenishmentDraftApprovedBy")
 
   @@index([globalRole, isActive])
 }
@@ -526,11 +527,11 @@ model CashSession {
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
-  physicalCashBox PhysicalCashBox @relation(fields: [physicalCashBoxId], references: [id])
-  operationalDay  OperationalDay? @relation(fields: [operationalDayId], references: [id])
-  openedBy        User            @relation("CashSessionOpenedBy", fields: [openedByUserId], references: [id])
-  closedBy        User?           @relation("CashSessionClosedBy", fields: [closedByUserId], references: [id])
-  reviewedBy      User?           @relation("CashSessionReviewedBy", fields: [reviewedByUserId], references: [id])
+  physicalCashBox PhysicalCashBox       @relation(fields: [physicalCashBoxId], references: [id])
+  operationalDay  OperationalDay?       @relation(fields: [operationalDayId], references: [id])
+  openedBy        User                  @relation("CashSessionOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy        User?                 @relation("CashSessionClosedBy", fields: [closedByUserId], references: [id])
+  reviewedBy      User?                 @relation("CashSessionReviewedBy", fields: [reviewedByUserId], references: [id])
   payments        Payment[]
   operators       CashSessionOperator[]
   cashMovements   CashMovement[]
@@ -608,11 +609,17 @@ model OperationalDay {
   createdAt                    DateTime             @default(now())
   updatedAt                    DateTime             @updatedAt
 
-  branch       Branch        @relation(fields: [branchId], references: [id])
-  openedBy     User          @relation("OperationalDayOpenedBy", fields: [openedByUserId], references: [id])
-  closedBy     User?         @relation("OperationalDayClosedBy", fields: [closedByUserId], references: [id])
-  approvedBy   User?         @relation("OperationalDayApprovedBy", fields: [approvedByMasterId], references: [id])
-  cashSessions CashSession[]
+  branch            Branch             @relation(fields: [branchId], references: [id])
+  openedBy          User               @relation("OperationalDayOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy          User?              @relation("OperationalDayClosedBy", fields: [closedByUserId], references: [id])
+  approvedBy        User?              @relation("OperationalDayApprovedBy", fields: [approvedByMasterId], references: [id])
+  cashSessions      CashSession[]
+  saleOrders        SaleOrder[]
+  payments          Payment[]
+  paymentTenders    PaymentTender[]
+  dispatchTickets   DispatchTicket[]
+  transportServices TransportService[]
+  refunds           Refund[]
   saleCancellations SaleCancellation[]
   saleReturns       SaleReturn[]
 
@@ -686,11 +693,11 @@ model Category {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  parent   Category?  @relation("CategoryToCategory", fields: [parentId], references: [id])
-  children Category[] @relation("CategoryToCategory")
-  products Product[]
+  parent                  Category?                     @relation("CategoryToCategory", fields: [parentId], references: [id])
+  children                Category[]                    @relation("CategoryToCategory")
+  products                Product[]
   categoryPricingPolicies BranchCategoryPricingPolicy[]
-  productStockGroups ProductStockGroup[]
+  productStockGroups      ProductStockGroup[]
 }
 
 model BranchCategoryPricingPolicy {
@@ -721,25 +728,25 @@ model BranchCategoryPricingPolicy {
 }
 
 model Product {
-  id                String   @id @default(cuid())
-  sku               String   @unique
-  barcode           String?  @unique
-  name              String
-  description       String?
-  categoryId        String
-  unit              String
-  isActive          Boolean  @default(true)
-  allowsFraction    Boolean  @default(false)
-  isTimber          Boolean  @default(false)
-  standardSalePrice Decimal
-  globalCost        Decimal?
-  averageCost       Decimal?
-  lastPurchaseCost  Decimal?
-  costUpdatedAt     DateTime?
-  costSource        String?
+  id                  String    @id @default(cuid())
+  sku                 String    @unique
+  barcode             String?   @unique
+  name                String
+  description         String?
+  categoryId          String
+  unit                String
+  isActive            Boolean   @default(true)
+  allowsFraction      Boolean   @default(false)
+  isTimber            Boolean   @default(false)
+  standardSalePrice   Decimal
+  globalCost          Decimal?
+  averageCost         Decimal?
+  lastPurchaseCost    Decimal?
+  costUpdatedAt       DateTime?
+  costSource          String?
   costUpdatedByUserId String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   /// ABC-XYZ Classification fields
   abcClassification    String? /// "A", "B", "C"
@@ -750,48 +757,48 @@ model Product {
   lastClassificationAt DateTime?
   suggestedMargin      Decimal? /// Suggested margin based on classification
 
-  category               Category                  @relation(fields: [categoryId], references: [id])
-  inventoryBalances      InventoryBalance[]
+  category                   Category                    @relation(fields: [categoryId], references: [id])
+  inventoryBalances          InventoryBalance[]
   inventoryConditionBalances InventoryConditionBalance[]
-  inventoryMovements     InventoryMovement[]
-  orderLines             SaleOrderLine[]
-  saleReturnItems        SaleReturnItem[]
-  transferLines          TransferLine[]
-  internalFreightLines   InternalFreightTripLine[]
-  purchaseOrderLines     PurchaseOrderLine[]
-  timberProduct          TimberProduct?
-  productPricings        ProductPricing[]
-  branchProductSettings  BranchProductSetting[]
-  productAnalytics       ProductAnalytics[]
-  reorderPolicies        StockReorderPolicy[]
-  reorderAlerts          ReorderAlert[]
-  reorderSuggestionLines   ReorderSuggestionLine[]
-  stockGroupMemberships    ProductStockGroupMember[]
-  recipesAsOutput          ProductionRecipe[]        @relation("RecipeOutput")
-  recipesAsInput           ProductionRecipeInput[]   @relation("RecipeInput")
-  batchInputs              ProductionBatchInput[]    @relation("BatchInput")
-  brainDecisions           BrainDecision[]
-  replenishmentDraftItems  ReplenishmentDraftItem[]  @relation("ReplenishmentDraftItemProduct")
+  inventoryMovements         InventoryMovement[]
+  orderLines                 SaleOrderLine[]
+  saleReturnItems            SaleReturnItem[]
+  transferLines              TransferLine[]
+  internalFreightLines       InternalFreightTripLine[]
+  purchaseOrderLines         PurchaseOrderLine[]
+  timberProduct              TimberProduct?
+  productPricings            ProductPricing[]
+  branchProductSettings      BranchProductSetting[]
+  productAnalytics           ProductAnalytics[]
+  reorderPolicies            StockReorderPolicy[]
+  reorderAlerts              ReorderAlert[]
+  reorderSuggestionLines     ReorderSuggestionLine[]
+  stockGroupMemberships      ProductStockGroupMember[]
+  recipesAsOutput            ProductionRecipe[]          @relation("RecipeOutput")
+  recipesAsInput             ProductionRecipeInput[]     @relation("RecipeInput")
+  batchInputs                ProductionBatchInput[]      @relation("BatchInput")
+  brainDecisions             BrainDecision[]
+  replenishmentDraftItems    ReplenishmentDraftItem[]    @relation("ReplenishmentDraftItemProduct")
 
   @@index([abcClassification])
   @@index([rotationIndex])
 }
 
 model ProductStockGroup {
-  id                     String   @id @default(cuid())
-  code                   String   @unique
-  name                   String
-  baseUnit               String
-  packageUnit            String?
-  conversionFactorToBase Decimal?
-  tracksPackages         Boolean  @default(false)
-  approximateFactor      Boolean  @default(false)
-  minimumClosedPackageReserve Decimal @default(1)
-  autoOpenForUnitSale    Boolean  @default(true)
-  categoryId             String?
-  isActive               Boolean  @default(true)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                          String   @id @default(cuid())
+  code                        String   @unique
+  name                        String
+  baseUnit                    String
+  packageUnit                 String?
+  conversionFactorToBase      Decimal?
+  tracksPackages              Boolean  @default(false)
+  approximateFactor           Boolean  @default(false)
+  minimumClosedPackageReserve Decimal  @default(1)
+  autoOpenForUnitSale         Boolean  @default(true)
+  categoryId                  String?
+  isActive                    Boolean  @default(true)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
 
   category Category?                 @relation(fields: [categoryId], references: [id])
   products ProductStockGroupMember[]
@@ -965,15 +972,15 @@ model TimberTripLine {
 }
 
 model InventoryBalance {
-  id                  String   @id @default(cuid())
-  branchId            String
-  productId           String
-  quantityOnHand      Decimal  @default(0)
-  closedPackageQuantity Decimal @default(0)
-  looseUnitQuantity     Decimal @default(0)
-  weightedAverageCost Decimal  @default(0)
-  inventoryValue      Decimal  @default(0)
-  updatedAt           DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  branchId              String
+  productId             String
+  quantityOnHand        Decimal  @default(0)
+  closedPackageQuantity Decimal  @default(0)
+  looseUnitQuantity     Decimal  @default(0)
+  weightedAverageCost   Decimal  @default(0)
+  inventoryValue        Decimal  @default(0)
+  updatedAt             DateTime @updatedAt
 
   branch  Branch  @relation(fields: [branchId], references: [id])
   product Product @relation(fields: [productId], references: [id])
@@ -1090,23 +1097,23 @@ model InventoryImportLine {
 }
 
 model BranchProductSetting {
-  id           String   @id @default(cuid())
-  branchId     String
-  productId    String
-  isAvailable  Boolean  @default(true)
-  minStock     Decimal?
-  maxStock     Decimal?
-  reorderPoint Decimal?
-  branchCost   Decimal?
-  branchPrice  Decimal?
-  minPrice      Decimal?
-  wholesalePrice Decimal?
-  priceSource   String?
-  marginPercent Decimal?
-  lastPriceUpdateAt DateTime?
+  id                   String    @id @default(cuid())
+  branchId             String
+  productId            String
+  isAvailable          Boolean   @default(true)
+  minStock             Decimal?
+  maxStock             Decimal?
+  reorderPoint         Decimal?
+  branchCost           Decimal?
+  branchPrice          Decimal?
+  minPrice             Decimal?
+  wholesalePrice       Decimal?
+  priceSource          String?
+  marginPercent        Decimal?
+  lastPriceUpdateAt    DateTime?
   priceUpdatedByUserId String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   branch  Branch  @relation(fields: [branchId], references: [id])
   product Product @relation(fields: [productId], references: [id])
@@ -1120,6 +1127,7 @@ model SaleOrder {
   id                String          @id @default(cuid())
   orderNumber       String          @unique
   branchId          String
+  operationalDayId  String?
   customerId        String?
   createdByUserId   String
   status            SaleOrderStatus
@@ -1132,6 +1140,14 @@ model SaleOrder {
   notes             String?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
+
+  // ── Fecha operativa / offline (ERP source-of-truth) ──
+  // saleOccurredAt: cuándo ocurrió realmente la venta (en POS, incluso offline).
+  // postedAt: cuándo se asentó al día operativo. syncedAt: cuándo se sincronizó.
+  saleOccurredAt  DateTime?
+  postedAt        DateTime?
+  syncedAt        DateTime?
+  offlineClientId String?   @unique
 
   // ── Documentos comerciales ──
   documentMode          DocumentMode @default(DELIVERY_ORDER_ONLY)
@@ -1153,19 +1169,20 @@ model SaleOrder {
   manualInvoiceRegisteredAt   DateTime?
   manualInvoiceNotes          String?
 
-  branch                    Branch             @relation(fields: [branchId], references: [id])
-  customer                  Customer?          @relation(fields: [customerId], references: [id])
-  createdBy                 User               @relation("SaleOrderCreatedBy", fields: [createdByUserId], references: [id])
-  manualInvoiceRegisteredBy User?              @relation("ManualInvoiceRegisteredBy", fields: [manualInvoiceRegisteredById], references: [id])
-  lines                     SaleOrderLine[]
-  payments                  Payment[]
-  cancellations             SaleCancellation[] @relation("SaleCancellationOriginalOrder")
+  branch                      Branch             @relation(fields: [branchId], references: [id])
+  operationalDay              OperationalDay?    @relation(fields: [operationalDayId], references: [id])
+  customer                    Customer?          @relation(fields: [customerId], references: [id])
+  createdBy                   User               @relation("SaleOrderCreatedBy", fields: [createdByUserId], references: [id])
+  manualInvoiceRegisteredBy   User?              @relation("ManualInvoiceRegisteredBy", fields: [manualInvoiceRegisteredById], references: [id])
+  lines                       SaleOrderLine[]
+  payments                    Payment[]
+  cancellations               SaleCancellation[] @relation("SaleCancellationOriginalOrder")
   replacementForCancellations SaleCancellation[] @relation("SaleCancellationReplacementOrder")
-  returns                   SaleReturn[]
-  creditNotes               CreditNote[]
-  dispatchTickets           DispatchTicket[]
-  transportServices         TransportService[]
-  documentPrintLogs         DocumentPrintLog[]
+  returns                     SaleReturn[]
+  creditNotes                 CreditNote[]
+  dispatchTickets             DispatchTicket[]
+  transportServices           TransportService[]
+  documentPrintLogs           DocumentPrintLog[]
 
   @@unique([branchId, manualInvoiceSeries, manualInvoiceNumber])
   @@index([branchId, status])
@@ -1173,24 +1190,26 @@ model SaleOrder {
   @@index([customerId, createdAt])
   @@index([deliveryOrderNumber])
   @@index([manualInvoiceSeries, manualInvoiceNumber])
+  @@index([operationalDayId])
+  @@index([branchId, operationalDayId, status])
 }
 
 model SaleOrderLine {
-  id             String   @id @default(cuid())
-  saleOrderId    String
-  productId      String
-  quantity       Decimal
-  unitPrice      Decimal
-  costSnapshot   Decimal?
-  marginSnapshot Decimal?
+  id                    String   @id @default(cuid())
+  saleOrderId           String
+  productId             String
+  quantity              Decimal
+  unitPrice             Decimal
+  costSnapshot          Decimal?
+  marginSnapshot        Decimal?
   marginPercentSnapshot Decimal?
-  costSourceSnapshot String?
-  discountAmount Decimal  @default(0)
-  lineSubtotal   Decimal
-  createdAt      DateTime @default(now())
+  costSourceSnapshot    String?
+  discountAmount        Decimal  @default(0)
+  lineSubtotal          Decimal
+  createdAt             DateTime @default(now())
 
-  saleOrder SaleOrder @relation(fields: [saleOrderId], references: [id])
-  product   Product   @relation(fields: [productId], references: [id])
+  saleOrder   SaleOrder        @relation(fields: [saleOrderId], references: [id])
+  product     Product          @relation(fields: [productId], references: [id])
   returnItems SaleReturnItem[]
 
   @@unique([saleOrderId, productId])
@@ -1203,6 +1222,7 @@ model Payment {
   id               String        @id @default(cuid())
   saleOrderId      String
   cashSessionId    String
+  operationalDayId String?
   receivedByUserId String
   method           PaymentMethod
   status           PaymentStatus @default(POSTED)
@@ -1210,38 +1230,47 @@ model Payment {
   currencyCode     CurrencyCode  @default(NIO)
   referenceNumber  String?
   paidAt           DateTime      @default(now())
+  postedAt         DateTime?
+  syncedAt         DateTime?
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  saleOrder   SaleOrder   @relation(fields: [saleOrderId], references: [id])
-  cashSession CashSession @relation(fields: [cashSessionId], references: [id])
-  receivedBy  User        @relation(fields: [receivedByUserId], references: [id])
-  tenders     PaymentTender[]
-  refunds     Refund[]
+  saleOrder      SaleOrder       @relation(fields: [saleOrderId], references: [id])
+  cashSession    CashSession     @relation(fields: [cashSessionId], references: [id])
+  operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
+  receivedBy     User            @relation(fields: [receivedByUserId], references: [id])
+  tenders        PaymentTender[]
+  refunds        Refund[]
 
   @@index([cashSessionId, paidAt])
+  @@index([operationalDayId])
+  @@index([cashSessionId, operationalDayId])
 }
 
 model PaymentTender {
-  id              String        @id @default(cuid())
-  paymentId       String
-  method          PaymentMethod
-  amount          Decimal
-  receivedAmount  Decimal?
-  changeAmount    Decimal?
-  referenceNumber String?
-  createdAt       DateTime      @default(now())
+  id               String        @id @default(cuid())
+  paymentId        String
+  operationalDayId String?
+  method           PaymentMethod
+  amount           Decimal
+  receivedAmount   Decimal?
+  changeAmount     Decimal?
+  referenceNumber  String?
+  createdAt        DateTime      @default(now())
 
-  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  payment        Payment         @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
 
   @@index([paymentId])
   @@index([method])
+  @@index([operationalDayId, method])
 }
 
 model DispatchTicket {
   id                 String         @id @default(cuid())
   saleOrderId        String
   branchId           String
+  operationalDayId   String?
   status             DispatchStatus @default(PENDING)
   preparedByUserId   String?
   dispatchedByUserId String?
@@ -1250,12 +1279,14 @@ model DispatchTicket {
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
 
-  saleOrder   SaleOrder @relation(fields: [saleOrderId], references: [id])
-  branch      Branch    @relation("BranchDispatchTickets", fields: [branchId], references: [id])
-  preparedBy  User?     @relation("DispatchPreparedBy", fields: [preparedByUserId], references: [id])
-  processedBy User?     @relation("DispatchProcessedBy", fields: [dispatchedByUserId], references: [id])
+  saleOrder      SaleOrder       @relation(fields: [saleOrderId], references: [id])
+  branch         Branch          @relation("BranchDispatchTickets", fields: [branchId], references: [id])
+  operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
+  preparedBy     User?           @relation("DispatchPreparedBy", fields: [preparedByUserId], references: [id])
+  processedBy    User?           @relation("DispatchProcessedBy", fields: [dispatchedByUserId], references: [id])
 
   @@index([branchId, status])
+  @@index([operationalDayId])
 }
 
 model ApprovalRequest {
@@ -1274,9 +1305,9 @@ model ApprovalRequest {
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
-  branch      Branch @relation("BranchApprovalRequests", fields: [branchId], references: [id])
-  requestedBy User   @relation("ApprovalRequestedBy", fields: [requestedByUserId], references: [id])
-  resolvedBy  User?  @relation("ApprovalResolvedBy", fields: [resolvedByUserId], references: [id])
+  branch           Branch            @relation("BranchApprovalRequests", fields: [branchId], references: [id])
+  requestedBy      User              @relation("ApprovalRequestedBy", fields: [requestedByUserId], references: [id])
+  resolvedBy       User?             @relation("ApprovalResolvedBy", fields: [resolvedByUserId], references: [id])
   saleCancellation SaleCancellation?
   saleReturn       SaleReturn?
 
@@ -1384,6 +1415,7 @@ model Refund {
   saleCancellationId String?
   paymentId          String?
   cashSessionId      String?
+  operationalDayId   String?
   branchId           String
   customerId         String?
   method             RefundMethod
@@ -1399,6 +1431,7 @@ model Refund {
   saleCancellation SaleCancellation? @relation(fields: [saleCancellationId], references: [id])
   payment          Payment?          @relation(fields: [paymentId], references: [id])
   cashSession      CashSession?      @relation(fields: [cashSessionId], references: [id])
+  operationalDay   OperationalDay?   @relation(fields: [operationalDayId], references: [id])
   branch           Branch            @relation(fields: [branchId], references: [id])
   customer         Customer?         @relation(fields: [customerId], references: [id])
   postedBy         User?             @relation("RefundPostedBy", fields: [postedByUserId], references: [id])
@@ -1410,6 +1443,7 @@ model Refund {
   @@index([cashSessionId])
   @@index([branchId, status])
   @@index([customerId])
+  @@index([operationalDayId])
 }
 
 model CreditNote {
@@ -1868,10 +1902,10 @@ model PurchaseOrder {
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
 
-  branch    Branch              @relation(fields: [branchId], references: [id])
-  createdBy User                @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
-  supplierRef Supplier?         @relation(fields: [supplierId], references: [id])
-  lines     PurchaseOrderLine[]
+  branch      Branch              @relation(fields: [branchId], references: [id])
+  createdBy   User                @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
+  supplierRef Supplier?           @relation(fields: [supplierId], references: [id])
+  lines       PurchaseOrderLine[]
 
   @@index([branchId, status])
   @@index([supplierId])
@@ -1879,19 +1913,19 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderLine {
-  id                           String  @id @default(cuid())
+  id                           String   @id @default(cuid())
   purchaseOrderId              String
   productId                    String
   quantity                     Decimal
   unitCost                     Decimal /// Compatibility: final unit cost used for inventory
-  unitCostBeforeTax            Decimal @default(0)
-  taxRate                      Decimal @default(15)
-  unitTaxAmount                Decimal @default(0)
-  costWithTax                  Decimal @default(0)
-  allocatedFreightPerUnit      Decimal @default(0)
-  allocatedOtherChargesPerUnit Decimal @default(0)
-  allocatedDiscountPerUnit     Decimal @default(0)
-  finalUnitCost                Decimal @default(0)
+  unitCostBeforeTax            Decimal  @default(0)
+  taxRate                      Decimal  @default(15)
+  unitTaxAmount                Decimal  @default(0)
+  costWithTax                  Decimal  @default(0)
+  allocatedFreightPerUnit      Decimal  @default(0)
+  allocatedOtherChargesPerUnit Decimal  @default(0)
+  allocatedDiscountPerUnit     Decimal  @default(0)
+  finalUnitCost                Decimal  @default(0)
   subtotal                     Decimal
   previousGlobalCost           Decimal?
   newGlobalCost                Decimal?
@@ -2224,6 +2258,7 @@ model TransportService {
   id                   String                 @id @default(cuid())
   saleOrderId          String
   branchId             String
+  operationalDayId     String?
   customerName         String
   reference            String?
   price                Decimal
@@ -2235,12 +2270,14 @@ model TransportService {
   updatedAt            DateTime               @updatedAt
   deliveredAt          DateTime?
 
-  saleOrder SaleOrder @relation(fields: [saleOrderId], references: [id])
-  branch    Branch    @relation(fields: [branchId], references: [id])
-  createdBy User      @relation("TransportServiceCreatedBy", fields: [createdByUserId], references: [id])
+  saleOrder      SaleOrder       @relation(fields: [saleOrderId], references: [id])
+  branch         Branch          @relation(fields: [branchId], references: [id])
+  operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
+  createdBy      User            @relation("TransportServiceCreatedBy", fields: [createdByUserId], references: [id])
 
   @@index([branchId, status])
   @@index([saleOrderId])
+  @@index([operationalDayId])
 }
 
 /**
@@ -2431,9 +2468,9 @@ model ProductionRecipe {
   recipeType   String @default("MANUFACTURING") /// MANUFACTURING, CONVERSION, CUTTING, MIXING, PACKAGING, REPACKAGING
   recipeFamily String @default("GENERAL") /// WOOD, CEMENT, STONE, METAL, BLOCKS, PAINT, GENERAL
 
-  targetMarginPct Float? /// 0.30 = 30%
-  yieldPercent    Float? /// rendimiento esperado; 1 = 100%
-  wastePercent    Float? /// merma esperada; 0.05 = 5%
+  targetMarginPct        Float? /// 0.30 = 30%
+  yieldPercent           Float? /// rendimiento esperado; 1 = 100%
+  wastePercent           Float? /// merma esperada; 0.05 = 5%
   processingCostPerBatch Float?
   laborCostPerBatch      Float?
 
@@ -2564,39 +2601,39 @@ model UserPermission {
 
 /// Configuración de impresión por sucursal
 model PrintSettings {
-  id          String      @id @default(cuid())
-  branchId    String      @unique
-  cashRegisterId String?
-  name        String      @default("Configuracion principal")
-  printerName String? /// Nombre de la impresora (para QZ Tray / network)
-  printerMode PrinterMode @default(BROWSER_PRINT)
-  paperWidth  PaperWidth  @default(W80MM)
-  fontSize    Int         @default(12)
-  logoUrl     String? /// URL del logo para encabezado
-  footerText  String? /// Texto de pie de página personalizado
-  autoPrint   Boolean     @default(false) /// Imprimir automáticamente al pagar
-  autoPrintDelivery Boolean @default(false)
-  copies      Int         @default(1)
-  copiesDeliveryOrder Int @default(1)
-  cutPaper    Boolean     @default(true) /// Enviar comando de corte (térmica)
-  openDrawer  Boolean     @default(false) /// Abrir cajón al imprimir
-  showQr      Boolean     @default(false) /// Incluir QR en documentos
-  businessName      String?
-  businessLegalName String?
-  taxId             String?
-  address           String?
-  phone             String?
-  showPricesOnDeliveryOrder Boolean @default(false)
-  showCostData              Boolean @default(false)
-  showCashierName           Boolean @default(true)
-  showCustomerData          Boolean @default(true)
-  ticketTemplate       String?
-  deliveryTemplate     String?
-  receiptTemplate      String?
-  isDefault            Boolean @default(false)
-  isActive             Boolean @default(true)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id                        String      @id @default(cuid())
+  branchId                  String      @unique
+  cashRegisterId            String?
+  name                      String      @default("Configuracion principal")
+  printerName               String? /// Nombre de la impresora (para QZ Tray / network)
+  printerMode               PrinterMode @default(BROWSER_PRINT)
+  paperWidth                PaperWidth  @default(W80MM)
+  fontSize                  Int         @default(12)
+  logoUrl                   String? /// URL del logo para encabezado
+  footerText                String? /// Texto de pie de página personalizado
+  autoPrint                 Boolean     @default(false) /// Imprimir automáticamente al pagar
+  autoPrintDelivery         Boolean     @default(false)
+  copies                    Int         @default(1)
+  copiesDeliveryOrder       Int         @default(1)
+  cutPaper                  Boolean     @default(true) /// Enviar comando de corte (térmica)
+  openDrawer                Boolean     @default(false) /// Abrir cajón al imprimir
+  showQr                    Boolean     @default(false) /// Incluir QR en documentos
+  businessName              String?
+  businessLegalName         String?
+  taxId                     String?
+  address                   String?
+  phone                     String?
+  showPricesOnDeliveryOrder Boolean     @default(false)
+  showCostData              Boolean     @default(false)
+  showCashierName           Boolean     @default(true)
+  showCustomerData          Boolean     @default(true)
+  ticketTemplate            String?
+  deliveryTemplate          String?
+  receiptTemplate           String?
+  isDefault                 Boolean     @default(false)
+  isActive                  Boolean     @default(true)
+  createdAt                 DateTime    @default(now())
+  updatedAt                 DateTime    @updatedAt
 
   branch Branch @relation(fields: [branchId], references: [id])
 
@@ -2663,7 +2700,7 @@ model MfaPendingToken {
 model SecurityAlert {
   id             String        @id @default(cuid())
   severity       AlertSeverity
-  type           String        /// e.g. "FAILED_LOGIN_BURST", "IDOR_ATTEMPT", "MFA_DISABLED"
+  type           String /// e.g. "FAILED_LOGIN_BURST", "IDOR_ATTEMPT", "MFA_DISABLED"
   title          String
   description    String
   actorUserId    String?
@@ -2677,7 +2714,7 @@ model SecurityAlert {
   acknowledgedAt DateTime?
   resolvedBy     String?
   resolvedAt     DateTime?
-  note           String?       /// Motivo al reconocer/resolver
+  note           String? /// Motivo al reconocer/resolver
 
   @@index([severity, status])
   @@index([createdAt])
@@ -2736,18 +2773,18 @@ enum ReplenishmentDraftCriticality {
 
 /// Borrador editable de reposición — snapshot de recomendaciones listo para revisión Master
 model ReplenishmentDraft {
-  id                String                  @id @default(cuid())
+  id                String                   @id @default(cuid())
   branchId          String
   createdByUserId   String
   approvedByUserId  String?
   status            ReplenishmentDraftStatus @default(DRAFT)
-  includePreventive Boolean                 @default(false)
-  includeSensitive  Boolean                 @default(false)
+  includePreventive Boolean                  @default(false)
+  includeSensitive  Boolean                  @default(false)
   categoryId        String?
   notes             String?
-  generatedAt       DateTime                @default(now())
-  createdAt         DateTime                @default(now())
-  updatedAt         DateTime                @updatedAt
+  generatedAt       DateTime                 @default(now())
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
   approvedAt        DateTime?
   convertedAt       DateTime?
 
@@ -2763,34 +2800,34 @@ model ReplenishmentDraft {
 
 /// Línea del borrador — snapshot inmutable del estado al momento de generación
 model ReplenishmentDraftItem {
-  id                   String                       @id @default(cuid())
-  draftId              String
-  productId            String
-  branchId             String
-  categoryId           String?
-  categoryName         String?
-  productName          String
-  sku                  String
-  currentStock         Decimal
-  salesLast30Days      Decimal                      @default(0)
-  salesLast60Days      Decimal                      @default(0)
-  salesLast90Days      Decimal                      @default(0)
-  lastSoldAt           DateTime?
-  criticality          ReplenishmentDraftCriticality
-  recommendedSource    ReplenishmentDraftSource
-  sourceBranchId       String?
-  suggestedQuantity    Decimal
-  finalQuantity        Decimal?
-  reason               String
-  warnings             Json                         @default("[]")
-  isSensitive          Boolean                      @default(false)
-  requiresManualReview Boolean                      @default(false)
-  status               ReplenishmentDraftItemStatus @default(PENDING_REVIEW)
-  linkedTransferId     String?
+  id                    String                        @id @default(cuid())
+  draftId               String
+  productId             String
+  branchId              String
+  categoryId            String?
+  categoryName          String?
+  productName           String
+  sku                   String
+  currentStock          Decimal
+  salesLast30Days       Decimal                       @default(0)
+  salesLast60Days       Decimal                       @default(0)
+  salesLast90Days       Decimal                       @default(0)
+  lastSoldAt            DateTime?
+  criticality           ReplenishmentDraftCriticality
+  recommendedSource     ReplenishmentDraftSource
+  sourceBranchId        String?
+  suggestedQuantity     Decimal
+  finalQuantity         Decimal?
+  reason                String
+  warnings              Json                          @default("[]")
+  isSensitive           Boolean                       @default(false)
+  requiresManualReview  Boolean                       @default(false)
+  status                ReplenishmentDraftItemStatus  @default(PENDING_REVIEW)
+  linkedTransferId      String?
   linkedPurchaseOrderId String?
-  notes                String?
-  createdAt            DateTime                     @default(now())
-  updatedAt            DateTime                     @updatedAt
+  notes                 String?
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
 
   draft   ReplenishmentDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
   product Product            @relation("ReplenishmentDraftItemProduct", fields: [productId], references: [id])

@@ -112,11 +112,41 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "OPERATIONAL_DAY_CLOSE_NOTE_REQUIRED") {
       return errJson("VALIDATION_ERROR", "Se requiere una nota para cerrar con advertencias o forzar el cierre.", 400);
     }
-    if (error.message === "OPERATIONAL_DAY_HAS_REAL_PAYMENTS") {
-      return errJson("CONFLICT", "El dia operativo tiene pagos reales y no puede cancelarse sin override.", 409);
+    if (error.message === "OPERATIONAL_DAY_HAS_REAL_PAYMENTS" || error.message === "OPERATIONAL_DAY_HAS_REAL_ACTIVITY") {
+      return errJson("CONFLICT", "El dia operativo tiene actividad real (pagos, devoluciones o movimientos de caja) y no puede cancelarse sin override.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_ALREADY_CANCELLED") {
+      return errJson("CONFLICT", "El dia operativo ya fue cancelado.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_CLOSING_IN_PROGRESS") {
+      return errJson("CONFLICT", "El dia operativo ya esta en proceso de cierre. Espera a que termine.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_NOT_CLOSING") {
+      return errJson("CONFLICT", "El dia operativo no esta en proceso de cierre.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_APPROVE_REQUIRES_RECONCILIATION") {
+      return errJson("OPERATIONAL_DAY_APPROVE_REQUIRES_RECONCILIATION", "El resumen recalculado difiere del cierre y la fuente es mixta. Requiere revision Master con nota (override).", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_APPROVE_LATE_OFFLINE_PENDING") {
+      return errJson("OPERATIONAL_DAY_APPROVE_LATE_OFFLINE_PENDING", "Hay ventas offline sincronizadas despues del cierre, pendientes de revision. Requiere override Master con nota.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_APPROVE_NOTE_REQUIRED") {
+      return errJson("VALIDATION_ERROR", "Se requiere una nota para aprobar con excepciones.", 400);
     }
     if (error.message === "OPERATIONAL_DAY_ALREADY_OPEN") {
       return errJson("CONFLICT", "Ya existe un día operativo abierto para esta sucursal.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_OPEN_DATE_NOT_TODAY") {
+      return errJson("FORBIDDEN", "Solo un Master puede abrir un dia operativo con fecha distinta a hoy.", 403);
+    }
+    if (error.message === "OPERATIONAL_DAY_OPEN_FUTURE_NOT_ALLOWED") {
+      return errJson("CONFLICT", "No se puede abrir un dia operativo con fecha futura.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_OPEN_DATE_NOTE_REQUIRED") {
+      return errJson("VALIDATION_ERROR", "Se requiere una nota para abrir un dia operativo con fecha distinta a hoy.", 400);
+    }
+    if (error.message === "OPERATIONAL_DAY_REOPEN_BLOCKED_ACTIVE_DAY_EXISTS") {
+      return errJson("CONFLICT", "No se puede reabrir: la sucursal ya tiene un dia operativo activo. Cierra el dia en curso primero.", 409);
     }
 
     // Cash session errors

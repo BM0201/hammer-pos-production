@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import { Prisma, SaleOrderStatus } from "@prisma/client";
+import { OperationalDayStatus, Prisma, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { consumeSharedStockForSaleTx } from "@/modules/inventory/service";
 import { logAuditEvent } from "@/modules/audit/service";
@@ -32,7 +32,10 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
   // ── 1. Validate cash session timing ────────────────────────────────────────
   const session = await prisma.cashSession.findUnique({
     where: { id: input.cashSessionId },
-    include: { physicalCashBox: { select: { branchId: true, isActive: true } } },
+    include: {
+      physicalCashBox: { select: { branchId: true, isActive: true } },
+      operationalDay: { select: { id: true, status: true, approvedAt: true } },
+    },
   });
   if (!session) throw new Error("INVALID_CASH_SESSION");
   if (session.physicalCashBox.branchId !== input.branchId) throw new Error("CASH_BOX_BRANCH_MISMATCH");
@@ -42,6 +45,17 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
   if (saleTime < session.openedAt) throw new Error("OFFLINE_SALE_BEFORE_SESSION_OPEN");
   if (session.closedAt && saleTime > session.closedAt) throw new Error("OFFLINE_SALE_AFTER_SESSION_CLOSE");
 
+  // ── 1b. Día operativo original (fuente de verdad, NO el día de hoy) ─────────
+  // Regla ERP: una venta offline se asienta al día operativo de SU sesión, no al
+  // día actual solo porque se sincronizó hoy. Y nunca se altera un día aprobado.
+  const operationalDay = session.operationalDay;
+  if (operationalDay?.approvedAt) {
+    // Día ya aprobado/archivado: no mutar el snapshot cerrado. Requiere ajuste Master.
+    throw new Error("OFFLINE_SALE_DAY_APPROVED");
+  }
+  const operationalDayId = operationalDay?.id ?? null;
+  const lateSyncIntoClosedDay = operationalDay?.status === OperationalDayStatus.CLOSED;
+
   // ── 2. Validate products ────────────────────────────────────────────────────
   const productIds = [...new Set(input.lines.map(l => l.productId))];
   const products = await prisma.product.findMany({
@@ -50,9 +64,9 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
   });
   if (products.length !== productIds.length) throw new Error("INVALID_PRODUCTS");
 
-  // ── 3. Check for duplicate (idempotency) ───────────────────────────────────
-  const duplicate = await prisma.saleOrder.findFirst({
-    where: { notes: { contains: input.offlineId } },
+  // ── 3. Check for duplicate (idempotency por offlineClientId, unique en DB) ──
+  const duplicate = await prisma.saleOrder.findUnique({
+    where: { offlineClientId: input.offlineId },
     select: { id: true, orderNumber: true },
   });
   if (duplicate) {
@@ -65,8 +79,12 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
     select: { code: true },
   });
 
+  const now = new Date();
+
   // ── 5. Transaction: create order + lines + inventory + payment ─────────────
-  const result = await prisma.$transaction(async (tx) => {
+  let result: { orderId: string; orderNumber: string };
+  try {
+    result = await prisma.$transaction(async (tx) => {
     const subtotal = input.lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0);
     const discountTotal = input.lines.reduce((s, l) => s + l.discountAmount, 0);
 
@@ -74,6 +92,12 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
       data: {
         orderNumber: makeOrderNumber(branch.code),
         branchId: input.branchId,
+        // Día operativo ORIGINAL de la venta, no el de hoy.
+        operationalDayId,
+        offlineClientId: input.offlineId,
+        saleOccurredAt: saleTime,
+        syncedAt: now,
+        postedAt: now,
         createdByUserId: input.actorUserId,
         status: SaleOrderStatus.DISPATCHED,
         subtotal: new Prisma.Decimal(subtotal),
@@ -128,19 +152,67 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
       }
     }
 
-    await tx.payment.create({
+    const payment = await tx.payment.create({
       data: {
         saleOrderId: order.id,
         cashSessionId: input.cashSessionId,
+        operationalDayId,
         receivedByUserId: input.actorUserId,
         method: "CASH",
         amount: new Prisma.Decimal(input.grandTotal),
         status: "POSTED",
+        // paidAt = cuándo ocurrió realmente la venta offline; syncedAt = ahora.
+        paidAt: saleTime,
+        postedAt: now,
+        syncedAt: now,
+      },
+    });
+    await tx.paymentTender.create({
+      data: {
+        paymentId: payment.id,
+        operationalDayId,
+        method: "CASH",
+        amount: new Prisma.Decimal(input.grandTotal),
       },
     });
 
+    // Sincronización tardía sobre un día ya CERRADO (no aprobado): NO se altera el
+    // snapshot silenciosamente. Se marca para revisión; el recálculo en aprobación
+    // (que recalcula el summary) la incorporará bajo control del Master.
+    if (lateSyncIntoClosedDay) {
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: input.branchId,
+          module: "sales",
+          action: "LATE_OFFLINE_SYNC_INTO_CLOSED_DAY",
+          entityType: "SaleOrder",
+          entityId: order.id,
+          metadataJson: {
+            offlineId: input.offlineId,
+            operationalDayId,
+            saleOccurredAt: saleTime.toISOString(),
+            note: "Venta offline pendiente de revisión: el día ya estaba cerrado.",
+          },
+        },
+      });
+    }
+
     return { orderId: order.id, orderNumber: order.orderNumber };
   });
+  } catch (error) {
+    // Reintento de sync no debe duplicar: el unique de offlineClientId protege.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const existing = await prisma.saleOrder.findUnique({
+        where: { offlineClientId: input.offlineId },
+        select: { id: true, orderNumber: true },
+      });
+      if (existing) {
+        return { orderId: existing.id, orderNumber: existing.orderNumber, alreadySynced: true };
+      }
+    }
+    throw error;
+  }
 
   await logAuditEvent({
     actorUserId: input.actorUserId,
@@ -153,6 +225,8 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
       offlineId: input.offlineId,
       originalCreatedAt: input.createdAt,
       cashSessionId: input.cashSessionId,
+      operationalDayId,
+      lateSyncIntoClosedDay,
       grandTotal: input.grandTotal,
       lineCount: input.lines.length,
     },

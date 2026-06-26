@@ -7,7 +7,7 @@ export type OperationalDay = {
   id: string;
   branchId: string;
   businessDate: string;
-  status: "OPEN" | "CLOSING" | "CLOSED" | "CANCELLED";
+  status: "OPEN" | "CLOSING" | "CLOSED" | "CANCELLED" | "REOPENED_FOR_ADJUSTMENT";
   openedAt: string;
   closedAt?: string | null;
   approvedAt?: string | null;
@@ -21,6 +21,8 @@ export type OperationalDay = {
   autoClosedPendingReviewCount: number;
   pendingDispatchCount: number;
   criticalBrainDecisionCount: number;
+  /** Transitorio (no persistido): ventas offline sincronizadas tras el cierre, pendientes de revisión. */
+  lateOfflineSyncCount?: number;
   branch?: { id: string; code: string; name: string };
   openedBy?: { username: string; fullName?: string | null };
   approvedBy?: { username: string; fullName?: string | null };
@@ -29,6 +31,19 @@ export type OperationalDay = {
     paymentsByMethod?: Array<{ method: string; amount: number; count: number }>;
     cashExpensesTotal?: number | string | null;
     cashOutflowsTotal?: number | string | null;
+    sourceMode?: "OPERATIONAL_DAY_ID" | "MIXED" | "LEGACY_TIME_WINDOW";
+    changeAmountTotal?: number | string | null;
+    refunds?: { total: number; count: number; byMethod?: Record<string, number> } | null;
+    cashMovements?: { net: number; inflows: number; outflows: number; expenses: number } | null;
+    expectedVsCountedByCashSession?: Array<{
+      cashSessionId: string;
+      physicalCashBoxCode: string | null;
+      expected: number;
+      counted: number;
+      difference: number;
+      requiresReview: boolean;
+    }>;
+    lateOfflineSyncCount?: number;
   } | null;
 };
 
@@ -70,6 +85,7 @@ const STATUS_CONFIG: Record<string, { label: string; badge: "success" | "warning
   CLOSING:   { label: "En cierre", badge: "warning", barColor: "var(--color-warning-500)" },
   CLOSED:    { label: "Cerrado",   badge: "neutral",  barColor: "var(--color-text-soft)" },
   CANCELLED: { label: "Cancelado", badge: "danger",   barColor: "var(--color-danger-500)" },
+  REOPENED_FOR_ADJUSTMENT: { label: "Reabierto (ajuste)", badge: "warning", barColor: "var(--color-warning-500)" },
 };
 
 type KpiTileProps = {
@@ -107,6 +123,7 @@ function KpiTile({ label, value, icon: Icon, tone = "default", subtext }: KpiTil
 
 export function OperationalDaySummary({ day }: { day: OperationalDay }) {
   const statusCfg = STATUS_CONFIG[day.status] ?? STATUS_CONFIG.OPEN;
+  const lateOffline = Number(day.lateOfflineSyncCount ?? day.summaryJson?.lateOfflineSyncCount ?? 0);
   const diff = Number(day.cashDifferenceTotal ?? 0);
   const cashDiffTone: KpiTileProps["tone"] = Math.abs(diff) > 100 ? "alert" : diff !== 0 ? "warn" : "ok";
 
@@ -128,7 +145,14 @@ export function OperationalDaySummary({ day }: { day: OperationalDay }) {
               </h1>
             </div>
           </div>
-          <Badge variant={statusCfg.badge} className="flex-shrink-0">{statusCfg.label}</Badge>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {lateOffline > 0 && (
+              <Badge variant="warning" title="Ventas offline sincronizadas después del cierre — requieren revisión Master.">
+                {lateOffline} venta{lateOffline !== 1 ? "s" : ""} offline pendiente{lateOffline !== 1 ? "s" : ""} de revisión
+              </Badge>
+            )}
+            <Badge variant={statusCfg.badge}>{statusCfg.label}</Badge>
+          </div>
         </div>
 
         <div className="px-5 py-3 flex flex-wrap gap-x-5 gap-y-1.5 text-[0.75rem] text-[var(--color-text-muted)] border-t border-[var(--color-border)] bg-[var(--color-surface-muted)]">
@@ -224,6 +248,70 @@ export function OperationalDaySummary({ day }: { day: OperationalDay }) {
           />
         </div>
       </div>
+
+      {/* ── Conciliación de caja (esperado vs contado), devoluciones y vuelto ── */}
+      {(() => {
+        const evc = day.summaryJson?.expectedVsCountedByCashSession ?? [];
+        const refunds = day.summaryJson?.refunds ?? null;
+        const change = Number(day.summaryJson?.changeAmountTotal ?? 0);
+        const sourceMode = day.summaryJson?.sourceMode;
+        const hasAny = evc.length > 0 || (refunds && refunds.count > 0) || change > 0 || (sourceMode && sourceMode !== "OPERATIONAL_DAY_ID");
+        if (!hasAny) return null;
+        return (
+          <div className="space-y-2">
+            <p className="text-[0.625rem] font-bold uppercase tracking-[0.14em] text-[var(--color-text-muted)] flex items-center gap-1.5">
+              <Wallet style={{ width: "0.75rem", height: "0.75rem" }} />
+              Conciliación de caja
+              {sourceMode && sourceMode !== "OPERATIONAL_DAY_ID" && (
+                <Badge variant={sourceMode === "MIXED" ? "warning" : "neutral"}>
+                  {sourceMode === "MIXED" ? "Fuente mixta" : "Ventana legacy"}
+                </Badge>
+              )}
+            </p>
+
+            {evc.length > 0 && (
+              <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+                <table className="hm-table w-full text-left text-xs">
+                  <thead>
+                    <tr>
+                      <th>Caja</th>
+                      <th className="text-right">Esperado</th>
+                      <th className="text-right">Contado</th>
+                      <th className="text-right">Diferencia</th>
+                      <th>Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {evc.map((s) => (
+                      <tr key={s.cashSessionId}>
+                        <td className="font-semibold">{s.physicalCashBoxCode ?? "—"}</td>
+                        <td className="text-right">{money(s.expected)}</td>
+                        <td className="text-right">{money(s.counted)}</td>
+                        <td className={`text-right font-semibold ${Math.abs(s.difference) > 0.009 ? (Math.abs(s.difference) > 100 ? "text-[var(--color-danger-700)]" : "text-[var(--color-warning-700)]") : ""}`}>
+                          {money(s.difference)}
+                        </td>
+                        <td>
+                          {s.requiresReview
+                            ? <Badge variant="warning">Revisión</Badge>
+                            : <Badge variant="success">OK</Badge>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <KpiTile label="Vuelto entregado" value={money(change)} icon={Wallet} tone="default" />
+              <KpiTile label="Devoluciones del día" value={money(refunds?.total ?? 0)} icon={XCircle}
+                tone={(refunds?.count ?? 0) > 0 ? "warn" : "ok"}
+                subtext={(refunds?.count ?? 0) > 0 ? `${refunds!.count} devolución(es)` : "Sin devoluciones"}
+              />
+            </div>
+          </div>
+        );
+      })()}
     </section>
   );
 }

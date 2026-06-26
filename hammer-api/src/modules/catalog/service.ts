@@ -313,6 +313,31 @@ export async function updateCategory(categoryId: string, input: {
 }
 
 /**
+ * Filtro de doble conteo: identifica productos que son miembros DERIVADOS
+ * (no canónicos) de una fusión activa. Su inventario vive en el producto canónico
+ * y su propio balance queda en cero físico. Por eso NO deben contarse ni
+ * mostrarse como stock independiente en reportes, valorización, alertas de
+ * reposición ni listados operativos — solo como equivalencias.
+ *
+ * Uso típico (excluir derivados):
+ *   where: { product: { NOT: derivedStockGroupMemberFilter() }, ... }
+ * o, sobre Product directamente:
+ *   where: { NOT: derivedStockGroupMemberFilter(), ... }
+ */
+export function derivedStockGroupMemberFilter(): Prisma.ProductWhereInput {
+  return {
+    stockGroupMemberships: {
+      some: { isActive: true, isCanonical: false, stockGroup: { isActive: true } },
+    },
+  };
+}
+
+/** Excluye los miembros derivados de una fusión activa (ver derivedStockGroupMemberFilter). */
+export function excludeDerivedStockGroupMembers(): Prisma.ProductWhereInput {
+  return { NOT: derivedStockGroupMemberFilter() };
+}
+
+/**
  * Branch-scope visibility filter: a product is relevant to a branch if it
  * satisfies at least one of the 4 conditions (stock, history, manual assignment,
  * or active inbound process). Products that satisfy none are hidden from that
