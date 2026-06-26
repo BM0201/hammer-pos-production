@@ -583,6 +583,29 @@ export async function createInventoryMovement(input: InventoryMovementInput) {
   return prisma.$transaction((tx) => createInventoryMovementTx(tx, input));
 }
 
+/**
+ * Converts the base-unit WAC (stored on the canonical product) to the sale-unit cost
+ * expected by createInventoryMovementTx for a given product's conversion.
+ *
+ * createInventoryMovementTx receives `unitCost` as sale-unit cost and internally divides
+ * by conversionFactor to get the base-unit cost. So when we already have the base WAC
+ * we must multiply back by the factor before passing it in.
+ *
+ * For canonical products (factor=1) and products with no conversion this is a no-op.
+ *
+ * Exported for unit tests.
+ */
+export function movementSaleUnitCostFromBaseWac(
+  baseWac: Prisma.Decimal | number,
+  conversion: { conversionFactor: Prisma.Decimal | number } | null | undefined,
+): number {
+  const wac = new Prisma.Decimal(baseWac);
+  if (!conversion) return Number(wac);
+  const factor = new Prisma.Decimal(conversion.conversionFactor);
+  if (factor.eq(1)) return Number(wac);
+  return Number(wac.mul(factor));
+}
+
 export async function consumeSharedStockForSaleTx(
   tx: Prisma.TransactionClient,
   input: ConsumeSharedStockForSaleInput,
@@ -599,14 +622,16 @@ export async function consumeSharedStockForSaleTx(
 
   if (!conversion?.tracksPackages) {
     const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
-    const currentWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+    const baseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
     const result = await createInventoryMovementTx(tx, {
       actorUserId: input.userId,
       branchId: input.branchId,
       productId: input.productId,
       movementType: InventoryMovementType.SALE_OUT,
       quantity: Number(requestedQty),
-      unitCost: Number(currentWac),
+      // baseWac is cost per base unit; createInventoryMovementTx expects sale-unit cost
+      // and divides internally by conversionFactor, so we multiply back here.
+      unitCost: movementSaleUnitCostFromBaseWac(baseWac, conversion),
       referenceType,
       referenceId,
       notes: input.notes ?? null,
@@ -616,14 +641,14 @@ export async function consumeSharedStockForSaleTx(
 
   if (conversion.isPackagePresentation) {
     const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
-    const currentWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+    const baseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
     const result = await createInventoryMovementTx(tx, {
       actorUserId: input.userId,
       branchId: input.branchId,
       productId: input.productId,
       movementType: InventoryMovementType.SALE_OUT,
       quantity: Number(requestedQty),
-      unitCost: Number(currentWac),
+      unitCost: movementSaleUnitCostFromBaseWac(baseWac, conversion),
       referenceType,
       referenceId,
       notes: input.notes ?? null,
@@ -794,14 +819,14 @@ export async function consumeSharedStockForSaleTx(
       },
     },
   });
-  const currentWac = refreshed?.weightedAverageCost ?? balance.weightedAverageCost;
+  const baseWacAfterOpen = refreshed?.weightedAverageCost ?? balance.weightedAverageCost;
   const saleResult = await createInventoryMovementTx(tx, {
     actorUserId: input.userId,
     branchId: input.branchId,
     productId: input.productId,
     movementType: InventoryMovementType.SALE_OUT,
     quantity: Number(requestedQty),
-    unitCost: Number(currentWac),
+    unitCost: movementSaleUnitCostFromBaseWac(baseWacAfterOpen, conversion),
     referenceType,
     referenceId,
     notes: input.notes ?? null,

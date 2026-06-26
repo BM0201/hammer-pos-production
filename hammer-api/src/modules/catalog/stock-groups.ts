@@ -8,6 +8,7 @@ import {
   ironStockGroupCode,
   NAIL_PACKAGE_PRESETS,
 } from "@/modules/inventory/unit-conversion";
+import { rebuildStockGroupBalancesTx } from "@/modules/catalog/stock-group-crud";
 
 type BootstrapIronInput = {
   actorUserId: string;
@@ -178,6 +179,15 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
         });
         membersUpserted += 1;
       }
+
+      // Migrate any stock that was in the QUINTAL product to the canonical VARILLA.
+      // rebuildStockGroupBalancesTx is idempotent — safe to run on new or existing groups.
+      await rebuildStockGroupBalancesTx(tx, {
+        stockGroupId: group.id,
+        actorUserId: input.actorUserId,
+        reason: `bootstrapIronStockGroups group=${suggestion.groupCode}`,
+        mode: "BOOTSTRAP_IRON",
+      });
     }
 
     return { groupsUpserted, membersUpserted, warnings };
@@ -194,7 +204,7 @@ export async function bootstrapIronStockGroups(input: BootstrapIronInput) {
       groupsUpserted: result.groupsUpserted,
       membersUpserted: result.membersUpserted,
       warnings: result.warnings,
-      note: "No stock quantities were migrated. Inventory remains in canonical base product balances.",
+      note: "Balances rebuilt per branch: QUINTAL stock migrated to canonical VARILLA.",
     },
   });
 
