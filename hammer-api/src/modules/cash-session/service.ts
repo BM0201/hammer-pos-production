@@ -203,6 +203,10 @@ export async function openCashSession(input: {
       });
       await refreshOperationalDaySummaryTx(tx, operationalDay.id);
 
+      // Auto-apply any payroll disbursements that were paid while the cash box was closed
+      const { applyPendingPayrollCashOuts } = await import("@/modules/payroll/payroll-cash-sync");
+      await applyPendingPayrollCashOuts(tx, input.branchId, session.id, input.actorUserId);
+
       return session;
     });
   } catch (error) {

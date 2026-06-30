@@ -150,23 +150,33 @@ async function computeOperatingExpenses(branchId?: string | null) {
   };
 }
 
-/** Planilla: corridas del periodo (neto, costo patronal) y pendientes (DRAFT). */
+/** Planilla: desembolsos pagados en el período y pendientes por pagar. */
 async function computePayroll(branchId: string | null, year: number, month: number) {
-  const where: Prisma.PayrollRunWhereInput = { year, month, ...(branchId ? { branchId } : {}) };
-  const [posted, pending] = await Promise.all([
-    prisma.payrollRun.aggregate({
-      where: { ...where, status: "POSTED" },
-      _sum: { totalNet: true, totalGross: true, totalEmployerCost: true },
+  const start = new Date(year, month - 1, 1);
+  const end = new Date(year, month, 1);
+  const disbWhere: Prisma.PayrollDisbursementWhereInput = {
+    scheduledDate: { gte: start, lt: end },
+    ...(branchId ? { branchId } : {}),
+  };
+  const [paid, pending, employerCost] = await Promise.all([
+    prisma.payrollDisbursement.aggregate({
+      where: { ...disbWhere, status: "PAID" },
+      _sum: { amount: true },
     }),
+    prisma.payrollDisbursement.aggregate({
+      where: { ...disbWhere, status: "PENDING" },
+      _sum: { amount: true },
+    }),
+    // Costo patronal: de la corrida completa POSTED, no se desembolsa en mitades
     prisma.payrollRun.aggregate({
-      where: { ...where, status: "DRAFT" },
-      _sum: { totalNet: true },
+      where: { year, month, status: "POSTED", ...(branchId ? { branchId } : {}) },
+      _sum: { totalEmployerCost: true },
     }),
   ]);
   return {
-    payrollTotal: round2(num(posted._sum.totalGross)),
-    employerCostTotal: round2(num(posted._sum.totalEmployerCost)),
-    pendingPayrollTotal: round2(num(pending._sum.totalNet)),
+    payrollTotal: round2(num(paid._sum.amount)),
+    employerCostTotal: round2(num(employerCost._sum.totalEmployerCost)),
+    pendingPayrollTotal: round2(num(pending._sum.amount)),
   };
 }
 

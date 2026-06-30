@@ -104,7 +104,7 @@ enum ApprovalType {
   CREDIT_EXCEPTION
   STOCK_ADJUSTMENT
   TRANSFER_EXCEPTION
-  CASH_SESSION_DISCREPANCY
+  CASH_SESSION_DISCREPANCY /// DEPRECATED: ya no se crean nuevos registros de este tipo (ver cash-session/service.ts). Las discrepancias de caja ahora se manejan inline en el cierre de sesión, no vía cola de aprobaciones. Se mantiene solo por compatibilidad histórica con registros existentes.
   OPERATION_OVERRIDE
 }
 
@@ -350,6 +350,7 @@ model Branch {
   employees                   Employee[]
   employeeLoans               EmployeeLoan[]
   payrollRuns                 PayrollRun[]
+  payrollDisbursements        PayrollDisbursement[]
   discounts                   Discount[]
   branchRoleConfigs           BranchRoleConfig[]
   cashClosures                CashClosure[]
@@ -572,9 +573,10 @@ model CashMovement {
   approvedByUserId String?
   createdAt        DateTime         @default(now())
 
-  cashSession CashSession @relation(fields: [cashSessionId], references: [id])
-  createdBy   User        @relation("CashMovementCreatedBy", fields: [createdByUserId], references: [id])
-  approvedBy  User?       @relation("CashMovementApprovedBy", fields: [approvedByUserId], references: [id])
+  cashSession          CashSession            @relation(fields: [cashSessionId], references: [id])
+  createdBy            User                   @relation("CashMovementCreatedBy", fields: [createdByUserId], references: [id])
+  approvedBy           User?                  @relation("CashMovementApprovedBy", fields: [approvedByUserId], references: [id])
+  payrollDisbursements PayrollDisbursement[]
 
   @@index([cashSessionId, createdAt])
   @@index([type])
@@ -1643,11 +1645,12 @@ model Employee {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  branch            Branch                  @relation(fields: [branchId], references: [id])
-  salaryHistory     EmployeeSalaryHistory[]
-  operatingExpenses OperatingExpense[]
-  loans             EmployeeLoan[]
-  payrollLines      PayrollLine[]
+  branch                Branch                  @relation(fields: [branchId], references: [id])
+  salaryHistory         EmployeeSalaryHistory[]
+  operatingExpenses     OperatingExpense[]
+  loans                 EmployeeLoan[]
+  payrollLines          PayrollLine[]
+  payrollDisbursements  PayrollDisbursement[]
 
   @@index([branchId])
   @@index([isActive])
@@ -1731,6 +1734,7 @@ model PayrollRun {
 
   branch           Branch?                   @relation(fields: [branchId], references: [id])
   lines            PayrollLine[]
+  disbursements    PayrollDisbursement[]
   loanInstallments EmployeeLoanInstallment[]
 
   @@unique([branchId, year, month])
@@ -1752,9 +1756,49 @@ model PayrollLine {
   payrollRun       PayrollRun                @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
   employee         Employee                  @relation(fields: [employeeId], references: [id])
   loanInstallments EmployeeLoanInstallment[]
+  disbursements    PayrollDisbursement[]
 
   @@unique([payrollRunId, employeeId])
   @@index([employeeId])
+}
+
+enum PayrollDisbursementPeriod {
+  FIRST_HALF  /// Pago del día 15
+  SECOND_HALF /// Pago del día 30 / último día del mes
+}
+
+enum PayrollDisbursementStatus {
+  PENDING
+  PAID
+}
+
+/// Cada mitad (50/50 fijo) del neto a pagar de una PayrollLine, pagadera el 15 y el 30.
+model PayrollDisbursement {
+  id              String                     @id @default(cuid())
+  payrollRunId    String
+  payrollLineId   String
+  employeeId      String
+  branchId        String
+  period          PayrollDisbursementPeriod
+  amount          Decimal /// neto/2, redondeado; la 2da mitad ajusta el residuo de centavos
+  status          PayrollDisbursementStatus  @default(PENDING)
+  scheduledDate   DateTime /// fecha calendario del 15 o del último día del mes, según `period`
+  paidAt          DateTime?
+  paidByUserId    String?
+  cashMovementId  String? /// null = aún no aplicado a ninguna caja física
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  payrollRun   PayrollRun    @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  payrollLine  PayrollLine   @relation(fields: [payrollLineId], references: [id], onDelete: Cascade)
+  employee     Employee      @relation(fields: [employeeId], references: [id])
+  branch       Branch        @relation(fields: [branchId], references: [id])
+  cashMovement CashMovement? @relation(fields: [cashMovementId], references: [id])
+
+  @@unique([payrollLineId, period])
+  @@index([branchId, status, scheduledDate])
+  @@index([payrollRunId])
+  @@index([cashMovementId])
 }
 
 /**

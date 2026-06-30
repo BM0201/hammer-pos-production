@@ -35,6 +35,39 @@ const createSchema = z.object({
 });
 
 /**
+ * Adds `disbursementCashApplied` to PAYROLL expenses: true if the matching PayrollDisbursement
+ * was already discounted from a physical cash box (has cashMovementId), false if paid but still
+ * pending application, null if no matching disbursement was found.
+ */
+async function enrichWithCashStatus(expenses: Awaited<ReturnType<typeof listExpensesByBranch>>) {
+  const payrollExpenses = expenses.filter((e) => e.category === "PAYROLL" && e.employeeId);
+  if (payrollExpenses.length === 0) return expenses;
+
+  const disbursements = await prisma.payrollDisbursement.findMany({
+    where: {
+      OR: payrollExpenses.map((e) => ({
+        branchId: e.branchId,
+        employeeId: e.employeeId as string,
+        scheduledDate: e.effectiveFrom,
+      })),
+    },
+    select: { branchId: true, employeeId: true, scheduledDate: true, status: true, cashMovementId: true },
+  });
+
+  const statusByKey = new Map<string, boolean>();
+  for (const d of disbursements) {
+    const key = `${d.branchId}:${d.employeeId}:${d.scheduledDate.toISOString()}`;
+    statusByKey.set(key, d.status === "PAID" && d.cashMovementId != null);
+  }
+
+  return expenses.map((e) => {
+    if (e.category !== "PAYROLL" || !e.employeeId) return e;
+    const key = `${e.branchId}:${e.employeeId}:${new Date(e.effectiveFrom).toISOString()}`;
+    return { ...e, disbursementCashApplied: statusByKey.has(key) ? statusByKey.get(key)! : null };
+  });
+}
+
+/**
  * GET /api/branch/expenses?branchId=xxx
  * Lists operating expenses for a branch. Accessible to BRANCH_ADMIN and MASTER.
  */
@@ -71,7 +104,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return ok(expenses);
+    return ok(await enrichWithCashStatus(expenses));
   } catch (error) {
     return toApiErrorResponse(error);
   }

@@ -42,7 +42,6 @@ type CashierSummary = {
   activeSessionCount: number;
   pendingPayments: number;
   lastPayment: { amount: number; paidAt: string; orderNumber: string } | null;
-  discrepancyApprovals: number;
 };
 
 type WarehouseSummary = {
@@ -262,9 +261,6 @@ export default function BranchPage() {
       return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
     }
     const summary = data.summary;
-    const alerts = summary.discrepancyApprovals > 0
-      ? [`Hay ${summary.discrepancyApprovals} cierres con discrepancia pendientes de revisión.`]
-      : [];
     return (
       <>
       {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {new Date(updatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p> : null}
@@ -272,7 +268,6 @@ export default function BranchPage() {
         title="Caja & Cobros"
         subtitle="Operación de cobro y estado de sesión de caja."
         roleAccent="CASHIER"
-        alerts={alerts}
         kpis={(
           <>
             <KpiCard label="Sesiones activas" value={summary.activeSessionCount} tone={summary.activeSessionCount > 0 ? "ok" : "alert"} roleAccent="CASHIER" />
@@ -283,7 +278,6 @@ export default function BranchPage() {
               helper={summary.lastPayment ? `${summary.lastPayment.orderNumber}` : "Sin cobros recientes"}
               roleAccent="CASHIER"
             />
-            <KpiCard label="Discrepancias pendientes" value={summary.discrepancyApprovals} tone={summary.discrepancyApprovals > 0 ? "alert" : "ok"} roleAccent="CASHIER" />
           </>
         )}
         quickLinks={[

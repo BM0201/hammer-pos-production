@@ -132,7 +132,7 @@ export async function getSalesDashboardSummary(branchId: string, userId: string)
 }
 
 export async function getCashierDashboardSummary(branchId: string) {
-  const [activeSessionCount, pendingPayments, lastPayment, discrepancyApprovals] = await Promise.all([
+  const [activeSessionCount, pendingPayments, lastPayment] = await Promise.all([
     prisma.cashSession.count({
       where: {
         physicalCashBox: { branchId },
@@ -144,13 +144,6 @@ export async function getCashierDashboardSummary(branchId: string) {
       where: { status: PaymentStatus.POSTED, saleOrder: { branchId, status: { not: SaleOrderStatus.CANCELLED } } },
       orderBy: { paidAt: "desc" },
       include: { saleOrder: { select: { orderNumber: true } } },
-    }),
-    prisma.approvalRequest.count({
-      where: {
-        branchId,
-        type: "CASH_SESSION_DISCREPANCY",
-        status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] },
-      },
     }),
   ]);
 
@@ -164,7 +157,6 @@ export async function getCashierDashboardSummary(branchId: string) {
           orderNumber: lastPayment.saleOrder.orderNumber,
         }
       : null,
-    discrepancyApprovals,
   };
 }
 

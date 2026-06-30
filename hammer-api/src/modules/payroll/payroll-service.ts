@@ -9,6 +9,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { calculateMonthlyPayroll, generateSalaryHistory, type ProratedSalaryResult } from "./payroll-calculator";
+import { generateDisbursementsForRun } from "./payroll-disbursement-service";
 
 // ── Employee CRUD ──
 
@@ -402,6 +403,7 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
   });
 
   await generateSalaryHistory(year, month, branchId);
+  await generateDisbursementsForRun(run.id);
 
   const payrollRun = await prisma.payrollRun.findUniqueOrThrow({
     where: { id: run.id },

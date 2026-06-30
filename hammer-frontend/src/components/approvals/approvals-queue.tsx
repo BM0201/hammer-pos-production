@@ -4,6 +4,8 @@ import { useCallback, useState } from "react";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { apiFetch } from "@/lib/client/api";
 
+type ApprovalApiError = { ok: false; error: { code: string; message: string } };
+
 type ApprovalItem = {
   id: string;
   type: string;
@@ -25,9 +27,9 @@ export function ApprovalsQueue({ branchId }: { branchId?: string }) {
     const query = new URLSearchParams();
     if (branchId) query.set("branchId", branchId);
     const response = await fetch(`/api/approvals?${query.toString()}`);
-    const json = (await response.json()) as { data?: ApprovalItem[]; message?: string };
+    const json = (await response.json()) as { data?: ApprovalItem[] } & Partial<ApprovalApiError>;
     if (!response.ok) {
-      setMessage(json.message ?? "No se pudo cargar la cola de aprobaciones.");
+      setMessage(json.error?.message ?? "No se pudo cargar la cola de aprobaciones.");
       return;
     }
     setItems(json.data ?? []);
@@ -51,9 +53,9 @@ export function ApprovalsQueue({ branchId }: { branchId?: string }) {
       }),
     });
 
-    const json = (await response.json()) as { message?: string };
+    const json = (await response.json()) as Partial<ApprovalApiError>;
     if (!response.ok) {
-      setMessage(json.message ?? "No se pudo resolver la solicitud.");
+      setMessage(json.error?.message ?? "No se pudo resolver la solicitud.");
       setBusyId(null);
       return;
     }

@@ -71,6 +71,14 @@ type SalaryRecord = {
   employee: { fullName: string; position: string };
 };
 type PayrollRunSummary = PayrollResult & { employeeCount: number; year: number; month: number };
+type Disbursement = {
+  id: string;
+  period: "FIRST_HALF" | "SECOND_HALF";
+  amount: string;
+  status: "PENDING" | "PAID";
+  scheduledDate: string;
+  employee: { id: string; fullName: string; position: string };
+};
 type EmployeeLoan = {
   id: string;
   employeeId: string;
@@ -137,6 +145,9 @@ export function EmployeeManager() {
   const [confirmPostPayroll, setConfirmPostPayroll] = useState(false);
   const [manualPaymentLoanId, setManualPaymentLoanId] = useState<string | null>(null);
   const [manualPaymentAmountStr, setManualPaymentAmountStr] = useState("");
+
+  const [disbursements, setDisbursements] = useState<Disbursement[]>([]);
+  const [disbLoading, setDisbLoading] = useState<"FIRST_HALF" | "SECOND_HALF" | null>(null);
 
   const flash = useCallback((type: "success" | "error", msg: string) => {
     if (type === "success") toast.success(msg);
@@ -289,12 +300,27 @@ export function EmployeeManager() {
       const data = unwrapApiData(raw) as PayrollResult;
       setPayrollResult(data);
       flash("success", `Nomina calculada: ${fmt(data.totalGross)}`);
+      if (data.payrollRunStatus === "POSTED") {
+        await loadDisbursements(data.payrollRunId);
+      } else {
+        setDisbursements([]);
+      }
     } catch {
       flash("error", "Error de conexion al calcular nomina");
     } finally {
       setLoading(false);
     }
   };
+
+  const loadDisbursements = useCallback(async (runId: string) => {
+    try {
+      const r = await apiFetch(`/api/payroll/disbursements?payrollRunId=${runId}`);
+      const data = unwrapApiData(await r.json());
+      setDisbursements(Array.isArray(data) ? (data as Disbursement[]) : []);
+    } catch {
+      setDisbursements([]);
+    }
+  }, []);
 
   const handlePostPayroll = async () => {
     if (!payrollResult?.payrollRunId) return;
@@ -310,10 +336,46 @@ export function EmployeeManager() {
       setPayrollResult(data);
       flash("success", data.alreadyPosted ? "La nomina ya estaba posteada" : "Nomina posteada");
       await loadLoans();
+      await loadDisbursements(data.payrollRunId);
     } catch {
       flash("error", "Error de conexion al postear nomina");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handlePayDisbursement = async (period: "FIRST_HALF" | "SECOND_HALF") => {
+    if (!payrollResult?.payrollRunId) return;
+    setDisbLoading(period);
+    try {
+      const endpoint = period === "FIRST_HALF" ? "first-half" : "second-half";
+      const r = await apiFetch(`/api/payroll/disbursements/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payrollRunId: payrollResult.payrollRunId }),
+      });
+      const raw = await r.json();
+      if (!r.ok) {
+        flash("error", getErrorMessage(raw, "Error al pagar quincena"));
+        return;
+      }
+      const data = unwrapApiData(raw) as {
+        paid: number;
+        cashSync: Array<{ branchId: string; applied: boolean; appliedGroups?: number; reason?: string }>;
+      };
+      const periodLabel = period === "FIRST_HALF" ? "1ra quincena (día 15)" : "2da quincena (día 30)";
+      const branchLabel = (branchId: string) => branches.find((b) => b.id === branchId)?.code ?? branchId;
+      const applied = (data.cashSync ?? []).filter((c) => c.applied).map((c) => branchLabel(c.branchId));
+      const pending = (data.cashSync ?? []).filter((c) => !c.applied).map((c) => branchLabel(c.branchId));
+      let detail = "";
+      if (applied.length > 0) detail += ` Descontado de caja en: ${applied.join(", ")}.`;
+      if (pending.length > 0) detail += ` Pendiente — se aplicará al abrir caja en: ${pending.join(", ")}.`;
+      flash("success", `${periodLabel} pagada.${detail}`);
+      await loadDisbursements(payrollResult.payrollRunId);
+    } catch {
+      flash("error", "Error de conexión al pagar quincena");
+    } finally {
+      setDisbLoading(null);
     }
   };
 
@@ -615,6 +677,36 @@ export function EmployeeManager() {
                     <button onClick={() => setConfirmPostPayroll(false)} className="px-3 py-1 text-[var(--color-text-muted)] hover:bg-white/50 rounded-lg text-xs">Cancelar</button>
                   </div>
                 )}
+                {payrollResult?.payrollRunStatus === "POSTED" && (() => {
+                  const firstDisb = disbursements.filter((d) => d.period === "FIRST_HALF");
+                  const secondDisb = disbursements.filter((d) => d.period === "SECOND_HALF");
+                  const firstPaid = firstDisb.length > 0 && firstDisb.every((d) => d.status === "PAID");
+                  const secondPaid = secondDisb.length > 0 && secondDisb.every((d) => d.status === "PAID");
+                  const firstTotal = firstDisb.reduce((s, d) => s + Number(d.amount), 0);
+                  const secondTotal = secondDisb.reduce((s, d) => s + Number(d.amount), 0);
+                  return (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => void handlePayDisbursement("FIRST_HALF")}
+                        disabled={disbLoading === "FIRST_HALF" || firstPaid}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors disabled:opacity-50"
+                        style={firstPaid ? { background: "var(--color-success-50)", borderColor: "var(--color-success-200)", color: "var(--color-success-700)" } : { background: "var(--color-info-600)", borderColor: "transparent", color: "white" }}
+                      >
+                        {disbLoading === "FIRST_HALF" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                        {firstPaid ? "✓ 1ra quincena pagada" : `Pagar 1ra quincena${firstTotal > 0 ? ` · ${fmt(firstTotal)}` : ""}`}
+                      </button>
+                      <button
+                        onClick={() => void handlePayDisbursement("SECOND_HALF")}
+                        disabled={disbLoading === "SECOND_HALF" || secondPaid}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors disabled:opacity-50"
+                        style={secondPaid ? { background: "var(--color-success-50)", borderColor: "var(--color-success-200)", color: "var(--color-success-700)" } : { background: "var(--color-info-600)", borderColor: "transparent", color: "white" }}
+                      >
+                        {disbLoading === "SECOND_HALF" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                        {secondPaid ? "✓ 2da quincena pagada" : `Pagar 2da quincena${secondTotal > 0 ? ` · ${fmt(secondTotal)}` : ""}`}
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
               <p className="text-xs text-[var(--color-text-soft)]">El cálculo crea un borrador; postear sincroniza gastos de nómina y aplica deducciones de préstamos sin duplicarlas.</p>
             </div>

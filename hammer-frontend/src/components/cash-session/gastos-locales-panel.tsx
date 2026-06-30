@@ -14,6 +14,8 @@ type OperatingExpense = {
   effectiveFrom: string;
   effectiveTo: string | null;
   employee?: { fullName: string } | null;
+  /** Solo presente en categoría PAYROLL: true = ya descontado de una caja física, false = pagado pero pendiente de aplicar, null/undefined = sin desembolso asociado. */
+  disbursementCashApplied?: boolean | null;
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -210,7 +212,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
           <div className="px-4 py-5 text-center">
             <p className="text-xs text-[var(--color-text-muted)]">Sin gastos operativos registrados.</p>
             <p className="mt-1 text-[0.65rem] text-[var(--color-text-soft)]">
-              La nómina aparece aquí automáticamente cuando el administrador la publica. Usa &quot;+ Agregar gasto&quot; para servicios, alquiler, etc.
+              Cuando el administrador paga una quincena, el monto se descuenta automáticamente de la caja física (al instante si hay caja abierta, o al abrir la siguiente). Usa &quot;+ Agregar gasto&quot; para servicios, alquiler, etc.
             </p>
           </div>
         ) : (
@@ -235,6 +237,17 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
                       )}
                       {exp.isAutoCalculated && (
                         <span className="text-[0.6rem] text-[var(--color-info-600)]">Calculado automáticamente</span>
+                      )}
+                      {exp.category === "PAYROLL" && exp.disbursementCashApplied != null && (
+                        <span
+                          className={`ml-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.6rem] font-semibold ${
+                            exp.disbursementCashApplied
+                              ? "border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"
+                              : "border-[var(--color-warning-200)] bg-[var(--color-warning-50)] text-[var(--color-warning-700)]"
+                          }`}
+                        >
+                          {exp.disbursementCashApplied ? "✓ Descontado de caja" : "⏳ Pendiente de aplicar a caja"}
+                        </span>
                       )}
                     </div>
                     <span className="shrink-0 text-sm font-bold text-[var(--color-text)]">
