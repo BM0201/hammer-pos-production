@@ -79,6 +79,15 @@ type Disbursement = {
   scheduledDate: string;
   employee: { id: string; fullName: string; position: string };
 };
+type CashStatusRow = {
+  branchId: string;
+  branchCode: string;
+  branchName: string;
+  appliedCount: number;
+  appliedAmount: number;
+  pendingCount: number;
+  pendingAmount: number;
+};
 type EmployeeLoan = {
   id: string;
   employeeId: string;
@@ -148,6 +157,7 @@ export function EmployeeManager() {
 
   const [disbursements, setDisbursements] = useState<Disbursement[]>([]);
   const [disbLoading, setDisbLoading] = useState<"FIRST_HALF" | "SECOND_HALF" | null>(null);
+  const [cashStatus, setCashStatus] = useState<CashStatusRow[]>([]);
 
   const flash = useCallback((type: "success" | "error", msg: string) => {
     if (type === "success") toast.success(msg);
@@ -214,7 +224,7 @@ export function EmployeeManager() {
   useEffect(() => { loadEmployees(); }, [loadEmployees]);
   useEffect(() => { if (activeTab === "loans") loadLoans(); }, [activeTab, loadLoans]);
   useEffect(() => { if (activeTab === "history") loadHistory(); }, [activeTab, loadHistory]);
-  useEffect(() => { setPayrollResult(null); }, [selectedBranch]);
+  useEffect(() => { setPayrollResult(null); setDisbursements([]); setCashStatus([]); }, [selectedBranch]);
 
   const fmt = (v: string | number | null | undefined) => `C$${Number(v ?? 0).toLocaleString("es-NI", { minimumFractionDigits: 2 })}`;
 
@@ -304,6 +314,7 @@ export function EmployeeManager() {
         await loadDisbursements(data.payrollRunId);
       } else {
         setDisbursements([]);
+        setCashStatus([]);
       }
     } catch {
       flash("error", "Error de conexion al calcular nomina");
@@ -314,11 +325,17 @@ export function EmployeeManager() {
 
   const loadDisbursements = useCallback(async (runId: string) => {
     try {
-      const r = await apiFetch(`/api/payroll/disbursements?payrollRunId=${runId}`);
-      const data = unwrapApiData(await r.json());
-      setDisbursements(Array.isArray(data) ? (data as Disbursement[]) : []);
+      const [disbRes, cashRes] = await Promise.all([
+        apiFetch(`/api/payroll/disbursements?payrollRunId=${runId}`),
+        apiFetch(`/api/payroll/disbursements/cash-status?payrollRunId=${runId}`),
+      ]);
+      const disbData = unwrapApiData(await disbRes.json());
+      setDisbursements(Array.isArray(disbData) ? (disbData as Disbursement[]) : []);
+      const cashData = unwrapApiData(await cashRes.json());
+      setCashStatus(Array.isArray(cashData) ? (cashData as CashStatusRow[]) : []);
     } catch {
       setDisbursements([]);
+      setCashStatus([]);
     }
   }, []);
 
@@ -709,6 +726,25 @@ export function EmployeeManager() {
                 })()}
               </div>
               <p className="text-xs text-[var(--color-text-soft)]">El cálculo crea un borrador; postear sincroniza gastos de nómina y aplica deducciones de préstamos sin duplicarlas.</p>
+              {cashStatus.length > 0 && (() => {
+                const pendingRows = cashStatus.filter((c) => c.pendingCount > 0);
+                const appliedRows = cashStatus.filter((c) => c.appliedCount > 0);
+                if (pendingRows.length === 0 && appliedRows.length === 0) return null;
+                return (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {appliedRows.map((c) => (
+                      <span key={`applied-${c.branchId}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--color-success-700)]">
+                        ✓ {c.branchCode}: {fmt(c.appliedAmount)} descontado de caja
+                      </span>
+                    ))}
+                    {pendingRows.map((c) => (
+                      <span key={`pending-${c.branchId}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--color-warning-700)]">
+                        ⏳ {c.branchCode}: {fmt(c.pendingAmount)} pendiente — se aplicará al abrir caja
+                      </span>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
