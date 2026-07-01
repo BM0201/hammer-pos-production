@@ -1,11 +1,10 @@
-import { NextResponse } from "next/server";
 import { clearSessionCookie, getCurrentSession } from "@/modules/auth/service";
 import { logAuditEvent } from "@/modules/audit/service";
 import { revokeSessionToken } from "@/modules/security/token-revocation";
 import { makeSessionCookieName } from "@/modules/auth/session";
 import { cookies } from "next/headers";
 import { requireCsrf, isCsrfError } from "@/modules/security/csrf";
-import { fail } from "@/lib/api/response";
+import { fail, ok } from "@/lib/api/response";
 import { markUserOffline } from "@/modules/auth/presence-service";
 
 export async function POST(request: Request) {
@@ -54,5 +53,9 @@ export async function POST(request: Request) {
     }
   }
 
-  return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  // Devolvemos JSON 200 (no un redirect server-side). El cliente ya navega a /login
+  // tras el fetch. Un redirect a `request.url` apuntaría al dominio del backend
+  // (hammer-api.vercel.app/login), que el fetch intentaría seguir cross-origin y la
+  // CSP `connect-src 'self'` del frontend bloquearía. Eso rompía el logout.
+  return ok({ loggedOut: true });
 }
