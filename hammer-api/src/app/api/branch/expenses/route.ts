@@ -25,6 +25,18 @@ function getNicaraguaDateParts() {
   return { year, month, day, lastDay };
 }
 
+/**
+ * UTC range [start, end) covering the current business day in America/Managua
+ * (fixed UTC-6, no DST). Used so the "Gastos del Local" panel only lists the
+ * expenses registered today — they clear automatically when the day rolls over.
+ */
+function getManaguaDayUtcRange() {
+  const { year, month, day } = getNicaraguaDateParts();
+  const start = new Date(Date.UTC(year, month - 1, day, 6, 0, 0, 0)); // Managua 00:00 → 06:00 UTC
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end };
+}
+
 const createSchema = z.object({
   branchId: z.string().min(1),
   category: z.enum(EXPENSE_CATEGORIES),
@@ -81,7 +93,10 @@ export async function GET(req: NextRequest) {
 
     requireBranchCapability(session, branchId, CAPABILITIES.OPERATING_EXPENSE_VIEW);
 
-    const expenses = await listExpensesByBranch(branchId);
+    // Only the expenses registered during the current business day are listed here,
+    // so the "Gastos del Local" panel clears automatically at the end of each day.
+    const { start, end } = getManaguaDayUtcRange();
+    const expenses = await listExpensesByBranch(branchId, { effectiveFromGte: start, effectiveFromLt: end });
 
     // Payroll expenses are only visible on the 15th and the last day of the month
     // (Nicaraguan quincena cycle). Once the PayrollRun for this month is POSTED

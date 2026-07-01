@@ -37,7 +37,7 @@ export async function GET(request: Request) {
       .map((membership) => membership.branchId);
 
     const data = await approvalService.listRequests({
-      branchId: isMaster(session) ? branchId : branchId,
+      branchId,
       branchIds: isMaster(session) ? undefined : (branchId ? [branchId] : reviewBranchIds),
       includeResolved: parsed.data.includeResolved,
     });

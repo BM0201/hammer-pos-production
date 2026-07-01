@@ -94,9 +94,23 @@ export async function deleteOperatingExpense(id: string, actorUserId: string) {
   });
 }
 
-export async function listExpensesByBranch(branchId: string) {
+export async function listExpensesByBranch(
+  branchId: string,
+  opts?: { effectiveFromGte?: Date; effectiveFromLt?: Date },
+) {
   return prisma.operatingExpense.findMany({
-    where: { branchId, isActive: true },
+    where: {
+      branchId,
+      isActive: true,
+      ...(opts?.effectiveFromGte || opts?.effectiveFromLt
+        ? {
+            effectiveFrom: {
+              ...(opts.effectiveFromGte ? { gte: opts.effectiveFromGte } : {}),
+              ...(opts.effectiveFromLt ? { lt: opts.effectiveFromLt } : {}),
+            },
+          }
+        : {}),
+    },
     include: { branch: { select: { id: true, code: true, name: true } } },
     orderBy: [{ category: "asc" }, { description: "asc" }],
   });

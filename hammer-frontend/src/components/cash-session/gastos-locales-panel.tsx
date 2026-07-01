@@ -128,7 +128,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
         <div>
           <h3 className="text-sm font-semibold text-[var(--color-text)]">Gastos del Local</h3>
           <p className="text-xs text-[var(--color-text-muted)]">
-            Costos operativos del mes — nómina, servicios, alquiler, etc.
+            Gastos operativos del día — servicios, alquiler, transporte, etc. Se limpian automáticamente al cerrar el día.
             {expenses.length > 0 && (
               <span className="ml-1 font-semibold text-[var(--color-text-secondary)]">
                 Total: C$ {grandTotal.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -164,7 +164,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
               </select>
             </label>
             <label className="grid gap-1 text-xs">
-              <span className="font-medium text-[var(--color-text-secondary)]">Monto mensual (C$)</span>
+              <span className="font-medium text-[var(--color-text-secondary)]">Monto (C$)</span>
               <input
                 className="hm-input rounded-lg text-sm"
                 type="number"
@@ -182,7 +182,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
             <input
               className="hm-input rounded-lg text-sm"
               type="text"
-              placeholder="Ej: Factura ENATREL agosto"
+              placeholder="Ej: Factura ENATREL"
               maxLength={200}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -212,7 +212,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
           <div className="px-4 py-5 text-center">
             <p className="text-xs text-[var(--color-text-muted)]">Sin gastos operativos registrados.</p>
             <p className="mt-1 text-[0.65rem] text-[var(--color-text-soft)]">
-              Cuando el administrador paga una quincena, el monto se descuenta automáticamente de la caja física (al instante si hay caja abierta, o al abrir la siguiente). Usa &quot;+ Agregar gasto&quot; para servicios, alquiler, etc.
+              Aquí se muestran únicamente los gastos operativos registrados hoy. Se limpian automáticamente al cerrar el día. Usa &quot;+ Agregar gasto&quot; para servicios, alquiler, transporte, etc.
             </p>
           </div>
         ) : (
@@ -263,7 +263,7 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
 
       {expenses.length > 0 && (
         <div className="flex justify-between items-center border-t border-[var(--color-border)] bg-[var(--color-surface-muted)] px-4 py-3">
-          <span className="text-sm font-semibold text-[var(--color-text)]">Total gastos del mes</span>
+          <span className="text-sm font-semibold text-[var(--color-text)]">Total gastos del día</span>
           <span className="text-sm font-bold text-[var(--color-danger-700)]">
             C$ {grandTotal.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </span>

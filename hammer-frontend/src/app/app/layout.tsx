@@ -15,6 +15,7 @@ function isPosRoute(pathname: string): boolean {
     pathname.startsWith("/app/branch/sales/orders") ||
     pathname.startsWith("/app/branch/cashier/payments") ||
     pathname.startsWith("/app/branch/cash") ||
+    pathname.startsWith("/app/branch/approvals") ||
     pathname === "/app/branch"
   );
 }

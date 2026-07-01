@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { apiFetch } from "@/lib/client/api";
+import { useSession } from "@/lib/client/session";
 
 type ApprovalApiError = { ok: false; error: { code: string; message: string } };
 
@@ -15,10 +16,12 @@ type ApprovalItem = {
   referenceType: string;
   referenceId: string;
   createdAt: string;
-  requestedBy: { username: string; fullName: string };
+  requestedBy: { id: string; username: string; fullName: string };
 };
 
 export function ApprovalsQueue({ branchId }: { branchId?: string }) {
+  const sessionState = useSession();
+  const currentUserId = sessionState.status === "authenticated" ? sessionState.session.userId : null;
   const [items, setItems] = useState<ApprovalItem[]>([]);
   const [message, setMessage] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -70,40 +73,49 @@ export function ApprovalsQueue({ branchId }: { branchId?: string }) {
       <div className="rounded-lg border border-[var(--color-border)] p-3 text-sm bg-[var(--color-surface-muted)]">
         <strong>Cola operativa de aprobaciones</strong>
         <p className="text-[var(--color-text-muted)]">Revisa y resuelve solicitudes sensibles de sucursal.</p>
-        <p className="text-xs text-[var(--color-text-soft)]">Actualización automática cada ~7 segundos.</p>
+        <p className="text-xs text-[var(--color-text-soft)]">Actualización automática cada ~25 segundos.</p>
       </div>
 
       <div className="space-y-2">
-        {items.map((item) => (
-          <article key={item.id} className="rounded-lg border border-[var(--color-border)] p-3 space-y-2">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-muted)]">
-              <span className="rounded-lg bg-[var(--color-surface-alt)] px-2 py-1">{item.type}</span>
-              <span className="rounded-lg bg-[var(--color-warning-100)] px-2 py-1">{item.status}</span>
-              <span>Sucursal: {item.branchId}</span>
-              <span>{new Date(item.createdAt).toLocaleString()}</span>
-            </div>
-            <p className="text-sm"><strong>Motivo:</strong> {item.reason}</p>
-            <p className="text-xs text-[var(--color-text-muted)]">
-              Referencia: {item.referenceType} / {item.referenceId} · Solicitado por {item.requestedBy.fullName ? `${item.requestedBy.fullName} (usuario: ${item.requestedBy.username})` : item.requestedBy.username}
-            </p>
-            <div className="flex gap-2">
-              <button
-                className="rounded-lg bg-[var(--color-success-700)] px-3 py-1.5 text-white text-sm disabled:opacity-60"
-                disabled={busyId === item.id}
-                onClick={() => resolve(item.id, "APPROVE")}
-              >
-                Aprobar
-              </button>
-              <button
-                className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm disabled:opacity-60"
-                disabled={busyId === item.id}
-                onClick={() => resolve(item.id, "REJECT")}
-              >
-                Rechazar
-              </button>
-            </div>
-          </article>
-        ))}
+        {items.map((item) => {
+          const isOwnRequest = currentUserId != null && item.requestedBy.id === currentUserId;
+          return (
+            <article key={item.id} className="rounded-lg border border-[var(--color-border)] p-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-muted)]">
+                <span className="rounded-lg bg-[var(--color-surface-alt)] px-2 py-1">{item.type}</span>
+                <span className="rounded-lg bg-[var(--color-warning-100)] px-2 py-1">{item.status}</span>
+                <span>Sucursal: {item.branchId}</span>
+                <span>{new Date(item.createdAt).toLocaleString()}</span>
+              </div>
+              <p className="text-sm"><strong>Motivo:</strong> {item.reason}</p>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Referencia: {item.referenceType} / {item.referenceId} · Solicitado por {item.requestedBy.fullName ? `${item.requestedBy.fullName} (usuario: ${item.requestedBy.username})` : item.requestedBy.username}
+              </p>
+              {isOwnRequest ? (
+                <p className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
+                  Esta solicitud fue creada por ti. Debe resolverla otro usuario autorizado.
+                </p>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    className="rounded-lg bg-[var(--color-success-700)] px-3 py-1.5 text-white text-sm disabled:opacity-60"
+                    disabled={busyId === item.id}
+                    onClick={() => resolve(item.id, "APPROVE")}
+                  >
+                    Aprobar
+                  </button>
+                  <button
+                    className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm disabled:opacity-60"
+                    disabled={busyId === item.id}
+                    onClick={() => resolve(item.id, "REJECT")}
+                  >
+                    Rechazar
+                  </button>
+                </div>
+              )}
+            </article>
+          );
+        })}
       </div>
 
       {!items.length ? <p className="text-sm text-[var(--color-text-muted)]">No hay solicitudes pendientes.</p> : null}
