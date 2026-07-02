@@ -62,11 +62,6 @@ function localWallClockParts(date: Date, timezone: string) {
   return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute"), second: get("second") };
 }
 
-function localDateParts(date: Date) {
-  const { year, month, day } = localWallClockParts(date, TIMEZONE);
-  return { year, month, day };
-}
-
 /**
  * Fecha de negocio (a las 00:00 UTC) a la que pertenece un instante, según la
  * zona horaria y la hora de corte del día de negocio.
@@ -579,7 +574,7 @@ export async function resolveOpenOperationalDayForOperationTx(
   options?: { openedByUserId?: string; allowStaleOverride?: boolean },
 ): Promise<{ operationalDayId: string; autoOpened: boolean; warnings: string[] }> {
   const open = await getOpenOperationalDayForBranchTx(tx, branchId);
-  const today = businessDateFromNow();
+  const today = businessDateFromNow(occurredAt);
   if (open) {
     const isStale = open.businessDate.getTime() !== today.getTime();
     if (isStale && !options?.allowStaleOverride) {

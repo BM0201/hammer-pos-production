@@ -252,11 +252,14 @@ export async function addSaleOrderLine(input: {
     if (!product.isActive) throw new Error("PRODUCT_INACTIVE");
 
     const pricing = await getEffectiveProductPricing(tx, { branchId: order.branchId, productId: input.productId });
+    if (input.unitPrice === undefined && pricing.effectivePrice === null) {
+      throw new Error("PRODUCT_HAS_NO_BRANCH_PRICE");
+    }
     const categoryPolicy = await resolvePolicyForProduct({ branchId: order.branchId, productId: input.productId });
     const commercialIntelligence = await buildCommercialIntelligenceForProduct({ branchId: order.branchId, productId: input.productId });
     const priceSource = input.unitPrice === undefined ? pricing.priceSource : "MANUAL";
     const quantity = new Prisma.Decimal(input.quantity);
-    const unitPrice = input.unitPrice === undefined ? pricing.effectivePrice : new Prisma.Decimal(input.unitPrice);
+    const unitPrice = input.unitPrice === undefined ? pricing.effectivePrice! : new Prisma.Decimal(input.unitPrice);
     const discountAmount = new Prisma.Decimal(input.discountAmount);
     const discountPerUnit = discountAmount.div(quantity);
     const netUnitPriceAfterDiscount = unitPrice.sub(discountPerUnit);
@@ -353,7 +356,7 @@ export async function addSaleOrderLine(input: {
           priceSource,
           standardSalePrice: pricing.standardSalePrice.toString(),
           branchPrice: pricing.branchPrice?.toString() ?? null,
-          effectivePrice: pricing.effectivePrice.toString(),
+          effectivePrice: pricing.effectivePrice?.toString() ?? null,
           effectiveCost: pricing.effectiveCost?.toString() ?? null,
           costSource: pricing.costSource,
           marginSnapshot: snapshots.marginSnapshot?.toString() ?? null,

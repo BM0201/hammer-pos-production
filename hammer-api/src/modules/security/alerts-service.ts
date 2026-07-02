@@ -105,12 +105,6 @@ export async function updateAlertStatus(input: UpdateAlertInput): Promise<void> 
   const now = new Date();
   const { alertId, actorUserId, action, note } = input;
 
-  const statusMap: Record<string, AlertStatus> = {
-    ACKNOWLEDGE: "ACKNOWLEDGED",
-    RESOLVE: "RESOLVED",
-    DISMISS: "DISMISSED",
-  };
-
   const updateData =
     action === "ACKNOWLEDGE"
       ? { status: "ACKNOWLEDGED" as AlertStatus, acknowledgedBy: actorUserId, acknowledgedAt: now, note }

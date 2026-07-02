@@ -16,7 +16,7 @@ import { getAlertCounts, listSecurityAlerts } from "@/modules/security/alerts-se
 const CRITICAL_ROLES = ["MASTER", "OWNER", "SYSTEM_ADMIN"];
 const HOURS_24 = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-export async function GET(req: Request) {
+export async function GET() {
   const session = await getCurrentSession();
   if (!session) return unauthorized();
   if (!isMaster(session)) return forbidden();

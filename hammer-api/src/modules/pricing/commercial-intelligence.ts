@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { resolvePolicyForProduct, type CategoryPricingPolicyDto } from "@/modules/pricing/category-policy-service";
+import { getEffectiveProductPricing, getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
+import { resolvePolicyForProduct, resolvePolicyForProductBatch, type CategoryPricingPolicyDto } from "@/modules/pricing/category-policy-service";
 
 export type AbcClass = "A" | "B" | "C";
 export type XyzClass = "X" | "Y" | "Z";
@@ -56,7 +56,7 @@ export type CommercialAlert = {
   categoryName: string;
   combinedClass: CombinedAbcXyzClass;
   riskLevel: CommercialRiskLevel;
-  effectivePrice: number;
+  effectivePrice: number | null;
   effectiveCost: number | null;
   grossMarginPercent: number | null;
   stockOnHand: number;
@@ -295,6 +295,163 @@ async function getSalesSignals(input: { branchId?: string; productId: string }) 
   };
 }
 
+/**
+ * Batch version of getSalesSignals — resolves sales signals for many
+ * (branchId, productId) pairs. Groups by branch (branch90 is identical for
+ * every product in the same branch, so it's computed once per branch instead
+ * of once per product) and uses groupBy to fetch per-product sums in 1 query
+ * per branch instead of 1 query per product.
+ */
+async function getSalesSignalsBatch(
+  items: Array<{ branchId: string; productId: string }>,
+): Promise<Map<string, ReturnType<typeof buildSalesSignal>>> {
+  const result = new Map<string, ReturnType<typeof buildSalesSignal>>();
+  if (items.length === 0) return result;
+
+  const last30 = startOfDaysAgo(30);
+  const last90 = startOfDaysAgo(90);
+  const saleStatuses = ["PAID", "DISPATCH_PENDING", "DISPATCHED"] as const;
+
+  const productIdsByBranch = new Map<string, Set<string>>();
+  for (const { branchId, productId } of items) {
+    if (!productIdsByBranch.has(branchId)) productIdsByBranch.set(branchId, new Set());
+    productIdsByBranch.get(branchId)!.add(productId);
+  }
+
+  await Promise.all(
+    [...productIdsByBranch.entries()].map(async ([branchId, productIdSet]) => {
+      const productIds = [...productIdSet];
+      const [product30Rows, product90Rows, branch90, analyticsRows] = await Promise.all([
+        prisma.saleOrderLine.groupBy({
+          by: ["productId"],
+          where: { productId: { in: productIds }, saleOrder: { status: { in: saleStatuses as any }, createdAt: { gte: last30 }, branchId } },
+          _sum: { quantity: true },
+        }),
+        prisma.saleOrderLine.groupBy({
+          by: ["productId"],
+          where: { productId: { in: productIds }, saleOrder: { status: { in: saleStatuses as any }, createdAt: { gte: last90 }, branchId } },
+          _sum: { quantity: true, lineSubtotal: true },
+        }),
+        prisma.saleOrderLine.aggregate({
+          where: { saleOrder: { status: { in: saleStatuses as any }, createdAt: { gte: last90 }, branchId } },
+          _sum: { lineSubtotal: true },
+        }),
+        prisma.productAnalytics.findMany({
+          where: { productId: { in: productIds } },
+          orderBy: { month: "desc" },
+          select: { productId: true, salesVariance: true, abcClass: true, xyzClass: true },
+        }),
+      ]);
+
+      const product30ByProductId = new Map(product30Rows.map((row) => [row.productId, row]));
+      const product90ByProductId = new Map(product90Rows.map((row) => [row.productId, row]));
+      const latestAnalyticsByProductId = new Map<string, (typeof analyticsRows)[number]>();
+      for (const row of analyticsRows) {
+        if (!latestAnalyticsByProductId.has(row.productId)) latestAnalyticsByProductId.set(row.productId, row);
+      }
+      const branchRevenue90 = Number(branch90._sum.lineSubtotal ?? 0);
+
+      for (const productId of productIds) {
+        result.set(`${branchId}:${productId}`, buildSalesSignal({
+          product30: product30ByProductId.get(productId) ?? null,
+          product90: product90ByProductId.get(productId) ?? null,
+          branchRevenue90,
+          latestAnalytics: latestAnalyticsByProductId.get(productId) ?? null,
+        }));
+      }
+    }),
+  );
+
+  return result;
+}
+
+function buildSalesSignal(input: {
+  product30: { _sum: { quantity: Prisma.Decimal | null } } | null;
+  product90: { _sum: { quantity: Prisma.Decimal | null; lineSubtotal: Prisma.Decimal | null } } | null;
+  branchRevenue90: number;
+  latestAnalytics: { salesVariance: Prisma.Decimal | null; abcClass: string | null; xyzClass: string | null } | null;
+}) {
+  const productRevenue90 = Number(input.product90?._sum.lineSubtotal ?? 0);
+  return {
+    unitsSoldLast30Days: Number(input.product30?._sum.quantity ?? 0),
+    unitsSoldLast90Days: Number(input.product90?._sum.quantity ?? 0),
+    revenueContributionPercent: input.branchRevenue90 > 0 ? (productRevenue90 / input.branchRevenue90) * 100 : undefined,
+    salesVariabilityCoefficient: input.latestAnalytics?.salesVariance === undefined || input.latestAnalytics?.salesVariance === null
+      ? undefined
+      : Number(input.latestAnalytics.salesVariance),
+    analyticsAbcClass: input.latestAnalytics?.abcClass ?? null,
+    analyticsXyzClass: input.latestAnalytics?.xyzClass ?? null,
+  };
+}
+
+/**
+ * Batch version of buildCommercialIntelligenceForProduct — resolves commercial
+ * intelligence for many (branchId, productId) pairs in a fixed small number of
+ * queries instead of ~13+ queries per pair. Used by hot loops (Brain
+ * detectors, replenishment) that previously called
+ * buildCommercialIntelligenceForProduct once per item.
+ */
+export async function buildCommercialIntelligenceBatch(
+  items: Array<{ branchId: string; productId: string }>,
+): Promise<Map<string, CommercialPricingRecommendation>> {
+  const result = new Map<string, CommercialPricingRecommendation>();
+  if (items.length === 0) return result;
+
+  const productIds = [...new Set(items.map((item) => item.productId))];
+
+  const [products, balances, pricingByKey, policyByKey, signalsByKey] = await Promise.all([
+    prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, abcClassification: true, xyzClassification: true, averageDailySales: true, daysInStock: true },
+    }),
+    prisma.inventoryBalance.findMany({
+      where: { productId: { in: productIds } },
+      select: { branchId: true, productId: true, quantityOnHand: true },
+    }),
+    getEffectiveProductPricingBatch(prisma, items),
+    resolvePolicyForProductBatch(items),
+    getSalesSignalsBatch(items),
+  ]);
+
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const balanceByKey = new Map(balances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]));
+
+  for (const { branchId, productId } of items) {
+    const key = `${branchId}:${productId}`;
+    if (result.has(key)) continue;
+    const product = productById.get(productId);
+    if (!product) continue;
+
+    const pricing = pricingByKey.get(key);
+    const policy = policyByKey.get(key);
+    const signals = signalsByKey.get(key) ?? buildSalesSignal({ product30: null, product90: null, branchRevenue90: 0, latestAnalytics: null });
+    const balance = balanceByKey.get(key);
+
+    const effectivePrice = pricing?.effectivePrice === null || pricing?.effectivePrice === undefined ? null : Number(pricing.effectivePrice);
+    const effectiveCost = pricing?.effectiveCost === null || pricing?.effectiveCost === undefined ? null : Number(pricing.effectiveCost);
+
+    result.set(key, resolveCommercialPricingRecommendation({
+      productId: product.id,
+      branchId,
+      storedAbcClass: product.abcClassification ?? signals.analyticsAbcClass,
+      storedXyzClass: product.xyzClassification ?? signals.analyticsXyzClass,
+      revenueContributionPercent: signals.revenueContributionPercent,
+      unitsSoldLast30Days: signals.unitsSoldLast30Days,
+      unitsSoldLast90Days: signals.unitsSoldLast90Days,
+      averageDailySales: product.averageDailySales === null ? undefined : Number(product.averageDailySales),
+      salesVariabilityCoefficient: signals.salesVariabilityCoefficient,
+      daysInStock: product.daysInStock,
+      stockOnHand: Number(balance?.quantityOnHand ?? 0),
+      effectiveCost,
+      effectivePrice,
+      grossMarginPercent: effectivePrice === null ? null : grossMarginPercent(effectivePrice, effectiveCost),
+      categoryPolicy: policy?.categoryPolicy,
+    }));
+  }
+
+  return result;
+}
+
 export async function buildCommercialIntelligenceForProduct(input: { branchId: string; productId: string }) {
   const [product, pricing, balance, policy, signals] = await Promise.all([
     prisma.product.findUniqueOrThrow({
@@ -329,8 +486,10 @@ export async function buildCommercialIntelligenceForProduct(input: { branchId: s
     daysInStock: product.daysInStock,
     stockOnHand: Number(balance?.quantityOnHand ?? 0),
     effectiveCost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost),
-    effectivePrice: Number(pricing.effectivePrice),
-    grossMarginPercent: grossMarginPercent(Number(pricing.effectivePrice), pricing.effectiveCost === null ? null : Number(pricing.effectiveCost)),
+    effectivePrice: pricing.effectivePrice === null ? null : Number(pricing.effectivePrice),
+    grossMarginPercent: pricing.effectivePrice === null
+      ? null
+      : grossMarginPercent(Number(pricing.effectivePrice), pricing.effectiveCost === null ? null : Number(pricing.effectiveCost)),
     categoryPolicy: policy.categoryPolicy,
   });
 }
@@ -354,18 +513,25 @@ export async function listCommercialAlerts(input: { branchId: string; limit?: nu
     },
   });
 
+  const activeBalances = balances.filter((balance) => balance.product.isActive);
+  const pairs = activeBalances.map((balance) => ({ branchId: input.branchId, productId: balance.productId }));
+  const [pricingByKey, policyByKey, commercialByKey] = await Promise.all([
+    getEffectiveProductPricingBatch(prisma, pairs),
+    resolvePolicyForProductBatch(pairs),
+    buildCommercialIntelligenceBatch(pairs),
+  ]);
+
   const alerts: CommercialAlert[] = [];
-  for (const balance of balances) {
-    if (!balance.product.isActive) continue;
-    const [pricing, policy, commercial] = await Promise.all([
-      getEffectiveProductPricing(prisma, { branchId: input.branchId, productId: balance.productId }),
-      resolvePolicyForProduct({ branchId: input.branchId, productId: balance.productId }),
-      buildCommercialIntelligenceForProduct({ branchId: input.branchId, productId: balance.productId }),
-    ]);
-    const effectivePrice = Number(pricing.effectivePrice);
+  for (const balance of activeBalances) {
+    const key = `${input.branchId}:${balance.productId}`;
+    const pricing = pricingByKey.get(key);
+    const policy = policyByKey.get(key);
+    const commercial = commercialByKey.get(key);
+    if (!pricing || !policy || !commercial) continue;
+    const effectivePrice = pricing.effectivePrice === null ? null : Number(pricing.effectivePrice);
     const effectiveCost = pricing.effectiveCost === null ? null : Number(pricing.effectiveCost);
     const stockOnHand = Number(balance.quantityOnHand);
-    const margin = grossMarginPercent(effectivePrice, effectiveCost);
+    const margin = effectivePrice === null ? null : grossMarginPercent(effectivePrice, effectiveCost);
     const base = {
       productId: balance.productId,
       sku: balance.product.sku,
@@ -380,7 +546,9 @@ export async function listCommercialAlerts(input: { branchId: string; limit?: nu
       daysInStock: balance.product.daysInStock,
     };
 
-    if (effectiveCost !== null && effectivePrice < effectiveCost) {
+    if (effectivePrice === null) {
+      alerts.push({ ...base, severity: "WARNING", message: "Producto sin precio de venta asignado en esta sucursal.", recommendedAction: "Asignar precio en Catalogo -> Precios y costos." });
+    } else if (effectiveCost !== null && effectivePrice < effectiveCost) {
       alerts.push({ ...base, severity: "DANGER", message: "Precio debajo de costo efectivo.", recommendedAction: "Corregir precio o revisar costo antes de vender." });
     }
     if (margin !== null && margin < policy.categoryPolicy.minMarginPercent) {

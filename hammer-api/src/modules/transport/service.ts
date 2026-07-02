@@ -1,4 +1,4 @@
-import { Prisma, TransportServiceStatus, type SaleOrder, type Customer } from "@prisma/client";
+import { Prisma, TransportServiceStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export async function createTransportService(input: {

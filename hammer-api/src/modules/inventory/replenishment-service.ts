@@ -1,8 +1,7 @@
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { buildCommercialIntelligenceForProduct, type CombinedAbcXyzClass, type CommercialRiskLevel } from "@/modules/pricing/commercial-intelligence";
-import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
+import { getEffectiveProductPricing, getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
+import { buildCommercialIntelligenceBatch, type CommercialRiskLevel } from "@/modules/pricing/commercial-intelligence";
+import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
 import { createPurchaseOrder } from "@/modules/purchase-orders/service";
 import { createTransfer } from "@/modules/transfers/service";
 import { logAuditEvent } from "@/modules/audit/service";
@@ -96,7 +95,6 @@ type RecommendationParams = {
 };
 
 const DEFAULT_LEAD_TIME_DAYS = 7;
-const ZERO = new Prisma.Decimal(0);
 
 function daysAgo(days: number) {
   const date = new Date();
@@ -230,13 +228,18 @@ async function getSourceBranchOpportunity(input: {
       product: { select: { id: true, sku: true, name: true } },
     },
   });
+  if (balances.length === 0) return null;
+
+  // Batched: 1 query for all candidate branches' settings instead of 1 per balance.
+  const settings = await prisma.branchProductSetting.findMany({
+    where: { productId: input.productId, branchId: { in: balances.map((b) => b.branchId) } },
+    select: { branchId: true, reorderPoint: true, minStock: true },
+  });
+  const settingByBranchId = new Map(settings.map((s) => [s.branchId, s]));
 
   let best: { balance: typeof balances[number]; fromReorderPoint: number; surplus: number } | null = null;
   for (const balance of balances) {
-    const setting = await prisma.branchProductSetting.findUnique({
-      where: { branchId_productId: { branchId: balance.branchId, productId: input.productId } },
-      select: { reorderPoint: true, minStock: true },
-    });
+    const setting = settingByBranchId.get(balance.branchId);
     const fromReorderPoint = Math.max(finiteNumber(setting?.reorderPoint), finiteNumber(setting?.minStock));
     const surplus = Math.max(0, finiteNumber(balance.quantityOnHand) - fromReorderPoint);
     if (surplus > 0 && (!best || surplus > best.surplus)) best = { balance, fromReorderPoint, surplus };
@@ -282,14 +285,32 @@ export async function getReplenishmentRecommendations(params: RecommendationPara
   const regularBalances = balances.filter((b) => !b.product.isTimber);
 
   const productIds = regularBalances.map((balance) => balance.productId);
-  const [sales, recipesSet] = await Promise.all([
+  const pairs = productIds.map((productId) => ({ branchId: params.branchId, productId }));
+  const [sales, recipesSet, pricingByKey, commercialByKey, policyByKey, branchSettingRows] = await Promise.all([
     getSalesMaps(params.branchId, productIds),
     prisma.productionRecipe.findMany({ where: { finishedProductId: { in: productIds }, isActive: true }, select: { finishedProductId: true } })
       .then((rows) => new Set(rows.map((r) => r.finishedProductId))),
+    getEffectiveProductPricingBatch(prisma, pairs),
+    buildCommercialIntelligenceBatch(pairs),
+    resolvePolicyForProductBatch(pairs),
+    productIds.length > 0
+      ? prisma.branchProductSetting.findMany({
+          where: { branchId: params.branchId, productId: { in: productIds } },
+          select: { productId: true, minStock: true, maxStock: true, reorderPoint: true, isAvailable: true },
+        })
+      : Promise.resolve([]),
   ]);
+  const branchSettingByProductId = new Map(branchSettingRows.map((row) => [row.productId, row]));
   const recommendations: ReplenishmentRecommendation[] = [];
 
   for (const balance of regularBalances) {
+    const key = `${params.branchId}:${balance.productId}`;
+    const pricing = pricingByKey.get(key);
+    const commercial = commercialByKey.get(key);
+    const categoryPolicy = policyByKey.get(key);
+    if (!pricing || !commercial || !categoryPolicy) continue;
+    const branchSetting = branchSettingByProductId.get(balance.productId) ?? null;
+
     const warnings: string[] = [];
     const unitsSoldLast30Days = sales.last30.get(balance.productId) ?? 0;
     const unitsSoldLast60Days = sales.last60.get(balance.productId) ?? 0;
@@ -299,22 +320,12 @@ export async function getReplenishmentRecommendations(params: RecommendationPara
     if (averageDailyDemand <= 0 && balance.product.averageDailySales) averageDailyDemand = finiteNumber(balance.product.averageDailySales);
     if (averageDailyDemand <= 0) warnings.push("Sin ventas suficientes para estimar demanda.");
 
-    const [pricing, commercial, categoryPolicy, branchSetting] = await Promise.all([
-      getEffectiveProductPricing(prisma, { branchId: params.branchId, productId: balance.productId }),
-      buildCommercialIntelligenceForProduct({ branchId: params.branchId, productId: balance.productId }),
-      resolvePolicyForProduct({ branchId: params.branchId, productId: balance.productId }),
-      prisma.branchProductSetting.findUnique({
-        where: { branchId_productId: { branchId: params.branchId, productId: balance.productId } },
-        select: { minStock: true, maxStock: true, reorderPoint: true, isAvailable: true },
-      }),
-    ]);
-
     warnings.push(...commercial.warnings);
     const stockOnHand = finiteNumber(balance.quantityOnHand);
     const availableStock = stockOnHand;
-    const effectivePrice = finiteNumber(pricing.effectivePrice);
+    const effectivePrice = pricing.effectivePrice === null ? null : finiteNumber(pricing.effectivePrice);
     const effectiveCost = pricing.effectiveCost === null ? null : finiteNumber(pricing.effectiveCost);
-    const margin = grossMarginPercent(effectivePrice, effectiveCost);
+    const margin = effectivePrice === null ? null : grossMarginPercent(effectivePrice, effectiveCost);
     const safetyDays = xyzSafetyDays(commercial.xyzClass) + abcSafetyDays(commercial.abcClass);
     const coverageDays = Math.max(0, finiteNumber(params.coverageDays, defaultCoverageDays(commercial.combinedClass)));
     let reorderPoint = averageDailyDemand * leadTimeDays + averageDailyDemand * safetyDays;
@@ -334,7 +345,12 @@ export async function getReplenishmentRecommendations(params: RecommendationPara
       recommendedActions.push("No comprar stock normal sin confirmacion de demanda.");
     }
 
-    if (effectiveCost !== null && effectivePrice < effectiveCost) {
+    if (effectivePrice === null) {
+      suggestedOrderQty = 0;
+      recommendationType = "REVIEW_PRICE";
+      message = "Producto sin precio de venta asignado en esta sucursal; asignalo antes de comprar.";
+      warnings.push("Compra bloqueada por falta de precio de venta en esta sucursal.");
+    } else if (effectiveCost !== null && effectivePrice < effectiveCost) {
       suggestedOrderQty = 0;
       recommendationType = "REVIEW_PRICE";
       message = "Precio debajo del costo efectivo; revisar precio antes de comprar.";

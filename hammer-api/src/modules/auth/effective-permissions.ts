@@ -1,7 +1,6 @@
-import type { RoleCode } from "@prisma/client";
 import { CashSessionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { CAPABILITIES, getCapabilitiesForRole, type Capability } from "@/modules/rbac/policies";
+import { CAPABILITIES, getCapabilitiesForRole } from "@/modules/rbac/policies";
 import { getEffectiveBranchMemberships } from "@/modules/rbac/effective-permissions";
 
 type ModuleFlags = {

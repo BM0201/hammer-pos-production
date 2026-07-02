@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSelectedLayoutSegments, useRouter } from "next/navigation";
 import type { Route } from "next";
 import type { ReactNode } from "react";
@@ -100,9 +100,19 @@ export function AppShellRouter({
     } catch {
       /* redirect anyway */
     } finally {
-      router.push("/login");
+      // Navegación dura: descarta el estado en memoria del SPA (caches de
+      // CSRF/sesión) en lugar de mantener el shell vivo con datos del usuario.
+      window.location.assign("/login");
     }
-  }, [router]);
+  }, []);
+
+  // Refs espejo para que el efecto del heartbeat NO dependa de pathname/segments:
+  // antes se destruía y recreaba en cada navegación, disparando un heartbeat
+  // inmediato por página visitada (mismo fix que ya tenía pos-shell).
+  const pathnameRef = useRef(pathname);
+  const moduleRef = useRef(segments[0] ?? "app");
+  pathnameRef.current = pathname;
+  moduleRef.current = segments[0] ?? "app";
 
   useEffect(() => {
     let stopped = false;
@@ -113,8 +123,8 @@ export function AppShellRouter({
           method: "POST",
           body: JSON.stringify({
             branchId: session.primaryBranchId,
-            currentPath: pathname,
-            currentModule: segments[0] ?? "app",
+            currentPath: pathnameRef.current,
+            currentModule: moduleRef.current,
           }),
         });
         if (!stopped && response.status === 401) {
@@ -145,7 +155,7 @@ export function AppShellRouter({
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, [pathname, router, segments, session.primaryBranchId]);
+  }, [router, session.primaryBranchId]);
 
   return (
     <div className="flex min-h-screen bg-[var(--color-page-bg)]">

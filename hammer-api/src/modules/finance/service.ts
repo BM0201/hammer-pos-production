@@ -105,10 +105,14 @@ async function computeInventoryProjection(branchId?: string | null) {
   for (const row of balances) {
     const qty = Math.max(0, num(row.quantityOnHand));
     inventoryValue += num(row.inventoryValue);
-    const effectivePrice =
-      branchPriceByKey.get(`${row.productId}:${row.branchId}`) ?? Math.max(0, num(row.product.standardSalePrice));
+    // La valorización potencial sigue usando standardSalePrice como estimacion cuando
+    // no hay precio de sucursal (reporte de valorizacion, no precio de venta real).
+    // El contador "sin precio" en cambio debe reflejar precio de sucursal genuino,
+    // igual que el resto del sistema tras quitar el fallback global de venta.
+    const branchPrice = branchPriceByKey.get(`${row.productId}:${row.branchId}`);
+    const effectivePrice = branchPrice ?? Math.max(0, num(row.product.standardSalePrice));
     potentialRevenue += qty * effectivePrice;
-    if (effectivePrice <= 0) productsNoPrice.add(row.productId);
+    if (branchPrice === undefined) productsNoPrice.add(row.productId);
     if (qty > 0 && num(row.weightedAverageCost) <= 0) productsNoCost.add(row.productId);
   }
 

@@ -538,13 +538,16 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
 
       const pricing = await getEffectiveProductPricing(tx, { branchId: po.branchId, productId: line.productId });
       const policy = await resolvePolicyForProduct({ branchId: po.branchId, productId: line.productId });
-      const effectivePrice = Number(pricing.effectivePrice);
+      const effectivePrice = pricing.effectivePrice === null ? null : Number(pricing.effectivePrice);
       const effectiveCost = pricing.effectiveCost === null ? null : Number(pricing.effectiveCost);
-      const margin = marginPercent(effectivePrice, effectiveCost);
+      const margin = effectivePrice === null ? null : marginPercent(effectivePrice, effectiveCost);
       let priceReviewRequired = false;
       const oldCost = previousWac ?? 0;
       const costIncreasePercent = oldCost > 0 ? ((finalUnitCost - oldCost) / oldCost) * 100 : 0;
-      if (effectiveCost !== null && effectivePrice < effectiveCost) {
+      if (effectivePrice === null) {
+        priceReviewRequired = true;
+        lineWarnings.push("Producto sin precio de venta asignado en esta sucursal; asignalo antes de venderlo.");
+      } else if (effectiveCost !== null && effectivePrice < effectiveCost) {
         priceReviewRequired = true;
         lineWarnings.push("Precio efectivo debajo del costo efectivo; revisar precio de venta.");
       }

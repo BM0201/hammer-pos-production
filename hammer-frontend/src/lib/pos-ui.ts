@@ -42,6 +42,7 @@ const ERROR_MESSAGES_ES: Record<string, string> = {
   INSUFFICIENT_STOCK: "Stock insuficiente para completar la operación.",
   INSUFFICIENT_STOCK_AT_PAYMENT: "Stock insuficiente al confirmar. Verifica existencias y vuelve a intentar.",
   PRODUCT_INACTIVE: "El producto no está disponible actualmente.",
+  PRODUCT_HAS_NO_BRANCH_PRICE: "Este producto no tiene precio de venta asignado en esta sucursal. Asígnalo en Catálogo → Precios y costos antes de venderlo.",
   ORDER_NOT_DRAFT: "La orden ya no está en estado editable.",
   ORDER_EMPTY: "La orden está vacía. Agrega productos antes de continuar.",
   INVALID_TRANSITION: "La orden ya no puede cambiar de estado.",

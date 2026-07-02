@@ -12,7 +12,7 @@
  * Roles críticos que REQUIEREN MFA: MASTER, OWNER, SYSTEM_ADMIN
  */
 
-import { createHmac, randomBytes, createHash, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
@@ -84,6 +84,7 @@ export async function cleanupExpiredMfaTokens(): Promise<void> {
 export async function initMfaSetup(
   userId: string,
   username: string,
+  auditContext: { ipAddress?: string; userAgent?: string } = {},
 ): Promise<{ secret: string; otpauthUri: string }> {
   const secret = generateTotpSecret();
   const otpauthUri = buildOtpauthUri({ secret, username });
@@ -93,6 +94,16 @@ export async function initMfaSetup(
   await prisma.user.update({
     where: { id: userId },
     data: { mfaSecret: secret, mfaEnabled: false },
+  });
+
+  await logAuditEvent({
+    actorUserId: userId,
+    module: "mfa",
+    action: "MFA_SETUP_INITIATED",
+    entityType: "User",
+    entityId: userId,
+    metadataJson: { username },
+    ...auditContext,
   });
 
   return { secret, otpauthUri };

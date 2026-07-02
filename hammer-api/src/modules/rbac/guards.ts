@@ -2,7 +2,7 @@ import type { RoleCode } from "@prisma/client";
 import type { Route } from "next";
 import type { SessionPayload } from "@/types/auth";
 import { getPermissionsForRole, type PermissionKey } from "@/modules/rbac/permissions";
-import { can, canInAnyAssignedBranch, canInBranch as policyCanInBranch, type Capability } from "@/modules/rbac/policies";
+import { can, canInAnyAssignedBranch, type Capability } from "@/modules/rbac/policies";
 import { resolveRoleHome, isMasterOrAbove, isOwnerRole, isSystemAdminRole } from "@/modules/rbac/role-routing";
 import {
   canUseBranchCapability,

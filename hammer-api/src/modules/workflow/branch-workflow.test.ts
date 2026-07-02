@@ -2,28 +2,13 @@
  * ════════════════════════════════════════════════════════════════
  * BRANCH WORKFLOW GUARD — Unit Tests
  *
- * Tests assertBranchWorkflowAction logic.
- * We mock getBranchModuleConfig to control enableCashier/enableDispatch.
+ * Tests assertBranchWorkflowAction logic by extracting the assertion
+ * logic pattern from branch-workflow.ts and exercising it directly
+ * (rather than mocking getBranchModuleConfig at the module level).
  * ════════════════════════════════════════════════════════════════
  */
 import assert from "node:assert/strict";
-import test, { mock, beforeEach } from "node:test";
-
-/* ── Mock getBranchModuleConfig ── */
-let mockConfig = {
-  enableCashier: true,
-  enableDispatch: true,
-  paymentWorkflowMode: "HYBRID" as const,
-  dispatchWorkflowMode: "ENABLED" as const,
-  allowCashierQueue: true,
-  allowSellerDirectPayment: true,
-};
-
-// We need to mock at module level - use dynamic import with mock
-const mockGetBranchModuleConfig = mock.fn(async (_branchId: string) => mockConfig);
-
-// Instead of mocking the import, test the logic directly:
-// Extract the assertion logic pattern from branch-workflow.ts
+import test from "node:test";
 
 const WORKFLOW_ACTIONS = {
   CREATE_DRAFT_ORDER: "CREATE_DRAFT_ORDER",

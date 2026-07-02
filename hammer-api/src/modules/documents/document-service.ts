@@ -9,7 +9,7 @@ import { prisma } from "@/lib/prisma";
 import type { DocumentType } from "@prisma/client";
 import { generateDeliveryOrderHtml } from "./generators/delivery-order";
 import { generateManualInvoiceReceiptHtml } from "./generators/manual-invoice-receipt";
-import type { DocumentOrderData, PrintSettingsData, ManualInvoiceData, DocumentGenerationOptions } from "./types";
+import type { DocumentOrderData, PrintSettingsData, DocumentGenerationOptions } from "./types";
 
 // ─── Sequence generation for delivery order numbers ──────────────────────────
 

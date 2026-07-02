@@ -180,6 +180,10 @@ export function toApiErrorResponse(error: unknown) {
     return fail("PRODUCT_INACTIVE", "El producto no esta activo.", 400);
   }
 
+  if (message === "PRODUCT_HAS_NO_BRANCH_PRICE") {
+    return fail("PRODUCT_HAS_NO_BRANCH_PRICE", "Este producto no tiene precio de venta asignado en esta sucursal. Asignalo en Catalogo -> Precios y costos antes de venderlo.", 422);
+  }
+
   if (message && CASH_SESSION_CONFLICTS.has(message)) {
     return fail(message, message, 409);
   }

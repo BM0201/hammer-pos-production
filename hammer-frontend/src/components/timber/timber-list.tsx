@@ -35,7 +35,7 @@ type TimberItem = {
   stockOnHand?: number;
   effectiveCost?: number | null;
   effectivePrice?: number | null;
-  priceSource?: "BRANCH" | "STANDARD";
+  priceSource?: "BRANCH" | "MISSING";
   costSource?: "BRANCH" | "WAC" | "NONE";
   warnings?: string[];
   product: {
@@ -209,7 +209,8 @@ export function TimberList() {
                 {data.items.map((item) => {
                   const timberType = item.woodSubtype ?? item.timberType;
                   const baseCost = item.effectiveCost ?? parseFloat(item.baseCost.toString());
-                  const sellingPrice = item.effectivePrice ?? parseFloat(item.sellingPrice.toString());
+                  const sellingPriceRaw = item.sellingPrice.toString();
+                  const sellingPrice = item.effectivePrice ?? (sellingPriceRaw === "" ? null : parseFloat(sellingPriceRaw));
                   const canEditTimber = !item.isCatalogOnly;
                   return (
                   <TR key={item.id}>
@@ -245,12 +246,12 @@ export function TimberList() {
                       {item.costSource ? <div className="text-[0.6rem] text-[var(--color-text-soft)]">{item.costSource}</div> : null}
                     </TD>
                     <TD className="text-right font-mono font-semibold text-[var(--color-warehouse-700)]">
-                      C${sellingPrice.toFixed(2)}
-                      {item.priceSource ? <div className="text-[0.6rem] text-[var(--color-text-soft)]">{item.priceSource === "BRANCH" ? "Sucursal" : "Base"}</div> : null}
+                      {sellingPrice !== null ? `C$${sellingPrice.toFixed(2)}` : "Sin precio"}
+                      {item.priceSource ? <div className="text-[0.6rem] text-[var(--color-text-soft)]">{item.priceSource === "BRANCH" ? "Sucursal" : "Sin precio"}</div> : null}
                     </TD>
                     <TD className="text-right">
-                      <Badge variant="success">
-                        {calcMargin(String(baseCost), String(sellingPrice))}%
+                      <Badge variant={sellingPrice === null ? "neutral" : "success"}>
+                        {sellingPrice === null ? "N/D" : `${calcMargin(String(baseCost), String(sellingPrice))}%`}
                       </Badge>
                     </TD>
                     <TD>

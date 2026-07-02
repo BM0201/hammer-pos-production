@@ -2,9 +2,6 @@ import { prisma } from "@/lib/prisma";
 import {
   calculateTimber,
   calculateTimberTrip,
-  classifyTimber,
-  getVaraLength,
-  measureKey,
   DEFAULT_PRICING,
   type TimberPricing,
   type TimberTripLineInput,
@@ -356,7 +353,9 @@ export async function listTimberProducts(filters?: {
     const effectiveCost = effective?.effectiveCost === null || effective?.effectiveCost === undefined
       ? weightedCost
       : Number(effective.effectiveCost);
-    const effectivePrice = effective ? Number(effective.effectivePrice) : product.standardSalePrice.toNumber();
+    const effectivePrice = effective
+      ? (effective.effectivePrice === null ? null : Number(effective.effectivePrice))
+      : product.standardSalePrice.toNumber();
     const thickness = detected.thicknessInches ?? 0;
     const width = detected.widthInches ?? 0;
     const length = detected.lengthFeet ?? 0;
@@ -373,17 +372,17 @@ export async function listTimberProducts(filters?: {
       varaLength: length,
       boardFeet: String(boardFeet),
       baseCost: String(effectiveCost ?? 0),
-      sellingPrice: String(effectivePrice),
+      sellingPrice: effectivePrice === null ? "" : String(effectivePrice),
       stockOnHand,
       effectiveCost,
       effectivePrice,
-      priceSource: effective?.priceSource ?? "STANDARD",
+      priceSource: effective?.priceSource ?? "MISSING",
       costSource: effective?.costSource ?? (weightedCost !== null ? "WAC" : "NONE"),
       product,
       detectedDimensions: detected,
       warnings: [
         ...(effectiveCost === null ? ["Producto de madera sin costo efectivo."] : []),
-        ...(effectivePrice <= 0 ? ["Producto de madera sin precio de venta."] : []),
+        ...(effectivePrice === null || effectivePrice <= 0 ? ["Producto de madera sin precio de venta."] : []),
         ...(boardFeet <= 0 ? ["No se pudieron inferir dimensiones desde el nombre."] : []),
       ],
     };

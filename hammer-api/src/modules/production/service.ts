@@ -7,7 +7,7 @@ import {
   convertBaseUnitCostToSaleUnitCost,
   getSharedInventoryBalance,
 } from "@/modules/inventory/unit-conversion";
-import { calculateBatchCosts, estimateMaterialCost } from "./calculations";
+import { calculateBatchCosts } from "./calculations";
 import type {
   CreateRecipeInput,
   UpdateRecipeInput,
@@ -532,9 +532,8 @@ export async function completeBatch(
         },
       },
     });
-    const effectivePrice = Number(
-      finishedPricing?.branchProductSettings[0]?.branchPrice ?? finishedPricing?.standardSalePrice ?? 0,
-    );
+    const finishedBranchPrice = finishedPricing?.branchProductSettings[0]?.branchPrice;
+    const effectivePrice = finishedBranchPrice == null ? null : Number(finishedBranchPrice);
     const finishedShared = await getSharedInventoryBalance(tx, {
       branchId: batch.branchId,
       productId: batch.recipe.finishedProductId,
@@ -545,8 +544,8 @@ export async function completeBatch(
           conversionFactor: finishedShared.conversion.conversionFactor,
         }))
       : costs.unitCost;
-    if (effectivePrice <= 0) {
-      warnings.push("Producto terminado sin precio efectivo.");
+    if (effectivePrice === null || effectivePrice <= 0) {
+      warnings.push("Producto terminado sin precio de venta asignado en esta sucursal.");
     } else if (effectivePrice < producedSaleUnitCost) {
       warnings.push("Precio actual por debajo del costo producido; revisar precio.");
     } else if (batch.recipe.targetMarginPct != null && batch.recipe.targetMarginPct > 0) {

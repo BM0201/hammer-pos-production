@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import { getCurrentSession } from "@/modules/auth/service";
-import { ok, fail, unauthorized, forbidden } from "@/lib/api/response";
+import { ok, fail, unauthorized } from "@/lib/api/response";
 import {
   initMfaSetup,
   confirmMfaSetup,
@@ -50,7 +50,7 @@ export async function POST(req: Request) {
   if (!session) return unauthorized();
 
   const ctx = getAuditContext(req);
-  const result = await initMfaSetup(session.userId, session.username);
+  const result = await initMfaSetup(session.userId, session.username, ctx);
   return ok(result, 201);
 }
 

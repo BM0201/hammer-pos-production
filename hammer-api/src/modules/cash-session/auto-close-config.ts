@@ -64,17 +64,31 @@ export function normalizeCashAutoCloseConfig(
   };
 }
 
+// TTL cache: read on every cron tick and on cash-session open, but changed only
+// by rare admin actions. 60s TTL saves a Neon round trip per call on warm
+// instances; the update below invalidates the local cache immediately.
+const CONFIG_CACHE_TTL_MS = 60_000;
+let configCache: { value: CashAutoCloseConfig; expiresAt: number } | null = null;
+
 /** Read the current auto-close config, returning defaults when unset or corrupt. */
 export async function getCashAutoCloseConfig(): Promise<CashAutoCloseConfig> {
+  if (configCache && configCache.expiresAt > Date.now()) return { ...configCache.value };
+
   const row = await prisma.systemSetting.findUnique({
     where: { key: CASH_AUTO_CLOSE_SETTING_KEY },
   });
-  if (!row) return { ...DEFAULT_CASH_AUTO_CLOSE_CONFIG };
-  try {
-    return normalizeCashAutoCloseConfig(JSON.parse(row.value));
-  } catch {
-    return { ...DEFAULT_CASH_AUTO_CLOSE_CONFIG };
+  let config: CashAutoCloseConfig;
+  if (!row) {
+    config = { ...DEFAULT_CASH_AUTO_CLOSE_CONFIG };
+  } else {
+    try {
+      config = normalizeCashAutoCloseConfig(JSON.parse(row.value));
+    } catch {
+      config = { ...DEFAULT_CASH_AUTO_CLOSE_CONFIG };
+    }
   }
+  configCache = { value: config, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
+  return { ...config };
 }
 
 /** Persist a new auto-close config (merged over the current one) and return the result. */
@@ -91,6 +105,7 @@ export async function updateCashAutoCloseConfig(
     create: { key: CASH_AUTO_CLOSE_SETTING_KEY, value, updatedByUserId: userId ?? null },
     update: { value, updatedByUserId: userId ?? null },
   });
+  configCache = { value: merged, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
 
   await prisma.auditLog.create({
     data: {

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -9,7 +9,7 @@ import { ok, fail } from "@/lib/api/response";
 type Params = { params: Promise<{ id: string }> };
 
 /** GET /api/employees/:id — get employee detail */
-export async function GET(req: NextRequest, { params }: Params) {
+export async function GET(_req: NextRequest, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);

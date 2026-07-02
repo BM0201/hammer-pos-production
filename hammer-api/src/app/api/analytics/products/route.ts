@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -18,7 +18,8 @@ export async function GET(req: NextRequest) {
     const xyzClass = url.searchParams.get("xyzClass") ?? undefined;
     const branchId = url.searchParams.get("branchId") ?? undefined;
     const withPricing = url.searchParams.get("withPricing") === "true";
-    const take = parseInt(url.searchParams.get("take") ?? "50");
+    const takeParam = parseInt(url.searchParams.get("take") ?? "50", 10);
+    const take = Number.isFinite(takeParam) ? Math.min(Math.max(takeParam, 1), 200) : 50;
 
     const where: any = { isActive: true };
     if (abcClass) where.abcClassification = abcClass;
@@ -44,14 +45,13 @@ export async function GET(req: NextRequest) {
       orderBy: [{ abcClassification: "asc" }, { name: "asc" }],
     });
 
-    // Optionally include dynamic pricing
-    let enriched = products.map((p) => ({ ...p, dynamicPrice: null as any }));
+    // Optionally include dynamic pricing (fetched in parallel instead of sequentially)
+    const enriched = products.map((p) => ({ ...p, dynamicPrice: null as any }));
     if (withPricing) {
-      for (let i = 0; i < enriched.length; i++) {
-        try {
-          enriched[i].dynamicPrice = await calculateDynamicPrice(enriched[i].id, branchId);
-        } catch { /* skip */ }
-      }
+      const prices = await Promise.all(
+        enriched.map((p) => calculateDynamicPrice(p.id, branchId).catch(() => null)),
+      );
+      prices.forEach((price, i) => { enriched[i].dynamicPrice = price; });
     }
 
     return ok(enriched);

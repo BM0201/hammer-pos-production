@@ -151,7 +151,7 @@ export const bootstrapCategoryPoliciesSchema = z.object({
 export const applyPricingSchema = z.object({
   productId: z.string().cuid(),
   branchId: z.string().cuid().optional(),
-  applyScope: z.enum(["BRANCH", "GLOBAL"]),
+  applyScope: z.literal("BRANCH"),
   suggestedPrice: nonNegativeNumericInput.refine((value) => value > 0, "El precio sugerido debe ser mayor que 0"),
   minPrice: nonNegativeNumericInput.optional(),
   maxPrice: nonNegativeNumericInput.nullable().optional(),

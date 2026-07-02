@@ -4,7 +4,7 @@ export const catalogInventoryQuerySchema = z.object({
   q: z.string().trim().optional(),
   branchId: z.string().cuid().optional(),
   categoryId: z.string().cuid().optional(),
-  filter: z.enum(["LOW_STOCK", "ZERO_STOCK", "NEGATIVE_STOCK", "NO_COST", "NO_PRICE"]).optional(),
+  filter: z.enum(["LOW_STOCK", "ZERO_STOCK", "NEGATIVE_STOCK", "NO_COST", "NO_PRICE", "NO_BRANCH_PRICE"]).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });

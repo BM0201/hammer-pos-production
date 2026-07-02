@@ -36,7 +36,14 @@ export async function detectInventoryDecisions(ctx: BrainDetectorContext): Promi
     }),
     prisma.product.findMany({
       where: { isActive: true, ...(ctx.branchId ? { inventoryBalances: { some: { branchId: ctx.branchId } } } : {}) },
-      select: { id: true, sku: true, name: true, standardSalePrice: true, category: { select: { id: true, code: true, name: true } } },
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        standardSalePrice: true,
+        category: { select: { id: true, code: true, name: true } },
+        branchProductSettings: { select: { branchId: true, branchPrice: true } },
+      },
       take: 500,
       orderBy: { name: "asc" },
     }),
@@ -245,13 +252,16 @@ export async function detectInventoryDecisions(ctx: BrainDetectorContext): Promi
       });
     }
 
-    if (n(product.standardSalePrice) <= 0) {
+    // El precio de venta es obligatorio por sucursal (sin fallback a standardSalePrice):
+    // un producto solo esta realmente "sin precio" si ninguna sucursal tiene branchPrice.
+    const hasAnyBranchPrice = product.branchProductSettings.some((s) => n(s.branchPrice) > 0);
+    if (!hasAnyBranchPrice) {
       decisions.push({
         category: "INVENTORY",
         severity: isWoodCategory ? "HIGH" : "HIGH",
         title: `${isWoodCategory ? "Madera" : "Producto"} sin precio: ${product.sku} - ${product.name}`,
-        description: "Producto activo sin precio base de venta.",
-        recommendation: "Definir precio antes de venderlo en POS para evitar ventas sin margen.",
+        description: "Producto activo sin precio de venta asignado en ninguna sucursal.",
+        recommendation: "Definir precio por sucursal en Catalogo -> Precios y costos antes de venderlo en POS.",
         productId: product.id,
         confidenceScore: 0.96,
         riskScore: riskScoreFor("HIGH", 0.96),

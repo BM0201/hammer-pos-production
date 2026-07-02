@@ -27,11 +27,21 @@ export async function POST(request: Request, context: { params: Promise<{ orderI
 
     const order = await prisma.saleOrder.findUniqueOrThrow({ where: { id: parsed.data.orderId } });
 
-    // RBAC
-    requireBranchCapability(session, order.branchId, CAPABILITIES.DISPATCH_MARK);
+    try {
+      // RBAC
+      requireBranchCapability(session, order.branchId, CAPABILITIES.DISPATCH_MARK);
 
-    // Workflow guard: dispatch must be enabled
-    await assertBranchWorkflowAction(order.branchId, WORKFLOW_ACTIONS.MARK_DISPATCHED);
+      // Workflow guard: dispatch must be enabled
+      await assertBranchWorkflowAction(order.branchId, WORKFLOW_ACTIONS.MARK_DISPATCHED);
+    } catch (denyError) {
+      await logDispatchDenied({
+        actorUserId: session.userId,
+        branchId: order.branchId,
+        entityId: order.id,
+        reason: denyError instanceof Error ? denyError.message : "UNKNOWN",
+      });
+      throw denyError;
+    }
 
     let data: Awaited<ReturnType<typeof markOrderDispatched>> | null = null;
     try {

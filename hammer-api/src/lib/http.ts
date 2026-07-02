@@ -92,6 +92,9 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "PRODUCT_INACTIVE") {
       return errJson("VALIDATION_ERROR", "El producto no está activo.", 400);
     }
+    if (error.message === "PRODUCT_HAS_NO_BRANCH_PRICE") {
+      return errJson("PRODUCT_HAS_NO_BRANCH_PRICE", "Este producto no tiene precio de venta asignado en esta sucursal. Asígnalo en Catálogo → Precios y costos antes de venderlo.", 422);
+    }
 
     // Operational day errors
     if (error.message === "OPERATIONAL_DAY_NOT_CLOSED") {

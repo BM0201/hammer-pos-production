@@ -57,16 +57,32 @@ export function normalizeOperationalDayAutoConfig(
   };
 }
 
+// TTL cache: this config is read on every cron tick (every 10 min, plus twice
+// per operational-automation run) but changes only via rare admin actions.
+// 60s TTL on warm serverless instances avoids re-hitting Neon per call; the
+// update function below invalidates the local cache immediately. Cross-instance
+// staleness is bounded to 60s, which is harmless for open/close schedules.
+const CONFIG_CACHE_TTL_MS = 60_000;
+let configCache: { value: OperationalDayAutoConfig; expiresAt: number } | null = null;
+
 export async function getOperationalDayAutoConfig(): Promise<OperationalDayAutoConfig> {
+  if (configCache && configCache.expiresAt > Date.now()) return { ...configCache.value };
+
   const row = await prisma.systemSetting.findUnique({
     where: { key: OPERATIONAL_DAY_AUTO_SETTING_KEY },
   });
-  if (!row) return { ...DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG };
-  try {
-    return normalizeOperationalDayAutoConfig(JSON.parse(row.value));
-  } catch {
-    return { ...DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG };
+  let config: OperationalDayAutoConfig;
+  if (!row) {
+    config = { ...DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG };
+  } else {
+    try {
+      config = normalizeOperationalDayAutoConfig(JSON.parse(row.value));
+    } catch {
+      config = { ...DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG };
+    }
   }
+  configCache = { value: config, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
+  return { ...config };
 }
 
 export async function updateOperationalDayAutoConfig(
@@ -82,6 +98,7 @@ export async function updateOperationalDayAutoConfig(
     create: { key: OPERATIONAL_DAY_AUTO_SETTING_KEY, value, updatedByUserId: userId ?? null },
     update: { value, updatedByUserId: userId ?? null },
   });
+  configCache = { value: merged, expiresAt: Date.now() + CONFIG_CACHE_TTL_MS };
 
   await prisma.auditLog.create({
     data: {

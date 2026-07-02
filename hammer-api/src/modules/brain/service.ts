@@ -49,10 +49,6 @@ function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function nestedRecord(value: unknown, key: string): Record<string, unknown> {
-  return recordValue(recordValue(value)[key]);
-}
-
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }

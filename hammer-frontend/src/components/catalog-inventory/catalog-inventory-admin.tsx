@@ -232,6 +232,7 @@ type CenterData = {
     grossMarginPercent: number | null;
     productsWithoutCost: number;
     productsWithoutPrice: number;
+    missingPriceCount: number;
   };
   products: ProductRow[];
   balances: ProductRow["inventoryBalances"];
@@ -243,10 +244,10 @@ type CenterData = {
 };
 
 type BranchPricingCostRow = {
-  standardSalePrice: number;
+  referencePrice: number;
   branchPrice: number | null;
-  effectivePrice: number;
-  priceSource: "GLOBAL" | "BRANCH";
+  effectivePrice: number | null;
+  priceSource: "BRANCH" | "MISSING";
   baseWeightedAverageCost: number | null;
   weightedAverageCost: number | null;
   branchCost: number | null;
@@ -350,8 +351,8 @@ function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchP
   const setting = product.branchProductSettings.find((item) => item.branchId === branch.id);
   const branchPrice = numberOrNull(setting?.branchPrice);
   const branchCost = numberOrNull(setting?.branchCost);
-  const standardSalePrice = Number(product.basePrice) || 0;
-  const effectivePrice = branchPrice ?? standardSalePrice;
+  const referencePrice = Number(product.basePrice) || 0;
+  const effectivePrice = branchPrice;
   const sharedWac = numberOrNull(product.allSharedInventoryBalances?.find((item) => item.branchId === branch.id)?.weightedAverageCost);
   const directWac = numberOrNull(product.inventoryBalances.find((item) => item.branchId === branch.id)?.weightedAverageCost);
   const baseWeightedAverageCost = sharedWac ?? directWac;
@@ -360,18 +361,19 @@ function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchP
     ? null
     : baseWeightedAverageCost * (product.stockConversion ? conversionFactor : 1);
   const effectiveCost = numberOrNull(product.baseCost);
-  const effectiveMarginPercent = effectivePrice > 0 && effectiveCost !== null && effectiveCost > 0
+  const effectiveMarginPercent = effectivePrice !== null && effectivePrice > 0 && effectiveCost !== null && effectiveCost > 0
     ? ((effectivePrice - effectiveCost) / effectivePrice) * 100
     : null;
   const warnings: string[] = [];
+  if (effectivePrice === null) warnings.push("Sin precio en esta sucursal");
   if (effectiveCost === null) warnings.push("No se puede calcular margen sin costo efectivo.");
-  if (effectiveCost !== null && effectivePrice < effectiveCost) warnings.push("Precio bajo costo.");
+  if (effectiveCost !== null && effectivePrice !== null && effectivePrice < effectiveCost) warnings.push("Precio bajo costo.");
 
   return {
-    standardSalePrice,
+    referencePrice,
     branchPrice,
     effectivePrice,
-    priceSource: branchPrice !== null ? "BRANCH" : "GLOBAL",
+    priceSource: branchPrice !== null ? "BRANCH" : "MISSING",
     baseWeightedAverageCost,
     weightedAverageCost,
     branchCost,
@@ -1055,13 +1057,14 @@ export function CatalogInventoryAdmin() {
                   </select>
                 </div>
                 <Input
-                  label="Precio de venta (C$) *"
+                  label="Precio inicial (sucursal principal) *"
                   type="number"
                   min="0.01"
                   step="0.01"
                   value={newProduct.standardSalePrice}
                   onChange={(e) => setNewProduct({ ...newProduct, standardSalePrice: e.target.value })}
                   placeholder="Ej: 350.00"
+                  hint="Este valor se usa solo para prellenar el precio en la sucursal donde crees el producto. Cada sucursal puede tener su propio precio en Precios y costos."
                 />
                 <Input
                   label="Descripción (opcional)"
@@ -1357,6 +1360,9 @@ export function CatalogInventoryAdmin() {
             products={data.products}
             selectedBranchId={branchId}
             focusedProductId={focusedPricingProductId}
+            missingPriceCount={data.kpis.missingPriceCount}
+            onlyMissing={filter === "NO_BRANCH_PRICE"}
+            onToggleOnlyMissing={() => { setFilter((prev) => (prev === "NO_BRANCH_PRICE" ? "" : "NO_BRANCH_PRICE")); setPage(1); }}
             onSelectBranch={(nextBranchId) => { setBranchId(nextBranchId); setPage(1); }}
             onSave={updateBranchPrice}
             onSaveGlobalCost={updateGlobalCost}
@@ -3107,6 +3113,9 @@ function PricingPanel({
   products,
   selectedBranchId,
   focusedProductId,
+  missingPriceCount,
+  onlyMissing,
+  onToggleOnlyMissing,
   onSelectBranch,
   onSave,
   onSaveGlobalCost,
@@ -3116,6 +3125,9 @@ function PricingPanel({
   products: ProductRow[];
   selectedBranchId?: string;
   focusedProductId?: string | null;
+  missingPriceCount: number;
+  onlyMissing: boolean;
+  onToggleOnlyMissing: () => void;
   onSelectBranch: (branchId: string) => void;
   onSave: (product: ProductRow, branch: Branch, field: "branchPrice", value: string) => Promise<void>;
   onSaveGlobalCost?: (product: ProductRow, value: string) => Promise<void>;
@@ -3135,6 +3147,16 @@ function PricingPanel({
     [branches, selectedBranchId],
   );
   const pricingBranches = useMemo(() => activeBranch ? [activeBranch] : [], [activeBranch]);
+
+  // If no branch is selected yet, the panel displays branches[0] locally but the
+  // parent never fetched data scoped to it — kpis.missingPriceCount would then
+  // reflect the global (all-branches) count instead of this branch's. Sync back
+  // so the banner and the table always agree on which branch they describe.
+  useEffect(() => {
+    if (!selectedBranchId && branches[0]) {
+      onSelectBranch(branches[0].id);
+    }
+  }, [selectedBranchId, branches, onSelectBranch]);
   const filteredProducts = useMemo(() => products.filter((product) => {
     if (focusedProductId && product.id !== focusedProductId) return false;
     const term = productFilter.trim().toLowerCase();
@@ -3211,38 +3233,74 @@ function PricingPanel({
     }
   }
 
+  const healthyMarginCount = filteredProducts.reduce((count, product) => {
+    if (!activeBranch) return count;
+    const row = buildBranchPricingCostRow(product, activeBranch);
+    return marginBadgeVariant(row.effectiveMarginPercent) === "success" ? count + 1 : count;
+  }, 0);
+
   return (
     <Card noPadding>
       <div className="hm-card-header-green">
         <h2 className="text-sm font-semibold flex items-center gap-2">
-          <DollarSign className="h-4 w-4" /> Precios por sucursal y costo global
+          <DollarSign className="h-4 w-4" /> Precios de venta {activeBranch ? `· ${activeBranch.code} · ${activeBranch.name}` : ""}
         </h2>
-        <p className="mt-0.5 text-xs opacity-90">Edita precios por sucursal. Los margenes usan el costo global efectivo.</p>
+        <p className="mt-0.5 text-xs opacity-90">El costo de compra es el mismo para todas las sucursales. El precio de venta es obligatorio en esta vista.</p>
       </div>
+
+      {/* Franja de costo global — solo lectura/enlace, el costo se gestiona una sola vez */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--color-info-100)] text-[var(--color-info-700)]">
+            <DollarSign className="h-4 w-4" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-[var(--color-text)]">Costos de compra</p>
+            <p className="text-xs text-[var(--color-text-muted)]">Se gestionan una sola vez y aplican a todas las sucursales</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Franja de KPIs */}
+      <div className="flex flex-wrap gap-2 px-4 pt-3">
+        <div className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm">
+          <span className="font-bold text-[var(--color-text)]">{filteredProducts.length}</span>{" "}
+          <span className="text-xs text-[var(--color-text-muted)]">productos cargados{activeBranch ? ` en ${activeBranch.code}` : ""}</span>
+        </div>
+        <div className="rounded-lg border border-[var(--color-danger-200)] px-3 py-1.5 text-sm">
+          <span className="font-bold text-[var(--color-danger-600)]">{missingPriceCount}</span>{" "}
+          <span className="text-xs text-[var(--color-text-muted)]">sin precio asignado</span>
+        </div>
+        <div className="rounded-lg border border-[var(--color-success-200)] px-3 py-1.5 text-sm">
+          <span className="font-bold text-[var(--color-success-700)]">{healthyMarginCount}</span>{" "}
+          <span className="text-xs text-[var(--color-text-muted)]">con margen saludable</span>
+        </div>
+      </div>
+
       {/* Branch pricing filters */}
-      <div className="grid gap-2 px-4 pt-3 md:grid-cols-[240px_1fr_auto_auto]">
+      <div className="grid gap-2 px-4 pt-3 md:grid-cols-[240px_1fr_auto_auto_auto]">
         <select className="hm-input" value={activeBranch?.id ?? ""} onChange={(event) => onSelectBranch(event.target.value)}>
           {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} - {branch.name}</option>)}
         </select>
         <Input value={productFilter} onChange={(event) => setProductFilter(event.target.value)} placeholder="Buscar producto, SKU o categoria" />
+        <Button variant={onlyMissing ? "secondary" : "ghost"} onClick={onToggleOnlyMissing}>Solo sin precio</Button>
         <Button variant={comparisonMode ? "secondary" : "ghost"} onClick={() => setComparisonMode((value) => !value)}>Vista comparativa</Button>
         <Button variant="ghost" onClick={() => setProductFilter("")}>Limpiar</Button>
       </div>
       {comparisonMode ? (
         <div className="overflow-x-auto p-4">
           <table className="hm-table min-w-[900px] w-full">
-            <thead><tr><th>Producto</th><th>Precio global</th>{branches.map((branch) => <th key={branch.id}>{branch.code} precio / costo global</th>)}<th>Modo</th></tr></thead>
+            <thead><tr><th>Producto</th>{branches.map((branch) => <th key={branch.id}>{branch.code} precio / costo</th>)}<th>Modo</th></tr></thead>
             <tbody>
               {filteredProducts.map((product) => (
                 <tr key={product.id}>
                   <td className="font-medium">{product.sku} - {product.name}</td>
-                  <td>{money(product.basePrice)}</td>
                   {branches.map((branch) => {
                     const row = buildBranchPricingCostRow(product, branch);
                     return (
                       <td key={branch.id} className="text-xs">
-                        <div>Precio: {formatMoneyOrNd(row.effectivePrice)} ({row.priceSource === "BRANCH" ? "Sucursal" : "Global"})</div>
-                        <div>Costo global: {formatMoneyOrNd(row.effectiveCost)}</div>
+                        <div>Precio: {formatMoneyOrNd(row.effectivePrice)} ({row.priceSource === "BRANCH" ? "Sucursal" : "Sin precio"})</div>
+                        <div>Costo de compra: {formatMoneyOrNd(row.effectiveCost)}</div>
                         <div>Margen: {formatMarginOrNd(row.effectiveMarginPercent)}</div>
                       </td>
                     );
@@ -3255,18 +3313,13 @@ function PricingPanel({
         </div>
       ) : null}
       <div className="overflow-x-auto p-4">
-        <table className="hm-table min-w-[1200px] w-full">
+        <table className="hm-table min-w-[900px] w-full">
           <thead>
             <tr>
               <th className="min-w-[220px]">Producto</th>
-              <th>Precio global</th>
-              <th>Precio sucursal</th>
-              <th>Precio efectivo</th>
-              <th>WAC referencia</th>
-              <th title="Costo que aplica a todas las sucursales. Se puede sobreescribir por sucursal.">Costo universal ↕</th>
-              <th>Margen efectivo</th>
-              <th>Fuente</th>
-              <th>Alertas</th>
+              <th title="Costo que aplica a todas las sucursales. Se puede sobreescribir por sucursal.">Costo de compra ↕</th>
+              <th>Precio de venta{activeBranch ? ` · ${activeBranch.code}` : ""}</th>
+              <th>Margen</th>
               <th title="Asignación manual: activa el producto en esta sucursal aunque no tenga stock ni historial">Asignado ★</th>
               <th className="min-w-[100px]">Acciones</th>
             </tr>
@@ -3278,8 +3331,11 @@ function PricingPanel({
               const cell = draft[p.id]?.[activeBranch.id] ?? { cost: "", price: "", dirty: false };
               const priceKey = `${p.id}-${activeBranch.id}-price`;
               const hasDirty = Boolean(cell.dirty);
+              const isMissing = row.effectivePrice === null;
+              const actionVariant = isMissing ? "danger" : hasDirty ? "success" : "ghost";
+              const actionLabel = isMissing ? "Asignar" : hasDirty ? "Guardar cambios" : "Guardado";
               return (
-                <tr key={p.id}>
+                <tr key={p.id} className={isMissing ? "bg-[color-mix(in_srgb,var(--color-danger-500)_6%,transparent)]" : undefined}>
                   <td className="font-medium">
                     <div>{p.sku} - {p.name}</div>
                     {row.isConvertibleStock ? (
@@ -3288,20 +3344,9 @@ function PricingPanel({
                         {row.conversionFactor && row.conversionFactor > 1 ? <span className="rounded border border-[var(--color-border)] px-1.5 py-0.5">WAC convertido x {row.conversionFactor}</span> : null}
                       </div>
                     ) : null}
-                  </td>
-                  <td>{formatMoneyOrNd(row.standardSalePrice)}</td>
-                  <td className="py-2">
-                    <div className="flex items-center gap-1">
-                      <Input className={`h-7 text-xs flex-1 ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`} type="number" min="0" step="0.01" placeholder="Precio" value={cell.price} onChange={(e) => updateCell(p.id, activeBranch.id, "price", e.target.value)} />
-                      <button type="button" title="Guardar precio" className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === priceKey ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700 shadow-sm hover:shadow"}`} disabled={savingKey === priceKey} onClick={() => saveCell(p, activeBranch, "price")}>
-                        {savingKey === priceKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                      </button>
-                    </div>
-                  </td>
-                  <td>{formatMoneyOrNd(row.effectivePrice)}</td>
-                  <td>
-                    <div>{formatMoneyOrNd(row.weightedAverageCost)}</div>
-                    {row.isConvertibleStock ? <div className="text-[0.65rem] text-[var(--color-text-muted)]">Base: {formatMoneyOrNd(row.baseWeightedAverageCost)} / {row.baseUnit}</div> : null}
+                    {row.warnings.filter((w) => w !== "Sin precio en esta sucursal").map((warning) => (
+                      <Badge key={warning} variant={warning.includes("bajo costo") ? "danger" : "warning"}>{warning}</Badge>
+                    ))}
                   </td>
                   <td className="py-1.5">
                     {onSaveGlobalCost ? (
@@ -3309,12 +3354,12 @@ function PricingPanel({
                         <Input
                           className={`h-7 text-xs flex-1 ${globalCostDraft[p.id] !== (p.globalCost != null ? String(p.globalCost) : "") ? "ring-2 ring-amber-300/60" : ""}`}
                           type="number" min="0" step="0.01"
-                          placeholder="Sin costo univ."
+                          placeholder="Sin costo de compra"
                           value={globalCostDraft[p.id] ?? ""}
                           onChange={(e) => setGlobalCostDraft((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                          title="Costo universal — aplica a todas las sucursales sin override"
+                          title="Costo de compra — aplica a todas las sucursales sin override"
                         />
-                        <button type="button" title="Guardar costo universal"
+                        <button type="button" title="Guardar costo de compra"
                           className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === `${p.id}-global-cost` ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm"}`}
                           disabled={savingKey === `${p.id}-global-cost`}
                           onClick={async () => {
@@ -3327,16 +3372,24 @@ function PricingPanel({
                       </div>
                     ) : formatMoneyOrNd(row.effectiveCost)}
                   </td>
-                  <td><Badge variant={marginBadgeVariant(row.effectiveMarginPercent)}>{formatMarginOrNd(row.effectiveMarginPercent)}</Badge></td>
-                  <td className="text-xs">
-                    <div>Precio: {row.priceSource === "BRANCH" ? "Sucursal" : "Global"}</div>
-                    <div>Costo: {row.costSource === "GLOBAL" ? "Global" : "Sin costo"}</div>
-                  </td>
-                  <td>
-                    <div className="flex flex-col gap-1 text-xs">
-                      {row.warnings.length === 0 ? <span className="text-[var(--color-text-muted)]">OK</span> : row.warnings.map((warning) => <Badge key={warning} variant={warning.includes("bajo costo") ? "danger" : "warning"}>{warning}</Badge>)}
+                  <td className="py-2">
+                    <div className="flex items-center gap-1">
+                      <Input
+                        className={`h-7 text-xs flex-1 ${isMissing ? "border-[var(--color-danger-400)] bg-[color-mix(in_srgb,var(--color-danger-500)_8%,var(--color-surface))]" : ""} ${cell.dirty ? "ring-2 ring-amber-300/60" : ""}`}
+                        type="number" min="0" step="0.01"
+                        placeholder="C$ 0.00"
+                        value={cell.price}
+                        onChange={(e) => updateCell(p.id, activeBranch.id, "price", e.target.value)}
+                      />
+                      <button type="button" title="Guardar precio" className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === priceKey ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700 shadow-sm hover:shadow"}`} disabled={savingKey === priceKey} onClick={() => saveCell(p, activeBranch, "price")}>
+                        {savingKey === priceKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                      </button>
+                    </div>
+                    <div className={`mt-1 text-[0.6875rem] ${isMissing ? "font-semibold text-[var(--color-danger-600)]" : "text-[var(--color-text-muted)]"}`}>
+                      {isMissing ? "⚠ Falta precio en esta sucursal" : "Precio asignado en esta sucursal"}
                     </div>
                   </td>
+                  <td><Badge variant={marginBadgeVariant(row.effectiveMarginPercent)}>{formatMarginOrNd(row.effectiveMarginPercent)}</Badge></td>
                   <td className="text-center">
                     {onToggleBranchAssignment && activeBranch ? (() => {
                       const setting = p.branchProductSettings.find((s) => s.branchId === activeBranch.id);
@@ -3364,13 +3417,13 @@ function PricingPanel({
                     })() : null}
                   </td>
                   <td>
-                    <Button variant={hasDirty ? "success" : "ghost"} size="sm" onClick={() => saveAllDirty(p)} icon={<Save className="h-3.5 w-3.5" />}>Guardar fila</Button>
+                    <Button variant={actionVariant} size="sm" onClick={() => saveAllDirty(p)} icon={<Save className="h-3.5 w-3.5" />}>{actionLabel}</Button>
                   </td>
                 </tr>
               );
             })}
             {filteredProducts.length === 0 ? (
-              <tr><td colSpan={11} className="py-6 text-center text-[var(--color-text-muted)]">No hay productos.</td></tr>
+              <tr><td colSpan={6} className="py-6 text-center text-[var(--color-text-muted)]">No hay productos.</td></tr>
             ) : null}
           </tbody>
         </table>

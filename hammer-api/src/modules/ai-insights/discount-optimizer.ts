@@ -18,8 +18,6 @@
 import { prisma } from "@/lib/prisma";
 import {
   mean,
-  linearRegression,
-  trendDirection,
   daysAgo,
   type DiscountSuggestion,
   type Severity,

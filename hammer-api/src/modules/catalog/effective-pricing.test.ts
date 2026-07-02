@@ -24,7 +24,7 @@ type PricingInput = {
 // Inline the pure resolution logic mirrored from effective-pricing.ts so tests
 // remain in-process without a DB.
 function resolveEffectivePricingPure(input: PricingInput) {
-  const effectivePrice = input.branchPrice ?? input.standardSalePrice;
+  const effectivePrice = input.branchPrice;
   const effectiveCost = input.branchCost
     ?? input.averageCost
     ?? input.globalCost
@@ -46,7 +46,7 @@ function resolveEffectivePricingPure(input: PricingInput) {
     effectiveCost,
     costSource,
     effectivePrice,
-    priceSource: input.branchPrice === null ? "STANDARD" : "BRANCH",
+    priceSource: input.branchPrice === null ? "MISSING" : "BRANCH",
   };
 }
 
@@ -127,14 +127,14 @@ test("effectiveCost: retorna null y NONE cuando no hay ningún costo", () => {
 
 test("effectivePrice: usa branchPrice cuando existe", () => {
   const result = resolveEffectivePricingPure({ ...BASE, branchPrice: d(90) });
-  assert.equal(result.effectivePrice.toNumber(), 90);
+  assert.equal(result.effectivePrice?.toNumber(), 90);
   assert.equal(result.priceSource, "BRANCH");
 });
 
-test("effectivePrice: usa standardSalePrice cuando no hay branchPrice", () => {
+test("effectivePrice: es null (sin fallback a standardSalePrice) cuando no hay branchPrice", () => {
   const result = resolveEffectivePricingPure({ ...BASE, branchPrice: null });
-  assert.equal(result.effectivePrice.toNumber(), 100);
-  assert.equal(result.priceSource, "STANDARD");
+  assert.equal(result.effectivePrice, null);
+  assert.equal(result.priceSource, "MISSING");
 });
 
 test("effectiveCost: branchCost=0 no cae al siguiente nivel (mantiene BRANCH con 0)", () => {

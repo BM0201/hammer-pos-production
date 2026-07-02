@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import Link from "next/link";
 import type { Route } from "next";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { isMasterRole, isMasterOrAbove, isOwnerRole, isSystemAdminRole, resolveRoleHome } from "@/modules/rbac/role-routing";
 import { getRoleColor } from "@/lib/role-colors";
@@ -41,6 +41,7 @@ import {
   Brain,
   Printer,
   Factory,
+  History,
   LogOut,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -115,6 +116,7 @@ function buildNavSections(
         items: [
           { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain, capabilities: [CAPABILITIES.BRAIN_VIEW] },
           { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart, capabilities: [CAPABILITIES.MASTER_INVENTORY_VIEW] },
+          { href: "/app/master/history", label: "Historial Completo", icon: History },
         ],
       },
     ]);
@@ -171,6 +173,7 @@ function buildNavSections(
         items: [
           { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain },
           { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart },
+          { href: "/app/master/history", label: "Historial Completo", icon: History },
         ],
       },
     ]);
@@ -222,6 +225,7 @@ function buildNavSections(
         items: [
           { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain },
           { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart },
+          { href: "/app/master/history", label: "Historial Completo", icon: History },
         ],
       },
     ]);
@@ -278,12 +282,13 @@ function buildNavSections(
 /* ────────────────────────────────────────────────────────────── */
 
 function LogoutButton() {
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const handleLogout = async () => {
     setLoading(true);
     try { await apiFetch("/api/auth/logout", { method: "POST" }); } catch {}
-    router.push("/login");
+    // Navegación dura (no router.push): descarta todo el estado en memoria del
+    // SPA (caches de CSRF/sesión, datos de la cuenta anterior) antes del login.
+    window.location.assign("/login");
   };
   return (
     <button
@@ -317,6 +322,15 @@ export function AppSidebar({
 }: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships" | "effectiveCapabilities"> & { username: string; userId: string }) {
   const pathname = usePathname();
   const sections = buildNavSections({ roleCode, globalRoles, branchMemberships, effectiveCapabilities });
+
+  // Ítem activo = el href más largo que sea prefijo de la ruta actual (gana solo
+  // uno). Con startsWith por ítem, "/app/master" quedaba resaltado en TODAS las
+  // páginas master a la vez que el ítem específico de la página.
+  const activeHref = sections
+    .flatMap((section) => section.items)
+    .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
+    .reduce<string | null>((best, item) => (best === null || item.href.length > best.length ? item.href : best), null);
+
   const isMaster = isMasterOrAbove(roleCode as string, globalRoles as unknown as string[]);
   const roleCfg = getRoleColor(roleCode);
   const homeHref = resolveRoleHome(roleCode as string, globalRoles as unknown as string[]);
@@ -345,15 +359,18 @@ export function AppSidebar({
   }, [pathname, closeDesktopRail, closeMobile]);
 
   /* Outside clicks are handled by the overlay backdrop (see desktop sidebar
-     markup). Here we only need Escape-to-close while the rail is expanded. */
+     markup). Escape closes both the expanded rail and the mobile drawer. */
   useEffect(() => {
-    if (collapsed) return;
+    if (collapsed && !mobileOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeDesktopRail();
+      if (event.key === "Escape") {
+        closeDesktopRail();
+        closeMobile();
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [collapsed, closeDesktopRail]);
+  }, [collapsed, mobileOpen, closeDesktopRail, closeMobile]);
 
   /* Role-specific color classes */
   const roleActiveBg = `var(--color-${roleCfg.cssPrefix}-600)`;
@@ -462,7 +479,7 @@ export function AppSidebar({
             )}
             <div className="space-y-0.5">
               {section.items.map((item) => {
-                const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const active = item.href === activeHref;
                 const Icon = item.icon;
                 return (
                   <div key={item.href} className="relative sidebar-nav-item">

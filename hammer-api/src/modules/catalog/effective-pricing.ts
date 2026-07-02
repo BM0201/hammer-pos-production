@@ -1,5 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
-import { convertBaseUnitCostToSaleUnitCost, resolveInventoryProductForMovement } from "@/modules/inventory/unit-conversion";
+import { convertBaseUnitCostToSaleUnitCost, resolveInventoryProductForMovement, getProductStockConversionsBatch } from "@/modules/inventory/unit-conversion";
 
 type PricingClient = PrismaClient | Prisma.TransactionClient;
 
@@ -7,14 +7,14 @@ export type EffectivePricing = {
   productId: string;
   standardSalePrice: Prisma.Decimal;
   branchPrice: Prisma.Decimal | null;
-  effectivePrice: Prisma.Decimal;
+  effectivePrice: Prisma.Decimal | null;
   branchCost: Prisma.Decimal | null;
   weightedAverageCost: Prisma.Decimal | null;
   globalCost: Prisma.Decimal | null;
   averageCost: Prisma.Decimal | null;
   lastPurchaseCost: Prisma.Decimal | null;
   effectiveCost: Prisma.Decimal | null;
-  priceSource: "BRANCH" | "STANDARD";
+  priceSource: "BRANCH" | "MISSING";
   costSource: "BRANCH" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
 };
 
@@ -71,6 +71,78 @@ export async function getEffectiveProductPricing(
   });
 }
 
+/**
+ * Batch version of getEffectiveProductPricing — resolves effective pricing for
+ * many (branchId, productId) pairs in a fixed small number of queries instead
+ * of ~4 queries per pair. Used by hot loops (Brain detectors, replenishment,
+ * commercial-intelligence) that previously called getEffectiveProductPricing
+ * once per item, turning O(n) sequential round trips into O(1).
+ */
+export async function getEffectiveProductPricingBatch(
+  txOrPrisma: PricingClient,
+  items: Array<{ branchId: string; productId: string }>,
+): Promise<Map<string, EffectivePricing>> {
+  const result = new Map<string, EffectivePricing>();
+  if (items.length === 0) return result;
+
+  const productIds = [...new Set(items.map((item) => item.productId))];
+  const branchIds = [...new Set(items.map((item) => item.branchId))];
+
+  const [products, conversionByProductId, branchSettings] = await Promise.all([
+    txOrPrisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, standardSalePrice: true, globalCost: true, averageCost: true, lastPurchaseCost: true },
+    }),
+    getProductStockConversionsBatch(txOrPrisma, productIds),
+    txOrPrisma.branchProductSetting.findMany({
+      where: { productId: { in: productIds }, branchId: { in: branchIds } },
+      select: { branchId: true, productId: true, branchPrice: true, branchCost: true },
+    }),
+  ]);
+
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const settingByKey = new Map(branchSettings.map((setting) => [`${setting.branchId}:${setting.productId}`, setting]));
+
+  const inventoryProductIdByProductId = new Map(
+    productIds.map((productId) => [productId, conversionByProductId.get(productId)?.canonicalProductId ?? productId]),
+  );
+  const inventoryProductIds = [...new Set(inventoryProductIdByProductId.values())];
+
+  const balances = await txOrPrisma.inventoryBalance.findMany({
+    where: { productId: { in: inventoryProductIds }, branchId: { in: branchIds } },
+    select: { branchId: true, productId: true, weightedAverageCost: true },
+  });
+  const balanceByKey = new Map(balances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]));
+
+  for (const { branchId, productId } of items) {
+    const key = `${branchId}:${productId}`;
+    if (result.has(key)) continue;
+    const product = productById.get(productId);
+    if (!product) continue;
+
+    const conversion = conversionByProductId.get(productId) ?? null;
+    const inventoryProductId = inventoryProductIdByProductId.get(productId) ?? productId;
+    const balance = balanceByKey.get(`${branchId}:${inventoryProductId}`);
+    const saleUnitWac = balance?.weightedAverageCost && conversion
+      ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: balance.weightedAverageCost, conversionFactor: conversion.conversionFactor })
+      : balance?.weightedAverageCost ?? null;
+    const setting = settingByKey.get(key);
+
+    result.set(key, resolveEffectivePricing({
+      productId: product.id,
+      standardSalePrice: product.standardSalePrice,
+      globalCost: product.globalCost,
+      averageCost: product.averageCost,
+      lastPurchaseCost: product.lastPurchaseCost,
+      branchPrice: setting?.branchPrice ?? null,
+      branchCost: setting?.branchCost ?? null,
+      weightedAverageCost: saleUnitWac,
+    }));
+  }
+
+  return result;
+}
+
 export function mapProductWithEffectivePricing<TProduct extends ProductWithOptionalBranchPricing>(
   product: TProduct,
   branchId?: string,
@@ -106,7 +178,7 @@ function resolveEffectivePricing(input: {
   branchCost: Prisma.Decimal | null;
   weightedAverageCost: Prisma.Decimal | null;
 }): EffectivePricing {
-  const effectivePrice = input.branchPrice ?? input.standardSalePrice;
+  const effectivePrice = input.branchPrice;
 
   // Prioridad de costo: branchCost > averageCost > globalCost > lastPurchaseCost > WAC > null.
   // branchCost permite que cada sucursal registre su propio costo de adquisición
@@ -141,7 +213,7 @@ function resolveEffectivePricing(input: {
     averageCost: input.averageCost ?? null,
     lastPurchaseCost: input.lastPurchaseCost ?? null,
     effectiveCost,
-    priceSource: input.branchPrice === null ? "STANDARD" : "BRANCH",
+    priceSource: input.branchPrice === null ? "MISSING" : "BRANCH",
     costSource,
   };
 }

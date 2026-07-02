@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { createPrintLog } from "@/modules/print/service";
-import type { DocumentType, PaymentMethod, PrintSettings, Prisma } from "@prisma/client";
+import type { DocumentType, PrintSettings } from "@prisma/client";
 
 type RenderFormat = "HTML" | "TEXT" | "JSON";
 

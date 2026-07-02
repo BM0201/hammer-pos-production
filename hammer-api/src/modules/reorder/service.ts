@@ -256,7 +256,6 @@ export async function evaluateReorderNeeds(params?: { branchId?: string }): Prom
   if (policies.length === 0) return { alertsCreated: 0, batchesCreated: 0, skippedDuplicates: 0 };
 
   // 2. Batch-load inventory balances for all (branch, product) pairs
-  const balancePairs = policies.map((p) => ({ branchId: p.branchId, productId: p.productId }));
   const allBranchIds = [...new Set(policies.map((p) => p.branchId))];
   const allProductIds = [...new Set(policies.map((p) => p.productId))];
 
@@ -297,6 +296,14 @@ export async function evaluateReorderNeeds(params?: { branchId?: string }): Prom
   const policyMap = new Map(
     allPolicies.map((p) => [`${p.branchId}:${p.productId}`, p]),
   );
+
+  // 5b. Products with an active production recipe (1 query). Most products have
+  // none, so this lets the loop skip findProductionOpportunitiesForProduct
+  // (~3-6 queries per call) for the vast majority of alerts.
+  const producibleProductIds = await prisma.productionRecipe.findMany({
+    where: { isActive: true, finishedProductId: { in: allProductIds } },
+    select: { finishedProductId: true },
+  }).then((rows) => new Set(rows.map((r) => r.finishedProductId)));
 
   // 6. Evaluate each policy
   type AlertData = {
@@ -390,10 +397,12 @@ export async function evaluateReorderNeeds(params?: { branchId?: string }): Prom
       reason = `${prodName}: stock (${currentNum}) bajo punto de reorden (${reorderNum}). No hay stock disponible en otras sucursales.`;
     }
 
-    const productionOptions = await findProductionOpportunitiesForProduct({
-      branchId: policy.branchId,
-      productId: policy.productId,
-    });
+    const productionOptions = producibleProductIds.has(policy.productId)
+      ? await findProductionOpportunitiesForProduct({
+          branchId: policy.branchId,
+          productId: policy.productId,
+        })
+      : [];
     const viableProduction = productionOptions.find((option) =>
       option.recommendationType === "PRODUCE_FROM_EXCESS"
       || option.recommendationType === "PRODUCE_FROM_AVAILABLE_STOCK",

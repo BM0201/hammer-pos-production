@@ -71,7 +71,7 @@ export type CachedProduct = {
   name: string;
   barcode?: string | null;
   categoryName?: string | null;
-  effectivePrice: number;
+  effectivePrice: number | null;
   unit: string;
   availableSaleStock: number | null;
 };

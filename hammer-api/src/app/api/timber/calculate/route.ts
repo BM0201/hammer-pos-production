@@ -1,6 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import { calculateTimber, DEFAULT_PRICING, type TimberPricing } from "@/modules/timber/calculator";
+import { calculateTimber, type TimberPricing } from "@/modules/timber/calculator";
 import { getPricingConfig } from "@/modules/timber/service";
 import { calculateTimberSchema } from "@/modules/timber/validators";
 import { toHttpErrorResponse } from "@/lib/http";

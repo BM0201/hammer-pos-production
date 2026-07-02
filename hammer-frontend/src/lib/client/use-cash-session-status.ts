@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CashSessionState } from "@/components/cash-session/cash-session-panel";
+import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 
 type CashBox = { id: string; code: string; description: string | null };
 type CashSession = {
@@ -23,13 +24,14 @@ function cashBoxLabel(box: CashBox | null | undefined) {
   return box.description ? `${box.code} - ${box.description}` : box.code;
 }
 
-export function useCashSessionStatus(branchId: string, intervalMs = 6000) {
+export function useCashSessionStatus(branchId: string, intervalMs = 12_000) {
   const [state, setState] = useState<CashSessionState>(CLOSED_STATE);
   const [cashBoxLabelText, setCashBoxLabelText] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [operatorRequired, setOperatorRequired] = useState(false);
   const [requiresCashBoxSelection, setRequiresCashBoxSelection] = useState(false);
   const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const publishSession = useCallback((session: CashSession, box: CashBox | null) => {
     const canOperate = session.canOperate ?? false;
@@ -142,15 +144,16 @@ export function useCashSessionStatus(branchId: string, intervalMs = 6000) {
     }
   }, [branchId, publishSession]);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    refresh();
-    const timer = window.setInterval(() => { refresh().catch(() => undefined); }, intervalMs);
-    return () => {
-      mountedRef.current = false;
-      window.clearInterval(timer);
-    };
-  }, [refresh, intervalMs]);
+  // Critical: cash session status gates payment collection, so it must keep
+  // refreshing even while the tab is briefly unfocused (unlike most polling,
+  // which pauses on document.hidden to save Vercel/Neon resources).
+  useOperationalPolling({
+    task: refresh,
+    intervalMs,
+    critical: true,
+    deps: [refresh],
+    onError: () => undefined,
+  });
 
   return {
     state,

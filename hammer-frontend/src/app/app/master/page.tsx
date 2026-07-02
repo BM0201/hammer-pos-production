@@ -140,6 +140,15 @@ type CommandCenter = {
     transferTenderTotal: number;
     otherTenderTotal: number;
   };
+  attention: {
+    pendingApprovals: number;
+    criticalBrainDecisions: number;
+    openSecurityAlerts: number;
+    daysPendingApproval: number;
+    staleOpenDays: number;
+    productsMissingPrice: number;
+    pendingDispatchTotal: number;
+  };
   users: {
     summary: { online: number; idle: number; offline: number; openCashSessions: number };
     list: ConnectedUser[];
@@ -356,6 +365,111 @@ function KpiV7({
           <span className="text-[11px] font-medium text-[var(--color-text-muted)]">{helper}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── Franja "Requiere atención" ── */
+
+type AttentionTone = "danger" | "warning" | "info";
+
+type AttentionItem = {
+  key: string;
+  count: number;
+  label: string;
+  href: string;
+  tone: AttentionTone;
+};
+
+const ATTENTION_TONE_STYLES: Record<AttentionTone, { bg: string; border: string; text: string }> = {
+  danger: { bg: "color-mix(in srgb, var(--color-danger-500) 10%, transparent)", border: "color-mix(in srgb, var(--color-danger-500) 35%, transparent)", text: "var(--color-danger-600)" },
+  warning: { bg: "color-mix(in srgb, var(--color-warning-500) 12%, transparent)", border: "color-mix(in srgb, var(--color-warning-500) 40%, transparent)", text: "var(--color-warning-700)" },
+  info: { bg: "color-mix(in srgb, var(--color-info-500) 10%, transparent)", border: "color-mix(in srgb, var(--color-info-500) 35%, transparent)", text: "var(--color-info-700)" },
+};
+
+function AttentionStrip({ items }: { items: AttentionItem[] }) {
+  const visible = items.filter((item) => item.count > 0);
+  if (visible.length === 0) {
+    return (
+      <div
+        className="flex items-center gap-2 rounded-lg border px-3.5 py-2.5"
+        style={{
+          background: "color-mix(in srgb, var(--v7-success) 7%, transparent)",
+          borderColor: "color-mix(in srgb, var(--v7-success) 25%, transparent)",
+        }}
+      >
+        <CheckCircle2 className="h-4 w-4 flex-shrink-0" style={{ color: "var(--v7-success)" }} />
+        <span className="text-[12px] font-medium" style={{ color: "var(--v7-success)" }}>
+          Sin pendientes que requieran tu decisión — todo al día.
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div
+      className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-3"
+      style={{ boxShadow: "var(--shadow-card)" }}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <AlertTriangle className="h-3.5 w-3.5 text-[var(--color-warning-600)]" />
+        <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-secondary)]">
+          Requiere tu atención
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {visible.map((item) => {
+          const tone = ATTENTION_TONE_STYLES[item.tone];
+          return (
+            <Link
+              key={item.key}
+              href={item.href as Route}
+              className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-transform hover:scale-[1.02]"
+              style={{ background: tone.bg, borderColor: tone.border, color: tone.text }}
+            >
+              <span className="font-mono font-bold">{item.count}</span>
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Desglose global de cobros del día por método ── */
+
+function PaymentMethodsStrip({ totals }: { totals: CommandCenter["totals"] }) {
+  const entries: Array<{ label: string; value: number; highlight?: boolean }> = [
+    { label: "Efectivo neto", value: totals.cashTenderNetTotal },
+    { label: "Tarjeta", value: totals.cardTenderTotal },
+    { label: "Transferencia", value: totals.transferTenderTotal },
+    { label: "Otros", value: totals.otherTenderTotal },
+    { label: "Pago pendiente", value: totals.pendingPaymentTotal, highlight: totals.pendingPaymentTotal > 0 },
+  ];
+  return (
+    <div
+      className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-4 py-3"
+      style={{ boxShadow: "var(--shadow-card)" }}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <CreditCard className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
+        <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-secondary)]">
+          Cobros del día por método
+        </span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-x-4 gap-y-2">
+        {entries.map((entry) => (
+          <div key={entry.label}>
+            <p className="text-[10px] font-medium text-[var(--color-text-muted)]">{entry.label}</p>
+            <p
+              className="font-mono text-[14px] font-bold"
+              style={{ color: entry.highlight ? "var(--color-warning-700)" : "var(--color-text)" }}
+            >
+              {money(entry.value)}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1060,7 +1174,19 @@ export default function MasterCommandCenterPage() {
   }
   if (!data) return null;
 
-  const { totals, users, byBranch, cashClosures } = data;
+  const { totals, users, byBranch, cashClosures, attention } = data;
+
+  // Señales accionables — orden por severidad (bloqueantes primero).
+  const attentionItems: AttentionItem[] = [
+    { key: "stale", count: attention?.staleOpenDays ?? 0, label: "día(s) anterior(es) aún abiertos", href: "/app/master/operations", tone: "danger" },
+    { key: "security", count: attention?.openSecurityAlerts ?? 0, label: "alerta(s) de seguridad abiertas", href: "/app/master/security", tone: "danger" },
+    { key: "brain", count: attention?.criticalBrainDecisions ?? 0, label: "decisión(es) críticas en Brain", href: "/app/master/brain", tone: "danger" },
+    { key: "days", count: attention?.daysPendingApproval ?? 0, label: "día(s) cerrados por aprobar", href: "/app/master/operations", tone: "warning" },
+    { key: "approvals", count: attention?.pendingApprovals ?? 0, label: "aprobación(es) pendientes", href: "/app/master/approvals", tone: "warning" },
+    { key: "pendingPay", count: totals.pendingPaymentCount, label: `cobro(s) pendientes · ${money(totals.pendingPaymentTotal)}`, href: "/app/master/sales/orders", tone: "warning" },
+    { key: "noPrice", count: attention?.productsMissingPrice ?? 0, label: "producto(s) sin precio de venta", href: "/app/master/catalog-inventory?tab=pricing", tone: "warning" },
+    { key: "dispatch", count: attention?.pendingDispatchTotal ?? 0, label: "despacho(s) pendientes", href: "/app/master/sales/orders", tone: "info" },
+  ];
   const closureRows =
     tab === "pending" ? cashClosures.pending :
     tab === "completedToday" ? cashClosures.completedToday :
@@ -1121,6 +1247,9 @@ export default function MasterCommandCenterPage() {
         </button>
       </div>
 
+      {/* ── Requiere atención — señales accionables de todo el sistema ── */}
+      <AttentionStrip items={attentionItems} />
+
       {/* ── KPI grid ── */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiV7
@@ -1156,6 +1285,9 @@ export default function MasterCommandCenterPage() {
           icon={Users}
         />
       </div>
+
+      {/* ── Cobros del día por método (datos globales ya calculados) ── */}
+      <PaymentMethodsStrip totals={totals} />
 
       {/* ── Gestión rápida ── */}
       <div>

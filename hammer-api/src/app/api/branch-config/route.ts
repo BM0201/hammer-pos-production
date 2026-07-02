@@ -7,7 +7,7 @@ import { assertOwner } from "@/modules/security/rbac-helpers";
 import { listBranchModuleConfigs, upsertBranchModuleConfig, bulkUpdateBranchModuleConfigs } from "@/modules/branch-config/service";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, validationFail } from "@/lib/api/response";
-import { toApiErrorResponse, parseJsonBody } from "@/lib/api/errors";
+import { toApiErrorResponse } from "@/lib/api/errors";
 
 const singleUpdateSchema = z.object({
   branchId: z.string().cuid(),
@@ -25,8 +25,6 @@ const bulkUpdateSchema = z.object({
   enableCashier: z.boolean(),
   enableDispatch: z.boolean(),
 });
-
-const updateSchema = z.union([bulkUpdateSchema, singleUpdateSchema]);
 
 export async function GET() {
   try {

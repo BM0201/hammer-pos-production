@@ -3,7 +3,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertSystemAdmin } from "@/modules/auth/access";
 import { listBranchRoleConfigs, updateBranchRoleConfig } from "@/modules/system-admin/service";
 import { requireCsrf } from "@/modules/security/csrf";
-import { ok, fail, validationFail } from "@/lib/api/response";
+import { ok, validationFail } from "@/lib/api/response";
 import { toApiErrorResponse } from "@/lib/api/errors";
 
 const VALID_BRANCH_ROLES = ["BRANCH_ADMIN", "SALES", "CASHIER", "WAREHOUSE"] as const;

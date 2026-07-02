@@ -277,6 +277,58 @@ export async function getProductStockConversion(db: DbClient, productId: string)
   };
 }
 
+/**
+ * Batch version of getProductStockConversion — resolves stock-group conversion
+ * for many products in 1 query instead of 1-per-product. Used by hot loops
+ * (Brain detectors, replenishment, commercial-intelligence) that previously
+ * called getProductStockConversion once per item.
+ */
+export async function getProductStockConversionsBatch(
+  db: DbClient,
+  productIds: string[],
+): Promise<Map<string, ProductStockConversion>> {
+  const uniqueIds = [...new Set(productIds)];
+  if (uniqueIds.length === 0) return new Map();
+
+  const members = await db.productStockGroupMember.findMany({
+    where: { productId: { in: uniqueIds }, isActive: true, stockGroup: { isActive: true } },
+    include: {
+      stockGroup: {
+        include: {
+          products: {
+            where: { isActive: true },
+            select: { productId: true, isCanonical: true, conversionFactor: true },
+            orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
+          },
+        },
+      },
+    },
+  });
+
+  const result = new Map<string, ProductStockConversion>();
+  for (const member of members) {
+    const canonical = member.stockGroup.products.find((item) => item.isCanonical) ?? member.stockGroup.products.find((item) => new Prisma.Decimal(item.conversionFactor).eq(1)) ?? member;
+    result.set(member.productId, {
+      stockGroupId: member.stockGroupId,
+      stockGroupCode: member.stockGroup.code,
+      stockGroupName: member.stockGroup.name,
+      baseUnit: member.stockGroup.baseUnit,
+      packageUnit: member.stockGroup.packageUnit,
+      saleUnit: member.saleUnit,
+      conversionFactor: member.conversionFactor,
+      conversionFactorToBase: member.stockGroup.conversionFactorToBase,
+      tracksPackages: member.stockGroup.tracksPackages,
+      approximateFactor: member.stockGroup.approximateFactor,
+      minimumClosedPackageReserve: member.stockGroup.minimumClosedPackageReserve,
+      autoOpenForUnitSale: member.stockGroup.autoOpenForUnitSale,
+      isPackagePresentation: member.isPackagePresentation,
+      canonicalProductId: canonical.productId,
+      isCanonical: member.isCanonical,
+    });
+  }
+  return result;
+}
+
 export async function resolveInventoryProductForMovement(db: DbClient, productId: string) {
   const conversion = await getProductStockConversion(db, productId);
   return {

@@ -316,7 +316,6 @@ export function InventoryFusionPanel() {
       })
       .catch(() => {});
     return () => controller.abort();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [memberIds]);
 
   const usedProductIds = useMemo(() => new Set(members.map((m) => m.productId)), [members]);

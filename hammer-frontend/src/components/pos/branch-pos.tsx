@@ -198,7 +198,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     } finally {
       setIsSavingOffline(false);
     }
-  }, [activeCashSessionId, sessionState, offlineCart, branchId, pendingCount, refreshPendingCount, setNoticeTimed]);
+  }, [activeCashSessionId, sessionState, offlineCart, branchId, refreshPendingCount, setNoticeTimed]);
 
   const isBusy = isMutatingOrder || isSubmittingPayment;
   const hasTicketLines = ticketLines.length > 0;
@@ -302,16 +302,23 @@ export function BranchPos({ branchId }: { branchId: string }) {
             searchInputRef={searchInputRef}
             isBusy={isBusy}
             onAddProduct={isOffline
-              ? (product) => offlineCart.addProduct({
-                  id: product.id,
-                  sku: product.sku,
-                  name: product.name,
-                  barcode: product.barcode,
-                  categoryName: product.categoryName,
-                  effectivePrice: Number(product.effectivePrice ?? product.branchPrice ?? product.standardSalePrice ?? 0),
-                  unit: product.unit ?? "UND",
-                  availableSaleStock: typeof product.availableSaleStock === "number" ? product.availableSaleStock : null,
-                })
+              ? (product) => {
+                  const rawPrice = product.effectivePrice ?? product.branchPrice ?? null;
+                  const cachedProduct: CachedProduct = {
+                    id: product.id,
+                    sku: product.sku,
+                    name: product.name,
+                    barcode: product.barcode,
+                    categoryName: product.categoryName,
+                    effectivePrice: rawPrice === null || rawPrice === undefined ? null : Number(rawPrice),
+                    unit: product.unit ?? "UND",
+                    availableSaleStock: typeof product.availableSaleStock === "number" ? product.availableSaleStock : null,
+                  };
+                  const added = offlineCart.addProduct(cachedProduct);
+                  if (!added) {
+                    setNoticeTimed(`${product.name} no tiene precio de venta asignado en esta sucursal. Asignalo antes de venderlo.`, 10000);
+                  }
+                }
               : addProduct}
             onTabToTicket={() => ticketPanelRef.current?.focus()}
             onClearSearch={() => { setSearch(""); setNoticeTimed(""); }}
@@ -480,7 +487,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
         setPaymentMethod={setPaymentMethod}
         referenceNumber={referenceNumber}
         setReferenceNumber={setReferenceNumber}
-        onConfirm={() => completeTicket("DIRECT")}
+        onConfirm={(cashDetail) => completeTicket("DIRECT", cashDetail)}
         isSubmitting={isSubmittingPayment}
       />
 

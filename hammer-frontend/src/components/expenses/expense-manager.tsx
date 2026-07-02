@@ -75,8 +75,8 @@ type PricingProductContext = {
   name: string;
   standardSalePrice: number;
   branchPrice: number | null;
-  effectivePrice: number;
-  priceSource: "BRANCH" | "STANDARD";
+  effectivePrice: number | null;
+  priceSource: "BRANCH" | "MISSING";
   branchCost: number | null;
   weightedAverageCost: number | null;
   effectiveCost: number | null;
@@ -686,17 +686,17 @@ export function ExpenseManager({
     loadCategoryPolicies();
   };
 
-  const handleApplySuggestedPrice = async (applyScope: "BRANCH" | "GLOBAL") => {
+  const handleApplySuggestedPrice = async () => {
     if (!calcResult || !productContext) return;
     if (calcResult.canApplyPrice === false || calcResult.marketConflict?.hasConflict) {
       showToast("warning", "Corrige costos, ambito de prorrateo o precio maximo de mercado antes de aplicar.");
       return;
     }
-    const previousPrice = applyScope === "BRANCH" ? productContext.branchPrice : productContext.standardSalePrice;
-    const diff = calcResult.suggestedPrice - (previousPrice ?? productContext.effectivePrice);
-    const target = applyScope === "BRANCH" ? `la sucursal ${selectedBranch?.name ?? ""}` : "el precio global";
+    const previousPrice = productContext.branchPrice ?? 0;
+    const diff = calcResult.suggestedPrice - previousPrice;
+    const target = `la sucursal ${selectedBranch?.name ?? ""}`;
     const ok = confirm(
-      `Vas a cambiar el precio de venta de este producto. Esta accion afectara el precio usado por el POS.\n\nProducto: ${productContext.sku} - ${productContext.name}\nDestino: ${target}\nPrecio anterior: ${formatC(previousPrice ?? productContext.effectivePrice)}\nPrecio nuevo: ${formatC(calcResult.suggestedPrice)}\nDiferencia: ${formatC(diff)}\nMargen estimado: ${calcResult.grossMarginPercent.toFixed(1)}%\n\n${calcResult.warnings.join("\n")}`,
+      `Vas a cambiar el precio de venta de este producto. Esta accion afectara el precio usado por el POS.\n\nProducto: ${productContext.sku} - ${productContext.name}\nDestino: ${target}\nPrecio anterior: ${productContext.branchPrice === null ? "Sin precio asignado" : formatC(previousPrice)}\nPrecio nuevo: ${formatC(calcResult.suggestedPrice)}\nDiferencia: ${formatC(diff)}\nMargen estimado: ${calcResult.grossMarginPercent.toFixed(1)}%\n\n${calcResult.warnings.join("\n")}`,
     );
     if (!ok) return;
 
@@ -706,8 +706,8 @@ export function ExpenseManager({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           productId: productContext.productId,
-          branchId: applyScope === "BRANCH" ? selectedBranchId : undefined,
-          applyScope,
+          branchId: selectedBranchId,
+          applyScope: "BRANCH",
           suggestedPrice: calcResult.suggestedPrice,
           minPrice: calcResult.minPrice,
           maxPrice: calcResult.maxPrice,
@@ -723,8 +723,8 @@ export function ExpenseManager({
       });
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar el precio");
-      const applied = unwrapApiData(raw);
-      showToast("success", `Precio aplicado. Fuente actual: ${applied.priceSourceAfter === "BRANCH" ? "Sucursal" : "Base"}`);
+      unwrapApiData(raw);
+      showToast("success", `Precio aplicado en ${selectedBranch?.name ?? "la sucursal"}.`);
       await handleLoadProductContext();
     } catch (e) {
       showToast("error", e instanceof Error ? e.message : "No se pudo aplicar el precio");
@@ -1360,9 +1360,9 @@ export function ExpenseManager({
                       <div className="sm:col-span-2 grid gap-2 rounded-lg border border-emerald-200 bg-white p-3 text-xs">
                         <div className="flex justify-between"><span>Producto</span><strong>{productContext.sku} - {productContext.name}</strong></div>
                         <div className="flex justify-between"><span>Categoria</span><strong>{productContext.categoryName}</strong></div>
-                        <div className="flex justify-between"><span>Precio global</span><strong>{formatC(productContext.standardSalePrice)}</strong></div>
+                        <div className="flex justify-between"><span>Precio semilla (referencia)</span><strong>{formatC(productContext.standardSalePrice)}</strong></div>
                         <div className="flex justify-between"><span>Precio sucursal</span><strong>{productContext.branchPrice === null ? "Sin precio" : formatC(productContext.branchPrice)}</strong></div>
-                        <div className="flex justify-between"><span>Precio efectivo</span><strong>{formatC(productContext.effectivePrice)} ({productContext.priceSource === "BRANCH" ? "Sucursal" : "Base"})</strong></div>
+                        <div className="flex justify-between"><span>Precio efectivo</span><strong>{productContext.effectivePrice === null ? "Sin precio en esta sucursal" : `${formatC(productContext.effectivePrice)} (Sucursal)`}</strong></div>
                         <div className="flex justify-between"><span>Costo efectivo</span><strong>{productContext.effectiveCost === null ? "Sin costo" : `${formatC(productContext.effectiveCost)} (${productContext.costSource})`}</strong></div>
                         <div className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-800">
                           Politica: margen {productContext.categoryPolicy.targetMarginPercent}% · utilidad {formatC(productContext.categoryPolicy.minProfitAmount)} · gasto {formatC(productContext.categoryPolicy.monthlyExpenseAllocation)} · redondeo {productContext.categoryPolicy.roundingRule}
@@ -1776,11 +1776,8 @@ export function ExpenseManager({
 
                       {productContext ? (
                         <div className="mt-5 w-full max-w-xs space-y-2">
-                          <Button className="w-full disabled:cursor-not-allowed disabled:opacity-50" variant="success" disabled={cannotApplyPrice} onClick={() => handleApplySuggestedPrice("BRANCH")}>
+                          <Button className="w-full disabled:cursor-not-allowed disabled:opacity-50" variant="success" disabled={cannotApplyPrice} onClick={() => handleApplySuggestedPrice()}>
                             Aplicar a sucursal
-                          </Button>
-                          <Button className="w-full disabled:cursor-not-allowed disabled:opacity-50" variant="secondary" disabled={cannotApplyPrice} onClick={() => handleApplySuggestedPrice("GLOBAL")}>
-                            Aplicar global
                           </Button>
                           {cannotApplyPrice && (
                             <p className="text-xs text-red-700">

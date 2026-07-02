@@ -19,13 +19,11 @@ import {
   mean,
   linearRegression,
   trendDirection,
-  coefficientOfVariation,
   daysAgo,
   dayOfWeekLabel,
   hourLabel,
   type PatternInsight,
   type BusinessRecommendation,
-  type Severity,
 } from "./analyzer";
 
 const DAYS_WINDOW = 30;
@@ -300,7 +298,7 @@ async function analyzeDemandTrends(
   const growing: { name: string; slope: number; r2: number; avgSales: number }[] = [];
   const declining: { name: string; slope: number; r2: number; avgSales: number }[] = [];
 
-  for (const [pid, data] of productDaily) {
+  for (const [, data] of productDaily) {
     if (data.dailyMap.size < 7) continue; // Need at least a week
 
     // Create time series ordered by date

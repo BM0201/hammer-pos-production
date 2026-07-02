@@ -218,6 +218,28 @@ export async function getCommandCenterSnapshot() {
     }),
   ]);
 
+  // ── Señales accionables fuera de caja (conteos baratos en paralelo). El
+  // Centro de Comando debe responder "¿qué requiere mi decisión hoy?" sin que
+  // el Master tenga que visitar aprobaciones/Brain/seguridad/operaciones una
+  // por una.
+  const [
+    pendingApprovals,
+    criticalBrainDecisions,
+    openSecurityAlerts,
+    daysPendingApproval,
+    staleOpenDays,
+    productsMissingPrice,
+  ] = await Promise.all([
+    prisma.approvalRequest.count({ where: { status: { in: ["REQUESTED", "UNDER_REVIEW"] } } }),
+    prisma.brainDecision.count({ where: { status: "OPEN", severity: { in: ["CRITICAL", "HIGH"] } } }),
+    prisma.securityAlert.count({ where: { status: "OPEN" } }),
+    prisma.operationalDay.count({ where: { status: "CLOSED", approvedAt: null } }),
+    prisma.operationalDay.count({ where: { status: "OPEN", businessDate: { lt: todayBusinessDate } } }),
+    prisma.product.count({
+      where: { isActive: true, branchProductSettings: { none: { branchPrice: { gt: 0 } } } },
+    }),
+  ]);
+
   // Map boxId -> branchId for resolving grouped session counts.
   const boxBranch = new Map(physicalBoxes.map((b) => [b.id, b.branchId]));
   const cashByBranch = new Map<
@@ -380,6 +402,15 @@ export async function getCommandCenterSnapshot() {
     generatedAt: new Date().toISOString(),
     operationalWindow: { start: start.toISOString(), end: end.toISOString(), timezone: OPERATIONAL_TIMEZONE },
     totals,
+    attention: {
+      pendingApprovals,
+      criticalBrainDecisions,
+      openSecurityAlerts,
+      daysPendingApproval,
+      staleOpenDays,
+      productsMissingPrice,
+      pendingDispatchTotal: byBranch.reduce((acc, b) => acc + (b.operationalDay?.pendingDispatchCount ?? 0), 0),
+    },
     users: {
       summary: activity.summary,
       list: activity.users,

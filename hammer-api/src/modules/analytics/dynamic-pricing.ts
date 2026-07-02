@@ -8,7 +8,6 @@
  * BUG FIX: Velocity comparison always true (avgDailySales compared to itself).
  * BUG FIX: Guard against negative costs or margins.
  */
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { calculateSuggestedMarginForProduct } from "./abc-classifier";
 
@@ -172,17 +171,13 @@ export async function getBulkDynamicPrices(filters?: {
   if (filters?.minRotation !== undefined) where.rotationIndex = { gte: filters.minRotation };
   if (filters?.maxDaysInStock !== undefined) where.daysInStock = { lte: filters.maxDaysInStock };
 
+  const take = Math.min(Math.max(filters?.take ?? 100, 1), 200);
   const products = await prisma.product.findMany({
     where,
     select: { id: true },
-    take: filters?.take ?? 100,
+    take,
   });
 
-  const results: DynamicPriceResult[] = [];
-  for (const p of products) {
-    const result = await calculateDynamicPrice(p.id, filters?.branchId);
-    if (result) results.push(result);
-  }
-
-  return results;
+  const resolved = await Promise.all(products.map((p) => calculateDynamicPrice(p.id, filters?.branchId)));
+  return resolved.filter((result): result is DynamicPriceResult => result !== null);
 }

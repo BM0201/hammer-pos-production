@@ -357,7 +357,6 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
               id: true,
               sku: true,
               name: true,
-              standardSalePrice: true,
               branchProductSettings: {
                 select: { branchId: true, branchPrice: true },
               },
@@ -372,7 +371,9 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
 
   for (const batch of belowCostBatches) {
     const setting = batch.recipe.finishedProduct.branchProductSettings.find((item) => item.branchId === batch.branchId);
-    const effectivePrice = Number(setting?.branchPrice ?? batch.recipe.finishedProduct.standardSalePrice ?? 0);
+    // No fallback a standardSalePrice: sin precio de sucursal no se puede juzgar
+    // "bajo costo" contra un valor de venta real.
+    const effectivePrice = Number(setting?.branchPrice ?? 0);
     const unitCost = Number(batch.unitCost ?? 0);
     if (effectivePrice <= 0 || effectivePrice >= unitCost) continue;
     decisions.push({

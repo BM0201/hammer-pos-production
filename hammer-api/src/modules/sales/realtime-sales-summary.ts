@@ -362,13 +362,8 @@ export async function getAllBranchesSalesRealtimeSummaryBatch(
     }),
 
     // 8. Tenders by method and branch
-    prisma.paymentTender.groupBy({
-      by: ["method"],
-      where: { payment: paymentWhere },
-      _sum: { amount: true },
-      _count: { _all: true },
-    }).then(async (rows) => {
-      // We need per-branch tender breakdown; fetch payments with saleOrder branchId
+    (async () => {
+      // Per-branch tender breakdown; fetch payments with saleOrder branchId
       const tenderRows = await prisma.paymentTender.findMany({
         where: { payment: paymentWhere },
         select: {
@@ -392,7 +387,7 @@ export async function getAllBranchesSalesRealtimeSummaryBatch(
         result.set(bid, Array.from(methods.entries()).map(([method, v]) => ({ method: method as PaymentMethod, amount: v.amount, count: v.count })));
       }
       return result;
-    }),
+    })(),
 
     // 9. Last sale per branch
     (async () => {

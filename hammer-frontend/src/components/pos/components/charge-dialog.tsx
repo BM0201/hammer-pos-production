@@ -8,6 +8,9 @@ type PaymentTab = "CASH" | "CARD" | "TRANSFER";
 
 const QUICK_AMOUNTS = [100, 200, 500] as const;
 
+/** Detalle de efectivo capturado en el diálogo (recibido/vuelto) para el registro del pago. */
+export type CashTenderDetail = { receivedAmount: number; changeAmount: number };
+
 type ChargeDialogProps = {
   open: boolean;
   onClose: () => void;
@@ -16,9 +19,14 @@ type ChargeDialogProps = {
   setPaymentMethod: (m: string) => void;
   referenceNumber: string;
   setReferenceNumber: (r: string) => void;
-  onConfirm: () => void;
+  /** cashDetail es null cuando no aplica (tarjeta/transferencia o efectivo sin monto tecleado). */
+  onConfirm: (cashDetail: CashTenderDetail | null) => void;
   isSubmitting: boolean;
 };
+
+function round2(value: number) {
+  return Math.round(value * 100) / 100;
+}
 
 export function ChargeDialog({
   open,
@@ -241,11 +249,19 @@ export function ChargeDialog({
           </div>
         ) : null}
 
-        {/* Confirm button */}
+        {/* Confirm button — en efectivo con monto tecleado, envía recibido/vuelto
+            para que el pago quede registrado con el detalle real (conciliación
+            de vuelto del Día Operativo), no como pago exacto ficticio. */}
         <Button
           variant="success"
           className="mt-4 w-full rounded-xl py-3 text-base font-bold"
-          onClick={onConfirm}
+          onClick={() =>
+            onConfirm(
+              activeTab === "CASH" && receivedRaw.length > 0 && received >= total
+                ? { receivedAmount: round2(received), changeAmount: round2(received - total) }
+                : null,
+            )
+          }
           disabled={!canConfirm}
           loading={isSubmitting}
           icon={<Check className="h-5 w-5" />}

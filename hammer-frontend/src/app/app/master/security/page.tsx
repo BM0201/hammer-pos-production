@@ -11,6 +11,7 @@ import {
   Eye,
   UserX,
   Lock,
+  Archive,
 } from "lucide-react";
 
 type AlertSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
@@ -51,6 +52,20 @@ type Overview = {
   criticalActions: CriticalAction[];
 };
 
+type RetentionRule = {
+  table: string;
+  description: string;
+  retentionDays: number;
+  matched: number;
+  deleted: number;
+  capped: boolean;
+};
+
+type RetentionStatus = {
+  policy: { archiveRetentionDays: number; loginAttemptRetentionDays: number; docs: string };
+  preview: { cutoffIso: string; rules: RetentionRule[] };
+};
+
 const SEVERITY_STYLES: Record<AlertSeverity, { badge: string; icon: React.ReactNode }> = {
   CRITICAL: { badge: "bg-red-100 text-red-700 border border-red-300", icon: <ShieldAlert className="h-3.5 w-3.5" /> },
   HIGH: { badge: "bg-orange-100 text-orange-700 border border-orange-300", icon: <AlertTriangle className="h-3.5 w-3.5" /> },
@@ -79,6 +94,10 @@ export default function SecurityCenterPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [retention, setRetention] = useState<RetentionStatus | null>(null);
+  const [retentionLoading, setRetentionLoading] = useState(false);
+  const [retentionRunning, setRetentionRunning] = useState(false);
+  const [retentionMsg, setRetentionMsg] = useState<string | null>(null);
 
   async function loadOverview() {
     setLoading(true);
@@ -92,6 +111,47 @@ export default function SecurityCenterPage() {
   }
 
   useEffect(() => { loadOverview(); }, []);
+
+  async function loadRetention() {
+    setRetentionLoading(true);
+    setRetentionMsg(null);
+    try {
+      const res = await apiFetch("/api/master/retention");
+      const json = await res.json();
+      if (res.ok) setRetention(unwrapApiData(json as ApiResponse<RetentionStatus>));
+      else setRetentionMsg(json?.error?.message ?? "No se pudo consultar la política de retención.");
+    } catch {
+      setRetentionMsg("Error de red al consultar retención.");
+    } finally {
+      setRetentionLoading(false);
+    }
+  }
+
+  async function runRetentionNow() {
+    const totalPending = retention?.preview.rules.reduce((s, r) => s + r.matched, 0) ?? 0;
+    const ok = window.confirm(
+      `Vas a purgar ${totalPending} registro(s) con más de ${retention?.policy.archiveRetentionDays ?? 1095} días (mínimo 3 años). ` +
+      "Solo se borran datos de archivo (auditoría/derivados); las ventas, pagos e inventario NUNCA se tocan. ¿Continuar?",
+    );
+    if (!ok) return;
+    setRetentionRunning(true);
+    setRetentionMsg(null);
+    try {
+      const res = await apiFetch("/api/master/retention", { method: "POST" });
+      const json = await res.json();
+      if (res.ok) {
+        const result = unwrapApiData(json as ApiResponse<{ totalDeleted: number }>);
+        setRetentionMsg(`Purga ejecutada: ${result.totalDeleted} registro(s) eliminados.`);
+        await loadRetention();
+      } else {
+        setRetentionMsg(json?.error?.message ?? "No se pudo ejecutar la purga.");
+      }
+    } catch {
+      setRetentionMsg("Error de red al ejecutar la purga.");
+    } finally {
+      setRetentionRunning(false);
+    }
+  }
 
   async function updateAlert(alertId: string, action: "ACKNOWLEDGE" | "RESOLVE" | "DISMISS") {
     setUpdatingId(alertId);
@@ -273,6 +333,74 @@ export default function SecurityCenterPage() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Retención de datos */}
+      <div className="erp-card overflow-hidden">
+        <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-[var(--color-border)]">
+          <div className="flex items-center gap-2">
+            <Archive className="h-4 w-4 text-[var(--color-text-muted)]" />
+            <h2 className="text-sm font-semibold text-[var(--color-text)]">Retención de datos</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={loadRetention}
+              disabled={retentionLoading}
+              className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-soft)] hover:bg-[var(--color-surface-raised)] transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${retentionLoading ? "animate-spin" : ""}`} />
+              {retention ? "Actualizar" : "Consultar estado"}
+            </button>
+            {retention && (
+              <button
+                onClick={runRetentionNow}
+                disabled={retentionRunning || retention.preview.rules.every((r) => r.matched === 0)}
+                className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                {retentionRunning ? "Purgando…" : "Ejecutar purga ahora"}
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="px-4 py-3 space-y-3">
+          <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+            Los datos transaccionales del negocio (ventas, pagos, inventario, caja, planilla) se conservan para siempre.
+            Los datos de archivo (auditoría y derivados) se conservan mínimo <strong>3 años</strong> y luego se purgan
+            automáticamente cada madrugada. Los intentos de login se conservan 90 días. Política completa en{" "}
+            <code className="text-[11px] bg-[var(--color-surface-alt)] px-1 rounded">docs/POLITICA-RETENCION-DATOS.md</code>.
+          </p>
+          {retentionMsg && (
+            <p className="text-xs font-medium text-[var(--color-text)] bg-[var(--color-surface-alt)] rounded px-3 py-2">{retentionMsg}</p>
+          )}
+          {retention && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="text-[var(--color-text-muted)] uppercase tracking-wide">
+                    <th className="py-1.5 pr-3">Tabla</th>
+                    <th className="py-1.5 pr-3">Qué guarda</th>
+                    <th className="py-1.5 text-right">Vencidos (purgables)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--color-border)]">
+                  {retention.preview.rules.map((r) => (
+                    <tr key={r.table}>
+                      <td className="py-1.5 pr-3 font-mono text-[11px] text-[var(--color-text)]">{r.table}</td>
+                      <td className="py-1.5 pr-3 text-[var(--color-text-muted)]">{r.description}</td>
+                      <td className={`py-1.5 text-right font-semibold ${r.matched > 0 ? "text-orange-600" : "text-[var(--color-text-soft)]"}`}>
+                        {r.matched}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-2 text-[11px] text-[var(--color-text-soft)]">
+                Corte actual: registros anteriores al {fmt(retention.preview.cutoffIso)}. Antes de purgar puedes exportar
+                la auditoría a CSV desde Reportes → Auditoría.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );

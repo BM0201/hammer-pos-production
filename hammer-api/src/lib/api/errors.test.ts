@@ -89,10 +89,8 @@ test("errors: INSUFFICIENT_STOCK returns 409", async () => {
 });
 
 test("errors: PAYMENT_ALREADY_POSTED returns 409", async () => {
-  const res = toApiErrorResponse({ code: "PAYMENT_ALREADY_POSTED", message: "PAYMENT_ALREADY_POSTED" });
-  // code-based matching
-  const res2 = toApiErrorResponse(new Error("PAYMENT_ALREADY_POSTED"));
-  assert.equal(res2.status, 409);
+  const res = toApiErrorResponse(new Error("PAYMENT_ALREADY_POSTED"));
+  assert.equal(res.status, 409);
 });
 
 // ─── Not found ──────────────────────────────────────────────────

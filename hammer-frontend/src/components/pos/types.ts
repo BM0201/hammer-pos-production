@@ -9,8 +9,8 @@ export type ProductRow = {
   categoryName?: string | null;
   standardSalePrice: string;
   branchPrice?: string | null;
-  effectivePrice?: string;
-  priceSource?: "BRANCH" | "STANDARD";
+  effectivePrice?: string | null;
+  priceSource?: "BRANCH" | "MISSING";
   unit: string;
   stockOnHand?: number;
   availableStock?: number;

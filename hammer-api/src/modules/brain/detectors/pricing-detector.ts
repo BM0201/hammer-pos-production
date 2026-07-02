@@ -3,9 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { riskScoreFor, severityForMargin } from "@/modules/brain/scoring";
 import { simulatePriceChange } from "@/modules/brain/prediction/price-simulation";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
-import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
-import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
+import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
+import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
+import { buildCommercialIntelligenceBatch } from "@/modules/pricing/commercial-intelligence";
 import { calculatePricingSuggestion } from "@/modules/pricing/calculator";
 
 function n(value: Prisma.Decimal | number | null | undefined) {
@@ -49,10 +49,25 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     }),
   ]);
 
+  // Batch-prefetch pricing/policy/commercial intelligence for every (branchId, productId)
+  // pair touched by this detector — both loops below used to call these once per item
+  // (up to ~1500 items x ~20 queries each = tens of thousands of sequential round trips).
+  const pairs = [
+    ...balances.map((b) => ({ branchId: b.branchId, productId: b.productId })),
+    ...branchSettings.map((s) => ({ branchId: s.branchId, productId: s.productId })),
+  ];
+  const [pricingByKey, policyByKey, commercialByKey] = await Promise.all([
+    getEffectiveProductPricingBatch(prisma, pairs),
+    resolvePolicyForProductBatch(pairs),
+    buildCommercialIntelligenceBatch(pairs),
+  ]);
+
   for (const balance of balances) {
-    const effective = await getEffectiveProductPricing(prisma, { branchId: balance.branchId, productId: balance.productId });
-    const policy = await resolvePolicyForProduct({ branchId: balance.branchId, productId: balance.productId });
-    const commercial = await buildCommercialIntelligenceForProduct({ branchId: balance.branchId, productId: balance.productId });
+    const key = `${balance.branchId}:${balance.productId}`;
+    const effective = pricingByKey.get(key);
+    const policy = policyByKey.get(key);
+    const commercial = commercialByKey.get(key);
+    if (!effective || !policy || !commercial) continue;
     const cost = effective.effectiveCost === null ? n(balance.weightedAverageCost) : n(effective.effectiveCost);
     const price = n(effective.effectivePrice);
     if (cost <= 0 || price <= 0) continue;
@@ -207,7 +222,8 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
   }
 
   for (const setting of branchSettings) {
-    const effective = await getEffectiveProductPricing(prisma, { branchId: setting.branchId, productId: setting.productId });
+    const effective = pricingByKey.get(`${setting.branchId}:${setting.productId}`);
+    if (!effective) continue;
     const price = n(effective.effectivePrice);
     const cost = effective.effectiveCost === null ? n(setting.branchCost) : n(effective.effectiveCost);
     if (cost > 0 && price > 0 && cost >= price) {

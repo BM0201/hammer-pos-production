@@ -92,7 +92,10 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       hasZeroStock: totalStock === 0,
       hasNegativeStock: productBalances.some((row: any) => decimalToNumber(row.quantityOnHand) < 0),
       hasNoCost: productCost <= 0,
-      hasNoPrice: decimalToNumber(product.standardSalePrice) <= 0 && branchSettings.every((setting: any) => decimalToNumber(setting.branchPrice) <= 0),
+      hasNoPrice: branchSettings.every((setting: any) => decimalToNumber(setting.branchPrice) <= 0),
+      hasNoBranchPrice: params.branchId
+        ? !branchSettings.some((setting: any) => setting.branchId === params.branchId && decimalToNumber(setting.branchPrice) > 0)
+        : undefined,
     };
   }
 
@@ -104,6 +107,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     if (params.filter === "NEGATIVE_STOCK") return row.hasNegativeStock;
     if (params.filter === "NO_COST") return row.hasNoCost;
     if (params.filter === "NO_PRICE") return row.hasNoPrice;
+    if (params.filter === "NO_BRANCH_PRICE") return Boolean(row.hasNoBranchPrice);
     return true;
   }
 
@@ -393,7 +397,10 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     grossMarginValue,
     grossMarginPercent,
     productsWithoutCost: allMetricRows.filter((row) => row.isActive && row.hasNoCost).length,
-    productsWithoutPrice: 0,
+    productsWithoutPrice: allMetricRows.filter((row) => row.isActive && row.hasNoPrice).length,
+    missingPriceCount: params.branchId
+      ? allMetricRows.filter((row) => row.isActive && row.hasNoBranchPrice).length
+      : allMetricRows.filter((row) => row.isActive && row.hasNoPrice).length,
   };
 
   const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));

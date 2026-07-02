@@ -6,7 +6,7 @@
  * OWNER y MASTER solo pueden resetearlo en usuarios de menor jerarquía.
  */
 
-import { ok, fail, unauthorized, forbidden, notFound } from "@/lib/api/response";
+import { ok, unauthorized, forbidden, notFound } from "@/lib/api/response";
 import { getCurrentSession } from "@/modules/auth/service";
 import { getUserById } from "@/modules/users/service";
 import { disableMfa } from "@/modules/auth/mfa-service";

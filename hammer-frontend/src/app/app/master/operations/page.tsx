@@ -9,6 +9,7 @@ import { OperationalDayPanel } from "@/components/operations/operational-day-pan
 import { OperationalDayScanner } from "@/components/operations/operational-day-scanner";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { showToast } from "@/components/ui/toast";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -172,11 +173,7 @@ export default function MasterOperationsPage() {
     } catch { /* silent refresh */ }
   }, []);
 
-  useEffect(() => {
-    void loadLive();
-    const t = window.setInterval(() => void loadLive(), 30_000);
-    return () => window.clearInterval(t);
-  }, [loadLive]);
+  useOperationalPolling({ task: loadLive, intervalMs: 30_000, deps: [loadLive] });
 
   // ── Load pending days (Bandeja Master) ──
   const loadPending = useCallback(async () => {
@@ -189,11 +186,7 @@ export default function MasterOperationsPage() {
     } finally { setPendingRefreshing(false); }
   }, []);
 
-  useEffect(() => {
-    void loadPending();
-    const t = window.setInterval(() => void loadPending(), 30_000);
-    return () => window.clearInterval(t);
-  }, [loadPending]);
+  useOperationalPolling({ task: loadPending, intervalMs: 30_000, deps: [loadPending] });
 
   // ── Load archived days (Biblioteca) ──
   const loadArchive = useCallback(async () => {

@@ -14,7 +14,6 @@ import {
   mean,
   stddev,
   zScore,
-  iqrBounds,
   daysAgo,
   type DiscrepancyInsight,
   type Severity,
@@ -102,7 +101,6 @@ async function detectUnusualDiscounts(
   const rates = discountRates.map((d) => d.discountRate);
   const m = mean(rates);
   const sd = stddev(rates);
-  const bounds = iqrBounds(rates);
 
   for (const order of discountRates) {
     // Flag orders with discount rate > 30% or significantly above average

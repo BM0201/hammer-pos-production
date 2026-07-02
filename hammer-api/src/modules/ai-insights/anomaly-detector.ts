@@ -21,7 +21,6 @@ import {
   zScore,
   iqrBounds,
   daysAgo,
-  dayOfWeekLabel,
   hourLabel,
   type AnomalyInsight,
   type Severity,

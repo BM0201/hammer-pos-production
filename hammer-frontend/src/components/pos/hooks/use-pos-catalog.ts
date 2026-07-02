@@ -7,13 +7,14 @@ import type { CachedProduct } from "@/lib/offline-db";
 import type { InventoryBalanceRow, ProductRow } from "../types";
 
 function toCachedProduct(row: ProductRow): CachedProduct {
+  const price = row.effectivePrice ?? row.branchPrice ?? null;
   return {
     id: row.id,
     sku: row.sku,
     name: row.name,
     barcode: row.barcode,
     categoryName: row.categoryName,
-    effectivePrice: Number(row.effectivePrice ?? row.branchPrice ?? row.standardSalePrice ?? 0),
+    effectivePrice: price === null || price === undefined ? null : Number(price),
     unit: row.unit ?? "UND",
     availableSaleStock: typeof row.availableSaleStock === "number" ? row.availableSaleStock : null,
   };
@@ -275,7 +276,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
         setLoadingProducts(false);
       }
     }
-  }, [branchId, resolveError, seedSharedStock, onNotice, applySearchRows]);
+  }, [branchId, isOffline, resolveError, seedSharedStock, onNotice, applySearchRows]);
 
   // Load top-selling products once per branchId (replaces the combined effect in branch-pos).
   useEffect(() => {

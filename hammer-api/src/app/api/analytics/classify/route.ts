@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -44,16 +44,16 @@ export async function POST(req: NextRequest) {
     const marginsUpdated = await updateSuggestedMargins();
     const analyticsCreated = await generateProductAnalytics(year, mon);
 
+    // Nota: ok() ya envuelve en { ok, data } — la doble envoltura anterior hacia
+    // que el frontend leyera undefined y reportara "ABC=0, XYZ=0" siempre.
     return ok({
-      data: {
-        month,
-        abc: abcResult,
-        xyz: xyzResult,
-        rotationIndicesUpdated: rotationCount,
-        daysInStockUpdated: daysUpdated,
-        suggestedMarginsUpdated: marginsUpdated,
-        analyticsRecordsCreated: analyticsCreated,
-      },
+      month,
+      abc: abcResult,
+      xyz: xyzResult,
+      rotationIndicesUpdated: rotationCount,
+      daysInStockUpdated: daysUpdated,
+      suggestedMarginsUpdated: marginsUpdated,
+      analyticsRecordsCreated: analyticsCreated,
     });
   } catch (err: any) {
     return toHttpErrorResponse(err);

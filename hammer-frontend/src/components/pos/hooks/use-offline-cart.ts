@@ -9,7 +9,9 @@ export function useOfflineCart() {
   const [lines, setLines] = useState<OfflineCartLine[]>([]);
   const [notes, setNotes] = useState("");
 
-  const addProduct = useCallback((product: CachedProduct, qty = 1) => {
+  const addProduct = useCallback((product: CachedProduct, qty = 1): boolean => {
+    if (product.effectivePrice === null) return false;
+    const price = product.effectivePrice;
     setLines(prev => {
       const existing = prev.find(l => l.productId === product.id);
       if (existing) {
@@ -20,7 +22,6 @@ export function useOfflineCart() {
             : l,
         );
       }
-      const price = product.effectivePrice;
       return [...prev, {
         lineId: `${product.id}-${Date.now()}`,
         productId: product.id,
@@ -32,6 +33,7 @@ export function useOfflineCart() {
         lineSubtotal: qty * price,
       }];
     });
+    return true;
   }, []);
 
   const updateQuantity = useCallback((lineId: string, qty: number) => {

@@ -1194,6 +1194,8 @@ model SaleOrder {
   @@index([manualInvoiceSeries, manualInvoiceNumber])
   @@index([operationalDayId])
   @@index([branchId, operationalDayId, status])
+  // Dashboard de ventas y ventanas de dia operativo filtran por sucursal + rango de fechas
+  @@index([branchId, createdAt])
 }
 
 model SaleOrderLine {
@@ -1216,6 +1218,8 @@ model SaleOrderLine {
 
   @@unique([saleOrderId, productId])
   @@index([saleOrderId])
+  // Señales de venta / analytics / top-selling agrupan por productId constantemente
+  @@index([productId])
 }
 
 model Payment {
@@ -1247,6 +1251,8 @@ model Payment {
   @@index([cashSessionId, paidAt])
   @@index([operationalDayId])
   @@index([cashSessionId, operationalDayId])
+  // Resumen realtime de ventas (poll cada 12-15s por usuario POS) filtra status+ventana paidAt
+  @@index([status, paidAt])
 }
 
 model PaymentTender {
@@ -2114,6 +2120,9 @@ model AuditLog {
   @@index([occurredAt])
   @@index([module, action])
   @@index([entityType, entityId])
+  // Historial de producto consulta por entityId sin entityType (catalog-inventory);
+  // sin este indice era full scan sobre la tabla de mayor crecimiento del sistema
+  @@index([entityId, occurredAt])
 }
 
 model BrainDecision {

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { CheckCircle2, RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet, AlertTriangle, Info, ArrowRight, Activity } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { showToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
@@ -90,7 +91,6 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   const [approveBlockers, setApproveBlockers] = useState<Blocker[]>([]);
   const [approveWarnings, setApproveWarnings] = useState<Blocker[]>([]);
   const [showScanner, setShowScanner] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -132,14 +132,16 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
     setApproveWarnings([]);
   }, [day?.id, day?.status]);
 
-  // Auto-refresh every 30s in branch mode.
+  // Auto-refresh every 30s in branch mode (pauses on hidden tab, backoff on errors).
   // In masterMode, the parent page (master/operations) manages its own polling
   // to avoid double-refresh and maintain a single source of truth for all branches.
-  useEffect(() => {
-    if (masterMode) return;
-    intervalRef.current = setInterval(() => { void load(); }, 30_000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [masterMode, load]);
+  useOperationalPolling({
+    task: load,
+    intervalMs: 30_000,
+    enabled: !masterMode,
+    immediate: false, // loadInitial already runs the first fetch
+    deps: [load],
+  });
 
   async function openDay() {
     try {

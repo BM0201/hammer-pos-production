@@ -168,3 +168,47 @@ export async function resolvePolicyForProduct(input: { branchId: string; product
     categoryPolicy: policy,
   };
 }
+
+/**
+ * Batch version of resolvePolicyForProduct — resolves category pricing policy
+ * for many (branchId, productId) pairs in 2 queries instead of ~2 per pair.
+ * Used by hot loops (Brain detectors, replenishment, commercial-intelligence).
+ */
+export async function resolvePolicyForProductBatch(
+  items: Array<{ branchId: string; productId: string }>,
+): Promise<Map<string, { categoryId: string; categoryName: string; categoryPolicy: CategoryPricingPolicyDto }>> {
+  const result = new Map<string, { categoryId: string; categoryName: string; categoryPolicy: CategoryPricingPolicyDto }>();
+  if (items.length === 0) return result;
+
+  const productIds = [...new Set(items.map((item) => item.productId))];
+  const branchIds = [...new Set(items.map((item) => item.branchId))];
+
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds } },
+    select: { id: true, categoryId: true, category: { select: { code: true, name: true } } },
+  });
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const categoryIds = [...new Set(products.map((product) => product.categoryId))];
+
+  const policies = await prisma.branchCategoryPricingPolicy.findMany({
+    where: { branchId: { in: branchIds }, categoryId: { in: categoryIds } },
+    include: { category: { select: { code: true, name: true } } },
+  });
+  const policyByKey = new Map(policies.map((policy) => [`${policy.branchId}:${policy.categoryId}`, policy]));
+
+  for (const { branchId, productId } of items) {
+    const key = `${branchId}:${productId}`;
+    if (result.has(key)) continue;
+    const product = productById.get(productId);
+    if (!product) continue;
+
+    const policy = policyByKey.get(`${branchId}:${product.categoryId}`);
+    result.set(key, {
+      categoryId: product.categoryId,
+      categoryName: product.category.name,
+      categoryPolicy: toDto(policy, product.category, branchId, product.categoryId),
+    });
+  }
+
+  return result;
+}

@@ -90,6 +90,11 @@ export function PosCheckoutBar({
           >
             {!hasTicketLines ? "Agrega productos para cobrar" : `Cobrar  ${totalLabel}`}
           </Button>
+          {hasTicketLines && !activeCashSessionId ? (
+            <p className="text-center text-[11px] text-[var(--color-warning-700)]">
+              Abre una sesión de caja para poder cobrar aquí.
+            </p>
+          ) : null}
           {canSendToCashier ? (
             <Button
               variant="ghost"

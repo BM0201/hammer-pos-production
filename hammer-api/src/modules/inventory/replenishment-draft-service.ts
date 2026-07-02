@@ -341,6 +341,21 @@ export async function updateReplenishmentDraftItem(
     },
   });
 
+  await logAuditEvent({
+    actorUserId,
+    module: "inventory",
+    action: "REPLENISHMENT_DRAFT_ITEM_UPDATED",
+    entityType: "ReplenishmentDraftItem",
+    entityId: updated.id,
+    metadataJson: {
+      draftId,
+      previousStatus: item.status,
+      newStatus: updated.status,
+      finalQuantity: input.finalQuantity ?? null,
+      notes: input.notes ?? null,
+    },
+  });
+
   return updated;
 }
 

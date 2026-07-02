@@ -4,7 +4,7 @@ import { createCategory, listCategories } from "@/modules/catalog/service";
 import { createCategorySchema } from "@/modules/catalog/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
-import { ok, okCached, created, fail } from "@/lib/api/response";
+import { okCached, created, fail } from "@/lib/api/response";
 
 export async function GET() {
   try {

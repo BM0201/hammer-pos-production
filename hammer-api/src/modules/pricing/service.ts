@@ -397,7 +397,7 @@ export async function getProductPricingContext(input: { productId: string; branc
     categoryName: product.category.name,
     standardSalePrice: Number(pricing.standardSalePrice),
     branchPrice: pricing.branchPrice === null ? null : Number(pricing.branchPrice),
-    effectivePrice: Number(pricing.effectivePrice),
+    effectivePrice: pricing.effectivePrice === null ? null : Number(pricing.effectivePrice),
     priceSource: pricing.priceSource,
     branchCost: pricing.branchCost === null ? null : Number(pricing.branchCost),
     weightedAverageCost: pricing.weightedAverageCost === null ? null : Number(pricing.weightedAverageCost),
@@ -447,36 +447,20 @@ export async function applySuggestedPrice(input: ApplyPricingInput & { actorUser
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    const product = await tx.product.findUniqueOrThrow({
-      where: { id: input.productId },
-      select: { id: true, standardSalePrice: true },
-    });
-
-    let previousPrice: Prisma.Decimal | null = null;
-    let priceSourceAfter: "BRANCH" | "STANDARD";
+    const branchId = input.branchId!;
     const newPrice = new Prisma.Decimal(input.suggestedPrice);
 
-    if (input.applyScope === "BRANCH") {
-      const branchId = input.branchId!;
-      const existing = await tx.branchProductSetting.findUnique({
-        where: { branchId_productId: { branchId, productId: input.productId } },
-        select: { branchPrice: true },
-      });
-      previousPrice = existing?.branchPrice ?? null;
-      await tx.branchProductSetting.upsert({
-        where: { branchId_productId: { branchId, productId: input.productId } },
-        create: { branchId, productId: input.productId, branchPrice: newPrice },
-        update: { branchPrice: newPrice },
-      });
-      priceSourceAfter = "BRANCH";
-    } else {
-      previousPrice = product.standardSalePrice;
-      await tx.product.update({
-        where: { id: input.productId },
-        data: { standardSalePrice: newPrice },
-      });
-      priceSourceAfter = "STANDARD";
-    }
+    const existing = await tx.branchProductSetting.findUnique({
+      where: { branchId_productId: { branchId, productId: input.productId } },
+      select: { branchPrice: true },
+    });
+    const previousPrice = existing?.branchPrice ?? null;
+    await tx.branchProductSetting.upsert({
+      where: { branchId_productId: { branchId, productId: input.productId } },
+      create: { branchId, productId: input.productId, branchPrice: newPrice },
+      update: { branchPrice: newPrice },
+    });
+    const priceSourceAfter: "BRANCH" = "BRANCH";
 
     await tx.auditLog.create({
       data: {

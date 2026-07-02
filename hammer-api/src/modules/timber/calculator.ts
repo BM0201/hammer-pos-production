@@ -449,11 +449,6 @@ export const STANDARD_MEASURES: TimberDimensions[] = [
   { thickness: 4, width: 4, length: 11 },
 ];
 
-/** Generate measure key like "1x12x16" */
-export function measureKey(dims: TimberDimensions): string {
-  return `${dims.thickness}x${dims.width}x${dims.length}`;
-}
-
 /** Legacy compatibility alias */
 export type TimberType = TimberPriceGroup;
 

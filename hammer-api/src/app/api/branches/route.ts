@@ -2,7 +2,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { prisma } from "@/lib/prisma";
 import { toHttpErrorResponse } from "@/lib/http";
-import { ok } from "@/lib/api/response";
+import { okCached } from "@/lib/api/response";
 import { isPrivilegedGlobal } from "@/modules/rbac/guards";
 
 /**
@@ -27,7 +27,9 @@ export async function GET() {
       orderBy: { name: "asc" },
     });
 
-    return ok(branches);
+    // Near-static reference data fetched by ~18 screens; 5 min private browser
+    // cache (never shared/CDN) cuts repeat invocations without cross-user risk.
+    return okCached(branches, 300);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

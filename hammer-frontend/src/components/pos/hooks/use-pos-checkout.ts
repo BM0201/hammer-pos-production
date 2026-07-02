@@ -27,6 +27,8 @@ type PosCheckoutOpts = {
   onCompleted: () => void;
 };
 
+export type CashTenderDetail = { receivedAmount: number; changeAmount: number };
+
 export function usePosCheckout(opts: PosCheckoutOpts) {
   // Mirror opts into a ref so completeTicket is always reading the latest
   // external state without capturing stale closures.
@@ -34,6 +36,9 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
   useEffect(() => { optsRef.current = opts; });
 
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+  // Guard síncrono contra doble click: el estado de React no se actualiza
+  // dentro del mismo tick, así que dos clicks rápidos verían ambos false.
+  const inFlightRef = useRef(false);
   const [includeTransport, setIncludeTransport] = useState(false);
   const [transportAmount, setTransportAmount] = useState("");
   const [transportTouched, setTransportTouched] = useState(false);
@@ -55,7 +60,7 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
     return null;
   }, [includeTransport, transportAmount]);
 
-  async function completeTicket(target: "QUEUE" | "DIRECT") {
+  async function completeTicket(target: "QUEUE" | "DIRECT", cashDetail: CashTenderDetail | null = null) {
     const {
       order,
       ticketLines,
@@ -73,7 +78,7 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
       onCompleted,
     } = optsRef.current;
 
-    if (!order || isSubmittingPayment || ticketLines.length === 0) return;
+    if (!order || inFlightRef.current || isSubmittingPayment || ticketLines.length === 0) return;
 
     if (includeTransport && transportValidationError) {
       setTransportTouched(true);
@@ -108,6 +113,7 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
       return;
     }
 
+    inFlightRef.current = true;
     setIsSubmittingPayment(true);
 
     try {
@@ -119,6 +125,17 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
         };
         if (includeTransport) body.transportAmount = transportAmountValue;
         if (referenceNumber.trim()) body.referenceNumber = referenceNumber.trim();
+        // Efectivo con monto tecleado en el diálogo: registrar recibido/vuelto
+        // reales (alimentan la conciliación de vuelto del Día Operativo).
+        if (paymentMethod === "CASH" && cashDetail) {
+          const amount = Math.round((Number(order.grandTotal) + transportAmountValue) * 100) / 100;
+          body.tenders = [{
+            method: "CASH",
+            amount,
+            receivedAmount: cashDetail.receivedAmount,
+            changeAmount: cashDetail.changeAmount,
+          }];
+        }
 
         const response = await apiFetch(`/api/sales/orders/${order.id}/direct-sale`, {
           method: "POST",
@@ -195,6 +212,7 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
         10000,
       );
     } finally {
+      inFlightRef.current = false;
       setIsSubmittingPayment(false);
     }
   }

@@ -131,7 +131,8 @@ export function PosCatalogPanel({
         >
           {products.map((product, index) => {
             const selected = index === activeProductIndex;
-            const displayPrice = product.effectivePrice ?? product.standardSalePrice;
+            const displayPrice = product.effectivePrice ?? null;
+            const hasNoPrice = displayPrice === null;
             const availableStock =
               product.availableSaleStock ??
               product.sharedStock?.saleQuantity ??
@@ -150,32 +151,34 @@ export function PosCatalogPanel({
                   selected
                     ? "border-[var(--color-pay)] bg-[color-mix(in_srgb,var(--color-pay)_8%,transparent)]"
                     : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-strong)]",
-                  hasNoStock ? "opacity-60" : "",
+                  hasNoStock || hasNoPrice ? "opacity-60" : "",
                 ].join(" ")}
                 onClick={() => {
                   setActiveProductIndex(index);
                   onAddProduct(product);
                 }}
-                disabled={isBusy || hasNoStock}
+                disabled={isBusy || hasNoStock || hasNoPrice}
                 data-testid={`pos-product-${product.id}`}
               >
                 <div className="line-clamp-2 text-[13px] font-medium leading-snug text-[var(--color-text)]">
                   {product.name}
                 </div>
                 <div className="mt-auto text-[17px] font-semibold tabular-nums text-[var(--color-text)]">
-                  C$ {Number(displayPrice).toFixed(2)}
+                  {hasNoPrice ? "Sin precio" : `C$ ${Number(displayPrice).toFixed(2)}`}
                 </div>
                 <div
                   className={[
                     "text-[11px]",
-                    isLowStock
+                    hasNoPrice || isLowStock
                       ? "text-[var(--color-warning-700)]"
                       : hasNoStock
                         ? "text-[var(--color-danger-600)]"
                         : "text-[var(--color-text-soft)]",
                   ].join(" ")}
                 >
-                  {hasNoStock
+                  {hasNoPrice
+                    ? "Sin precio asignado"
+                    : hasNoStock
                     ? "Sin stock"
                     : `Stock ${availableStock % 1 === 0 ? availableStock : availableStock.toFixed(2)}`}
                   {product.saleUnit ? ` ${product.saleUnit}` : ""}

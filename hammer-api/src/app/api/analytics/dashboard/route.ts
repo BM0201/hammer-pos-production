@@ -1,4 +1,3 @@
-import { NextRequest, NextResponse } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -6,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { ok } from "@/lib/api/response";
 
 /** GET /api/analytics/dashboard — analytics dashboard data */
-export async function GET(req: NextRequest) {
+export async function GET() {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
@@ -87,16 +86,16 @@ export async function GET(req: NextRequest) {
       recommendations.push(`${classC} productos clase C con +90 d\u00edas en stock \u2014 candidatos a liquidaci\u00f3n.`);
     }
 
+    // Nota: ok() ya envuelve en { ok, data } — la doble envoltura anterior
+    // ({ data: {...} }) rompia unwrapApiData en el frontend y crasheaba Analytics.
     return ok({
-      data: {
-        abcDistribution,
-        xyzDistribution,
-        avgRotationByClass,
-        lowRotationProducts,
-        highValueProducts,
-        staleProducts,
-        recommendations,
-      },
+      abcDistribution,
+      xyzDistribution,
+      avgRotationByClass,
+      lowRotationProducts,
+      highValueProducts,
+      staleProducts,
+      recommendations,
     });
   } catch (err: any) {
     return toHttpErrorResponse(err);
