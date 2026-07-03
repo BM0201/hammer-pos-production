@@ -39,7 +39,10 @@ test("M.2 Finanzas SÍ renderiza venta potencial, ganancia bruta, gastos, utilid
   assert.ok(summary.includes("Valor de venta potencial"), "venta potencial");
   assert.ok(summary.includes("Ganancia bruta potencial"), "ganancia bruta potencial");
   assert.ok(summary.includes("Margen bruto potencial"), "margen bruto potencial");
-  assert.ok(summary.includes("Gastos operativos"), "gastos operativos");
+  // Desde 2026-07-02 los gastos del P&L son REALES (caja + planilla pagada) y
+  // el presupuesto configurado se muestra aparte como comparación.
+  assert.ok(summary.includes("Gastos pagados desde caja"), "gastos reales de caja");
+  assert.ok(summary.includes("Presupuesto mensual configurado"), "presupuesto como referencia");
   assert.ok(summary.includes("Planilla"), "planilla");
   // Renombrada de "Utilidad operativa estimada" a "Utilidad operativa" al
   // adoptar el formato de estado de resultados (P&L) el 2026-07-02.

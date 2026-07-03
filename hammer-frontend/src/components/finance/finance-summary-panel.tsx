@@ -17,6 +17,8 @@ type BranchRow = {
   cogs: number;
   grossProfit: number;
   grossMarginPercent: number | null;
+  cashExpenses: number;
+  payrollPaid: number;
   operatingExpenses: number;
   operatingProfit: number;
 };
@@ -40,7 +42,10 @@ type FinanceSummary = {
     cogs: number;
     grossProfit: number;
     grossMarginPercent: number | null;
+    cashExpenses: number;
+    payrollPaid: number;
     operatingExpenses: number;
+    expensesBudgetMonthly: number;
     operatingProfit: number;
     estimatedNetProfit: number;
     byBranch: BranchRow[];
@@ -235,13 +240,13 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                 <PnlRow label="Ventas netas" value={perf.netSales} kind="subtotal" />
                 <PnlRow label="Costo de ventas (COGS)" value={perf.cogs} kind="minus" />
                 <PnlRow label="Utilidad bruta" value={perf.grossProfit} kind="subtotal" percent={perf.grossMarginPercent} />
-                <PnlRow label="Gastos operativos del mes" value={perf.operatingExpenses} kind="minus" />
+                <PnlRow label="Gastos pagados desde caja" value={perf.cashExpenses} kind="minus" />
+                <PnlRow label="Planilla pagada" value={perf.payrollPaid} kind="minus" />
                 <PnlRow label="Utilidad operativa" value={perf.operatingProfit} kind="total" />
-                {isCurrentMonth && perf.operatingProfit < 0 && (
-                  <p className="mt-2 text-[10px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
-                    Mes en curso: compara gastos del mes completo contra ventas acumuladas — puede verse negativa hasta avanzar el mes.
-                  </p>
-                )}
+                <p className="mt-2 text-[10px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+                  Gastos de caja = egresos reales que cada sucursal pagó en el período (luz, agua, compras del momento…),
+                  sin incluir planilla (va aparte para no doble-contarla).
+                </p>
               </div>
 
               {/* Rentabilidad por sucursal */}
@@ -258,7 +263,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                         <th className="py-1.5 pr-3 text-right">COGS</th>
                         <th className="py-1.5 pr-3 text-right">Ut. bruta</th>
                         <th className="py-1.5 pr-3 text-right">Margen</th>
-                        <th className="py-1.5 pr-3 text-right">Gastos</th>
+                        <th className="py-1.5 pr-3 text-right" title="Egresos de caja + planilla pagada del período">Gastos reales</th>
                         <th className="py-1.5 text-right">Ut. operativa</th>
                       </tr>
                     </thead>
@@ -284,15 +289,22 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
             </div>
 
             <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-              Reglas: ventas netas = pagos cobrados − reembolsos del período (base caja, corte mensual en hora Managua) ·
+              Reglas (todo en base caja, corte mensual hora Managua): ventas netas = pagos cobrados − reembolsos ·
               COGS = costo de salidas por venta − reingresos vendibles por devolución (lo dañado queda como merma) ·
-              utilidad operativa = utilidad bruta − gastos operativos (incluyen planilla).
+              utilidad operativa = utilidad bruta − gastos REALES pagados (egresos de caja de sucursal + planilla desembolsada).
+              El presupuesto mensual configurado se compara aparte, no se resta.
             </p>
           </section>
 
-          {/* ── 2. Costos del período ── */}
-          <section className="grid gap-3 sm:grid-cols-3">
-            <Card icon={Receipt} label="Gastos operativos (mes)" value={money(data.operatingExpenses.periodTotal)} hint="Gastos recurrentes configurados" />
+          {/* ── 2. Costos del período: real vs presupuesto ── */}
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Card icon={Wallet} label="Gastos reales pagados" value={money(perf.operatingExpenses)}
+              hint={`Caja ${money(perf.cashExpenses)} + planilla ${money(perf.payrollPaid)}`} />
+            <Card icon={Receipt} label="Presupuesto mensual configurado" value={money(perf.expensesBudgetMonthly)}
+              tone={perf.expensesBudgetMonthly > 0 && perf.operatingExpenses > perf.expensesBudgetMonthly ? "warn" : "default"}
+              hint={perf.expensesBudgetMonthly > 0
+                ? `Ejecutado: ${Math.round((perf.operatingExpenses / perf.expensesBudgetMonthly) * 100)}% del presupuesto`
+                : "Sin presupuesto configurado"} />
             <Card icon={Users} label="Planilla pagada (bruto)" value={money(data.payroll.payrollTotal)} hint={`Costo patronal: ${money(data.payroll.employerCostTotal)}`} />
             <Card icon={Landmark} label="Planilla pendiente de pago" value={money(data.payroll.pendingPayrollTotal)} tone={data.payroll.pendingPayrollTotal > 0 ? "warn" : "default"}
               hint={data.payroll.pendingPayrollTotal > 0 ? "Desembolsos programados sin pagar" : "Al día"} />

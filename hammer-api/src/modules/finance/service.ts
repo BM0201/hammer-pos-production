@@ -81,7 +81,14 @@ export type FinanceSummary = {
     cogs: number;
     grossProfit: number;
     grossMarginPercent: number | null;
+    /** Gastos pagados desde caja de sucursal en el período (luz, agua, compras del momento…), sin planilla. */
+    cashExpenses: number;
+    /** Planilla realmente desembolsada (PAID) en el período. */
+    payrollPaid: number;
+    /** Total de gastos REALES del período = cashExpenses + payrollPaid. */
     operatingExpenses: number;
+    /** Presupuesto mensual configurado (OperatingExpense) — referencia, no se resta. */
+    expensesBudgetMonthly: number;
     operatingProfit: number;
     estimatedNetProfit: number;
     byBranch: Array<{
@@ -94,6 +101,8 @@ export type FinanceSummary = {
       cogs: number;
       grossProfit: number;
       grossMarginPercent: number | null;
+      cashExpenses: number;
+      payrollPaid: number;
       operatingExpenses: number;
       operatingProfit: number;
     }>;
@@ -237,10 +246,10 @@ async function computeRealPerformance(
   branchId: string | null,
   start: Date,
   end: Date,
-  operatingExpenses: { periodTotal: number; byBranch: Array<{ branchId: string; amount: number }> },
+  operatingExpenses: { monthlyTotal: number },
 ) {
   const branchFilter = branchId ? { branchId } : {};
-  const [payments, refunds, movements, branches] = await Promise.all([
+  const [payments, refunds, movements, branches, cashExpenseMovs, payrollDisbursed] = await Promise.all([
     prisma.payment.findMany({
       where: {
         status: PaymentStatus.POSTED,
@@ -262,17 +271,37 @@ async function computeRealPerformance(
       select: { quantity: true, unitCost: true, movementType: true, branchId: true },
     }),
     prisma.branch.findMany({ select: { id: true, code: true, name: true } }),
+    // Gastos REALES pagados desde caja de sucursal (luz, agua, aceite, compras
+    // del momento…). Se excluyen los EXPENSE_OUT vinculados a desembolsos de
+    // planilla: la planilla se cuenta aparte para no doble-contarla.
+    prisma.cashMovement.findMany({
+      where: {
+        type: "EXPENSE_OUT",
+        createdAt: { gte: start, lt: end },
+        payrollDisbursements: { none: {} },
+        ...(branchId ? { cashSession: { physicalCashBox: { branchId } } } : {}),
+      },
+      select: { amount: true, cashSession: { select: { physicalCashBox: { select: { branchId: true } } } } },
+    }),
+    // Planilla realmente desembolsada en el período (independiente de si salió
+    // por caja de sucursal o la pagó Master por otro medio).
+    prisma.payrollDisbursement.findMany({
+      where: { status: "PAID", paidAt: { gte: start, lt: end }, ...(branchId ? { branchId } : {}) },
+      select: { amount: true, branchId: true },
+    }),
   ]);
 
   const branchMeta = new Map(branches.map((b) => [b.id, { code: b.code, name: b.name }]));
-  const expensesByBranch = new Map(operatingExpenses.byBranch.map((e) => [e.branchId, e.amount]));
 
-  type BranchAcc = { grossSales: number; refunds: number; cogsOut: number; cogsReturned: number };
+  type BranchAcc = {
+    grossSales: number; refunds: number; cogsOut: number; cogsReturned: number;
+    cashExpenses: number; payrollPaid: number;
+  };
   const perBranch = new Map<string, BranchAcc>();
   const acc = (id: string): BranchAcc => {
     let entry = perBranch.get(id);
     if (!entry) {
-      entry = { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0 };
+      entry = { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, payrollPaid: 0 };
       perBranch.set(id, entry);
     }
     return entry;
@@ -285,13 +314,15 @@ async function computeRealPerformance(
     if ((SALE_OUT_TYPES as readonly string[]).includes(m.movementType)) acc(m.branchId).cogsOut += cost;
     else acc(m.branchId).cogsReturned += cost;
   }
+  for (const e of cashExpenseMovs) acc(e.cashSession.physicalCashBox.branchId).cashExpenses += num(e.amount);
+  for (const d of payrollDisbursed) acc(d.branchId).payrollPaid += num(d.amount);
 
   const byBranch = [...perBranch.entries()]
     .map(([id, b]) => {
       const netSales = b.grossSales - b.refunds;
       const cogs = b.cogsOut - b.cogsReturned;
       const grossProfit = netSales - cogs;
-      const branchExpenses = expensesByBranch.get(id) ?? 0;
+      const realExpenses = b.cashExpenses + b.payrollPaid;
       return {
         branchId: id,
         branchCode: branchMeta.get(id)?.code ?? null,
@@ -302,8 +333,10 @@ async function computeRealPerformance(
         cogs: round2(cogs),
         grossProfit: round2(grossProfit),
         grossMarginPercent: netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null,
-        operatingExpenses: round2(branchExpenses),
-        operatingProfit: round2(grossProfit - branchExpenses),
+        cashExpenses: round2(b.cashExpenses),
+        payrollPaid: round2(b.payrollPaid),
+        operatingExpenses: round2(realExpenses),
+        operatingProfit: round2(grossProfit - realExpenses),
       };
     })
     .sort((a, b) => b.netSales - a.netSales);
@@ -314,7 +347,10 @@ async function computeRealPerformance(
   const cogs = byBranch.reduce((s, b) => s + b.cogs, 0);
   const grossProfit = netSales - cogs;
   const grossMarginPercent = netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null;
-  const operatingProfit = grossProfit - operatingExpenses.periodTotal;
+  const cashExpenses = byBranch.reduce((s, b) => s + b.cashExpenses, 0);
+  const payrollPaid = byBranch.reduce((s, b) => s + b.payrollPaid, 0);
+  const realExpenses = cashExpenses + payrollPaid;
+  const operatingProfit = grossProfit - realExpenses;
 
   return {
     grossSales: round2(grossSales),
@@ -323,7 +359,10 @@ async function computeRealPerformance(
     cogs: round2(cogs),
     grossProfit: round2(grossProfit),
     grossMarginPercent,
-    operatingExpenses: round2(operatingExpenses.periodTotal),
+    cashExpenses: round2(cashExpenses),
+    payrollPaid: round2(payrollPaid),
+    operatingExpenses: round2(realExpenses),
+    expensesBudgetMonthly: round2(operatingExpenses.monthlyTotal),
     operatingProfit: round2(operatingProfit),
     // Sin impuestos modelados: la utilidad neta estimada = utilidad operativa.
     estimatedNetProfit: round2(operatingProfit),

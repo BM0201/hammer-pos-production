@@ -114,6 +114,43 @@ describe("ventas netas y COGS con devoluciones (reglas contables)", () => {
   });
 });
 
+// ── Gastos reales del período (base caja, sin doble conteo de planilla) ──────
+
+describe("gastos reales: caja de sucursal + planilla desembolsada", () => {
+  function gastos(input: {
+    cashExpensesNoPayroll: number; // EXPENSE_OUT sin vínculo a planilla
+    payrollPaid: number;           // desembolsos PAID del período
+    grossProfit: number;
+    budgetMonthly: number;
+  }) {
+    const realExpenses = input.cashExpensesNoPayroll + input.payrollPaid;
+    return {
+      operatingExpenses: round2(realExpenses),
+      operatingProfit: round2(input.grossProfit - realExpenses),
+      budgetExecutionPercent: input.budgetMonthly > 0 ? Math.round((realExpenses / input.budgetMonthly) * 100) : null,
+    };
+  }
+
+  it("gastos reales = egresos de caja (luz/agua/compras del momento) + planilla pagada", () => {
+    const r = gastos({ cashExpensesNoPayroll: 3200, payrollPaid: 9000, grossProfit: 15000, budgetMonthly: 14000 });
+    assert.equal(r.operatingExpenses, 12200);
+    assert.equal(r.operatingProfit, 2800);
+  });
+
+  it("la planilla pagada por caja NO se doble-cuenta (su EXPENSE_OUT se excluye del lado caja)", () => {
+    // El servicio filtra payrollDisbursements: { none: {} } en los EXPENSE_OUT,
+    // así que la nómina solo entra por la línea de planilla desembolsada.
+    const r = gastos({ cashExpensesNoPayroll: 500, payrollPaid: 9000, grossProfit: 10000, budgetMonthly: 0 });
+    assert.equal(r.operatingExpenses, 9500); // no 18,500
+  });
+
+  it("el presupuesto configurado NO se resta de la utilidad — solo se compara", () => {
+    const r = gastos({ cashExpensesNoPayroll: 1000, payrollPaid: 0, grossProfit: 5000, budgetMonthly: 20000 });
+    assert.equal(r.operatingProfit, 4000); // resta 1000 real, no 20000 presupuestado
+    assert.equal(r.budgetExecutionPercent, 5);
+  });
+});
+
 // ── Corte de mes contable en hora Managua ─────────────────────────────────────
 
 describe("managuaMonthRangeUtc (corte de mes en Managua, UTC-6 sin DST)", () => {
