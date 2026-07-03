@@ -272,22 +272,31 @@ export async function detectInventoryDecisions(ctx: BrainDetectorContext): Promi
       });
     }
 
-    if (!balanceProductIds.has(product.id) && (salesByProduct.get(product.id) ?? 0) === 0) {
-      decisions.push({
-        category: "INVENTORY",
-        severity: "INFO",
-        title: `SKU sin inventario registrado: ${product.sku}`,
-        description: `${product.name} no tiene existencias registradas en ninguna sucursal.`,
-        recommendation: "Confirmar si debe seguir disponible o cargar inventario inicial por sucursal.",
-        productId: product.id,
-        confidenceScore: 0.8,
-        riskScore: riskScoreFor("INFO", 0.8),
-        proposedActionType: "REVIEW_INITIAL_INVENTORY",
-        evidenceJson: { sku: product.sku },
-        sourceJson: { detector: "inventory-detector" },
-        fingerprintParts: ["inventory", "no-balance", product.id],
-      });
-    }
+  }
+
+  // SKUs sin inventario: UNA decisión agregada, no una por producto. La
+  // versión anterior (fingerprint por producto) llegó a acumular 500
+  // decisiones INFO en la bandeja durante la carga inicial del catálogo.
+  const noBalanceProducts = products.filter(
+    (product) => !balanceProductIds.has(product.id) && (salesByProduct.get(product.id) ?? 0) === 0,
+  );
+  if (noBalanceProducts.length > 0) {
+    decisions.push({
+      category: "INVENTORY",
+      severity: "INFO",
+      title: `${noBalanceProducts.length} SKU(s) sin inventario registrado`,
+      description: `${noBalanceProducts.length} producto(s) activos no tienen existencias en ninguna sucursal ni ventas recientes. Ejemplos: ${noBalanceProducts.slice(0, 5).map((p) => p.sku).join(", ")}${noBalanceProducts.length > 5 ? "…" : ""}`,
+      recommendation: "Confirmar si deben seguir disponibles o cargar inventario inicial por sucursal (Catálogo e Inventario → filtro Stock cero).",
+      confidenceScore: 0.8,
+      riskScore: riskScoreFor("INFO", 0.8),
+      proposedActionType: "REVIEW_INITIAL_INVENTORY",
+      evidenceJson: {
+        count: noBalanceProducts.length,
+        sampleSkus: noBalanceProducts.slice(0, 25).map((p) => p.sku),
+      },
+      sourceJson: { detector: "inventory-detector" },
+      fingerprintParts: ["inventory", "no-balance-summary"],
+    });
   }
 
   const woodDimensionGroups = new Map<string, typeof products>();

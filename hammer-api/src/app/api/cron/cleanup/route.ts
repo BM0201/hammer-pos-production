@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/api/response";
 import { runRetentionSweep } from "@/modules/retention/service";
 import { LOGIN_ATTEMPT_RETENTION_DAYS, retentionCutoff } from "@/modules/retention/policy";
+import { expireStaleBrainDecisions } from "@/modules/brain/service";
 
 /**
  * Cron diario de limpieza (ver vercel.json — 0 9 UTC = 3am Managua).
@@ -47,6 +48,10 @@ export async function GET(request: Request) {
 
   const retention = await runRetentionSweep({ now });
 
+  // Higiene de Brain: expira decisiones que ningún escaneo re-detecta en 7 días
+  // (condición desaparecida) para que la bandeja no acumule bulto muerto.
+  const brainExpired = await expireStaleBrainDecisions(now);
+
   return ok({
     timestamp: now.toISOString(),
     cleaned: {
@@ -54,6 +59,7 @@ export async function GET(request: Request) {
       loginAttempts: loginDeleted.count,
       revokedSessions: revokedDeleted.count,
       mfaPendingTokens: mfaDeleted.count,
+      brainDecisionsExpired: brainExpired,
     },
     retention: {
       cutoff: retention.cutoffIso,

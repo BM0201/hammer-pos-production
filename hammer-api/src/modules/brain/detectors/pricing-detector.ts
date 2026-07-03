@@ -283,7 +283,9 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
         calculatedAt: calculation.calculatedAt.toISOString(),
       },
       sourceJson: { detector: "pricing-detector" },
-      fingerprintParts: ["pricing", "scope-misconfiguration", calculation.branchId, calculation.productId, calculation.id],
+      // Sin calculation.id: cada recálculo de precio generaba un fingerprint
+      // nuevo y por tanto una decisión duplicada del mismo producto.
+      fingerprintParts: ["pricing", "scope-misconfiguration", calculation.branchId, calculation.productId],
     });
   }
 

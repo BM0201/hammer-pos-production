@@ -31,15 +31,21 @@ export function DecisionActionButtons({
   busy: boolean;
   onAction: (action: BrainDecisionAction) => void;
 }) {
-  const isExecutable = actionMode === "AUTO_EXECUTABLE" || isAutoExecutable(proposedActionType);
+  const isAutoExec = actionMode === "AUTO_EXECUTABLE" || isAutoExecutable(proposedActionType);
   const canApprove = status === "OPEN" || status === "SNOOZED" || status === "FAILED" || status === "MANUAL_REVIEW";
-  const canExecute = status === "APPROVED" && isExecutable;
+  // Toda decisión es "ejecutable": las de tipo revisión se cierran como
+  // atendidas por el usuario (el backend las marca EXECUTED). Antes las
+  // no-auto-ejecutables quedaban APPROVED para siempre sin ninguna salida
+  // ("Requiere acción manual" era un badge muerto) y seguían apareciendo.
+  const canExecute = status === "APPROVED";
   const canManualReview = status === "OPEN" || status === "APPROVED" || status === "FAILED";
   const canSnooze = status === "OPEN" || status === "APPROVED" || status === "MANUAL_REVIEW";
   const canDismiss = !["EXECUTED", "DISMISSED", "EXPIRED"].includes(status);
   // K: SNOOZED decisions can be explicitly reopened (e.g. urgent situation changed)
   const canReopen = ["DISMISSED", "EXPIRED", "FAILED", "SNOOZED"].includes(status);
-  const canApproveAndExecute = canApprove && isExecutable;
+  const canApproveAndExecute = canApprove;
+  const comboLabel = isAutoExec ? "Aprobar y Ejecutar" : "Marcar como atendida";
+  const executeLabel = isAutoExec ? "Ejecutar" : "Confirmar atención y cerrar";
 
   const secondary = "rounded-md border border-[var(--color-border)] px-3 py-2 text-sm font-semibold text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-muted)] disabled:cursor-not-allowed disabled:text-[var(--color-text-soft)]";
   const primary = "rounded-md bg-[var(--color-info-700)] px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-info-600)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-alt)] disabled:text-[var(--color-text-soft)]";
@@ -52,17 +58,15 @@ export function DecisionActionButtons({
       {canApproveAndExecute ? (
         <button type="button" disabled={busy} className={combo} onClick={() => onAction("approve-and-execute")}>
           <Zap className="h-3.5 w-3.5" />
-          Aprobar y Ejecutar
+          {comboLabel}
         </button>
       ) : (
         <button type="button" disabled={!canApprove || busy} className={primary} onClick={() => onAction("approve")}>
           Aprobar
         </button>
       )}
-      {isExecutable ? (
-        <button type="button" disabled={!canExecute || busy} className={success} onClick={() => onAction("execute")}>Ejecutar</button>
-      ) : status === "APPROVED" ? (
-        <span className="rounded-md border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-sm font-semibold text-[var(--color-warning-700)]">Requiere acción manual</span>
+      {canExecute ? (
+        <button type="button" disabled={busy} className={success} onClick={() => onAction("execute")}>{executeLabel}</button>
       ) : null}
       <button type="button" disabled={!canManualReview || busy} className={secondary} onClick={() => onAction("manual-review")}>Revisión manual</button>
       <button type="button" disabled={!canSnooze || busy} className={secondary} onClick={() => onAction("snooze")}>Posponer</button>

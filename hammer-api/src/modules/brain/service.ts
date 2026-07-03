@@ -14,6 +14,10 @@ const terminalStatuses: BrainDecisionStatus[] = ["EXECUTED", "DISMISSED"];
 const activeStatuses: BrainDecisionStatus[] = ["OPEN", "APPROVED", "MANUAL_REVIEW", "SNOOZED", "FAILED"];
 const REOPEN_AFTER_DAYS = 14;
 const STALE_EXECUTING_MINUTES = 10;
+// Una decisión activa que ningún escaneo re-detecta en este plazo se considera
+// resuelta en la vida real (la condición desapareció) y se expira sola. Antes
+// no existía esta salida y la bandeja acumulaba cientos de decisiones muertas.
+const STALE_DETECTION_DAYS = 7;
 
 function decimal(value: number | null | undefined) {
   return value === null || value === undefined ? undefined : new Prisma.Decimal(value);
@@ -445,6 +449,51 @@ async function writeActionLog(input: {
   });
 }
 
+/**
+ * Expira decisiones activas que ya no tienen razón de estar en la bandeja:
+ *  - con `expiresAt` vencido (snoozes que despertaron sin re-detección), o
+ *  - sin re-detección en STALE_DETECTION_DAYS (la condición desapareció:
+ *    cada escaneo refresca `lastDetectedAt` de lo que sigue vigente, así que
+ *    lo que nadie re-detecta en una semana es bulto muerto).
+ * EXPIRED no es terminal para el dedup: si la condición reaparece, el
+ * fingerprint la reabre como OPEN en el siguiente escaneo.
+ * Se ejecuta en cada persistencia de scan y en el cron diario de limpieza.
+ */
+export async function expireStaleBrainDecisions(now: Date = new Date()): Promise<number> {
+  const staleDetectionThreshold = new Date(now.getTime() - STALE_DETECTION_DAYS * 24 * 60 * 60 * 1000);
+  const targets = await prisma.brainDecision.findMany({
+    where: {
+      status: { in: activeStatuses },
+      OR: [
+        { expiresAt: { lt: now } },
+        { lastDetectedAt: { lt: staleDetectionThreshold } },
+      ],
+    },
+    select: { id: true, status: true },
+  });
+  if (targets.length === 0) return 0;
+
+  await prisma.brainDecision.updateMany({
+    where: { id: { in: targets.map((t) => t.id) } },
+    data: { status: "EXPIRED", resolvedAt: now },
+  });
+  await prisma.brainDecisionActionLog.createMany({
+    data: targets.map((t) => ({
+      decisionId: t.id,
+      action: "EXPIRED",
+      metadataJson: {
+        reason: "Condición no re-detectada o snooze vencido",
+        staleDetectionDays: STALE_DETECTION_DAYS,
+        beforeStatus: t.status,
+        afterStatus: "EXPIRED",
+      },
+    })),
+  }).catch(() => {
+    // Bitácora es no-crítica: no fallar la expiración por un error de log.
+  });
+  return targets.length;
+}
+
 export async function persistBrainDecisions(
   drafts: BrainDecisionDraft[],
   actorUserId?: string,
@@ -551,14 +600,7 @@ export async function persistBrainDecisions(
 
   let expired = 0;
   if (!options.dryRun) {
-    const expiredRows = await prisma.brainDecision.updateMany({
-      where: {
-        status: { in: activeStatuses },
-        expiresAt: { lt: now },
-      },
-      data: { status: "EXPIRED", resolvedAt: now },
-    });
-    expired = expiredRows.count;
+    expired = await expireStaleBrainDecisions(now);
   }
 
   if (actorUserId && !options.dryRun) {
