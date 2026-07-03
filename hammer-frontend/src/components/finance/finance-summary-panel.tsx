@@ -1,11 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { TrendingUp, Wallet, Receipt, Users, Landmark, Info } from "lucide-react";
+import { TrendingUp, Wallet, Receipt, Users, Landmark, Info, ChevronLeft, ChevronRight, RefreshCw, Building2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
 
 /* ── Tipos del endpoint oficial: /api/master/finance/summary (finance/service.ts) ── */
+
+type BranchRow = {
+  branchId: string;
+  branchCode: string | null;
+  branchName: string | null;
+  grossSales: number;
+  refunds: number;
+  netSales: number;
+  cogs: number;
+  grossProfit: number;
+  grossMarginPercent: number | null;
+  operatingExpenses: number;
+  operatingProfit: number;
+};
 
 type FinanceSummary = {
   period: { year: number; month: number };
@@ -29,24 +43,22 @@ type FinanceSummary = {
     operatingExpenses: number;
     operatingProfit: number;
     estimatedNetProfit: number;
-    byBranch: Array<{
-      branchId: string;
-      branchCode: string | null;
-      branchName: string | null;
-      grossSales: number;
-      refunds: number;
-      netSales: number;
-      cogs: number;
-      grossProfit: number;
-      grossMarginPercent: number | null;
-      operatingExpenses: number;
-      operatingProfit: number;
-    }>;
+    byBranch: BranchRow[];
   };
 };
 
+type Branch = { id: string; code: string; name: string };
+
+const MONTH_NAMES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
 function money(value: number | null | undefined) {
   return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
+}
+
+function managuaNow() {
+  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Managua", year: "numeric", month: "2-digit" }).format(new Date());
+  const [year, month] = ymd.split("-").map(Number);
+  return { year, month };
 }
 
 function Card({
@@ -72,15 +84,50 @@ function Card({
   );
 }
 
-export function FinanceSummaryPanel({ branchId }: { branchId?: string | null }) {
+/* ── Estado de resultados (P&L) — el formato que espera contabilidad ── */
+
+function PnlRow({
+  label, value, kind = "line", percent,
+}: { label: string; value: number; kind?: "line" | "minus" | "subtotal" | "total"; percent?: number | null }) {
+  const isResult = kind === "subtotal" || kind === "total";
+  const color =
+    kind === "total"
+      ? value >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)"
+      : isResult
+        ? "var(--color-text)"
+        : "var(--color-text-secondary)";
+  return (
+    <div
+      className={`flex items-baseline justify-between gap-3 py-1.5 ${isResult ? "border-t" : ""}`}
+      style={{ borderColor: isResult ? "var(--color-border-strong)" : undefined }}
+    >
+      <span className={`text-xs ${isResult ? "font-bold" : ""}`} style={{ color: isResult ? "var(--color-text)" : "var(--color-text-muted)" }}>
+        {kind === "minus" ? "(−) " : isResult ? "= " : ""}{label}
+      </span>
+      <span className={`tabular-nums text-sm ${isResult ? "font-bold" : "font-medium"}`} style={{ color, fontFamily: "'DM Mono', ui-monospace, monospace" }}>
+        {kind === "minus" && value > 0 ? `(${money(value)})` : money(value)}
+        {percent != null && <span className="ml-2 text-[11px] font-normal" style={{ color: "var(--color-text-muted)" }}>{percent.toFixed(1)}%</span>}
+      </span>
+    </div>
+  );
+}
+
+export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: string | null }) {
   const [data, setData] = useState<FinanceSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState(() => managuaNow());
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [branchFilter, setBranchFilter] = useState<string>(fixedBranchId ?? "");
+  const nowParts = managuaNow();
+  const isCurrentMonth = period.year === nowParts.year && period.month === nowParts.month;
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const qs = branchId ? `?branchId=${encodeURIComponent(branchId)}` : "";
-      const res = await apiFetch(`/api/master/finance/summary${qs}`);
+      const params = new URLSearchParams({ year: String(period.year), month: String(period.month) });
+      const effectiveBranch = fixedBranchId ?? branchFilter;
+      if (effectiveBranch) params.set("branchId", effectiveBranch);
+      const res = await apiFetch(`/api/master/finance/summary?${params.toString()}`);
       const raw = await res.json();
       if (!res.ok) {
         showToast("error", raw?.error?.message ?? "No se pudo cargar el resumen financiero.");
@@ -92,109 +139,190 @@ export function FinanceSummaryPanel({ branchId }: { branchId?: string | null }) 
     } finally {
       setLoading(false);
     }
-  }, [branchId]);
+  }, [fixedBranchId, branchFilter, period.year, period.month]);
 
   useEffect(() => { void load(); }, [load]);
 
-  if (loading) return <div className="p-6 text-center text-sm text-[var(--color-text-muted)]">Cargando resumen financiero…</div>;
-  if (!data) return null;
+  useEffect(() => {
+    if (fixedBranchId !== undefined && fixedBranchId !== null) return; // selector deshabilitado
+    apiFetch("/api/branches")
+      .then((r) => r.json())
+      .then((raw) => setBranches((unwrapApiData(raw) as Branch[]) ?? []))
+      .catch(() => { /* selector es opcional */ });
+  }, [fixedBranchId]);
 
-  const inv = data.inventoryProjection;
-  const perf = data.realPerformance;
+  function shiftMonth(delta: number) {
+    setPeriod((prev) => {
+      const idx = prev.year * 12 + (prev.month - 1) + delta;
+      return { year: Math.floor(idx / 12), month: (idx % 12) + 1 };
+    });
+  }
+
+  const inv = data?.inventoryProjection;
+  const perf = data?.realPerformance;
 
   return (
     <div className="space-y-5">
-      {/* ── Proyección comercial (NO es utilidad real) ── */}
-      <section className="rounded-xl p-4 space-y-4" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
-            <TrendingUp className="h-3.5 w-3.5" /> Proyección comercial del inventario
-          </p>
-          <span className="text-[10px] rounded px-2 py-0.5" style={{ background: "var(--color-warning-100)", color: "var(--color-warning-700)" }}>
-            No es utilidad real — es potencial si se vendiera todo el stock
+      {/* ── Controles: período + sucursal ── */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => shiftMonth(-1)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border transition-colors hover:bg-[var(--color-surface-alt)]"
+            style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
+            aria-label="Mes anterior"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="min-w-[10rem] text-center text-sm font-bold capitalize" style={{ color: "var(--color-text)" }}>
+            {MONTH_NAMES[period.month - 1]} {period.year}
+            {isCurrentMonth && <span className="ml-1.5 text-[10px] font-semibold rounded px-1.5 py-0.5" style={{ background: "var(--color-info-100)", color: "var(--color-info-700)" }}>en curso</span>}
           </span>
+          <button
+            onClick={() => shiftMonth(1)}
+            disabled={isCurrentMonth}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
+            aria-label="Mes siguiente"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
-        <div className="grid gap-3 sm:grid-cols-4">
-          <Card icon={Wallet} label="Valor inventario (costo)" value={money(inv.inventoryValue)} hint="Cantidad × costo promedio" />
-          <Card icon={TrendingUp} label="Valor de venta potencial" value={money(inv.potentialRevenue)} tone="info" hint="Cantidad × precio vigente" />
-          <Card icon={TrendingUp} label="Ganancia bruta potencial" value={money(inv.potentialGrossProfit)} tone={inv.potentialGrossProfit >= 0 ? "ok" : "warn"} hint="No incluye gastos" />
-          <Card icon={TrendingUp} label="Margen bruto potencial" value={inv.potentialGrossMarginPercent != null ? `${inv.potentialGrossMarginPercent.toFixed(1)}%` : "—"} tone="ok" />
+        <div className="flex items-center gap-2">
+          {fixedBranchId == null && branches.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Building2 className="h-3.5 w-3.5" style={{ color: "var(--color-text-muted)" }} />
+              <select
+                className="hm-input h-8 text-xs"
+                value={branchFilter}
+                onChange={(e) => setBranchFilter(e.target.value)}
+                aria-label="Filtrar por sucursal"
+              >
+                <option value="">Todas las sucursales</option>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
+              </select>
+            </div>
+          )}
+          <button
+            onClick={() => void load()}
+            className="flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors hover:bg-[var(--color-surface-alt)]"
+            style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            Actualizar
+          </button>
         </div>
-        {(inv.productsWithoutPrice > 0 || inv.productsWithoutCost > 0) && (
-          <p className="text-[11px] flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
-            <Info className="h-3 w-3" />
-            {inv.productsWithoutPrice} producto(s) sin precio · {inv.productsWithoutCost} sin costo (excluidos del cálculo).
-          </p>
-        )}
-      </section>
+      </div>
 
-      {/* ── Costos del periodo ── */}
-      <section className="grid gap-3 sm:grid-cols-3">
-        <Card icon={Receipt} label="Gastos operativos (periodo)" value={money(data.operatingExpenses.periodTotal)} hint="Gastos recurrentes mensuales" />
-        <Card icon={Users} label="Planilla (bruto)" value={money(data.payroll.payrollTotal)} hint={`Costo patronal: ${money(data.payroll.employerCostTotal)}`} />
-        <Card icon={Landmark} label="Planilla pendiente (borrador)" value={money(data.payroll.pendingPayrollTotal)} tone={data.payroll.pendingPayrollTotal > 0 ? "warn" : "default"} />
-      </section>
+      {loading && !data ? (
+        <div className="p-6 text-center text-sm text-[var(--color-text-muted)]">Cargando resumen financiero…</div>
+      ) : !data || !perf || !inv ? null : (
+        <>
+          {/* ── 1. DESEMPEÑO REAL — la verdad primero ── */}
+          <section className="rounded-xl p-4 space-y-4" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+            <p className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
+              <Landmark className="h-3.5 w-3.5" /> Estado de resultados del período
+              <span className="text-[10px] rounded px-2 py-0.5" style={{ background: "var(--color-info-100)", color: "var(--color-info-700)" }}>
+                Dinero real: ventas cobradas, no proyección
+              </span>
+            </p>
 
-      {/* ── Desempeño REAL del periodo ── */}
-      <section className="rounded-xl p-4 space-y-4" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
-        <p className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
-          <Landmark className="h-3.5 w-3.5" /> Desempeño real del periodo
-          <span className="text-[10px] rounded px-2 py-0.5" style={{ background: "var(--color-info-100)", color: "var(--color-info-700)" }}>
-            Ventas cobradas, no proyección
-          </span>
-        </p>
-        <div className="grid gap-3 sm:grid-cols-4">
-          <Card icon={TrendingUp} label="Ventas netas" value={money(perf.netSales)} tone="info"
-            hint={perf.refunds > 0 ? `Brutas ${money(perf.grossSales)} − devoluciones ${money(perf.refunds)}` : "Sin devoluciones en el periodo"} />
-          <Card icon={Wallet} label="Costo de ventas (COGS)" value={money(perf.cogs)} hint="Neto de devoluciones vendibles" />
-          <Card icon={TrendingUp} label="Utilidad bruta real" value={money(perf.grossProfit)} tone={perf.grossProfit >= 0 ? "ok" : "warn"}
-            hint={perf.grossMarginPercent != null ? `${perf.grossMarginPercent.toFixed(1)}% margen` : undefined} />
-          <Card icon={Landmark} label="Utilidad operativa estimada" value={money(perf.operatingProfit)} tone={perf.operatingProfit >= 0 ? "ok" : "warn"}
-            hint="Bruta real − gastos del MES COMPLETO (a inicio de mes puede verse negativa)" />
-        </div>
+            <div className="grid gap-5 lg:grid-cols-[minmax(260px,340px)_1fr]">
+              {/* Estado de resultados */}
+              <div className="rounded-lg p-3.5" style={{ background: "var(--color-surface-alt)", border: "0.5px solid var(--color-border)" }}>
+                <PnlRow label="Ventas brutas cobradas" value={perf.grossSales} />
+                <PnlRow label="Devoluciones (reembolsos)" value={perf.refunds} kind="minus" />
+                <PnlRow label="Ventas netas" value={perf.netSales} kind="subtotal" />
+                <PnlRow label="Costo de ventas (COGS)" value={perf.cogs} kind="minus" />
+                <PnlRow label="Utilidad bruta" value={perf.grossProfit} kind="subtotal" percent={perf.grossMarginPercent} />
+                <PnlRow label="Gastos operativos del mes" value={perf.operatingExpenses} kind="minus" />
+                <PnlRow label="Utilidad operativa" value={perf.operatingProfit} kind="total" />
+                {isCurrentMonth && perf.operatingProfit < 0 && (
+                  <p className="mt-2 text-[10px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+                    Mes en curso: compara gastos del mes completo contra ventas acumuladas — puede verse negativa hasta avanzar el mes.
+                  </p>
+                )}
+              </div>
 
-        {/* ── Rentabilidad por sucursal ── */}
-        {perf.byBranch.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="text-[10px] uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
-                  <th className="py-1.5 pr-3">Sucursal</th>
-                  <th className="py-1.5 pr-3 text-right">Ventas netas</th>
-                  <th className="py-1.5 pr-3 text-right">Devoluciones</th>
-                  <th className="py-1.5 pr-3 text-right">COGS</th>
-                  <th className="py-1.5 pr-3 text-right">Utilidad bruta</th>
-                  <th className="py-1.5 pr-3 text-right">Margen</th>
-                  <th className="py-1.5 pr-3 text-right">Gastos</th>
-                  <th className="py-1.5 text-right">Utilidad operativa</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y" style={{ borderColor: "var(--color-border)" }}>
-                {perf.byBranch.map((b) => (
-                  <tr key={b.branchId}>
-                    <td className="py-2 pr-3 font-semibold" style={{ color: "var(--color-text)" }}>
-                      {b.branchCode ?? "—"} <span className="font-normal" style={{ color: "var(--color-text-muted)" }}>{b.branchName ?? ""}</span>
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums font-semibold" style={{ color: "var(--color-text)" }}>{money(b.netSales)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: b.refunds > 0 ? "var(--color-warning-700)" : "var(--color-text-muted)" }}>{money(b.refunds)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{money(b.cogs)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: b.grossProfit >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>{money(b.grossProfit)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{b.grossMarginPercent != null ? `${b.grossMarginPercent.toFixed(1)}%` : "—"}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{money(b.operatingExpenses)}</td>
-                    <td className="py-2 text-right tabular-nums font-bold" style={{ color: b.operatingProfit >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>{money(b.operatingProfit)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              {/* Rentabilidad por sucursal */}
+              <div className="overflow-x-auto">
+                {perf.byBranch.length === 0 ? (
+                  <p className="p-4 text-center text-xs" style={{ color: "var(--color-text-muted)" }}>Sin ventas cobradas en el período.</p>
+                ) : (
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
+                        <th className="py-1.5 pr-3">Sucursal</th>
+                        <th className="py-1.5 pr-3 text-right">Ventas netas</th>
+                        <th className="py-1.5 pr-3 text-right">Devol.</th>
+                        <th className="py-1.5 pr-3 text-right">COGS</th>
+                        <th className="py-1.5 pr-3 text-right">Ut. bruta</th>
+                        <th className="py-1.5 pr-3 text-right">Margen</th>
+                        <th className="py-1.5 pr-3 text-right">Gastos</th>
+                        <th className="py-1.5 text-right">Ut. operativa</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y" style={{ borderColor: "var(--color-border)" }}>
+                      {perf.byBranch.map((b) => (
+                        <tr key={b.branchId}>
+                          <td className="py-2 pr-3 font-semibold whitespace-nowrap" style={{ color: "var(--color-text)" }}>
+                            {b.branchCode ?? "—"} <span className="font-normal hidden xl:inline" style={{ color: "var(--color-text-muted)" }}>{b.branchName ?? ""}</span>
+                          </td>
+                          <td className="py-2 pr-3 text-right tabular-nums font-semibold" style={{ color: "var(--color-text)" }}>{money(b.netSales)}</td>
+                          <td className="py-2 pr-3 text-right tabular-nums" style={{ color: b.refunds > 0 ? "var(--color-warning-700)" : "var(--color-text-muted)" }}>{money(b.refunds)}</td>
+                          <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{money(b.cogs)}</td>
+                          <td className="py-2 pr-3 text-right tabular-nums" style={{ color: b.grossProfit >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>{money(b.grossProfit)}</td>
+                          <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{b.grossMarginPercent != null ? `${b.grossMarginPercent.toFixed(1)}%` : "—"}</td>
+                          <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{money(b.operatingExpenses)}</td>
+                          <td className="py-2 text-right tabular-nums font-bold" style={{ color: b.operatingProfit >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>{money(b.operatingProfit)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
 
-        <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-          Reglas: ventas netas = pagos cobrados − reembolsos del periodo (base caja, corte mensual en hora Managua) ·
-          COGS = costo de salidas por venta − reingresos vendibles por devolución (lo dañado queda como merma) ·
-          utilidad operativa = utilidad bruta − gastos operativos (incluyen planilla). La proyección comercial de arriba NO se mezcla con la utilidad real.
-        </p>
-      </section>
+            <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+              Reglas: ventas netas = pagos cobrados − reembolsos del período (base caja, corte mensual en hora Managua) ·
+              COGS = costo de salidas por venta − reingresos vendibles por devolución (lo dañado queda como merma) ·
+              utilidad operativa = utilidad bruta − gastos operativos (incluyen planilla).
+            </p>
+          </section>
+
+          {/* ── 2. Costos del período ── */}
+          <section className="grid gap-3 sm:grid-cols-3">
+            <Card icon={Receipt} label="Gastos operativos (mes)" value={money(data.operatingExpenses.periodTotal)} hint="Gastos recurrentes configurados" />
+            <Card icon={Users} label="Planilla pagada (bruto)" value={money(data.payroll.payrollTotal)} hint={`Costo patronal: ${money(data.payroll.employerCostTotal)}`} />
+            <Card icon={Landmark} label="Planilla pendiente de pago" value={money(data.payroll.pendingPayrollTotal)} tone={data.payroll.pendingPayrollTotal > 0 ? "warn" : "default"}
+              hint={data.payroll.pendingPayrollTotal > 0 ? "Desembolsos programados sin pagar" : "Al día"} />
+          </section>
+
+          {/* ── 3. Proyección comercial — hipotética, al final ── */}
+          <section className="rounded-xl p-4 space-y-4" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
+                <TrendingUp className="h-3.5 w-3.5" /> Proyección comercial del inventario
+              </p>
+              <span className="text-[10px] rounded px-2 py-0.5" style={{ background: "var(--color-warning-100)", color: "var(--color-warning-700)" }}>
+                No es utilidad real — es potencial si se vendiera todo el stock de hoy
+              </span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-4">
+              <Card icon={Wallet} label="Valor inventario (costo)" value={money(inv.inventoryValue)} hint="Cantidad × costo promedio" />
+              <Card icon={TrendingUp} label="Valor de venta potencial" value={money(inv.potentialRevenue)} tone="info" hint="Cantidad × precio vigente" />
+              <Card icon={TrendingUp} label="Ganancia bruta potencial" value={money(inv.potentialGrossProfit)} tone={inv.potentialGrossProfit >= 0 ? "ok" : "warn"} hint="No incluye gastos" />
+              <Card icon={TrendingUp} label="Margen bruto potencial" value={inv.potentialGrossMarginPercent != null ? `${inv.potentialGrossMarginPercent.toFixed(1)}%` : "—"} tone="ok" />
+            </div>
+            {(inv.productsWithoutPrice > 0 || inv.productsWithoutCost > 0) && (
+              <p className="text-[11px] flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
+                <Info className="h-3 w-3" />
+                {inv.productsWithoutPrice} producto(s) sin precio · {inv.productsWithoutCost} sin costo (excluidos del cálculo).
+              </p>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }

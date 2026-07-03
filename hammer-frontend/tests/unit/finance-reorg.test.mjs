@@ -41,7 +41,9 @@ test("M.2 Finanzas SÍ renderiza venta potencial, ganancia bruta, gastos, utilid
   assert.ok(summary.includes("Margen bruto potencial"), "margen bruto potencial");
   assert.ok(summary.includes("Gastos operativos"), "gastos operativos");
   assert.ok(summary.includes("Planilla"), "planilla");
-  assert.ok(summary.includes("Utilidad operativa estimada"), "utilidad operativa");
+  // Renombrada de "Utilidad operativa estimada" a "Utilidad operativa" al
+  // adoptar el formato de estado de resultados (P&L) el 2026-07-02.
+  assert.ok(summary.includes("Utilidad operativa"), "utilidad operativa");
 });
 
 // ── M.3 / M.4: Sidebar ───────────────────────────────────────────────────────

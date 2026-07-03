@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { Route } from "next";
 import {
@@ -54,6 +54,23 @@ export function FinanceAccountingManager() {
 
   const initialTab: FinanceTabKey = tabs.some((t) => t.key === requestedTab) ? requestedTab : "summary";
   const [activeTab, setActiveTab] = useState<FinanceTabKey>(initialTab);
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // Sincroniza tab ↔ URL en ambas direcciones: cambiar de tab actualiza ?tab=
+  // (compartible/refrescable), y navegar a un enlace con ?tab= estando ya en la
+  // página cambia el tab (antes solo funcionaba en la carga inicial).
+  useEffect(() => {
+    if (tabs.some((t) => t.key === requestedTab)) setActiveTab(requestedTab);
+  }, [requestedTab, tabs]);
+
+  function selectTab(key: FinanceTabKey) {
+    setActiveTab(key);
+    const params = new URLSearchParams(searchParams.toString());
+    if (key === "summary") params.delete("tab");
+    else params.set("tab", key);
+    router.replace(`${pathname}${params.size ? `?${params}` : ""}` as Parameters<typeof router.replace>[0], { scroll: false });
+  }
 
   return (
     <div className="space-y-5">
@@ -62,7 +79,7 @@ export function FinanceAccountingManager() {
         {tabs.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
-            onClick={() => setActiveTab(key)}
+            onClick={() => selectTab(key)}
             className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-md text-sm font-medium transition-all whitespace-nowrap
               ${activeTab === key
                 ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm"
