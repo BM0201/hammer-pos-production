@@ -20,6 +20,8 @@ type FinanceSummary = {
   operatingExpenses: { monthlyTotal: number; periodTotal: number };
   payroll: { payrollTotal: number; employerCostTotal: number; pendingPayrollTotal: number };
   realPerformance: {
+    grossSales: number;
+    refunds: number;
     netSales: number;
     cogs: number;
     grossProfit: number;
@@ -27,6 +29,19 @@ type FinanceSummary = {
     operatingExpenses: number;
     operatingProfit: number;
     estimatedNetProfit: number;
+    byBranch: Array<{
+      branchId: string;
+      branchCode: string | null;
+      branchName: string | null;
+      grossSales: number;
+      refunds: number;
+      netSales: number;
+      cogs: number;
+      grossProfit: number;
+      grossMarginPercent: number | null;
+      operatingExpenses: number;
+      operatingProfit: number;
+    }>;
   };
 };
 
@@ -129,15 +144,55 @@ export function FinanceSummaryPanel({ branchId }: { branchId?: string | null }) 
           </span>
         </p>
         <div className="grid gap-3 sm:grid-cols-4">
-          <Card icon={TrendingUp} label="Ventas netas" value={money(perf.netSales)} tone="info" />
-          <Card icon={Wallet} label="Costo de ventas (COGS)" value={money(perf.cogs)} />
+          <Card icon={TrendingUp} label="Ventas netas" value={money(perf.netSales)} tone="info"
+            hint={perf.refunds > 0 ? `Brutas ${money(perf.grossSales)} − devoluciones ${money(perf.refunds)}` : "Sin devoluciones en el periodo"} />
+          <Card icon={Wallet} label="Costo de ventas (COGS)" value={money(perf.cogs)} hint="Neto de devoluciones vendibles" />
           <Card icon={TrendingUp} label="Utilidad bruta real" value={money(perf.grossProfit)} tone={perf.grossProfit >= 0 ? "ok" : "warn"}
             hint={perf.grossMarginPercent != null ? `${perf.grossMarginPercent.toFixed(1)}% margen` : undefined} />
           <Card icon={Landmark} label="Utilidad operativa estimada" value={money(perf.operatingProfit)} tone={perf.operatingProfit >= 0 ? "ok" : "warn"}
-            hint="Utilidad bruta real − gastos operativos" />
+            hint="Bruta real − gastos del MES COMPLETO (a inicio de mes puede verse negativa)" />
         </div>
+
+        {/* ── Rentabilidad por sucursal ── */}
+        {perf.byBranch.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="text-[10px] uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
+                  <th className="py-1.5 pr-3">Sucursal</th>
+                  <th className="py-1.5 pr-3 text-right">Ventas netas</th>
+                  <th className="py-1.5 pr-3 text-right">Devoluciones</th>
+                  <th className="py-1.5 pr-3 text-right">COGS</th>
+                  <th className="py-1.5 pr-3 text-right">Utilidad bruta</th>
+                  <th className="py-1.5 pr-3 text-right">Margen</th>
+                  <th className="py-1.5 pr-3 text-right">Gastos</th>
+                  <th className="py-1.5 text-right">Utilidad operativa</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y" style={{ borderColor: "var(--color-border)" }}>
+                {perf.byBranch.map((b) => (
+                  <tr key={b.branchId}>
+                    <td className="py-2 pr-3 font-semibold" style={{ color: "var(--color-text)" }}>
+                      {b.branchCode ?? "—"} <span className="font-normal" style={{ color: "var(--color-text-muted)" }}>{b.branchName ?? ""}</span>
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums font-semibold" style={{ color: "var(--color-text)" }}>{money(b.netSales)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: b.refunds > 0 ? "var(--color-warning-700)" : "var(--color-text-muted)" }}>{money(b.refunds)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{money(b.cogs)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: b.grossProfit >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>{money(b.grossProfit)}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{b.grossMarginPercent != null ? `${b.grossMarginPercent.toFixed(1)}%` : "—"}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums" style={{ color: "var(--color-text-secondary)" }}>{money(b.operatingExpenses)}</td>
+                    <td className="py-2 text-right tabular-nums font-bold" style={{ color: b.operatingProfit >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>{money(b.operatingProfit)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-          Utilidad operativa = utilidad bruta real − gastos operativos (incluye planilla). La proyección comercial de arriba NO se mezcla con la utilidad real.
+          Reglas: ventas netas = pagos cobrados − reembolsos del periodo (base caja, corte mensual en hora Managua) ·
+          COGS = costo de salidas por venta − reingresos vendibles por devolución (lo dañado queda como merma) ·
+          utilidad operativa = utilidad bruta − gastos operativos (incluyen planilla). La proyección comercial de arriba NO se mezcla con la utilidad real.
         </p>
       </section>
     </div>

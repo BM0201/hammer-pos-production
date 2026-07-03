@@ -12,6 +12,10 @@ import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
  */
 
 const SALE_OUT_TYPES = ["SALE_OUT", "PACKAGE_SALE_OUT", "LOOSE_UNIT_SALE_OUT"] as const;
+// Devoluciones que reingresan inventario VENDIBLE: reducen el costo de ventas.
+// RETURN_IN_DAMAGED queda fuera a propósito: esa mercadería ya no es vendible,
+// su costo permanece consumido (merma) — regla contable correcta.
+const SELLABLE_RETURN_IN_TYPES = ["RETURN_IN", "LOOSE_UNIT_RETURN_IN"] as const;
 
 function num(value: Prisma.Decimal | number | null | undefined): number {
   return Number(value ?? 0);
@@ -19,6 +23,27 @@ function num(value: Prisma.Decimal | number | null | undefined): number {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/**
+ * Límites del mes contable en hora de Managua (UTC-6, Nicaragua no usa DST):
+ * medianoche Managua del día 1 = 06:00 UTC. Antes se cortaba en medianoche UTC,
+ * lo que empujaba las ventas de 6pm-12am Managua del último día al mes siguiente.
+ */
+function managuaMonthRangeUtc(year: number, month: number) {
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1, 6)),
+    end: new Date(Date.UTC(year, month, 1, 6)),
+  };
+}
+
+/** Año/mes "actuales" según el calendario de Managua (no el del servidor). */
+function managuaNowParts(now: Date = new Date()) {
+  const ymd = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Managua", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(now);
+  const [year, month] = ymd.split("-").map(Number);
+  return { year, month };
 }
 
 export type FinanceSummaryInput = {
@@ -50,6 +75,8 @@ export type FinanceSummary = {
     pendingPayrollTotal: number;
   };
   realPerformance: {
+    grossSales: number;
+    refunds: number;
     netSales: number;
     cogs: number;
     grossProfit: number;
@@ -57,6 +84,19 @@ export type FinanceSummary = {
     operatingExpenses: number;
     operatingProfit: number;
     estimatedNetProfit: number;
+    byBranch: Array<{
+      branchId: string;
+      branchCode: string | null;
+      branchName: string | null;
+      grossSales: number;
+      refunds: number;
+      netSales: number;
+      cogs: number;
+      grossProfit: number;
+      grossMarginPercent: number | null;
+      operatingExpenses: number;
+      operatingProfit: number;
+    }>;
   };
 };
 
@@ -156,8 +196,11 @@ async function computeOperatingExpenses(branchId?: string | null) {
 
 /** Planilla: desembolsos pagados en el período y pendientes por pagar. */
 async function computePayroll(branchId: string | null, year: number, month: number) {
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 1);
+  // scheduledDate es una fecha pura (medianoche UTC): límites en UTC explícito.
+  // Antes usaba `new Date(year, month-1, 1)` = zona horaria DEL SERVIDOR, con
+  // resultados distintos entre local y Vercel.
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1));
   const disbWhere: Prisma.PayrollDisbursementWhereInput = {
     scheduledDate: { gte: start, lt: end },
     ...(branchId ? { branchId } : {}),
@@ -194,49 +237,106 @@ async function computeRealPerformance(
   branchId: string | null,
   start: Date,
   end: Date,
-  operatingExpensesPeriodTotal: number,
+  operatingExpenses: { periodTotal: number; byBranch: Array<{ branchId: string; amount: number }> },
 ) {
   const branchFilter = branchId ? { branchId } : {};
-  const [payments, saleMovements] = await Promise.all([
-    prisma.payment.aggregate({
+  const [payments, refunds, movements, branches] = await Promise.all([
+    prisma.payment.findMany({
       where: {
         status: PaymentStatus.POSTED,
         paidAt: { gte: start, lt: end },
         saleOrder: { ...(branchId ? { branchId } : {}), status: { not: SaleOrderStatus.CANCELLED } },
       },
-      _sum: { amount: true },
+      select: { amount: true, saleOrder: { select: { branchId: true } } },
+    }),
+    prisma.refund.findMany({
+      where: { ...branchFilter, status: "POSTED", postedAt: { gte: start, lt: end } },
+      select: { amount: true, branchId: true },
     }),
     prisma.inventoryMovement.findMany({
-      where: { ...branchFilter, movementType: { in: [...SALE_OUT_TYPES] }, createdAt: { gte: start, lt: end } },
-      select: { quantity: true, unitCost: true },
+      where: {
+        ...branchFilter,
+        movementType: { in: [...SALE_OUT_TYPES, ...SELLABLE_RETURN_IN_TYPES] },
+        createdAt: { gte: start, lt: end },
+      },
+      select: { quantity: true, unitCost: true, movementType: true, branchId: true },
     }),
+    prisma.branch.findMany({ select: { id: true, code: true, name: true } }),
   ]);
 
-  const netSales = num(payments._sum.amount);
-  const cogs = saleMovements.reduce((sum, m) => sum + num(m.quantity) * num(m.unitCost), 0);
+  const branchMeta = new Map(branches.map((b) => [b.id, { code: b.code, name: b.name }]));
+  const expensesByBranch = new Map(operatingExpenses.byBranch.map((e) => [e.branchId, e.amount]));
+
+  type BranchAcc = { grossSales: number; refunds: number; cogsOut: number; cogsReturned: number };
+  const perBranch = new Map<string, BranchAcc>();
+  const acc = (id: string): BranchAcc => {
+    let entry = perBranch.get(id);
+    if (!entry) {
+      entry = { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0 };
+      perBranch.set(id, entry);
+    }
+    return entry;
+  };
+
+  for (const p of payments) acc(p.saleOrder.branchId).grossSales += num(p.amount);
+  for (const r of refunds) acc(r.branchId).refunds += num(r.amount);
+  for (const m of movements) {
+    const cost = num(m.quantity) * num(m.unitCost);
+    if ((SALE_OUT_TYPES as readonly string[]).includes(m.movementType)) acc(m.branchId).cogsOut += cost;
+    else acc(m.branchId).cogsReturned += cost;
+  }
+
+  const byBranch = [...perBranch.entries()]
+    .map(([id, b]) => {
+      const netSales = b.grossSales - b.refunds;
+      const cogs = b.cogsOut - b.cogsReturned;
+      const grossProfit = netSales - cogs;
+      const branchExpenses = expensesByBranch.get(id) ?? 0;
+      return {
+        branchId: id,
+        branchCode: branchMeta.get(id)?.code ?? null,
+        branchName: branchMeta.get(id)?.name ?? null,
+        grossSales: round2(b.grossSales),
+        refunds: round2(b.refunds),
+        netSales: round2(netSales),
+        cogs: round2(cogs),
+        grossProfit: round2(grossProfit),
+        grossMarginPercent: netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null,
+        operatingExpenses: round2(branchExpenses),
+        operatingProfit: round2(grossProfit - branchExpenses),
+      };
+    })
+    .sort((a, b) => b.netSales - a.netSales);
+
+  const grossSales = byBranch.reduce((s, b) => s + b.grossSales, 0);
+  const refundsTotal = byBranch.reduce((s, b) => s + b.refunds, 0);
+  const netSales = grossSales - refundsTotal;
+  const cogs = byBranch.reduce((s, b) => s + b.cogs, 0);
   const grossProfit = netSales - cogs;
   const grossMarginPercent = netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null;
-  const operatingProfit = grossProfit - operatingExpensesPeriodTotal;
+  const operatingProfit = grossProfit - operatingExpenses.periodTotal;
 
   return {
+    grossSales: round2(grossSales),
+    refunds: round2(refundsTotal),
     netSales: round2(netSales),
     cogs: round2(cogs),
     grossProfit: round2(grossProfit),
     grossMarginPercent,
-    operatingExpenses: round2(operatingExpensesPeriodTotal),
+    operatingExpenses: round2(operatingExpenses.periodTotal),
     operatingProfit: round2(operatingProfit),
     // Sin impuestos modelados: la utilidad neta estimada = utilidad operativa.
     estimatedNetProfit: round2(operatingProfit),
+    byBranch,
   };
 }
 
 export async function getFinanceSummary(input: FinanceSummaryInput = {}): Promise<FinanceSummary> {
   const branchId = input.branchId ?? null;
-  const now = new Date();
-  const year = input.year ?? now.getUTCFullYear();
-  const month = input.month ?? now.getUTCMonth() + 1;
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const end = new Date(Date.UTC(year, month, 1));
+  const nowParts = managuaNowParts();
+  const year = input.year ?? nowParts.year;
+  const month = input.month ?? nowParts.month;
+  const { start, end } = managuaMonthRangeUtc(year, month);
 
   const [inventoryProjection, operatingExpenses, payroll] = await Promise.all([
     computeInventoryProjection(branchId),
@@ -244,7 +344,7 @@ export async function getFinanceSummary(input: FinanceSummaryInput = {}): Promis
     computePayroll(branchId, year, month),
   ]);
 
-  const realPerformance = await computeRealPerformance(branchId, start, end, operatingExpenses.periodTotal);
+  const realPerformance = await computeRealPerformance(branchId, start, end, operatingExpenses);
 
   return {
     period: { year, month, start: start.toISOString(), end: end.toISOString() },
