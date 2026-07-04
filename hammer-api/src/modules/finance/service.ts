@@ -179,9 +179,20 @@ async function computeInventoryProjection(branchId?: string | null) {
   };
 }
 
-/** Gastos operativos: total mensual configurado, por categoría y por sucursal. */
-async function computeOperatingExpenses(branchId?: string | null) {
-  const where: Prisma.OperatingExpenseWhereInput = { isActive: true, ...(branchId ? { branchId } : {}) };
+/**
+ * Gastos operativos configurados VIGENTES en el período: total mensual, por
+ * categoría y por sucursal. Sin el filtro de vigencia, un gasto de nómina de
+ * mayo (effectiveTo puntual) seguiría sumando en el presupuesto de julio.
+ */
+async function computeOperatingExpenses(branchId: string | null, start: Date, end: Date) {
+  const where: Prisma.OperatingExpenseWhereInput = {
+    isActive: true,
+    ...(branchId ? { branchId } : {}),
+    effectiveFrom: { lt: end },
+    // Cubre recurrentes sin fecha de fin y gastos puntuales (ej. nómina) con
+    // effectiveTo del día de pago.
+    OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }],
+  };
   const [byCategoryRaw, byBranchRaw, branches] = await Promise.all([
     prisma.operatingExpense.groupBy({ by: ["category"], where, _sum: { amount: true } }),
     prisma.operatingExpense.groupBy({ by: ["branchId"], where, _sum: { amount: true } }),
@@ -379,7 +390,7 @@ export async function getFinanceSummary(input: FinanceSummaryInput = {}): Promis
 
   const [inventoryProjection, operatingExpenses, payroll] = await Promise.all([
     computeInventoryProjection(branchId),
-    computeOperatingExpenses(branchId),
+    computeOperatingExpenses(branchId, start, end),
     computePayroll(branchId, year, month),
   ]);
 

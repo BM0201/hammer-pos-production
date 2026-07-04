@@ -52,6 +52,21 @@ type ExpenseSummary = {
   totalExpenses: number;
 };
 
+/** Resumen consolidado de /api/expenses?branchId=all&summary=true (solo lectura). */
+type AllBranchesSummary = {
+  grandTotal: number;
+  branchesWithExpenses: number;
+  totalBranches: number;
+  topCategory: string | null;
+  byBranch: Array<{
+    branchId: string;
+    branchCode: string;
+    branchName: string;
+    byCategory: Record<string, number>;
+    total: number;
+  }>;
+};
+
 type PricingConfig = {
   id?: string;
   branchId: string;
@@ -307,6 +322,9 @@ export function ExpenseManager({
   const [selectedBranchId, setSelectedBranchId] = useState<string>("");
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [summary, setSummary] = useState<ExpenseSummary | null>(null);
+  const [allSummary, setAllSummary] = useState<AllBranchesSummary | null>(null);
+  // "all" = vista consolidada de solo lectura; registrar/editar exige sucursal.
+  const isAllBranches = selectedBranchId === "all";
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [internalTab, setInternalTab] = useState<ExpenseManagerTab>(forcedTab ?? "expenses");
@@ -390,6 +408,21 @@ export function ExpenseManager({
   /* ── Load data when branch changes ── */
   const loadBranchData = useCallback(async () => {
     if (!selectedBranchId) return;
+    if (selectedBranchId === "all") {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/expenses?branchId=all&summary=true`);
+        setAllSummary(unwrapApiData(await res.json()));
+        setExpenses([]);
+        setSummary(null);
+        setPricingConfig(null);
+      } catch (e) {
+        console.error("Error loading consolidated expenses:", e);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     setLoading(true);
     try {
       const [expRes, sumRes, cfgRes] = await Promise.all([
@@ -422,7 +455,7 @@ export function ExpenseManager({
   }, [selectedBranchId]);
 
   useEffect(() => {
-    if (!selectedBranchId || activeTab !== "pricing") return;
+    if (!selectedBranchId || selectedBranchId === "all" || activeTab !== "pricing") return;
     fetch(`/api/catalog/products?isActive=true&branchId=${selectedBranchId}`)
       .then((res) => res.json())
       .then((raw) => {
@@ -433,7 +466,7 @@ export function ExpenseManager({
   }, [activeTab, selectedBranchId]);
 
   const loadCategoryPolicies = useCallback(async () => {
-    if (!selectedBranchId) return;
+    if (!selectedBranchId || selectedBranchId === "all") return;
     try {
       const res = await fetch(`/api/pricing/category-policies?branchId=${selectedBranchId}`);
       const data = unwrapApiData(await res.json()) as { policies?: CategoryPolicyRow[] };
@@ -641,7 +674,7 @@ export function ExpenseManager({
   };
 
   const loadCommercialAlerts = async () => {
-    if (!selectedBranchId) return;
+    if (!selectedBranchId || selectedBranchId === "all") return;
     try {
       const res = await fetch(`/api/pricing/commercial-alerts?branchId=${selectedBranchId}`);
       if (!res.ok) throw new Error("Failed");
@@ -835,6 +868,7 @@ export function ExpenseManager({
             onChange={(e) => setSelectedBranchId(e.target.value)}
           >
             <option value="">Seleccionar sucursal...</option>
+            <option value="all">Todas las sucursales (consolidado)</option>
             {branches.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.code} · {b.name}
@@ -847,8 +881,8 @@ export function ExpenseManager({
         </Button>
       </div>
 
-      {/* ── Summary Cards ── */}
-      {summary && selectedBranchId && (
+      {/* ── Summary Cards (sucursal específica) ── */}
+      {summary && selectedBranchId && !isAllBranches && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Card className="p-4">
             <div className="flex items-center gap-3">
@@ -930,9 +964,112 @@ export function ExpenseManager({
       )}
 
       {/* ══════════════════════════════════════════════════════════ */}
+      {/* VISTA CONSOLIDADA: TODAS LAS SUCURSALES (solo lectura) */}
+      {/* ══════════════════════════════════════════════════════════ */}
+      {activeTab === "expenses" && isAllBranches && !loading && allSummary && (
+        <div className="space-y-4">
+          <div className="hm-alert hm-alert-info text-xs">
+            Vista consolidada de solo lectura — para registrar, editar o borrar un gasto, selecciona una sucursal específica.
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Card className="p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-[var(--color-danger-50)]">
+                  <DollarSign className="h-5 w-5 text-[var(--color-danger-600)]" />
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--color-text-muted)] font-medium">Gasto total (todas)</p>
+                  <p className="text-xl font-bold text-[var(--color-text)]">{formatC(allSummary.grandTotal)}</p>
+                </div>
+              </div>
+            </Card>
+            <Card className="p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-[var(--color-info-50)]">
+                  <Building2 className="h-5 w-5 text-[var(--color-info-600)]" />
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--color-text-muted)] font-medium">Sucursales con gasto</p>
+                  <p className="text-xl font-bold text-[var(--color-text)]">
+                    {allSummary.branchesWithExpenses} de {allSummary.totalBranches}
+                  </p>
+                </div>
+              </div>
+            </Card>
+            <Card className="p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-[var(--color-warning-50)]">
+                  <PieChart className="h-5 w-5 text-[var(--color-warning-600)]" />
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--color-text-muted)] font-medium">Categoría mayor</p>
+                  <p className="text-xl font-bold text-[var(--color-text)]">
+                    {allSummary.topCategory ? (CATEGORY_LABELS[allSummary.topCategory] ?? allSummary.topCategory) : "—"}
+                  </p>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          <Card className="p-5">
+            <h4 className="text-sm font-semibold text-[var(--color-text)] mb-3">Desglose por sucursal</h4>
+            <div className="min-w-0 overflow-x-auto">
+              <table className="w-full min-w-[640px] text-left text-xs">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                    <th className="py-1.5 pr-3">Sucursal</th>
+                    <th className="py-1.5 pr-3 text-right">Nómina</th>
+                    <th className="py-1.5 pr-3 text-right">Fijos (renta, servicios)</th>
+                    <th className="py-1.5 pr-3 text-right">Otros</th>
+                    <th className="py-1.5 pr-3 text-right">Total</th>
+                    <th className="py-1.5">% del total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--color-border)]">
+                  {allSummary.byBranch.map((b) => {
+                    const payroll = b.byCategory.PAYROLL ?? 0;
+                    const fixed = (b.byCategory.RENT ?? 0) + (b.byCategory.UTILITIES ?? 0);
+                    const other = Math.max(0, b.total - payroll - fixed);
+                    const maxTotal = allSummary.byBranch[0]?.total || 1;
+                    return (
+                      <tr key={b.branchId}>
+                        <td className="py-2 pr-3 font-semibold whitespace-nowrap text-[var(--color-text)]">
+                          {b.branchCode} <span className="font-normal text-[var(--color-text-muted)]">{b.branchName}</span>
+                        </td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(payroll)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(fixed)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(other)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums font-bold text-[var(--color-text)]">{formatC(b.total)}</td>
+                        <td className="py-2">
+                          <div className="h-2 w-24 rounded-full bg-[var(--color-surface-alt)] overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-[var(--color-info-500)]"
+                              style={{ width: `${Math.round((b.total / maxTotal) * 100)}%` }}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* En modo consolidado, los tabs que editan por sucursal piden elegir una. */}
+      {isAllBranches && !loading && (activeTab === "pricing" || activeTab === "policies") && (
+        <div className="hm-alert hm-alert-info text-xs">
+          Esta sección trabaja sobre una sucursal específica — selecciónala en el filtro de arriba.
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════ */}
       {/* TAB: GASTOS OPERATIVOS */}
       {/* ══════════════════════════════════════════════════════════ */}
-      {activeTab === "expenses" && selectedBranchId && !loading && (
+      {activeTab === "expenses" && selectedBranchId && !isAllBranches && !loading && (
         <div className="space-y-6">
           {/* ── Create Expense Form ── */}
           <Card className="p-5">
@@ -1096,7 +1233,7 @@ export function ExpenseManager({
       {/* ══════════════════════════════════════════════════════════ */}
       {/* TAB: PRECIOS (Configuración + Calculadora) — Rediseño */}
       {/* ══════════════════════════════════════════════════════════ */}
-      {activeTab === "pricing" && selectedBranchId && !loading && (
+      {activeTab === "pricing" && selectedBranchId && !isAllBranches && !loading && (
         <div className="space-y-8">
 
           {/* ── Header de sección ── */}
@@ -1911,7 +2048,7 @@ export function ExpenseManager({
         </div>
       )}
 
-      {activeTab === "policies" && selectedBranchId && !loading && (
+      {activeTab === "policies" && selectedBranchId && !isAllBranches && !loading && (
         <div className="space-y-4">
           <Card className="p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">

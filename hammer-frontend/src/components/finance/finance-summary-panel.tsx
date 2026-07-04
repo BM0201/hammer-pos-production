@@ -249,12 +249,14 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                 </p>
               </div>
 
-              {/* Rentabilidad por sucursal */}
-              <div className="overflow-x-auto">
+              {/* Rentabilidad por sucursal — min-w-0 en el item de grid para que
+                  el overflow-x quede CONTENIDO en la tabla y no empuje el ancho
+                  de toda la página (los grid items tienen min-width:auto). */}
+              <div className="min-w-0 overflow-x-auto rounded-lg px-3" style={{ border: "0.5px solid var(--color-border)" }}>
                 {perf.byBranch.length === 0 ? (
                   <p className="p-4 text-center text-xs" style={{ color: "var(--color-text-muted)" }}>Sin ventas cobradas en el período.</p>
                 ) : (
-                  <table className="w-full text-left text-xs">
+                  <table className="w-full min-w-[680px] text-left text-xs">
                     <thead>
                       <tr className="text-[10px] uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
                         <th className="py-1.5 pr-3">Sucursal</th>

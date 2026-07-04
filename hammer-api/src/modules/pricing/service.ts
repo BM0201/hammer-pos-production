@@ -155,6 +155,67 @@ export async function getExpenseSummaryByBranch(branchId: string) {
   return { byCategory, grandTotal, totalExpenses: expenses.length };
 }
 
+/**
+ * Resumen consolidado de gastos operativos de TODAS las sucursales activas
+ * (vista "Todas las sucursales" del manager — solo lectura, para análisis).
+ * Un solo groupBy por sucursal+categoría, sin N+1.
+ */
+export async function getExpenseSummaryAllBranches() {
+  const [grouped, branches] = await Promise.all([
+    prisma.operatingExpense.groupBy({
+      by: ["branchId", "category"],
+      where: { isActive: true },
+      _sum: { amount: true },
+    }),
+    prisma.branch.findMany({
+      where: { isActive: true },
+      select: { id: true, code: true, name: true },
+      orderBy: { code: "asc" },
+    }),
+  ]);
+
+  const totalsByBranch = new Map<string, { byCategory: Record<string, number>; total: number }>();
+  const totalsByCategory = new Map<string, number>();
+  let grandTotal = 0;
+
+  for (const row of grouped) {
+    const amount = Number(row._sum.amount ?? 0);
+    let entry = totalsByBranch.get(row.branchId);
+    if (!entry) {
+      entry = { byCategory: {}, total: 0 };
+      totalsByBranch.set(row.branchId, entry);
+    }
+    entry.byCategory[row.category] = Math.round(((entry.byCategory[row.category] ?? 0) + amount) * 100) / 100;
+    entry.total += amount;
+    totalsByCategory.set(row.category, (totalsByCategory.get(row.category) ?? 0) + amount);
+    grandTotal += amount;
+  }
+
+  const topCategory =
+    [...totalsByCategory.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+  const byBranch = branches
+    .map((b) => {
+      const entry = totalsByBranch.get(b.id);
+      return {
+        branchId: b.id,
+        branchCode: b.code,
+        branchName: b.name,
+        byCategory: entry?.byCategory ?? {},
+        total: Math.round((entry?.total ?? 0) * 100) / 100,
+      };
+    })
+    .sort((a, b) => b.total - a.total);
+
+  return {
+    grandTotal: Math.round(grandTotal * 100) / 100,
+    branchesWithExpenses: byBranch.filter((b) => b.total > 0).length,
+    totalBranches: branches.length,
+    topCategory,
+    byBranch,
+  };
+}
+
 /* ══════════════════════════════════════════════════════
  *  PRICING CONFIGURATION
  * ══════════════════════════════════════════════════════ */

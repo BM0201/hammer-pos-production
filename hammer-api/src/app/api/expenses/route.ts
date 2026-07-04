@@ -9,6 +9,7 @@ import {
   createOperatingExpense,
   listExpensesByBranch,
   getExpenseSummaryByBranch,
+  getExpenseSummaryAllBranches,
 } from "@/modules/pricing/service";
 
 /**
@@ -25,8 +26,15 @@ export async function GET(req: NextRequest) {
     const branchId = searchParams.get("branchId");
     const summary = searchParams.get("summary") === "true";
 
-    if (!branchId) {
-      return fail("VALIDATION_ERROR", "branchId is required", 400);
+    // "all" = resumen consolidado de todas las sucursales (solo lectura).
+    // La lista detallada (editar/borrar gasto a gasto) sigue exigiendo una
+    // sucursal específica.
+    if (!branchId || branchId === "all") {
+      if (!summary) {
+        return fail("VALIDATION_ERROR", "branchId is required to list individual expenses", 400);
+      }
+      const result = await getExpenseSummaryAllBranches();
+      return ok(result);
     }
 
     if (summary) {

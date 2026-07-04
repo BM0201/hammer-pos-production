@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import type { Route } from "next";
 import {
   Users,
   Plus,
@@ -721,6 +723,36 @@ export function EmployeeManager() {
                         {disbLoading === "SECOND_HALF" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                         {secondPaid ? "✓ 2da quincena pagada" : `Pagar 2da quincena${secondTotal > 0 ? ` · ${fmt(secondTotal)}` : ""}`}
                       </button>
+
+                      {/* Reconciliación con Gastos operativos: confirma de un vistazo
+                          que la quincena pagada ya está bajando la utilidad real. */}
+                      <div className="w-full space-y-1.5 pt-1">
+                        {[
+                          { label: "1ra quincena (día 15)", paid: firstPaid, total: firstTotal },
+                          { label: "2da quincena (día 30)", paid: secondPaid, total: secondTotal },
+                        ].map((q) => (
+                          <div key={q.label} className="flex flex-wrap items-center gap-2 text-xs">
+                            <span
+                              className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                              style={{ background: q.paid ? "var(--color-success-500)" : "var(--color-border-strong)" }}
+                            />
+                            {q.paid ? (
+                              <>
+                                <span className="font-semibold text-[var(--color-text)]">{q.label} — pagada:</span>
+                                <span className="text-[var(--color-text-muted)]">{fmt(q.total)} sincronizados a Gastos operativos</span>
+                                <Link href={"/app/master/finance?tab=expenses" as Route} className="font-semibold text-[var(--color-info-600)] hover:underline">
+                                  Ver en Gastos operativos →
+                                </Link>
+                              </>
+                            ) : (
+                              <>
+                                <span className="font-semibold text-[var(--color-text-muted)]">{q.label} — pendiente:</span>
+                                <span className="text-[var(--color-text-soft)]">aún no afecta la utilidad del período; se sincroniza automáticamente al pagar</span>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   );
                 })()}
