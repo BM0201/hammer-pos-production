@@ -3,7 +3,6 @@
  *
  * BUG FIX: Added input validation for createEmployee (empty strings, invalid dates).
  * BUG FIX: Added salary validation (NaN, negative, zero).
- * BUG FIX: Wrapped syncPayrollToExpenses in transaction for consistency.
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -596,65 +595,7 @@ export async function postPayrollRun(id: string, actorUserId?: string) {
   return result;
 }
 
-// ── Payroll to Expenses Sync ──
-
-/**
- * Sync payroll to OperatingExpense records.
- * Creates/updates PAYROLL expenses for each employee with prorated amounts.
- */
-export async function syncPayrollToExpenses(year: number, month: number, branchId?: string) {
-  const { employees } = await calculateMonthlyPayroll(year, month, branchId);
-  const monthDate = new Date(year, month - 1, 1);
-  const monthEnd = new Date(year, month, 0, 23, 59, 59, 999);
-  let synced = 0;
-
-  for (const emp of employees) {
-    if (emp.daysWorked === 0) continue;
-
-    // Check if auto-calculated expense exists for this employee+month
-    const existing = await prisma.operatingExpense.findFirst({
-      where: {
-        branchId: emp.branchId,
-        employeeId: emp.employeeId,
-        isAutoCalculated: true,
-        category: "PAYROLL",
-        effectiveFrom: monthDate,
-      },
-    });
-
-    const description = `Nómina: ${emp.fullName} (${emp.position}) - ${emp.daysWorked}/${emp.totalDays} días`;
-
-    if (existing) {
-      await prisma.operatingExpense.update({
-        where: { id: existing.id },
-        data: {
-          amount: new Prisma.Decimal(emp.proratedSalary),
-          description,
-          isActive: true,
-          effectiveFrom: monthDate,
-          effectiveTo: monthEnd,
-        },
-      });
-    } else {
-      await prisma.operatingExpense.create({
-        data: {
-          branchId: emp.branchId,
-          category: "PAYROLL",
-          description,
-          amount: new Prisma.Decimal(emp.proratedSalary),
-          isActive: true,
-          isAutoCalculated: true,
-          employeeId: emp.employeeId,
-          effectiveFrom: monthDate,
-          effectiveTo: monthEnd,
-        },
-      });
-    }
-    synced++;
-  }
-
-  // Also generate salary history
-  await generateSalaryHistory(year, month, branchId);
-
-  return { synced, totalPayroll: employees.reduce((s, e) => s + e.proratedSalary, 0) };
-}
+// La antigua syncPayrollToExpenses (sync manual nómina→OperatingExpense) se
+// eliminó: quedó huérfana desde que payDisbursementPeriod (payroll-disbursement-
+// service) sincroniza el gasto REAL al pagar cada quincena. Reconectarla habría
+// duplicado los gastos de nómina.

@@ -79,6 +79,7 @@ type Disbursement = {
   amount: string;
   status: "PENDING" | "PAID";
   scheduledDate: string;
+  paidAt: string | null;
   employee: { id: string; fullName: string; position: string };
 };
 type CashStatusRow = {
@@ -724,34 +725,55 @@ export function EmployeeManager() {
                         {secondPaid ? "✓ 2da quincena pagada" : `Pagar 2da quincena${secondTotal > 0 ? ` · ${fmt(secondTotal)}` : ""}`}
                       </button>
 
-                      {/* Reconciliación con Gastos operativos: confirma de un vistazo
-                          que la quincena pagada ya está bajando la utilidad real. */}
-                      <div className="w-full space-y-1.5 pt-1">
+                      {/* Reconciliación con Gastos operativos (estilo banner del
+                          mockup): confirma de un vistazo que la quincena pagada
+                          ya está bajando la utilidad real, sin cruzar pantallas. */}
+                      <div className="mt-1 w-full overflow-hidden rounded-xl border border-[var(--color-border)]">
                         {[
-                          { label: "1ra quincena (día 15)", paid: firstPaid, total: firstTotal },
-                          { label: "2da quincena (día 30)", paid: secondPaid, total: secondTotal },
-                        ].map((q) => (
-                          <div key={q.label} className="flex flex-wrap items-center gap-2 text-xs">
-                            <span
-                              className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
-                              style={{ background: q.paid ? "var(--color-success-500)" : "var(--color-border-strong)" }}
-                            />
-                            {q.paid ? (
-                              <>
-                                <span className="font-semibold text-[var(--color-text)]">{q.label} — pagada:</span>
-                                <span className="text-[var(--color-text-muted)]">{fmt(q.total)} sincronizados a Gastos operativos</span>
-                                <Link href={"/app/master/finance?tab=expenses" as Route} className="font-semibold text-[var(--color-info-600)] hover:underline">
+                          { key: "FIRST_HALF", label: "1ra quincena (día 15)", paid: firstPaid, total: firstTotal, disb: firstDisb },
+                          { key: "SECOND_HALF", label: "2da quincena (día 30)", paid: secondPaid, total: secondTotal, disb: secondDisb },
+                        ].map((q, i) => {
+                          const lastPaidAt = q.disb
+                            .filter((d) => d.status === "PAID" && d.paidAt)
+                            .map((d) => d.paidAt as string)
+                            .sort()
+                            .pop();
+                          const paidDate = lastPaidAt
+                            ? new Date(lastPaidAt).toLocaleDateString("es-NI", { day: "2-digit", month: "2-digit", timeZone: "America/Managua" })
+                            : null;
+                          return (
+                            <div
+                              key={q.key}
+                              className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 bg-[var(--color-surface-alt)] ${i === 0 ? "border-b border-[var(--color-border)]" : ""}`}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <span
+                                  className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                                  style={q.paid
+                                    ? { background: "var(--color-success-500)", boxShadow: "0 0 0 3px var(--color-success-50)" }
+                                    : { background: "var(--color-border-strong)" }}
+                                />
+                                <div>
+                                  <p className="text-sm font-bold text-[var(--color-text)]">
+                                    {q.label} — {q.paid ? "pagada" : "pendiente"}
+                                  </p>
+                                  <p className="text-xs text-[var(--color-text-muted)]">
+                                    {q.paid
+                                      ? `${fmt(q.total)} sincronizados a Gastos operativos${paidDate ? ` el ${paidDate}` : ""}`
+                                      : "Aún no afecta la utilidad operativa del período"}
+                                  </p>
+                                </div>
+                              </div>
+                              {q.paid ? (
+                                <Link href={"/app/master/finance?tab=expenses" as Route} className="text-xs font-semibold text-[var(--color-info-600)] hover:underline">
                                   Ver en Gastos operativos →
                                 </Link>
-                              </>
-                            ) : (
-                              <>
-                                <span className="font-semibold text-[var(--color-text-muted)]">{q.label} — pendiente:</span>
-                                <span className="text-[var(--color-text-soft)]">aún no afecta la utilidad del período; se sincroniza automáticamente al pagar</span>
-                              </>
-                            )}
-                          </div>
-                        ))}
+                              ) : (
+                                <span className="text-xs text-[var(--color-text-muted)]">Se sincroniza automáticamente al pagar</span>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   );
