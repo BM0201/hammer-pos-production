@@ -405,3 +405,125 @@ export async function getFinanceSummary(input: FinanceSummaryInput = {}): Promis
     realPerformance,
   };
 }
+
+/* ══════════════════════════════════════════════════════
+ *  TRAYECTORIA MES A MES (paquete financiero ejecutivo)
+ * ══════════════════════════════════════════════════════ */
+
+export type FinanceTrendPoint = {
+  year: number;
+  month: number; // 1-12
+  grossSales: number;
+  refunds: number;
+  netSales: number;
+  cogs: number;
+  grossProfit: number;
+  grossMarginPercent: number | null;
+  cashExpenses: number;
+  payrollPaid: number;
+  operatingProfit: number;
+};
+
+/** Índice de mes absoluto (año*12 + mes-1) del instante, en calendario Managua. */
+function managuaMonthIndex(d: Date): number {
+  // UTC-6 fijo (Nicaragua no usa DST): restar 6h y leer el calendario UTC.
+  const shifted = new Date(d.getTime() - 6 * 3_600_000);
+  return shifted.getUTCFullYear() * 12 + shifted.getUTCMonth();
+}
+
+/**
+ * Serie mensual del desempeño REAL (mismas reglas contables que
+ * computeRealPerformance, todo base caja) para los últimos `months` meses
+ * incluyendo el actual. UNA pasada de 5 queries sobre el rango completo,
+ * bucketeada por mes Managua — no una consulta por mes.
+ */
+export async function getFinanceTrend(input: { branchId?: string | null; months?: number } = {}) {
+  const branchId = input.branchId ?? null;
+  const months = Math.min(12, Math.max(1, input.months ?? 6));
+  const nowParts = managuaNowParts();
+  const endIdx = nowParts.year * 12 + (nowParts.month - 1);
+  const startIdx = endIdx - (months - 1);
+  const { start } = managuaMonthRangeUtc(Math.floor(startIdx / 12), (startIdx % 12) + 1);
+  const { end } = managuaMonthRangeUtc(nowParts.year, nowParts.month);
+
+  const branchFilter = branchId ? { branchId } : {};
+  const [payments, refunds, movements, cashExpenseMovs, payrollDisbursed] = await Promise.all([
+    prisma.payment.findMany({
+      where: {
+        status: PaymentStatus.POSTED,
+        paidAt: { gte: start, lt: end },
+        saleOrder: { ...(branchId ? { branchId } : {}), status: { not: SaleOrderStatus.CANCELLED } },
+      },
+      select: { amount: true, paidAt: true },
+    }),
+    prisma.refund.findMany({
+      where: { ...branchFilter, status: "POSTED", postedAt: { gte: start, lt: end } },
+      select: { amount: true, postedAt: true },
+    }),
+    prisma.inventoryMovement.findMany({
+      where: {
+        ...branchFilter,
+        movementType: { in: [...SALE_OUT_TYPES, ...SELLABLE_RETURN_IN_TYPES] },
+        createdAt: { gte: start, lt: end },
+      },
+      select: { quantity: true, unitCost: true, movementType: true, createdAt: true },
+    }),
+    prisma.cashMovement.findMany({
+      where: {
+        type: "EXPENSE_OUT",
+        createdAt: { gte: start, lt: end },
+        payrollDisbursements: { none: {} },
+        ...(branchId ? { cashSession: { physicalCashBox: { branchId } } } : {}),
+      },
+      select: { amount: true, createdAt: true },
+    }),
+    prisma.payrollDisbursement.findMany({
+      where: { status: "PAID", paidAt: { gte: start, lt: end }, ...(branchId ? { branchId } : {}) },
+      select: { amount: true, paidAt: true },
+    }),
+  ]);
+
+  type Acc = { grossSales: number; refunds: number; cogsOut: number; cogsReturned: number; cashExpenses: number; payrollPaid: number };
+  const buckets = new Map<number, Acc>();
+  // Pre-crear todos los meses para que la serie no tenga huecos (meses sin ventas = 0).
+  for (let idx = startIdx; idx <= endIdx; idx++) {
+    buckets.set(idx, { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, payrollPaid: 0 });
+  }
+  const at = (d: Date | null): Acc | undefined => (d ? buckets.get(managuaMonthIndex(d)) : undefined);
+
+  for (const p of payments) { const b = at(p.paidAt); if (b) b.grossSales += num(p.amount); }
+  for (const r of refunds) { const b = at(r.postedAt); if (b) b.refunds += num(r.amount); }
+  for (const m of movements) {
+    const b = at(m.createdAt);
+    if (!b) continue;
+    const cost = num(m.quantity) * num(m.unitCost);
+    if ((SALE_OUT_TYPES as readonly string[]).includes(m.movementType)) b.cogsOut += cost;
+    else b.cogsReturned += cost;
+  }
+  for (const e of cashExpenseMovs) { const b = at(e.createdAt); if (b) b.cashExpenses += num(e.amount); }
+  for (const d of payrollDisbursed) { const b = at(d.paidAt); if (b) b.payrollPaid += num(d.amount); }
+
+  const points: FinanceTrendPoint[] = [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([idx, b]) => {
+      const netSales = b.grossSales - b.refunds;
+      const cogs = b.cogsOut - b.cogsReturned;
+      const grossProfit = netSales - cogs;
+      const operatingProfit = grossProfit - b.cashExpenses - b.payrollPaid;
+      return {
+        year: Math.floor(idx / 12),
+        month: (idx % 12) + 1,
+        grossSales: round2(b.grossSales),
+        refunds: round2(b.refunds),
+        netSales: round2(netSales),
+        cogs: round2(cogs),
+        grossProfit: round2(grossProfit),
+        grossMarginPercent: netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null,
+        cashExpenses: round2(b.cashExpenses),
+        payrollPaid: round2(b.payrollPaid),
+        operatingProfit: round2(operatingProfit),
+      };
+    });
+
+  return { branchId, months, points };
+}

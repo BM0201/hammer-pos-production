@@ -1,7 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { TrendingUp, Wallet, Receipt, Users, Landmark, Info, ChevronLeft, ChevronRight, RefreshCw, Building2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
+import { TrendingUp, TrendingDown, Wallet, Receipt, Users, Landmark, Info, ChevronLeft, ChevronRight, RefreshCw, Building2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
 
@@ -53,6 +56,21 @@ type FinanceSummary = {
 };
 
 type Branch = { id: string; code: string; name: string };
+
+/* /api/master/finance/trend — serie mensual del desempeño real (base caja) */
+type TrendPoint = {
+  year: number;
+  month: number;
+  grossSales: number;
+  refunds: number;
+  netSales: number;
+  cogs: number;
+  grossProfit: number;
+  grossMarginPercent: number | null;
+  cashExpenses: number;
+  payrollPaid: number;
+  operatingProfit: number;
+};
 
 const MONTH_NAMES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 
@@ -119,6 +137,7 @@ function PnlRow({
 
 export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: string | null }) {
   const [data, setData] = useState<FinanceSummary | null>(null);
+  const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState(() => managuaNow());
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -147,6 +166,53 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
   }, [fixedBranchId, branchFilter, period.year, period.month]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Trayectoria: 12 meses (6 para el gráfico + 6 previos para el comparativo
+  // del resumen ejecutivo). Depende solo de la sucursal, no del mes navegado.
+  const loadTrend = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({ months: "12" });
+      const effectiveBranch = fixedBranchId ?? branchFilter;
+      if (effectiveBranch) params.set("branchId", effectiveBranch);
+      const res = await apiFetch(`/api/master/finance/trend?${params.toString()}`);
+      const raw = await res.json();
+      if (!res.ok) return; // la trayectoria es complementaria: no bloquea el resumen
+      setTrend(((unwrapApiData(raw) as { points?: TrendPoint[] })?.points) ?? []);
+    } catch {
+      /* complementaria */
+    }
+  }, [fixedBranchId, branchFilter]);
+
+  useEffect(() => { void loadTrend(); }, [loadTrend]);
+
+  // Resumen ejecutivo: últimos 6 meses vs los 6 anteriores (solo si hay historia).
+  const exec = useMemo(() => {
+    if (trend.length === 0) return null;
+    const last6 = trend.slice(-6);
+    const prev6 = trend.slice(0, Math.max(0, trend.length - 6));
+    const sum = (pts: TrendPoint[], k: "netSales" | "operatingProfit") => pts.reduce((s, p) => s + p[k], 0);
+    const netSales6 = sum(last6, "netSales");
+    const profit6 = sum(last6, "operatingProfit");
+    const prevNet = sum(prev6, "netSales");
+    const prevProfit = sum(prev6, "operatingProfit");
+    const delta = (curr: number, prev: number) => (prev > 0 ? Math.round(((curr - prev) / prev) * 1000) / 10 : null);
+    const monthsWithSales = last6.filter((p) => p.netSales > 0).length;
+    return {
+      netSales6, profit6,
+      netSalesDelta: delta(netSales6, prevNet),
+      profitDelta: delta(profit6, prevProfit),
+      marginPercent: netSales6 > 0 ? Math.round((profit6 / netSales6) * 1000) / 10 : null,
+      monthsWithSales,
+    };
+  }, [trend]);
+
+  const chartData = useMemo(
+    () => trend.slice(-6).map((p) => ({
+      ...p,
+      label: `${MONTH_NAMES[p.month - 1].slice(0, 3)} ${String(p.year).slice(2)}`,
+    })),
+    [trend],
+  );
 
   useEffect(() => {
     if (fixedBranchId !== undefined && fixedBranchId !== null) return; // selector deshabilitado
@@ -223,6 +289,97 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
         <div className="p-6 text-center text-sm text-[var(--color-text-muted)]">Cargando resumen financiero…</div>
       ) : !data || !perf || !inv ? null : (
         <>
+          {/* ── 0. RESUMEN EJECUTIVO — lo primero que lee un banco o socio ── */}
+          {exec && exec.monthsWithSales > 0 && (
+            <section className="rounded-xl p-4" style={{ background: "var(--color-surface)", border: "1px solid var(--color-success-200)" }}>
+              <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
+                  Resumen ejecutivo — últimos 6 meses reales
+                </p>
+                <span className="text-[10px] rounded px-2 py-0.5" style={{ background: "var(--color-info-100)", color: "var(--color-info-700)" }}>
+                  Basado en ventas cobradas
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Ingresos netos (6m)</p>
+                  <p className="text-2xl font-extrabold tabular-nums" style={{ color: "var(--color-text)" }}>{money(exec.netSales6)}</p>
+                  {exec.netSalesDelta != null && (
+                    <span className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-bold"
+                      style={exec.netSalesDelta >= 0
+                        ? { background: "var(--color-success-50)", color: "var(--color-success-700)" }
+                        : { background: "var(--color-danger-50)", color: "var(--color-danger-700)" }}>
+                      {exec.netSalesDelta >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                      {Math.abs(exec.netSalesDelta).toFixed(1)}% vs semestre anterior
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Utilidad operativa (6m)</p>
+                  <p className="text-2xl font-extrabold tabular-nums" style={{ color: exec.profit6 >= 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>{money(exec.profit6)}</p>
+                  {exec.profitDelta != null && (
+                    <span className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-bold"
+                      style={exec.profitDelta >= 0
+                        ? { background: "var(--color-success-50)", color: "var(--color-success-700)" }
+                        : { background: "var(--color-danger-50)", color: "var(--color-danger-700)" }}>
+                      {exec.profitDelta >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                      {Math.abs(exec.profitDelta).toFixed(1)}% vs semestre anterior
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Margen operativo (6m)</p>
+                  <p className="text-2xl font-extrabold tabular-nums" style={{ color: "var(--color-text)" }}>
+                    {exec.marginPercent != null ? `${exec.marginPercent.toFixed(1)}%` : "—"}
+                  </p>
+                  <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Utilidad operativa / ingresos netos</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Meses con venta</p>
+                  <p className="text-2xl font-extrabold tabular-nums" style={{ color: "var(--color-text)" }}>{exec.monthsWithSales} de 6</p>
+                  <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Continuidad de operación</p>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* ── 0b. TRAYECTORIA — ingresos y utilidad, 6 meses ── */}
+          {chartData.some((p) => p.netSales !== 0 || p.operatingProfit !== 0) && (
+            <section className="rounded-xl p-4 space-y-3" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
+                  <TrendingUp className="h-3.5 w-3.5" /> Trayectoria de ingresos y utilidad — 6 meses
+                </p>
+                <span className="text-[10px] rounded px-2 py-0.5" style={{ background: "var(--color-info-100)", color: "var(--color-info-700)" }}>
+                  Real, base caja — mismas reglas que el estado de resultados
+                </span>
+              </div>
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--color-text-muted)" }} />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: "var(--color-text-muted)" }}
+                      tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(v))}
+                      width={48}
+                    />
+                    <Tooltip
+                      formatter={(value, name) => [money(Number(value ?? 0)), String(name ?? "")]}
+                      contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--color-border)", background: "var(--color-surface)" }}
+                    />
+                    <Bar dataKey="netSales" name="Ingresos netos" fill="var(--color-info-500)" opacity={0.55} radius={[4, 4, 0, 0]} />
+                    <Line type="monotone" dataKey="operatingProfit" name="Utilidad operativa" stroke="var(--color-success-600)" strokeWidth={2.5} dot={{ r: 3 }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                Barras = ingresos netos cobrados · línea = utilidad operativa real (ingresos − COGS − gastos de caja − planilla pagada).
+                El mes en curso se ve parcial hasta cerrarlo.
+              </p>
+            </section>
+          )}
+
           {/* ── 1. DESEMPEÑO REAL — la verdad primero ── */}
           <section className="rounded-xl p-4 space-y-4" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
             <p className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
@@ -290,6 +447,19 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
               </div>
             </div>
 
+            {/* Diversificación del ingreso — mitigante de riesgo para crédito */}
+            {perf.byBranch.length > 1 && perf.netSales > 0 && (() => {
+              const top = perf.byBranch.reduce((a, b) => (b.netSales > a.netSales ? b : a));
+              const share = Math.round((top.netSales / perf.netSales) * 100);
+              return (
+                <p className="rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-surface-alt)", border: "0.5px solid var(--color-border)", color: "var(--color-text-secondary)" }}>
+                  {share <= 40
+                    ? <>Ninguna sucursal concentra más del 40% del ingreso del período — el negocio no depende de un solo punto de venta.</>
+                    : <><b>{top.branchCode ?? top.branchName}</b> concentra el <b>{share}%</b> del ingreso del período — concentración a vigilar como riesgo.</>}
+                </p>
+              );
+            })()}
+
             <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
               Reglas (todo en base caja, corte mensual hora Managua): ventas netas = pagos cobrados − reembolsos ·
               COGS = costo de salidas por venta − reingresos vendibles por devolución (lo dañado queda como merma) ·
@@ -312,14 +482,15 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
               hint={data.payroll.pendingPayrollTotal > 0 ? "Desembolsos programados sin pagar" : "Al día"} />
           </section>
 
-          {/* ── 3. Proyección comercial — hipotética, al final ── */}
-          <section className="rounded-xl p-4 space-y-4" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+          {/* ── 3. Proyección comercial — hipotética, al final y con borde punteado
+                para no mezclarla visualmente con las cifras reales auditables ── */}
+          <section className="rounded-xl p-4 space-y-4" style={{ background: "var(--color-surface-muted, var(--color-surface))", border: "1.5px dashed var(--color-border-strong)" }}>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <p className="text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
                 <TrendingUp className="h-3.5 w-3.5" /> Proyección comercial del inventario
               </p>
               <span className="text-[10px] rounded px-2 py-0.5" style={{ background: "var(--color-warning-100)", color: "var(--color-warning-700)" }}>
-                No es utilidad real — es potencial si se vendiera todo el stock de hoy
+                ⚠ Estimado, no auditado — asume vender el 100% del stock de hoy; no es utilidad real
               </span>
             </div>
             <div className="grid gap-3 sm:grid-cols-4">

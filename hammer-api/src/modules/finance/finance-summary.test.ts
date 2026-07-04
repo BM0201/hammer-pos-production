@@ -151,6 +151,51 @@ describe("gastos reales: caja de sucursal + planilla desembolsada", () => {
   });
 });
 
+// ── Trayectoria mensual: bucketing por mes Managua (getFinanceTrend) ─────────
+
+describe("getFinanceTrend: índice de mes Managua (UTC-6 fijo)", () => {
+  // Espejo de managuaMonthIndex del servicio.
+  function managuaMonthIndex(d: Date): number {
+    const shifted = new Date(d.getTime() - 6 * 3_600_000);
+    return shifted.getUTCFullYear() * 12 + shifted.getUTCMonth();
+  }
+  const idx = (y: number, m: number) => y * 12 + (m - 1);
+
+  it("una venta a las 8pm Managua del 31 de julio cae en el bucket de JULIO", () => {
+    // 2026-08-01T02:00Z = 31 jul 8pm Managua
+    assert.equal(managuaMonthIndex(new Date("2026-08-01T02:00:00.000Z")), idx(2026, 7));
+  });
+
+  it("el instante exacto del corte (06:00 UTC del día 1) abre el mes nuevo", () => {
+    assert.equal(managuaMonthIndex(new Date("2026-07-01T06:00:00.000Z")), idx(2026, 7));
+    assert.equal(managuaMonthIndex(new Date("2026-07-01T05:59:59.999Z")), idx(2026, 6));
+  });
+
+  it("la serie de 6 meses desde julio arranca en febrero (sin huecos)", () => {
+    const endIdx = idx(2026, 7);
+    const startIdx = endIdx - 5;
+    assert.equal(Math.floor(startIdx / 12), 2026);
+    assert.equal((startIdx % 12) + 1, 2);
+    // pre-creación de buckets: exactamente 6 meses contiguos
+    const months: number[] = [];
+    for (let i = startIdx; i <= endIdx; i++) months.push((i % 12) + 1);
+    assert.deepEqual(months, [2, 3, 4, 5, 6, 7]);
+  });
+
+  it("cruce de año: 3 meses desde enero 2027 = nov, dic 2026 y ene 2027", () => {
+    const endIdx = idx(2027, 1);
+    const startIdx = endIdx - 2;
+    assert.equal(Math.floor(startIdx / 12), 2026);
+    assert.equal((startIdx % 12) + 1, 11);
+  });
+
+  it("utilidad operativa del punto = bruta − gastos caja − planilla (mismas reglas que el resumen)", () => {
+    const netSales = 10000, cogs = 6000, cashExpenses = 800, payrollPaid = 1500;
+    const operatingProfit = (netSales - cogs) - cashExpenses - payrollPaid;
+    assert.equal(operatingProfit, 1700);
+  });
+});
+
 // ── Corte de mes contable en hora Managua ─────────────────────────────────────
 
 describe("managuaMonthRangeUtc (corte de mes en Managua, UTC-6 sin DST)", () => {

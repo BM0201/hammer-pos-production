@@ -7,3 +7,11 @@ export const financeSummarySchema = z.object({
 });
 
 export type FinanceSummaryQuery = z.infer<typeof financeSummarySchema>;
+
+export const financeTrendSchema = z.object({
+  branchId: z.string().cuid().optional().nullable(),
+  /** Meses hacia atrás incluyendo el actual (1–12; default 6). */
+  months: z.coerce.number().int().min(1).max(12).optional(),
+});
+
+export type FinanceTrendQuery = z.infer<typeof financeTrendSchema>;
