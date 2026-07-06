@@ -2,7 +2,7 @@ import type { RoleCode } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { prisma, MissingDatabaseUrlError } from "@/lib/prisma";
 import { env, envStatus, logRuntimeEnvWarnings } from "@/lib/env";
-import { verifyPassword } from "@/modules/auth/password";
+import { verifyPassword, needsRehash, hashPassword } from "@/modules/auth/password";
 import { buildSessionPayload, decodeSession, encodeSession, makeSessionCookieName } from "@/modules/auth/session";
 import { cookies } from "next/headers";
 import type { SessionPayload } from "@/types/auth";
@@ -77,6 +77,20 @@ export async function authenticate(
       userAgent: auditContext.userAgent,
     });
     return null;
+  }
+
+  // Migración perezosa PBKDF2 → Argon2id: con la contraseña recién verificada,
+  // actualizar el hash al formato actual. No toca sessionVersion (no invalida
+  // sesiones) y un fallo aquí no debe impedir el login.
+  if (needsRehash(user.passwordHash)) {
+    try {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: hashPassword(password) },
+      });
+    } catch (rehashError) {
+      console.error("[auth] No fue posible re-hashear la contraseña a Argon2id", rehashError);
+    }
   }
 
   // Filter memberships through BranchRoleConfig (disabled roles are excluded)
@@ -252,12 +266,6 @@ export async function getCurrentSession(): Promise<SessionPayload | null> {
 
   _sessionCache.set(cacheKey, { payload: session, expiresAt: Date.now() + SESSION_CACHE_TTL_MS });
   return session;
-}
-
-export function getRawSessionToken(): string | undefined {
-  // Note: This is a sync helper for getting the raw token for revocation
-  // Cannot use await cookies() here - callers should get the cookie value directly
-  return undefined;
 }
 
 /**

@@ -1,10 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
 import { resolveRoleHome } from "@/modules/rbac/role-routing";
+import { TurnstileWidget, resetTurnstile } from "@/components/security/turnstile-widget";
+
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
 /* ── Light palette ──────────────────────────────────────────────────── */
 const C = {
@@ -154,6 +157,11 @@ export default function LoginPage() {
   const [errUser,    setErrUser]    = useState(false);
   const [errPass,    setErrPass]    = useState(false);
   const [btnHov,     setBtnHov]     = useState(false);
+
+  /* Challenge anti-bot (Turnstile) — se activa tras fallos repetidos */
+  const [requiresChallenge, setRequiresChallenge] = useState(false);
+  const [turnstileToken,    setTurnstileToken]    = useState<string | null>(null);
+  const handleTurnstileToken = useCallback((token: string | null) => setTurnstileToken(token), []);
 
   /* Animation refs */
   const ovRef   = useRef<HTMLDivElement>(null);
@@ -330,7 +338,11 @@ export default function LoginPage() {
     try {
       const res  = await apiFetch("/api/auth/login", {
         method: "POST",
-        body: JSON.stringify({ username: username.trim().toLowerCase(), password }),
+        body: JSON.stringify({
+          username: username.trim().toLowerCase(),
+          password,
+          ...(turnstileToken ? { turnstileToken } : {}),
+        }),
       });
       const json = await res.json() as ApiResponse<{
         redirectTo?: string;
@@ -340,11 +352,20 @@ export default function LoginPage() {
       }>;
 
       if (!res.ok) {
-        const msg =
-          !json.ok && "error" in json &&
-          typeof json.error === "object" && json.error && "message" in json.error
-            ? (json.error as { message: string }).message
-            : res.status === 401 ? "Usuario o contraseña inválidos." : "No se pudo iniciar sesión.";
+        const errBody = !json.ok && "error" in json && typeof json.error === "object" && json.error
+          ? json.error as { code?: string; message?: string; details?: { requiresChallenge?: boolean } }
+          : null;
+        const msg = errBody?.message
+          ?? (res.status === 401 ? "Usuario o contraseña inválidos." : "No se pudo iniciar sesión.");
+
+        // El backend avisa cuando el próximo intento exige challenge Turnstile.
+        if (errBody?.code === "CHALLENGE_REQUIRED" || errBody?.details?.requiresChallenge) {
+          setRequiresChallenge(true);
+        }
+        // Los tokens de Turnstile son de un solo uso — pedir uno nuevo.
+        setTurnstileToken(null);
+        resetTurnstile();
+
         setError(msg);
         setSubmitting(false);
         return;
@@ -707,6 +728,15 @@ export default function LoginPage() {
                       )}
                     </div>
 
+                    {requiresChallenge && TURNSTILE_SITE_KEY && (
+                      <div style={{ marginBottom: "1rem", display: "flex", justifyContent: "center" }}>
+                        <TurnstileWidget
+                          siteKey={TURNSTILE_SITE_KEY}
+                          onToken={handleTurnstileToken}
+                          theme={isDark ? "dark" : "light"}
+                        />
+                      </div>
+                    )}
                     {error && errBox(error)}
                     {submitBtn("Entrar", "Autenticando…")}
                   </form>

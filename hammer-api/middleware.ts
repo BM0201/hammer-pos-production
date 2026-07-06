@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { decodeSession, makeSessionCookieName } from "@/modules/auth/session";
+import { enforceApiRateLimit } from "@/modules/security/api-rate-limiter";
 
 /**
  * Backend (hammer-api) middleware.
@@ -45,7 +46,33 @@ function isRequestBodyTooLarge(request: NextRequest): boolean {
   return Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES;
 }
 
-export function middleware(request: NextRequest) {
+function getClientIp(request: NextRequest): string {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  const forwardedIp = forwardedFor?.split(",")[0]?.trim();
+  if (forwardedIp) return forwardedIp;
+
+  const realIp = request.headers.get("x-real-ip")?.trim();
+  return realIp || "unknown";
+}
+
+function rateLimitResponse(retryAfterSeconds: number) {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: {
+        code: "RATE_LIMIT",
+        message: `Demasiadas solicitudes. Intenta de nuevo en ${retryAfterSeconds} segundos.`,
+        details: { retryAfterSeconds },
+      },
+    },
+    {
+      status: 429,
+      headers: { "Retry-After": String(retryAfterSeconds) },
+    },
+  );
+}
+
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Default body-size guard for mutating requests. Excel imports must stay <= 10 MB.
@@ -64,6 +91,16 @@ export function middleware(request: NextRequest) {
 
   // Public, unauthenticated API endpoints.
   if (PUBLIC_API_PATHS.has(pathname) || isCronPath(pathname)) {
+    // Rate limit por IP para públicos (login usa su propio limiter en BD).
+    const publicLimit = await enforceApiRateLimit({
+      pathname,
+      method: request.method,
+      userId: null,
+      ip: getClientIp(request),
+    });
+    if (publicLimit && !publicLimit.result.allowed) {
+      return rateLimitResponse(publicLimit.result.retryAfterSeconds);
+    }
     return NextResponse.next();
   }
 
@@ -76,6 +113,17 @@ export function middleware(request: NextRequest) {
       { message: "Unauthorized", reason: "NO_SESSION" },
       { status: 401 },
     );
+  }
+
+  // Rate limit general por usuario (mutaciones, analytics, import).
+  const rateLimit = await enforceApiRateLimit({
+    pathname,
+    method: request.method,
+    userId: session.userId,
+    ip: getClientIp(request),
+  });
+  if (rateLimit && !rateLimit.result.allowed) {
+    return rateLimitResponse(rateLimit.result.retryAfterSeconds);
   }
 
   // Shallow CSRF check (header presence only).

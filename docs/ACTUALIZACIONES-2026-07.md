@@ -50,3 +50,14 @@ Ver **[POLITICA-RETENCION-DATOS.md](./POLITICA-RETENCION-DATOS.md)** — resumen
 ---
 
 *Recordatorio de seguridad: las credenciales de la base de datos fueron compartidas en texto plano durante estas sesiones — se recomienda rotar la contraseña de Neon.*
+
+## 6. Hardening de ciberseguridad (2026-07-06)
+
+- **Rate limiting general del API** con Upstash Redis (sliding window) en el middleware de hammer-api: mutaciones 60/min por usuario, reportes/analytics 20/min, import de Excel 5/min, públicos (csrf/session) 30/min por IP. Fail-open si Redis no está configurado; el login conserva su limiter en Postgres. Respuesta 429 con `Retry-After` y código `RATE_LIMIT`.
+- **CSP sin `unsafe-inline`** en producción: nonce por request generado en el middleware del frontend (`script-src 'self' 'nonce-...' 'strict-dynamic'`); los scripts inline del layout raíz (tema y service worker) reciben el nonce vía `headers()`.
+- **Dependabot + CI**: `.github/dependabot.yml` (npm semanal en ambos proyectos + github-actions) y workflow con `npm ci`, typecheck, tests, lint y `npm audit --omit=dev --audit-level=high` que falla el pipeline con vulnerabilidades high/critical.
+- **Privilegio mínimo en BD**: runbook completo en [SEGURIDAD-DB-PRIVILEGIO-MINIMO.md](./SEGURIDAD-DB-PRIVILEGIO-MINIMO.md) (roles `hammer_app` DML / `hammer_migrate` DDL). **Pendiente de aplicar en el panel de Neon.**
+- **Cloudflare Turnstile en el login**: challenge exigido a partir del 3er intento (≥2 fallos recientes por usuario), validado server-side. Deshabilitado si faltan `TURNSTILE_SECRET_KEY` / `NEXT_PUBLIC_TURNSTILE_SITE_KEY`.
+- **Argon2id** (m=19 MiB, t=2, p=1) para contraseñas nuevas/reset, con verificación retrocompatible de PBKDF2 y re-hash perezoso tras login exitoso.
+- **Suite anti-IDOR** `rbac/cross-branch-access.test.ts`: todo endpoint nuevo scoped a sucursal debe agregar su caso ahí.
+- **Bloqueo por inactividad (5 min)** en vistas POS/caja/cobros: overlay que exige re-introducir la contraseña del usuario activo sin perder el estado de la venta.

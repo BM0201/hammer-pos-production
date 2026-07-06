@@ -76,6 +76,23 @@ export async function checkLoginRateLimit(
 }
 
 /**
+ * Umbral de fallos recientes por usuario a partir del cual el login exige
+ * resolver un challenge (Cloudflare Turnstile) antes de reintentar.
+ * Frena bots ANTES del límite duro y evita que rotar de IP lo esquive
+ * (el conteo es por username, no por IP).
+ */
+const CHALLENGE_AFTER_FAILURES = 2;
+
+/**
+ * ¿Debe exigirse challenge (Turnstile) para el próximo intento de login de
+ * este usuario? True cuando acumuló >= 2 fallos recientes en la ventana.
+ */
+export async function requiresLoginChallenge(username: string): Promise<boolean> {
+  const failures = await countRecentFailed(`u:${username}`);
+  return failures >= CHALLENGE_AFTER_FAILURES;
+}
+
+/**
  * Registra un intento de login en los tres identificadores.
  * Si el intento fue exitoso, limpia los fallos recientes para ese par y usuario.
  */

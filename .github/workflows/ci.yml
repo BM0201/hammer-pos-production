@@ -1,0 +1,62 @@
+# CI — Hammer POS
+#
+# Reglas:
+#  - Siempre `npm ci` (nunca `npm install`): respeta el lockfile exacto y
+#    evita bumps silenciosos / dependency confusion.
+#  - La auditoría de dependencias FALLA el pipeline con vulnerabilidades
+#    high/critical en dependencias de producción (--omit=dev --audit-level=high).
+name: CI
+
+on:
+  push:
+    branches: ["Hammer-V1", "main"]
+  pull_request:
+
+jobs:
+  api:
+    name: hammer-api
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hammer-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: hammer-api/package-lock.json
+      - name: Instalar dependencias (lockfile exacto)
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Tests
+        run: npm test
+      - name: Auditoría de dependencias (falla con high/critical)
+        run: npm audit --omit=dev --audit-level=high
+
+  frontend:
+    name: hammer-frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hammer-frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: hammer-frontend/package-lock.json
+      - name: Instalar dependencias (lockfile exacto)
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Tests unitarios
+        run: npm run test:unit
+      - name: Validar archivos críticos
+        run: npm run validate:critical
+      - name: Auditoría de dependencias (falla con high/critical)
+        run: npm audit --omit=dev --audit-level=high
