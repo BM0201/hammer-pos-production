@@ -488,12 +488,6 @@ export async function updateMembership(
   return result;
 }
 
-export async function removeMembership(membershipId: string) {
-  return prisma.userBranchRole.delete({
-    where: { id: membershipId },
-  });
-}
-
 export async function removeMembershipFromUser(userId: string, membershipId: string) {
   const result = await prisma.$transaction(async (tx) => {
   const membership = await tx.userBranchRole.findUniqueOrThrow({
