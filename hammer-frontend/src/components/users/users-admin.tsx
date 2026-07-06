@@ -20,8 +20,12 @@ import {
   Trash2,
   Pencil,
   Save,
+  Table2,
+  LayoutList,
+  ShieldCheck,
 } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
+import { fmtDate } from "@/lib/format";
 import toast from "react-hot-toast";
 
 // Las contraseñas temporales las genera el servidor de forma única por usuario.
@@ -49,7 +53,17 @@ type UserRow = {
   isActive: boolean;
   globalRole: "MASTER" | null;
   mustChangePassword?: boolean;
+  createdAt: string;
   userBranchRoles: MembershipRow[];
+};
+
+type CreateFormState = {
+  username: string;
+  fullName: string;
+  email: string;
+  globalRole: string;
+  branchId: string;
+  rolePreset: UserRolePreset;
 };
 
 const ROLE_LABEL: Record<string, string> = {
@@ -57,6 +71,32 @@ const ROLE_LABEL: Record<string, string> = {
   SALES: "Ventas",
   CASHIER: "Caja",
   WAREHOUSE: "Despacho / Bodega",
+};
+
+// Resumen informativo por rol — mantener alineado con hammer-api/src/modules/rbac/policies.ts (ROLE_CAPABILITIES).
+const ROLE_CAPABILITY_HINTS: Record<MembershipRole, string[]> = {
+  SALES: [
+    "Crea ventas, borradores y cotizaciones",
+    "Envía órdenes a caja para cobro",
+    "Ve su historial de ventas",
+  ],
+  CASHIER: [
+    "Cobra pagos y emite recibos",
+    "Abre y cierra caja",
+    "Registra movimientos de caja y facturas manuales",
+    "Ejecuta devoluciones y cancelaciones aprobadas",
+  ],
+  WAREHOUSE: [
+    "Despacha órdenes",
+    "Ajusta y registra movimientos de inventario",
+    "Gestiona inventario dañado",
+  ],
+  BRANCH_ADMIN: [
+    "Aprueba devoluciones, cancelaciones y movimientos de caja",
+    "Concilia caja y cierra el día operativo",
+    "Ve finanzas, reportes y auditoría de su sucursal",
+    "Opera POS y caja como cualquier operador",
+  ],
 };
 
 const USER_ROLE_PRESETS = [
@@ -109,6 +149,364 @@ function getErrorMessage(payload?: { message?: string; reason?: string; error?: 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Role Preset Picker — descripción de perfil + badges con preview de permisos
+// ─────────────────────────────────────────────────────────────────────────────
+function RolePresetPicker({
+  preset,
+  branch,
+  isRoleAvailable,
+}: {
+  preset: (typeof USER_ROLE_PRESETS)[number];
+  branch: BranchOption | null;
+  isRoleAvailable: (branch: BranchOption | null, role: MembershipRole) => boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2.5 text-xs text-[var(--color-text-secondary)]">
+      {preset.description}
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {preset.roles.map((role) => {
+          const available = isRoleAvailable(branch, role);
+          return (
+            <span
+              key={role}
+              className={`group relative inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.5625rem] font-semibold border ${
+                available
+                  ? "bg-[var(--color-info-50)] text-[var(--color-info-700)] border-[var(--color-info-200)]"
+                  : "bg-[var(--color-warning-50)] text-[var(--color-warning-700)] border-[var(--color-warning-200)]"
+              }`}
+            >
+              {ROLE_LABEL[role]}{available ? "" : " · deshabilitado"}
+              <Info className="h-2.5 w-2.5 cursor-help" />
+              <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1.5 hidden w-56 -translate-x-1/2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5 text-left text-[0.6875rem] font-normal normal-case text-[var(--color-text-secondary)] shadow-lg group-hover:block">
+                <span className="block font-semibold text-[var(--color-text)]">{ROLE_LABEL[role]}</span>
+                <ul className="mt-1 list-disc space-y-0.5 pl-3.5">
+                  {ROLE_CAPABILITY_HINTS[role].map((hint) => (
+                    <li key={hint}>{hint}</li>
+                  ))}
+                </ul>
+              </span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Create User Modal
+// ─────────────────────────────────────────────────────────────────────────────
+function CreateUserModal({
+  open,
+  onClose,
+  form,
+  setForm,
+  branches,
+  creating,
+  onSubmit,
+  selectedBranch,
+  selectedPreset,
+  isRoleAvailable,
+  arePresetRolesAvailable,
+}: {
+  open: boolean;
+  onClose: () => void;
+  form: CreateFormState;
+  setForm: React.Dispatch<React.SetStateAction<CreateFormState>>;
+  branches: BranchOption[];
+  creating: boolean;
+  onSubmit: (event: React.FormEvent) => void;
+  selectedBranch: BranchOption | null;
+  selectedPreset: (typeof USER_ROLE_PRESETS)[number];
+  isRoleAvailable: (branch: BranchOption | null, role: MembershipRole) => boolean;
+  arePresetRolesAvailable: (branch: BranchOption | null, preset: (typeof USER_ROLE_PRESETS)[number]) => boolean;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+        onClick={onClose}
+      />
+
+      {/* Modal */}
+      <div className="relative z-10 w-full max-w-2xl bg-[var(--color-surface)] rounded-xl shadow-2xl border border-[var(--color-border)] animate-fade-in overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-info-100)]">
+              <UserPlus className="h-5 w-5 text-[var(--color-info-700)]" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-[var(--color-text)]">Crear usuario</h3>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                La contraseña temporal se genera automáticamente y se mostrará al crear.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-[var(--color-text-soft)] hover:text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)] transition-colors"
+            aria-label="Cerrar"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form onSubmit={onSubmit}>
+          {/* Body */}
+          <div className="px-6 py-5 space-y-3 max-h-[70vh] overflow-y-auto">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="grid gap-1">
+                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Usuario *</span>
+                <input
+                  className="hm-input rounded-lg text-sm"
+                  placeholder="ej. jperez"
+                  value={form.username}
+                  onChange={(e) => setForm((prev) => ({ ...prev, username: e.target.value }))}
+                  required minLength={3} autoComplete="off"
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Nombre completo *</span>
+                <input
+                  className="hm-input rounded-lg text-sm"
+                  placeholder="Juan Pérez"
+                  value={form.fullName}
+                  onChange={(e) => setForm((prev) => ({ ...prev, fullName: e.target.value }))}
+                  required minLength={2}
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Correo</span>
+                <input
+                  className="hm-input rounded-lg text-sm"
+                  placeholder="opcional"
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Rol global</span>
+                <select
+                  className="hm-input rounded-lg text-sm"
+                  value={form.globalRole}
+                  onChange={(e) => setForm((prev) => ({ ...prev, globalRole: e.target.value }))}
+                >
+                  <option value="">Sin rol global</option>
+                  <option value="MASTER">MASTER</option>
+                </select>
+              </label>
+            </div>
+
+            {form.globalRole !== "MASTER" ? (
+              <div className="space-y-2">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="grid gap-1">
+                    <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Sucursal inicial *</span>
+                    <select
+                      className="hm-input rounded-lg text-sm"
+                      value={form.branchId}
+                      onChange={(e) => setForm((prev) => ({ ...prev, branchId: e.target.value }))}
+                      required disabled={branches.length === 0}
+                    >
+                      {branches.length === 0 && <option value="">No hay sucursales disponibles</option>}
+                      {branches.map((branch) => (
+                        <option key={branch.id} value={branch.id} disabled={!branch.isActive}>
+                          {branch.code} · {branch.name}{branch.isActive ? "" : " (Inactiva)"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Tipo de usuario *</span>
+                    <select
+                      className="hm-input rounded-lg text-sm"
+                      value={form.rolePreset}
+                      onChange={(e) => setForm((prev) => ({ ...prev, rolePreset: e.target.value as UserRolePreset }))}
+                    >
+                      {USER_ROLE_PRESETS.map((preset) => (
+                        <option key={preset.value} value={preset.value} disabled={!arePresetRolesAvailable(selectedBranch, preset)}>
+                          {preset.label}{arePresetRolesAvailable(selectedBranch, preset) ? "" : " (No disponible)"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <RolePresetPicker preset={selectedPreset} branch={selectedBranch} isRoleAvailable={isRoleAvailable} />
+              </div>
+            ) : (
+              <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
+                MASTER es un rol global. Si también necesita operar en una sucursal concreta, podrás agregarle membresías desde el panel de edición.
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={creating}
+              className="rounded-lg px-4 py-2 text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] transition-colors disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+            <Button
+              type="submit"
+              loading={creating}
+              disabled={form.globalRole !== "MASTER" && !arePresetRolesAvailable(selectedBranch, selectedPreset)}
+              icon={<UserPlus className="h-4 w-4" />}
+            >
+              Crear usuario
+            </Button>
+          </div>
+        </form>
+      </div>
+
+      <style>{`
+        @keyframes fade-in {
+          from { opacity: 0; transform: scale(0.95) translateY(10px); }
+          to   { opacity: 1; transform: scale(1)    translateY(0); }
+        }
+        .animate-fade-in { animation: fade-in 0.2s ease-out; }
+      `}</style>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bulk Password Reset Result Modal — muestra las contraseñas generadas una vez
+// ─────────────────────────────────────────────────────────────────────────────
+type BulkResetResult = { username: string; fullName: string; tempPassword: string };
+
+function BulkResetResultModal({
+  results,
+  onClose,
+}: {
+  results: BulkResetResult[];
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copyAll = useCallback(async () => {
+    const text = results.map((row) => `${row.username}: ${row.tempPassword}`).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  }, [results]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+        onClick={onClose}
+      />
+
+      {/* Modal */}
+      <div className="relative z-10 w-full max-w-lg bg-[var(--color-surface)] rounded-xl shadow-2xl border border-[var(--color-border)] animate-fade-in overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] bg-[var(--color-surface-alt)]">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-warning-100)]">
+              <KeyRound className="h-5 w-5 text-[var(--color-warning-700)]" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-[var(--color-text)]">Contraseñas temporales generadas</h3>
+              <p className="text-xs text-[var(--color-text-muted)]">{results.length} usuario{results.length !== 1 ? "s" : ""}</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-[var(--color-text-soft)] hover:text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)] transition-colors"
+            aria-label="Cerrar"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-3">
+          <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)] flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+            <p>Estas contraseñas solo se muestran una vez. Cópialas y compártelas con cada usuario; deberán cambiarlas en su próximo inicio de sesión.</p>
+          </div>
+          <div className="max-h-[40vh] overflow-y-auto rounded-lg border border-[var(--color-border)]">
+            <table className="hm-table w-full">
+              <thead>
+                <tr>
+                  <th className="text-left">Usuario</th>
+                  <th className="text-left">Nombre</th>
+                  <th className="text-left">Contraseña temporal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {results.map((row) => (
+                  <tr key={row.username}>
+                    <td className="font-mono">{row.username}</td>
+                    <td>{row.fullName}</td>
+                    <td className="font-mono tracking-wider select-all">{row.tempPassword}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
+          <button
+            type="button"
+            onClick={copyAll}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 ${
+              copied
+                ? "bg-[var(--color-success-50)] text-[var(--color-success-700)] border border-green-300"
+                : "bg-[var(--color-master-600)] text-white hover:bg-[var(--color-master-700)]"
+            }`}
+          >
+            {copied ? (
+              <><Check className="h-4 w-4" /><span>¡Copiado!</span></>
+            ) : (
+              <><Copy className="h-4 w-4" /><span>Copiar todo</span></>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg px-4 py-2 text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] transition-colors"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes fade-in {
+          from { opacity: 0; transform: scale(0.95) translateY(10px); }
+          to   { opacity: 1; transform: scale(1)    translateY(0); }
+        }
+        .animate-fade-in { animation: fade-in 0.2s ease-out; }
+      `}</style>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Password Reset Confirmation Modal
 // ─────────────────────────────────────────────────────────────────────────────
 function ResetPasswordModal({
@@ -127,7 +525,7 @@ function ResetPasswordModal({
   tempPassword: string | null;
 }) {
   const [copied, setCopied] = useState(false);
-  const [showPassword, setShowPassword] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
 
   const copyToClipboard = useCallback(async (pwd: string) => {
     try {
@@ -291,8 +689,18 @@ export function UsersAdmin() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [branches, setBranches] = useState<BranchOption[]>([]);
   const [selectedUserId, setSelectedUserId] = useState("");
-  
+
   const [searchQuery, setSearchQuery] = useState("");
+  const [branchFilterId, setBranchFilterId] = useState<string>("");
+  const [tableView, setTableView] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+
+  // Bulk actions (vista tabla)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkWorking, setBulkWorking] = useState(false);
+  const [confirmBulkDeactivate, setConfirmBulkDeactivate] = useState(false);
+  const [confirmBulkReset, setConfirmBulkReset] = useState(false);
+  const [bulkResetResults, setBulkResetResults] = useState<BulkResetResult[] | null>(null);
 
   const [initialLoading, setInitialLoading] = useState(true);
   const [creatingUser, setCreatingUser] = useState(false);
@@ -314,11 +722,25 @@ export function UsersAdmin() {
   const [newUsername, setNewUsername] = useState("");
   const [savingUsername, setSavingUsername] = useState(false);
 
+  // Full name editing
+  const [editingFullName, setEditingFullName] = useState(false);
+  const [newFullName, setNewFullName] = useState("");
+  const [savingFullName, setSavingFullName] = useState(false);
+
+  // Email editing
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [savingEmail, setSavingEmail] = useState(false);
+
+  // Global role editing
+  const [confirmGlobalRoleChange, setConfirmGlobalRoleChange] = useState<"promote" | "demote" | null>(null);
+  const [savingGlobalRole, setSavingGlobalRole] = useState(false);
+
   // Inline confirmations (replaces confirm() dialogs)
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
   const [confirmRemoveMembershipId, setConfirmRemoveMembershipId] = useState<string | null>(null);
 
-  const [createForm, setCreateForm] = useState({
+  const [createForm, setCreateForm] = useState<CreateFormState>({
     username: "",
     fullName: "",
     email: "",
@@ -354,17 +776,52 @@ export function UsersAdmin() {
     [isRoleAvailable],
   );
 
-  // Filter users by search query
+  // Filter users by search query + active membership in selected branch (AND lógico)
   const filteredUsers = useMemo(() => {
-    if (!searchQuery.trim()) return users;
     const q = searchQuery.toLowerCase().trim();
-    return users.filter(
-      (u) =>
+    return users.filter((u) => {
+      if (branchFilterId && !u.userBranchRoles.some((m) => m.branchId === branchFilterId && m.isActive)) {
+        return false;
+      }
+      if (!q) return true;
+      return (
         u.username.toLowerCase().includes(q) ||
         u.fullName.toLowerCase().includes(q) ||
         u.email.toLowerCase().includes(q)
-    );
-  }, [users, searchQuery]);
+      );
+    });
+  }, [users, searchQuery, branchFilterId]);
+
+  const hasListFilters = Boolean(searchQuery.trim() || branchFilterId);
+
+  // KPIs derivados de `users` ya cargado — sin llamadas extra a la API
+  const kpis = useMemo(
+    () => ({
+      total: users.length,
+      active: users.filter((u) => u.isActive).length,
+      withoutMemberships: users.filter((u) => u.userBranchRoles.length === 0 && !u.globalRole).length,
+      pendingPasswordChange: users.filter((u) => u.mustChangePassword).length,
+    }),
+    [users],
+  );
+
+  const allFilteredSelected = filteredUsers.length > 0 && filteredUsers.every((u) => selectedIds.has(u.id));
+
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds(allFilteredSelected ? new Set() : new Set(filteredUsers.map((u) => u.id)));
+  }, [allFilteredSelected, filteredUsers]);
 
   async function load() {
 
@@ -421,6 +878,15 @@ export function UsersAdmin() {
       .finally(() => setInitialLoading(false));
   }, []);
 
+  // Al cambiar de usuario seleccionado, descartar ediciones/confirmaciones en curso
+  useEffect(() => {
+    setEditingUsername(false);
+    setEditingFullName(false);
+    setEditingEmail(false);
+    setConfirmGlobalRoleChange(null);
+    setConfirmDeactivate(false);
+  }, [selectedUserId]);
+
   /* Feedback now handled by react-hot-toast */
 
   async function createUser(event: React.FormEvent) {
@@ -468,6 +934,7 @@ export function UsersAdmin() {
 
       const tempPwd = data?.tempPassword ?? "";
       setCreateForm((prev) => ({ username: "", fullName: "", email: "", globalRole: "", branchId: prev.branchId, rolePreset: "SALES" }));
+      setCreateModalOpen(false);
       await load();
       toast.success(
         tempPwd
@@ -559,6 +1026,138 @@ export function UsersAdmin() {
     }
   }
 
+  async function handleSaveFullName() {
+    if (!selectedUser) return;
+    const trimmed = newFullName.trim();
+    if (trimmed.length < 2) { toast.error("El nombre completo debe tener al menos 2 caracteres."); return; }
+    if (trimmed === selectedUser.fullName) { setEditingFullName(false); return; }
+    setSavingFullName(true);
+    try {
+      const response = await apiFetch(`/api/master/users/${selectedUser.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fullName: trimmed }),
+      });
+      const json = (await response.json()) as { message?: string; reason?: string; error?: string };
+      if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo cambiar el nombre completo."));
+      await load();
+      toast.success("✅ Nombre completo actualizado.");
+      setEditingFullName(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo cambiar el nombre completo.");
+    } finally {
+      setSavingFullName(false);
+    }
+  }
+
+  async function handleSaveEmail() {
+    if (!selectedUser) return;
+    const trimmed = newEmail.trim().toLowerCase();
+    // El backend exige correo único no vacío (updateUserSchema); no se puede vaciar una vez asignado
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) { toast.error("Ingresa un correo con formato válido."); return; }
+    if (trimmed === selectedUser.email) { setEditingEmail(false); return; }
+    setSavingEmail(true);
+    try {
+      const response = await apiFetch(`/api/master/users/${selectedUser.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trimmed }),
+      });
+      const json = (await response.json()) as { message?: string; reason?: string; error?: string };
+      if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo cambiar el correo."));
+      await load();
+      toast.success("✅ Correo actualizado.");
+      setEditingEmail(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo cambiar el correo.");
+    } finally {
+      setSavingEmail(false);
+    }
+  }
+
+  async function handleSetGlobalRole(user: UserRow, globalRole: "MASTER" | null) {
+    setSavingGlobalRole(true);
+    try {
+      const response = await apiFetch(`/api/master/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ globalRole }),
+      });
+      const json = (await response.json()) as { message?: string; reason?: string; error?: string };
+      if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo actualizar el rol global."));
+      await load();
+      toast.success("✅ Rol global actualizado.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo actualizar el rol global.");
+    } finally {
+      setSavingGlobalRole(false);
+      setConfirmGlobalRoleChange(null);
+    }
+  }
+
+  async function bulkDeactivate() {
+    const targets = users.filter((u) => selectedIds.has(u.id) && u.isActive);
+    if (targets.length === 0) {
+      toast("No hay usuarios activos en la selección.");
+      setConfirmBulkDeactivate(false);
+      return;
+    }
+    setBulkWorking(true);
+    let okCount = 0;
+    const failures: string[] = [];
+    // Mismo endpoint que la desactivación individual — conserva la auditoría por usuario
+    for (const user of targets) {
+      try {
+        const response = await apiFetch(`/api/master/users/${user.id}`, { method: "DELETE" });
+        const json = (await response.json()) as { message?: string; reason?: string; error?: string };
+        if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo desactivar."));
+        okCount += 1;
+      } catch (error) {
+        failures.push(`@${user.username}: ${error instanceof Error ? error.message : "error desconocido"}`);
+      }
+    }
+    await load().catch(() => undefined);
+    setSelectedIds(new Set());
+    setConfirmBulkDeactivate(false);
+    setBulkWorking(false);
+    if (okCount > 0) {
+      toast.success(`✅ ${okCount} usuario${okCount !== 1 ? "s" : ""} desactivado${okCount !== 1 ? "s" : ""}. Sus roles se conservan.`);
+    }
+    failures.forEach((message) => toast.error(message));
+  }
+
+  async function bulkResetPasswords() {
+    const targets = users.filter((u) => selectedIds.has(u.id));
+    if (targets.length === 0) {
+      setConfirmBulkReset(false);
+      return;
+    }
+    setBulkWorking(true);
+    const results: BulkResetResult[] = [];
+    const failures: string[] = [];
+    // Mismo endpoint que el reset individual — conserva la auditoría por usuario
+    for (const user of targets) {
+      try {
+        const response = await apiFetch(`/api/master/users/${user.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: "reset" }),
+        });
+        const json = (await response.json()) as { data?: { tempPassword?: string }; message?: string; reason?: string; error?: string };
+        if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo resetear la contraseña."));
+        results.push({ username: user.username, fullName: user.fullName, tempPassword: json.data?.tempPassword ?? "—" });
+      } catch (error) {
+        failures.push(`@${user.username}: ${error instanceof Error ? error.message : "error desconocido"}`);
+      }
+    }
+    await load().catch(() => undefined);
+    setSelectedIds(new Set());
+    setConfirmBulkReset(false);
+    setBulkWorking(false);
+    if (results.length > 0) setBulkResetResults(results);
+    failures.forEach((message) => toast.error(message));
+  }
+
   async function deactivateUser(user: UserRow) {
     setDeletingUser(true);
     toast("Desactivando usuario...");
@@ -577,34 +1176,6 @@ export function UsersAdmin() {
       setDeletingUser(false);
     }
   }
-
-  async function addMembership(event: React.FormEvent) {
-    event.preventDefault();
-    if (!selectedUser) return;
-
-    setAssigningMembership(true);
-    toast("Asignando membresía...");
-
-    try {
-      const response = await apiFetch(`/api/master/users/${selectedUser.id}/memberships`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(membershipForm),
-      });
-      const json = (await response.json()) as { message?: string; reason?: string; error?: string };
-
-      if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo asignar la membresía."));
-
-      await load();
-      toast.success("✅ Membresía asignada correctamente.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo asignar la membresía.");
-    } finally {
-      setAssigningMembership(false);
-    }
-  }
-
-  void addMembership;
 
   async function addMembershipPreset(event: React.FormEvent) {
     event.preventDefault();
@@ -679,153 +1250,105 @@ export function UsersAdmin() {
 
   return (
     <section className="space-y-4" data-testid="users-admin-root">
-      {/* ── Create User Card ── */}
+      {/* ── Resumen + Nuevo usuario ── */}
       <div className="hm-module-card">
         <div className="hm-module-card-header">
           <div className="flex items-center gap-2">
-            <UserPlus className="h-3.5 w-3.5 text-[var(--color-info-600)]" />
-            <span className="font-semibold text-sm text-[var(--color-text)]">Crear usuario</span>
+            <UserRoundCheck className="h-3.5 w-3.5 text-[var(--color-info-600)]" />
+            <span className="font-semibold text-sm text-[var(--color-text)]">Resumen de personal</span>
           </div>
-          <span className="text-xs text-[var(--color-text-muted)] hidden sm:block">
-            La contraseña temporal se genera automáticamente y se mostrará al crear.
-          </span>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={initialLoading}
+            onClick={() => setCreateModalOpen(true)}
+            icon={<UserPlus className="h-4 w-4" />}
+          >
+            Nuevo usuario
+          </Button>
         </div>
-        <div className="p-4">
-          <form className="space-y-3" onSubmit={createUser}>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <label className="grid gap-1">
-                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Usuario *</span>
-                <input
-                  className="hm-input rounded-lg text-sm"
-                  placeholder="ej. jperez"
-                  value={createForm.username}
-                  onChange={(e) => setCreateForm((prev) => ({ ...prev, username: e.target.value }))}
-                  required minLength={3} autoComplete="off"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Nombre completo *</span>
-                <input
-                  className="hm-input rounded-lg text-sm"
-                  placeholder="Juan Pérez"
-                  value={createForm.fullName}
-                  onChange={(e) => setCreateForm((prev) => ({ ...prev, fullName: e.target.value }))}
-                  required minLength={2}
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Correo</span>
-                <input
-                  className="hm-input rounded-lg text-sm"
-                  placeholder="opcional"
-                  type="email"
-                  value={createForm.email}
-                  onChange={(e) => setCreateForm((prev) => ({ ...prev, email: e.target.value }))}
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Rol global</span>
-                <select
-                  className="hm-input rounded-lg text-sm"
-                  value={createForm.globalRole}
-                  onChange={(e) => setCreateForm((prev) => ({ ...prev, globalRole: e.target.value }))}
-                >
-                  <option value="">Sin rol global</option>
-                  <option value="MASTER">MASTER</option>
-                </select>
-              </label>
-            </div>
-
-            {createForm.globalRole !== "MASTER" ? (
-              <div className="space-y-2">
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <label className="grid gap-1">
-                    <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Sucursal inicial *</span>
-                    <select
-                      className="hm-input rounded-lg text-sm"
-                      value={createForm.branchId}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, branchId: e.target.value }))}
-                      required disabled={branches.length === 0}
-                    >
-                      {branches.length === 0 && <option value="">No hay sucursales disponibles</option>}
-                      {branches.map((branch) => (
-                        <option key={branch.id} value={branch.id} disabled={!branch.isActive}>
-                          {branch.code} · {branch.name}{branch.isActive ? "" : " (Inactiva)"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Tipo de usuario *</span>
-                    <select
-                      className="hm-input rounded-lg text-sm"
-                      value={createForm.rolePreset}
-                      onChange={(e) => setCreateForm((prev) => ({ ...prev, rolePreset: e.target.value as UserRolePreset }))}
-                    >
-                      {USER_ROLE_PRESETS.map((preset) => (
-                        <option key={preset.value} value={preset.value} disabled={!arePresetRolesAvailable(selectedCreateBranch, preset)}>
-                          {preset.label}{arePresetRolesAvailable(selectedCreateBranch, preset) ? "" : " (No disponible)"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2.5 text-xs text-[var(--color-text-secondary)]">
-                  {selectedCreatePreset.description}
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {selectedCreatePreset.roles.map((role) => (
-                      <span
-                        key={role}
-                        className={`inline-flex rounded-full px-2 py-0.5 text-[0.5625rem] font-semibold border ${
-                          isRoleAvailable(selectedCreateBranch, role)
-                            ? "bg-[var(--color-info-50)] text-[var(--color-info-700)] border-[var(--color-info-200)]"
-                            : "bg-[var(--color-warning-50)] text-[var(--color-warning-700)] border-[var(--color-warning-200)]"
-                        }`}
-                      >
-                        {ROLE_LABEL[role]}{isRoleAvailable(selectedCreateBranch, role) ? "" : " · deshabilitado"}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
-                MASTER es un rol global. Si también necesita operar en una sucursal concreta, podrás agregarle membresías desde el panel de edición.
-              </div>
-            )}
-
-            <div className="flex items-center justify-end">
-              <Button
-                type="submit"
-                loading={creatingUser}
-                disabled={initialLoading || (createForm.globalRole !== "MASTER" && !arePresetRolesAvailable(selectedCreateBranch, selectedCreatePreset))}
-                icon={<UserPlus className="h-4 w-4" />}
-              >
-                Crear usuario
-              </Button>
-            </div>
-          </form>
+        {/* Franja de KPIs — al hacerse clicables, cada chip aplicaría su filtro rápido correspondiente */}
+        <div className="flex flex-wrap gap-2 px-4 py-3">
+          <div className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm">
+            <span className="font-bold text-[var(--color-text)]">{kpis.total}</span>{" "}
+            <span className="text-xs text-[var(--color-text-muted)]">usuarios en total</span>
+          </div>
+          <div className="rounded-lg border border-[var(--color-success-200)] px-3 py-1.5 text-sm">
+            <span className="font-bold text-[var(--color-success-700)]">{kpis.active}</span>{" "}
+            <span className="text-xs text-[var(--color-text-muted)]">activos</span>
+          </div>
+          <div className="rounded-lg border border-[var(--color-danger-200)] px-3 py-1.5 text-sm">
+            <span className="font-bold text-[var(--color-danger-600)]">{kpis.withoutMemberships}</span>{" "}
+            <span className="text-xs text-[var(--color-text-muted)]">sin membresías</span>
+          </div>
+          <div className="rounded-lg border border-[var(--color-warning-200)] px-3 py-1.5 text-sm">
+            <span className="font-bold text-[var(--color-warning-700)]">{kpis.pendingPasswordChange}</span>{" "}
+            <span className="text-xs text-[var(--color-text-muted)]">pendientes de cambio de clave</span>
+          </div>
         </div>
       </div>
+
+      <CreateUserModal
+        open={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        form={createForm}
+        setForm={setCreateForm}
+        branches={branches}
+        creating={creatingUser}
+        onSubmit={createUser}
+        selectedBranch={selectedCreateBranch}
+        selectedPreset={selectedCreatePreset}
+        isRoleAvailable={isRoleAvailable}
+        arePresetRolesAvailable={arePresetRolesAvailable}
+      />
+
+      {bulkResetResults && (
+        <BulkResetResultModal results={bulkResetResults} onClose={() => setBulkResetResults(null)} />
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1.35fr]">
         {/* ── Users List ── */}
         <div className="hm-module-card">
           <div className="hm-module-card-header">
             <span className="font-semibold text-sm text-[var(--color-text)]">
-              Usuarios{!initialLoading && ` (${filteredUsers.length}${searchQuery ? ` de ${users.length}` : ""})`}
+              Usuarios{!initialLoading && ` (${filteredUsers.length}${hasListFilters ? ` de ${users.length}` : ""})`}
             </span>
           </div>
           <div className="p-3 space-y-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--color-text-soft)]" />
-              <input
-                type="text"
-                placeholder="Buscar por usuario, nombre o correo..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="hm-input w-full rounded-lg pl-8 text-sm"
-              />
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[180px] flex-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--color-text-soft)]" />
+                <input
+                  type="text"
+                  placeholder="Buscar por usuario, nombre o correo..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="hm-input w-full rounded-lg pl-8 text-sm"
+                />
+              </div>
+              <select
+                className="hm-input rounded-lg text-sm"
+                value={branchFilterId}
+                onChange={(e) => setBranchFilterId(e.target.value)}
+                aria-label="Filtrar por sucursal"
+              >
+                <option value="">Todas las sucursales</option>
+                {branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.code} · {branch.name}{branch.isActive ? "" : " (Inactiva)"}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                variant={tableView ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setTableView((v) => !v)}
+                icon={tableView ? <LayoutList className="h-4 w-4" /> : <Table2 className="h-4 w-4" />}
+                title={tableView ? "Cambiar a vista de tarjetas" : "Cambiar a vista de tabla"}
+              >
+                Tabla
+              </Button>
             </div>
 
             {initialLoading ? (
@@ -833,11 +1356,136 @@ export function UsersAdmin() {
                 <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2 text-[var(--color-info-500)]" />
                 Cargando usuarios...
               </div>
+            ) : tableView ? (
+              <div className="space-y-2">
+                {selectedIds.size > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3 py-2 text-sm">
+                    {confirmBulkDeactivate ? (
+                      <>
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0 text-[var(--color-danger-700)]" />
+                        <span className="text-[var(--color-danger-700)]">
+                          ¿Desactivar <strong>{selectedIds.size}</strong> usuario{selectedIds.size !== 1 ? "s" : ""}? Se cierran sus sesiones; sus roles se conservan.
+                        </span>
+                        <Button variant="danger" size="sm" loading={bulkWorking} onClick={bulkDeactivate}>Confirmar</Button>
+                        <Button variant="ghost" size="sm" disabled={bulkWorking} onClick={() => setConfirmBulkDeactivate(false)}>Cancelar</Button>
+                      </>
+                    ) : confirmBulkReset ? (
+                      <>
+                        <KeyRound className="h-4 w-4 flex-shrink-0 text-[var(--color-warning-700)]" />
+                        <span className="text-[var(--color-warning-700)]">
+                          ¿Resetear la clave de <strong>{selectedIds.size}</strong> usuario{selectedIds.size !== 1 ? "s" : ""}? Se generarán contraseñas temporales nuevas.
+                        </span>
+                        <Button variant="secondary" size="sm" loading={bulkWorking} onClick={bulkResetPasswords}>Confirmar</Button>
+                        <Button variant="ghost" size="sm" disabled={bulkWorking} onClick={() => setConfirmBulkReset(false)}>Cancelar</Button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="font-semibold text-[var(--color-info-700)]">
+                          {selectedIds.size} seleccionado{selectedIds.size !== 1 ? "s" : ""}
+                        </span>
+                        <Button variant="danger" size="sm" onClick={() => setConfirmBulkDeactivate(true)}>
+                          Desactivar seleccionados ({selectedIds.size})
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={() => setConfirmBulkReset(true)}>
+                          Resetear clave a seleccionados ({selectedIds.size})
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Limpiar</Button>
+                      </>
+                    )}
+                  </div>
+                )}
+                <div className="max-h-[32rem] overflow-auto rounded-xl border border-[var(--color-border)]">
+                  <table className="hm-table w-full">
+                    <thead>
+                      <tr>
+                        <th className="w-8">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={toggleSelectAll}
+                            aria-label="Seleccionar todos los usuarios visibles"
+                          />
+                        </th>
+                        <th className="text-left">Usuario</th>
+                        <th className="text-left">Sucursal(es)</th>
+                        <th className="text-left">Rol(es)</th>
+                        <th className="text-left">Estado</th>
+                        <th className="text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-6 text-center text-sm text-[var(--color-text-muted)]">
+                            {hasListFilters ? "Sin resultados para ese filtro." : "No hay usuarios registrados."}
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredUsers.map((user) => {
+                          const branchCodes = Array.from(new Set(user.userBranchRoles.map((m) => m.branch.code)));
+                          const roleLabels = Array.from(new Set([
+                            ...(user.globalRole ? [user.globalRole] : []),
+                            ...user.userBranchRoles.map((m) => ROLE_LABEL[m.roleCode] ?? m.roleCode),
+                          ]));
+                          return (
+                            <tr
+                              key={user.id}
+                              className={`cursor-pointer ${selectedUserId === user.id ? "bg-[var(--color-info-50)]" : ""}`}
+                              onClick={() => setSelectedUserId(user.id)}
+                            >
+                              <td onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.has(user.id)}
+                                  onChange={() => toggleSelected(user.id)}
+                                  aria-label={`Seleccionar a ${user.username}`}
+                                />
+                              </td>
+                              <td>
+                                <span className="font-semibold text-[var(--color-text)]">{user.username}</span>
+                                <span className="block text-[0.6875rem] text-[var(--color-text-muted)]">{user.fullName}</span>
+                              </td>
+                              <td className="text-xs">
+                                {branchCodes.length === 0
+                                  ? "—"
+                                  : branchCodes.length === 1
+                                    ? branchCodes[0]
+                                    : `${branchCodes[0]} · +${branchCodes.length - 1}`}
+                              </td>
+                              <td className="text-xs">
+                                {roleLabels.length === 0
+                                  ? "—"
+                                  : roleLabels.length === 1
+                                    ? roleLabels[0]
+                                    : `${roleLabels[0]} · +${roleLabels.length - 1}`}
+                              </td>
+                              <td>
+                                <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[0.5rem] font-bold ${
+                                  user.isActive
+                                    ? "bg-[var(--color-success-100)] text-[var(--color-success-700)]"
+                                    : "bg-[var(--color-warning-100)] text-[var(--color-warning-700)]"
+                                }`}>
+                                  {user.isActive ? "Activo" : "Inactivo"}
+                                </span>
+                              </td>
+                              <td className="text-right">
+                                <Button variant="ghost" size="sm" onClick={() => setSelectedUserId(user.id)}>
+                                  Ver
+                                </Button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             ) : (
               <ul className="max-h-[32rem] space-y-1.5 overflow-y-auto pr-0.5">
                 {filteredUsers.length === 0 && (
                   <li className="rounded-lg border border-dashed border-[var(--color-border)] p-4 text-sm text-center text-[var(--color-text-muted)]">
-                    {searchQuery ? "Sin resultados para ese filtro." : "No hay usuarios registrados."}
+                    {hasListFilters ? "Sin resultados para ese filtro." : "No hay usuarios registrados."}
                   </li>
                 )}
                 {filteredUsers.map((user) => {
@@ -937,13 +1585,109 @@ export function UsersAdmin() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Nombre</span>
-                  <span className="text-[var(--color-text)]">{selectedUser.fullName}</span>
+                  {editingFullName ? (
+                    <div className="flex items-center gap-1 flex-1">
+                      <input
+                        className="hm-input h-7 text-sm flex-1 max-w-[200px] rounded-lg"
+                        value={newFullName}
+                        onChange={(e) => setNewFullName(e.target.value)}
+                        placeholder="nombre completo..."
+                        disabled={savingFullName}
+                      />
+                      <Button variant="success" size="sm" onClick={handleSaveFullName} loading={savingFullName} disabled={!newFullName.trim()} icon={<Save className="h-3 w-3" />}>
+                        Guardar
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setEditingFullName(false)} disabled={savingFullName} icon={<X className="h-3 w-3" />}>
+                        Cancelar
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <span className="text-[var(--color-text)]">{selectedUser.fullName}</span>
+                      <button
+                        type="button"
+                        className="hm-icon-btn h-5 w-5"
+                        title="Cambiar nombre completo"
+                        onClick={() => { setNewFullName(selectedUser.fullName); setEditingFullName(true); }}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-1.5 sm:col-span-2">
+                <div className="flex items-center gap-1.5 flex-wrap sm:col-span-2">
                   <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Correo</span>
-                  <span className="text-[var(--color-text)]">{selectedUser.email || "—"}</span>
+                  {editingEmail ? (
+                    <div className="flex items-center gap-1 flex-1">
+                      <input
+                        className="hm-input h-7 text-sm flex-1 max-w-[240px] rounded-lg"
+                        type="email"
+                        value={newEmail}
+                        onChange={(e) => setNewEmail(e.target.value.toLowerCase())}
+                        placeholder="correo@ejemplo.com"
+                        disabled={savingEmail}
+                      />
+                      <Button variant="success" size="sm" onClick={handleSaveEmail} loading={savingEmail} disabled={!newEmail.trim()} icon={<Save className="h-3 w-3" />}>
+                        Guardar
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setEditingEmail(false)} disabled={savingEmail} icon={<X className="h-3 w-3" />}>
+                        Cancelar
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <span className="text-[var(--color-text)]">{selectedUser.email || "—"}</span>
+                      <button
+                        type="button"
+                        className="hm-icon-btn h-5 w-5"
+                        title="Cambiar correo"
+                        onClick={() => { setNewEmail(selectedUser.email); setEditingEmail(true); }}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap sm:col-span-2">
+                  <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Rol global</span>
+                  {selectedUser.globalRole === "MASTER" ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-warning-100)] px-2 py-0.5 text-[0.625rem] font-bold text-[var(--color-warning-700)]">
+                      <ShieldCheck className="h-3 w-3" /> MASTER
+                    </span>
+                  ) : (
+                    <span className="text-[var(--color-text-muted)]">Sin rol global</span>
+                  )}
+                  {confirmGlobalRoleChange ? (
+                    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-2 py-1 text-xs text-[var(--color-warning-700)]">
+                      <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                      <span>
+                        {confirmGlobalRoleChange === "promote"
+                          ? <>¿Dar rol global <strong>MASTER</strong> a @{selectedUser.username}? Tendrá control total del sistema.</>
+                          : <>¿Quitar el rol global <strong>MASTER</strong> a @{selectedUser.username}?</>}
+                      </span>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        loading={savingGlobalRole}
+                        onClick={() => handleSetGlobalRole(selectedUser, confirmGlobalRoleChange === "promote" ? "MASTER" : null)}
+                      >
+                        Confirmar
+                      </Button>
+                      <Button variant="ghost" size="sm" disabled={savingGlobalRole} onClick={() => setConfirmGlobalRoleChange(null)}>
+                        Cancelar
+                      </Button>
+                    </div>
+                  ) : selectedUser.globalRole === "MASTER" ? (
+                    <Button variant="secondary" size="sm" onClick={() => setConfirmGlobalRoleChange("demote")}>
+                      Quitar rol global
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" size="sm" onClick={() => setConfirmGlobalRoleChange("promote")}>
+                      Hacer MASTER
+                    </Button>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5 sm:col-span-2">
                   <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Clave</span>
@@ -951,6 +1695,10 @@ export function UsersAdmin() {
                     ? <span className="text-[var(--color-warning-700)]">Pendiente de cambio al próximo login</span>
                     : <span className="text-[var(--color-success-700)]">Configurada por el usuario</span>
                   }
+                </div>
+                {/* TODO: "Último acceso" requiere agregar lastLoginAt al modelo User en hammer-api/prisma/schema.prisma y poblarlo en el login flow */}
+                <div className="sm:col-span-2 text-[0.6875rem] text-[var(--color-text-soft)]">
+                  Creado el {fmtDate(selectedUser.createdAt)}
                 </div>
               </div>
 
@@ -1020,23 +1768,11 @@ export function UsersAdmin() {
                       Asignar perfil
                     </Button>
                   </form>
-                  <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2.5 text-xs text-[var(--color-text-secondary)]">
-                    {selectedMembershipPreset.description}
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {selectedMembershipPreset.roles.map((role) => (
-                        <span
-                          key={role}
-                          className={`inline-flex rounded-full px-2 py-0.5 text-[0.5625rem] font-semibold border ${
-                            isRoleAvailable(selectedMembershipBranch, role)
-                              ? "bg-[var(--color-info-50)] text-[var(--color-info-700)] border-[var(--color-info-200)]"
-                              : "bg-[var(--color-warning-50)] text-[var(--color-warning-700)] border-[var(--color-warning-200)]"
-                          }`}
-                        >
-                          {ROLE_LABEL[role]}{isRoleAvailable(selectedMembershipBranch, role) ? "" : " · deshabilitado"}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                  <RolePresetPicker
+                    preset={selectedMembershipPreset}
+                    branch={selectedMembershipBranch}
+                    isRoleAvailable={isRoleAvailable}
+                  />
                 </div>
               </div>
 
