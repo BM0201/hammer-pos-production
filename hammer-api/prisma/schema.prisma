@@ -577,6 +577,7 @@ model CashMovement {
   createdBy            User                   @relation("CashMovementCreatedBy", fields: [createdByUserId], references: [id])
   approvedBy           User?                  @relation("CashMovementApprovedBy", fields: [approvedByUserId], references: [id])
   payrollDisbursements PayrollDisbursement[]
+  operatingExpense     OperatingExpense?
 
   @@index([cashSessionId, createdAt])
   @@index([type])
@@ -1868,14 +1869,17 @@ model OperatingExpense {
   createdByUserId  String?
   employeeId       String? /// Link to Employee when category=PAYROLL
   isAutoCalculated Boolean         @default(false) /// True for auto-generated payroll expenses
+  cashMovementId   String?         @unique /// Link to the CashMovement (EXPENSE_OUT) generated when the expense is actually paid from cash
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
-  branch   Branch    @relation(fields: [branchId], references: [id])
-  employee Employee? @relation(fields: [employeeId], references: [id])
+  branch       Branch        @relation(fields: [branchId], references: [id])
+  employee     Employee?     @relation(fields: [employeeId], references: [id])
+  cashMovement CashMovement? @relation(fields: [cashMovementId], references: [id])
 
   @@index([branchId, isActive])
   @@index([category])
+  @@index([cashMovementId])
 }
 
 /// Pricing configuration per branch (margin, proration, estimated units)

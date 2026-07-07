@@ -141,7 +141,12 @@ export async function POST(req: NextRequest) {
 
     requireBranchCapability(session, parsed.data.branchId, CAPABILITIES.OPERATING_EXPENSE_CREATE);
 
-    const expense = await createOperatingExpense(parsed.data, session.userId);
+    // Un "gasto del local" es dinero realmente desembolsado hoy: además del registro
+    // de gasto, genera el egreso de caja correspondiente para que cuente como gasto
+    // real pagado y mueva el % ejecutado del presupuesto.
+    const expense = await createOperatingExpense(parsed.data, session.userId, {
+      registerCashMovement: true,
+    });
     return created(expense);
   } catch (error) {
     return toApiErrorResponse(error);

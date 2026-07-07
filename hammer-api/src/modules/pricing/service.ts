@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { CashMovementType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { calculatePricingSuggestion, calculateSuggestedPrice, type PricingSuggestionInput, type SuggestedPriceResult } from "./calculator";
@@ -6,42 +6,109 @@ import type { ApplyPricingInput, CreateExpenseInput, UpdateExpenseInput, UpsertP
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
+import { getActiveCashSession, syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
 
 /* ══════════════════════════════════════════════════════
  *  OPERATING EXPENSES
  * ══════════════════════════════════════════════════════ */
 
+export type CreateOperatingExpenseOptions = {
+  /**
+   * Cuando es true, además de registrar el gasto se genera automáticamente un
+   * CashMovement (EXPENSE_OUT) en la caja abierta de la sucursal y se enlaza al
+   * gasto. Así el gasto cuenta como "gasto real pagado" y mueve el % ejecutado
+   * del presupuesto (antes el gasto solo alimentaba el presupuesto y jamás se
+   * reflejaba como egreso real). Si no hay caja abierta, el gasto se crea igual
+   * pero sin egreso de caja (cashApplied=false, reason=NO_OPEN_SESSION).
+   */
+  registerCashMovement?: boolean;
+};
+
+export type CreateOperatingExpenseResult = Prisma.OperatingExpenseGetPayload<{}> & {
+  cashApplied: boolean;
+  cashReason?: string;
+};
+
 export async function createOperatingExpense(
   input: CreateExpenseInput,
   actorUserId: string,
-) {
-  const expense = await prisma.operatingExpense.create({
-    data: {
-      branchId: input.branchId,
-      category: input.category as any,
-      description: input.description,
-      amount: new Prisma.Decimal(input.amount),
-      effectiveFrom: input.effectiveFrom ? new Date(input.effectiveFrom) : new Date(),
-      effectiveTo: input.effectiveTo ? new Date(input.effectiveTo) : null,
-      createdByUserId: actorUserId,
-    },
+  options: CreateOperatingExpenseOptions = {},
+): Promise<CreateOperatingExpenseResult> {
+  const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
+  const effectiveTo = input.effectiveTo ? new Date(input.effectiveTo) : null;
+
+  const baseData = {
+    branchId: input.branchId,
+    category: input.category as any,
+    description: input.description,
+    amount: new Prisma.Decimal(input.amount),
+    effectiveFrom,
+    effectiveTo,
+    createdByUserId: actorUserId,
+  };
+
+  // Camino simple (presupuesto): sin egreso de caja.
+  if (!options.registerCashMovement) {
+    const expense = await prisma.operatingExpense.create({ data: baseData });
+    await auditExpenseCreated(actorUserId, input, expense.id, false);
+    return { ...expense, cashApplied: false };
+  }
+
+  // Camino con egreso real: intenta descontar de la caja abierta de la sucursal.
+  const activeSession = await getActiveCashSession({ branchId: input.branchId });
+  if (!activeSession) {
+    const expense = await prisma.operatingExpense.create({ data: baseData });
+    await auditExpenseCreated(actorUserId, input, expense.id, false);
+    return { ...expense, cashApplied: false, cashReason: "NO_OPEN_SESSION" };
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const movement = await tx.cashMovement.create({
+      data: {
+        cashSessionId: activeSession.id,
+        type: CashMovementType.EXPENSE_OUT,
+        amount: new Prisma.Decimal(input.amount),
+        reason: input.description,
+        createdByUserId: actorUserId,
+      },
+    });
+
+    const expense = await tx.operatingExpense.create({
+      data: { ...baseData, cashMovementId: movement.id },
+    });
+
+    // Recalcula el efectivo esperado de la sesión tras el egreso.
+    await syncCashSessionSnapshotTx(tx, activeSession.id);
+
+    return { expense, movementId: movement.id };
   });
 
+  await auditExpenseCreated(actorUserId, input, result.expense.id, true, result.movementId);
+  return { ...result.expense, cashApplied: true };
+}
+
+async function auditExpenseCreated(
+  actorUserId: string,
+  input: CreateExpenseInput,
+  expenseId: string,
+  cashApplied: boolean,
+  cashMovementId?: string,
+) {
   await logAuditEvent({
     actorUserId,
     branchId: input.branchId,
     module: "expenses",
     action: "EXPENSE_CREATED",
     entityType: "OperatingExpense",
-    entityId: expense.id,
+    entityId: expenseId,
     metadataJson: {
       category: input.category,
       description: input.description,
       amount: input.amount,
+      cashApplied,
+      ...(cashMovementId ? { cashMovementId } : {}),
     },
   });
-
-  return expense;
 }
 
 export async function updateOperatingExpense(
