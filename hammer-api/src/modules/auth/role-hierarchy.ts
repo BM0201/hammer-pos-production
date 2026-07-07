@@ -14,6 +14,9 @@ import { isOwnerRole, isSystemAdminRole, isMasterOrAbove } from "@/modules/rbac/
 
 /** Nivel numérico de privilegio de un rol global (mayor = más privilegiado). */
 const ROLE_LEVEL: Record<string, number> = {
+  // Contador: rol global de baja jerarquía (solo-contabilidad). Cualquier
+  // Master+ puede asignarlo/gestionarlo; el Contador no puede asignar roles.
+  ACCOUNTANT:   5,
   MASTER:       10,
   OWNER:        20,
   SYSTEM_ADMIN: 30,

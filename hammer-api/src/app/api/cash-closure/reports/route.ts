@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import { assertMaster } from "@/modules/security/rbac-helpers";
+import { assertFinanceAccess } from "@/modules/security/rbac-helpers";
 import { getClosureReports } from "@/modules/cash-closure/service";
 import { fail, ok } from "@/lib/api/response";
 
@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
 
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const branchId = request.nextUrl.searchParams.get("branchId") ?? undefined;
     const startDate = request.nextUrl.searchParams.get("startDate") ?? undefined;

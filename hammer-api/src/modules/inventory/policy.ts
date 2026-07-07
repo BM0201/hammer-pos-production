@@ -32,6 +32,7 @@ const roleAllowedMovements: Record<RoleCode, InventoryMovementType[]> = {
   WAREHOUSE: ["RETURN_IN", "RETURN_OUT", "TRANSFER_OUT", "TRANSFER_IN"],
   CASHIER: [],
   SALES: [],
+  ACCOUNTANT: [],
 };
 
 export function canPostMovement(roleCode: RoleCode, movementType: InventoryMovementType): boolean {

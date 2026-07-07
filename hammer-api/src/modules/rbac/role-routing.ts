@@ -22,6 +22,11 @@ export function isMasterRole(roleCode: string, globalRoles?: readonly string[]) 
   return roleCode === "MASTER" || Boolean(globalRoles?.includes("MASTER"));
 }
 
+/** Contador — rol global de solo-contabilidad. */
+export function isAccountantRole(roleCode: string, globalRoles?: readonly string[]) {
+  return roleCode === "ACCOUNTANT" || Boolean(globalRoles?.includes("ACCOUNTANT"));
+}
+
 /** OWNER has at least MASTER-level access */
 export function isMasterOrAbove(roleCode: string, globalRoles?: readonly string[]) {
   return isMasterRole(roleCode, globalRoles) || isOwnerRole(roleCode, globalRoles) || isSystemAdminRole(roleCode, globalRoles);
@@ -31,6 +36,8 @@ export function resolveRoleHome(roleCode: AppRoleCode, globalRoles: readonly str
   if (isSystemAdminRole(roleCode, globalRoles)) return "/app/system-admin";
   if (isOwnerRole(roleCode, globalRoles)) return "/app/owner";
   if (isMasterRole(roleCode, globalRoles)) return "/app/master";
+  // Contador: aterriza directamente en Finanzas & Contabilidad (única área que ve).
+  if (isAccountantRole(roleCode, globalRoles)) return "/app/master/finance";
   if (roleCode === "BRANCH_ADMIN" || roleCode === "SALES") return "/app/branch/sales/orders";
   if (roleCode === "CASHIER") return "/app/branch/cashier/payments";
   if (roleCode === "WAREHOUSE") return "/app/branch/warehouse/dispatch";

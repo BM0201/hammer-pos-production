@@ -51,7 +51,7 @@ type UserRow = {
   email: string;
   fullName: string;
   isActive: boolean;
-  globalRole: "MASTER" | null;
+  globalRole: "MASTER" | "ACCOUNTANT" | null;
   mustChangePassword?: boolean;
   createdAt: string;
   userBranchRoles: MembershipRow[];
@@ -346,11 +346,12 @@ function CreateUserModal({
                 >
                   <option value="">Sin rol global</option>
                   <option value="MASTER">MASTER</option>
+                  <option value="ACCOUNTANT">CONTADOR</option>
                 </select>
               </label>
             </div>
 
-            {form.globalRole !== "MASTER" ? (
+            {form.globalRole !== "MASTER" && form.globalRole !== "ACCOUNTANT" ? (
               <div className="space-y-2">
                 <div className="grid gap-2 sm:grid-cols-2">
                   <label className="grid gap-1">
@@ -388,7 +389,9 @@ function CreateUserModal({
               </div>
             ) : (
               <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)]">
-                MASTER es un rol global. Si también necesita operar en una sucursal concreta, podrás agregarle membresías desde el panel de edición.
+                {form.globalRole === "ACCOUNTANT"
+                  ? "CONTADOR es un rol global de solo contabilidad: podrá ver únicamente el área de Finanzas & Contabilidad (todas las sucursales), sin acceso al resto del sistema. No requiere sucursal."
+                  : "MASTER es un rol global. Si también necesita operar en una sucursal concreta, podrás agregarle membresías desde el panel de edición."}
               </div>
             )}
           </div>
@@ -407,7 +410,7 @@ function CreateUserModal({
               type="submit"
               loading={creating}
               disabled={
-                form.globalRole !== "MASTER" &&
+                form.globalRole !== "MASTER" && form.globalRole !== "ACCOUNTANT" &&
                 (branches.length === 0 || !arePresetRolesAvailable(selectedBranch, selectedPreset))
               }
               icon={<UserPlus className="h-4 w-4" />}
@@ -905,11 +908,12 @@ export function UsersAdmin() {
       toast.error("El nombre completo es obligatorio.");
       return;
     }
-    if (createForm.globalRole !== "MASTER" && !createForm.branchId) {
+    const isGlobalRoleSel = createForm.globalRole === "MASTER" || createForm.globalRole === "ACCOUNTANT";
+    if (!isGlobalRoleSel && !createForm.branchId) {
       toast.error("Selecciona una sucursal para el rol operativo del usuario.");
       return;
     }
-    if (createForm.globalRole !== "MASTER" && !arePresetRolesAvailable(selectedCreateBranch, selectedCreatePreset)) {
+    if (!isGlobalRoleSel && !arePresetRolesAvailable(selectedCreateBranch, selectedCreatePreset)) {
       toast.error("Ese perfil tiene roles deshabilitados en la sucursal seleccionada.");
       return;
     }
@@ -925,8 +929,8 @@ export function UsersAdmin() {
           username: createForm.username.trim().toLowerCase(),
           fullName: createForm.fullName.trim(),
           email: createForm.email.trim() || undefined,
-          globalRole: createForm.globalRole === "MASTER" ? "MASTER" : undefined,
-          memberships: createForm.globalRole === "MASTER"
+          globalRole: isGlobalRoleSel ? createForm.globalRole : undefined,
+          memberships: isGlobalRoleSel
             ? []
             : selectedCreatePreset.roles.map((roleCode) => ({ branchId: createForm.branchId, roleCode })),
         }),
@@ -1659,6 +1663,10 @@ export function UsersAdmin() {
                   {selectedUser.globalRole === "MASTER" ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-warning-100)] px-2 py-0.5 text-[0.625rem] font-bold text-[var(--color-warning-700)]">
                       <ShieldCheck className="h-3 w-3" /> MASTER
+                    </span>
+                  ) : selectedUser.globalRole === "ACCOUNTANT" ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-accountant-100)] px-2 py-0.5 text-[0.625rem] font-bold text-[var(--color-accountant-700)]">
+                      <ShieldCheck className="h-3 w-3" /> CONTADOR
                     </span>
                   ) : (
                     <span className="text-[var(--color-text-muted)]">Sin rol global</span>

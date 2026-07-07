@@ -7,7 +7,8 @@ export type RoleCode =
   | "BRANCH_ADMIN"
   | "SALES"
   | "CASHIER"
-  | "WAREHOUSE";
+  | "WAREHOUSE"
+  | "ACCOUNTANT";
 
 export type BranchMembership = {
   branchId: string;

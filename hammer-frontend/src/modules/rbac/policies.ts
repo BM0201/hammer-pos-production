@@ -296,6 +296,26 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     // ── Documentos (FASE 3) ──
     CAPABILITIES.DOCUMENT_PRINT,
   ],
+  // ─────────────────────────────────────────────────────────────
+  // CONTADOR (ACCOUNTANT) — solo-contabilidad. Mantener en sync con backend.
+  // ─────────────────────────────────────────────────────────────
+  ACCOUNTANT: [
+    CAPABILITIES.FINANCE_VIEW,
+    CAPABILITIES.FINANCE_MANAGE_EXPENSES,
+    CAPABILITIES.FINANCE_VIEW_PAYROLL,
+    CAPABILITIES.FINANCE_MANAGE_PAYROLL,
+    CAPABILITIES.FINANCE_VIEW_PRICING,
+    CAPABILITIES.FINANCE_MANAGE_PRICING,
+    CAPABILITIES.FINANCE_REPORTS_EXPORT,
+    CAPABILITIES.OPERATING_EXPENSE_VIEW,
+    CAPABILITIES.OPERATING_EXPENSE_CREATE,
+    CAPABILITIES.CASH_MOVEMENT_VIEW,
+    CAPABILITIES.PRICING_VIEW,
+    CAPABILITIES.PRICING_EDIT_GLOBAL,
+    CAPABILITIES.REPORTS_EXPORT,
+    CAPABILITIES.SALES_HISTORY_VIEW,
+    CAPABILITIES.MASTER_HISTORY_VIEW,
+  ],
 };
 
 export function can(roleCode: RoleCode, capability: Capability): boolean {
@@ -309,6 +329,7 @@ export function canInBranch(session: CapabilitySession, branchId: string, capabi
   if (session.globalRoles.includes("SYSTEM_ADMIN")) return can("SYSTEM_ADMIN", capability);
   if (session.globalRoles.includes("OWNER")) return can("OWNER", capability);
   if (session.globalRoles.includes("MASTER")) return can("MASTER", capability);
+  if (session.globalRoles.includes("ACCOUNTANT")) return can("ACCOUNTANT", capability);
 
   return session.branchMemberships
     .filter((membership) => membership.branchId === branchId)
@@ -320,6 +341,7 @@ export function canInAnyAssignedBranch(session: CapabilitySession, capability: C
   if (session.globalRoles.includes("SYSTEM_ADMIN")) return can("SYSTEM_ADMIN", capability);
   if (session.globalRoles.includes("OWNER")) return can("OWNER", capability);
   if (session.globalRoles.includes("MASTER")) return can("MASTER", capability);
+  if (session.globalRoles.includes("ACCOUNTANT")) return can("ACCOUNTANT", capability);
 
   return session.branchMemberships.some((membership) => can(membership.roleCode, capability));
 }

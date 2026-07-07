@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { upsertPricingConfigSchema } from "@/modules/pricing/validators";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const { searchParams } = new URL(req.url);
     const branchId = searchParams.get("branchId");
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const body = await req.json();
     const parsed = upsertPricingConfigSchema.parse(body);

@@ -120,6 +120,15 @@
   --color-warehouse-700: #15803D;
   --color-warehouse-800: #166534;
   --color-warehouse-900: #14532D;
+  --color-accountant-50:  #FFFBEB;
+  --color-accountant-100: #FEF3C7;
+  --color-accountant-200: #FDE68A;
+  --color-accountant-400: #FBBF24;
+  --color-accountant-500: #F59E0B;
+  --color-accountant-600: #B45309;
+  --color-accountant-700: #92400E;
+  --color-accountant-800: #78350F;
+  --color-accountant-900: #451A03;
 
   /* ── SEMÁNTICOS ── */
 
@@ -285,6 +294,8 @@
   /* warehouse text anchor #4ADE80 */
   --color-warehouse-50:color-mix(in srgb,#4ADE80 14%,#232120); --color-warehouse-100:color-mix(in srgb,#4ADE80 22%,#232120);
   --color-warehouse-200:color-mix(in srgb,#4ADE80 35%,#232120); --color-warehouse-400:#4ADE80; --color-warehouse-700:#4ADE80;
+  --color-accountant-50:color-mix(in srgb,#FBBF24 14%,#232120); --color-accountant-100:color-mix(in srgb,#FBBF24 22%,#232120);
+  --color-accountant-200:color-mix(in srgb,#FBBF24 35%,#232120); --color-accountant-400:#FBBF24; --color-accountant-600:#FBBF24; --color-accountant-700:#FBBF24;
   /* success text anchor #34D399 */
   --color-success-50:color-mix(in srgb,#34D399 14%,#232120); --color-success-100:color-mix(in srgb,#34D399 22%,#232120);
   --color-success-200:color-mix(in srgb,#34D399 35%,#232120); --color-success-700:#34D399;
@@ -711,6 +722,7 @@ select.hm-input {
 .hm-badge-sales        { background: var(--color-sales-50);        color: var(--color-sales-700);        border: 1px solid var(--color-sales-100); }
 .hm-badge-cashier      { background: var(--color-cashier-50);      color: var(--color-cashier-700);      border: 1px solid var(--color-cashier-100); }
 .hm-badge-warehouse    { background: var(--color-warehouse-50);    color: var(--color-warehouse-700);    border: 1px solid var(--color-warehouse-100); }
+.hm-badge-accountant   { background: var(--color-accountant-50);   color: var(--color-accountant-700);   border: 1px solid var(--color-accountant-100); }
 /* Legacy alias */
 .hm-badge-branch       { background: var(--color-branch-admin-50); color: var(--color-branch-admin-700); border: 1px solid var(--color-branch-admin-100); }
 .hm-badge-neutral { background: var(--color-surface-alt); color: var(--color-text-secondary); border: 1px solid var(--color-border-strong); }
@@ -770,6 +782,7 @@ select.hm-input {
 .hm-section-icon-sales        { background: var(--color-sales-100);        color: var(--color-sales-600); }
 .hm-section-icon-cashier      { background: var(--color-cashier-100);      color: var(--color-cashier-700); }
 .hm-section-icon-warehouse    { background: var(--color-warehouse-100);    color: var(--color-warehouse-600); }
+.hm-section-icon-accountant   { background: var(--color-accountant-100);   color: var(--color-accountant-600); }
 /* Legacy alias */
 .hm-section-icon-branch       { background: var(--color-branch-admin-100); color: var(--color-branch-admin-600); }
 

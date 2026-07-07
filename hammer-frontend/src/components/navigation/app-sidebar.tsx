@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { usePathname } from "next/navigation";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
-import { isMasterRole, isMasterOrAbove, isOwnerRole, isSystemAdminRole, resolveRoleHome } from "@/modules/rbac/role-routing";
+import { isMasterRole, isMasterOrAbove, isOwnerRole, isSystemAdminRole, isAccountantRole, resolveRoleHome } from "@/modules/rbac/role-routing";
 import { getRoleColor } from "@/lib/role-colors";
 import { getEffectiveCapabilitySet, hasEffectiveCapability } from "@/lib/navigation/visible-modules";
 import type { SessionPayload } from "@/types/auth";
@@ -226,6 +226,18 @@ function buildNavSections(
           { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain },
           { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart },
           { href: "/app/master/history", label: "Historial Completo", icon: History },
+        ],
+      },
+    ]);
+  }
+
+  /* ── Contador (ACCOUNTANT) solo ve el área de contabilidad ── */
+  if (isAccountantRole(roleCode as string, globalRoles as unknown as string[])) {
+    return visibleSections([
+      {
+        title: "CONTABILIDAD",
+        items: [
+          { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark },
         ],
       },
     ]);

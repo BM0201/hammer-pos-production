@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { requireCsrf } from "@/modules/security/csrf";
 import { toHttpErrorResponse } from "@/lib/http";
 import { ok, validationFail } from "@/lib/api/response";
@@ -23,7 +23,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const { id } = await params;
     const loan = await getEmployeeLoan(id);
@@ -39,7 +39,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const parsed = updateLoanSchema.safeParse(await req.json());
     if (!parsed.success) return validationFail(parsed.error.issues);
@@ -57,7 +57,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const { id } = await params;
     const loan = await cancelEmployeeLoan(id, session.userId);

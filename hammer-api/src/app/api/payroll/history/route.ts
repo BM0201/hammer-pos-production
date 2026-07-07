@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getSalaryHistory, listPayrollRuns, serializePayrollRunResult } from "@/modules/payroll/payroll-service";
 import { ok } from "@/lib/api/response";
@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
-    assertMaster(session!);
+    assertFinanceAccess(session!);
 
     const url = new URL(req.url);
     const employeeId = url.searchParams.get("employeeId") ?? undefined;

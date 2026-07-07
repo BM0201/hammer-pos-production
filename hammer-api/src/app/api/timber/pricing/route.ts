@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import { assertMaster } from "@/modules/security/rbac-helpers";
+import { assertFinanceAccess } from "@/modules/security/rbac-helpers";
 import { getPricingConfig, updatePricingConfig } from "@/modules/timber/service";
 import { updateTimberPricingConfigSchema } from "@/modules/timber/validators";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -30,7 +30,7 @@ export async function PUT(req: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const body = await req.json();
     const parsed = updateTimberPricingConfigSchema.safeParse(body);

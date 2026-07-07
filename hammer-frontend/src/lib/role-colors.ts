@@ -15,7 +15,7 @@
  * | WAREHOUSE     | #16A34A     | 4.51:1           | green    |
  */
 
-export type RoleColorKey = "system-admin" | "owner" | "master" | "branch-admin" | "sales" | "cashier" | "warehouse";
+export type RoleColorKey = "system-admin" | "owner" | "master" | "branch-admin" | "sales" | "cashier" | "warehouse" | "accountant";
 
 export interface RoleColorConfig {
   key: RoleColorKey;
@@ -86,6 +86,14 @@ const ROLE_COLORS: Record<string, RoleColorConfig> = {
     hex600: "#16A34A",
     badgeClass: "hm-badge-warehouse",
     sectionIconClass: "hm-section-icon-warehouse",
+  },
+  ACCOUNTANT: {
+    key: "accountant",
+    label: "Contador",
+    cssPrefix: "accountant",
+    hex600: "#B45309",
+    badgeClass: "hm-badge-accountant",
+    sectionIconClass: "hm-section-icon-accountant",
   },
 };
 

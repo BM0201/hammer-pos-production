@@ -1,5 +1,5 @@
 import type { SessionPayload } from "@/types/auth";
-import { hasBranchAccess, isMaster, isOwner, isSystemAdmin } from "@/modules/rbac/guards";
+import { hasBranchAccess, isMaster, isOwner, isSystemAdmin, isFinanceUser } from "@/modules/rbac/guards";
 
 export function assertAuthenticated(session: SessionPayload | null): asserts session is SessionPayload {
   if (!session) {
@@ -16,6 +16,21 @@ export function assertBranchAccess(session: SessionPayload, branchId: string): v
 export function assertMaster(session: SessionPayload): void {
   if (!isMaster(session)) {
     throw new Error("FORBIDDEN_MASTER_ONLY");
+  }
+}
+
+/**
+ * Gate del módulo de Finanzas & Contabilidad.
+ *
+ * Permite el acceso a Master/Owner/SystemAdmin (control total) y al Contador
+ * (rol global de solo-contabilidad). Sustituye a `assertMaster` en los endpoints
+ * de gastos, precios/márgenes, planilla, cortes quincenales, fletes y reportes
+ * financieros: los mismos roles que antes seguían entrando (master+), y ahora
+ * además el Contador — ningún otro rol gana acceso.
+ */
+export function assertFinanceAccess(session: SessionPayload): void {
+  if (!isFinanceUser(session)) {
+    throw new Error("FORBIDDEN_FINANCE_ONLY");
   }
 }
 

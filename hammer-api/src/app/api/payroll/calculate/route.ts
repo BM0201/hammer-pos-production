@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { calculatePayrollRun, serializePayrollRunResult } from "@/modules/payroll/payroll-service";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session!);
+    assertFinanceAccess(session!);
 
     const body = await req.json();
     const { month, branchId, syncToExpenses } = body;

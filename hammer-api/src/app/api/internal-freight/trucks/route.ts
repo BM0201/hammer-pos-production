@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created, validationFail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
@@ -19,7 +19,7 @@ export async function GET() {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
-    assertMaster(session);
+    assertFinanceAccess(session);
     return ok(await listTrucks());
   } catch (error) {
     return toHttpErrorResponse(error);
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const parsed = schema.safeParse(await req.json());
     if (!parsed.success) return validationFail(parsed.error.issues);

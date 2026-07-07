@@ -17,7 +17,7 @@
  */
 
 import type { SessionPayload } from "@/types/auth";
-import { isPrivilegedGlobal, isMaster, isOwner, isSystemAdmin, hasBranchAccess } from "@/modules/rbac/guards";
+import { isPrivilegedGlobal, isMaster, isOwner, isSystemAdmin, isFinanceUser, hasBranchAccess } from "@/modules/rbac/guards";
 
 // ── Assertion helpers (throw on failure) ──
 
@@ -30,6 +30,12 @@ export function assertOwner(session: SessionPayload): void {
 export function assertMaster(session: SessionPayload): void {
   if (!isMaster(session)) {
     throw new Error("FORBIDDEN_MASTER_ONLY");
+  }
+}
+
+export function assertFinanceAccess(session: SessionPayload): void {
+  if (!isFinanceUser(session)) {
+    throw new Error("FORBIDDEN_FINANCE_ONLY");
   }
 }
 

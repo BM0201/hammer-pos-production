@@ -298,6 +298,33 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     // ── Documentos (FASE 3) ──
     CAPABILITIES.DOCUMENT_PRINT,
   ],
+  // ─────────────────────────────────────────────────────────────
+  // CONTADOR (ACCOUNTANT) — rol global de solo-contabilidad.
+  // Ve TODO el módulo de Finanzas & Contabilidad (resumen, gastos,
+  // precios/márgenes, planilla, cortes quincenales, fletes, reportes y
+  // configuración) y NADA más. No tiene acceso a ventas, inventario, caja,
+  // usuarios ni configuración del sistema.
+  // ─────────────────────────────────────────────────────────────
+  ACCOUNTANT: [
+    // Finanzas & Contabilidad — acceso completo (lectura y gestión).
+    CAPABILITIES.FINANCE_VIEW,
+    CAPABILITIES.FINANCE_MANAGE_EXPENSES,
+    CAPABILITIES.FINANCE_VIEW_PAYROLL,
+    CAPABILITIES.FINANCE_MANAGE_PAYROLL,
+    CAPABILITIES.FINANCE_VIEW_PRICING,
+    CAPABILITIES.FINANCE_MANAGE_PRICING,
+    CAPABILITIES.FINANCE_REPORTS_EXPORT,
+    // Capacidades de soporte que consumen los subpaneles de finanzas.
+    CAPABILITIES.OPERATING_EXPENSE_VIEW,
+    CAPABILITIES.OPERATING_EXPENSE_CREATE,
+    CAPABILITIES.CASH_MOVEMENT_VIEW,
+    CAPABILITIES.PRICING_VIEW,
+    CAPABILITIES.PRICING_EDIT_GLOBAL,
+    CAPABILITIES.REPORTS_EXPORT,
+    // Historial de sus propias consultas/exportaciones.
+    CAPABILITIES.SALES_HISTORY_VIEW,
+    CAPABILITIES.MASTER_HISTORY_VIEW,
+  ],
 };
 
 export function can(roleCode: RoleCode, capability: Capability): boolean {
@@ -316,6 +343,9 @@ export function canInBranch(session: CapabilitySession, branchId: string, capabi
   if (session.globalRoles.includes("SYSTEM_ADMIN")) return can("SYSTEM_ADMIN", capability);
   if (session.globalRoles.includes("OWNER")) return can("OWNER", capability);
   if (session.globalRoles.includes("MASTER")) return can("MASTER", capability);
+  // Contador: rol global sin membresías de sucursal. Sus capacidades (solo
+  // finanzas) aplican transversalmente a todas las sucursales.
+  if (session.globalRoles.includes("ACCOUNTANT")) return can("ACCOUNTANT", capability);
 
   return session.branchMemberships
     .filter((membership) => membership.branchId === branchId)
@@ -327,6 +357,8 @@ export function canInAnyAssignedBranch(session: CapabilitySession, capability: C
   if (session.globalRoles.includes("SYSTEM_ADMIN")) return can("SYSTEM_ADMIN", capability);
   if (session.globalRoles.includes("OWNER")) return can("OWNER", capability);
   if (session.globalRoles.includes("MASTER")) return can("MASTER", capability);
+  // Contador: rol global de finanzas (sin membresías de sucursal).
+  if (session.globalRoles.includes("ACCOUNTANT")) return can("ACCOUNTANT", capability);
 
   return session.branchMemberships.some((membership) => can(membership.roleCode, capability));
 }

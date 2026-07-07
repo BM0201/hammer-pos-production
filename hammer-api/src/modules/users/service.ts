@@ -125,7 +125,7 @@ export async function listBranchesForMembershipManagement() {
 
 type NewMembership = {
   branchId: string;
-  roleCode: Exclude<RoleCode, "MASTER" | "OWNER" | "SYSTEM_ADMIN">;
+  roleCode: Exclude<RoleCode, "MASTER" | "OWNER" | "SYSTEM_ADMIN" | "ACCOUNTANT">;
 };
 
 const BRANCH_MEMBERSHIP_ROLES: readonly RoleCode[] = ["BRANCH_ADMIN", "SALES", "CASHIER", "WAREHOUSE"];
@@ -224,7 +224,7 @@ export async function createUser(
     fullName: string;
     password?: string; // ignorado — se genera contraseña temporal única
     isActive?: boolean;
-    globalRole?: "MASTER" | "OWNER" | "SYSTEM_ADMIN";
+    globalRole?: "MASTER" | "OWNER" | "SYSTEM_ADMIN" | "ACCOUNTANT";
     memberships: NewMembership[];
   },
   actorUserId?: string,
@@ -303,7 +303,7 @@ export async function updateUser(
     fullName?: string;
     password?: string;
     isActive?: boolean;
-    globalRole?: "MASTER" | "OWNER" | "SYSTEM_ADMIN" | null;
+    globalRole?: "MASTER" | "OWNER" | "SYSTEM_ADMIN" | "ACCOUNTANT" | null;
   },
 ): Promise<{ tempPassword?: string }> {
   let tempPassword: string | undefined;
@@ -399,7 +399,7 @@ export async function updateUser(
 export async function upsertMembership(input: {
   userId: string;
   branchId: string;
-  roleCode: Exclude<RoleCode, "MASTER" | "OWNER" | "SYSTEM_ADMIN">;
+  roleCode: Exclude<RoleCode, "MASTER" | "OWNER" | "SYSTEM_ADMIN" | "ACCOUNTANT">;
   isActive?: boolean;
 }) {
   const result = await prisma.$transaction(async (tx) => {
@@ -435,7 +435,7 @@ export async function upsertMembership(input: {
 export async function updateMembership(
   userId: string,
   membershipId: string,
-  input: { roleCode?: Exclude<RoleCode, "MASTER" | "OWNER" | "SYSTEM_ADMIN">; isActive?: boolean },
+  input: { roleCode?: Exclude<RoleCode, "MASTER" | "OWNER" | "SYSTEM_ADMIN" | "ACCOUNTANT">; isActive?: boolean },
 ) {
   const result = await prisma.$transaction(async (tx) => {
   await assertAssignableUser(userId, tx);

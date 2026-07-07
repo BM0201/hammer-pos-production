@@ -132,6 +132,17 @@ const basePermissions: Record<RoleCode, PermissionKey[]> = {
     // Documentos (FASE 3)
     PERMISSIONS.DOCUMENT_PRINT,
   ],
+  // Contador: rol global de solo-contabilidad. Entra al shell master pero su
+  // navegación y sus endpoints se limitan al módulo de Finanzas & Contabilidad
+  // (ver ROLE_CAPABILITIES en policies.ts y assertFinanceAccess en auth/access.ts).
+  ACCOUNTANT: [
+    PERMISSIONS.AUTH_LOGIN,
+    PERMISSIONS.AUTH_LOGOUT,
+    PERMISSIONS.APP_MASTER_ACCESS,
+    // Historial de sus propias exportaciones/consultas de finanzas.
+    PERMISSIONS.SALES_HISTORY_VIEW,
+    PERMISSIONS.MASTER_HISTORY_VIEW,
+  ],
 };
 
 export function getPermissionsForRole(role: RoleCode): PermissionKey[] {

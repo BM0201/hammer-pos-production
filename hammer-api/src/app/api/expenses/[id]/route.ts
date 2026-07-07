@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { updateExpenseSchema } from "@/modules/pricing/validators";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -20,7 +20,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const { id } = await params;
     const body = await req.json();
@@ -44,7 +44,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const { id } = await params;
     await deleteOperatingExpense(id, session.userId);

@@ -3,7 +3,7 @@ import type { Route } from "next";
 import type { SessionPayload } from "@/types/auth";
 import { getPermissionsForRole, type PermissionKey } from "@/modules/rbac/permissions";
 import { can, canInAnyAssignedBranch, type Capability } from "@/modules/rbac/policies";
-import { resolveRoleHome, isMasterOrAbove, isOwnerRole, isSystemAdminRole } from "@/modules/rbac/role-routing";
+import { resolveRoleHome, isMasterOrAbove, isOwnerRole, isSystemAdminRole, isAccountantRole } from "@/modules/rbac/role-routing";
 import {
   canUseBranchCapability,
   requireEffectiveBranchCapability,
@@ -24,6 +24,19 @@ export function isOwner(session: SessionPayload | null): boolean {
 
 export function isSystemAdmin(session: SessionPayload | null): boolean {
   return Boolean(session && isSystemAdminRole(session.roleCode as string, session.globalRoles as unknown as string[]));
+}
+
+/** Contador — rol global de solo-contabilidad. */
+export function isAccountant(session: SessionPayload | null): boolean {
+  return Boolean(session && isAccountantRole(session.roleCode as string, session.globalRoles as unknown as string[]));
+}
+
+/**
+ * ¿Puede el usuario acceder al módulo de Finanzas & Contabilidad?
+ * Verdadero para Master/Owner/SystemAdmin (control total) y para el Contador.
+ */
+export function isFinanceUser(session: SessionPayload | null): boolean {
+  return isMaster(session) || isAccountant(session);
 }
 
 export function isPrivilegedGlobal(session: SessionPayload | null): boolean {

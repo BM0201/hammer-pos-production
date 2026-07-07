@@ -11,7 +11,7 @@ export const createUserSchema = z.object({
   fullName: z.string().trim().min(2),
   // password ignorado — el backend genera contraseña temporal única
   isActive: z.boolean().optional(),
-  globalRole: z.enum(["MASTER", "OWNER", "SYSTEM_ADMIN"]).optional(),
+  globalRole: z.enum(["MASTER", "OWNER", "SYSTEM_ADMIN", "ACCOUNTANT"]).optional(),
   memberships: z.array(membershipSchema).default([]),
 });
 
@@ -21,7 +21,7 @@ export const updateUserSchema = z.object({
   fullName: z.string().trim().min(2).optional(),
   password: z.string().min(1).optional(),
   isActive: z.boolean().optional(),
-  globalRole: z.enum(["MASTER", "OWNER", "SYSTEM_ADMIN"]).nullable().optional(),
+  globalRole: z.enum(["MASTER", "OWNER", "SYSTEM_ADMIN", "ACCOUNTANT"]).nullable().optional(),
 });
 
 export const upsertMembershipSchema = membershipSchema.extend({

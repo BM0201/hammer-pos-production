@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { calculatePricingSuggestionForBranch, calculateSuggestedPriceForProduct } from "@/modules/pricing/service";
 import { pricingSuggestionPayloadSchema } from "@/modules/pricing/validators";
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const { searchParams } = new URL(req.url);
     const branchId = searchParams.get("branchId");
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
-    assertMaster(session);
+    assertFinanceAccess(session);
     await requireCsrf(req, session);
 
     const parsed = pricingSuggestionPayloadSchema.safeParse(await req.json());

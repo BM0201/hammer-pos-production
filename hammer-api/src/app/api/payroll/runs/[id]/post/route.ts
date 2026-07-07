@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { requireCsrf } from "@/modules/security/csrf";
 import { toHttpErrorResponse } from "@/lib/http";
 import { ok } from "@/lib/api/response";
@@ -13,7 +13,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const { id } = await params;
     const result = await postPayrollRun(id, session.userId);

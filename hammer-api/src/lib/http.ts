@@ -43,6 +43,7 @@ export function toHttpErrorResponse(error: unknown) {
     if (
       error.message === "FORBIDDEN_BRANCH" ||
       error.message === "FORBIDDEN_MASTER_ONLY" ||
+      error.message === "FORBIDDEN_FINANCE_ONLY" ||
       error.message === "FORBIDDEN_SYSTEM_ADMIN_ONLY" ||
       error.message === "FORBIDDEN_REPORTS" ||
       error.message === "FORBIDDEN_CAPABILITY" ||

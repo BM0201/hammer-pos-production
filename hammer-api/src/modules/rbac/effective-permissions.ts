@@ -31,6 +31,15 @@ function isGlobalRole(session: SessionPayload): boolean {
   return session.globalRoles.some((r) => GLOBAL_ROLES.has(r));
 }
 
+/**
+ * Contador (ACCOUNTANT): rol global de solo-contabilidad. NO es un global role
+ * pleno (no hereda todas las capacidades), pero sus capacidades de finanzas
+ * aplican transversalmente a todas las sucursales, ya que no posee membresías.
+ */
+function isAccountantGlobal(session: SessionPayload): boolean {
+  return session.globalRoles.includes("ACCOUNTANT");
+}
+
 // ─── DB Queries ─────────────────────────────────────────────────
 
 /**
@@ -115,6 +124,10 @@ export function canUseBranchCapability(
     // Global roles always have all capabilities
     return can("SYSTEM_ADMIN", capability);
   }
+  // Contador: sus capacidades de finanzas aplican en cualquier sucursal.
+  if (isAccountantGlobal(session)) {
+    return can("ACCOUNTANT", capability);
+  }
 
   return session.branchMemberships
     .filter((m) => m.branchId === branchId)
@@ -144,6 +157,8 @@ export function getBranchIdsWithEffectiveCapability(
 ): string[] {
   if (!session) return [];
   if (isGlobalRole(session)) return []; // empty = no filter (all branches)
+  // Contador: si su rol cubre la capacidad, aplica a todas las sucursales.
+  if (isAccountantGlobal(session) && can("ACCOUNTANT", capability)) return [];
 
   return session.branchMemberships
     .filter((m) => can(m.roleCode, capability))

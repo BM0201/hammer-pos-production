@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
 import { requireCsrf } from "@/modules/security/csrf";
 import { toHttpErrorResponse } from "@/lib/http";
 import { created, ok, validationFail } from "@/lib/api/response";
@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const url = new URL(req.url);
     const loans = await listEmployeeLoans({
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     await requireCsrf(req, session);
-    assertMaster(session);
+    assertFinanceAccess(session);
 
     const parsed = createLoanSchema.safeParse(await req.json());
     if (!parsed.success) return validationFail(parsed.error.issues);
