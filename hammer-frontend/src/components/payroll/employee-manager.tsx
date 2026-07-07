@@ -106,6 +106,9 @@ type EmployeeLoan = {
 };
 type ActiveTab = "employees" | "payroll" | "loans" | "history";
 
+/** Clave de persistencia del tab activo de planilla (sobrevive recargas). */
+const PAYROLL_TAB_STORAGE_KEY = "hammer.payroll.activeTab";
+
 const POSITIONS = ["Supervisor", "Vendedor", "Cajero", "Bodeguero", "Administrador", "Auxiliar", "Otro"];
 const LOAN_STATUS_LABELS: Record<string, string> = {
   ACTIVE: "Activo",
@@ -127,7 +130,20 @@ export function EmployeeManager() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<ActiveTab>("employees");
+  // Persistimos el tab activo para que la navegación sobreviva a recargas y a
+  // volver desde otra pantalla (antes siempre reiniciaba en "Empleados").
+  const [activeTab, setActiveTabState] = useState<ActiveTab>("employees");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(PAYROLL_TAB_STORAGE_KEY);
+    if (saved === "employees" || saved === "payroll" || saved === "loans" || saved === "history") {
+      setActiveTabState(saved);
+    }
+  }, []);
+  const setActiveTab = useCallback((tab: ActiveTab) => {
+    setActiveTabState(tab);
+    if (typeof window !== "undefined") window.localStorage.setItem(PAYROLL_TAB_STORAGE_KEY, tab);
+  }, []);
   const [selectedBranch, setSelectedBranch] = useState("");
 
   const [showForm, setShowForm] = useState(false);
@@ -383,7 +399,7 @@ export function EmployeeManager() {
         paid: number;
         cashSync: Array<{ branchId: string; applied: boolean; appliedGroups?: number; reason?: string }>;
       };
-      const periodLabel = period === "FIRST_HALF" ? "1ra quincena (día 15)" : "2da quincena (día 30)";
+      const periodLabel = period === "FIRST_HALF" ? "1ra quincena (día 15)" : "2da quincena (fin de mes)";
       const branchLabel = (branchId: string) => branches.find((b) => b.id === branchId)?.code ?? branchId;
       const applied = (data.cashSync ?? []).filter((c) => c.applied).map((c) => branchLabel(c.branchId));
       const pending = (data.cashSync ?? []).filter((c) => !c.applied).map((c) => branchLabel(c.branchId));
@@ -731,7 +747,7 @@ export function EmployeeManager() {
                       <div className="mt-1 w-full overflow-hidden rounded-xl border border-[var(--color-border)]">
                         {[
                           { key: "FIRST_HALF", label: "1ra quincena (día 15)", paid: firstPaid, total: firstTotal, disb: firstDisb },
-                          { key: "SECOND_HALF", label: "2da quincena (día 30)", paid: secondPaid, total: secondTotal, disb: secondDisb },
+                          { key: "SECOND_HALF", label: "2da quincena (fin de mes)", paid: secondPaid, total: secondTotal, disb: secondDisb },
                         ].map((q, i) => {
                           const lastPaidAt = q.disb
                             .filter((d) => d.status === "PAID" && d.paidAt)

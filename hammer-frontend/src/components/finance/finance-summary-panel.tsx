@@ -480,6 +480,49 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
             <Card icon={Users} label="Planilla pagada (bruto)" value={money(data.payroll.payrollTotal)} hint={`Costo patronal: ${money(data.payroll.employerCostTotal)}`} />
             <Card icon={Landmark} label="Planilla pendiente de pago" value={money(data.payroll.pendingPayrollTotal)} tone={data.payroll.pendingPayrollTotal > 0 ? "warn" : "default"}
               hint={data.payroll.pendingPayrollTotal > 0 ? "Desembolsos programados sin pagar" : "Al día"} />
+
+            {/* Comparación visual presupuesto vs gasto real — barra de ejecución.
+                Antes solo había un % suelto en la tarjeta; ahora se ve de un
+                vistazo cuánto del presupuesto se consumió y si se excedió. */}
+            {perf.expensesBudgetMonthly > 0 && (() => {
+              const pct = (perf.operatingExpenses / perf.expensesBudgetMonthly) * 100;
+              const pctRounded = Math.round(pct);
+              const over = pct > 100;
+              const remaining = perf.expensesBudgetMonthly - perf.operatingExpenses;
+              const barColor = over
+                ? "var(--color-danger-600, #dc2626)"
+                : pct >= 85
+                  ? "var(--color-warning-600, #d97706)"
+                  : "var(--color-success-600, #16a34a)";
+              return (
+                <div className="sm:col-span-2 lg:col-span-4 rounded-xl p-4 space-y-2.5"
+                  style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
+                      Ejecución del presupuesto mensual
+                    </span>
+                    <span className="text-sm font-bold" style={{ color: barColor }}>
+                      {pctRounded}% ejecutado
+                    </span>
+                  </div>
+                  <div className="h-3 w-full overflow-hidden rounded-full" style={{ background: "var(--color-surface-alt)" }}>
+                    <div className="h-full rounded-full transition-all"
+                      style={{ width: `${Math.min(pct, 100)}%`, background: barColor }} />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]" style={{ color: "var(--color-text-secondary)" }}>
+                    <span>Real pagado: <b style={{ color: "var(--color-text)" }}>{money(perf.operatingExpenses)}</b> de {money(perf.expensesBudgetMonthly)}</span>
+                    <span style={{ color: over ? "var(--color-danger-700)" : "var(--color-text-secondary)" }}>
+                      {over
+                        ? `Excedido en ${money(Math.abs(remaining))}`
+                        : `Disponible: ${money(remaining)}`}
+                    </span>
+                  </div>
+                  <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                    El “gasto real” suma los egresos de caja de sucursal más la planilla desembolsada; el presupuesto es una referencia y no se resta de la utilidad.
+                  </p>
+                </div>
+              );
+            })()}
           </section>
 
           {/* ── 3. Proyección comercial — hipotética, al final y con borde punteado
