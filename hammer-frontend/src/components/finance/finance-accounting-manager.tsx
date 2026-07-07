@@ -5,12 +5,13 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { Route } from "next";
 import {
-  LayoutDashboard, Receipt, Calculator, Users, Truck, BarChart3, Settings, ArrowRight, Info,
+  LayoutDashboard, Receipt, Calculator, Users, Truck, BarChart3, Settings, ArrowRight, Info, CalendarClock,
 } from "lucide-react";
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ExpenseManager } from "@/components/expenses/expense-manager";
 import { EmployeeManager } from "@/components/payroll/employee-manager";
+import { BiweeklyCutsPanel } from "@/components/payroll/biweekly-cuts-panel";
 import { FinanceSummaryPanel } from "@/components/finance/finance-summary-panel";
 
 /**
@@ -26,7 +27,7 @@ import { FinanceSummaryPanel } from "@/components/finance/finance-summary-panel"
  * y la de planilla a payroll-finance-panel.tsx. Ver components/finance/.
  */
 
-type FinanceTabKey = "summary" | "expenses" | "pricing" | "payroll" | "freight" | "reports" | "config";
+type FinanceTabKey = "summary" | "expenses" | "pricing" | "payroll" | "biweekly" | "freight" | "reports" | "config";
 
 export function FinanceAccountingManager() {
   const sessionState = useSession();
@@ -43,7 +44,10 @@ export function FinanceAccountingManager() {
       { key: "expenses", label: "Gastos operativos", icon: Receipt },
       { key: "pricing", label: "Precios y márgenes", icon: Calculator },
     ];
-    if (canViewPayroll) base.push({ key: "payroll", label: "Planilla", icon: Users });
+    if (canViewPayroll) {
+      base.push({ key: "payroll", label: "Planilla", icon: Users });
+      base.push({ key: "biweekly", label: "Cortes Quincenales", icon: CalendarClock });
+    }
     base.push(
       { key: "freight", label: "Fletes / costos internos", icon: Truck },
       { key: "reports", label: "Reportes", icon: BarChart3 },
@@ -113,6 +117,19 @@ export function FinanceAccountingManager() {
           </div>
           {/* TODO(finance-extract): mover a payroll-finance-panel.tsx (corrida de nómina). */}
           <EmployeeManager />
+        </div>
+      )}
+
+      {activeTab === "biweekly" && canViewPayroll && (
+        <div className="space-y-3">
+          <div className="hm-alert hm-alert-info flex items-start gap-2">
+            <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <div>
+              Vista consolidada de los cortes quincenales pendientes de pago en todas las sucursales.
+              Permite procesar (pagar) los desembolsos pendientes de forma masiva por período.
+            </div>
+          </div>
+          <BiweeklyCutsPanel />
         </div>
       )}
 

@@ -195,6 +195,66 @@ export async function payDisbursementsForPeriod(
   };
 }
 
+/**
+ * Procesa (paga) TODOS los desembolsos PENDIENTES del negocio para un período dado,
+ * agrupando por corrida (payrollRunId). Pensado para el "corte por quincena"
+ * consolidado: pagar de una sola vez todas las quincenas pendientes de todas las
+ * sucursales/corridas. Devuelve el total pagado y el detalle por corrida.
+ */
+export async function payAllPendingDisbursements(
+  period: "FIRST_HALF" | "SECOND_HALF",
+  actorUserId: string,
+  branchId?: string,
+): Promise<{
+  paid: number;
+  runsProcessed: number;
+  perRun: Array<{ payrollRunId: string; paid: number }>;
+  cashSync: Array<{ branchId: string; applied: boolean; appliedGroups?: number; reason?: string }>;
+}> {
+  const periodEnum =
+    period === "FIRST_HALF" ? PayrollDisbursementPeriod.FIRST_HALF : PayrollDisbursementPeriod.SECOND_HALF;
+
+  // Corridas POSTED con al menos un desembolso pendiente en este período.
+  const pending = await prisma.payrollDisbursement.findMany({
+    where: {
+      period: periodEnum,
+      status: PayrollDisbursementStatus.PENDING,
+      ...(branchId ? { branchId } : {}),
+      payrollRun: { status: "POSTED" },
+    },
+    select: { payrollRunId: true },
+  });
+
+  const runIds = [...new Set(pending.map((d) => d.payrollRunId))];
+  if (runIds.length === 0) {
+    return { paid: 0, runsProcessed: 0, perRun: [], cashSync: [] };
+  }
+
+  let totalPaid = 0;
+  const perRun: Array<{ payrollRunId: string; paid: number }> = [];
+  const cashByBranch = new Map<string, { applied: boolean; appliedGroups?: number; reason?: string }>();
+
+  for (const runId of runIds) {
+    const result = await payDisbursementsForPeriod(runId, period, actorUserId);
+    totalPaid += result.paid;
+    perRun.push({ payrollRunId: runId, paid: result.paid });
+    for (const c of result.cashSync) {
+      // Conserva el estado "applied=true" si alguna corrida lo aplicó en esa sucursal.
+      const prev = cashByBranch.get(c.branchId);
+      if (!prev || (!prev.applied && c.applied)) {
+        cashByBranch.set(c.branchId, { applied: c.applied, appliedGroups: c.appliedGroups, reason: c.reason });
+      }
+    }
+  }
+
+  return {
+    paid: totalPaid,
+    runsProcessed: runIds.length,
+    perRun,
+    cashSync: [...cashByBranch.entries()].map(([bId, v]) => ({ branchId: bId, ...v })),
+  };
+}
+
 /** Lista disbursements pendientes, opcionalmente filtrados por sucursal y período. */
 export async function listPendingDisbursements(
   branchId?: string,
