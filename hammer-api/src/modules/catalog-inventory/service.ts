@@ -359,43 +359,15 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   const activeBalances = balances.filter((row) => row.product.isActive);
   const totalInventoryValue = activeBalances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0);
 
-  // Build effective price map from allMetricRows (which has branchProductSettings already loaded).
-  // Priority: branch-specific price → standardSalePrice. Products without any price contribute 0.
-  const effectivePriceByProductBranch = new Map<string, number>(); // "productId:branchId" → price
-  const standardPriceByProduct = new Map<string, number>();       // productId → standardSalePrice
-  for (const row of allMetricRows) {
-    const stdPrice = decimalToNumber((row as any).standardSalePrice);
-    if (stdPrice > 0) standardPriceByProduct.set(row.id, stdPrice);
-    for (const setting of (row as any).branchProductSettings ?? []) {
-      const bp = decimalToNumber(setting.branchPrice);
-      if (bp > 0) effectivePriceByProductBranch.set(`${row.id}:${setting.branchId}`, bp);
-    }
-  }
-  const totalPotentialRevenue = activeBalances.reduce((sum, row) => {
-    const qty = Math.max(0, decimalToNumber(row.quantityOnHand));
-    const effectivePrice = effectivePriceByProductBranch.get(`${row.productId}:${row.branchId}`)
-      ?? standardPriceByProduct.get(row.productId)
-      ?? Math.max(0, decimalToNumber(row.product.standardSalePrice));
-    return sum + qty * effectivePrice;
-  }, 0);
-  const grossMarginValue = totalPotentialRevenue - totalInventoryValue;
-  const grossMarginPercent = totalPotentialRevenue > 0
-    ? Math.round((grossMarginValue / totalPotentialRevenue) * 1000) / 10
-    : null;
-
   const kpis = {
     activeProducts: allMetricRows.filter((row) => row.isActive).length,
     skusWithoutInventory: allMetricRows.filter((row) => row.isActive && row.inventoryBalances.length === 0).length,
     criticalStockProducts: allMetricRows.filter((row) => row.isActive && row.isCriticalStock).length,
     zeroStockProducts: allMetricRows.filter((row) => row.isActive && row.hasZeroStock).length,
     totalInventoryValue,
-    // @deprecated Métricas financieras movidas a Finanzas & Contabilidad
-    // (modules/finance/service.ts → getFinanceSummary). El frontend de Inventario
-    // ya NO las consume; se mantienen aquí solo por compatibilidad temporal y se
-    // eliminarán cuando ningún consumidor legacy las use.
-    totalPotentialRevenue,
-    grossMarginValue,
-    grossMarginPercent,
+    // Nota: las métricas financieras (ingreso potencial, margen bruto) viven ahora
+    // exclusivamente en Finanzas & Contabilidad (modules/finance/service.ts →
+    // getFinanceSummary). Se eliminaron de aquí por no tener consumidores.
     productsWithoutCost: allMetricRows.filter((row) => row.isActive && row.hasNoCost).length,
     productsWithoutPrice: allMetricRows.filter((row) => row.isActive && row.hasNoPrice).length,
     missingPriceCount: params.branchId

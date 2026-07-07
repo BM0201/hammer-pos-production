@@ -227,9 +227,6 @@ type CenterData = {
     criticalStockProducts: number;
     zeroStockProducts: number;
     totalInventoryValue: number;
-    totalPotentialRevenue: number;
-    grossMarginValue: number;
-    grossMarginPercent: number | null;
     productsWithoutCost: number;
     productsWithoutPrice: number;
     missingPriceCount: number;
