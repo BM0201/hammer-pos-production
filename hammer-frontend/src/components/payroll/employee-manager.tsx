@@ -155,6 +155,9 @@ export function EmployeeManager() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
   const [payrollResult, setPayrollResult] = useState<PayrollResult | null>(null);
+  // Vista de cálculo: "MONTH" muestra el total mensual; "BIWEEKLY" divide entre
+  // las dos quincenas (mitad), reflejando cómo se desembolsa realmente el pago.
+  const [payrollView, setPayrollView] = useState<"MONTH" | "BIWEEKLY">("MONTH");
   const [history, setHistory] = useState<SalaryRecord[]>([]);
   const [payrollRuns, setPayrollRuns] = useState<PayrollRunSummary[]>([]);
 
@@ -687,7 +690,7 @@ export function EmployeeManager() {
             <div className="hm-module-card-header">
               <div className="flex items-center gap-2">
                 <Calculator className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
-                <span className="font-semibold text-sm text-[var(--color-text)]">Calcular Nómina del Mes</span>
+                <span className="font-semibold text-sm text-[var(--color-text)]">{payrollView === "BIWEEKLY" ? "Calcular Nómina por Quincena" : "Calcular Nómina del Mes"}</span>
               </div>
             </div>
             <div className="p-4 space-y-3">
@@ -696,9 +699,29 @@ export function EmployeeManager() {
                   Mes
                   <input type="month" value={payrollMonth} onChange={(e) => setPayrollMonth(e.target.value)} className="hm-input rounded-lg text-sm font-normal normal-case" />
                 </label>
+                {/* Selector de vista: calcular por mes completo o dividido por quincena. */}
+                <div className="grid gap-1 text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
+                  Período de cálculo
+                  <div className="inline-flex rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setPayrollView("MONTH")}
+                      className={`px-3 py-1.5 rounded-md text-sm font-medium normal-case transition-colors ${payrollView === "MONTH" ? "bg-[var(--color-info-600)] text-white" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
+                    >
+                      Mes completo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPayrollView("BIWEEKLY")}
+                      className={`px-3 py-1.5 rounded-md text-sm font-medium normal-case transition-colors ${payrollView === "BIWEEKLY" ? "bg-[var(--color-info-600)] text-white" : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
+                    >
+                      Por quincena
+                    </button>
+                  </div>
+                </div>
                 <button onClick={handleCalculatePayroll} disabled={loading} className="flex items-center gap-2 bg-[var(--color-info-600)] hover:bg-[var(--color-info-700)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
-                  Calcular nómina
+                  {payrollView === "BIWEEKLY" ? "Calcular quincena" : "Calcular nómina"}
                 </button>
                 {payrollResult?.payrollRunStatus === "DRAFT" && !confirmPostPayroll && (
                   <button onClick={() => setConfirmPostPayroll(true)} disabled={loading} className="flex items-center gap-2 bg-[var(--color-success-600)] hover:bg-[var(--color-success-700)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
@@ -818,18 +841,29 @@ export function EmployeeManager() {
             </div>
           </div>
 
-          {payrollResult && (
+          {payrollResult && (() => {
+            // En vista quincenal dividimos entre 2 (mitad), igual que el
+            // desembolso real (net/2 por quincena). Redondeamos a 2 decimales.
+            const isBiweekly = payrollView === "BIWEEKLY";
+            const half = (v: number) => (isBiweekly ? Math.round((v / 2) * 100) / 100 : v);
+            return (
             <div className="hm-module-card">
               <div className="hm-module-card-header">
                 <div>
-                  <span className="font-semibold text-sm text-[var(--color-text)]">Resultado: {payrollMonth}</span>
-                  <p className="text-xs text-[var(--color-text-muted)]">{payrollResult.employees.length} empleados · {payrollResult.payrollRunStatus}</p>
+                  <span className="font-semibold text-sm text-[var(--color-text)]">
+                    Resultado: {payrollMonth}
+                    {isBiweekly && <span className="ml-2 inline-flex items-center rounded-full bg-[var(--color-info-50)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--color-info-700)]">Vista quincenal (½ del mes)</span>}
+                  </span>
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {payrollResult.employees.length} empleados · {payrollResult.payrollRunStatus}
+                    {isBiweekly && " · montos por quincena"}
+                  </p>
                 </div>
                 <div className="hidden sm:flex gap-5 text-right text-sm">
-                  <div><p className="font-bold text-[var(--color-text)]">{fmt(payrollResult.totalGross)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Bruto</p></div>
-                  <div><p className="font-bold text-[var(--color-warning-700)]">{fmt(payrollResult.totalDeductions)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Deducc.</p></div>
-                  <div><p className="font-bold text-[var(--color-success-700)]">{fmt(payrollResult.totalNet)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Neto</p></div>
-                  <div><p className="font-bold text-[var(--color-info-700)]">{fmt(payrollResult.totalEmployerCost)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Costo emp.</p></div>
+                  <div><p className="font-bold text-[var(--color-text)]">{fmt(half(payrollResult.totalGross))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Bruto</p></div>
+                  <div><p className="font-bold text-[var(--color-warning-700)]">{fmt(half(payrollResult.totalDeductions))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Deducc.</p></div>
+                  <div><p className="font-bold text-[var(--color-success-700)]">{fmt(half(payrollResult.totalNet))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Neto</p></div>
+                  <div><p className="font-bold text-[var(--color-info-700)]">{fmt(half(payrollResult.totalEmployerCost))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Costo emp.</p></div>
                 </div>
               </div>
               <div className="overflow-x-auto">
@@ -851,18 +885,24 @@ export function EmployeeManager() {
                         <td className="font-medium text-[var(--color-text)]">{emp.fullName}</td>
                         <td className="text-[var(--color-text-muted)]">{emp.position}</td>
                         <td className="text-center">{emp.daysWorked}/{emp.totalDays}</td>
-                        <td className="text-right font-mono">{fmt(emp.grossSalary)}</td>
-                        <td className="text-right font-mono text-[var(--color-warning-700)]">{fmt(emp.loanDeductions)}</td>
-                        <td className="text-right font-mono font-semibold">{fmt(emp.netPay)}</td>
-                        <td className="text-right font-mono">{fmt(emp.employerCost)}</td>
+                        <td className="text-right font-mono">{fmt(half(emp.grossSalary))}</td>
+                        <td className="text-right font-mono text-[var(--color-warning-700)]">{fmt(half(emp.loanDeductions))}</td>
+                        <td className="text-right font-mono font-semibold">{fmt(half(emp.netPay))}</td>
+                        <td className="text-right font-mono">{fmt(half(emp.employerCost))}</td>
                       </tr>
                     ))}
                     {payrollResult.employees.length === 0 && <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">No hay empleados activos para este periodo</td></tr>}
                   </tbody>
                 </table>
               </div>
+              {isBiweekly && (
+                <div className="border-t border-[var(--color-border)] px-4 py-2.5 text-xs text-[var(--color-text-muted)]">
+                  Se muestra el monto de <strong>una quincena</strong> (½ del mes). El mes completo se paga en 2 quincenas: día 15 y fin de mes. El cálculo guardado sigue siendo mensual; el desembolso por quincena se realiza en los botones de pago de arriba tras postear.
+                </div>
+              )}
             </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
