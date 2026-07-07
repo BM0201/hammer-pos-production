@@ -144,8 +144,56 @@ function getRolePreset(value: UserRolePreset) {
   return USER_ROLE_PRESETS.find((preset) => preset.value === value) ?? USER_ROLE_PRESETS[0];
 }
 
-function getErrorMessage(payload?: { message?: string; reason?: string; error?: string }, fallback?: string) {
-  return payload?.message ?? payload?.reason ?? payload?.error ?? fallback ?? "No se pudo completar la operación.";
+function getErrorMessage(
+  payload?: { message?: string; reason?: string; error?: unknown },
+  fallback?: string,
+) {
+  if (payload) {
+    if (typeof payload.message === "string") return payload.message;
+    if (typeof payload.reason === "string") return payload.reason;
+    // Envelope estándar del API: { ok: false, error: { code, message } }
+    if (typeof payload.error === "string") return payload.error;
+    if (
+      payload.error && typeof payload.error === "object" &&
+      typeof (payload.error as { message?: unknown }).message === "string"
+    ) {
+      return (payload.error as { message: string }).message;
+    }
+  }
+  return fallback ?? "No se pudo completar la operación.";
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+  }
+}
+
+/**
+ * apiFetch con un reintento único ante 429: espera lo que indique Retry-After
+ * (acotado a 70 s) y repite. Pensado para las acciones masivas, que disparan
+ * una mutación por usuario y pueden rozar el límite de 60/min del API.
+ */
+async function apiFetchWithRateLimitRetry(
+  url: string,
+  options: Parameters<typeof apiFetch>[1],
+): Promise<Response> {
+  const res = await apiFetch(url, options);
+  if (res.status !== 429) return res;
+
+  const retryAfter = Number(res.headers.get("Retry-After"));
+  const waitSeconds = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 70) : 61;
+  await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+  return apiFetch(url, options);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -358,7 +406,10 @@ function CreateUserModal({
             <Button
               type="submit"
               loading={creating}
-              disabled={form.globalRole !== "MASTER" && !arePresetRolesAvailable(selectedBranch, selectedPreset)}
+              disabled={
+                form.globalRole !== "MASTER" &&
+                (branches.length === 0 || !arePresetRolesAvailable(selectedBranch, selectedPreset))
+              }
               icon={<UserPlus className="h-4 w-4" />}
             >
               Crear usuario
@@ -367,13 +418,6 @@ function CreateUserModal({
         </form>
       </div>
 
-      <style>{`
-        @keyframes fade-in {
-          from { opacity: 0; transform: scale(0.95) translateY(10px); }
-          to   { opacity: 1; transform: scale(1)    translateY(0); }
-        }
-        .animate-fade-in { animation: fade-in 0.2s ease-out; }
-      `}</style>
     </div>
   );
 }
@@ -393,19 +437,7 @@ function BulkResetResultModal({
   const [copied, setCopied] = useState(false);
 
   const copyAll = useCallback(async () => {
-    const text = results.map((row) => `${row.username}: ${row.tempPassword}`).join("\n");
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-    }
+    await copyTextToClipboard(results.map((row) => `${row.username}: ${row.tempPassword}`).join("\n"));
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   }, [results]);
@@ -495,13 +527,6 @@ function BulkResetResultModal({
         </div>
       </div>
 
-      <style>{`
-        @keyframes fade-in {
-          from { opacity: 0; transform: scale(0.95) translateY(10px); }
-          to   { opacity: 1; transform: scale(1)    translateY(0); }
-        }
-        .animate-fade-in { animation: fade-in 0.2s ease-out; }
-      `}</style>
     </div>
   );
 }
@@ -528,22 +553,9 @@ function ResetPasswordModal({
   const [showPassword, setShowPassword] = useState(false);
 
   const copyToClipboard = useCallback(async (pwd: string) => {
-    try {
-      await navigator.clipboard.writeText(pwd);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    } catch {
-      const textarea = document.createElement("textarea");
-      textarea.value = pwd;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    }
+    await copyTextToClipboard(pwd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
   }, []);
 
   if (!open) return null;
@@ -671,13 +683,6 @@ function ResetPasswordModal({
         </div>
       </div>
 
-      <style>{`
-        @keyframes fade-in {
-          from { opacity: 0; transform: scale(0.95) translateY(10px); }
-          to   { opacity: 1; transform: scale(1)    translateY(0); }
-        }
-        .animate-fade-in { animation: fade-in 0.2s ease-out; }
-      `}</style>
     </div>
   );
 }
@@ -698,8 +703,7 @@ export function UsersAdmin() {
   // Bulk actions (vista tabla)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkWorking, setBulkWorking] = useState(false);
-  const [confirmBulkDeactivate, setConfirmBulkDeactivate] = useState(false);
-  const [confirmBulkReset, setConfirmBulkReset] = useState(false);
+  const [bulkConfirm, setBulkConfirm] = useState<"deactivate" | "reset" | null>(null);
   const [bulkResetResults, setBulkResetResults] = useState<BulkResetResult[] | null>(null);
 
   const [initialLoading, setInitialLoading] = useState(true);
@@ -1099,7 +1103,7 @@ export function UsersAdmin() {
     const targets = users.filter((u) => selectedIds.has(u.id) && u.isActive);
     if (targets.length === 0) {
       toast("No hay usuarios activos en la selección.");
-      setConfirmBulkDeactivate(false);
+      setBulkConfirm(null);
       return;
     }
     setBulkWorking(true);
@@ -1108,8 +1112,8 @@ export function UsersAdmin() {
     // Mismo endpoint que la desactivación individual — conserva la auditoría por usuario
     for (const user of targets) {
       try {
-        const response = await apiFetch(`/api/master/users/${user.id}`, { method: "DELETE" });
-        const json = (await response.json()) as { message?: string; reason?: string; error?: string };
+        const response = await apiFetchWithRateLimitRetry(`/api/master/users/${user.id}`, { method: "DELETE" });
+        const json = (await response.json()) as { message?: string; reason?: string; error?: unknown };
         if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo desactivar."));
         okCount += 1;
       } catch (error) {
@@ -1118,7 +1122,7 @@ export function UsersAdmin() {
     }
     await load().catch(() => undefined);
     setSelectedIds(new Set());
-    setConfirmBulkDeactivate(false);
+    setBulkConfirm(null);
     setBulkWorking(false);
     if (okCount > 0) {
       toast.success(`✅ ${okCount} usuario${okCount !== 1 ? "s" : ""} desactivado${okCount !== 1 ? "s" : ""}. Sus roles se conservan.`);
@@ -1129,7 +1133,7 @@ export function UsersAdmin() {
   async function bulkResetPasswords() {
     const targets = users.filter((u) => selectedIds.has(u.id));
     if (targets.length === 0) {
-      setConfirmBulkReset(false);
+      setBulkConfirm(null);
       return;
     }
     setBulkWorking(true);
@@ -1138,12 +1142,12 @@ export function UsersAdmin() {
     // Mismo endpoint que el reset individual — conserva la auditoría por usuario
     for (const user of targets) {
       try {
-        const response = await apiFetch(`/api/master/users/${user.id}`, {
+        const response = await apiFetchWithRateLimitRetry(`/api/master/users/${user.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ password: "reset" }),
         });
-        const json = (await response.json()) as { data?: { tempPassword?: string }; message?: string; reason?: string; error?: string };
+        const json = (await response.json()) as { data?: { tempPassword?: string }; message?: string; reason?: string; error?: unknown };
         if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo resetear la contraseña."));
         results.push({ username: user.username, fullName: user.fullName, tempPassword: json.data?.tempPassword ?? "—" });
       } catch (error) {
@@ -1152,7 +1156,7 @@ export function UsersAdmin() {
     }
     await load().catch(() => undefined);
     setSelectedIds(new Set());
-    setConfirmBulkReset(false);
+    setBulkConfirm(null);
     setBulkWorking(false);
     if (results.length > 0) setBulkResetResults(results);
     failures.forEach((message) => toast.error(message));
@@ -1360,33 +1364,33 @@ export function UsersAdmin() {
               <div className="space-y-2">
                 {selectedIds.size > 0 && (
                   <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3 py-2 text-sm">
-                    {confirmBulkDeactivate ? (
+                    {bulkConfirm === "deactivate" ? (
                       <>
                         <AlertTriangle className="h-4 w-4 flex-shrink-0 text-[var(--color-danger-700)]" />
                         <span className="text-[var(--color-danger-700)]">
                           ¿Desactivar <strong>{selectedIds.size}</strong> usuario{selectedIds.size !== 1 ? "s" : ""}? Se cierran sus sesiones; sus roles se conservan.
                         </span>
                         <Button variant="danger" size="sm" loading={bulkWorking} onClick={bulkDeactivate}>Confirmar</Button>
-                        <Button variant="ghost" size="sm" disabled={bulkWorking} onClick={() => setConfirmBulkDeactivate(false)}>Cancelar</Button>
+                        <Button variant="ghost" size="sm" disabled={bulkWorking} onClick={() => setBulkConfirm(null)}>Cancelar</Button>
                       </>
-                    ) : confirmBulkReset ? (
+                    ) : bulkConfirm === "reset" ? (
                       <>
                         <KeyRound className="h-4 w-4 flex-shrink-0 text-[var(--color-warning-700)]" />
                         <span className="text-[var(--color-warning-700)]">
                           ¿Resetear la clave de <strong>{selectedIds.size}</strong> usuario{selectedIds.size !== 1 ? "s" : ""}? Se generarán contraseñas temporales nuevas.
                         </span>
                         <Button variant="secondary" size="sm" loading={bulkWorking} onClick={bulkResetPasswords}>Confirmar</Button>
-                        <Button variant="ghost" size="sm" disabled={bulkWorking} onClick={() => setConfirmBulkReset(false)}>Cancelar</Button>
+                        <Button variant="ghost" size="sm" disabled={bulkWorking} onClick={() => setBulkConfirm(null)}>Cancelar</Button>
                       </>
                     ) : (
                       <>
                         <span className="font-semibold text-[var(--color-info-700)]">
                           {selectedIds.size} seleccionado{selectedIds.size !== 1 ? "s" : ""}
                         </span>
-                        <Button variant="danger" size="sm" onClick={() => setConfirmBulkDeactivate(true)}>
+                        <Button variant="danger" size="sm" onClick={() => setBulkConfirm("deactivate")}>
                           Desactivar seleccionados ({selectedIds.size})
                         </Button>
-                        <Button variant="secondary" size="sm" onClick={() => setConfirmBulkReset(true)}>
+                        <Button variant="secondary" size="sm" onClick={() => setBulkConfirm("reset")}>
                           Resetear clave a seleccionados ({selectedIds.size})
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Limpiar</Button>

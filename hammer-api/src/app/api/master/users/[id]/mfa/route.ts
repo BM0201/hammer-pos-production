@@ -11,6 +11,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { getUserById } from "@/modules/users/service";
 import { disableMfa } from "@/modules/auth/mfa-service";
 import { assertCanManageUser } from "@/modules/auth/role-hierarchy";
+import { getClientIp } from "@/lib/client-ip";
 
 export async function DELETE(
   request: Request,
@@ -29,7 +30,7 @@ export async function DELETE(
     return forbidden(err instanceof Error ? err.message.replace("FORBIDDEN: ", "") : undefined);
   }
 
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip = getClientIp(request);
   const userAgent = request.headers.get("user-agent") ?? "unknown";
 
   await disableMfa(targetId, session.userId, { ipAddress: ip, userAgent });

@@ -34,8 +34,24 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /** Endpoints públicos sin sesión — limitados por IP */
 const PUBLIC_RATE_LIMITED_PATHS = new Set(["/api/auth/csrf", "/api/auth/session"]);
 
-/** Prefijos de endpoints de reportes/analytics ($queryRaw pesados) */
-const ANALYTICS_PATH_PREFIXES = ["/api/reports/", "/api/analytics/", "/api/master/analytics/"];
+/**
+ * Endpoints de reportes/analytics ($queryRaw / agregaciones pesadas).
+ * ⚠️ Si agregas una ruta de reportes fuera de estos prefijos, agrégala aquí
+ * y a api-rate-limiter.test.ts — si no, queda sin límite (los GETs generales
+ * no se limitan).
+ */
+const ANALYTICS_PATH_PREFIXES = [
+  "/api/reports/",
+  "/api/analytics/",
+  "/api/master/analytics/",
+  "/api/cash-closure/reports",
+];
+
+function isAnalyticsPath(pathname: string): boolean {
+  if (ANALYTICS_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return true;
+  // /api/branch/operations/[id]/daily-report — reporte diario pesado
+  return pathname.endsWith("/daily-report");
+}
 
 const POLICIES: Record<ApiRateLimitPolicy["name"], ApiRateLimitPolicy> = {
   // Punto de partida — ajustar según uso real observado en producción.
@@ -62,9 +78,7 @@ export function classifyApiRequest(pathname: string, method: string): ApiRateLim
 
   if (pathname.startsWith("/api/master/import/excel")) return POLICIES.import;
 
-  if (ANALYTICS_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
-    return POLICIES.analytics;
-  }
+  if (isAnalyticsPath(pathname)) return POLICIES.analytics;
 
   if (!SAFE_METHODS.has(method.toUpperCase())) return POLICIES.mutation;
 

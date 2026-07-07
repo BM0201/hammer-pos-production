@@ -355,12 +355,18 @@ export default function LoginPage() {
         const errBody = !json.ok && "error" in json && typeof json.error === "object" && json.error
           ? json.error as { code?: string; message?: string; details?: { requiresChallenge?: boolean } }
           : null;
-        const msg = errBody?.message
+        let msg = errBody?.message
           ?? (res.status === 401 ? "Usuario o contraseña inválidos." : "No se pudo iniciar sesión.");
 
         // El backend avisa cuando el próximo intento exige challenge Turnstile.
         if (errBody?.code === "CHALLENGE_REQUIRED" || errBody?.details?.requiresChallenge) {
           setRequiresChallenge(true);
+          // Config asimétrica: el servidor exige el challenge pero este cliente
+          // no tiene la site key para renderizar el widget — sin este aviso el
+          // usuario quedaría bloqueado sin explicación.
+          if (!TURNSTILE_SITE_KEY && errBody?.code === "CHALLENGE_REQUIRED") {
+            msg = "El servidor exige verificación de seguridad, pero este cliente no la tiene configurada (NEXT_PUBLIC_TURNSTILE_SITE_KEY). Contacta al administrador.";
+          }
         }
         // Los tokens de Turnstile son de un solo uso — pedir uno nuevo.
         setTurnstileToken(null);

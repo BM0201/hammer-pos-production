@@ -10,6 +10,7 @@ import { ok, fail } from "@/lib/api/response";
 import { consumeMfaPendingToken, verifyMfaCode } from "@/modules/auth/mfa-service";
 import { createSessionAfterMfa, setSessionCookie } from "@/modules/auth/service";
 import { getRoleAwareHome } from "@/modules/rbac/guards";
+import { getClientIp } from "@/lib/client-ip";
 
 const schema = z.object({
   pendingToken: z.string().min(1),
@@ -30,7 +31,7 @@ export async function POST(request: Request) {
   }
 
   const { pendingToken, code } = parsed.data;
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip = getClientIp(request);
   const userAgent = request.headers.get("user-agent") ?? "unknown";
 
   // Consume y valida el pending token (single-use, TTL 10 min)

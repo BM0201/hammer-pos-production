@@ -3,25 +3,17 @@ import { z } from "zod";
 import { authenticate, setSessionCookie } from "@/modules/auth/service";
 import { MissingDatabaseUrlError, isDatabaseConnectionError } from "@/lib/prisma";
 import { getRoleAwareHome } from "@/modules/rbac/guards";
-import { checkLoginRateLimit, recordLoginAttempt, requiresLoginChallenge } from "@/modules/security/rate-limiter";
+import { checkLoginRateLimit, recordLoginAttempt, LOGIN_CHALLENGE_AFTER_FAILURES } from "@/modules/security/rate-limiter";
 import { isTurnstileConfigured, verifyTurnstileToken } from "@/modules/security/turnstile";
 import { ok, fail } from "@/lib/api/response";
 import { markUserOnline } from "@/modules/auth/presence-service";
+import { getClientIp } from "@/lib/client-ip";
 
 const loginSchema = z.object({
   username: z.string().trim().toLowerCase().min(1),
   password: z.string().min(1),
   turnstileToken: z.string().optional(),
 });
-
-function getClientIp(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  const forwardedIp = forwardedFor?.split(",")[0]?.trim();
-  if (forwardedIp) return forwardedIp;
-
-  const realIp = request.headers.get("x-real-ip")?.trim();
-  return realIp || "unknown";
-}
 
 export async function POST(request: Request) {
   let payload: unknown;
@@ -70,27 +62,18 @@ export async function POST(request: Request) {
   }
 
   // Challenge anti-bot (Cloudflare Turnstile): exigido solo cuando el usuario
-  // acumula fallos recientes. Sin TURNSTILE_SECRET_KEY, queda deshabilitado.
-  if (isTurnstileConfigured()) {
-    try {
-      const challengeActive = await requiresLoginChallenge(username);
-      if (challengeActive) {
-        const challengePassed = await verifyTurnstileToken(parsed.data.turnstileToken, ip);
-        if (!challengePassed) {
-          return fail(
-            "CHALLENGE_REQUIRED",
-            "Completa la verificación de seguridad para continuar.",
-            403,
-            { requiresChallenge: true },
-          );
-        }
-      }
-    } catch (error) {
-      if (error instanceof MissingDatabaseUrlError || isDatabaseConnectionError(error)) {
-        return fail("SERVICE_UNAVAILABLE", "Base de datos no disponible o mal configurada. Verifica DATABASE_URL en el entorno de despliegue.", 503);
-      }
-      console.error("[auth/login] Error evaluando challenge", error);
-      return fail("INTERNAL_ERROR", "No fue posible iniciar sesión.", 500);
+  // acumula fallos recientes (userFailures ya calculado por el rate limiter —
+  // sin COUNTs extra). Sin TURNSTILE_SECRET_KEY, queda deshabilitado.
+  const turnstileActive = isTurnstileConfigured();
+  if (turnstileActive && rateLimit.userFailures >= LOGIN_CHALLENGE_AFTER_FAILURES) {
+    const challengePassed = await verifyTurnstileToken(parsed.data.turnstileToken, ip);
+    if (!challengePassed) {
+      return fail(
+        "CHALLENGE_REQUIRED",
+        "Completa la verificación de seguridad para continuar.",
+        403,
+        { requiresChallenge: true },
+      );
     }
   }
 
@@ -101,9 +84,10 @@ export async function POST(request: Request) {
     });
     if (!authResult) {
       await recordLoginAttempt(username, ip, false);
-      // Avisa al frontend si el PRÓXIMO intento exigirá challenge, para que
-      // muestre el widget de Turnstile antes de reintentar.
-      const requiresChallenge = isTurnstileConfigured() && (await requiresLoginChallenge(username));
+      // Avisa al frontend si el PRÓXIMO intento exigirá challenge (el fallo
+      // recién registrado suma 1 al conteo), para que muestre el widget de
+      // Turnstile antes de reintentar.
+      const requiresChallenge = turnstileActive && rateLimit.userFailures + 1 >= LOGIN_CHALLENGE_AFTER_FAILURES;
       return fail("UNAUTHENTICATED", "Usuario o contraseña inválidos.", 401, { requiresChallenge });
     }
 

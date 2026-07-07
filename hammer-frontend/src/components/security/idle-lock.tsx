@@ -13,11 +13,11 @@ import { useIdleLock } from "@/hooks/use-idle-lock";
  * desmonta la vista: el estado de la venta en curso (carrito, formularios)
  * se conserva intacto detrás del overlay.
  *
- * La re-autenticación reutiliza POST /api/auth/login con el username de la
- * sesión actual (obtenido de /api/auth/session): solo confirma identidad, no
- * hay flujo de login paralelo. Para usuarios con MFA, la respuesta
- * `mfaRequired` también prueba que la contraseña es correcta — suficiente
- * para desbloquear (la sesión ya existente completó su MFA al iniciarse).
+ * La re-autenticación usa POST /api/auth/verify-password (sesión ya activa):
+ * solo confirma la contraseña del usuario logueado, sin rotar la cookie y sin
+ * pasar por el rate limiter del login ni por el challenge de Turnstile — un
+ * desbloqueo fallido nunca puede bloquear el login real del usuario. El
+ * endpoint tiene su propio límite (5 fallos / 15 min).
  */
 export function IdleLock({ timeoutMinutes = 5 }: { timeoutMinutes?: number }) {
   const { locked, unlock } = useIdleLock(timeoutMinutes);
@@ -48,14 +48,14 @@ export function IdleLock({ timeoutMinutes = 5 }: { timeoutMinutes?: number }) {
 
   async function handleUnlock(event: FormEvent) {
     event.preventDefault();
-    if (!username || !password) return;
+    if (!password) return;
 
     setVerifying(true);
     setError(null);
     try {
-      const res = await apiFetch("/api/auth/login", {
+      const res = await apiFetch("/api/auth/verify-password", {
         method: "POST",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ password }),
         suppressAuthRedirect: true,
       });
 
@@ -67,10 +67,10 @@ export function IdleLock({ timeoutMinutes = 5 }: { timeoutMinutes?: number }) {
 
       if (res.status === 429) {
         setError("Demasiados intentos. Espera unos minutos e intenta de nuevo.");
-      } else if (res.status === 403) {
-        setError("Se requiere verificación adicional. Cierra sesión e ingresa de nuevo.");
-      } else {
+      } else if (res.status === 401) {
         setError("Contraseña incorrecta.");
+      } else {
+        setError("No se pudo verificar. Intenta de nuevo o cierra sesión.");
       }
     } catch {
       setError("No se pudo verificar. Revisa tu conexión e intenta de nuevo.");
@@ -130,7 +130,7 @@ export function IdleLock({ timeoutMinutes = 5 }: { timeoutMinutes?: number }) {
 
           <button
             type="submit"
-            disabled={verifying || !password || !username}
+            disabled={verifying || !password}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--color-master-600)] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[var(--color-master-700)] disabled:opacity-50"
           >
             <KeyRound className="h-4 w-4" />

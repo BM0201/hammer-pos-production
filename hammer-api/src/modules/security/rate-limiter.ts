@@ -39,14 +39,27 @@ function retryAfter(oldest: Date | null): number {
 }
 
 export type RateLimitResult =
-  | { allowed: true }
+  | { allowed: true; userFailures: number }
   | { allowed: false; reason: "pair" | "user_global" | "ip_global"; retryAfterSeconds: number };
+
+/**
+ * Umbral de fallos recientes por usuario a partir del cual el login exige
+ * resolver un challenge (Cloudflare Turnstile) antes de reintentar.
+ * Frena bots ANTES del límite duro y evita que rotar de IP lo esquive
+ * (el conteo es por username, no por IP). El route de login lo compara
+ * contra `userFailures` que checkLoginRateLimit ya calculó — sin COUNTs
+ * adicionales a la BD.
+ */
+export const LOGIN_CHALLENGE_AFTER_FAILURES = 2;
 
 /**
  * Verifica los tres niveles de rate limit para un intento de login:
  *   1. `username:ip`  — 5 fallos / 15 min  (más restrictivo)
  *   2. `u:<username>` — 10 fallos / 15 min  (global por usuario)
  *   3. `i:<ip>`       — 30 fallos / 15 min  (global por IP)
+ *
+ * Cuando permite el intento, expone `userFailures` (fallos recientes por
+ * username) para que el caller decida si exige challenge sin re-consultar.
  */
 export async function checkLoginRateLimit(
   username: string,
@@ -72,24 +85,44 @@ export async function checkLoginRateLimit(
     return { allowed: false, reason: "ip_global", retryAfterSeconds: retryAfter(await oldestInWindow(ipKey)) };
   }
 
+  return { allowed: true, userFailures: userCount };
+}
+
+// ── Re-autenticación (desbloqueo por inactividad en terminales POS) ────────
+// Namespace propio (`reauth:<userId>`) en la misma tabla loginAttempt: los
+// fallos de desbloqueo NO cuentan contra los límites del login normal ni
+// activan el challenge de Turnstile, y la retención (90 días) ya los cubre.
+
+const REAUTH_LIMIT = 5;
+
+export type ReauthRateLimitResult =
+  | { allowed: true }
+  | { allowed: false; retryAfterSeconds: number };
+
+/** Límite de intentos de re-autenticación: 5 fallos / 15 min por usuario. */
+export async function checkReauthRateLimit(userId: string): Promise<ReauthRateLimitResult> {
+  const key = `reauth:${userId}`;
+  const failures = await countRecentFailed(key);
+  if (failures >= REAUTH_LIMIT) {
+    return { allowed: false, retryAfterSeconds: retryAfter(await oldestInWindow(key)) };
+  }
   return { allowed: true };
 }
 
-/**
- * Umbral de fallos recientes por usuario a partir del cual el login exige
- * resolver un challenge (Cloudflare Turnstile) antes de reintentar.
- * Frena bots ANTES del límite duro y evita que rotar de IP lo esquive
- * (el conteo es por username, no por IP).
- */
-const CHALLENGE_AFTER_FAILURES = 2;
+/** Registra un intento de re-autenticación; el éxito limpia los fallos recientes. */
+export async function recordReauthAttempt(userId: string, success: boolean): Promise<void> {
+  const key = `reauth:${userId}`;
+  await prisma.loginAttempt.create({ data: { identifier: key, success } });
 
-/**
- * ¿Debe exigirse challenge (Turnstile) para el próximo intento de login de
- * este usuario? True cuando acumuló >= 2 fallos recientes en la ventana.
- */
-export async function requiresLoginChallenge(username: string): Promise<boolean> {
-  const failures = await countRecentFailed(`u:${username}`);
-  return failures >= CHALLENGE_AFTER_FAILURES;
+  if (success) {
+    await prisma.loginAttempt.deleteMany({
+      where: {
+        identifier: key,
+        attemptedAt: { gte: new Date(Date.now() - WINDOW_MS) },
+        success: false,
+      },
+    });
+  }
 }
 
 /**

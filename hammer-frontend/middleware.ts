@@ -33,12 +33,22 @@ const SESSION_COOKIE = "__Host-hammer_session";
 
 const isDev = process.env.NODE_ENV !== "production";
 
+// Archivos estáticos reales (public/, sw.js, assets) — pasan sin CSP ni auth.
+// Deliberadamente por extensión conocida y NO `pathname.includes(".")`: una
+// ruta de app que contenga un punto (ej. un SKU en la URL) debe seguir
+// recibiendo CSP y nonce.
+const STATIC_FILE_RE = /\.(js|mjs|css|map|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|eot|json|txt|xml|webmanifest|pdf|mp4|webm)$/i;
+
+// Orígenes externos permitidos para <script> (Turnstile). Una sola lista para
+// dev y prod — al agregar un origen aquí, ambos CSP lo heredan.
+const SCRIPT_ORIGINS = "https://challenges.cloudflare.com";
+
 function buildCsp(nonce: string): string {
   // challenges.cloudflare.com: widget de Turnstile en el login (script + iframe
   // + verificación). fonts.googleapis.com/gstatic: @import de DM Mono en /login.
   const scriptSrc = isDev
-    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com"
-    : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https://challenges.cloudflare.com`;
+    ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${SCRIPT_ORIGINS}`
+    : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' ${SCRIPT_ORIGINS}`;
 
   return [
     "default-src 'self'",
@@ -61,7 +71,7 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Static assets
-  if (pathname.startsWith("/_next") || pathname.includes(".")) {
+  if (pathname.startsWith("/_next") || STATIC_FILE_RE.test(pathname)) {
     return NextResponse.next();
   }
 

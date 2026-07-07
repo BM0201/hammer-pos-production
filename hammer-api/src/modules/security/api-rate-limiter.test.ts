@@ -53,6 +53,8 @@ test("classify: reportes/analytics → política analytics por usuario (20/min)"
     "/api/reports/sales/summary",
     "/api/analytics/dashboard",
     "/api/master/analytics/abc-xyz/123",
+    "/api/cash-closure/reports",
+    "/api/branch/operations/op123/daily-report",
   ]) {
     const policy = classifyApiRequest(path, "GET");
     assert.ok(policy, `esperaba política para ${path}`);

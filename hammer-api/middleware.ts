@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { decodeSession, makeSessionCookieName } from "@/modules/auth/session";
 import { enforceApiRateLimit } from "@/modules/security/api-rate-limiter";
+import { getClientIp } from "@/lib/client-ip";
 
 /**
  * Backend (hammer-api) middleware.
@@ -44,15 +45,6 @@ function isRequestBodyTooLarge(request: NextRequest): boolean {
 
   const contentLength = Number(rawContentLength);
   return Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES;
-}
-
-function getClientIp(request: NextRequest): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  const forwardedIp = forwardedFor?.split(",")[0]?.trim();
-  if (forwardedIp) return forwardedIp;
-
-  const realIp = request.headers.get("x-real-ip")?.trim();
-  return realIp || "unknown";
 }
 
 function rateLimitResponse(retryAfterSeconds: number) {

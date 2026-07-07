@@ -15,10 +15,11 @@ import {
   disableMfa,
 } from "@/modules/auth/mfa-service";
 import { prisma } from "@/lib/prisma";
+import { getClientIp } from "@/lib/client-ip";
 
 function getAuditContext(req: Request) {
   return {
-    ipAddress: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown",
+    ipAddress: getClientIp(req),
     userAgent: req.headers.get("user-agent") ?? "unknown",
   };
 }
