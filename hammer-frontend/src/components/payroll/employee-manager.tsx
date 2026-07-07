@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   RefreshCw,
   X,
+  Trash2,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import toast from "react-hot-toast";
@@ -98,6 +99,7 @@ type EmployeeLoan = {
   principalAmount: string;
   outstandingBalance: string;
   installmentAmount: string | null;
+  installmentFrequency?: "MONTHLY" | "BIWEEKLY" | string;
   issuedAt: string;
   status: "ACTIVE" | "PAID" | "CANCELLED" | string;
   notes: string | null;
@@ -167,6 +169,7 @@ export function EmployeeManager() {
     branchId: "",
     principalAmount: "",
     installmentAmount: "",
+    installmentFrequency: "MONTHLY" as "MONTHLY" | "BIWEEKLY",
     notes: "",
   });
 
@@ -174,6 +177,7 @@ export function EmployeeManager() {
   const [confirmDeactivateEmpId, setConfirmDeactivateEmpId] = useState<string | null>(null);
   const [confirmCancelLoanId, setConfirmCancelLoanId] = useState<string | null>(null);
   const [confirmPostPayroll, setConfirmPostPayroll] = useState(false);
+  const [confirmDeletePayroll, setConfirmDeletePayroll] = useState(false);
   const [manualPaymentLoanId, setManualPaymentLoanId] = useState<string | null>(null);
   const [manualPaymentAmountStr, setManualPaymentAmountStr] = useState("");
 
@@ -383,6 +387,30 @@ export function EmployeeManager() {
     }
   };
 
+  // Elimina un borrador (DRAFT) de nómina subido por error. El backend bloquea
+  // eliminar nóminas ya posteadas o con pagos, evitando descuadres o pagos dobles.
+  const handleDeletePayroll = async () => {
+    if (!payrollResult?.payrollRunId) return;
+    setLoading(true);
+    try {
+      const r = await apiFetch(`/api/payroll/runs/${payrollResult.payrollRunId}`, { method: "DELETE" });
+      const raw = await r.json();
+      if (!r.ok) {
+        flash("error", getErrorMessage(raw, "Error al eliminar el borrador de nómina"));
+        return;
+      }
+      flash("success", "Borrador de nómina eliminado");
+      setPayrollResult(null);
+      setDisbursements([]);
+      setCashStatus([]);
+    } catch {
+      flash("error", "Error de conexión al eliminar el borrador");
+    } finally {
+      setLoading(false);
+      setConfirmDeletePayroll(false);
+    }
+  };
+
   const handlePayDisbursement = async (period: "FIRST_HALF" | "SECOND_HALF") => {
     if (!payrollResult?.payrollRunId) return;
     setDisbLoading(period);
@@ -436,6 +464,7 @@ export function EmployeeManager() {
           branchId: loanForm.branchId,
           principalAmount,
           installmentAmount,
+          installmentFrequency: loanForm.installmentFrequency,
           notes: loanForm.notes || null,
         }),
       });
@@ -444,7 +473,7 @@ export function EmployeeManager() {
         flash("error", getErrorMessage(raw, "Error al crear prestamo"));
         return;
       }
-      setLoanForm({ employeeId: "", branchId: selectedBranch || "", principalAmount: "", installmentAmount: "", notes: "" });
+      setLoanForm({ employeeId: "", branchId: selectedBranch || "", principalAmount: "", installmentAmount: "", installmentFrequency: "MONTHLY", notes: "" });
       flash("success", "Prestamo/adelanto registrado");
       await loadLoans();
     } catch {
@@ -723,10 +752,16 @@ export function EmployeeManager() {
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
                   {payrollView === "BIWEEKLY" ? "Calcular quincena" : "Calcular nómina"}
                 </button>
-                {payrollResult?.payrollRunStatus === "DRAFT" && !confirmPostPayroll && (
-                  <button onClick={() => setConfirmPostPayroll(true)} disabled={loading} className="flex items-center gap-2 bg-[var(--color-success-600)] hover:bg-[var(--color-success-700)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
-                    <CheckCircle2 className="h-4 w-4" /> Postear nómina
-                  </button>
+                {payrollResult?.payrollRunStatus === "DRAFT" && !confirmPostPayroll && !confirmDeletePayroll && (
+                  <>
+                    <button onClick={() => setConfirmPostPayroll(true)} disabled={loading} className="flex items-center gap-2 bg-[var(--color-success-600)] hover:bg-[var(--color-success-700)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                      <CheckCircle2 className="h-4 w-4" /> Postear nómina
+                    </button>
+                    {/* Eliminar borrador: útil cuando la nómina se calculó/subió por error. */}
+                    <button onClick={() => setConfirmDeletePayroll(true)} disabled={loading} className="flex items-center gap-2 border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-700)] hover:bg-[var(--color-danger-100)] px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                      <Trash2 className="h-4 w-4" /> Eliminar borrador
+                    </button>
+                  </>
                 )}
                 {confirmPostPayroll && (
                   <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-sm text-[var(--color-warning-700)]">
@@ -734,6 +769,14 @@ export function EmployeeManager() {
                     <span>¿Postear? Sincroniza gastos y aplica deducciones. No se puede duplicar.</span>
                     <button onClick={() => { void handlePostPayroll(); setConfirmPostPayroll(false); }} disabled={loading} className="px-3 py-1 bg-[var(--color-success-600)] text-white rounded-lg text-xs font-medium disabled:opacity-50">Confirmar</button>
                     <button onClick={() => setConfirmPostPayroll(false)} className="px-3 py-1 text-[var(--color-text-muted)] hover:bg-white/50 rounded-lg text-xs">Cancelar</button>
+                  </div>
+                )}
+                {confirmDeletePayroll && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-3 py-2 text-sm text-[var(--color-danger-700)]">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    <span>¿Eliminar este borrador? Se borra el cálculo y sus desembolsos pendientes. No afecta pagos ya realizados.</span>
+                    <button onClick={() => void handleDeletePayroll()} disabled={loading} className="px-3 py-1 bg-[var(--color-danger-600)] text-white rounded-lg text-xs font-medium disabled:opacity-50">Eliminar</button>
+                    <button onClick={() => setConfirmDeletePayroll(false)} className="px-3 py-1 text-[var(--color-text-muted)] hover:bg-white/50 rounded-lg text-xs">Cancelar</button>
                   </div>
                 )}
                 {payrollResult?.payrollRunStatus === "POSTED" && (() => {
@@ -918,7 +961,7 @@ export function EmployeeManager() {
             </div>
             <div className="p-4 space-y-3">
               <p className="text-xs text-[var(--color-text-soft)]">Los préstamos no son gasto operativo; se recuperan vía deducción de nómina.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
                 <label className="grid gap-1 text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
                   Empleado
                   <select value={loanForm.employeeId} onChange={(e) => handleEmployeeForLoan(e.target.value)} className="hm-input rounded-lg text-sm font-normal normal-case">
@@ -938,13 +981,20 @@ export function EmployeeManager() {
                   <input type="number" min="0.01" step="0.01" value={loanForm.principalAmount} onChange={(e) => setLoanForm({ ...loanForm, principalAmount: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" />
                 </label>
                 <label className="grid gap-1 text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
-                  Cuota mensual
+                  Frecuencia
+                  <select value={loanForm.installmentFrequency} onChange={(e) => setLoanForm({ ...loanForm, installmentFrequency: e.target.value as "MONTHLY" | "BIWEEKLY" })} className="hm-input rounded-lg text-sm font-normal normal-case">
+                    <option value="MONTHLY">Mensual</option>
+                    <option value="BIWEEKLY">Quincenal</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
+                  {loanForm.installmentFrequency === "BIWEEKLY" ? "Cuota por quincena" : "Cuota mensual"}
                   <input type="number" min="0.01" step="0.01" value={loanForm.installmentAmount} onChange={(e) => setLoanForm({ ...loanForm, installmentAmount: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" />
                 </label>
                 <button onClick={handleCreateLoan} disabled={loading} className="self-end flex items-center justify-center gap-2 bg-[var(--color-info-600)] hover:bg-[var(--color-info-700)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
                   <Plus className="h-4 w-4" /> Registrar
                 </button>
-                <label className="grid gap-1 text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide sm:col-span-2 lg:col-span-5">
+                <label className="grid gap-1 text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide sm:col-span-2 lg:col-span-6">
                   Notas
                   <input value={loanForm.notes} onChange={(e) => setLoanForm({ ...loanForm, notes: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" />
                 </label>
@@ -984,7 +1034,14 @@ export function EmployeeManager() {
                         <td className="text-[var(--color-text-muted)]">{loan.branch.code}</td>
                         <td className="text-right font-mono">{fmt(loan.principalAmount)}</td>
                         <td className="text-right font-mono font-semibold">{fmt(loan.outstandingBalance)}</td>
-                        <td className="text-right font-mono">{loan.installmentAmount ? fmt(loan.installmentAmount) : "—"}</td>
+                        <td className="text-right font-mono">
+                          {loan.installmentAmount ? fmt(loan.installmentAmount) : "—"}
+                          {loan.installmentAmount && (
+                            <span className={`ml-1.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide ${loan.installmentFrequency === "BIWEEKLY" ? "bg-[var(--color-info-100)] text-[var(--color-info-700)]" : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"}`}>
+                              {loan.installmentFrequency === "BIWEEKLY" ? "Quincenal" : "Mensual"}
+                            </span>
+                          )}
+                        </td>
                         <td>
                           <span className={`inline-flex rounded-full px-2 py-0.5 text-[0.5625rem] font-semibold ${
                             loan.status === "ACTIVE" ? "bg-[var(--color-info-100)] text-[var(--color-info-700)]" :

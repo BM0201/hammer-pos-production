@@ -2,11 +2,14 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 
+export type LoanInstallmentFrequency = "MONTHLY" | "BIWEEKLY";
+
 export type CreateEmployeeLoanInput = {
   employeeId: string;
   branchId: string;
   principalAmount: number;
   installmentAmount?: number | null;
+  installmentFrequency?: LoanInstallmentFrequency;
   notes?: string | null;
 };
 
@@ -18,6 +21,7 @@ export type ListEmployeeLoansFilters = {
 
 export type UpdateEmployeeLoanInput = {
   installmentAmount?: number | null;
+  installmentFrequency?: LoanInstallmentFrequency;
   notes?: string | null;
 };
 
@@ -25,6 +29,10 @@ function assertPositiveAmount(value: number, field: string) {
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`INVALID_INPUT: ${field} debe ser mayor a 0`);
   }
+}
+
+function normalizeFrequency(value: LoanInstallmentFrequency | undefined): LoanInstallmentFrequency {
+  return value === "BIWEEKLY" ? "BIWEEKLY" : "MONTHLY";
 }
 
 function toDecimal(value: number) {
@@ -57,6 +65,7 @@ export async function createEmployeeLoan(input: CreateEmployeeLoanInput, actorUs
       principalAmount: principal,
       outstandingBalance: principal,
       installmentAmount: input.installmentAmount ? toDecimal(input.installmentAmount) : null,
+      installmentFrequency: normalizeFrequency(input.installmentFrequency),
       status: "ACTIVE",
       notes: input.notes?.trim() || null,
     },
@@ -128,6 +137,9 @@ export async function updateEmployeeLoan(id: string, input: UpdateEmployeeLoanIn
     data: {
       ...(input.installmentAmount !== undefined
         ? { installmentAmount: input.installmentAmount === null ? null : toDecimal(input.installmentAmount) }
+        : {}),
+      ...(input.installmentFrequency !== undefined
+        ? { installmentFrequency: normalizeFrequency(input.installmentFrequency) }
         : {}),
       ...(input.notes !== undefined ? { notes: input.notes?.trim() || null } : {}),
     },

@@ -237,6 +237,44 @@ export async function listPayrollRuns(filters?: {
   });
 }
 
+/**
+ * Elimina una corrida de nómina en estado DRAFT (borrador).
+ * - Solo se permite si NO ha sido posteada (POSTED): una nómina posteada ya afectó
+ *   gastos, deducciones de préstamos y caja, por lo que no puede borrarse aquí.
+ * - Guard extra: si alguna línea ya tiene un desembolso PAGADO, se bloquea.
+ * - Borra en cascada las líneas y los desembolsos PENDIENTES antes de eliminar la corrida.
+ * Esto evita que un borrador subido por error quede registrado y se pague por duplicado.
+ */
+export async function deletePayrollRun(id: string, actorUserId?: string) {
+  const existing = await prisma.payrollRun.findUnique({
+    where: { id },
+    include: { branch: { select: { id: true, code: true, name: true } } },
+  });
+  if (!existing) throw new Error("PAYROLL_RUN_NOT_FOUND");
+  if (existing.status === "POSTED") {
+    throw new Error("INVALID_INPUT: No se puede eliminar una nómina ya posteada. Solo se pueden eliminar borradores.");
+  }
+  if (existing.status !== "DRAFT") {
+    throw new Error("INVALID_INPUT: Solo se puede eliminar una nómina en borrador.");
+  }
+
+  // Guard defensivo: ningún desembolso de esta corrida debe estar PAGADO.
+  const paidCount = await prisma.payrollDisbursement.count({
+    where: { payrollRunId: id, status: "PAID" },
+  });
+  if (paidCount > 0) {
+    throw new Error("INVALID_INPUT: Esta nómina tiene pagos registrados y no puede eliminarse.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.payrollDisbursement.deleteMany({ where: { payrollRunId: id } });
+    await tx.payrollLine.deleteMany({ where: { payrollRunId: id } });
+    await tx.payrollRun.delete({ where: { id } });
+  });
+
+  return { deleted: true, id, year: existing.year, month: existing.month, branchId: existing.branchId };
+}
+
 async function findPayrollRunForPeriod(year: number, month: number, branchId?: string | null) {
   if (branchId) {
     return prisma.payrollRun.findUnique({
@@ -279,7 +317,11 @@ async function calculateLoanDeduction(employeeId: string, grossSalary: number) {
   for (const loan of loans) {
     if (remainingGross <= 0) break;
     const balance = Number(loan.outstandingBalance);
-    const requested = loan.installmentAmount ? Number(loan.installmentAmount) : balance;
+    const perInstallment = loan.installmentAmount ? Number(loan.installmentAmount) : balance;
+    // Si la cuota es quincenal (BIWEEKLY), en un mes hay 2 quincenas, por lo que
+    // la recuperación mensual equivale a 2 cuotas (topada por el saldo pendiente).
+    const monthlyInstallments = loan.installmentFrequency === "BIWEEKLY" ? 2 : 1;
+    const requested = perInstallment * monthlyInstallments;
     const deduction = Math.min(balance, requested, remainingGross);
     if (deduction <= 0) continue;
     total += deduction;

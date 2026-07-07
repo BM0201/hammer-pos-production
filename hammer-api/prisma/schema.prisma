@@ -1686,6 +1686,7 @@ model EmployeeLoan {
   principalAmount    Decimal
   outstandingBalance Decimal
   installmentAmount  Decimal?
+  installmentFrequency String @default("MONTHLY") /// MONTHLY, BIWEEKLY (quincenal): la cuota se descuenta en cada quincena
   issuedAt           DateTime @default(now())
   status             String   @default("ACTIVE") /// ACTIVE, PAID, CANCELLED
   notes              String?

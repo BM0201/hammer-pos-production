@@ -12,6 +12,7 @@ const createLoanSchema = z.object({
   branchId: z.string().cuid(),
   principalAmount: z.coerce.number().positive(),
   installmentAmount: z.coerce.number().positive().optional().nullable(),
+  installmentFrequency: z.enum(["MONTHLY", "BIWEEKLY"]).optional(),
   notes: z.string().max(1000).optional().nullable(),
 });
 
