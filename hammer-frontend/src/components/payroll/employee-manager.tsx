@@ -178,6 +178,9 @@ export function EmployeeManager() {
   const [confirmCancelLoanId, setConfirmCancelLoanId] = useState<string | null>(null);
   const [confirmPostPayroll, setConfirmPostPayroll] = useState(false);
   const [confirmDeletePayroll, setConfirmDeletePayroll] = useState(false);
+  // Borrado de borradores (DRAFT) antiguos directamente desde la tabla de corridas.
+  const [confirmDeleteRunId, setConfirmDeleteRunId] = useState<string | null>(null);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [manualPaymentLoanId, setManualPaymentLoanId] = useState<string | null>(null);
   const [manualPaymentAmountStr, setManualPaymentAmountStr] = useState("");
 
@@ -408,6 +411,34 @@ export function EmployeeManager() {
     } finally {
       setLoading(false);
       setConfirmDeletePayroll(false);
+    }
+  };
+
+  // Elimina un borrador (DRAFT) antiguo directamente desde la tabla de corridas,
+  // sin necesidad de recalcularlo. Útil para limpiar borradores viejos o mal
+  // calculados que quedaron atascados. El backend bloquea POSTED o con pagos.
+  const handleDeleteRunById = async (runId: string) => {
+    setDeletingRunId(runId);
+    try {
+      const r = await apiFetch(`/api/payroll/runs/${runId}`, { method: "DELETE" });
+      const raw = await r.json();
+      if (!r.ok) {
+        flash("error", getErrorMessage(raw, "Error al eliminar el borrador de nómina"));
+        return;
+      }
+      flash("success", "Borrador de nómina eliminado");
+      // Si el borrador borrado es el que está cargado en pantalla, límpialo.
+      if (payrollResult?.payrollRunId === runId) {
+        setPayrollResult(null);
+        setDisbursements([]);
+        setCashStatus([]);
+      }
+      await loadHistory();
+    } catch {
+      flash("error", "Error de conexión al eliminar el borrador");
+    } finally {
+      setDeletingRunId(null);
+      setConfirmDeleteRunId(null);
     }
   };
 
@@ -1096,6 +1127,13 @@ export function EmployeeManager() {
                 <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               </button>
             </div>
+            {/* Aviso: los borradores (DRAFT) pueden eliminarse aquí sin recalcular. */}
+            {payrollRuns.some((r) => r.payrollRunStatus === "DRAFT") && (
+              <div className="mx-3 mt-3 flex items-start gap-2 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-2.5 text-xs text-[var(--color-warning-700)]">
+                <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                <span>Hay borradores (DRAFT) pendientes. Puedes eliminar los que quedaron atascados o mal calculados con el botón <strong>Eliminar</strong>. No afecta nóminas ya posteadas.</span>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="hm-table w-full">
                 <thead>
@@ -1106,21 +1144,68 @@ export function EmployeeManager() {
                     <th className="text-right">Deducciones</th>
                     <th className="text-right">Neto</th>
                     <th className="text-right">Costo empresa</th>
+                    <th className="text-right">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {payrollRuns.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">Sin corridas formales de nómina.</td></tr>
-                  ) : payrollRuns.map((run) => (
+                    <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">Sin corridas formales de nómina.</td></tr>
+                  ) : payrollRuns.map((run) => {
+                    const isDraft = run.payrollRunStatus === "DRAFT";
+                    const isConfirming = confirmDeleteRunId === run.payrollRunId;
+                    const isDeleting = deletingRunId === run.payrollRunId;
+                    return (
                     <tr key={run.payrollRunId}>
                       <td className="text-[var(--color-text)]">{run.year}-{String(run.month).padStart(2, "0")} · {run.employeeCount} empleados</td>
-                      <td className="text-[var(--color-text-muted)]">{run.payrollRunStatus}</td>
+                      <td>
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[0.5625rem] font-bold ${
+                          isDraft
+                            ? "bg-[var(--color-warning-100)] text-[var(--color-warning-700)]"
+                            : "bg-[var(--color-success-100)] text-[var(--color-success-700)]"
+                        }`}>
+                          {isDraft ? "BORRADOR" : run.payrollRunStatus}
+                        </span>
+                      </td>
                       <td className="text-right font-mono">{fmt(run.totalGross)}</td>
                       <td className="text-right font-mono">{fmt(run.totalDeductions)}</td>
                       <td className="text-right font-mono">{fmt(run.totalNet)}</td>
                       <td className="text-right font-mono">{fmt(run.totalEmployerCost)}</td>
+                      <td className="text-right">
+                        {isDraft ? (
+                          isConfirming ? (
+                            <div className="flex justify-end items-center gap-1.5">
+                              <span className="text-[0.6875rem] text-[var(--color-danger-700)]">¿Eliminar?</span>
+                              <button
+                                onClick={() => void handleDeleteRunById(run.payrollRunId)}
+                                disabled={isDeleting}
+                                className="px-2 py-1 bg-[var(--color-danger-600)] text-white rounded-md text-[0.6875rem] font-medium disabled:opacity-50"
+                              >
+                                {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : "Sí"}
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteRunId(null)}
+                                disabled={isDeleting}
+                                className="px-2 py-1 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)] rounded-md text-[0.6875rem]"
+                              >
+                                No
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmDeleteRunId(run.payrollRunId)}
+                              className="inline-flex items-center gap-1 border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-700)] hover:bg-[var(--color-danger-100)] px-2.5 py-1 rounded-md text-[0.6875rem] font-medium transition-colors"
+                              title="Eliminar borrador atascado"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                            </button>
+                          )
+                        ) : (
+                          <span className="text-[0.6875rem] text-[var(--color-text-soft)]">—</span>
+                        )}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

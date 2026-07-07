@@ -1167,7 +1167,7 @@ export function UsersAdmin() {
     }
   }
 
-  async function handleSetGlobalRole(user: UserRow, globalRole: "MASTER" | null) {
+  async function handleSetGlobalRole(user: UserRow, globalRole: "MASTER" | "ACCOUNTANT" | null) {
     setSavingGlobalRole(true);
     try {
       const response = await apiFetch(`/api/master/users/${user.id}`, {
@@ -1765,7 +1765,7 @@ export function UsersAdmin() {
                       <span>
                         {confirmGlobalRoleChange === "promote"
                           ? <>¿Dar rol global <strong>MASTER</strong> a @{selectedUser.username}? Tendrá control total del sistema.</>
-                          : <>¿Quitar el rol global <strong>MASTER</strong> a @{selectedUser.username}?</>}
+                          : <>¿Quitar el rol global <strong>{selectedUser.globalRole}</strong> a @{selectedUser.username}?</>}
                       </span>
                       <Button
                         variant="danger"
@@ -1779,7 +1779,7 @@ export function UsersAdmin() {
                         Cancelar
                       </Button>
                     </div>
-                  ) : selectedUser.globalRole === "MASTER" ? (
+                  ) : selectedUser.globalRole === "MASTER" || selectedUser.globalRole === "ACCOUNTANT" ? (
                     <Button variant="secondary" size="sm" onClick={() => setConfirmGlobalRoleChange("demote")}>
                       Quitar rol global
                     </Button>
@@ -1831,7 +1831,17 @@ export function UsersAdmin() {
                 </Button>
               </div>
 
-              {/* Membership assignment */}
+              {/* Membership assignment — oculto para CONTADOR (rol global de solo
+                  contabilidad que abarca todas las sucursales; no requiere membresía). */}
+              {selectedUser.globalRole === "ACCOUNTANT" ? (
+                <div className="rounded-xl border border-[var(--color-accountant-200)] bg-[var(--color-accountant-50)] p-3 text-sm text-[var(--color-accountant-700)] flex items-start gap-2">
+                  <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <p>
+                    <strong>CONTADOR</strong> es un rol global de solo contabilidad: ve las finanzas de
+                    <strong> todas las sucursales</strong>. No requiere ni admite membresías de sucursal.
+                  </p>
+                </div>
+              ) : (
               <div className="rounded-xl border border-[var(--color-border)] overflow-hidden">
                 <div className="hm-module-card-header">
                   <div className="flex items-center gap-2">
@@ -1875,8 +1885,10 @@ export function UsersAdmin() {
                   />
                 </div>
               </div>
+              )}
 
-              {/* Memberships table */}
+              {/* Memberships table — oculta para CONTADOR (no tiene membresías). */}
+              {selectedUser.globalRole !== "ACCOUNTANT" && (
               <div className="rounded-xl border border-[var(--color-border)] overflow-hidden">
                 <div className="hm-card-header-teal px-4 py-3 flex items-center gap-2">
                   <Link2 className="h-4 w-4" />
@@ -1959,6 +1971,7 @@ export function UsersAdmin() {
                   </table>
                 </div>
               </div>
+              )}
 
               {/* Password Reset Modal */}
               {resetModalOpen && selectedUser && (
