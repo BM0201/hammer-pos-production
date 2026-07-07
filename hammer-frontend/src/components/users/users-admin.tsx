@@ -242,7 +242,7 @@ function RolePresetPicker({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Create User Modal
+// Create User Modal (with temp password display after creation)
 // ─────────────────────────────────────────────────────────────────────────────
 function CreateUserModal({
   open,
@@ -256,6 +256,7 @@ function CreateUserModal({
   selectedPreset,
   isRoleAvailable,
   arePresetRolesAvailable,
+  tempPassword,
 }: {
   open: boolean;
   onClose: () => void;
@@ -268,7 +269,17 @@ function CreateUserModal({
   selectedPreset: (typeof USER_ROLE_PRESETS)[number];
   isRoleAvailable: (branch: BranchOption | null, role: MembershipRole) => boolean;
   arePresetRolesAvailable: (branch: BranchOption | null, preset: (typeof USER_ROLE_PRESETS)[number]) => boolean;
+  tempPassword: string | null;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const copyToClipboard = useCallback(async (pwd: string) => {
+    await copyTextToClipboard(pwd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  }, []);
+
   if (!open) return null;
 
   return (
@@ -306,7 +317,66 @@ function CreateUserModal({
         <form onSubmit={onSubmit}>
           {/* Body */}
           <div className="px-6 py-5 space-y-3 max-h-[70vh] overflow-y-auto">
-            <div className="grid gap-2 sm:grid-cols-2">
+            {tempPassword ? (
+              /* Success state - show temp password */
+              <>
+                <div className="rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-800 flex items-start gap-2">
+                  <Check className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <p><strong>Usuario creado exitosamente.</strong> Copia esta contraseña temporal y compártela con el usuario.</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--color-text)] mb-2">
+                    Contraseña temporal (solo visible ahora):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        value={tempPassword}
+                        readOnly
+                        className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2.5 pr-10 text-sm font-mono tracking-wider select-all focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-[var(--color-master-500)]"
+                        onClick={(e) => (e.target as HTMLInputElement).select()}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(tempPassword)}
+                      className={`flex items-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                        copied
+                          ? "bg-[var(--color-success-50)] text-[var(--color-success-700)] border border-green-300"
+                          : "bg-[var(--color-master-600)] text-white hover:bg-[var(--color-master-700)]"
+                      }`}
+                    >
+                      {copied ? (
+                        <>
+                          <Check className="h-4 w-4" />
+                          Copiada
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-4 w-4" />
+                          Copiar
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-sm text-[var(--color-warning-700)] flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <p>El usuario deberá cambiar esta contraseña en su primer inicio de sesión.</p>
+                </div>
+              </>
+            ) : (
+              /* Form state - create user */
+              <>
+              <div className="grid gap-2 sm:grid-cols-2">
               <label className="grid gap-1">
                 <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Usuario *</span>
                 <input
@@ -394,29 +464,43 @@ function CreateUserModal({
                   : "MASTER es un rol global. Si también necesita operar en una sucursal concreta, podrás agregarle membresías desde el panel de edición."}
               </div>
             )}
+              </>
+            )}
           </div>
 
           {/* Footer */}
           <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={creating}
-              className="rounded-lg px-4 py-2 text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] transition-colors disabled:opacity-50"
-            >
-              Cancelar
-            </button>
-            <Button
-              type="submit"
-              loading={creating}
-              disabled={
-                form.globalRole !== "MASTER" && form.globalRole !== "ACCOUNTANT" &&
-                (branches.length === 0 || !arePresetRolesAvailable(selectedBranch, selectedPreset))
-              }
-              icon={<UserPlus className="h-4 w-4" />}
-            >
-              Crear usuario
-            </Button>
+            {tempPassword ? (
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-master-700)] transition-colors"
+              >
+                Cerrar
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={creating}
+                  className="rounded-lg px-4 py-2 text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] transition-colors disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <Button
+                  type="submit"
+                  loading={creating}
+                  disabled={
+                    form.globalRole !== "MASTER" && form.globalRole !== "ACCOUNTANT" &&
+                    (branches.length === 0 || !arePresetRolesAvailable(selectedBranch, selectedPreset))
+                  }
+                  icon={<UserPlus className="h-4 w-4" />}
+                >
+                  Crear usuario
+                </Button>
+              </>
+            )}
           </div>
         </form>
       </div>
@@ -702,6 +786,7 @@ export function UsersAdmin() {
   const [branchFilterId, setBranchFilterId] = useState<string>("");
   const [tableView, setTableView] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createTempPassword, setCreateTempPassword] = useState<string | null>(null);
 
   // Bulk actions (vista tabla)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -941,15 +1026,14 @@ export function UsersAdmin() {
       if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo crear el usuario."));
 
       const tempPwd = data?.tempPassword ?? "";
+      // Mostrar la contraseña en el modal (NO cerrar)
+      setCreateTempPassword(tempPwd);
       setCreateForm((prev) => ({ username: "", fullName: "", email: "", globalRole: "", branchId: prev.branchId, rolePreset: "SALES" }));
-      setCreateModalOpen(false);
       await load();
-      toast.success(
-        tempPwd
-          ? `✅ Usuario creado. Contraseña temporal: ${tempPwd} — Deberá cambiarla en su primer login.`
-          : "✅ Usuario creado correctamente.",
-        { duration: 12000 },
-      );
+      if (!tempPwd) {
+        toast.success("✅ Usuario creado correctamente.");
+      }
+      // Si hay tempPassword, se muestra en el modal, no en toast
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear el usuario.");
     } finally {
@@ -1298,7 +1382,10 @@ export function UsersAdmin() {
 
       <CreateUserModal
         open={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
+        onClose={() => {
+          setCreateModalOpen(false);
+          setCreateTempPassword(null);
+        }}
         form={createForm}
         setForm={setCreateForm}
         branches={branches}
@@ -1308,6 +1395,7 @@ export function UsersAdmin() {
         selectedPreset={selectedCreatePreset}
         isRoleAvailable={isRoleAvailable}
         arePresetRolesAvailable={arePresetRolesAvailable}
+        tempPassword={createTempPassword}
       />
 
       {bulkResetResults && (
