@@ -55,6 +55,8 @@ type UserRow = {
   mustChangePassword?: boolean;
   createdAt: string;
   userBranchRoles: MembershipRow[];
+  /** Total de registros de actividad; 0 = nunca movió nada (borrable por completo). */
+  activityCount?: number;
 };
 
 type CreateFormState = {
@@ -830,6 +832,7 @@ export function UsersAdmin() {
 
   // Inline confirmations (replaces confirm() dialogs)
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
+  const [confirmHardDelete, setConfirmHardDelete] = useState(false);
   const [confirmRemoveMembershipId, setConfirmRemoveMembershipId] = useState<string | null>(null);
 
   const [createForm, setCreateForm] = useState<CreateFormState>({
@@ -977,6 +980,7 @@ export function UsersAdmin() {
     setEditingEmail(false);
     setConfirmGlobalRoleChange(null);
     setConfirmDeactivate(false);
+    setConfirmHardDelete(false);
   }, [selectedUserId]);
 
   /* Feedback now handled by react-hot-toast */
@@ -1264,6 +1268,29 @@ export function UsersAdmin() {
       toast.success("Usuario desactivado correctamente. Sus roles se conservan para reactivarlo despues.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo desactivar el usuario.");
+    } finally {
+      setDeletingUser(false);
+    }
+  }
+
+  // Eliminación PERMANENTE: solo permitida por el backend si el usuario nunca
+  // registró actividad. Si tiene actividad, el backend responde con un error
+  // claro y el usuario se debe desactivar en su lugar.
+  async function hardDeleteUser(user: UserRow) {
+    setDeletingUser(true);
+    toast("Eliminando usuario...");
+
+    try {
+      const response = await apiFetch(`/api/master/users/${user.id}?permanent=true`, { method: "DELETE" });
+      const json = (await response.json()) as { message?: string; reason?: string; error?: string };
+
+      if (!response.ok) throw new Error(getErrorMessage(json, "No se pudo eliminar el usuario."));
+
+      if (selectedUserId === user.id) setSelectedUserId("");
+      await load();
+      toast.success("Usuario eliminado permanentemente.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el usuario.");
     } finally {
       setDeletingUser(false);
     }
@@ -1829,6 +1856,29 @@ export function UsersAdmin() {
                 >
                   Resetear contraseña
                 </Button>
+
+                {/* Eliminación permanente — solo para usuarios sin actividad. */}
+                {(selectedUser.activityCount ?? 0) === 0 && (
+                  confirmHardDelete ? (
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-danger-300)] bg-[var(--color-danger-50)] px-3 py-2 text-sm text-[var(--color-danger-700)]">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>¿Eliminar <strong>definitivamente</strong> a <strong>@{selectedUser.username}</strong>? Esta acción no se puede deshacer.</span>
+                      <Button variant="danger" size="sm" loading={deletingUser} onClick={() => { hardDeleteUser(selectedUser); setConfirmHardDelete(false); }}>Eliminar</Button>
+                      <Button variant="ghost" size="sm" onClick={() => setConfirmHardDelete(false)}>Cancelar</Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={savingUser || resetModalLoading || deletingUser}
+                      onClick={() => setConfirmHardDelete(true)}
+                      className="text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
+                      icon={<Trash2 className="h-4 w-4" />}
+                    >
+                      Eliminar permanentemente
+                    </Button>
+                  )
+                )}
               </div>
 
               {/* Membership assignment — oculto para CONTADOR (rol global de solo

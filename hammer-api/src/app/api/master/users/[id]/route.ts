@@ -1,6 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
-import { softDeleteUser, updateUser, getUserById } from "@/modules/users/service";
+import { softDeleteUser, hardDeleteUser, updateUser, getUserById } from "@/modules/users/service";
 import { updateUserSchema } from "@/modules/users/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -58,7 +58,12 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
       return forbidden("No tienes permisos para eliminar este usuario.");
     }
 
-    const result = await softDeleteUser(id, session!.userId);
+    // ?permanent=true elimina por completo al usuario, pero SOLO si nunca
+    // registró actividad en el sistema. En cualquier otro caso se desactiva.
+    const permanent = new URL(request.url).searchParams.get("permanent") === "true";
+    const result = permanent
+      ? await hardDeleteUser(id, session!.userId)
+      : await softDeleteUser(id, session!.userId);
     return ok(result);
   } catch (error) {
     return toHttpErrorResponse(error);

@@ -31,11 +31,27 @@ export async function listUsersWithMemberships() {
           branch: { select: { code: true, name: true } },
         },
       },
+      // Conteo de actividad para saber si el usuario puede eliminarse por
+      // completo (0 = nunca movió nada → borrado permanente permitido).
+      _count: {
+        select: Object.fromEntries(
+          USER_ACTIVITY_RELATIONS.map((relation) => [relation, true]),
+        ) as Prisma.UserCountOutputTypeSelect,
+      },
     },
   });
 
   const activeUsernames = new Set(users.filter((user) => user.isActive).map((user) => normalizeUsername(user.username)));
-  return users.filter((user) => user.isActive || !activeUsernames.has(normalizeUsername(user.username)));
+  return users
+    .filter((user) => user.isActive || !activeUsernames.has(normalizeUsername(user.username)))
+    .map((user) => {
+      const { _count, ...rest } = user;
+      const activityCount = Object.values(_count as unknown as Record<string, number>).reduce(
+        (total, value) => total + (value ?? 0),
+        0,
+      );
+      return { ...rest, activityCount };
+    });
 }
 
 export async function getUserById(userId: string) {
@@ -82,6 +98,160 @@ export async function softDeleteUser(userId: string, actorUserId: string) {
 
   await revokeAllUserSessions(userId, "USER_DEACTIVATED");
   return result;
+}
+
+/**
+ * Relaciones del modelo User que representan ACTIVIDAD real en el sistema
+ * (movimientos operativos, ventas, caja, aprobaciones, etc.). Si un usuario
+ * tiene registros en cualquiera de estas relaciones NO puede eliminarse de
+ * forma permanente — sólo desactivarse — para preservar la integridad
+ * histórica y de auditoría.
+ *
+ * Se excluyen a propósito: userBranchRoles (configuración de membresías),
+ * userPermissions (permisos propios, se borran en cascada), presences
+ * (telemetría efímera de conexión) y auditLogs (se conservan con actor nulo
+ * gracias a onDelete: SetNull). Ninguna de esas cuenta como "haber movido algo".
+ */
+const USER_ACTIVITY_RELATIONS = [
+  "openedSessions",
+  "closedSessions",
+  "reviewedCashSessions",
+  "cashSessionOperators",
+  "assignedCashOperators",
+  "createdCashMovements",
+  "approvedCashMovements",
+  "openedOperationalDays",
+  "closedOperationalDays",
+  "approvedOperationalDays",
+  "createdOrders",
+  "requestedSaleCancellations",
+  "approvedSaleCancellations",
+  "requestedSaleReturns",
+  "approvedSaleReturns",
+  "postedRefunds",
+  "approvedRefunds",
+  "createdCreditNotes",
+  "approvedCreditNotes",
+  "payments",
+  "preparedDispatchTickets",
+  "dispatchTickets",
+  "requestedApprovals",
+  "resolvedApprovals",
+  "requestedTransfers",
+  "approvedTransfers",
+  "purchaseOrders",
+  "createdDiscounts",
+  "updatedBranchRoleConfigs",
+  "updatedSystemSettings",
+  "createdTransportServices",
+  "updatedBranchModuleConfigs",
+  "updatedReorderPolicies",
+  "resolvedReorderAlerts",
+  "reviewedSuggestionBatches",
+  "createdRecipes",
+  "createdBatches",
+  "grantedPermissions",
+  "registeredManualInvoices",
+  "documentPrintLogs",
+  "createdDocumentTemplates",
+  "resolvedBrainDecisions",
+  "brainDecisionActionLogs",
+  "legacyBrainDecisions",
+  "targetedBrainDecisions",
+  "createdReplenishmentDrafts",
+  "approvedReplenishmentDrafts",
+] as const;
+
+/**
+ * Devuelve el total de registros de actividad de un usuario. 0 significa que
+ * el usuario nunca hizo ni movió nada en el sistema y puede eliminarse por
+ * completo.
+ */
+export async function getUserActivityCount(userId: string): Promise<number> {
+  const countSelect = Object.fromEntries(
+    USER_ACTIVITY_RELATIONS.map((relation) => [relation, true]),
+  );
+
+  const result = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { _count: { select: countSelect as Prisma.UserCountOutputTypeSelect } },
+  });
+
+  if (!result) return 0;
+  const counts = result._count as unknown as Record<string, number>;
+  return Object.values(counts).reduce((total, value) => total + (value ?? 0), 0);
+}
+
+/**
+ * Elimina PERMANENTEMENTE a un usuario, pero SOLO si no tiene actividad
+ * registrada en el sistema (ver getUserActivityCount). Ideal para depurar
+ * usuarios creados por error que nunca operaron.
+ *
+ * Si el usuario tiene actividad, lanza VALIDATION_ERROR: el llamador debe
+ * usar softDeleteUser (desactivar) en su lugar.
+ */
+export async function hardDeleteUser(userId: string, actorUserId: string) {
+  if (userId === actorUserId) {
+    throw new Error("VALIDATION_ERROR: no puedes eliminar tu propio usuario");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, username: true, email: true, globalRole: true },
+  });
+  if (!user) {
+    throw new Error("NOT_FOUND: usuario no encontrado");
+  }
+
+  const activityCount = await getUserActivityCount(userId);
+  if (activityCount > 0) {
+    throw new Error(
+      "VALIDATION_ERROR: el usuario tiene actividad registrada en el sistema y no puede eliminarse. Desactívalo en su lugar.",
+    );
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Limpieza de filas de configuración/telemetría propias que bloquearían
+      // el borrado por FK (los auditLogs se conservan con actor nulo).
+      await tx.userBranchRole.deleteMany({ where: { userId } });
+      await tx.userPermission.deleteMany({ where: { userId } });
+      await tx.userPresence.deleteMany({ where: { userId } });
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId,
+          module: "users",
+          action: "USER_DELETED",
+          entityType: "User",
+          entityId: userId,
+          metadataJson: {
+            username: user.username,
+            email: user.email,
+            globalRole: user.globalRole,
+            permanent: true,
+          },
+        },
+      });
+
+      await tx.user.delete({ where: { id: userId } });
+    });
+  } catch (error) {
+    // Red de seguridad: si alguna FK inesperada impide el borrado, tratamos al
+    // usuario como "con actividad" y pedimos desactivarlo en su lugar.
+    const code = (error as { code?: string })?.code;
+    if (code === "P2003" || code === "P2014") {
+      throw new Error(
+        "VALIDATION_ERROR: el usuario tiene registros asociados y no puede eliminarse. Desactívalo en su lugar.",
+      );
+    }
+    throw error;
+  }
+
+  // No hace falta revocar sesiones: al eliminar físicamente al usuario,
+  // getCurrentSession() rechaza cualquier token existente porque el usuario
+  // ya no existe en la base de datos.
+  return { deleted: true, id: userId };
 }
 
 export async function listActiveBranches() {

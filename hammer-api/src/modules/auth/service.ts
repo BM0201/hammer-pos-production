@@ -104,6 +104,10 @@ export async function authenticate(
     ? "OWNER"
     : user.globalRole === "MASTER"
     ? "MASTER"
+    // CONTADOR: rol global de solo-contabilidad. No tiene (ni necesita)
+    // membresías de sucursal, por lo que su roleCode viene del rol global.
+    : user.globalRole === "ACCOUNTANT"
+    ? "ACCOUNTANT"
     : branchMemberships[0]?.roleCode;
 
   if (!derivedRole) {
@@ -294,6 +298,9 @@ export async function createSessionAfterMfa(
       ? "OWNER"
       : user.globalRole === "MASTER"
       ? "MASTER"
+      // CONTADOR: rol global de solo-contabilidad, sin membresías de sucursal.
+      : user.globalRole === "ACCOUNTANT"
+      ? "ACCOUNTANT"
       : branchMemberships[0]?.roleCode;
 
   if (!roleCode) return null;
