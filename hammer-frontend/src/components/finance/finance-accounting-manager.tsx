@@ -10,9 +10,9 @@ import {
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ExpenseManager } from "@/components/expenses/expense-manager";
-import { EmployeeManager } from "@/components/payroll/employee-manager";
 import { BiweeklyCutsPanel } from "@/components/payroll/biweekly-cuts-panel";
 import { FinanceSummaryPanel } from "@/components/finance/finance-summary-panel";
+import { PayrollFinancePanel } from "@/components/finance/payroll-finance-panel";
 
 /**
  * Finanzas & Contabilidad — contenedor principal.
@@ -23,8 +23,8 @@ import { FinanceSummaryPanel } from "@/components/finance/finance-summary-panel"
  * (planilla) sin duplicar lógica.
  *
  * TODO(finance-extract): mover progresivamente la lógica de ExpenseManager a
- * components/finance/{operating-expenses,pricing-margins,freight-costs}-panel.tsx
- * y la de planilla a payroll-finance-panel.tsx. Ver components/finance/.
+ * components/finance/{operating-expenses,pricing-margins,freight-costs}-panel.tsx.
+ * Planilla ya vive en payroll-finance-panel.tsx (Planilla V2).
  */
 
 type FinanceTabKey = "summary" | "expenses" | "pricing" | "payroll" | "biweekly" | "freight" | "reports" | "config";
@@ -105,20 +105,10 @@ export function FinanceAccountingManager() {
       {activeTab === "freight" && <ExpenseManager forcedTab="freight" hideTabBar />}
       {activeTab === "config" && <ExpenseManager forcedTab="policies" hideTabBar />}
 
-      {activeTab === "payroll" && canViewPayroll && (
-        <div className="space-y-3">
-          <div className="hm-alert hm-alert-info flex items-start gap-2">
-            <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
-            <div>
-              El cálculo de planilla, costo patronal y neto a pagar vive aquí (Finanzas). Para editar la
-              ficha del empleado (datos, roles, sucursales) ve a{" "}
-              <Link href={"/app/master/users" as Route} className="font-semibold underline">Personal &amp; Roles</Link>.
-            </div>
-          </div>
-          {/* TODO(finance-extract): mover a payroll-finance-panel.tsx (corrida de nómina). */}
-          <EmployeeManager />
-        </div>
-      )}
+      {/* Planilla V2: el banner informativo (ahora descartable), el hero de costo
+          y la tabla viven dentro del panel; los tabs Calcular Nómina / Préstamos /
+          Historial se reutilizan de EmployeeManager con tab fijo. */}
+      {activeTab === "payroll" && canViewPayroll && <PayrollFinancePanel />}
 
       {activeTab === "biweekly" && canViewPayroll && (
         <div className="space-y-3">
