@@ -4,6 +4,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
 import { ensureOpenOperationalDayTx, refreshOperationalDaySummaryTx, getOperationalWindowForNow, businessDateFromNow } from "@/modules/operations/service";
 import { resolveAutoCloseReview } from "@/modules/cash-session/review-policy";
+import { cashMovementsNetTotal, computeExpectedCash } from "@/modules/cash-session/expected-cash";
 
 function toDecimal(value: number): Prisma.Decimal {
   return new Prisma.Decimal(value);
@@ -38,13 +39,19 @@ export async function calculateExpectedCashForSessionTx(
   const opening = Number(openingAmount);
   const postedCashPayments = Number(cashTenderAggregate._sum.amount ?? 0);
   const cashChange = Number(changeAggregate._sum.changeAmount ?? 0);
-  const movementNet = cashMovements.reduce((sum, movement) => {
-    const amount = Number(movement.amount);
-    if (["CASH_OUT", "BANK_DEPOSIT_OUT", "EXPENSE_OUT", "REFUND_OUT"].includes(movement.type)) return sum - amount;
-    return sum + amount;
-  }, 0);
-  const refundsOrWithdrawals = Math.abs(Math.min(0, movementNet)) + cashChange;
-  const expectedCash = opening + postedCashPayments + movementNet - cashChange;
+  const movementNet = cashMovementsNetTotal(
+    cashMovements.map((movement) => ({ type: movement.type, amount: Number(movement.amount) })),
+  );
+  // FIX doble resta del vuelto: `tender.amount` ya es el monto aplicado (el
+  // vuelto sale del excedente recibido, no de la gaveta neta) — ver invariante
+  // en expected-cash.ts. `cashChange` queda solo como métrica de auditoría y
+  // por eso tampoco cuenta como retiro en `refundsOrWithdrawals`.
+  const refundsOrWithdrawals = Math.abs(Math.min(0, movementNet));
+  const expectedCash = computeExpectedCash({
+    openingAmount: opening,
+    postedCashPayments,
+    cashMovementsNet: movementNet,
+  });
 
   return {
     openingAmount: opening,
@@ -542,7 +549,7 @@ export async function closeCashSession(input: {
       throw new Error("CASH_SESSION_HAS_PENDING_PAYMENTS");
     }
 
-    const { openingAmount, postedCashPayments, refundsOrWithdrawals, expectedCash } =
+    const { openingAmount, postedCashPayments, refundsOrWithdrawals, cashChange, expectedCash } =
       await calculateExpectedCashForSessionTx(tx, session.id, session.openingAmount);
     const countedCash = Number(input.closingAmount);
     const difference = countedCash - expectedCash;
@@ -596,6 +603,11 @@ export async function closeCashSession(input: {
           openingAmount,
           postedCashPayments,
           refundsOrWithdrawals,
+          // Métrica de auditoría: el vuelto entregado NO se resta del esperado
+          // (tender.amount ya es el monto aplicado) y refundsOrWithdrawals ya
+          // no lo incluye como retiro. Ver expected-cash.ts.
+          cashChange,
+          expectedCashFormula: "opening + postedCashPayments + cashMovementsNet",
           expectedCash,
           countedCash,
           difference,

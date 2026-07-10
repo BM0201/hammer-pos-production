@@ -15,6 +15,7 @@ import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-pol
 import { isHardApproveBlocker } from "@/modules/operations/approve-policy";
 import { getSalesSummaryForOperationalDayTx } from "@/modules/sales/realtime-sales-summary";
 import { OPERATIONAL_DAY_AUTO_SETTING_KEY, normalizeOperationalDayAutoConfig } from "@/modules/operations/auto-day-config";
+import { cashTenderTotal, tenderTotalsByMethod } from "@/modules/cash-session/expected-cash";
 
 export const OPERATIONAL_TIMEZONE = "America/Managua";
 const TIMEZONE = OPERATIONAL_TIMEZONE;
@@ -217,24 +218,23 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
   }
 
   // Totales por método usando PaymentTender de la fuente elegida.
-  const totalsByPaymentMethod = effectiveTenders.reduce<Record<string, { amount: number; changeAmount: number; net: number }>>(
-    (acc, tender) => {
-      const key = tender.method;
-      const amount = n(tender.amount);
-      const change = n(tender.changeAmount);
-      acc[key] = acc[key] ?? { amount: 0, changeAmount: 0, net: 0 };
-      acc[key].amount += amount;
-      acc[key].changeAmount += change;
-      acc[key].net += amount - change;
-      return acc;
-    },
-    {},
+  // FIX doble resta del vuelto: `net` === `amount` (tender.amount ya es el
+  // monto aplicado; el vuelto sale del excedente recibido). `changeAmount`
+  // sigue expuesto como campo informativo separado. Ver expected-cash.ts.
+  const totalsByPaymentMethod = tenderTotalsByMethod(
+    effectiveTenders.map((tender) => ({
+      method: tender.method,
+      amount: n(tender.amount),
+      changeAmount: n(tender.changeAmount),
+    })),
   );
 
   const openingCashTotal = cashSessions.reduce((sum, session) => sum + n(session.openingAmount), 0);
-  const cashTenderNetTotal = effectiveTenders
-    .filter((tender) => tender.method === PaymentMethod.CASH)
-    .reduce((sum, tender) => sum + n(tender.amount) - n(tender.changeAmount), 0);
+  // Σ amount de tenders CASH, SIN restar vuelto (misma regla que el esperado
+  // por sesión). Se conserva el nombre por compatibilidad con closeSummaryJson.
+  const cashTenderNetTotal = cashTenderTotal(
+    effectiveTenders.map((tender) => ({ method: tender.method, amount: n(tender.amount) })),
+  );
   const cardTenderTotal = effectiveTenders
     .filter((tender) => tender.method === PaymentMethod.CARD)
     .reduce((sum, tender) => sum + n(tender.amount), 0);
