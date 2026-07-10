@@ -226,3 +226,27 @@ test("integration: manual invoice registration after payment and later cancellat
   assert.equal(summary.cancelledSalesTotal, 800);
   assert.equal(summary.voidedPaymentsCount, 1);
 });
+
+test("integration BUG día corrido: con businessDateToYmdUTC el pago de HOY cuenta en salesTotal de hoy (con businessDateYmd daba 0)", async () => {
+  // OperationalDay.businessDate del 10 jun = 2026-06-10T00:00Z (medianoche UTC).
+  const businessDate = new Date(Date.UTC(2026, 5, 10));
+  const orders: OrderRow[] = [
+    { id: "sale-850", orderNumber: "OE-850", branchId: MSY.id, status: SaleOrderStatus.PAID, grandTotal: 850, createdAt: paidToday, updatedAt: paidToday, createdBy: { username: "seller", fullName: "Seller" } },
+  ];
+  const payments: PaymentRow[] = [
+    { id: "pay-850", saleOrderId: "sale-850", status: PaymentStatus.POSTED, amount: 850, paidAt: paidToday, method: PaymentMethod.CASH, receivedBy: { username: "cashier", fullName: "Cashier" } },
+  ];
+  const db = createRealtimeDb({ orders, payments, tenders: [{ id: "t-850", paymentId: "pay-850", method: PaymentMethod.CASH, amount: 850 }] });
+
+  // Conversión correcta (la que ahora usa getSalesSummaryForOperationalDayTx):
+  const { businessDateToYmdUTC, businessDateYmd } = await import("@/modules/sales/realtime-sales-summary");
+  const fixed = await buildBranchRealtimeSalesSummary(db, MSY, businessDateToYmdUTC(businessDate));
+  assert.equal(fixed.businessDate, "2026-06-10");
+  assert.equal(fixed.paidSalesTotal, 850);
+
+  // Conversión errónea (businessDateYmd formatea el 00:00Z en zona Managua →
+  // ventana del día ANTERIOR): el pago de hoy desaparece del resumen del día.
+  const shifted = await buildBranchRealtimeSalesSummary(db, MSY, businessDateYmd(businessDate));
+  assert.equal(shifted.businessDate, "2026-06-09");
+  assert.equal(shifted.paidSalesTotal, 0);
+});

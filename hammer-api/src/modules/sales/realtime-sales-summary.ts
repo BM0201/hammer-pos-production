@@ -21,8 +21,28 @@ function fixedDateParts(date: Date) {
   return { year, month, day };
 }
 
-function businessDateYmd(date: Date) {
+/**
+ * YMD (en calendario Managua) de un INSTANTE real — ej. "¿a qué día local
+ * pertenece este `new Date()`?". Exportada solo para el test que documenta la
+ * diferencia con businessDateToYmdUTC.
+ */
+export function businessDateYmd(date: Date) {
   const { year, month, day } = fixedDateParts(date);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/**
+ * YMD de un `businessDate` de OperationalDay, que NO es un instante real:
+ * se guarda a las 00:00 UTC del día de negocio (businessDateFromNow en
+ * operations/service.ts). Formatearlo en zona Managua (businessDateYmd) lo
+ * corre un día hacia atrás — 2026-07-08T00:00Z son las 6pm Managua del 07 —
+ * y todo el resumen de ventas del día se calculaba con la ventana del día
+ * ANTERIOR. Aquí el YMD se lee por componentes UTC, que es como se escribió.
+ */
+export function businessDateToYmdUTC(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + 1;
+  const day = date.getUTCDate();
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
@@ -543,5 +563,9 @@ export async function getSalesSummaryForOperationalDayTx(tx: Prisma.TransactionC
       branch: { select: { id: true, code: true, name: true } },
     },
   });
-  return buildBranchRealtimeSalesSummary(tx, day.branch, businessDateYmd(day.businessDate));
+  // FIX: businessDate es una fecha-a-medianoche-UTC, NO un instante real —
+  // usar businessDateYmd aquí desplazaba la ventana al día anterior (los
+  // totales de ventas del día operativo salían corridos y pending_payments,
+  // hard blocker del cierre, bloqueaba hoy por pendientes de ayer).
+  return buildBranchRealtimeSalesSummary(tx, day.branch, businessDateToYmdUTC(day.businessDate));
 }
