@@ -30,7 +30,8 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await calculatePayrollRun(year, mon, branchId, session!.userId);
-    const serialized = serializePayrollRunResult(result.payrollRun, result.employees);
+    // Incluye `rates` (tasas usadas) y el desglose INSS/IR/patronal por línea.
+    const serialized = serializePayrollRunResult(result.payrollRun, result.employees, result.rates);
 
     return ok({
       period: month,
