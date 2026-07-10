@@ -151,6 +151,47 @@ describe("gastos reales: caja de sucursal + planilla desembolsada", () => {
   });
 });
 
+// ── Planilla a costo EMPRESA en el desempeño real (Planilla V2) ───────────────
+
+describe("planilla como línea propia a employerCost (sin doble conteo)", () => {
+  // Espejo de payrollEmployerCostPaid (finance/service.ts): los desembolsos
+  // registran el NETO pagado; la línea de planilla del desempeño real lo escala
+  // a costo empresa con employerCost/netPay de su PayrollLine.
+  function payrollEmployerCostPaid(d: { amount: number; line: { netPay: number; employerCost: number } | null }) {
+    const lineNet = d.line?.netPay ?? 0;
+    const lineCost = d.line?.employerCost ?? 0;
+    if (lineNet <= 0 || lineCost <= 0) return d.amount;
+    return d.amount * (lineCost / lineNet);
+  }
+
+  it("una quincena pagada entra al desempeño real valorada a costo empresa, no al neto", () => {
+    // Salario 10,000: neto 9,155, costo empresa 14,850 (INSS/IR/patronal/INATEC/provisiones).
+    // Quincena = neto/2 = 4,577.50 → línea de planilla = 14,850/2 = 7,425.
+    const quincena = payrollEmployerCostPaid({ amount: 4577.5, line: { netPay: 9155, employerCost: 14850 } });
+    assert.equal(round2(quincena), 7425);
+  });
+
+  it("línea histórica sin desglose (netPay 0) cae al monto pagado, no revienta", () => {
+    assert.equal(payrollEmployerCostPaid({ amount: 4500, line: { netPay: 0, employerCost: 0 } }), 4500);
+    assert.equal(payrollEmployerCostPaid({ amount: 4500, line: null }), 4500);
+  });
+
+  it("un gasto operativo PAYROLL pagado por caja NO suma al lado caja (criterio de exclusión)", () => {
+    // El servicio excluye del lado caja los EXPENSE_OUT con operatingExpense
+    // categoría PAYROLL (además de los ligados a desembolsos): la nómina solo
+    // entra por su línea propia a employerCost.
+    const cashMovs = [
+      { amount: 800, expenseCategory: "UTILITIES" as string | null },
+      { amount: 7425, expenseCategory: "PAYROLL" as string | null }, // manual de planilla
+      { amount: 300, expenseCategory: null }, // gasto suelto sin partida
+    ];
+    const cashExpenses = cashMovs.filter((m) => m.expenseCategory !== "PAYROLL").reduce((s, m) => s + m.amount, 0);
+    const payrollLine = 7425; // employerCost desembolsado
+    assert.equal(cashExpenses, 1100);
+    assert.equal(cashExpenses + payrollLine, 8525); // no 15,950 (doble conteo)
+  });
+});
+
 // ── Trayectoria mensual: bucketing por mes Managua (getFinanceTrend) ─────────
 
 describe("getFinanceTrend: índice de mes Managua (UTC-6 fijo)", () => {

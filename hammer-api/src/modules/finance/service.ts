@@ -83,7 +83,11 @@ export type FinanceSummary = {
     grossMarginPercent: number | null;
     /** Gastos pagados desde caja de sucursal en el período (luz, agua, compras del momento…), sin planilla. */
     cashExpenses: number;
-    /** Planilla realmente desembolsada (PAID) en el período. */
+    /**
+     * Costo EMPRESA de la planilla desembolsada (PAID) en el período: el neto
+     * pagado escalado a employerCost (incluye retenciones, INSS patronal,
+     * INATEC y provisiones). Línea propia — ver computeRealPerformance.
+     */
     payrollPaid: number;
     /** Total de gastos REALES del período = cashExpenses + payrollPaid. */
     operatingExpenses: number;
@@ -251,8 +255,34 @@ async function computePayroll(branchId: string | null, year: number, month: numb
  * Desempeño REAL del periodo (utilidad de verdad, no proyección):
  *  netSales = pagos POSTED del periodo; cogs = costo de los movimientos de salida por
  *  venta (cantidad × costo base); grossProfit = netSales − cogs; operatingProfit =
- *  grossProfit − gastos operativos (que ya incluyen la planilla auto-generada).
+ *  grossProfit − (cashExpenses + payrollPaid).
+ *
+ * CRITERIO PLANILLA (sin doble conteo):
+ *  - La planilla entra como LÍNEA PROPIA valorada a costo EMPRESA (employerCost:
+ *    bruto + INSS patronal + INATEC + provisiones), no al neto desembolsado ni al
+ *    grossSalary. Como los desembolsos registran el NETO (mitades del netPay),
+ *    cada desembolso pagado se escala por employerCost/netPay de su PayrollLine.
+ *  - Del lado caja se excluye TODO egreso vinculado a planilla: los EXPENSE_OUT
+ *    de desembolsos (payrollDisbursements: none) y los EXPENSE_OUT de partidas de
+ *    OperatingExpense categorizadas PAYROLL pagadas desde caja. Así la nómina no
+ *    se cuenta dos veces (una por la línea de planilla y otra como gasto de caja).
  */
+/**
+ * Convierte un desembolso de planilla PAGADO (registrado al NETO) a costo
+ * EMPRESA, escalando por employerCost/netPay de su PayrollLine. Si la línea
+ * no tiene neto (>0) — p. ej. datos históricos — se usa el monto pagado tal cual.
+ */
+function payrollEmployerCostPaid(d: {
+  amount: Prisma.Decimal;
+  payrollLine: { netPay: Prisma.Decimal; employerCost: Prisma.Decimal } | null;
+}): number {
+  const paidNet = num(d.amount);
+  const lineNet = num(d.payrollLine?.netPay);
+  const lineCost = num(d.payrollLine?.employerCost);
+  if (lineNet <= 0 || lineCost <= 0) return paidNet;
+  return paidNet * (lineCost / lineNet);
+}
+
 async function computeRealPerformance(
   branchId: string | null,
   start: Date,
@@ -284,21 +314,24 @@ async function computeRealPerformance(
     prisma.branch.findMany({ select: { id: true, code: true, name: true } }),
     // Gastos REALES pagados desde caja de sucursal (luz, agua, aceite, compras
     // del momento…). Se excluyen los EXPENSE_OUT vinculados a desembolsos de
-    // planilla: la planilla se cuenta aparte para no doble-contarla.
+    // planilla Y los de partidas OperatingExpense categorizadas PAYROLL: la
+    // planilla se cuenta aparte (a costo empresa) para no doble-contarla.
     prisma.cashMovement.findMany({
       where: {
         type: "EXPENSE_OUT",
         createdAt: { gte: start, lt: end },
         payrollDisbursements: { none: {} },
+        operatingExpense: { isNot: { category: "PAYROLL" } },
         ...(branchId ? { cashSession: { physicalCashBox: { branchId } } } : {}),
       },
       select: { amount: true, cashSession: { select: { physicalCashBox: { select: { branchId: true } } } } },
     }),
     // Planilla realmente desembolsada en el período (independiente de si salió
-    // por caja de sucursal o la pagó Master por otro medio).
+    // por caja de sucursal o la pagó Master por otro medio). Se trae la línea
+    // para escalar el neto pagado a costo empresa (ver criterio arriba).
     prisma.payrollDisbursement.findMany({
       where: { status: "PAID", paidAt: { gte: start, lt: end }, ...(branchId ? { branchId } : {}) },
-      select: { amount: true, branchId: true },
+      select: { amount: true, branchId: true, payrollLine: { select: { netPay: true, employerCost: true } } },
     }),
   ]);
 
@@ -326,7 +359,7 @@ async function computeRealPerformance(
     else acc(m.branchId).cogsReturned += cost;
   }
   for (const e of cashExpenseMovs) acc(e.cashSession.physicalCashBox.branchId).cashExpenses += num(e.amount);
-  for (const d of payrollDisbursed) acc(d.branchId).payrollPaid += num(d.amount);
+  for (const d of payrollDisbursed) acc(d.branchId).payrollPaid += payrollEmployerCostPaid(d);
 
   const byBranch = [...perBranch.entries()]
     .map(([id, b]) => {
@@ -468,18 +501,20 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
       },
       select: { quantity: true, unitCost: true, movementType: true, createdAt: true },
     }),
+    // Mismas exclusiones de planilla que computeRealPerformance (criterio único).
     prisma.cashMovement.findMany({
       where: {
         type: "EXPENSE_OUT",
         createdAt: { gte: start, lt: end },
         payrollDisbursements: { none: {} },
+        operatingExpense: { isNot: { category: "PAYROLL" } },
         ...(branchId ? { cashSession: { physicalCashBox: { branchId } } } : {}),
       },
       select: { amount: true, createdAt: true },
     }),
     prisma.payrollDisbursement.findMany({
       where: { status: "PAID", paidAt: { gte: start, lt: end }, ...(branchId ? { branchId } : {}) },
-      select: { amount: true, paidAt: true },
+      select: { amount: true, paidAt: true, payrollLine: { select: { netPay: true, employerCost: true } } },
     }),
   ]);
 
@@ -501,7 +536,7 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
     else b.cogsReturned += cost;
   }
   for (const e of cashExpenseMovs) { const b = at(e.createdAt); if (b) b.cashExpenses += num(e.amount); }
-  for (const d of payrollDisbursed) { const b = at(d.paidAt); if (b) b.payrollPaid += num(d.amount); }
+  for (const d of payrollDisbursed) { const b = at(d.paidAt); if (b) b.payrollPaid += payrollEmployerCostPaid(d); }
 
   const points: FinanceTrendPoint[] = [...buckets.entries()]
     .sort((a, b) => a[0] - b[0])
