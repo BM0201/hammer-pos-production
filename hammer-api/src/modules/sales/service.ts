@@ -1,4 +1,4 @@
-import { DispatchStatus, Prisma, SaleOrderStatus, InventoryMovementType, PaymentMethod, PaymentStatus, CashSessionStatus } from "@prisma/client";
+import { BrainDecisionCategory, BrainDecisionSeverity, CashMovementType, DispatchStatus, Prisma, SaleOrderStatus, InventoryMovementType, PaymentMethod, PaymentStatus, CashSessionStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
@@ -13,6 +13,7 @@ import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+import { resolveCancellationCashPlan, type CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
 
 type DirectSaleTenderInput = {
   method: PaymentMethod;
@@ -1166,7 +1167,7 @@ export async function listSaleOrdersForManagement(params: {
  */
 export async function cancelSaleOrderTx(
   tx: Prisma.TransactionClient,
-  input: { orderId: string; actorUserId: string; reason: string },
+  input: { orderId: string; actorUserId: string; reason: string; cashRefundHandling?: CashRefundHandling | null },
 ) {
   const order = await tx.saleOrder.findUnique({
     where: { id: input.orderId },
@@ -1255,17 +1256,127 @@ export async function cancelSaleOrderTx(
     }
   }
 
-  // ── 2) Anulación de pagos POSTED ─────────────────────────────────────
+  // ── 2) Anulación de pagos POSTED + manejo del efectivo ───────────────
+  // La porción CASH del pago se resuelve ANTES de anular: si la caja sigue
+  // abierta, el operador debe declarar qué pasó físicamente con el efectivo
+  // (cashRefundHandling); si falta, se aborta sin efectos. Ver la política y
+  // la aritmética en cancellation-cash-policy.ts.
+  const postedPayments = order.payments.filter((p) => p.status === PaymentStatus.POSTED);
+  const cashTendersByPayment = postedPayments.length
+    ? await tx.paymentTender.findMany({
+        where: { paymentId: { in: postedPayments.map((p) => p.id) }, method: PaymentMethod.CASH },
+        select: { paymentId: true, amount: true },
+      })
+    : [];
+  const paymentSessionById = new Map(postedPayments.map((p) => [p.id, p.cashSessionId]));
+  const cashBySession = new Map<string, number>();
+  for (const tender of cashTendersByPayment) {
+    const sessionId = paymentSessionById.get(tender.paymentId);
+    if (!sessionId) continue;
+    cashBySession.set(sessionId, (cashBySession.get(sessionId) ?? 0) + Number(tender.amount));
+  }
+
+  const cashHandlingResults: Array<{
+    cashSessionId: string;
+    cashTenderTotal: number;
+    cashRefundHandling: string;
+    cashMovementIds?: string[];
+    brainDecisionId?: string;
+  }> = [];
+  const sessionPlans: Array<{ cashSessionId: string; cashAmount: number; action: string }> = [];
+  for (const [cashSessionId, cashAmount] of cashBySession) {
+    const session = await tx.cashSession.findUniqueOrThrow({
+      where: { id: cashSessionId },
+      select: { status: true },
+    });
+    const plan = resolveCancellationCashPlan({
+      cashTenderTotal: cashAmount,
+      sessionStatus: session.status,
+      cashRefundHandling: input.cashRefundHandling,
+    });
+    sessionPlans.push({ cashSessionId, cashAmount, action: plan.action });
+  }
+
   const voidedPayments: string[] = [];
   const cashSessionIds = new Set<string>();
   const operationalDayIds = new Set<string>();
-  for (const p of order.payments) {
-    if (p.status === PaymentStatus.POSTED) {
-      await tx.payment.update({ where: { id: p.id }, data: { status: PaymentStatus.VOIDED } });
-      voidedPayments.push(p.id);
-      cashSessionIds.add(p.cashSessionId);
+  for (const p of postedPayments) {
+    await tx.payment.update({ where: { id: p.id }, data: { status: PaymentStatus.VOIDED } });
+    voidedPayments.push(p.id);
+    cashSessionIds.add(p.cashSessionId);
+  }
+
+  for (const { cashSessionId, cashAmount, action } of sessionPlans) {
+    if (action === "CREATE_DRAWER_REFUND") {
+      // Par de movimientos con neto 0: el void ya bajó el esperado una vez;
+      // aquí queda el rastro físico (el efectivo estaba en gaveta y salió).
+      // esperado = opening + ventas_cash_vigentes + movimientos = físico. ✓
+      const compensation = await tx.cashMovement.create({
+        data: {
+          cashSessionId,
+          type: CashMovementType.CASH_IN,
+          amount: new Prisma.Decimal(cashAmount),
+          reason: `Anulación orden ${order.orderNumber} — efectivo de la venta anulada estaba en gaveta (compensa el void para trazar la salida)`,
+          createdByUserId: input.actorUserId,
+        },
+      });
+      const refundOut = await tx.cashMovement.create({
+        data: {
+          cashSessionId,
+          type: CashMovementType.REFUND_OUT,
+          amount: new Prisma.Decimal(cashAmount),
+          reason: `Anulación orden ${order.orderNumber}`,
+          createdByUserId: input.actorUserId,
+        },
+      });
+      cashHandlingResults.push({
+        cashSessionId,
+        cashTenderTotal: cashAmount,
+        cashRefundHandling: "REFUNDED_FROM_DRAWER",
+        cashMovementIds: [compensation.id, refundOut.id],
+      });
+    } else if (action === "VOID_ONLY") {
+      // El dinero nunca entró / ya salió: el void es el único ajuste.
+      cashHandlingResults.push({
+        cashSessionId,
+        cashTenderTotal: cashAmount,
+        cashRefundHandling: "NO_CASH_MOVEMENT",
+      });
+    } else if (action === "MANUAL_FOLLOWUP") {
+      // Sesión ya cerrada (anulación de días anteriores): no se tocan sus
+      // movimientos; queda decisión de seguimiento para la devolución manual.
+      const decision = await tx.brainDecision.create({
+        data: {
+          category: BrainDecisionCategory.CASH,
+          severity: BrainDecisionSeverity.HIGH,
+          title: `Anulación con efectivo de caja cerrada — orden ${order.orderNumber}`,
+          description:
+            `La orden ${order.orderNumber} (${order.branch.code}) se anuló con C$${cashAmount.toFixed(2)} ` +
+            `en efectivo cobrados en una sesión de caja ya cerrada (${cashSessionId}). ` +
+            `El cierre histórico no se modifica; la devolución del efectivo requiere seguimiento manual.`,
+          recommendation:
+            "Coordinar y documentar la devolución del efectivo fuera de la caja cerrada (o el ajuste contable equivalente).",
+          branchId: order.branchId,
+          impactAmount: new Prisma.Decimal(cashAmount),
+          fingerprint: `sale-cancellation-cash-followup:${order.id}:${cashSessionId}`,
+          sourceJson: {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            cashSessionId,
+            cashTenderTotal: cashAmount,
+            cancelledByUserId: input.actorUserId,
+          },
+        },
+      });
+      cashHandlingResults.push({
+        cashSessionId,
+        cashTenderTotal: cashAmount,
+        cashRefundHandling: "SESSION_CLOSED_MANUAL_FOLLOWUP",
+        brainDecisionId: decision.id,
+      });
     }
   }
+
   for (const cashSessionId of cashSessionIds) {
     await syncCashSessionSnapshotTx(tx, cashSessionId);
   }
@@ -1311,6 +1422,11 @@ export async function cancelSaleOrderTx(
         reason: input.reason,
         voidedPayments,
         voidedPaymentsCount: voidedPayments.length,
+        // Manejo del efectivo declarado por el operador y su resultado por
+        // sesión (movimientos creados o seguimiento manual). Ver
+        // cancellation-cash-policy.ts.
+        cashRefundHandling: input.cashRefundHandling ?? null,
+        cashHandling: cashHandlingResults,
         inventoryReversalsCount: inventoryReversals.length,
         inventoryReversals,
         cancelledByUserId: input.actorUserId,
@@ -1325,6 +1441,7 @@ export async function cancelSaleOrderTx(
     previousStatus: order.status,
     reason: input.reason,
     voidedPaymentsCount: voidedPayments.length,
+    cashHandling: cashHandlingResults,
     inventoryReversalsCount: inventoryReversals.length,
   };
 }
@@ -1338,6 +1455,7 @@ export async function cancelSaleOrder(input: {
   orderId: string;
   actorUserId: string;
   reason: string;
+  cashRefundHandling?: CashRefundHandling | null;
 }) {
   const reason = input.reason?.trim() ?? "";
   if (reason.length < 3) {

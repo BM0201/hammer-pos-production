@@ -1,6 +1,7 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { cancelSaleOrder } from "@/modules/sales/service";
+import { isCashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
 import { logAuditEvent } from "@/modules/audit/service";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -14,8 +15,12 @@ export const dynamic = "force-dynamic";
  * POST /api/master/sales-orders/[id]/cancel
  *
  * Anula (CANCELLED) una factura/orden de venta desde el Centro de Comando.
- * Reservado al rol master/admin. Requiere un motivo de anulación en el body:
- *   { "reason": "texto descriptivo" }
+ * Reservado al rol master/admin. Body:
+ *   { "reason": "texto descriptivo",
+ *     "cashRefundHandling": "REFUNDED_FROM_DRAWER" | "NO_CASH_MOVEMENT" }
+ * `cashRefundHandling` es OBLIGATORIO cuando el pago tiene tenders CASH y la
+ * sesión de caja sigue abierta (el operador declara si el efectivo salió de
+ * la gaveta) — ver cancellation-cash-policy.ts.
  *
  * La operación revierte inventario, anula pagos, actualiza el día operativo y
  * registra auditoría (ver cancelSaleOrder).
@@ -31,9 +36,9 @@ export async function POST(
     assertMaster(session!);
 
     const { id } = await params;
-    let body: { reason?: string } = {};
+    let body: { reason?: string; cashRefundHandling?: string } = {};
     try {
-      body = (await request.json()) as { reason?: string };
+      body = (await request.json()) as { reason?: string; cashRefundHandling?: string };
     } catch {
       body = {};
     }
@@ -42,6 +47,7 @@ export async function POST(
       orderId: id,
       actorUserId: session!.userId,
       reason: body.reason ?? "",
+      cashRefundHandling: isCashRefundHandling(body.cashRefundHandling) ? body.cashRefundHandling : null,
     });
     return ok(result);
   } catch (error) {

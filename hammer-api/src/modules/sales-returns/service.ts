@@ -24,6 +24,7 @@ import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { refreshOperationalDaySummaryTx, businessDateFromNow } from "@/modules/operations/service";
 import { cancelSaleOrderTx } from "@/modules/sales/service";
+import type { CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
 
 type Actor = {
   userId: string;
@@ -816,7 +817,11 @@ export async function rejectSaleCancellation(cancellationId: string, reason: str
   });
 }
 
-export async function executeSaleCancellation(cancellationId: string, actor: Actor) {
+export async function executeSaleCancellation(
+  cancellationId: string,
+  actor: Actor,
+  options?: { cashRefundHandling?: CashRefundHandling | null },
+) {
   // Una sola transacción: validación + cancelSaleOrderTx + updateMany atómico + auditoría.
   // Opción A para concurrencia: updateMany con where:status=APPROVED — si retorna
   // count=0, otro request ya ejecutó esta anulación y lanzamos error en lugar de
@@ -837,6 +842,7 @@ export async function executeSaleCancellation(cancellationId: string, actor: Act
       orderId: cancellation.saleOrderId,
       actorUserId: actor.userId,
       reason: `Anulacion aprobada por Master — cancelacion ${cancellationId}`,
+      cashRefundHandling: options?.cashRefundHandling ?? null,
     });
 
     // Transición atómica: evita doble ejecución por doble-click, retry o dos Masters.

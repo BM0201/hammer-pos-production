@@ -253,6 +253,8 @@ function KpiCard({ label, value, color }: { label: string; value: string | numbe
 
 // ─── Cancel Modal ─────────────────────────────────────────────────────────────
 
+export type CashRefundHandling = "REFUNDED_FROM_DRAWER" | "NO_CASH_MOVEMENT";
+
 function CancelModal({
   orderNumber,
   onConfirm,
@@ -260,11 +262,15 @@ function CancelModal({
   loading,
 }: {
   orderNumber: string;
-  onConfirm: (reason: string) => void;
+  onConfirm: (reason: string, cashRefundHandling: CashRefundHandling) => void;
   onClose: () => void;
   loading: boolean;
 }) {
   const [reason, setReason] = useState("");
+  // El backend exige declarar qué pasó con el efectivo cuando el pago tiene
+  // tenders CASH y la caja sigue abierta: con "Sí" registra el REFUND_OUT
+  // (salida física de la gaveta); con "No" solo anula el pago.
+  const [cashHandling, setCashHandling] = useState<CashRefundHandling>("REFUNDED_FROM_DRAWER");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-xl">
@@ -283,6 +289,38 @@ function CancelModal({
           onChange={(e) => setReason(e.target.value)}
           autoFocus
         />
+        <fieldset className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+          <legend className="px-1 text-sm font-medium text-[var(--color-text)]">
+            ¿Se devolvió el efectivo de la gaveta?
+          </legend>
+          <label className="flex cursor-pointer items-start gap-2 py-1 text-sm text-[var(--color-text-secondary)]">
+            <input
+              type="radio"
+              name="cash-refund-handling"
+              className="mt-0.5"
+              checked={cashHandling === "REFUNDED_FROM_DRAWER"}
+              onChange={() => setCashHandling("REFUNDED_FROM_DRAWER")}
+            />
+            <span>
+              <strong>Sí</strong> — se entregó el efectivo al cliente (queda registrado como salida de caja)
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2 py-1 text-sm text-[var(--color-text-secondary)]">
+            <input
+              type="radio"
+              name="cash-refund-handling"
+              className="mt-0.5"
+              checked={cashHandling === "NO_CASH_MOVEMENT"}
+              onChange={() => setCashHandling("NO_CASH_MOVEMENT")}
+            />
+            <span>
+              <strong>No</strong> — el dinero nunca entró a la gaveta / fue un error antes de cobrar
+            </span>
+          </label>
+          <p className="mt-1 text-xs text-[var(--color-text-soft)]">
+            Solo aplica si el pago incluyó efectivo y la caja sigue abierta.
+          </p>
+        </fieldset>
         <div className="flex gap-2 justify-end">
           <button
             className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-60"
@@ -293,7 +331,7 @@ function CancelModal({
           </button>
           <button
             className="rounded-lg bg-[var(--color-danger-700)] px-4 py-2 text-sm text-white hover:bg-[var(--color-danger-800)] disabled:opacity-60"
-            onClick={() => onConfirm(reason)}
+            onClick={() => onConfirm(reason, cashHandling)}
             disabled={loading || reason.trim().length < 10}
           >
             {loading ? "Anulando…" : "Confirmar anulación"}
@@ -725,13 +763,13 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
   }, []);
 
   const handleCancel = useCallback(
-    async (orderId: string, reason: string) => {
+    async (orderId: string, reason: string, cashRefundHandling: CashRefundHandling) => {
       setCancelling(true);
       try {
         const res = await apiFetch(`/api/master/sales-orders/${orderId}/cancel`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reason }),
+          body: JSON.stringify({ reason, cashRefundHandling }),
         });
         if (!res.ok) {
           const json = (await res.json()) as { error?: string };
@@ -976,7 +1014,7 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
           }
           loading={cancelling}
           onClose={() => setCancelTargetId(null)}
-          onConfirm={(reason) => handleCancel(cancelTargetId, reason)}
+          onConfirm={(reason, cashRefundHandling) => handleCancel(cancelTargetId, reason, cashRefundHandling)}
         />
       )}
     </div>

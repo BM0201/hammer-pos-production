@@ -632,6 +632,10 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
   const [showCancelled, setShowCancelled] = useState(false);
   const [target, setTarget] = useState<ManagedOrder | null>(null);
   const [reason, setReason] = useState("");
+  // Declaración del operador sobre el efectivo (obligatoria en el backend si
+  // el pago tiene tenders CASH y la caja sigue abierta): "Sí" registra la
+  // salida física (REFUND_OUT); "No" solo anula el pago.
+  const [cashRefundHandling, setCashRefundHandling] = useState<"REFUNDED_FROM_DRAWER" | "NO_CASH_MOVEMENT">("REFUNDED_FROM_DRAWER");
   const [submitting, setSubmitting] = useState(false);
   const mounted = useRef(true);
   const requestId = useRef(0);
@@ -665,7 +669,7 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
     return () => { mounted.current = false; };
   }, [loadOrders, refreshKey]);
 
-  const openCancelModal = (order: ManagedOrder) => { setTarget(order); setReason(""); };
+  const openCancelModal = (order: ManagedOrder) => { setTarget(order); setReason(""); setCashRefundHandling("REFUNDED_FROM_DRAWER"); };
   const closeModal = () => { if (submitting) return; setTarget(null); setReason(""); };
 
   const confirmCancel = async () => {
@@ -676,7 +680,7 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
     try {
       const res = await apiFetch(`/api/master/sales-orders/${target.id}/cancel`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: trimmed }),
+        body: JSON.stringify({ reason: trimmed, cashRefundHandling }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error?.message ?? json?.message ?? `Error al anular (HTTP ${res.status})`);
@@ -1077,6 +1081,24 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
                   placeholder="Ej.: Error en el cobro, devolución del cliente…"
                   autoFocus disabled={submitting} />
               </div>
+              <fieldset className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2">
+                <legend className="px-1 text-xs font-medium text-[var(--color-text-secondary)]">
+                  ¿Se devolvió el efectivo de la gaveta?
+                </legend>
+                <label className="flex cursor-pointer items-start gap-2 py-0.5 text-xs text-[var(--color-text-secondary)]">
+                  <input type="radio" name="cc-cash-refund" className="mt-0.5" disabled={submitting}
+                    checked={cashRefundHandling === "REFUNDED_FROM_DRAWER"}
+                    onChange={() => setCashRefundHandling("REFUNDED_FROM_DRAWER")} />
+                  <span><strong>Sí</strong> — se entregó el efectivo al cliente (se registra la salida de caja)</span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2 py-0.5 text-xs text-[var(--color-text-secondary)]">
+                  <input type="radio" name="cc-cash-refund" className="mt-0.5" disabled={submitting}
+                    checked={cashRefundHandling === "NO_CASH_MOVEMENT"}
+                    onChange={() => setCashRefundHandling("NO_CASH_MOVEMENT")} />
+                  <span><strong>No</strong> — el dinero nunca entró a la gaveta / error antes de cobrar</span>
+                </label>
+                <p className="mt-1 text-[0.6875rem] text-[var(--color-text-soft)]">Solo aplica si el pago incluyó efectivo y la caja sigue abierta.</p>
+              </fieldset>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--color-border)]">
               <Button variant="secondary" size="sm" onClick={closeModal} disabled={submitting}>Cancelar</Button>
