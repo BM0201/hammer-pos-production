@@ -141,7 +141,18 @@ export async function buildBranchRealtimeSalesSummary(
       _count: { _all: true },
     }),
     db.saleOrder.aggregate({
-      where: { branchId: branch.id, status: SaleOrderStatus.CANCELLED, updatedAt: { gte: window.start, lt: window.end } },
+      // Anulaciones DEL día: por cancelledAt (momento real de la anulación).
+      // updatedAt queda solo como fallback para datos legacy sin cancelledAt —
+      // con updatedAt, editar una orden anulada la re-contaba como anulación
+      // del día de la edición.
+      where: {
+        branchId: branch.id,
+        status: SaleOrderStatus.CANCELLED,
+        OR: [
+          { cancelledAt: { gte: window.start, lt: window.end } },
+          { cancelledAt: null, updatedAt: { gte: window.start, lt: window.end } },
+        ],
+      },
       _sum: { grandTotal: true },
       _count: { _all: true },
     }),

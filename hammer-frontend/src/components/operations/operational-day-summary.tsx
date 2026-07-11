@@ -33,6 +33,8 @@ export type OperationalDay = {
     cashOutflowsTotal?: number | string | null;
     sourceMode?: "OPERATIONAL_DAY_ID" | "MIXED" | "LEGACY_TIME_WINDOW";
     changeAmountTotal?: number | string | null;
+    /** Esperado de sesiones sin revisar (fuera de expected/counted/difference). */
+    expectedCashPendingReviewTotal?: number | string | null;
     refunds?: { total: number; count: number; byMethod?: Record<string, number> } | null;
     cashMovements?: { net: number; inflows: number; outflows: number; expenses: number } | null;
     expectedVsCountedByCashSession?: Array<{
@@ -215,8 +217,16 @@ export function OperationalDaySummary({ day }: { day: OperationalDay }) {
           />
           <KpiTile label="Auto-cierre pendiente" value={day.autoClosedPendingReviewCount} icon={AlertTriangle}
             tone={day.autoClosedPendingReviewCount > 0 ? "alert" : "ok"}
-            subtext={day.autoClosedPendingReviewCount > 0 ? "Requieren revisión" : undefined}
+            subtext={
+              day.autoClosedPendingReviewCount > 0
+                ? Number(day.summaryJson?.expectedCashPendingReviewTotal ?? 0) > 0
+                  ? `Requieren revisión · esperado sin revisar: ${money(day.summaryJson?.expectedCashPendingReviewTotal)}`
+                  : "Requieren revisión"
+                : undefined
+            }
           />
+          {/* expected/counted/difference comparan solo sesiones revisadas
+              (requiresReview: false); las pendientes se informan arriba. */}
           <KpiTile label="Diferencia de caja"  value={money(day.cashDifferenceTotal)}     icon={XCircle}
             tone={cashDiffTone}
             subtext={Math.abs(diff) > 100 ? "Diferencia alta — requiere nota" : diff !== 0 ? "Diferencia pequeña" : "Sin diferencia"}

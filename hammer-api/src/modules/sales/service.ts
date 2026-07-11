@@ -1389,11 +1389,16 @@ export async function cancelSaleOrderTx(
   }
 
   // ── 3) Cambio de estado a CANCELLED ──────────────────────────────────
-  const cancellationNote = `[ANULADA ${new Date().toISOString()}] ${input.reason}`;
+  const cancelledAt = new Date();
+  const cancellationNote = `[ANULADA ${cancelledAt.toISOString()}] ${input.reason}`;
   const updatedOrder = await tx.saleOrder.update({
     where: { id: order.id },
     data: {
       status: SaleOrderStatus.CANCELLED,
+      // Sella el momento REAL de la anulación: el resumen del día filtra por
+      // cancelledAt (updatedAt re-contaba la anulación si la orden se editaba
+      // después, p. ej. al registrar la factura manual).
+      cancelledAt,
       notes: order.notes ? `${order.notes}\n${cancellationNote}` : cancellationNote,
     },
   });

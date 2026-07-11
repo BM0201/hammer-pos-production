@@ -11,6 +11,7 @@ type OrderRow = {
   grandTotal: number;
   createdAt: Date;
   updatedAt: Date;
+  cancelledAt?: Date | null;
   requiresManualInvoice?: boolean;
   manualInvoiceRegisteredAt?: Date | null;
   deliveryOrderIssuedAt?: Date | null;
@@ -69,10 +70,16 @@ function createRealtimeDb(input: { orders: OrderRow[]; payments: PaymentRow[]; t
     return true;
   }
 
-  function matchesOrderWhere(order: OrderRow, where: any) {
+  function matchesOrderWhere(order: OrderRow, where: any): boolean {
     if (where.branchId && order.branchId !== where.branchId) return false;
     if (where.status && !matchesStatus(order.status, where.status)) return false;
     if (where.updatedAt && !matchesDate(order.updatedAt, where.updatedAt)) return false;
+    if (where.cancelledAt !== undefined) {
+      if (where.cancelledAt === null) {
+        if (order.cancelledAt) return false;
+      } else if (!matchesDate(order.cancelledAt ?? null, where.cancelledAt)) return false;
+    }
+    if (where.OR && !where.OR.some((sub: any) => matchesOrderWhere(order, sub))) return false;
     if (where.manualInvoiceRegisteredAt !== undefined) {
       if (where.manualInvoiceRegisteredAt === null && order.manualInvoiceRegisteredAt) return false;
       if (where.manualInvoiceRegisteredAt !== null && !matchesDate(order.manualInvoiceRegisteredAt, where.manualInvoiceRegisteredAt)) return false;
@@ -249,4 +256,20 @@ test("integration BUG día corrido: con businessDateToYmdUTC el pago de HOY cuen
   const shifted = await buildBranchRealtimeSalesSummary(db, MSY, businessDateYmd(businessDate));
   assert.equal(shifted.businessDate, "2026-06-09");
   assert.equal(shifted.paidSalesTotal, 0);
+});
+
+test("integration: cancelledSalesTotal filtra por cancelledAt — editar una anulación vieja NO la re-cuenta hoy", async () => {
+  const orders: OrderRow[] = [
+    // Anulada AYER pero editada hoy (p. ej. registrar factura manual): con el
+    // filtro viejo por updatedAt volvía a contar como anulación de HOY.
+    { id: "old-cancel", orderNumber: "OE-OLD", branchId: MSY.id, status: SaleOrderStatus.CANCELLED, grandTotal: 400, createdAt: yesterday, updatedAt: paidToday, cancelledAt: yesterday, createdBy: { username: "seller", fullName: null } },
+    // Anulada HOY (cancelledAt sellado hoy): sí cuenta.
+    { id: "today-cancel", orderNumber: "OE-TODAY", branchId: MSY.id, status: SaleOrderStatus.CANCELLED, grandTotal: 150, createdAt: paidToday, updatedAt: paidToday, cancelledAt: paidToday, createdBy: { username: "seller", fullName: null } },
+    // Legacy sin cancelledAt: cae al fallback por updatedAt (hoy) y cuenta.
+    { id: "legacy-cancel", orderNumber: "OE-LEGACY", branchId: MSY.id, status: SaleOrderStatus.CANCELLED, grandTotal: 60, createdAt: paidToday, updatedAt: paidToday, createdBy: { username: "seller", fullName: null } },
+  ];
+  const summary = await buildBranchRealtimeSalesSummary(createRealtimeDb({ orders, payments: [], tenders: [] }), MSY, today);
+
+  assert.equal(summary.cancelledSalesTotal, 150 + 60); // sin los 400 de ayer
+  assert.equal(summary.cancelledSalesCount, 2);
 });

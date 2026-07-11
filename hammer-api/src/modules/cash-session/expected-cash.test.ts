@@ -58,6 +58,14 @@ describe("expectedCash por sesión (el vuelto NO se resta)", () => {
     ]);
     assert.equal(net, 100 + 50 - 30 - 40 - 20);
   });
+
+  it("CORRECTION (legado) es entrada y CORRECTION_OUT es salida", () => {
+    const net = cashMovementsNetTotal([
+      { type: CashMovementType.CORRECTION, amount: 25 },
+      { type: CashMovementType.CORRECTION_OUT, amount: 10 },
+    ]);
+    assert.equal(net, 25 - 10);
+  });
 });
 
 describe("resumen del día operativo (tenders CASH sin restar vuelto)", () => {

@@ -25,6 +25,9 @@ export const CASH_OUTFLOW_TYPES: readonly CashMovementType[] = [
   CashMovementType.BANK_DEPOSIT_OUT,
   CashMovementType.EXPENSE_OUT,
   CashMovementType.REFUND_OUT,
+  // CORRECTION quedó como ENTRADA (compatibilidad con datos existentes);
+  // las correcciones que restan usan CORRECTION_OUT.
+  CashMovementType.CORRECTION_OUT,
 ];
 
 export function isCashOutflowType(type: CashMovementType): boolean {

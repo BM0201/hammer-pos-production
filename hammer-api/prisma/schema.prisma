@@ -89,7 +89,8 @@ enum CashMovementType {
   BANK_DEPOSIT_OUT
   EXPENSE_OUT
   REFUND_OUT
-  CORRECTION
+  CORRECTION /// legado: corrección que SUMA a la gaveta (entrada)
+  CORRECTION_OUT /// corrección que RESTA de la gaveta (salida)
 }
 
 enum DispatchStatus {
@@ -1144,6 +1145,10 @@ model SaleOrder {
   notes             String?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
+  /// Momento REAL de la anulación (sellado en cancelSaleOrder). El resumen del
+  /// día filtra por esta columna; updatedAt solo queda como fallback legacy
+  /// (una edición posterior re-contaba la anulación en el día de la edición).
+  cancelledAt       DateTime?
 
   // ── Fecha operativa / offline (ERP source-of-truth) ──
   // saleOccurredAt: cuándo ocurrió realmente la venta (en POS, incluso offline).

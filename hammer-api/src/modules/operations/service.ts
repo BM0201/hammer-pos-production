@@ -15,7 +15,7 @@ import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-pol
 import { isHardApproveBlocker } from "@/modules/operations/approve-policy";
 import { getSalesSummaryForOperationalDayTx } from "@/modules/sales/realtime-sales-summary";
 import { OPERATIONAL_DAY_AUTO_SETTING_KEY, normalizeOperationalDayAutoConfig } from "@/modules/operations/auto-day-config";
-import { cashTenderTotal, tenderTotalsByMethod } from "@/modules/cash-session/expected-cash";
+import { cashTenderTotal, isCashOutflowType, tenderTotalsByMethod } from "@/modules/cash-session/expected-cash";
 
 export const OPERATIONAL_TIMEZONE = "America/Managua";
 const TIMEZONE = OPERATIONAL_TIMEZONE;
@@ -28,17 +28,10 @@ function n(value: Prisma.Decimal | number | string | null | undefined) {
   return Number(value ?? 0);
 }
 
-function isCashOutflow(type: CashMovementType) {
-  return (
-    type === CashMovementType.CASH_OUT ||
-    type === CashMovementType.BANK_DEPOSIT_OUT ||
-    type === CashMovementType.EXPENSE_OUT ||
-    type === CashMovementType.REFUND_OUT
-  );
-}
-
+// Clasificación entrada/salida compartida con cash-session (CASH_OUTFLOW_TYPES
+// en expected-cash.ts) para que ambos módulos no vuelvan a divergir.
 function movementSignedAmount(type: CashMovementType, amount: number) {
-  return isCashOutflow(type) ? -amount : amount;
+  return isCashOutflowType(type) ? -amount : amount;
 }
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue {
@@ -119,6 +112,7 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     pendingDispatchCount,
     criticalBrainDecisionCount,
     expectedCashTotal,
+    expectedCashPendingReviewTotal,
     countedCashTotal,
     cashDifferenceTotal,
     cashSessions,
@@ -150,7 +144,12 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
         createdAt: { gte: start, lt: end },
       },
     }),
-    tx.cashSession.aggregate({ where: { operationalDayId: day.id }, _sum: { expectedCashAmount: true } }),
+    // expected/counted/difference comparan el MISMO conjunto (requiresReview:
+    // false): antes expected incluía sesiones sin revisar y counted no, y
+    // cashDifferenceTotal no cuadraba con expected − counted. Las sesiones
+    // pendientes de revisión se exponen aparte (expectedCashPendingReviewTotal).
+    tx.cashSession.aggregate({ where: { operationalDayId: day.id, requiresReview: false }, _sum: { expectedCashAmount: true } }),
+    tx.cashSession.aggregate({ where: { operationalDayId: day.id, requiresReview: true }, _sum: { expectedCashAmount: true } }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id, requiresReview: false }, _sum: { countedCashAmount: true } }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id, requiresReview: false }, _sum: { differenceAmount: true } }),
     tx.cashSession.findMany({
@@ -251,10 +250,10 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     .filter((movement) => movement.type === CashMovementType.EXPENSE_OUT)
     .reduce((sum, movement) => sum + n(movement.amount), 0);
   const cashOutflowsTotal = cashMovements
-    .filter((movement) => isCashOutflow(movement.type))
+    .filter((movement) => isCashOutflowType(movement.type))
     .reduce((sum, movement) => sum + n(movement.amount), 0);
   const cashInflowsTotal = cashMovements
-    .filter((movement) => !isCashOutflow(movement.type))
+    .filter((movement) => !isCashOutflowType(movement.type))
     .reduce((sum, movement) => sum + n(movement.amount), 0);
   const expectedCashOnHand = openingCashTotal + cashTenderNetTotal + cashMovementsNet;
 
@@ -330,6 +329,8 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     postedPaymentsCount: salesSummary.postedPaymentsCount,
     voidedPaymentsCount: salesSummary.voidedPaymentsCount,
     expectedCashTotal: n(expectedCashTotal._sum.expectedCashAmount),
+    // Esperado de sesiones AUTO_CLOSED_PENDING_REVIEW (fuera del comparativo).
+    expectedCashPendingReviewTotal: n(expectedCashPendingReviewTotal._sum.expectedCashAmount),
     countedCashTotal: n(countedCashTotal._sum.countedCashAmount),
     cashDifferenceTotal: n(cashDifferenceTotal._sum.differenceAmount),
     openingCashTotal,
