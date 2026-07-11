@@ -9,6 +9,8 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { calculateMonthlyPayroll, generateSalaryHistory, type ProratedSalaryResult } from "./payroll-calculator";
 import { generateDisbursementsForRun } from "./payroll-disbursement-service";
+import { computePayrollLineBreakdown, type PayrollRates } from "./payroll-nicaragua";
+import { getPayrollRates } from "./payroll-rate-config";
 
 // ── Employee CRUD ──
 
@@ -166,10 +168,44 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
   if (filters?.isActive !== undefined) where.isActive = filters.isActive;
   if (filters?.position) where.position = filters.position;
 
-  return prisma.employee.findMany({
-    where,
-    include: { branch: { select: { id: true, code: true, name: true } } },
-    orderBy: [{ isActive: "desc" }, { fullName: "asc" }],
+  const [employees, rates] = await Promise.all([
+    prisma.employee.findMany({
+      where,
+      include: { branch: { select: { id: true, code: true, name: true } } },
+      orderBy: [{ isActive: "desc" }, { fullName: "asc" }],
+    }),
+    getPayrollRates(),
+  ]);
+
+  // Estimación de mes completo por empleado ACTIVO (sin préstamos ni prorrateo):
+  // permite que la tabla de Finanzas muestre neto y costo empresa sin correr
+  // una nómina. `provisions` viene separado para poder mostrar el costo con o
+  // sin provisiones en el cliente.
+  return employees.map((emp) => {
+    if (!emp.isActive) return { ...emp, payrollEstimate: null, payrollRates: rates };
+    const salary = Number(emp.monthlySalary);
+    // provisionsEnabled forzado: `provisions` viaja siempre calculado y el
+    // toggle del cliente decide si sumarlo (rates.provisionsEnabled marca el default).
+    const b = computePayrollLineBreakdown({
+      monthlySalary: salary,
+      grossSalary: salary,
+      daysWorked: 1,
+      totalDays: 1,
+      rates: { ...rates, provisionsEnabled: true },
+    });
+    return {
+      ...emp,
+      payrollEstimate: {
+        inssLaboral: b.inssLaboral,
+        ir: b.ir,
+        netPay: b.netPay,
+        inssPatronal: b.inssPatronal,
+        inatec: b.inatec,
+        provisions: b.provisions,
+        employerCost: b.employerCost,
+      },
+      payrollRates: rates,
+    };
   });
 }
 
@@ -343,6 +379,13 @@ function serializePayrollLine(line: PayrollLineWithEmployee, prorated?: Prorated
     proratedSalary: Number(line.grossSalary),
     isFullMonth: prorated?.isFullMonth ?? false,
     grossSalary: Number(line.grossSalary),
+    // Desglose Nicaragua persistido por línea (0 en corridas históricas
+    // anteriores a la migración payroll_nicaragua_rates).
+    inssLaboral: Number(line.inssLaboral),
+    ir: Number(line.ir),
+    inssPatronal: Number(line.inssPatronal),
+    inatec: Number(line.inatec),
+    provisions: Number(line.provisions),
     loanDeductions: Number(line.loanDeductions),
     otherDeductions: Number(line.otherDeductions),
     netPay: Number(line.netPay),
@@ -350,7 +393,11 @@ function serializePayrollLine(line: PayrollLineWithEmployee, prorated?: Prorated
   };
 }
 
-export function serializePayrollRunResult(payrollRun: PayrollRunForResponse, proratedEmployees: ProratedSalaryResult[] = []) {
+export function serializePayrollRunResult(
+  payrollRun: PayrollRunForResponse,
+  proratedEmployees: ProratedSalaryResult[] = [],
+  ratesUsed?: PayrollRates,
+) {
   const proratedByEmployee = new Map(proratedEmployees.map((emp) => [emp.employeeId, emp]));
   return {
     payrollRunId: payrollRun.id,
@@ -363,6 +410,7 @@ export function serializePayrollRunResult(payrollRun: PayrollRunForResponse, pro
     totalNet: Number(payrollRun.totalNet),
     totalEmployerCost: Number(payrollRun.totalEmployerCost),
     employeeCount: payrollRun.lines.length,
+    ...(ratesUsed ? { rates: ratesUsed } : {}),
     employees: payrollRun.lines.map((line) => serializePayrollLine(line, proratedByEmployee.get(line.employeeId))),
   };
 }
@@ -375,7 +423,7 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
     throw new Error("INVALID_INPUT: La nomina de este periodo ya fue posteada");
   }
 
-  const result = await calculateMonthlyPayroll(year, month, branchId);
+  const [result, rates] = await Promise.all([calculateMonthlyPayroll(year, month, branchId), getPayrollRates()]);
   const run = existing
     ? await prisma.payrollRun.update({
         where: { id: existing.id },
@@ -412,25 +460,40 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
     const grossSalary = Math.max(0, emp.proratedSalary);
     const loanDeductions = await calculateLoanDeduction(emp.employeeId, grossSalary);
     const otherDeductions = 0;
-    const netPay = Math.max(0, grossSalary - loanDeductions - otherDeductions);
-    const employerCost = grossSalary;
+    // Cálculo Nicaragua (payroll-nicaragua.ts): INSS laboral + IR (Ley 822,
+    // prorrateado igual que el salario), cargas patronales y provisiones.
+    const line = computePayrollLineBreakdown({
+      monthlySalary: emp.monthlySalary,
+      grossSalary,
+      daysWorked: emp.daysWorked,
+      totalDays: emp.totalDays,
+      loanDeductions,
+      otherDeductions,
+      rates,
+    });
 
     await prisma.payrollLine.create({
       data: {
         payrollRunId: run.id,
         employeeId: emp.employeeId,
-        grossSalary: decimal(grossSalary),
-        loanDeductions: decimal(loanDeductions),
-        otherDeductions: decimal(otherDeductions),
-        netPay: decimal(netPay),
-        employerCost: decimal(employerCost),
+        grossSalary: decimal(line.grossSalary),
+        inssLaboral: decimal(line.inssLaboral),
+        ir: decimal(line.ir),
+        inssPatronal: decimal(line.inssPatronal),
+        inatec: decimal(line.inatec),
+        provisions: decimal(line.provisions),
+        loanDeductions: decimal(line.loanDeductions),
+        otherDeductions: decimal(line.otherDeductions),
+        netPay: decimal(line.netPay),
+        employerCost: decimal(line.employerCost),
       },
     });
 
-    totalGross += grossSalary;
-    totalDeductions += loanDeductions + otherDeductions;
-    totalNet += netPay;
-    totalEmployerCost += employerCost;
+    totalGross += line.grossSalary;
+    // totalDeductions ahora incluye INSS laboral + IR además de préstamos/otras.
+    totalDeductions += line.totalDeductions;
+    totalNet += line.netPay;
+    totalEmployerCost += line.employerCost;
   }
 
   await prisma.payrollRun.update({
@@ -467,7 +530,7 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
     metadataJson: { year, month, totalGross, totalDeductions, totalNet, totalEmployerCost },
   });
 
-  return { payrollRun, employees: result.employees };
+  return { payrollRun, employees: result.employees, rates };
 }
 
 async function syncPostedPayrollLineExpense(

@@ -128,24 +128,42 @@ function getErrorMessage(payload: unknown, fallback: string) {
   return fallback;
 }
 
-export function EmployeeManager() {
+type EmployeeManagerProps = {
+  /**
+   * Tab fijo para embeber un solo tab dentro de otra vista: Finanzas ›
+   * Planilla (payroll-finance-panel.tsx) usa payroll/loans/history y rinde su
+   * propio tab Empleados. Sin forcedTab se comporta como siempre (Personal &
+   * Roles): barra de tabs propia + persistencia en localStorage.
+   */
+  forcedTab?: ActiveTab;
+  hideTabBar?: boolean;
+  /** Oculta los KPI tiles (en Finanzas los reemplaza el hero de costo). */
+  hideKpis?: boolean;
+};
+
+export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = false }: EmployeeManagerProps = {}) {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
   // Persistimos el tab activo para que la navegación sobreviva a recargas y a
   // volver desde otra pantalla (antes siempre reiniciaba en "Empleados").
-  const [activeTab, setActiveTabState] = useState<ActiveTab>("employees");
+  const [activeTab, setActiveTabState] = useState<ActiveTab>(forcedTab ?? "employees");
   useEffect(() => {
+    if (forcedTab) {
+      setActiveTabState(forcedTab);
+      return;
+    }
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem(PAYROLL_TAB_STORAGE_KEY);
     if (saved === "employees" || saved === "payroll" || saved === "loans" || saved === "history") {
       setActiveTabState(saved);
     }
-  }, []);
+  }, [forcedTab]);
   const setActiveTab = useCallback((tab: ActiveTab) => {
     setActiveTabState(tab);
-    if (typeof window !== "undefined") window.localStorage.setItem(PAYROLL_TAB_STORAGE_KEY, tab);
-  }, []);
+    // Con tab fijo la navegación pertenece al contenedor: no se persiste.
+    if (!forcedTab && typeof window !== "undefined") window.localStorage.setItem(PAYROLL_TAB_STORAGE_KEY, tab);
+  }, [forcedTab]);
   const [selectedBranch, setSelectedBranch] = useState("");
 
   const [showForm, setShowForm] = useState(false);
@@ -567,6 +585,7 @@ export function EmployeeManager() {
   return (
     <div className="space-y-4">
       {/* ── KPI Tiles ── */}
+      {!hideKpis && (
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="hm-kpi-tile hm-shine">
           <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: "linear-gradient(90deg, var(--color-info-400), var(--color-info-600))" }} />
@@ -605,8 +624,10 @@ export function EmployeeManager() {
           </div>
         </div>
       </div>
+      )}
 
       {/* ── Tab bar ── */}
+      {!hideTabBar && (
       <div className="erp-tabs-pill">
         {([
           { key: "employees" as const, label: "Empleados", icon: Users },
@@ -619,6 +640,7 @@ export function EmployeeManager() {
           </button>
         ))}
       </div>
+      )}
 
       {/* ── Branch filter + Add button ── */}
       <div className="flex items-center gap-3">
