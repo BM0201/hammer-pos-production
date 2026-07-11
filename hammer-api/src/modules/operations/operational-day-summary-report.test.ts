@@ -18,12 +18,16 @@ const n = (v: number | null | undefined) => Number(v ?? 0);
 describe("H totales por método y vuelto (PaymentTender)", () => {
   type Tender = { method: string; amount: number; changeAmount: number };
 
+  // FIX doble resta del vuelto: este espejo codificaba `net = amount − change`,
+  // pero tender.amount YA es el monto aplicado a la orden (el vuelto sale del
+  // excedente recibido) — restarlo aquí lo descontaba dos veces. Hoy
+  // `net === amount` y changeAmount es solo informativo (expected-cash.ts).
   function totalsByMethod(tenders: Tender[]) {
     return tenders.reduce<Record<string, { amount: number; changeAmount: number; net: number }>>((acc, t) => {
       acc[t.method] = acc[t.method] ?? { amount: 0, changeAmount: 0, net: 0 };
       acc[t.method].amount += n(t.amount);
       acc[t.method].changeAmount += n(t.changeAmount);
-      acc[t.method].net += n(t.amount) - n(t.changeAmount);
+      acc[t.method].net += n(t.amount);
       return acc;
     }, {});
   }
@@ -36,11 +40,11 @@ describe("H totales por método y vuelto (PaymentTender)", () => {
     { method: "TRANSFER", amount: 300, changeAmount: 0 },
   ];
 
-  it("agrupa por método con neto (amount - changeAmount)", () => {
+  it("agrupa por método con neto === amount (el vuelto NO se resta; es informativo)", () => {
     const t = totalsByMethod(tenders);
     assert.equal(t.CASH.amount, 1500);
     assert.equal(t.CASH.changeAmount, 120);
-    assert.equal(t.CASH.net, 1380);
+    assert.equal(t.CASH.net, 1500); // antes 1380: codificaba la doble resta
     assert.equal(t.CARD.net, 800);
     assert.equal(t.TRANSFER.net, 300);
   });
