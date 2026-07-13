@@ -7,6 +7,7 @@
   "description": "H.A.M.M.E.R. POS/ERP — Backend (API-only) — Next.js 15 + Prisma + Neon PostgreSQL",
   "scripts": {
     "dev": "next dev --port 4000",
+    "dev:mock": "tsx scripts/dev-mock-api.ts",
     "build": "npm run prisma:generate && next build",
     "vercel-build": "npx prisma generate && npx prisma migrate deploy && next build",
     "start": "next start --port 4000",
