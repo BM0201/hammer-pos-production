@@ -1655,6 +1655,9 @@ model Employee {
   startDate     DateTime
   endDate       DateTime?
   isActive      Boolean   @default(true)
+  /// Días de vacaciones ya consumidos (gozados + pagados en dinero). El saldo
+  /// legal = 2.5 × meses de servicio − este acumulado (Arts. 76–82 CT).
+  vacationDaysTaken Decimal @default(0)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -1768,7 +1771,11 @@ model PayrollLine {
   /// …y cargas patronales que componen el costo empresa.
   inssPatronal    Decimal  @default(0)
   inatec          Decimal  @default(0)
-  provisions      Decimal  @default(0) /// aguinaldo + vacaciones + indemnización
+  provisions      Decimal  @default(0) /// suma de las tres provisiones del período
+  /// Desglose por prestación (0 en corridas históricas o en modo ON_PAYMENT):
+  aguinaldoAccrual     Decimal @default(0) /// 1/12 (Arts. 93–99 CT)
+  vacacionesAccrual    Decimal @default(0) /// 2.5 días/mes (Arts. 76–82 CT)
+  indemnizacionAccrual Decimal @default(0) /// tramo Art. 45 según antigüedad
   netPay          Decimal
   employerCost    Decimal
   createdAt       DateTime @default(now())

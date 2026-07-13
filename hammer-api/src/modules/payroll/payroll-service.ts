@@ -9,8 +9,17 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { calculateMonthlyPayroll, generateSalaryHistory, type ProratedSalaryResult } from "./payroll-calculator";
 import { generateDisbursementsForRun } from "./payroll-disbursement-service";
-import { computePayrollLineBreakdown, type PayrollRates } from "./payroll-nicaragua";
+import { computePayrollLineBreakdown, round2, type PayrollRates } from "./payroll-nicaragua";
 import { getPayrollRates } from "./payroll-rate-config";
+import {
+  aguinaldoAccrued,
+  aguinaldoPaymentDeadline,
+  indemnizacionAccrualRate,
+  indemnizacionAccruedTotal,
+  monthsOfService,
+  vacationDaysAccrued,
+  vacationPayout,
+} from "./prestaciones-sociales";
 
 // ── Employee CRUD ──
 
@@ -181,9 +190,12 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
   // permite que la tabla de Finanzas muestre neto y costo empresa sin correr
   // una nómina. `provisions` viene separado para poder mostrar el costo con o
   // sin provisiones en el cliente.
+  const at = new Date();
   return employees.map((emp) => {
     if (!emp.isActive) return { ...emp, payrollEstimate: null, payrollRates: rates };
     const salary = Number(emp.monthlySalary);
+    const months = monthsOfService(emp.startDate, at);
+    const indemnizacionRate = indemnizacionAccrualRate(months);
     // Modos forzados a ACCRUE_MONTHLY: `provisions` viaja siempre calculado y
     // el control del cliente decide si sumarlo (los modos de la config marcan
     // el default del panel).
@@ -193,7 +205,12 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
       daysWorked: 1,
       totalDays: 1,
       rates: { ...rates, aguinaldoMode: "ACCRUE_MONTHLY", vacacionesMode: "ACCRUE_MONTHLY", indemnizacionMode: "ACCRUE_MONTHLY" },
+      indemnizacionRate,
     });
+    // Prestaciones ACUMULADAS a la fecha (pasivo por empleado, para drawer/CSV).
+    const daysAccrued = vacationDaysAccrued(emp.startDate, at);
+    const daysTaken = Number(emp.vacationDaysTaken) || 0;
+    const vacationDaysBalance = round2(daysAccrued - daysTaken);
     return {
       ...emp,
       payrollEstimate: {
@@ -203,7 +220,21 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
         inssPatronal: b.inssPatronal,
         inatec: b.inatec,
         provisions: b.provisions,
+        aguinaldoAccrual: b.aguinaldoAccrual,
+        vacacionesAccrual: b.vacacionesAccrual,
+        indemnizacionAccrual: b.indemnizacionAccrual,
         employerCost: b.employerCost,
+        monthsOfService: round2(months),
+        aguinaldoAccrued: aguinaldoAccrued(salary, emp.startDate, at),
+        aguinaldoDeadline: aguinaldoPaymentDeadline(at).toISOString().slice(0, 10),
+        vacationDaysAccrued: daysAccrued,
+        vacationDaysTaken: daysTaken,
+        vacationDaysBalance,
+        vacationBalanceValue: vacationPayout(Math.max(0, vacationDaysBalance), salary),
+        indemnizacionAccrued: indemnizacionAccruedTotal(salary, emp.startDate, at),
+        indemnizacionRateActual: indemnizacionRate,
+        // Warning (no bloqueo): salario por debajo del mínimo sectorial configurado.
+        belowMinimumWage: rates.salarioMinimoSectorial > 0 && salary < rates.salarioMinimoSectorial,
       },
       payrollRates: rates,
     };
@@ -387,6 +418,9 @@ function serializePayrollLine(line: PayrollLineWithEmployee, prorated?: Prorated
     inssPatronal: Number(line.inssPatronal),
     inatec: Number(line.inatec),
     provisions: Number(line.provisions),
+    aguinaldoAccrual: Number(line.aguinaldoAccrual),
+    vacacionesAccrual: Number(line.vacacionesAccrual),
+    indemnizacionAccrual: Number(line.indemnizacionAccrual),
     loanDeductions: Number(line.loanDeductions),
     otherDeductions: Number(line.otherDeductions),
     netPay: Number(line.netPay),
@@ -456,11 +490,24 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
   let totalNet = 0;
   let totalEmployerCost = 0;
 
+  // Antigüedad por empleado: define la tasa de provisión de indemnización
+  // (tramos del Art. 45 CT) al corte del período que se calcula.
+  const startDatesById = new Map(
+    (
+      await prisma.employee.findMany({
+        where: { id: { in: result.employees.map((emp) => emp.employeeId) } },
+        select: { id: true, startDate: true },
+      })
+    ).map((emp) => [emp.id, emp.startDate]),
+  );
+  const periodEnd = lastMomentOfMonth(year, month);
+
   for (const emp of result.employees) {
     if (emp.daysWorked === 0) continue;
     const grossSalary = Math.max(0, emp.proratedSalary);
     const loanDeductions = await calculateLoanDeduction(emp.employeeId, grossSalary);
     const otherDeductions = 0;
+    const startDate = startDatesById.get(emp.employeeId);
     // Cálculo Nicaragua (payroll-nicaragua.ts): INSS laboral + IR (Ley 822,
     // prorrateado igual que el salario), cargas patronales y provisiones.
     const line = computePayrollLineBreakdown({
@@ -471,6 +518,7 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
       loanDeductions,
       otherDeductions,
       rates,
+      indemnizacionRate: startDate ? indemnizacionAccrualRate(monthsOfService(startDate, periodEnd)) : undefined,
     });
 
     await prisma.payrollLine.create({
@@ -483,6 +531,9 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
         inssPatronal: decimal(line.inssPatronal),
         inatec: decimal(line.inatec),
         provisions: decimal(line.provisions),
+        aguinaldoAccrual: decimal(line.aguinaldoAccrual),
+        vacacionesAccrual: decimal(line.vacacionesAccrual),
+        indemnizacionAccrual: decimal(line.indemnizacionAccrual),
         loanDeductions: decimal(line.loanDeductions),
         otherDeductions: decimal(line.otherDeductions),
         netPay: decimal(line.netPay),
