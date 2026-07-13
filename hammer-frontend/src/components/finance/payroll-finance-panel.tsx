@@ -376,8 +376,18 @@ export function PayrollFinancePanel() {
   function exportCsv() {
     const header = [
       "Nombre", "Puesto", "Sucursal", "Salario base", "INSS laboral", "IR", "Neto a pagar",
-      "INSS patronal", "INATEC", "Provisiones", "Costo empresa", "% Nómina", "Inicio", "Fin", "Estado",
+      "INSS patronal", "INATEC",
+      "Prov. aguinaldo", "Prov. vacaciones", "Prov. indemnización",
+      "Costo empresa", "% Nómina",
+      "Antigüedad (meses)", "Aguinaldo acumulado", "Días vacaciones (saldo)", "Valor vacaciones",
+      "Indemnización acumulada", "Tramo indemnización",
+      "Inicio", "Fin", "Estado",
     ];
+    const tramoLabel = (rate: number | undefined) => {
+      if (rate === undefined) return "";
+      if (rate === 0) return "Tope 5 meses (0%)";
+      return rate > 1 / 12 - 1e-9 ? "Años 1–3 (8.333%)" : "Años 4–6 (5.556%)";
+    };
     const rows = visibleEmployees.map((emp) => {
       const { b } = breakdownOf(emp);
       const salary = Number(emp.monthlySalary);
@@ -385,8 +395,18 @@ export function PayrollFinancePanel() {
       return [
         emp.fullName, emp.position, emp.branch?.name ?? "", salary.toFixed(2),
         b.inssLaboral.toFixed(2), b.ir.toFixed(2), b.netPay.toFixed(2),
-        b.inssPatronal.toFixed(2), b.inatec.toFixed(2), (includeProvisions ? b.provisions : 0).toFixed(2),
-        employerCostOf(b).toFixed(2), share, emp.startDate.slice(0, 10), emp.endDate?.slice(0, 10) ?? "",
+        b.inssPatronal.toFixed(2), b.inatec.toFixed(2),
+        (includeProvisions ? b.aguinaldoAccrual : 0).toFixed(2),
+        (includeProvisions ? b.vacacionesAccrual : 0).toFixed(2),
+        (includeProvisions ? b.indemnizacionAccrual : 0).toFixed(2),
+        employerCostOf(b).toFixed(2), share,
+        (b.monthsOfService ?? 0).toFixed(1),
+        (b.aguinaldoAccrued ?? 0).toFixed(2),
+        (b.vacationDaysBalance ?? 0).toFixed(1),
+        (b.vacationBalanceValue ?? 0).toFixed(2),
+        (b.indemnizacionAccrued ?? 0).toFixed(2),
+        tramoLabel(b.indemnizacionRateActual),
+        emp.startDate.slice(0, 10), emp.endDate?.slice(0, 10) ?? "",
         emp.isActive ? "Activo" : "Inactivo",
       ];
     });

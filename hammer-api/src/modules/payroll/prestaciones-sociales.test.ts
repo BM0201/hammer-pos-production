@@ -183,6 +183,31 @@ describe("provisión de indemnización por tramo en el costo mensual", () => {
     assert.ok(tramo2.employerCost > tope.employerCost);
   });
 
+  it("sanity 3 empleados reales: todos en tramo 1 → costo total C$46,777.50 (compatible)", () => {
+    // Carolina 10,000 · 4-ene-2026; Harry 12,000 · 4-ene-2026; Marvin 9,500 · 15-mar-2026.
+    const at = utc(2026, 7, 13);
+    const staff = [
+      { salary: 10_000, start: utc(2026, 1, 4) },
+      { salary: 12_000, start: utc(2026, 1, 4) },
+      { salary: 9_500, start: utc(2026, 3, 15) },
+    ];
+    let cost = 0;
+    for (const emp of staff) {
+      const rate = indemnizacionAccrualRate(monthsOfService(emp.start, at));
+      assert.equal(rate, 1 / 12); // < 1 año: primer tramo para los tres
+      const b = computePayrollLineBreakdown({
+        monthlySalary: emp.salary,
+        grossSalary: emp.salary,
+        daysWorked: 30,
+        totalDays: 30,
+        indemnizacionRate: rate,
+      });
+      cost += b.employerCost;
+    }
+    // Mismo número que antes del desglose: confirma compatibilidad (base 31,500).
+    assert.equal(round2(cost), 46_777.5);
+  });
+
   it("pago de aguinaldo: neto == bruto (exento, no toca base INSS ni IR)", () => {
     // El aguinaldo se paga como línea EXENTA: su neto es el mismo acumulado.
     const aguinaldo = aguinaldoAccrued(10_000, utc(2024, 1, 1), utc(2026, 11, 30));
