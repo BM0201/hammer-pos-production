@@ -2,37 +2,98 @@
  * Cálculo de nómina de Nicaragua — módulo PURO (sin DB).
  *
  * Fuente única de las fórmulas legales:
- *  - INSS laboral (retención al empleado, 7% por defecto)
+ *  - INSS (Decreto 06-2019): tasas laboral/patronal POR RÉGIMEN (Integral o
+ *    IVM-RP) y por tamaño de empresa (<50 / ≥50 trabajadores activos, conteo
+ *    GLOBAL de la empresa, no por sucursal). Sin techo de cotización.
+ *  - INATEC: 2% patronal sobre planilla bruta (ambos regímenes), constante.
  *  - IR salarial (tabla progresiva ANUAL del art. 23, Ley 822) — constante
  *    versionada en código, NO en DB: la tarifa solo cambia por reforma de ley.
- *  - Cargas patronales: INSS patronal (régimen integral, <50 empleados: 21.5%,
- *    editable vía PayrollRateConfig) + INATEC (2%).
- *  - Provisiones: aguinaldo, vacaciones e indemnización (1/12 c/u), activables.
+ *  - Prestaciones sociales OBLIGATORIAS (aguinaldo Arts. 93–99 CT, vacaciones
+ *    Arts. 76–82 CT, indemnización Art. 45 CT): cada una con su modo de
+ *    reconocimiento (provisión mensual o al pago) — NUNCA desactivables.
+ *    Las fórmulas de acumulación viven en prestaciones-sociales.ts.
  *
  * Lo consume payroll-service (persistencia por PayrollLine) y los tests
  * unitarios importan estas mismas funciones (convención del repo: lógica de
  * cálculo pura y testeable sin base de datos).
  */
 
+/* ── INSS (Decreto 06-2019, vigente desde feb 2019) ─────────────────────────── */
+
+export type InssRegime = "INTEGRAL" | "IVM_RP";
+
+export const INSS_INTEGRAL_LABORAL = 0.07;
+export const INSS_INTEGRAL_PATRONAL_LT50 = 0.215;
+export const INSS_INTEGRAL_PATRONAL_GTE50 = 0.225;
+export const INSS_IVM_RP_LABORAL = 0.05;
+export const INSS_IVM_RP_PATRONAL_LT50 = 0.155;
+export const INSS_IVM_RP_PATRONAL_GTE50 = 0.165;
+
+/** INATEC: 2% patronal sobre planilla bruta, ambos regímenes (constante legal). */
+export const INATEC_RATE = 0.02;
+
+/** Umbral de trabajadores activos que cambia la tasa patronal (≥50 sube). */
+export const INSS_EMPLOYER_SIZE_THRESHOLD = 50;
+
+/**
+ * Tasas INSS vigentes según régimen y tamaño de empresa. El conteo de activos
+ * es GLOBAL (todas las sucursales): la tasa por tamaño aplica a toda la
+ * planilla, no por sucursal.
+ */
+export function resolveInssRates(
+  regime: InssRegime,
+  activeEmployeeCount: number,
+): { laboral: number; patronal: number } {
+  const large = activeEmployeeCount >= INSS_EMPLOYER_SIZE_THRESHOLD;
+  if (regime === "IVM_RP") {
+    return { laboral: INSS_IVM_RP_LABORAL, patronal: large ? INSS_IVM_RP_PATRONAL_GTE50 : INSS_IVM_RP_PATRONAL_LT50 };
+  }
+  return { laboral: INSS_INTEGRAL_LABORAL, patronal: large ? INSS_INTEGRAL_PATRONAL_GTE50 : INSS_INTEGRAL_PATRONAL_LT50 };
+}
+
+/* ── Prestaciones sociales: modos de reconocimiento ─────────────────────────── */
+
+/**
+ * Aguinaldo, vacaciones e indemnización son obligaciones LEGALES: no existe un
+ * modo "OFF". Solo cambia CUÁNDO se reflejan en el costo mensual:
+ *  - ACCRUE_MONTHLY: se provisiona la fracción del mes (1/12, 2.5 días, tramo
+ *    Art. 45) dentro del costo empresa.
+ *  - ON_PAYMENT: el gasto se reconoce al pagar (diciembre / goce / liquidación).
+ */
+export type BenefitAccrualMode = "ACCRUE_MONTHLY" | "ON_PAYMENT";
+
+/** Aguinaldo: 1/12 del salario mensual por mes trabajado (Art. 93 CT). */
+export const AGUINALDO_MONTHLY_RATE = 1 / 12;
+/** Vacaciones: 2.5 días/mes × (salario/30) = 1/12 del salario (Art. 76 CT). */
+export const VACACIONES_MONTHLY_RATE = 2.5 / 30;
+/** Indemnización Art. 45, años 1–3: 1 mes por año → 1/12 mensual. */
+export const INDEMNIZACION_RATE_Y1_3 = 1 / 12;
+/** Indemnización Art. 45, años 4–6: 20 días por año → (20/30)/12 mensual. */
+export const INDEMNIZACION_RATE_Y4_6 = 20 / 30 / 12;
+
+/* ── Configuración de nómina (PayrollRateConfig + conteo global) ────────────── */
+
 export type PayrollRates = {
-  inssLaboralRate: number;
-  inssPatronalRate: number;
+  inssRegime: InssRegime;
+  /** Trabajadores activos de TODA la empresa (define la tasa patronal). */
+  activeEmployeeCount: number;
   inatecRate: number;
-  provisionAguinaldo: number;
-  provisionVacaciones: number;
-  provisionIndemnizacion: number;
-  provisionsEnabled: boolean;
+  aguinaldoMode: BenefitAccrualMode;
+  vacacionesMode: BenefitAccrualMode;
+  indemnizacionMode: BenefitAccrualMode;
+  /** Salario mínimo sectorial: solo para ADVERTIR salarios por debajo (no bloquea). */
+  salarioMinimoSectorial: number;
 };
 
-/** Tasas por defecto (régimen integral, empleador con <50 empleados). */
+/** Config por defecto: régimen Integral, empresa <50, todo provisionado mensual. */
 export const DEFAULT_PAYROLL_RATES: PayrollRates = {
-  inssLaboralRate: 0.07,
-  inssPatronalRate: 0.215,
-  inatecRate: 0.02,
-  provisionAguinaldo: 1 / 12,
-  provisionVacaciones: 1 / 12,
-  provisionIndemnizacion: 1 / 12,
-  provisionsEnabled: true,
+  inssRegime: "INTEGRAL",
+  activeEmployeeCount: 0,
+  inatecRate: INATEC_RATE,
+  aguinaldoMode: "ACCRUE_MONTHLY",
+  vacacionesMode: "ACCRUE_MONTHLY",
+  indemnizacionMode: "ACCRUE_MONTHLY",
+  salarioMinimoSectorial: 0,
 };
 
 /**
@@ -64,11 +125,6 @@ export function computeAnnualIr(annualTaxable: number): number {
   return Math.max(0, bracket.base + (annualTaxable - bracket.from) * bracket.rate);
 }
 
-/** Suma de tasas de provisiones (aguinaldo + vacaciones + indemnización). */
-export function provisionsRateSum(rates: PayrollRates): number {
-  return rates.provisionAguinaldo + rates.provisionVacaciones + rates.provisionIndemnizacion;
-}
-
 export type PayrollLineBreakdownInput = {
   /** Salario mensual completo (base para anualizar el IR). */
   monthlySalary: number;
@@ -79,6 +135,13 @@ export type PayrollLineBreakdownInput = {
   loanDeductions?: number;
   otherDeductions?: number;
   rates?: PayrollRates;
+  /**
+   * Tasa de provisión de indemnización vigente para ESTE empleado según su
+   * antigüedad (indemnizacionAccrualRate en prestaciones-sociales.ts):
+   * 1/12 (años 1–3), (20/30)/12 (años 4–6) o 0 (tope de 5 meses alcanzado).
+   * Sin dato de antigüedad se asume el primer tramo.
+   */
+  indemnizacionRate?: number;
 };
 
 export type PayrollLineBreakdown = {
@@ -95,7 +158,13 @@ export type PayrollLineBreakdown = {
   netPay: number;
   inssPatronal: number;
   inatec: number;
-  /** Provisiones del período (0 si provisionsEnabled=false). */
+  /** Provisión del mes de aguinaldo (0 si aguinaldoMode=ON_PAYMENT). */
+  aguinaldoAccrual: number;
+  /** Provisión del mes de vacaciones (0 si vacacionesMode=ON_PAYMENT). */
+  vacacionesAccrual: number;
+  /** Provisión del mes de indemnización según tramo (0 si ON_PAYMENT o tope). */
+  indemnizacionAccrual: number;
+  /** Suma de las tres provisiones del período (compatibilidad con snapshots). */
   provisions: number;
   /** Costo total empresa = bruto + patronal + INATEC + provisiones. */
   employerCost: number;
@@ -107,9 +176,15 @@ export type PayrollLineBreakdown = {
  * IR: se calcula sobre el mes COMPLETO — IR_anual((salario − INSS laboral) × 12) / 12 —
  * y luego se prorratea por días trabajados, igual que el salario. Anualizar el
  * bruto ya prorrateado sesgaría el tramo de la tabla hacia abajo en meses parciales.
+ *
+ * Prestaciones: son costo PATRONAL — nunca tocan el neto del empleado. El
+ * aguinaldo y la indemnización NO generan INSS patronal ni INATEC sobre sí
+ * mismos (Art. 97 CT / Art. 19.3 Ley 822): las cargas se calculan solo sobre
+ * el salario bruto.
  */
 export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): PayrollLineBreakdown {
   const rates = input.rates ?? DEFAULT_PAYROLL_RATES;
+  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
   const grossSalary = Math.max(0, input.grossSalary);
   const monthlySalary = Math.max(0, input.monthlySalary);
   const loanDeductions = round2(Math.max(0, input.loanDeductions ?? 0));
@@ -117,19 +192,29 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
 
   const prorationFactor = input.totalDays > 0 ? Math.min(1, Math.max(0, input.daysWorked / input.totalDays)) : 1;
 
-  const inssLaboral = round2(grossSalary * rates.inssLaboralRate);
+  const inssLaboral = round2(grossSalary * inss.laboral);
 
-  const fullMonthInss = monthlySalary * rates.inssLaboralRate;
+  const fullMonthInss = monthlySalary * inss.laboral;
   const irMonthlyFull = computeAnnualIr((monthlySalary - fullMonthInss) * 12) / 12;
   const ir = round2(irMonthlyFull * prorationFactor);
 
   const totalDeductions = round2(inssLaboral + ir + loanDeductions + otherDeductions);
   const netPay = round2(Math.max(0, grossSalary - totalDeductions));
 
-  const inssPatronal = round2(grossSalary * rates.inssPatronalRate);
+  const inssPatronal = round2(grossSalary * inss.patronal);
   const inatec = round2(grossSalary * rates.inatecRate);
-  const provisions = rates.provisionsEnabled ? round2(grossSalary * provisionsRateSum(rates)) : 0;
-  const employerCost = round2(grossSalary + inssPatronal + inatec + provisions);
+
+  const indemnizacionRate = input.indemnizacionRate ?? INDEMNIZACION_RATE_Y1_3;
+  // La suma se redondea UNA sola vez (sin redondeos intermedios): así
+  // 3 × (10,000/12) da 2,500.00 exactos y el costo empresa conserva los
+  // números históricos. Cada acumulado individual se redondea solo para su
+  // columna (puede diferir de la suma por 1 centavo, es esperado).
+  const aguinaldoRaw = rates.aguinaldoMode === "ACCRUE_MONTHLY" ? grossSalary * AGUINALDO_MONTHLY_RATE : 0;
+  const vacacionesRaw = rates.vacacionesMode === "ACCRUE_MONTHLY" ? grossSalary * VACACIONES_MONTHLY_RATE : 0;
+  const indemnizacionRaw = rates.indemnizacionMode === "ACCRUE_MONTHLY" ? grossSalary * indemnizacionRate : 0;
+
+  const provisions = round2(aguinaldoRaw + vacacionesRaw + indemnizacionRaw);
+  const employerCost = round2(grossSalary + inssPatronal + inatec + aguinaldoRaw + vacacionesRaw + indemnizacionRaw);
 
   return {
     grossSalary: round2(grossSalary),
@@ -141,6 +226,9 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
     netPay,
     inssPatronal,
     inatec,
+    aguinaldoAccrual: round2(aguinaldoRaw),
+    vacacionesAccrual: round2(vacacionesRaw),
+    indemnizacionAccrual: round2(indemnizacionRaw),
     provisions,
     employerCost,
   };

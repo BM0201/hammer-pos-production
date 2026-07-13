@@ -1783,21 +1783,38 @@ model PayrollLine {
   @@index([employeeId])
 }
 
-/// Tasas de nómina Nicaragua (fila única). La tabla progresiva del IR (Ley 822)
-/// vive versionada en código (payroll-nicaragua.ts), NO aquí: solo cambia por
-/// reforma de ley. Si no existe fila, el servicio usa DEFAULT_PAYROLL_RATES.
+/// Régimen de afiliación al INSS (Decreto 06-2019). Las tasas laboral/patronal
+/// se derivan del régimen + conteo GLOBAL de empleados activos (<50 / ≥50) en
+/// resolveInssRates (payroll-nicaragua.ts) — no se guardan tasas sueltas.
+enum InssRegime {
+  INTEGRAL /// laboral 7%; patronal 21.5% (<50) / 22.5% (≥50)
+  IVM_RP /// laboral 5%; patronal 15.5% (<50) / 16.5% (≥50)
+}
+
+/// Cuándo se reconoce cada prestación social en el costo mensual. La obligación
+/// legal (aguinaldo Arts. 93–99, vacaciones Arts. 76–82, indemnización Art. 45 CT)
+/// existe en AMBOS modos — por eso no hay valor "OFF": solo cambia si se
+/// provisiona mes a mes o si el gasto se reconoce al pagar.
+enum BenefitAccrualMode {
+  ACCRUE_MONTHLY /// provisiona 1/12, 2.5 días y tramo Art. 45 en el costo mensual
+  ON_PAYMENT /// el gasto se reconoce al pagar (diciembre / goce / liquidación)
+}
+
+/// Configuración de nómina Nicaragua (fila única). La tabla progresiva del IR
+/// (Ley 822) y las tasas INSS/INATEC viven versionadas en código
+/// (payroll-nicaragua.ts), NO aquí: solo cambian por reforma de ley. Si no
+/// existe fila, el servicio usa DEFAULT_PAYROLL_RATES.
 model PayrollRateConfig {
-  id                     String   @id @default(cuid())
-  inssLaboralRate        Decimal  @default(0.07)
-  inssPatronalRate       Decimal  @default(0.215) /// Régimen integral, <50 empleados; editable
-  inatecRate             Decimal  @default(0.02)
-  provisionAguinaldo     Decimal  @default(0.0833333333333333) /// 1/12
-  provisionVacaciones    Decimal  @default(0.0833333333333333) /// 1/12
-  provisionIndemnizacion Decimal  @default(0.0833333333333333) /// 1/12
-  provisionsEnabled      Boolean  @default(true)
+  id                     String             @id @default(cuid())
+  inssRegime             InssRegime         @default(INTEGRAL)
+  aguinaldoMode          BenefitAccrualMode @default(ACCRUE_MONTHLY)
+  vacacionesMode         BenefitAccrualMode @default(ACCRUE_MONTHLY)
+  indemnizacionMode      BenefitAccrualMode @default(ACCRUE_MONTHLY)
+  /// Salario mínimo sectorial: solo para ADVERTIR salarios por debajo (warning, no bloqueo).
+  salarioMinimoSectorial Decimal            @default(0)
   updatedByUserId        String?
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 }
 
 enum PayrollDisbursementPeriod {

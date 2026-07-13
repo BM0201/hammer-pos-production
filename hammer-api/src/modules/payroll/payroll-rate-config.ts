@@ -1,59 +1,88 @@
 /**
- * Tasas de nómina configurables (PayrollRateConfig, fila única).
+ * Configuración de nómina (PayrollRateConfig, fila única) + conteo global de
+ * empleados activos.
  *
  * La fila en DB es opcional: sin fila, rigen los DEFAULT_PAYROLL_RATES del
- * módulo puro (payroll-nicaragua.ts). Editar tasas crea/actualiza la fila —
- * pensado para el cambio de régimen del INSS patronal (21.5% ↔ 22.5% al pasar
- * de <50 a ≥50 empleados) sin tocar código.
+ * módulo puro (payroll-nicaragua.ts). Las tasas INSS ya NO se editan sueltas:
+ * se derivan del régimen (INTEGRAL / IVM_RP) y del conteo de trabajadores
+ * activos de TODA la empresa (<50 / ≥50) vía resolveInssRates — al cruzar el
+ * umbral de 50, la tasa patronal cambia sola en todos los cálculos.
  */
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
-import { DEFAULT_PAYROLL_RATES, type PayrollRates } from "./payroll-nicaragua";
+import {
+  DEFAULT_PAYROLL_RATES,
+  resolveInssRates,
+  type BenefitAccrualMode,
+  type InssRegime,
+  type PayrollRates,
+} from "./payroll-nicaragua";
 
-function num(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
+const INSS_REGIMES: readonly InssRegime[] = ["INTEGRAL", "IVM_RP"];
+const BENEFIT_MODES: readonly BenefitAccrualMode[] = ["ACCRUE_MONTHLY", "ON_PAYMENT"];
 
-/** Tasas vigentes: fila de PayrollRateConfig si existe, defaults si no. */
+/**
+ * Config vigente: fila de PayrollRateConfig (o defaults) + conteo GLOBAL de
+ * empleados activos. El conteo es de toda la empresa (todas las sucursales):
+ * así lo define el Decreto 06-2019 para la tasa patronal por tamaño.
+ */
 export async function getPayrollRates(): Promise<PayrollRates> {
-  const row = await prisma.payrollRateConfig.findFirst({ orderBy: { createdAt: "asc" } });
-  if (!row) return { ...DEFAULT_PAYROLL_RATES };
+  const [row, activeEmployeeCount] = await Promise.all([
+    prisma.payrollRateConfig.findFirst({ orderBy: { createdAt: "asc" } }),
+    prisma.employee.count({ where: { isActive: true } }),
+  ]);
+  if (!row) return { ...DEFAULT_PAYROLL_RATES, activeEmployeeCount };
   return {
-    inssLaboralRate: num(row.inssLaboralRate, DEFAULT_PAYROLL_RATES.inssLaboralRate),
-    inssPatronalRate: num(row.inssPatronalRate, DEFAULT_PAYROLL_RATES.inssPatronalRate),
-    inatecRate: num(row.inatecRate, DEFAULT_PAYROLL_RATES.inatecRate),
-    provisionAguinaldo: num(row.provisionAguinaldo, DEFAULT_PAYROLL_RATES.provisionAguinaldo),
-    provisionVacaciones: num(row.provisionVacaciones, DEFAULT_PAYROLL_RATES.provisionVacaciones),
-    provisionIndemnizacion: num(row.provisionIndemnizacion, DEFAULT_PAYROLL_RATES.provisionIndemnizacion),
-    provisionsEnabled: row.provisionsEnabled,
+    inssRegime: row.inssRegime,
+    activeEmployeeCount,
+    inatecRate: DEFAULT_PAYROLL_RATES.inatecRate,
+    aguinaldoMode: row.aguinaldoMode,
+    vacacionesMode: row.vacacionesMode,
+    indemnizacionMode: row.indemnizacionMode,
+    salarioMinimoSectorial: Number(row.salarioMinimoSectorial) || 0,
   };
 }
 
-export type UpdatePayrollRatesInput = Partial<PayrollRates>;
+/** Tasas INSS resueltas para una config (conveniencia para endpoints/UI). */
+export function resolvedInssRatesFor(rates: PayrollRates) {
+  return resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
+}
 
-const RATE_FIELDS = [
-  "inssLaboralRate",
-  "inssPatronalRate",
-  "inatecRate",
-  "provisionAguinaldo",
-  "provisionVacaciones",
-  "provisionIndemnizacion",
-] as const;
+export type UpdatePayrollRatesInput = {
+  inssRegime?: InssRegime;
+  aguinaldoMode?: BenefitAccrualMode;
+  vacacionesMode?: BenefitAccrualMode;
+  indemnizacionMode?: BenefitAccrualMode;
+  salarioMinimoSectorial?: number;
+};
+
+const MODE_FIELDS = ["aguinaldoMode", "vacacionesMode", "indemnizacionMode"] as const;
 
 export async function updatePayrollRates(input: UpdatePayrollRatesInput, actorUserId?: string): Promise<PayrollRates> {
   const data: Record<string, unknown> = {};
-  for (const field of RATE_FIELDS) {
+
+  if (input.inssRegime !== undefined) {
+    if (!INSS_REGIMES.includes(input.inssRegime)) {
+      throw new Error("INVALID_INPUT: inssRegime debe ser INTEGRAL o IVM_RP");
+    }
+    data.inssRegime = input.inssRegime;
+  }
+  for (const field of MODE_FIELDS) {
     const value = input[field];
     if (value === undefined) continue;
-    if (!Number.isFinite(value) || value < 0 || value > 1) {
-      throw new Error(`INVALID_INPUT: ${field} debe ser una tasa entre 0 y 1`);
+    if (!BENEFIT_MODES.includes(value)) {
+      throw new Error(`INVALID_INPUT: ${field} debe ser ACCRUE_MONTHLY u ON_PAYMENT`);
     }
     data[field] = value;
   }
-  if (input.provisionsEnabled !== undefined) data.provisionsEnabled = Boolean(input.provisionsEnabled);
+  if (input.salarioMinimoSectorial !== undefined) {
+    if (!Number.isFinite(input.salarioMinimoSectorial) || input.salarioMinimoSectorial < 0) {
+      throw new Error("INVALID_INPUT: salarioMinimoSectorial debe ser un monto ≥ 0");
+    }
+    data.salarioMinimoSectorial = input.salarioMinimoSectorial;
+  }
   if (Object.keys(data).length === 0) {
-    throw new Error("INVALID_INPUT: No hay tasas para actualizar");
+    throw new Error("INVALID_INPUT: No hay configuración para actualizar");
   }
   data.updatedByUserId = actorUserId ?? null;
 

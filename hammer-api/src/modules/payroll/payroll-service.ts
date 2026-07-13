@@ -184,14 +184,15 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
   return employees.map((emp) => {
     if (!emp.isActive) return { ...emp, payrollEstimate: null, payrollRates: rates };
     const salary = Number(emp.monthlySalary);
-    // provisionsEnabled forzado: `provisions` viaja siempre calculado y el
-    // toggle del cliente decide si sumarlo (rates.provisionsEnabled marca el default).
+    // Modos forzados a ACCRUE_MONTHLY: `provisions` viaja siempre calculado y
+    // el control del cliente decide si sumarlo (los modos de la config marcan
+    // el default del panel).
     const b = computePayrollLineBreakdown({
       monthlySalary: salary,
       grossSalary: salary,
       daysWorked: 1,
       totalDays: 1,
-      rates: { ...rates, provisionsEnabled: true },
+      rates: { ...rates, aguinaldoMode: "ACCRUE_MONTHLY", vacacionesMode: "ACCRUE_MONTHLY", indemnizacionMode: "ACCRUE_MONTHLY" },
     });
     return {
       ...emp,

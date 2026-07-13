@@ -3,8 +3,9 @@
  *
  * A diferencia de los tests-espejo, aquí se importan las funciones REALES:
  * el módulo es puro (sin DB), así que se valida la implementación exacta que
- * consume payroll-service. Casos con tasas por defecto (INSS laboral 7%,
- * patronal 21.5%, INATEC 2%, provisiones 3×1/12) y tabla IR anual Ley 822.
+ * consume payroll-service. Casos con la config por defecto (régimen Integral
+ * <50: laboral 7%, patronal 21.5%, INATEC 2%, prestaciones provisionadas
+ * 3×1/12 en el primer tramo) y tabla IR anual Ley 822.
  *
  * Run: node --import tsx --test src/modules/payroll/payroll-nicaragua.test.ts
  */
@@ -15,7 +16,7 @@ import {
   DEFAULT_PAYROLL_RATES,
   computeAnnualIr,
   computePayrollLineBreakdown,
-  provisionsRateSum,
+  resolveInssRates,
   round2,
 } from "./payroll-nicaragua";
 
@@ -102,19 +103,68 @@ describe("computePayrollLineBreakdown — casos exactos (tasas por defecto)", ()
   });
 });
 
-// ── Provisiones desactivadas ──────────────────────────────────────────────────
+// ── INSS por régimen y tamaño de empresa (Decreto 06-2019) ──────────────────
 
-describe("provisiones desactivadas (provisionsEnabled=false)", () => {
-  it("el costo empresa excluye aguinaldo/vacaciones/indemnización", () => {
-    const b = fullMonth(10_000, { rates: { ...DEFAULT_PAYROLL_RATES, provisionsEnabled: false } });
+describe("resolveInssRates (régimen + conteo global de activos)", () => {
+  it("Integral con 49 activos → patronal 21.5%, laboral 7%", () => {
+    assert.deepEqual(resolveInssRates("INTEGRAL", 49), { laboral: 0.07, patronal: 0.215 });
+  });
+
+  it("Integral con 50 activos → patronal 22.5% (el umbral es ≥50)", () => {
+    assert.deepEqual(resolveInssRates("INTEGRAL", 50), { laboral: 0.07, patronal: 0.225 });
+  });
+
+  it("IVM-RP con 49 activos → laboral 5%, patronal 15.5%", () => {
+    assert.deepEqual(resolveInssRates("IVM_RP", 49), { laboral: 0.05, patronal: 0.155 });
+  });
+
+  it("IVM-RP con 50 activos → patronal 16.5%", () => {
+    assert.deepEqual(resolveInssRates("IVM_RP", 50), { laboral: 0.05, patronal: 0.165 });
+  });
+
+  it("el breakdown hereda la tasa del régimen: IVM-RP retiene 5% al empleado", () => {
+    const b = fullMonth(10_000, { rates: { ...DEFAULT_PAYROLL_RATES, inssRegime: "IVM_RP" } });
+    assert.equal(b.inssLaboral, 500);
+    assert.equal(b.inssPatronal, 1_550);
+  });
+});
+
+// ── Modo de reconocimiento de prestaciones (nunca "OFF") ────────────────────
+
+describe("prestaciones en modo ON_PAYMENT (no se provisionan en el mes)", () => {
+  it("el costo empresa del mes excluye las tres provisiones", () => {
+    const b = fullMonth(10_000, {
+      rates: {
+        ...DEFAULT_PAYROLL_RATES,
+        aguinaldoMode: "ON_PAYMENT",
+        vacacionesMode: "ON_PAYMENT",
+        indemnizacionMode: "ON_PAYMENT",
+      },
+    });
     assert.equal(b.provisions, 0);
+    assert.equal(b.aguinaldoAccrual, 0);
+    assert.equal(b.vacacionesAccrual, 0);
+    assert.equal(b.indemnizacionAccrual, 0);
     assert.equal(b.employerCost, 12_350); // 10,000 + 2,150 + 200
-    // Las deducciones del empleado no cambian: provisiones son costo patronal.
+    // Las deducciones del empleado no cambian: prestaciones son costo patronal.
     assert.equal(b.netPay, 9_155);
   });
 
-  it("suma de provisiones por defecto = 3 × 1/12 = 25%", () => {
-    assert.equal(round2(provisionsRateSum(DEFAULT_PAYROLL_RATES) * 100), 25);
+  it("los modos son independientes: solo aguinaldo al pago deja vac.+indemn. provisionadas", () => {
+    const b = fullMonth(10_000, { rates: { ...DEFAULT_PAYROLL_RATES, aguinaldoMode: "ON_PAYMENT" } });
+    assert.equal(b.aguinaldoAccrual, 0);
+    assert.equal(b.vacacionesAccrual, 833.33);
+    assert.equal(b.indemnizacionAccrual, 833.33);
+    // La suma se redondea una sola vez: 2 × 10,000/12 = 1,666.67 (no 1,666.66).
+    assert.equal(b.provisions, 1_666.67);
+  });
+
+  it("provisión por defecto (tramo 1) = 3 × 1/12 ≈ 25% del bruto", () => {
+    const b = fullMonth(10_000);
+    assert.equal(b.provisions, 2_500);
+    assert.equal(b.aguinaldoAccrual, 833.33);
+    assert.equal(b.vacacionesAccrual, 833.33);
+    assert.equal(b.indemnizacionAccrual, 833.33);
   });
 });
 
