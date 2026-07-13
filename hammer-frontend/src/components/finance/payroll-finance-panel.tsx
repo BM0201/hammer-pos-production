@@ -32,8 +32,11 @@ import {
   fmtC,
   fmtDateShort,
   fmtRatePct,
+  fmtRatePct3,
+  fmtSeniority,
   initials,
   nextBiweeklyPayday,
+  resolveInssRates,
   round2,
   type PayrollBreakdown,
   type PayrollRates,
@@ -138,9 +141,10 @@ export function PayrollFinancePanel() {
       const j = unwrapApiData(await r.json());
       const list = Array.isArray(j) ? (j as EmployeeRow[]) : [];
       setEmployees(list);
-      // Default del toggle de provisiones desde la config del backend (una vez).
+      // Default del control de prestaciones desde la config del backend (una
+      // vez): las tres comparten el control, aguinaldoMode marca el default.
       const rates = list.find((e) => e.payrollRates)?.payrollRates;
-      if (rates && !provisionsTouched.current) setIncludeProvisions(rates.provisionsEnabled);
+      if (rates && !provisionsTouched.current) setIncludeProvisions(rates.aguinaldoMode === "ACCRUE_MONTHLY");
     } catch {
       toast.error("Error al cargar empleados");
     } finally {
@@ -177,11 +181,16 @@ export function PayrollFinancePanel() {
     [employees],
   );
 
-  // Desglose por empleado: backend si existe; espejo cliente como fallback.
+  // Tasas INSS resueltas por régimen + conteo global (las tasas ya no viajan
+  // sueltas en la config: se derivan, y cambian solas al cruzar 50 activos).
+  const inssResolved = useMemo(() => resolveInssRates(rates.inssRegime, rates.activeEmployeeCount), [rates]);
+
+  // Desglose por empleado: backend si existe; espejo cliente como fallback
+  // (startDate define el tramo de indemnización y las prestaciones acumuladas).
   const breakdownOf = useCallback(
     (emp: EmployeeRow): { b: PayrollBreakdown; estimated: boolean } => {
       if (emp.payrollEstimate) return { b: emp.payrollEstimate, estimated: false };
-      return { b: computeMonthlyBreakdown(Number(emp.monthlySalary), rates), estimated: true };
+      return { b: computeMonthlyBreakdown(Number(emp.monthlySalary), rates, emp.startDate), estimated: true };
     },
     [rates],
   );
@@ -222,7 +231,7 @@ export function PayrollFinancePanel() {
   // (la búsqueda no altera los totales, igual que el mockup).
   const heroTotals = useMemo<PayrollHeroTotals>(() => {
     const active = employees.filter((e) => e.isActive && inBranchScope(e));
-    const t = { base: 0, net: 0, ret: 0, patronal: 0, inatec: 0, prov: 0, cost: 0 };
+    const t = { base: 0, net: 0, ret: 0, patronal: 0, inatec: 0, agui: 0, vac: 0, indem: 0, cost: 0 };
     for (const emp of active) {
       const { b } = breakdownOf(emp);
       t.base += Number(emp.monthlySalary);
@@ -230,7 +239,11 @@ export function PayrollFinancePanel() {
       t.ret += b.inssLaboral + b.ir;
       t.patronal += b.inssPatronal;
       t.inatec += b.inatec;
-      t.prov += includeProvisions ? b.provisions : 0;
+      if (includeProvisions) {
+        t.agui += b.aguinaldoAccrual;
+        t.vac += b.vacacionesAccrual;
+        t.indem += b.indemnizacionAccrual;
+      }
       t.cost += employerCostOf(b);
     }
     return {
@@ -239,7 +252,9 @@ export function PayrollFinancePanel() {
       ret: round2(t.ret),
       patronal: round2(t.patronal),
       inatec: round2(t.inatec),
-      prov: round2(t.prov),
+      agui: round2(t.agui),
+      vac: round2(t.vac),
+      indem: round2(t.indem),
       cost: round2(t.cost),
       activeEmployees: active.length,
       branchCount: new Set(active.map((e) => e.branchId)).size,
@@ -527,18 +542,34 @@ export function PayrollFinancePanel() {
               </kbd>
             </div>
 
-            <label className="inline-flex cursor-pointer select-none items-center gap-2 whitespace-nowrap text-[0.78rem] text-[var(--color-text-muted)]" title="Aguinaldo, vacaciones e indemnización (1/12 c/u)">
-              <input
-                type="checkbox"
-                checked={includeProvisions}
-                onChange={(e) => {
-                  provisionsTouched.current = true;
-                  setIncludeProvisions(e.target.checked);
-                }}
-                className="h-3.5 w-3.5 cursor-pointer accent-[var(--color-info-600)]"
-              />
-              Incluir provisiones
-            </label>
+            {/* Prestaciones: la obligación legal existe en ambos modos — el
+                control solo cambia CUÁNDO se refleja en el costo (nada de
+                "apagar" aguinaldo/vacaciones/indemnización). */}
+            <fieldset
+              className="inline-flex select-none items-center gap-2 whitespace-nowrap text-[0.78rem] text-[var(--color-text-muted)]"
+              title="Aguinaldo, vacaciones e indemnización son obligaciones de ley en ambos modos; solo cambia cuándo se reflejan en el costo: provisionadas mes a mes o reconocidas al pagarlas."
+            >
+              <legend className="sr-only">Modo de reconocimiento de prestaciones sociales</legend>
+              <span className="font-medium">Prestaciones:</span>
+              {([
+                { value: true, label: "Provisionar mensual" },
+                { value: false, label: "Reconocer al pago" },
+              ] as const).map((opt) => (
+                <label key={opt.label} className="inline-flex cursor-pointer items-center gap-1.5">
+                  <input
+                    type="radio"
+                    name="benefits-mode"
+                    checked={includeProvisions === opt.value}
+                    onChange={() => {
+                      provisionsTouched.current = true;
+                      setIncludeProvisions(opt.value);
+                    }}
+                    className="h-3.5 w-3.5 cursor-pointer accent-[var(--color-info-600)]"
+                  />
+                  {opt.label}
+                </label>
+              ))}
+            </fieldset>
 
             <button
               onClick={exportCsv}
@@ -709,7 +740,17 @@ export function PayrollFinancePanel() {
                                 {emp.branch?.code ?? "—"}
                               </span>
                             </td>
-                            <td className="text-right font-mono font-medium text-[var(--color-text)]">{fmtC(salary)}</td>
+                            <td className="text-right font-mono font-medium text-[var(--color-text)]">
+                              {fmtC(salary)}
+                              {b.belowMinimumWage && (
+                                <span
+                                  className="hm-badge hm-badge-warning ml-1.5 align-middle text-[0.5rem]"
+                                  title={`Por debajo del salario mínimo sectorial configurado (${fmtC(rates.salarioMinimoSectorial)})`}
+                                >
+                                  &lt; mínimo
+                                </span>
+                              )}
+                            </td>
                             <td className="hidden text-right md:table-cell">
                               <div className="flex items-center justify-end gap-2">
                                 <span className="w-9 text-right text-[0.7188rem] tabular-nums text-[var(--color-text-muted)]">{share.toFixed(0)}%</span>
@@ -726,7 +767,26 @@ export function PayrollFinancePanel() {
                               {fmtC(b.netPay)}
                               {estimated && <span className="hm-badge hm-badge-warning ml-1.5 align-middle text-[0.5rem]">EST</span>}
                             </td>
-                            <td className="hidden text-right font-mono text-[var(--color-text-muted)] md:table-cell">{fmtC(employerCostOf(b))}</td>
+                            <td className="hidden text-right font-mono text-[var(--color-text-muted)] md:table-cell">
+                              {fmtC(employerCostOf(b))}
+                              {/* Tasa de indemnización visible cuando el tramo Art. 45 ya
+                                  no es el inicial: explica por qué dos empleados con igual
+                                  salario cuestan distinto. */}
+                              {includeProvisions && (b.indemnizacionRateActual ?? 1 / 12) !== 1 / 12 && (
+                                <span
+                                  className="block text-[0.625rem] font-sans text-[var(--color-owner-600)]"
+                                  title={
+                                    (b.indemnizacionRateActual ?? 0) === 0
+                                      ? "Indemnización Art. 45: tope de 5 meses alcanzado (6+ años) — ya no se provisiona."
+                                      : "Indemnización Art. 45: tramo años 4–6 (20 días/año) — provisión (20/30)/12."
+                                  }
+                                >
+                                  {(b.indemnizacionRateActual ?? 0) === 0
+                                    ? "indemn. 0% (tope)"
+                                    : `indemn. ${fmtRatePct3(b.indemnizacionRateActual ?? 0)}`}
+                                </span>
+                              )}
+                            </td>
                             <td>
                               <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[0.5625rem] font-semibold ${
                                 emp.isActive
@@ -812,8 +872,23 @@ export function PayrollFinancePanel() {
             ret: round2(b.inssLaboral + b.ir),
             patronal: b.inssPatronal,
             inatec: b.inatec,
-            prov: includeProvisions ? b.provisions : 0,
+            agui: includeProvisions ? b.aguinaldoAccrual : 0,
+            vac: includeProvisions ? b.vacacionesAccrual : 0,
+            indem: includeProvisions ? b.indemnizacionAccrual : 0,
           };
+          const months = b.monthsOfService ?? 0;
+          const indemRate = b.indemnizacionRateActual ?? 1 / 12;
+          const vacBalance = b.vacationDaysBalance ?? 0;
+          const chipExento = (
+            <span className="ml-1.5 inline-flex rounded-full border border-[var(--color-success-100)] bg-[var(--color-success-50)] px-1.5 py-px align-middle text-[0.5313rem] font-bold uppercase tracking-wide text-[var(--color-success-700)]">
+              Exento IR/INSS
+            </span>
+          );
+          const chipGravable = (
+            <span className="ml-1.5 inline-flex rounded-full border border-[var(--color-warning-100)] bg-[var(--color-warning-50)] px-1.5 py-px align-middle text-[0.5313rem] font-bold uppercase tracking-wide text-[var(--color-warning-700)]">
+              Gravable si se paga
+            </span>
+          );
           const avatarAccent = AVATAR_ACCENTS[hashIndex(drawerEmployee.id, AVATAR_ACCENTS.length)];
           const branch = drawerEmployee.branch;
           const sw = (k: keyof PayrollSegmentAmounts) => (
@@ -849,11 +924,15 @@ export function PayrollFinancePanel() {
                   </h4>
                   <PayrollCompositionBar amounts={amounts} total={cost} rates={rates} mini />
                   <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("neto")}Neto al empleado</span><span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(b.netPay)}</span></div>
-                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("ret")}Retenciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">INSS {fmtRatePct(rates.inssLaboralRate)} + IR</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(amounts.ret)}</span></div>
-                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("patronal")}INSS patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(rates.inssPatronalRate)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.inssPatronal)}</span></div>
+                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("ret")}Retenciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">INSS {fmtRatePct(inssResolved.laboral)} + IR</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(amounts.ret)}</span></div>
+                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("patronal")}INSS patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.patronal)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.inssPatronal)}</span></div>
                   <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("inatec")}INATEC <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(rates.inatecRate)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.inatec)}</span></div>
                   {includeProvisions && (
-                    <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("prov")}Provisiones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">aguinaldo + vac. + indemn.</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.provisions)}</span></div>
+                    <>
+                      <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("agui")}Aguinaldo <small className="text-[0.6875rem] text-[var(--color-text-soft)]">1/12</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.aguinaldoAccrual)}</span></div>
+                      <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("vac")}Vacaciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">2.5 días/mes</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.vacacionesAccrual)}</span></div>
+                      <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("indem")}Indemnización <small className="text-[0.6875rem] text-[var(--color-text-soft)]">Art. 45 · {indemRate === 0 ? "tope" : fmtRatePct3(indemRate)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.indemnizacionAccrual)}</span></div>
+                    </>
                   )}
                   <div className="mt-1.5 flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-2.5 text-sm font-bold">
                     <span className="text-[var(--color-text-secondary)]">Costo mensual empresa</span>
@@ -866,12 +945,53 @@ export function PayrollFinancePanel() {
                     Recibo del empleado
                   </h4>
                   <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario base</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(Number(drawerEmployee.monthlySalary))}</span></div>
-                  <div className={dline}><span className="text-[var(--color-text-secondary)]">INSS laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(rates.inssLaboralRate)}</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.inssLaboral)}</span></div>
+                  <div className={dline}><span className="text-[var(--color-text-secondary)]">INSS laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.laboral)}</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.inssLaboral)}</span></div>
                   <div className={dline}><span className="text-[var(--color-text-secondary)]">IR <small className="text-[0.6875rem] text-[var(--color-text-soft)]">tabla progresiva Ley 822</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.ir)}</span></div>
                   <div className="mt-1.5 flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-2.5 text-sm font-bold">
                     <span className="text-[var(--color-text-secondary)]">Neto a pagar</span>
                     <span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(b.netPay)}</span>
                   </div>
+                </section>
+
+                {/* Prestaciones ACUMULADAS: pasivo por empleado según ley (no es
+                    el costo del mes — es lo que la empresa ya debe a la fecha). */}
+                <section className="mb-6">
+                  <h4 className="mb-2.5 flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-soft)] after:h-px after:flex-1 after:bg-[var(--color-border)]">
+                    Prestaciones acumuladas
+                  </h4>
+                  <div className={dline}>
+                    <span className="text-[var(--color-text-secondary)]">Antigüedad</span>
+                    <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtSeniority(months)}</span>
+                  </div>
+                  <div className={dline}>
+                    <span className="text-[var(--color-text-secondary)]">
+                      Aguinaldo del período <small className="text-[0.6875rem] text-[var(--color-text-soft)]">dic–nov · pagar antes del {b.aguinaldoDeadline ? fmtDateShort(b.aguinaldoDeadline) : "10 dic"}</small>
+                      {chipExento}
+                    </span>
+                    <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.aguinaldoAccrued ?? 0)}</span>
+                  </div>
+                  <div className={dline}>
+                    <span className="text-[var(--color-text-secondary)]">
+                      Vacaciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{vacBalance.toLocaleString("es-NI", { maximumFractionDigits: 1 })} días de saldo</small>
+                      {chipGravable}
+                    </span>
+                    <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.vacationBalanceValue ?? 0)}</span>
+                  </div>
+                  <div className={dline}>
+                    <span className="text-[var(--color-text-secondary)]">
+                      Indemnización Art. 45{" "}
+                      <small className="text-[0.6875rem] text-[var(--color-text-soft)]">
+                        {indemRate === 0 ? "tope de 5 meses alcanzado" : `tramo actual ${fmtRatePct3(indemRate)}`}
+                      </small>
+                      {chipExento}
+                    </span>
+                    <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.indemnizacionAccrued ?? 0)}</span>
+                  </div>
+                  <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
+                    La indemnización acumula 1 mes/año (años 1–3) y 20 días/año (años 4–6), con tope de 5 meses de
+                    salario; exenta de IR hasta 5 meses + C$500,000 (Ley 822). El aguinaldo es exento de todo (Art. 97 CT);
+                    las vacaciones pagadas en dinero gravan INSS e IR el mes en que se pagan.
+                  </p>
                 </section>
               </div>
 

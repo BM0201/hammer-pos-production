@@ -1988,13 +1988,20 @@ a:focus-visible {
   --pay-seg-ret: var(--color-info-500);
   --pay-seg-patronal: var(--color-warning-500);
   --pay-seg-inatec: var(--color-sales-600);
-  --pay-seg-prov: var(--color-owner-600);
+  /* Prestaciones sociales desglosadas — familia violeta/rosa para distinguirlas
+     del resto: aguinaldo (violeta), vacaciones (violeta claro), indemnización
+     (rosa; la paleta no tiene familia rosa, se ancla aquí en hex). */
+  --pay-seg-agui: var(--color-owner-600);
+  --pay-seg-vac: var(--color-owner-400);
+  --pay-seg-indem: #db2777;
 }
 /* Anclas más claras sobre carbón (mismo criterio que los text anchors dark). */
 [data-theme="dark"] {
   --pay-seg-ret: var(--color-info-400);
   --pay-seg-inatec: var(--color-sales-400);
-  --pay-seg-prov: var(--color-owner-400);
+  --pay-seg-agui: var(--color-owner-400);
+  --pay-seg-vac: #c4b5fd;
+  --pay-seg-indem: #f472b6;
 }
 
 .pay-compbar,
@@ -2021,14 +2028,18 @@ a:focus-visible {
 .pay-seg-ret      { background: var(--pay-seg-ret); }
 .pay-seg-patronal { background: var(--pay-seg-patronal); }
 .pay-seg-inatec   { background: var(--pay-seg-inatec); }
-.pay-seg-prov     { background: var(--pay-seg-prov); }
+.pay-seg-agui     { background: var(--pay-seg-agui); }
+.pay-seg-vac      { background: var(--pay-seg-vac); }
+.pay-seg-indem    { background: var(--pay-seg-indem); }
 /* Hover en la leyenda: atenúa el resto de segmentos. */
 .pay-compbar[data-hl] .pay-seg { opacity: 0.28; }
 .pay-compbar[data-hl="neto"] .pay-seg-neto,
 .pay-compbar[data-hl="ret"] .pay-seg-ret,
 .pay-compbar[data-hl="patronal"] .pay-seg-patronal,
 .pay-compbar[data-hl="inatec"] .pay-seg-inatec,
-.pay-compbar[data-hl="prov"] .pay-seg-prov { opacity: 1; filter: brightness(1.08); }
+.pay-compbar[data-hl="agui"] .pay-seg-agui,
+.pay-compbar[data-hl="vac"] .pay-seg-vac,
+.pay-compbar[data-hl="indem"] .pay-seg-indem { opacity: 1; filter: brightness(1.08); }
 
 /* Brackets superiores: agrupan Salario base vs Cargas patronales. */
 .pay-brackets { display: flex; margin-bottom: 0.3rem; }

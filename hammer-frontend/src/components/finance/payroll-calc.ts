@@ -1,32 +1,47 @@
 /**
- * Cálculo de nómina Nicaragua — espejo cliente del módulo del backend
- * (hammer-api/src/modules/payroll/payroll-nicaragua.ts).
+ * Cálculo de nómina Nicaragua — espejo cliente de los módulos del backend
+ * (hammer-api/src/modules/payroll/payroll-nicaragua.ts y
+ * prestaciones-sociales.ts).
  *
  * El panel de Planilla usa el desglose que devuelve el backend
  * (`payrollEstimate` en /api/employees); estas funciones son el FALLBACK con
- * las mismas tasas por defecto para cuando ese desglose aún no está desplegado
- * (las columnas se marcan con el badge "ESTIMADO") y para recalcular el toggle
- * de provisiones sin ir al servidor.
+ * las mismas reglas legales para cuando ese desglose aún no está desplegado
+ * (las columnas se marcan con el badge "ESTIMADO") y para recalcular el
+ * control de prestaciones sin ir al servidor.
  */
 
+/* ── INSS (Decreto 06-2019): tasas por régimen y tamaño de empresa ─────────── */
+
+export type InssRegime = "INTEGRAL" | "IVM_RP";
+export type BenefitAccrualMode = "ACCRUE_MONTHLY" | "ON_PAYMENT";
+
+export const INSS_EMPLOYER_SIZE_THRESHOLD = 50;
+
+/** Tasas INSS según régimen y conteo GLOBAL de activos (<50 / ≥50). */
+export function resolveInssRates(regime: InssRegime, activeEmployeeCount: number): { laboral: number; patronal: number } {
+  const large = activeEmployeeCount >= INSS_EMPLOYER_SIZE_THRESHOLD;
+  if (regime === "IVM_RP") return { laboral: 0.05, patronal: large ? 0.165 : 0.155 };
+  return { laboral: 0.07, patronal: large ? 0.225 : 0.215 };
+}
+
 export type PayrollRates = {
-  inssLaboralRate: number;
-  inssPatronalRate: number;
+  inssRegime: InssRegime;
+  activeEmployeeCount: number;
   inatecRate: number;
-  provisionAguinaldo: number;
-  provisionVacaciones: number;
-  provisionIndemnizacion: number;
-  provisionsEnabled: boolean;
+  aguinaldoMode: BenefitAccrualMode;
+  vacacionesMode: BenefitAccrualMode;
+  indemnizacionMode: BenefitAccrualMode;
+  salarioMinimoSectorial: number;
 };
 
 export const DEFAULT_PAYROLL_RATES: PayrollRates = {
-  inssLaboralRate: 0.07,
-  inssPatronalRate: 0.215,
+  inssRegime: "INTEGRAL",
+  activeEmployeeCount: 0,
   inatecRate: 0.02,
-  provisionAguinaldo: 1 / 12,
-  provisionVacaciones: 1 / 12,
-  provisionIndemnizacion: 1 / 12,
-  provisionsEnabled: true,
+  aguinaldoMode: "ACCRUE_MONTHLY",
+  vacacionesMode: "ACCRUE_MONTHLY",
+  indemnizacionMode: "ACCRUE_MONTHLY",
+  salarioMinimoSectorial: 0,
 };
 
 /** Tabla progresiva ANUAL del IR salarial (Ley 822), en córdobas. */
@@ -47,29 +62,152 @@ function computeAnnualIr(annualTaxable: number): number {
   return Math.max(0, bracket.base + (annualTaxable - bracket.from) * bracket.rate);
 }
 
-/** Desglose de mes completo por empleado (mismo shape que payrollEstimate del API). */
+/* ── Prestaciones sociales (espejo de prestaciones-sociales.ts) ─────────────── */
+
+const MS_PER_DAY = 86_400_000;
+
+/** Meses calendario completos + días restantes /30 (criterio del backend). */
+export function monthsBetween(from: Date | string, to: Date | string): number {
+  const start = from instanceof Date ? from : new Date(from);
+  const end = to instanceof Date ? to : new Date(to);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) return 0;
+  let months = (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + (end.getUTCMonth() - start.getUTCMonth());
+  let anchor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + months, start.getUTCDate()));
+  if (anchor > end) {
+    months -= 1;
+    anchor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + months, start.getUTCDate()));
+  }
+  if (months < 0) return 0;
+  const extraDays = Math.floor((end.getTime() - anchor.getTime()) / MS_PER_DAY);
+  return months + Math.min(extraDays, 30) / 30;
+}
+
+export function monthsOfService(startDate: Date | string, at: Date = new Date()): number {
+  return monthsBetween(startDate, at);
+}
+
+/** Tasa de provisión Art. 45 según antigüedad: 1/12, (20/30)/12 o 0 (tope). */
+export function indemnizacionAccrualRate(months: number): number {
+  if (months < 36) return 1 / 12;
+  if (months < 72) return (20 / 30) / 12;
+  return 0;
+}
+
+/** Pasivo acumulado Art. 45 (tope 5 meses; el mínimo de 1 mes aplica al pagar). */
+export function indemnizacionAccruedTotal(monthlySalary: number, startDate: Date | string, at: Date = new Date()): number {
+  const salary = Math.max(0, monthlySalary);
+  const months = monthsOfService(startDate, at);
+  const tramo1 = Math.min(months, 36);
+  const tramo2 = Math.min(Math.max(months - 36, 0), 36);
+  return round2(Math.min(salary * (tramo1 / 12) + salary * ((20 / 30) / 12) * tramo2, salary * 5));
+}
+
+/** Inicio del período legal dic→nov del aguinaldo vigente a la fecha. */
+export function aguinaldoPeriodStart(at: Date = new Date()): Date {
+  const year = at.getUTCMonth() === 11 ? at.getUTCFullYear() : at.getUTCFullYear() - 1;
+  return new Date(Date.UTC(year, 11, 1));
+}
+
+/** Fecha límite legal de pago del aguinaldo: 10-dic al cierre del período. */
+export function aguinaldoPaymentDeadline(at: Date = new Date()): Date {
+  return new Date(Date.UTC(aguinaldoPeriodStart(at).getUTCFullYear() + 1, 11, 10));
+}
+
+/** Aguinaldo acumulado del período dic→nov (día `at` inclusive); EXENTO de todo. */
+export function aguinaldoAccrued(monthlySalary: number, startDate: Date | string, at: Date = new Date()): number {
+  const salary = Math.max(0, monthlySalary);
+  const periodStart = aguinaldoPeriodStart(at);
+  const start = startDate instanceof Date ? startDate : new Date(startDate);
+  const from = start > periodStart ? start : periodStart;
+  const months = Math.min(monthsBetween(from, new Date(at.getTime() + MS_PER_DAY)), 12);
+  return round2((salary * months) / 12);
+}
+
+/** Días de vacaciones acumulados: 2.5 por mes trabajado. */
+export function vacationDaysAccrued(startDate: Date | string, at: Date = new Date()): number {
+  return round2(2.5 * monthsBetween(startDate, at));
+}
+
+/** Valor de pagar `days` de vacaciones en dinero (GRAVABLE si se paga). */
+export function vacationPayout(days: number, monthlySalary: number): number {
+  return round2(Math.max(0, days) * (Math.max(0, monthlySalary) / 30));
+}
+
+/* ── Desglose mensual (mismo shape que payrollEstimate del API) ─────────────── */
+
 export type PayrollBreakdown = {
   inssLaboral: number;
   ir: number;
   netPay: number;
   inssPatronal: number;
   inatec: number;
-  /** Provisiones SIEMPRE calculadas; el toggle del panel decide si sumarlas. */
+  /** Provisiones SIEMPRE calculadas; el control del panel decide si sumarlas. */
   provisions: number;
-  /** Costo empresa CON provisiones (restar `provisions` si el toggle está off). */
+  aguinaldoAccrual: number;
+  vacacionesAccrual: number;
+  indemnizacionAccrual: number;
+  /** Costo empresa CON provisiones (restar `provisions` si se reconoce al pago). */
   employerCost: number;
+  /** Prestaciones acumuladas (pasivo por empleado) — solo cuando las sirve el API. */
+  monthsOfService?: number;
+  aguinaldoAccrued?: number;
+  aguinaldoDeadline?: string;
+  vacationDaysAccrued?: number;
+  vacationDaysTaken?: number;
+  vacationDaysBalance?: number;
+  vacationBalanceValue?: number;
+  indemnizacionAccrued?: number;
+  indemnizacionRateActual?: number;
+  belowMinimumWage?: boolean;
 };
 
-export function computeMonthlyBreakdown(monthlySalary: number, rates: PayrollRates = DEFAULT_PAYROLL_RATES): PayrollBreakdown {
+export function computeMonthlyBreakdown(
+  monthlySalary: number,
+  rates: PayrollRates = DEFAULT_PAYROLL_RATES,
+  startDate?: string,
+): PayrollBreakdown {
   const salary = Math.max(0, monthlySalary);
-  const inssLaboral = round2(salary * rates.inssLaboralRate);
-  const ir = round2(computeAnnualIr((salary - salary * rates.inssLaboralRate) * 12) / 12);
+  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
+  const inssLaboral = round2(salary * inss.laboral);
+  const ir = round2(computeAnnualIr((salary - salary * inss.laboral) * 12) / 12);
   const netPay = round2(Math.max(0, salary - inssLaboral - ir));
-  const inssPatronal = round2(salary * rates.inssPatronalRate);
+  const inssPatronal = round2(salary * inss.patronal);
   const inatec = round2(salary * rates.inatecRate);
-  const provisions = round2(salary * (rates.provisionAguinaldo + rates.provisionVacaciones + rates.provisionIndemnizacion));
-  const employerCost = round2(salary + inssPatronal + inatec + provisions);
-  return { inssLaboral, ir, netPay, inssPatronal, inatec, provisions, employerCost };
+
+  const at = new Date();
+  const months = startDate ? monthsOfService(startDate, at) : 0;
+  const indemRate = indemnizacionAccrualRate(months);
+  const aguiRaw = salary * (1 / 12);
+  const vacRaw = salary * (2.5 / 30);
+  const indemRaw = salary * indemRate;
+  // Igual que el backend: la suma se redondea UNA sola vez (sin drift de centavos).
+  const provisions = round2(aguiRaw + vacRaw + indemRaw);
+  const employerCost = round2(salary + inssPatronal + inatec + aguiRaw + vacRaw + indemRaw);
+
+  return {
+    inssLaboral,
+    ir,
+    netPay,
+    inssPatronal,
+    inatec,
+    provisions,
+    aguinaldoAccrual: round2(aguiRaw),
+    vacacionesAccrual: round2(vacRaw),
+    indemnizacionAccrual: round2(indemRaw),
+    employerCost,
+    ...(startDate
+      ? {
+          monthsOfService: round2(months),
+          aguinaldoAccrued: aguinaldoAccrued(salary, startDate, at),
+          aguinaldoDeadline: aguinaldoPaymentDeadline(at).toISOString().slice(0, 10),
+          vacationDaysAccrued: vacationDaysAccrued(startDate, at),
+          vacationDaysBalance: vacationDaysAccrued(startDate, at),
+          vacationBalanceValue: vacationPayout(vacationDaysAccrued(startDate, at), salary),
+          indemnizacionAccrued: indemnizacionAccruedTotal(salary, startDate, at),
+          indemnizacionRateActual: indemRate,
+        }
+      : {}),
+  };
 }
 
 /* ── Formato ─────────────────────────────────────────────────────────────── */
@@ -106,6 +244,21 @@ export function initials(fullName: string): string {
 export function fmtRatePct(rate: number): string {
   const pct = rate * 100;
   return `${Number.isInteger(pct) ? pct : Math.round(pct * 10) / 10}%`;
+}
+
+/** "8.333%" con 3 decimales para tasas de prestaciones (1/12, (20/30)/12). */
+export function fmtRatePct3(rate: number): string {
+  return `${(Math.round(rate * 100 * 1000) / 1000).toLocaleString("es-NI", { maximumFractionDigits: 3 })}%`;
+}
+
+/** Antigüedad legible: "2 años 5 meses" / "8 meses" a partir de meses fraccionados. */
+export function fmtSeniority(months: number): string {
+  const whole = Math.floor(months);
+  const years = Math.floor(whole / 12);
+  const rest = whole % 12;
+  if (years === 0) return `${rest} mes${rest === 1 ? "" : "es"}`;
+  if (rest === 0) return `${years} año${years === 1 ? "" : "s"}`;
+  return `${years} año${years === 1 ? "" : "s"} ${rest} mes${rest === 1 ? "" : "es"}`;
 }
 
 /**

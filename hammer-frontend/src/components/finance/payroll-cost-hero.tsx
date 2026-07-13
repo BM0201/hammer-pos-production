@@ -1,8 +1,8 @@
 "use client";
 
-import { Building2, Info, Users } from "lucide-react";
+import { Building2, Info, Landmark, Users } from "lucide-react";
 import { PayrollCompositionBar, type PayrollSegmentAmounts } from "./payroll-composition-bar";
-import { fmtC, type PayrollRates, DEFAULT_PAYROLL_RATES } from "./payroll-calc";
+import { fmtC, fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES, INSS_EMPLOYER_SIZE_THRESHOLD } from "./payroll-calc";
 
 /**
  * Hero de costo de Planilla: la historia del costo total empresa del mes —
@@ -19,8 +19,10 @@ export type PayrollHeroTotals = {
   ret: number;
   patronal: number;
   inatec: number;
-  /** Provisiones incluidas en `cost` (0 si el toggle está apagado). */
-  prov: number;
+  /** Prestaciones sociales incluidas en `cost` (0 si se reconocen al pago). */
+  agui: number;
+  vac: number;
+  indem: number;
   /** Costo total empresa (los segmentos suman exactamente esto). */
   cost: number;
   activeEmployees: number;
@@ -46,8 +48,17 @@ export function PayrollCostHero({ totals, periodLabel, branchLabel, provisionsIn
     ret: totals.ret,
     patronal: totals.patronal,
     inatec: totals.inatec,
-    prov: totals.prov,
+    agui: totals.agui,
+    vac: totals.vac,
+    indem: totals.indem,
   };
+  // Chip informativo del INSS: régimen + tasa patronal resuelta por el conteo
+  // REAL de activos de la empresa; al cruzar el umbral de 50 cambia solo.
+  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
+  const regimeLabel = rates.inssRegime === "IVM_RP" ? "Régimen IVM-RP" : "Régimen Integral";
+  const sizeLabel = rates.activeEmployeeCount >= INSS_EMPLOYER_SIZE_THRESHOLD
+    ? `≥${INSS_EMPLOYER_SIZE_THRESHOLD} empleados`
+    : `<${INSS_EMPLOYER_SIZE_THRESHOLD} empleados`;
 
   return (
     <div className="hm-module-card overflow-hidden">
@@ -56,17 +67,23 @@ export function PayrollCostHero({ totals, periodLabel, branchLabel, provisionsIn
         className="h-[3px]"
         style={{
           background:
-            "linear-gradient(90deg, var(--pay-seg-neto) 0%, var(--pay-seg-ret) 58%, var(--pay-seg-patronal) 68%, var(--pay-seg-inatec) 82%, var(--pay-seg-prov) 100%)",
+            "linear-gradient(90deg, var(--pay-seg-neto) 0%, var(--pay-seg-ret) 52%, var(--pay-seg-patronal) 62%, var(--pay-seg-inatec) 74%, var(--pay-seg-agui) 84%, var(--pay-seg-vac) 92%, var(--pay-seg-indem) 100%)",
         }}
       />
       <div className="p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="mb-1.5 text-[0.6563rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-soft)]">
-              Costo total empresa · {periodLabel}
-              {provisionsIncluded ? "" : " · sin provisiones"}
+            <p className="mb-1.5 flex flex-wrap items-center gap-2 text-[0.6563rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-soft)]">
+              <span>
+                Costo total empresa · {periodLabel}
+                {provisionsIncluded ? "" : " · prestaciones al pago"}
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-owner-100)] bg-[var(--color-owner-50)] px-2 py-0.5 text-[0.5938rem] font-bold normal-case tracking-normal text-[var(--color-owner-700)]">
+                <Landmark className="h-2.5 w-2.5" />
+                {regimeLabel} · patronal {fmtRatePct(inss.patronal)} ({sizeLabel})
+              </span>
               {estimated && (
-                <span className="hm-badge hm-badge-warning ml-2 align-middle text-[0.5313rem]">Estimado</span>
+                <span className="hm-badge hm-badge-warning align-middle text-[0.5313rem]">Estimado</span>
               )}
             </p>
             <p className="hm-num-2xl">
@@ -77,7 +94,7 @@ export function PayrollCostHero({ totals, periodLabel, branchLabel, provisionsIn
                   <Info className="h-3 w-3" />
                   <span className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-[60] w-[235px] -translate-x-1/2 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-2 text-left text-[0.71rem] font-normal normal-case leading-relaxed tracking-normal text-[var(--color-text-secondary)] opacity-0 shadow-[var(--shadow-modal)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
                     Esta es la cifra que se compara contra el presupuesto en el desempeño real (presupuesto vs. real), no la
-                    nómina base: incluye INSS patronal, INATEC y provisiones.
+                    nómina base: incluye INSS patronal, INATEC y las prestaciones sociales de ley.
                   </span>
                 </span>
               </span>

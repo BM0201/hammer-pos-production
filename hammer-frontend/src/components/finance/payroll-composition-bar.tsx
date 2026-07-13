@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { fmtC, fmtC0, fmtRatePct, type PayrollRates, DEFAULT_PAYROLL_RATES } from "./payroll-calc";
+import { fmtC, fmtC0, fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES } from "./payroll-calc";
 
 /**
  * Barra de composición del costo empresa (elemento firma de Planilla V2).
@@ -9,24 +9,31 @@ import { fmtC, fmtC0, fmtRatePct, type PayrollRates, DEFAULT_PAYROLL_RATES } fro
  * Reutilizable en el hero (con brackets + leyenda interactiva) y en el drawer
  * (variante mini). Los segmentos suman exactamente el total recibido; estilos
  * en globals.css (`.pay-compbar`, tokens --pay-seg-*), correctos en light/dark.
+ *
+ * Las prestaciones sociales van DESGLOSADAS en tres segmentos (aguinaldo,
+ * vacaciones, indemnización) en tonos violeta/rosa: son obligaciones legales
+ * distintas, con acumulación y tratamiento fiscal propios.
  */
 
-export type PayrollSegKey = "neto" | "ret" | "patronal" | "inatec" | "prov";
+export type PayrollSegKey = "neto" | "ret" | "patronal" | "inatec" | "agui" | "vac" | "indem";
 
-/** Montos por rubro: neto al empleado, retenciones (INSS+IR), cargas patronales. */
+/** Montos por rubro: neto, retenciones (INSS+IR), cargas y las tres prestaciones. */
 export type PayrollSegmentAmounts = Record<PayrollSegKey, number>;
 
 export function segmentLabels(rates: PayrollRates = DEFAULT_PAYROLL_RATES): Record<PayrollSegKey, string> {
+  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
   return {
     neto: "Neto al empleado",
-    ret: `Retenciones (INSS ${fmtRatePct(rates.inssLaboralRate)} + IR)`,
-    patronal: `INSS patronal ${fmtRatePct(rates.inssPatronalRate)}`,
+    ret: `Retenciones (INSS ${fmtRatePct(inss.laboral)} + IR)`,
+    patronal: `INSS patronal ${fmtRatePct(inss.patronal)}`,
     inatec: `INATEC ${fmtRatePct(rates.inatecRate)}`,
-    prov: "Provisiones",
+    agui: "Aguinaldo (1/12)",
+    vac: "Vacaciones (2.5 días/mes)",
+    indem: "Indemnización Art. 45 (según antigüedad)",
   };
 }
 
-const SEG_ORDER: PayrollSegKey[] = ["neto", "ret", "patronal", "inatec", "prov"];
+const SEG_ORDER: PayrollSegKey[] = ["neto", "ret", "patronal", "inatec", "agui", "vac", "indem"];
 
 type Props = {
   amounts: PayrollSegmentAmounts;
@@ -34,7 +41,7 @@ type Props = {
   rates?: PayrollRates;
   /** Variante compacta (drawer): sin brackets ni leyenda. */
   mini?: boolean;
-  /** Brackets superiores "Salario base" / "Cargas patronales" (solo variante completa). */
+  /** Brackets superiores "Salario base" / "INSS + INATEC" / "Prestaciones sociales". */
   brackets?: boolean;
 };
 
@@ -46,6 +53,10 @@ export function PayrollCompositionBar({ amounts, total, rates = DEFAULT_PAYROLL_
 
   const basePct = pct("neto") + pct("ret");
   const baseAmount = amounts.neto + amounts.ret;
+  const cargasPct = pct("patronal") + pct("inatec");
+  const cargasAmount = amounts.patronal + amounts.inatec;
+  const prestacionesAmount = amounts.agui + amounts.vac + amounts.indem;
+  const prestacionesPct = pct("agui") + pct("vac") + pct("indem");
 
   return (
     <div>
@@ -54,9 +65,14 @@ export function PayrollCompositionBar({ amounts, total, rates = DEFAULT_PAYROLL_
           <div className="pay-bracket" style={{ width: `${basePct}%` }}>
             Salario base · {fmtC0(baseAmount)}
           </div>
-          <div className="pay-bracket" style={{ width: `${100 - basePct}%` }}>
-            Cargas patronales · {fmtC0(total - baseAmount)}
+          <div className="pay-bracket" style={{ width: `${cargasPct}%` }}>
+            INSS + INATEC · {fmtC0(cargasAmount)}
           </div>
+          {prestacionesAmount > 0.005 && (
+            <div className="pay-bracket" style={{ width: `${prestacionesPct}%` }}>
+              Prestaciones sociales · {fmtC0(prestacionesAmount)}
+            </div>
+          )}
         </div>
       )}
 
