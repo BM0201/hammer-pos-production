@@ -592,6 +592,13 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
   return { payrollRun, employees: result.employees, rates };
 }
 
+/**
+ * ÚNICO gasto operativo de planilla: el COSTO LABORAL mensual por empleado
+ * (employerCost = salario + INSS patronal + INATEC + prestaciones) — "lo que
+ * cuesta tener al empleado", visible aparte en Gastos operativos. El pago de
+ * cada quincena NO crea otro gasto (es el flujo de caja de este mismo costo;
+ * duplicaba la planilla en el libro).
+ */
 async function syncPostedPayrollLineExpense(
   tx: Prisma.TransactionClient,
   line: PayrollLineWithEmployee,
@@ -613,7 +620,7 @@ async function syncPostedPayrollLineExpense(
     },
   });
 
-  const description = `Nomina posteada: ${line.employee.fullName} (${line.employee.position})`;
+  const description = `Costo laboral: ${line.employee.fullName} (${line.employee.position})`;
   if (existing) {
     await tx.operatingExpense.update({
       where: { id: existing.id },

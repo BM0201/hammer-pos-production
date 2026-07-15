@@ -861,6 +861,38 @@ export function ExpenseManager({
             </div>
           </Card>
 
+          {/* ── Costo laboral (planilla) — APARTE de los demás gastos ──
+              Lo que cuesta tener a cada empleado (salario + INSS patronal +
+              INATEC + prestaciones). Se sincroniza solo al postear la nómina;
+              aquí es de solo lectura: se gestiona desde Finanzas › Planilla. */}
+          {summary && (summary.byCategory.PAYROLL?.total ?? 0) > 0 && (
+            <Card className="p-5" style={{ borderColor: "var(--color-owner-200)" }}>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                  <BadgeDollarSign className="h-4 w-4 text-[var(--color-owner-600)]" />
+                  Costo laboral (planilla) · {selectedBranch?.name}
+                </h4>
+                <span className="text-lg font-bold text-[var(--color-owner-600)]">
+                  {formatC(summary.byCategory.PAYROLL.total)}
+                </span>
+              </div>
+              <p className="mb-3 text-xs text-[var(--color-text-muted)]">
+                Lo que cuesta tener a cada empleado por mes: salario + INSS patronal + INATEC + prestaciones de ley.
+                Se actualiza al postear la nómina; se gestiona en Finanzas › Planilla (aquí no se edita).
+              </p>
+              <div className="divide-y divide-[var(--color-neutral-100)] rounded-lg border border-[var(--color-neutral-100)]">
+                {summary.byCategory.PAYROLL.items.map((exp) => (
+                  <div key={exp.id} className="flex items-center justify-between px-4 py-2.5">
+                    <p className="text-sm text-[var(--color-text)]">{exp.description}</p>
+                    <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">
+                      {formatC(Number(exp.amount))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
           {/* ── Expense Distribution Chart (simple bar) ── */}
           {summary && summary.grandTotal > 0 && (
             <Card className="p-5">
@@ -903,10 +935,11 @@ export function ExpenseManager({
             </Card>
           )}
 
-          {/* ── Expense List by Category ── */}
+          {/* ── Expense List by Category (la planilla vive en su sección aparte) ── */}
           {summary && (
             <div className="space-y-3">
               {Object.entries(summary.byCategory)
+                .filter(([cat]) => cat !== "PAYROLL")
                 .sort(([, a], [, b]) => b.total - a.total)
                 .map(([cat, data]) => (
                   <Card key={cat} noPadding>

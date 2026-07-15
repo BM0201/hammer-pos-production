@@ -88,8 +88,14 @@ export async function generateDisbursementsForRun(
 }
 
 /**
- * Marca como PAID todos los disbursements de una corrida y período, y crea el gasto operativo
- * correspondiente en la fecha real de desembolso.
+ * Marca como PAID todos los disbursements de una corrida y período.
+ *
+ * OJO — sin gasto operativo aquí: el ÚNICO OperatingExpense de planilla es el
+ * costo laboral mensual por empleado (employerCost) que crea postPayrollRun.
+ * El desembolso de la quincena es el flujo de caja de ese mismo costo, no un
+ * gasto adicional: registrarlo también aquí (al neto) duplicaba la planilla en
+ * el libro de gastos. La utilidad real ya lo toma del desembolso PAID
+ * (finance/service.ts) y la salida física la registra payroll-cash-sync.
  */
 export async function payDisbursementsForPeriod(
   payrollRunId: string,
@@ -129,39 +135,6 @@ export async function payDisbursementsForPeriod(
           paidByUserId: actorUserId,
         },
       });
-
-      const description = `Nómina (${period === "FIRST_HALF" ? "1ra" : "2da"} quincena): ${d.employee.fullName}`;
-
-      const existing = await tx.operatingExpense.findFirst({
-        where: {
-          branchId: d.branchId,
-          employeeId: d.employeeId,
-          isAutoCalculated: true,
-          category: "PAYROLL",
-          effectiveFrom: d.scheduledDate,
-        },
-      });
-
-      if (existing) {
-        await tx.operatingExpense.update({
-          where: { id: existing.id },
-          data: { amount: d.amount, description, isActive: true, effectiveTo: d.scheduledDate },
-        });
-      } else {
-        await tx.operatingExpense.create({
-          data: {
-            branchId: d.branchId,
-            employeeId: d.employeeId,
-            category: "PAYROLL",
-            description,
-            amount: d.amount,
-            isActive: true,
-            isAutoCalculated: true,
-            effectiveFrom: d.scheduledDate,
-            effectiveTo: d.scheduledDate,
-          },
-        });
-      }
 
       await logAuditEvent({
         actorUserId,

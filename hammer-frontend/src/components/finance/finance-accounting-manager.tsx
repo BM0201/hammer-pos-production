@@ -5,12 +5,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { Route } from "next";
 import {
-  LayoutDashboard, Receipt, Calculator, Users, Truck, BarChart3, Settings, ArrowRight, Info, CalendarClock,
+  LayoutDashboard, Receipt, Calculator, Users, Truck, BarChart3, Settings, ArrowRight, Info,
 } from "lucide-react";
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ExpenseManager } from "@/components/expenses/expense-manager";
-import { BiweeklyCutsPanel } from "@/components/payroll/biweekly-cuts-panel";
 import { FinanceSummaryPanel } from "@/components/finance/finance-summary-panel";
 import { PayrollFinancePanel } from "@/components/finance/payroll-finance-panel";
 
@@ -27,7 +26,7 @@ import { PayrollFinancePanel } from "@/components/finance/payroll-finance-panel"
  * Planilla ya vive en payroll-finance-panel.tsx (Planilla V2).
  */
 
-type FinanceTabKey = "summary" | "expenses" | "pricing" | "payroll" | "biweekly" | "freight" | "reports" | "config";
+type FinanceTabKey = "summary" | "expenses" | "pricing" | "payroll" | "freight" | "reports" | "config";
 
 export function FinanceAccountingManager() {
   const sessionState = useSession();
@@ -36,7 +35,11 @@ export function FinanceAccountingManager() {
   const canViewPayroll = Boolean(session && canInAnyAssignedBranch(session, CAPABILITIES.FINANCE_VIEW_PAYROLL));
 
   const searchParams = useSearchParams();
-  const requestedTab = (searchParams.get("tab") ?? "summary") as FinanceTabKey;
+  // Los cortes quincenales viven DENTRO de Planilla (tab "Cortes Quincenales"
+  // del panel): el tab "biweekly" de Finanzas duplicaba ese flujo de pago.
+  // Los enlaces viejos ?tab=biweekly caen en Planilla.
+  const rawTab = searchParams.get("tab") ?? "summary";
+  const requestedTab = (rawTab === "biweekly" ? "payroll" : rawTab) as FinanceTabKey;
 
   const tabs = useMemo(() => {
     const base: Array<{ key: FinanceTabKey; label: string; icon: React.ElementType }> = [
@@ -46,7 +49,6 @@ export function FinanceAccountingManager() {
     ];
     if (canViewPayroll) {
       base.push({ key: "payroll", label: "Planilla", icon: Users });
-      base.push({ key: "biweekly", label: "Cortes Quincenales", icon: CalendarClock });
     }
     base.push(
       { key: "freight", label: "Fletes / costos internos", icon: Truck },
@@ -109,19 +111,6 @@ export function FinanceAccountingManager() {
           y la tabla viven dentro del panel; los tabs Calcular Nómina / Préstamos /
           Historial se reutilizan de EmployeeManager con tab fijo. */}
       {activeTab === "payroll" && canViewPayroll && <PayrollFinancePanel />}
-
-      {activeTab === "biweekly" && canViewPayroll && (
-        <div className="space-y-3">
-          <div className="hm-alert hm-alert-info flex items-start gap-2">
-            <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
-            <div>
-              Vista consolidada de los cortes quincenales pendientes de pago en todas las sucursales.
-              Permite procesar (pagar) los desembolsos pendientes de forma masiva por período.
-            </div>
-          </div>
-          <BiweeklyCutsPanel />
-        </div>
-      )}
 
       {activeTab === "reports" && (
         <div className="space-y-3">

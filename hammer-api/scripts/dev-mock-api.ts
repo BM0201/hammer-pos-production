@@ -78,6 +78,37 @@ const employees: MockEmployee[] = [
   { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "45", applyIrRetention: false },
 ];
 
+/* Cortes quincenales en memoria: dos mitades del NETO por empleado activo
+   (misma regla que generateDisbursementsForRun). Se crean al arrancar. */
+type MockDisbursement = {
+  id: string;
+  branchId: string;
+  employeeId: string;
+  period: "FIRST_HALF" | "SECOND_HALF";
+  amount: string;
+  status: "PENDING" | "PAID";
+  scheduledDate: string;
+  paidAt: string | null;
+};
+const disbursements: MockDisbursement[] = [];
+
+/* Gastos operativos manuales en memoria (los de planilla se derivan SIEMPRE
+   de los empleados activos con la aritmética real — ver payrollExpenses). */
+type MockExpense = {
+  id: string;
+  branchId: string;
+  category: string;
+  description: string;
+  amount: string;
+  isActive: boolean;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+};
+const manualExpenses: MockExpense[] = [
+  { id: "exp-rent", branchId: "br-central", category: "RENT", description: "Alquiler del local", amount: "8000", isActive: true, effectiveFrom: "2026-07-01T00:00:00.000Z", effectiveTo: null },
+  { id: "exp-luz", branchId: "br-central", category: "UTILITIES", description: "Luz + agua + internet", amount: "2500", isActive: true, effectiveFrom: "2026-07-01T00:00:00.000Z", effectiveTo: null },
+];
+
 const config: { inssRegime: InssRegime; aguinaldoMode: BenefitAccrualMode; vacacionesMode: BenefitAccrualMode; indemnizacionMode: BenefitAccrualMode; salarioMinimoSectorial: number } = {
   inssRegime: "INTEGRAL",
   aguinaldoMode: "ACCRUE_MONTHLY",
@@ -144,6 +175,93 @@ function withEstimate(emp: MockEmployee) {
       belowMinimumWage: config.salarioMinimoSectorial > 0 && salary < config.salarioMinimoSectorial,
     },
     payrollRates: rates,
+  };
+}
+
+/* ── Gastos operativos y cortes derivados de los empleados ──────────────────── */
+
+/** Único gasto de planilla: costo laboral mensual por empleado (como el real). */
+function payrollExpenses(): MockExpense[] {
+  return employees
+    .filter((e) => e.isActive)
+    .map((e) => {
+      const est = withEstimate(e).payrollEstimate!;
+      return {
+        id: `exp-payroll-${e.id}`,
+        branchId: e.branchId,
+        category: "PAYROLL",
+        description: `Costo laboral: ${e.fullName} (${e.position})`,
+        amount: String(est.employerCost),
+        isActive: true,
+        effectiveFrom: "2026-07-01T00:00:00.000Z",
+        effectiveTo: "2026-07-31T23:59:59.999Z",
+      };
+    });
+}
+
+function allExpenses(): MockExpense[] {
+  return [...payrollExpenses(), ...manualExpenses.filter((e) => e.isActive)];
+}
+
+function expenseSummaryFor(branchId: string) {
+  const rows = allExpenses().filter((e) => e.branchId === branchId);
+  const byCategory: Record<string, { total: number; count: number; items: unknown[] }> = {};
+  let grandTotal = 0;
+  for (const e of rows) {
+    const branch = branches.find((b) => b.id === e.branchId);
+    byCategory[e.category] = byCategory[e.category] ?? { total: 0, count: 0, items: [] };
+    byCategory[e.category].total = round2(byCategory[e.category].total + Number(e.amount));
+    byCategory[e.category].count += 1;
+    byCategory[e.category].items.push({ ...e, branch });
+    grandTotal = round2(grandTotal + Number(e.amount));
+  }
+  return { byCategory, grandTotal, totalExpenses: rows.length };
+}
+
+function allBranchesSummary() {
+  const byBranch = branches.map((b) => {
+    const rows = allExpenses().filter((e) => e.branchId === b.id);
+    const byCategory: Record<string, number> = {};
+    let total = 0;
+    for (const e of rows) {
+      byCategory[e.category] = round2((byCategory[e.category] ?? 0) + Number(e.amount));
+      total = round2(total + Number(e.amount));
+    }
+    return { branchId: b.id, branchCode: b.code, branchName: b.name, byCategory, total };
+  }).sort((a, b) => b.total - a.total);
+  const grandTotal = round2(byBranch.reduce((s, b) => s + b.total, 0));
+  const catTotals = new Map<string, number>();
+  for (const b of byBranch) for (const [c, v] of Object.entries(b.byCategory)) catTotals.set(c, (catTotals.get(c) ?? 0) + v);
+  const topCategory = [...catTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  return {
+    grandTotal,
+    branchesWithExpenses: byBranch.filter((b) => b.total > 0).length,
+    totalBranches: branches.length,
+    topCategory,
+    byBranch,
+  };
+}
+
+/** Dos mitades PENDING del neto por empleado activo (regla real 50/50). */
+function seedDisbursements() {
+  for (const e of employees.filter((x) => x.isActive)) {
+    const net = withEstimate(e).payrollEstimate!.netPay;
+    const first = round2(net / 2);
+    const second = round2(net - first);
+    disbursements.push(
+      { id: `disb-${e.id}-1`, branchId: e.branchId, employeeId: e.id, period: "FIRST_HALF", amount: String(first), status: "PENDING", scheduledDate: "2026-07-15T00:00:00.000Z", paidAt: null },
+      { id: `disb-${e.id}-2`, branchId: e.branchId, employeeId: e.id, period: "SECOND_HALF", amount: String(second), status: "PENDING", scheduledDate: "2026-07-31T00:00:00.000Z", paidAt: null },
+    );
+  }
+}
+seedDisbursements();
+
+function serializeDisbursement(d: MockDisbursement) {
+  const emp = employees.find((e) => e.id === d.employeeId);
+  return {
+    ...d,
+    employee: { id: d.employeeId, fullName: emp?.fullName ?? "—", position: emp?.position ?? "—" },
+    payrollRun: { id: "run-2026-07", year: 2026, month: 7, status: "POSTED" },
   };
 }
 
@@ -251,6 +369,71 @@ const server = http.createServer(async (req, res) => {
       return ok(res, withEstimate(emp));
     }
     return ok(res, withEstimate(emp));
+  }
+
+  // Gastos operativos (tab Gastos de Finanzas): lista, resumen y consolidado.
+  if (path === "/api/expenses" && method === "GET") {
+    const branchId = url.searchParams.get("branchId") ?? "";
+    const wantsSummary = url.searchParams.get("summary") === "true";
+    if (branchId === "all" && wantsSummary) return ok(res, allBranchesSummary());
+    if (wantsSummary) return ok(res, expenseSummaryFor(branchId));
+    return ok(res, allExpenses().filter((e) => !branchId || e.branchId === branchId));
+  }
+  if (path === "/api/expenses" && method === "POST") {
+    const body = await readJson(req);
+    const exp: MockExpense = {
+      id: `exp-${randomUUID().slice(0, 8)}`,
+      branchId: String(body.branchId ?? branches[0].id),
+      category: String(body.category ?? "OTHER"),
+      description: String(body.description ?? ""),
+      amount: String(body.amount ?? "0"),
+      isActive: true,
+      effectiveFrom: "2026-07-01T00:00:00.000Z",
+      effectiveTo: null,
+    };
+    manualExpenses.push(exp);
+    return send(res, 201, { ok: true, data: exp });
+  }
+  const expMatch = path.match(/^\/api\/expenses\/([^/]+)$/);
+  if (expMatch && method === "DELETE") {
+    const exp = manualExpenses.find((e) => e.id === expMatch[1]);
+    if (exp) exp.isActive = false;
+    return ok(res, { deactivated: true });
+  }
+
+  // Cortes quincenales: pendientes consolidados, por corrida, y pago en bloque.
+  if (path === "/api/payroll/disbursements" && method === "GET") {
+    const runId = url.searchParams.get("payrollRunId");
+    const branchId = url.searchParams.get("branchId");
+    if (runId) return ok(res, disbursements.map(serializeDisbursement));
+    return ok(
+      res,
+      disbursements
+        .filter((d) => d.status === "PENDING" && (!branchId || d.branchId === branchId))
+        .map(serializeDisbursement),
+    );
+  }
+  if (path === "/api/payroll/disbursements/cash-status") {
+    return ok(res, []);
+  }
+  if (path === "/api/payroll/disbursements/pay-pending" && method === "POST") {
+    const body = await readJson(req);
+    const period = body.period === "SECOND_HALF" ? "SECOND_HALF" : "FIRST_HALF";
+    const branchId = typeof body.branchId === "string" && body.branchId ? body.branchId : null;
+    const targets = disbursements.filter(
+      (d) => d.status === "PENDING" && d.period === period && (!branchId || d.branchId === branchId),
+    );
+    const now = new Date().toISOString();
+    for (const d of targets) {
+      d.status = "PAID";
+      d.paidAt = now;
+    }
+    return ok(res, {
+      paid: targets.length,
+      runsProcessed: targets.length > 0 ? 1 : 0,
+      perRun: targets.length > 0 ? [{ payrollRunId: "run-2026-07", paid: targets.length }] : [],
+      cashSync: [],
+    });
   }
 
   if (path === "/api/payroll/rates") {

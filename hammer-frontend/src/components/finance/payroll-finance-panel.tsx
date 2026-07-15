@@ -6,6 +6,7 @@ import type { Route } from "next";
 import {
   Briefcase,
   Calculator,
+  CalendarClock,
   CalendarDays,
   CheckCircle2,
   Download,
@@ -23,6 +24,7 @@ import {
 import toast from "react-hot-toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { EmployeeManager } from "@/components/payroll/employee-manager";
+import { BiweeklyCutsPanel } from "@/components/payroll/biweekly-cuts-panel";
 import { PayrollCostHero, type PayrollHeroTotals } from "./payroll-cost-hero";
 import { PayrollCompositionBar, type PayrollSegmentAmounts } from "./payroll-composition-bar";
 import {
@@ -73,7 +75,7 @@ type EmployeeRow = {
   payrollRates?: PayrollRates;
 };
 
-type PanelTab = "employees" | "payroll" | "loans" | "history";
+type PanelTab = "employees" | "payroll" | "cuts" | "loans" | "history";
 type SortKey = "name" | "salary" | "start";
 
 const BANNER_DISMISS_KEY = "hammer.finance.payrollBanner.dismissed";
@@ -520,11 +522,15 @@ export function PayrollFinancePanel() {
         estimated={anyEstimated}
       />
 
-      {/* ── 4 · Tabs (mismos del sistema) ── */}
+      {/* ── 4 · Tabs (mismos del sistema) ──
+          "Cortes Quincenales" vive AQUÍ (antes era un tab aparte en Finanzas y
+          duplicaba el pago que también ofrecía Calcular Nómina): un solo lugar
+          para pagar quincenas. */}
       <div className="erp-tabs-pill">
         {([
           { key: "employees" as const, label: "Empleados", icon: Users },
           { key: "payroll" as const, label: "Calcular Nómina", icon: Calculator },
+          { key: "cuts" as const, label: "Cortes Quincenales", icon: CalendarClock },
           { key: "loans" as const, label: "Préstamos", icon: DollarSign },
           { key: "history" as const, label: "Historial", icon: History },
         ] as const).map((t) => (
@@ -535,7 +541,12 @@ export function PayrollFinancePanel() {
       </div>
 
       {/* Tabs heredados: se reutiliza EmployeeManager con tab fijo hasta extraerlos. */}
-      {tab !== "employees" && <EmployeeManager forcedTab={tab} hideTabBar hideKpis />}
+      {(tab === "payroll" || tab === "loans" || tab === "history") && (
+        <EmployeeManager forcedTab={tab} hideTabBar hideKpis onGoToCuts={() => setTab("cuts")} />
+      )}
+
+      {/* Corte consolidado: el ÚNICO flujo para pagar quincenas. */}
+      {tab === "cuts" && <BiweeklyCutsPanel />}
 
       {tab === "employees" && (
         <>

@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import Link from "next/link";
-import type { Route } from "next";
 import {
   Users,
   Plus,
@@ -17,6 +15,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
+  Wallet,
   X,
   Trash2,
 } from "lucide-react";
@@ -139,9 +138,14 @@ type EmployeeManagerProps = {
   hideTabBar?: boolean;
   /** Oculta los KPI tiles (en Finanzas los reemplaza el hero de costo). */
   hideKpis?: boolean;
+  /**
+   * Navega al tab "Cortes Quincenales" del contenedor (Planilla): el pago de
+   * quincenas vive SOLO ahí — aquí solo se calcula/postea y se ve el estado.
+   */
+  onGoToCuts?: () => void;
 };
 
-export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = false }: EmployeeManagerProps = {}) {
+export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = false, onGoToCuts }: EmployeeManagerProps = {}) {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
@@ -203,7 +207,6 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
   const [manualPaymentAmountStr, setManualPaymentAmountStr] = useState("");
 
   const [disbursements, setDisbursements] = useState<Disbursement[]>([]);
-  const [disbLoading, setDisbLoading] = useState<"FIRST_HALF" | "SECOND_HALF" | null>(null);
   const [cashStatus, setCashStatus] = useState<CashStatusRow[]>([]);
 
   const flash = useCallback((type: "success" | "error", msg: string) => {
@@ -460,40 +463,9 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
     }
   };
 
-  const handlePayDisbursement = async (period: "FIRST_HALF" | "SECOND_HALF") => {
-    if (!payrollResult?.payrollRunId) return;
-    setDisbLoading(period);
-    try {
-      const endpoint = period === "FIRST_HALF" ? "first-half" : "second-half";
-      const r = await apiFetch(`/api/payroll/disbursements/${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payrollRunId: payrollResult.payrollRunId }),
-      });
-      const raw = await r.json();
-      if (!r.ok) {
-        flash("error", getErrorMessage(raw, "Error al pagar quincena"));
-        return;
-      }
-      const data = unwrapApiData(raw) as {
-        paid: number;
-        cashSync: Array<{ branchId: string; applied: boolean; appliedGroups?: number; reason?: string }>;
-      };
-      const periodLabel = period === "FIRST_HALF" ? "1ra quincena (día 15)" : "2da quincena (fin de mes)";
-      const branchLabel = (branchId: string) => branches.find((b) => b.id === branchId)?.code ?? branchId;
-      const applied = (data.cashSync ?? []).filter((c) => c.applied).map((c) => branchLabel(c.branchId));
-      const pending = (data.cashSync ?? []).filter((c) => !c.applied).map((c) => branchLabel(c.branchId));
-      let detail = "";
-      if (applied.length > 0) detail += ` Descontado de caja en: ${applied.join(", ")}.`;
-      if (pending.length > 0) detail += ` Pendiente — se aplicará al abrir caja en: ${pending.join(", ")}.`;
-      flash("success", `${periodLabel} pagada.${detail}`);
-      await loadDisbursements(payrollResult.payrollRunId);
-    } catch {
-      flash("error", "Error de conexión al pagar quincena");
-    } finally {
-      setDisbLoading(null);
-    }
-  };
+  // El PAGO de quincenas vive únicamente en el tab "Cortes Quincenales"
+  // (BiweeklyCutsPanel, corte consolidado). Aquí solo se calcula/postea la
+  // corrida y se muestra el estado de sus quincenas — un solo flujo de pago.
 
   const handleCreateLoan = async () => {
     const principalAmount = Number(loanForm.principalAmount);
@@ -839,30 +811,21 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                   const secondPaid = secondDisb.length > 0 && secondDisb.every((d) => d.status === "PAID");
                   const firstTotal = firstDisb.reduce((s, d) => s + Number(d.amount), 0);
                   const secondTotal = secondDisb.reduce((s, d) => s + Number(d.amount), 0);
+                  const anyPending = !firstPaid || !secondPaid;
                   return (
                     <div className="flex flex-wrap gap-2">
-                      <button
-                        onClick={() => void handlePayDisbursement("FIRST_HALF")}
-                        disabled={disbLoading === "FIRST_HALF" || firstPaid}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors disabled:opacity-50"
-                        style={firstPaid ? { background: "var(--color-success-50)", borderColor: "var(--color-success-200)", color: "var(--color-success-700)" } : { background: "var(--color-info-600)", borderColor: "transparent", color: "white" }}
-                      >
-                        {disbLoading === "FIRST_HALF" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                        {firstPaid ? "✓ 1ra quincena pagada" : `Pagar 1ra quincena${firstTotal > 0 ? ` · ${fmt(firstTotal)}` : ""}`}
-                      </button>
-                      <button
-                        onClick={() => void handlePayDisbursement("SECOND_HALF")}
-                        disabled={disbLoading === "SECOND_HALF" || secondPaid}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors disabled:opacity-50"
-                        style={secondPaid ? { background: "var(--color-success-50)", borderColor: "var(--color-success-200)", color: "var(--color-success-700)" } : { background: "var(--color-info-600)", borderColor: "transparent", color: "white" }}
-                      >
-                        {disbLoading === "SECOND_HALF" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                        {secondPaid ? "✓ 2da quincena pagada" : `Pagar 2da quincena${secondTotal > 0 ? ` · ${fmt(secondTotal)}` : ""}`}
-                      </button>
+                      {/* El pago vive SOLO en Cortes Quincenales (un flujo, sin
+                          duplicarse con esta pantalla): aquí estado + acceso directo. */}
+                      {anyPending && onGoToCuts && (
+                        <button
+                          onClick={onGoToCuts}
+                          className="flex items-center gap-2 rounded-lg border border-transparent bg-[var(--color-info-600)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--color-info-700)]"
+                        >
+                          <Wallet className="h-4 w-4" /> Procesar en Cortes Quincenales →
+                        </button>
+                      )}
 
-                      {/* Reconciliación con Gastos operativos (estilo banner del
-                          mockup): confirma de un vistazo que la quincena pagada
-                          ya está bajando la utilidad real, sin cruzar pantallas. */}
+                      {/* Estado de las quincenas de ESTA corrida (solo lectura). */}
                       <div className="mt-1 w-full overflow-hidden rounded-xl border border-[var(--color-border)]">
                         {[
                           { key: "FIRST_HALF", label: "1ra quincena (día 15)", paid: firstPaid, total: firstTotal, disb: firstDisb },
@@ -894,17 +857,15 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                                   </p>
                                   <p className="text-xs text-[var(--color-text-muted)]">
                                     {q.paid
-                                      ? `${fmt(q.total)} sincronizados a Gastos operativos${paidDate ? ` el ${paidDate}` : ""}`
-                                      : "Aún no afecta la utilidad operativa del período"}
+                                      ? `${fmt(q.total)} desembolsados${paidDate ? ` el ${paidDate}` : ""} — ya cuenta en la utilidad real`
+                                      : `${fmt(q.total)} por desembolsar — se paga en Cortes Quincenales`}
                                   </p>
                                 </div>
                               </div>
-                              {q.paid ? (
-                                <Link href={"/app/master/finance?tab=expenses" as Route} className="text-xs font-semibold text-[var(--color-info-600)] hover:underline">
-                                  Ver en Gastos operativos →
-                                </Link>
-                              ) : (
-                                <span className="text-xs text-[var(--color-text-muted)]">Se sincroniza automáticamente al pagar</span>
+                              {!q.paid && onGoToCuts && (
+                                <button onClick={onGoToCuts} className="text-xs font-semibold text-[var(--color-info-600)] hover:underline">
+                                  Ir a Cortes Quincenales →
+                                </button>
                               )}
                             </div>
                           );
