@@ -29,6 +29,8 @@ export type CreateEmployeeInput = {
   branchId: string;
   monthlySalary: number;
   startDate: string; // ISO date
+  /** Retener IR salarial a este trabajador (varía por persona; default false). */
+  applyIrRetention?: boolean;
 };
 
 export type UpdateEmployeeInput = {
@@ -39,6 +41,7 @@ export type UpdateEmployeeInput = {
   startDate?: string;
   endDate?: string | null;
   isActive?: boolean;
+  applyIrRetention?: boolean;
 };
 
 type PayrollRunForResponse = Prisma.PayrollRunGetPayload<{
@@ -91,6 +94,7 @@ export async function createEmployee(input: CreateEmployeeInput, actorUserId?: s
       branchId: input.branchId,
       monthlySalary: new Prisma.Decimal(input.monthlySalary),
       startDate,
+      applyIrRetention: Boolean(input.applyIrRetention),
     },
     include: { branch: true },
   });
@@ -135,6 +139,7 @@ export async function updateEmployee(id: string, input: UpdateEmployeeInput, act
     }
   }
   if (input.isActive !== undefined) data.isActive = input.isActive;
+  if (input.applyIrRetention !== undefined) data.applyIrRetention = Boolean(input.applyIrRetention);
 
   const employee = await prisma.employee.update({ where: { id }, data, include: { branch: true } });
 
@@ -206,6 +211,7 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
       totalDays: 1,
       rates: { ...rates, aguinaldoMode: "ACCRUE_MONTHLY", vacacionesMode: "ACCRUE_MONTHLY", indemnizacionMode: "ACCRUE_MONTHLY" },
       indemnizacionRate,
+      applyIrRetention: emp.applyIrRetention,
     });
     // Prestaciones ACUMULADAS a la fecha (pasivo por empleado, para drawer/CSV).
     const daysAccrued = vacationDaysAccrued(emp.startDate, at);
@@ -492,13 +498,13 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
 
   // Antigüedad por empleado: define la tasa de provisión de indemnización
   // (tramos del Art. 45 CT) al corte del período que se calcula.
-  const startDatesById = new Map(
+  const employeeFlagsById = new Map(
     (
       await prisma.employee.findMany({
         where: { id: { in: result.employees.map((emp) => emp.employeeId) } },
-        select: { id: true, startDate: true },
+        select: { id: true, startDate: true, applyIrRetention: true },
       })
-    ).map((emp) => [emp.id, emp.startDate]),
+    ).map((emp) => [emp.id, emp]),
   );
   const periodEnd = lastMomentOfMonth(year, month);
 
@@ -507,9 +513,9 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
     const grossSalary = Math.max(0, emp.proratedSalary);
     const loanDeductions = await calculateLoanDeduction(emp.employeeId, grossSalary);
     const otherDeductions = 0;
-    const startDate = startDatesById.get(emp.employeeId);
-    // Cálculo Nicaragua (payroll-nicaragua.ts): INSS laboral + IR (Ley 822,
-    // prorrateado igual que el salario), cargas patronales y provisiones.
+    const empFlags = employeeFlagsById.get(emp.employeeId);
+    // Cálculo Nicaragua (payroll-nicaragua.ts): INSS laboral + IR solo si al
+    // trabajador se le retiene (applyIrRetention), cargas patronales y provisiones.
     const line = computePayrollLineBreakdown({
       monthlySalary: emp.monthlySalary,
       grossSalary,
@@ -518,7 +524,8 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
       loanDeductions,
       otherDeductions,
       rates,
-      indemnizacionRate: startDate ? indemnizacionAccrualRate(monthsOfService(startDate, periodEnd)) : undefined,
+      indemnizacionRate: empFlags ? indemnizacionAccrualRate(monthsOfService(empFlags.startDate, periodEnd)) : undefined,
+      applyIrRetention: empFlags?.applyIrRetention ?? false,
     });
 
     await prisma.payrollLine.create({

@@ -1658,6 +1658,10 @@ model Employee {
   /// Días de vacaciones ya consumidos (gozados + pagados en dinero). El saldo
   /// legal = 2.5 × meses de servicio − este acumulado (Arts. 76–82 CT).
   vacationDaysTaken Decimal @default(0)
+  /// Retener IR salarial (Ley 822) en nómina. Varía POR TRABAJADOR: quienes
+  /// tributan por su cuenta (otro régimen) no llevan retención — default off;
+  /// se marca en la ficha cuando a un empleado sí se le retiene.
+  applyIrRetention Boolean @default(false)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

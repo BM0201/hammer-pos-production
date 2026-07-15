@@ -64,15 +64,18 @@ type MockEmployee = {
   endDate: string | null;
   isActive: boolean;
   vacationDaysTaken: string;
+  /** Retener IR salarial (varía por trabajador; los 3 reales tributan por su cuenta). */
+  applyIrRetention: boolean;
 };
 
 const employees: MockEmployee[] = [
-  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0" },
-  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0" },
-  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0" },
-  // Demo de tramos Art. 45 — mismo salario que Carolina para ver que cuestan distinto:
-  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "20" },
-  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "45" },
+  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false },
+  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false },
+  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false },
+  // Demo de tramos Art. 45 — mismo salario que Carolina para ver que cuestan distinto.
+  // Diana además CON retención de IR, para ver la variación por trabajador:
+  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "20", applyIrRetention: true },
+  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "45", applyIrRetention: false },
 ];
 
 const config: { inssRegime: InssRegime; aguinaldoMode: BenefitAccrualMode; vacacionesMode: BenefitAccrualMode; indemnizacionMode: BenefitAccrualMode; salarioMinimoSectorial: number } = {
@@ -109,6 +112,7 @@ function withEstimate(emp: MockEmployee) {
     totalDays: 1,
     rates: { ...rates, aguinaldoMode: "ACCRUE_MONTHLY", vacacionesMode: "ACCRUE_MONTHLY", indemnizacionMode: "ACCRUE_MONTHLY" },
     indemnizacionRate,
+    applyIrRetention: emp.applyIrRetention,
   });
   const daysAccrued = vacationDaysAccrued(emp.startDate, at);
   const daysTaken = Number(emp.vacationDaysTaken) || 0;
@@ -222,6 +226,7 @@ const server = http.createServer(async (req, res) => {
       endDate: null,
       isActive: true,
       vacationDaysTaken: "0",
+      applyIrRetention: Boolean(body.applyIrRetention),
     };
     employees.push(emp);
     return send(res, 201, { ok: true, data: withEstimate(emp) });
@@ -237,6 +242,7 @@ const server = http.createServer(async (req, res) => {
       if (body.branchId !== undefined) emp.branchId = String(body.branchId);
       if (body.monthlySalary !== undefined) emp.monthlySalary = String(body.monthlySalary);
       if (body.startDate !== undefined) emp.startDate = `${String(body.startDate)}T00:00:00.000Z`;
+      if (body.applyIrRetention !== undefined) emp.applyIrRetention = Boolean(body.applyIrRetention);
       return ok(res, withEstimate(emp));
     }
     if (method === "DELETE") {

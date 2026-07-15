@@ -165,11 +165,13 @@ export function computeMonthlyBreakdown(
   monthlySalary: number,
   rates: PayrollRates = DEFAULT_PAYROLL_RATES,
   startDate?: string,
+  /** Retener IR a este trabajador (varía por persona; default false como en DB). */
+  applyIrRetention = false,
 ): PayrollBreakdown {
   const salary = Math.max(0, monthlySalary);
   const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
   const inssLaboral = round2(salary * inss.laboral);
-  const ir = round2(computeAnnualIr((salary - salary * inss.laboral) * 12) / 12);
+  const ir = applyIrRetention ? round2(computeAnnualIr((salary - salary * inss.laboral) * 12) / 12) : 0;
   const netPay = round2(Math.max(0, salary - inssLaboral - ir));
   const inssPatronal = round2(salary * inss.patronal);
   const inatec = round2(salary * rates.inatecRate);

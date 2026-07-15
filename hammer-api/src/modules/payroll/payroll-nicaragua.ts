@@ -142,6 +142,13 @@ export type PayrollLineBreakdownInput = {
    * Sin dato de antigüedad se asume el primer tramo.
    */
   indemnizacionRate?: number;
+  /**
+   * Retener IR salarial a este empleado (Employee.applyIrRetention). Varía
+   * POR TRABAJADOR: quienes tributan por su cuenta no llevan retención.
+   * Default true a nivel de función (la fórmula legal completa); en la
+   * práctica el flag del empleado decide, y su default en DB es false.
+   */
+  applyIrRetention?: boolean;
 };
 
 export type PayrollLineBreakdown = {
@@ -194,8 +201,11 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
 
   const inssLaboral = round2(grossSalary * inss.laboral);
 
+  // IR solo si a ESTE empleado se le retiene (varía por trabajador: quien
+  // tributa por su cuenta no lleva retención y su neto = bruto − INSS − préstamos).
+  const applyIr = input.applyIrRetention ?? true;
   const fullMonthInss = monthlySalary * inss.laboral;
-  const irMonthlyFull = computeAnnualIr((monthlySalary - fullMonthInss) * 12) / 12;
+  const irMonthlyFull = applyIr ? computeAnnualIr((monthlySalary - fullMonthInss) * 12) / 12 : 0;
   const ir = round2(irMonthlyFull * prorationFactor);
 
   const totalDeductions = round2(inssLaboral + ir + loanDeductions + otherDeductions);

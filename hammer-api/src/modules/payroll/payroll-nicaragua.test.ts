@@ -172,6 +172,26 @@ describe("prestaciones en modo ON_PAYMENT (no se provisionan en el mes)", () => 
   });
 });
 
+// ── Retención de IR por trabajador ───────────────────────────────────────────
+
+describe("applyIrRetention=false (el trabajador tributa por su cuenta)", () => {
+  it("no se retiene IR: neto = bruto − INSS; el costo empresa NO cambia", () => {
+    const conIr = fullMonth(10_000);
+    const sinIr = fullMonth(10_000, { applyIrRetention: false });
+    assert.equal(sinIr.ir, 0);
+    assert.equal(sinIr.netPay, 9_300); // 10,000 − 700 de INSS, nada más
+    assert.equal(sinIr.totalDeductions, 700);
+    // El IR es retención al empleado: quitarlo no altera lo que paga el patrón.
+    assert.equal(sinIr.employerCost, conIr.employerCost);
+  });
+
+  it("los préstamos siguen deduciéndose aunque no haya IR", () => {
+    const b = fullMonth(10_000, { applyIrRetention: false, loanDeductions: 1_000 });
+    assert.equal(b.totalDeductions, 1_700); // INSS 700 + préstamo 1,000
+    assert.equal(b.netPay, 8_300);
+  });
+});
+
 // ── Prorrateo por días trabajados ─────────────────────────────────────────────
 
 describe("salario prorrateado (daysWorked < totalDays)", () => {

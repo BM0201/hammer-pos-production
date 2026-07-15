@@ -66,6 +66,8 @@ type EmployeeRow = {
   startDate: string;
   endDate: string | null;
   isActive: boolean;
+  /** Retener IR salarial a este trabajador (varía por persona). */
+  applyIrRetention?: boolean;
   branch: { id: string; code: string; name: string };
   payrollEstimate?: PayrollBreakdown | null;
   payrollRates?: PayrollRates;
@@ -117,7 +119,7 @@ export function PayrollFinancePanel() {
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "" });
+  const [form, setForm] = useState({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", applyIrRetention: false });
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -191,7 +193,7 @@ export function PayrollFinancePanel() {
   const breakdownOf = useCallback(
     (emp: EmployeeRow): { b: PayrollBreakdown; estimated: boolean } => {
       if (emp.payrollEstimate) return { b: emp.payrollEstimate, estimated: false };
-      return { b: computeMonthlyBreakdown(Number(emp.monthlySalary), rates, emp.startDate), estimated: true };
+      return { b: computeMonthlyBreakdown(Number(emp.monthlySalary), rates, emp.startDate, emp.applyIrRetention ?? false), estimated: true };
     },
     [rates],
   );
@@ -295,6 +297,7 @@ export function PayrollFinancePanel() {
       branchId: selectedBranch || branches[0]?.id || "",
       monthlySalary: "",
       startDate: new Date().toISOString().slice(0, 10),
+      applyIrRetention: false,
     });
     setShowForm(true);
     setTab("employees");
@@ -308,6 +311,7 @@ export function PayrollFinancePanel() {
       branchId: emp.branchId,
       monthlySalary: emp.monthlySalary,
       startDate: emp.startDate.slice(0, 10),
+      applyIrRetention: emp.applyIrRetention ?? false,
     });
     setShowForm(true);
     setDrawerEmployeeId(null);
@@ -671,6 +675,18 @@ export function PayrollFinancePanel() {
                     Fecha de inicio *
                     <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" />
                   </label>
+                  {/* Varía por trabajador: quien tributa por su cuenta NO lleva
+                      retención de IR (default). Se marca solo si a esta persona
+                      sí se le retiene en nómina. */}
+                  <label className="flex cursor-pointer select-none items-center gap-2 self-end pb-2 text-[0.78rem] font-normal normal-case tracking-normal text-[var(--color-text-secondary)]" title="El IR salarial (Ley 822) se retiene solo a los trabajadores que no tributan por su cuenta. Al resto, únicamente se le deduce INSS y préstamos.">
+                    <input
+                      type="checkbox"
+                      checked={form.applyIrRetention}
+                      onChange={(e) => setForm({ ...form, applyIrRetention: e.target.checked })}
+                      className="h-3.5 w-3.5 cursor-pointer accent-[var(--color-info-600)]"
+                    />
+                    Retener IR en nómina (varía por trabajador)
+                  </label>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => void handleSubmitForm()} disabled={loading} className="flex items-center gap-2 rounded-lg bg-[var(--color-info-600)] px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--color-info-700)] disabled:opacity-50">
@@ -988,7 +1004,7 @@ export function PayrollFinancePanel() {
                     Del salario del trabajador
                   </p>
                   <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("neto")}Neto al empleado</span><span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(b.netPay)}</span></div>
-                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("ret")}Retenciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">INSS {fmtRatePct(inssResolved.laboral)} + IR de ley</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(amounts.ret)}</span></div>
+                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("ret")}Retenciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">INSS {fmtRatePct(inssResolved.laboral)}{b.ir > 0 ? " + IR de ley" : " (sin retención de IR)"}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(amounts.ret)}</span></div>
 
                   {/* Bloque 2: aportes que la EMPRESA paga aparte — nunca se
                       deducen del salario del trabajador. */}
