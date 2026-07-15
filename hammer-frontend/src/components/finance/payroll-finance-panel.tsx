@@ -104,6 +104,7 @@ export function PayrollFinancePanel() {
   const [loading, setLoading] = useState(false);
 
   const [selectedBranch, setSelectedBranch] = useState("");
+  const [selectedEmployee, setSelectedEmployee] = useState("");
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
@@ -207,9 +208,13 @@ export function PayrollFinancePanel() {
 
   /* ── Listas derivadas ── */
 
+  // Scope de los totales: sucursal + selección unitaria de empleado. Con un
+  // empleado seleccionado, el hero, la tabla y el CSV muestran SOLO a esa
+  // persona (desglose individual completo).
   const inBranchScope = useCallback(
-    (emp: EmployeeRow) => !selectedBranch || emp.branchId === selectedBranch,
-    [selectedBranch],
+    (emp: EmployeeRow) =>
+      (!selectedBranch || emp.branchId === selectedBranch) && (!selectedEmployee || emp.id === selectedEmployee),
+    [selectedBranch, selectedEmployee],
   );
 
   const visibleEmployees = useMemo(() => {
@@ -371,6 +376,7 @@ export function PayrollFinancePanel() {
   function clearFilters() {
     setQuery("");
     setSelectedBranch("");
+    setSelectedEmployee("");
   }
 
   function exportCsv() {
@@ -496,12 +502,14 @@ export function PayrollFinancePanel() {
         totals={heroTotals}
         periodLabel={periodLabel}
         branchLabel={
-          selectedBranch
-            ? (() => {
-                const b = branches.find((x) => x.id === selectedBranch);
-                return b ? `${b.code} — ${b.name}` : null;
-              })()
-            : null
+          selectedEmployee
+            ? employees.find((e) => e.id === selectedEmployee)?.fullName ?? null
+            : selectedBranch
+              ? (() => {
+                  const b = branches.find((x) => x.id === selectedBranch);
+                  return b ? `${b.code} — ${b.name}` : null;
+                })()
+              : null
         }
         provisionsIncluded={includeProvisions}
         rates={rates}
@@ -535,7 +543,15 @@ export function PayrollFinancePanel() {
             <select
               id="payroll-branch-filter"
               value={selectedBranch}
-              onChange={(e) => setSelectedBranch(e.target.value)}
+              onChange={(e) => {
+                const branchId = e.target.value;
+                setSelectedBranch(branchId);
+                // La selección unitaria se limpia si el empleado no pertenece
+                // a la nueva sucursal.
+                if (branchId && selectedEmployee && !employees.some((emp) => emp.id === selectedEmployee && emp.branchId === branchId)) {
+                  setSelectedEmployee("");
+                }
+              }}
               className="hm-input rounded-lg text-sm"
             >
               <option value="">Todas ({employees.length})</option>
@@ -544,6 +560,28 @@ export function PayrollFinancePanel() {
                   {b.code} — {b.name} ({employees.filter((e) => e.branchId === b.id).length})
                 </option>
               ))}
+            </select>
+
+            {/* Selección unitaria: el hero, la tabla y el CSV pasan a mostrar
+                el desglose de UN solo trabajador. */}
+            <label className="text-sm font-medium text-[var(--color-text-secondary)] whitespace-nowrap" htmlFor="payroll-employee-filter">
+              Empleado:
+            </label>
+            <select
+              id="payroll-employee-filter"
+              value={selectedEmployee}
+              onChange={(e) => setSelectedEmployee(e.target.value)}
+              className="hm-input max-w-[220px] rounded-lg text-sm"
+            >
+              <option value="">Todos</option>
+              {employees
+                .filter((e) => !selectedBranch || e.branchId === selectedBranch)
+                .map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.fullName}
+                    {e.isActive ? "" : " (inactivo)"}
+                  </option>
+                ))}
             </select>
 
             <div className="relative max-w-[300px] flex-1 basis-[210px]">
@@ -943,10 +981,22 @@ export function PayrollFinancePanel() {
                     {estimated && <span className="hm-badge hm-badge-warning text-[0.5rem] normal-case tracking-normal">Estimado</span>}
                   </h4>
                   <PayrollCompositionBar amounts={amounts} total={cost} rates={rates} mini />
+
+                  {/* Bloque 1: el salario del trabajador (lo único que se le
+                      puede deducir es INSS + IR de ley y préstamos). */}
+                  <p className="mb-0.5 mt-3 text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    Del salario del trabajador
+                  </p>
                   <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("neto")}Neto al empleado</span><span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(b.netPay)}</span></div>
-                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("ret")}Retenciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">INSS {fmtRatePct(inssResolved.laboral)} + IR</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(amounts.ret)}</span></div>
+                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("ret")}Retenciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">INSS {fmtRatePct(inssResolved.laboral)} + IR de ley</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(amounts.ret)}</span></div>
+
+                  {/* Bloque 2: aportes que la EMPRESA paga aparte — nunca se
+                      deducen del salario del trabajador. */}
+                  <p className="mb-0.5 mt-3 text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    El patrón paga aparte (no se deduce al trabajador)
+                  </p>
                   <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("patronal")}INSS patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.patronal)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.inssPatronal)}</span></div>
-                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("inatec")}INATEC <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(rates.inatecRate)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.inatec)}</span></div>
+                  <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("inatec")}INATEC <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(rates.inatecRate)} · lo paga la empresa</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.inatec)}</span></div>
                   {includeProvisions && (
                     <>
                       <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("agui")}Aguinaldo <small className="text-[0.6875rem] text-[var(--color-text-soft)]">1/12</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.aguinaldoAccrual)}</span></div>
@@ -954,6 +1004,10 @@ export function PayrollFinancePanel() {
                       <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("indem")}Indemnización <small className="text-[0.6875rem] text-[var(--color-text-soft)]">Art. 45 · {indemRate === 0 ? "tope" : fmtRatePct3(indemRate)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.indemnizacionAccrual)}</span></div>
                     </>
                   )}
+                  <div className="flex items-baseline justify-between border-t border-[var(--color-border)] pt-1.5 text-[0.8125rem] font-semibold">
+                    <span className="text-[var(--color-text-secondary)]">Subtotal aportes del patrón</span>
+                    <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(round2(b.inssPatronal + b.inatec + (includeProvisions ? b.provisions : 0)))}</span>
+                  </div>
                   <div className="mt-1.5 flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-2.5 text-sm font-bold">
                     <span className="text-[var(--color-text-secondary)]">Costo mensual empresa</span>
                     <span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(cost)}</span>
@@ -965,12 +1019,19 @@ export function PayrollFinancePanel() {
                     Recibo del empleado
                   </h4>
                   <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario base</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(Number(drawerEmployee.monthlySalary))}</span></div>
-                  <div className={dline}><span className="text-[var(--color-text-secondary)]">INSS laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.laboral)}</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.inssLaboral)}</span></div>
-                  <div className={dline}><span className="text-[var(--color-text-secondary)]">IR <small className="text-[0.6875rem] text-[var(--color-text-soft)]">tabla progresiva Ley 822</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.ir)}</span></div>
+                  <div className={dline}><span className="text-[var(--color-text-secondary)]">INSS laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.laboral)} · se retiene y entera 1 vez al mes</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.inssLaboral)}</span></div>
+                  {b.ir > 0 && (
+                    <div className={dline}><span className="text-[var(--color-text-secondary)]">IR <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retención de ley (Ley 822) al superar C$100,000/año</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.ir)}</span></div>
+                  )}
                   <div className="mt-1.5 flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-2.5 text-sm font-bold">
                     <span className="text-[var(--color-text-secondary)]">Neto a pagar</span>
                     <span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(b.netPay)}</span>
                   </div>
+                  <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
+                    Al trabajador SOLO se le deduce el INSS laboral{b.ir > 0 ? ", el IR de ley" : ""} y las cuotas de
+                    préstamos que tenga activos. El INSS patronal, el INATEC y las prestaciones sociales las paga la
+                    empresa aparte: nunca salen de su salario.
+                  </p>
                 </section>
 
                 {/* Prestaciones ACUMULADAS: pasivo por empleado según ley (no es

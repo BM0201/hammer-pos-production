@@ -180,9 +180,13 @@ export function computeMonthlyBreakdown(
   const aguiRaw = salary * (1 / 12);
   const vacRaw = salary * (2.5 / 30);
   const indemRaw = salary * indemRate;
-  // Igual que el backend: la suma se redondea UNA sola vez (sin drift de centavos).
+  // Igual que el backend: la suma se redondea UNA sola vez y el último
+  // componente con monto absorbe el residuo — el desglose CIERRA al centavo.
   const provisions = round2(aguiRaw + vacRaw + indemRaw);
-  const employerCost = round2(salary + inssPatronal + inatec + aguiRaw + vacRaw + indemRaw);
+  const aguinaldoAccrual = round2(aguiRaw);
+  const vacacionesAccrual = indemRaw > 0 ? round2(vacRaw) : round2(provisions - aguinaldoAccrual);
+  const indemnizacionAccrual = indemRaw > 0 ? round2(provisions - aguinaldoAccrual - vacacionesAccrual) : 0;
+  const employerCost = round2(salary + inssPatronal + inatec + provisions);
 
   return {
     inssLaboral,
@@ -191,9 +195,9 @@ export function computeMonthlyBreakdown(
     inssPatronal,
     inatec,
     provisions,
-    aguinaldoAccrual: round2(aguiRaw),
-    vacacionesAccrual: round2(vacRaw),
-    indemnizacionAccrual: round2(indemRaw),
+    aguinaldoAccrual,
+    vacacionesAccrual,
+    indemnizacionAccrual,
     employerCost,
     ...(startDate
       ? {

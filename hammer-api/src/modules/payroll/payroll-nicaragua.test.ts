@@ -154,17 +154,21 @@ describe("prestaciones en modo ON_PAYMENT (no se provisionan en el mes)", () => 
     const b = fullMonth(10_000, { rates: { ...DEFAULT_PAYROLL_RATES, aguinaldoMode: "ON_PAYMENT" } });
     assert.equal(b.aguinaldoAccrual, 0);
     assert.equal(b.vacacionesAccrual, 833.33);
-    assert.equal(b.indemnizacionAccrual, 833.33);
-    // La suma se redondea una sola vez: 2 × 10,000/12 = 1,666.67 (no 1,666.66).
+    // El último componente absorbe el residuo: 833.33 + 833.34 = 1,666.67 exacto.
+    assert.equal(b.indemnizacionAccrual, 833.34);
     assert.equal(b.provisions, 1_666.67);
   });
 
-  it("provisión por defecto (tramo 1) = 3 × 1/12 ≈ 25% del bruto", () => {
+  it("provisión por defecto (tramo 1) = 3 × 1/12 ≈ 25% del bruto y CIERRA al centavo", () => {
     const b = fullMonth(10_000);
     assert.equal(b.provisions, 2_500);
     assert.equal(b.aguinaldoAccrual, 833.33);
     assert.equal(b.vacacionesAccrual, 833.33);
-    assert.equal(b.indemnizacionAccrual, 833.33);
+    // La indemnización absorbe el residuo (833.34): 833.33+833.33+833.34 = 2,500.00.
+    assert.equal(b.indemnizacionAccrual, 833.34);
+    assert.equal(round2(b.aguinaldoAccrual + b.vacacionesAccrual + b.indemnizacionAccrual), b.provisions);
+    // Y el costo empresa es la suma exacta de sus componentes mostrados.
+    assert.equal(round2(10_000 + b.inssPatronal + b.inatec + b.provisions), b.employerCost);
   });
 });
 

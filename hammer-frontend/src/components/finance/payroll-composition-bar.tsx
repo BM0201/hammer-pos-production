@@ -66,7 +66,7 @@ export function PayrollCompositionBar({ amounts, total, rates = DEFAULT_PAYROLL_
             Salario base · {fmtC0(baseAmount)}
           </div>
           <div className="pay-bracket" style={{ width: `${cargasPct}%` }}>
-            INSS + INATEC · {fmtC0(cargasAmount)}
+            INSS patronal + INATEC · {fmtC0(cargasAmount)}
           </div>
           {prestacionesAmount > 0.005 && (
             <div className="pay-bracket" style={{ width: `${prestacionesPct}%` }}>

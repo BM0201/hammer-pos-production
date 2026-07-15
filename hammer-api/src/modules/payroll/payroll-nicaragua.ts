@@ -205,16 +205,29 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
   const inatec = round2(grossSalary * rates.inatecRate);
 
   const indemnizacionRate = input.indemnizacionRate ?? INDEMNIZACION_RATE_Y1_3;
-  // La suma se redondea UNA sola vez (sin redondeos intermedios): así
-  // 3 × (10,000/12) da 2,500.00 exactos y el costo empresa conserva los
-  // números históricos. Cada acumulado individual se redondea solo para su
-  // columna (puede diferir de la suma por 1 centavo, es esperado).
+  // CIERRE EXACTO: la suma se redondea UNA sola vez (3 × 10,000/12 = 2,500.00,
+  // números históricos intactos) y el ÚLTIMO componente con monto absorbe el
+  // residuo de redondeo, de modo que aguinaldo + vacaciones + indemnización
+  // === provisions al centavo (la UI y el CSV cierran sin descuadres).
   const aguinaldoRaw = rates.aguinaldoMode === "ACCRUE_MONTHLY" ? grossSalary * AGUINALDO_MONTHLY_RATE : 0;
   const vacacionesRaw = rates.vacacionesMode === "ACCRUE_MONTHLY" ? grossSalary * VACACIONES_MONTHLY_RATE : 0;
   const indemnizacionRaw = rates.indemnizacionMode === "ACCRUE_MONTHLY" ? grossSalary * indemnizacionRate : 0;
 
   const provisions = round2(aguinaldoRaw + vacacionesRaw + indemnizacionRaw);
-  const employerCost = round2(grossSalary + inssPatronal + inatec + aguinaldoRaw + vacacionesRaw + indemnizacionRaw);
+  let aguinaldoAccrual = round2(aguinaldoRaw);
+  let vacacionesAccrual = round2(vacacionesRaw);
+  let indemnizacionAccrual = round2(indemnizacionRaw);
+  if (indemnizacionRaw > 0) {
+    indemnizacionAccrual = round2(provisions - aguinaldoAccrual - vacacionesAccrual);
+  } else if (vacacionesRaw > 0) {
+    vacacionesAccrual = round2(provisions - aguinaldoAccrual - indemnizacionAccrual);
+  } else if (aguinaldoRaw > 0) {
+    aguinaldoAccrual = round2(provisions - vacacionesAccrual - indemnizacionAccrual);
+  }
+
+  // Costo empresa = suma EXACTA de los componentes ya redondeados (cierra
+  // contra lo que se muestra: salario + patronal + INATEC + provisiones).
+  const employerCost = round2(round2(grossSalary) + inssPatronal + inatec + provisions);
 
   return {
     grossSalary: round2(grossSalary),
@@ -226,9 +239,9 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
     netPay,
     inssPatronal,
     inatec,
-    aguinaldoAccrual: round2(aguinaldoRaw),
-    vacacionesAccrual: round2(vacacionesRaw),
-    indemnizacionAccrual: round2(indemnizacionRaw),
+    aguinaldoAccrual,
+    vacacionesAccrual,
+    indemnizacionAccrual,
     provisions,
     employerCost,
   };
