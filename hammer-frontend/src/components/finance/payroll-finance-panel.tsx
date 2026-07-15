@@ -467,9 +467,13 @@ export function PayrollFinancePanel() {
             <CalendarDays className="h-3 w-3" />
             {periodLabel}
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-success-100)] bg-[var(--color-success-50)] px-3 py-0.5 text-xs font-semibold text-[var(--color-success-700)]">
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-success-100)] bg-[var(--color-success-50)] px-3 py-0.5 text-xs font-semibold text-[var(--color-success-700)]"
+            title={payday.adjustedNote ? `${payday.adjustedNote} — para pagar bien y a tiempo` : undefined}
+          >
             <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success-500)]" />
             Próximo pago: {payday.label}
+            {payday.adjusted && <span className="font-bold" aria-hidden="true">*</span>}
           </span>
         </h2>
         <div className="flex flex-wrap items-center gap-2">

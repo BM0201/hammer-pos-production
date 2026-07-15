@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
+import { nextBiweeklyPayday } from "@/components/finance/payroll-calc";
 
 const MANAGEMENT_LINKS: { href: string; label: string; description: string; icon: LucideIcon }[] = [
   { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", description: "Revisar y aprobar cierres", icon: Wallet },
@@ -386,6 +387,55 @@ const ATTENTION_TONE_STYLES: Record<AttentionTone, { bg: string; border: string;
   warning: { bg: "color-mix(in srgb, var(--color-warning-500) 12%, transparent)", border: "color-mix(in srgb, var(--color-warning-500) 40%, transparent)", text: "var(--color-warning-700)" },
   info: { bg: "color-mix(in srgb, var(--color-info-500) 10%, transparent)", border: "color-mix(in srgb, var(--color-info-500) 35%, transparent)", text: "var(--color-info-700)" },
 };
+
+/* ── Recordatorio de pago de planilla (15 y 30) ──
+ * Regla de la casa (payroll-calc.nextBiweeklyPayday): si el 15 o el 30 cae
+ * DOMINGO, o el mes no tiene 30 (febrero), el pago se ADELANTA un día — así
+ * se paga bien y a tiempo. El banner sube de tono cuando el pago está encima
+ * (hoy o mañana) para recordar postear la nómina y procesar el corte.
+ */
+function PayrollPaydayReminder() {
+  const payday = nextBiweeklyPayday();
+  const urgent = payday.daysUntil <= 1;
+  const whenLabel =
+    payday.daysUntil === 0 ? "HOY" : payday.daysUntil === 1 ? "MAÑANA" : `en ${payday.daysUntil} días`;
+  const accent = urgent ? "var(--color-warning-600)" : "var(--color-info-600)";
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 rounded-lg border px-3.5 py-2.5"
+      style={{
+        background: `color-mix(in srgb, ${accent} ${urgent ? 9 : 6}%, transparent)`,
+        borderColor: `color-mix(in srgb, ${accent} ${urgent ? 35 : 22}%, transparent)`,
+      }}
+    >
+      <Wallet className="h-4 w-4 flex-shrink-0" style={{ color: accent }} />
+      <div className="min-w-0 flex-1">
+        <p className="text-[12px] font-semibold" style={{ color: "var(--color-text)" }}>
+          Pago de planilla: {payday.label}
+          <span
+            className="ml-2 rounded-full border px-2 py-0.5 align-middle text-[10px] font-bold uppercase tracking-wide"
+            style={{ color: accent, borderColor: `color-mix(in srgb, ${accent} 40%, transparent)` }}
+          >
+            {whenLabel}
+          </span>
+        </p>
+        <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+          {payday.adjustedNote
+            ? `⚠ ${payday.adjustedNote} — para pagar bien y a tiempo. `
+            : ""}
+          Recuerda postear la nómina y procesar el corte quincenal antes del pago.
+        </p>
+      </div>
+      <Link
+        href={"/app/master/finance?tab=payroll" as Route}
+        className="flex-shrink-0 rounded-md border px-3 py-1.5 text-[12px] font-semibold transition-transform hover:scale-[1.02]"
+        style={{ color: accent, borderColor: `color-mix(in srgb, ${accent} 40%, transparent)`, background: "var(--color-surface)" }}
+      >
+        Ir a Planilla →
+      </Link>
+    </div>
+  );
+}
 
 function AttentionStrip({ items }: { items: AttentionItem[] }) {
   const visible = items.filter((item) => item.count > 0);
@@ -1271,6 +1321,9 @@ export default function MasterCommandCenterPage() {
 
       {/* ── Requiere atención — señales accionables de todo el sistema ── */}
       <AttentionStrip items={attentionItems} />
+
+      {/* ── Recordatorio de pago de planilla (15 y 30, regla del día hábil) ── */}
+      <PayrollPaydayReminder />
 
       {/* ── KPI grid ── */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

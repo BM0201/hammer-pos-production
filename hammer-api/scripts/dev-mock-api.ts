@@ -436,6 +436,29 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // Centro de Comando (pantalla principal de Master): payload mínimo en ceros
+  // para que la página renderice (y se vea el recordatorio de pago 15/30).
+  if (path === "/api/master/command-center") {
+    return ok(res, {
+      generatedAt: new Date().toISOString(),
+      totals: {
+        salesToday: 0, openSessions: 0, pendingReviewSessions: 0, reconcilingSessions: 0,
+        closuresCompletedToday: 0, boxesActive: 0, boxesTotal: 0, usersOnline: 1, usersIdle: 0,
+        usersOffline: 0, paidSalesCount: 0, pendingPaymentTotal: 0, pendingPaymentCount: 0,
+        openingCashTotal: 0, cashTenderNetTotal: 0, cashMovementsNet: 0, cashExpensesTotal: 0,
+        cashOutflowsTotal: 0, expectedCashOnHand: 0, cashNetWithoutOpening: 0,
+        cardTenderTotal: 0, transferTenderTotal: 0, otherTenderTotal: 0,
+      },
+      attention: {
+        pendingApprovals: 0, criticalBrainDecisions: 0, openSecurityAlerts: 0,
+        daysPendingApproval: 0, staleOpenDays: 0, productsMissingPrice: 0, pendingDispatchTotal: 0,
+      },
+      users: { summary: { online: 1, idle: 0, offline: 0, openCashSessions: 0 }, list: [] },
+      byBranch: [],
+      cashClosures: { pending: [], completedToday: [], history: [] },
+    });
+  }
+
   if (path === "/api/payroll/rates") {
     if (method === "PATCH") {
       const body = await readJson(req);

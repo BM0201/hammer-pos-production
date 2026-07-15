@@ -267,21 +267,71 @@ export function fmtSeniority(months: number): string {
   return `${years} año${years === 1 ? "" : "s"} ${rest} mes${rest === 1 ? "" : "es"}`;
 }
 
-/**
- * Próximo pago quincenal a partir de `now`: día 15 (1ª quincena) o último día
- * del mes (2ª quincena).
+/* ── Próximo pago quincenal (con la regla del día hábil) ─────────────────────
+ * Los pagos son el 15 y el 30. REGLA DE LA CASA:
+ *  - Si el 15 o el 30 cae DOMINGO → se paga un día antes (sábado).
+ *  - Si el mes termina sin 30 (febrero) → se paga el último día del mes
+ *    (y si ese día cae domingo, también se adelanta al sábado).
+ * Así el pago siempre sale bien y a tiempo.
  */
-export function nextBiweeklyPayday(now: Date = new Date()): { label: string; date: Date; half: 1 | 2 } {
-  const year = now.getFullYear();
-  const month = now.getMonth();
+
+const DIA = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+
+export type PaydayInfo = {
+  /** Ej. "2ª quincena · sáb 14 jun" (fecha EFECTIVA de pago, ya ajustada). */
+  label: string;
+  /** Fecha efectiva de pago (ajustada por domingo / mes corto). */
+  date: Date;
+  half: 1 | 2;
+  /** Día nominal del pago (15 o 30). */
+  baseDay: number;
+  /** true si el pago se adelantó respecto al día nominal. */
+  adjusted: boolean;
+  /** Nota humana del ajuste (null si el pago cae en su día nominal). */
+  adjustedNote: string | null;
+  /** Días calendario desde hoy (0 = el pago es HOY). */
+  daysUntil: number;
+};
+
+/** Fecha efectiva de pago de una quincena concreta (con la regla de la casa). */
+function effectivePayday(year: number, month: number, half: 1 | 2): Omit<PaydayInfo, "label" | "daysUntil"> {
   const lastDay = new Date(year, month + 1, 0).getDate();
-  const day = now.getDate();
-  const DIA = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
-  const build = (d: Date, half: 1 | 2) => ({
-    label: `${half}ª quincena · ${DIA[d.getDay()]} ${d.getDate()} ${MES_CORTO[d.getMonth()]}`,
-    date: d,
+  const baseDay = half === 1 ? 15 : 30;
+  // Mes sin 30 (febrero): se paga el último día disponible.
+  const shortMonth = half === 2 && lastDay < 30;
+  let payDay = half === 1 ? 15 : Math.min(30, lastDay);
+  const notes: string[] = [];
+  if (shortMonth) notes.push(`el mes no tiene 30: se paga el ${payDay}`);
+  // Domingo → se adelanta al sábado.
+  if (new Date(year, month, payDay).getDay() === 0) {
+    notes.push(`el ${payDay} cae domingo: se adelanta al sábado ${payDay - 1}`);
+    payDay -= 1;
+  }
+  return {
+    date: new Date(year, month, payDay),
     half,
-  });
-  if (day <= 15) return build(new Date(year, month, 15), 1);
-  return build(new Date(year, month, lastDay), 2);
+    baseDay,
+    adjusted: notes.length > 0,
+    adjustedNote: notes.length > 0 ? notes.join("; ") : null,
+  };
+}
+
+/**
+ * Próximo pago quincenal a partir de `now`, con fecha EFECTIVA ajustada.
+ * Si el pago ajustado de la quincena ya pasó, devuelve el siguiente.
+ */
+export function nextBiweeklyPayday(now: Date = new Date()): PaydayInfo {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const candidates: Array<Omit<PaydayInfo, "label" | "daysUntil">> = [
+    effectivePayday(now.getFullYear(), now.getMonth(), 1),
+    effectivePayday(now.getFullYear(), now.getMonth(), 2),
+    effectivePayday(now.getFullYear(), now.getMonth() + 1, 1),
+  ];
+  const next = candidates.find((c) => c.date >= today) ?? candidates[candidates.length - 1];
+  const daysUntil = Math.round((next.date.getTime() - today.getTime()) / 86_400_000);
+  return {
+    ...next,
+    label: `${next.half}ª quincena · ${DIA[next.date.getDay()]} ${next.date.getDate()} ${MES_CORTO[next.date.getMonth()]}`,
+    daysUntil,
+  };
 }
