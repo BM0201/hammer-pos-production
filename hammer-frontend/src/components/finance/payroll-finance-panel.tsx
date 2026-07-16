@@ -1216,7 +1216,19 @@ export function PayrollFinancePanel() {
                     Recibo del empleado
                   </h4>
                   <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario base</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(Number(drawerEmployee.monthlySalary))}</span></div>
-                  <div className={dline}><span className="text-[var(--color-text-secondary)]">INSS laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.laboral)} · se retiene y entera 1 vez al mes</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.inssLaboral)}</span></div>
+                  <div className={dline}>
+                    <span className="text-[var(--color-text-secondary)]">
+                      INSS laboral{" "}
+                      <small className="text-[0.6875rem] text-[var(--color-text-soft)]">
+                        {fmtRatePct(inssResolved.laboral)}
+                        {drawerEmployee.inssSalary != null
+                          ? ` sobre base cotizable ${fmtC(Number(drawerEmployee.inssSalary))}`
+                          : ""}{" "}
+                        · se retiene y entera 1 vez al mes
+                      </small>
+                    </span>
+                    <span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.inssLaboral)}</span>
+                  </div>
                   {b.ir > 0 && (
                     <div className={dline}><span className="text-[var(--color-text-secondary)]">IR <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retención de ley (Ley 822) al superar C$100,000/año</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.ir)}</span></div>
                   )}
