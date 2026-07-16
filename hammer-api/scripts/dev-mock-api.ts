@@ -436,6 +436,74 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  // Cálculo de nómina (tab Calcular Nómina): misma aritmética real, honrando
+  // la selección "esto sí, esto no" (includeEmployeeIds / skipLoanEmployeeIds).
+  // Harry tiene un préstamo demo con cuota mensual de C$500.
+  if (path === "/api/payroll/calculate" && method === "POST") {
+    const body = await readJson(req);
+    const include =
+      Array.isArray(body.includeEmployeeIds) && body.includeEmployeeIds.length > 0
+        ? new Set(body.includeEmployeeIds as string[])
+        : null;
+    const skipLoans = new Set(Array.isArray(body.skipLoanEmployeeIds) ? (body.skipLoanEmployeeIds as string[]) : []);
+    const LOAN_MONTHLY: Record<string, number> = { "emp-harry": 500 };
+    const rates = currentRates();
+    const at = new Date();
+    let totalGross = 0, totalDeductions = 0, totalNet = 0, totalEmployerCost = 0;
+    const lines = employees
+      .filter((e) => e.isActive && (!include || include.has(e.id)))
+      .map((e) => {
+        const salary = Number(e.monthlySalary);
+        const b = computePayrollLineBreakdown({
+          monthlySalary: salary,
+          grossSalary: salary,
+          daysWorked: 30,
+          totalDays: 30,
+          rates: { ...rates, aguinaldoMode: "ACCRUE_MONTHLY", vacacionesMode: "ACCRUE_MONTHLY", indemnizacionMode: "ACCRUE_MONTHLY" },
+          indemnizacionRate: indemnizacionAccrualRate(monthsOfService(e.startDate, at)),
+          applyIrRetention: e.applyIrRetention,
+          loanDeductions: skipLoans.has(e.id) ? 0 : LOAN_MONTHLY[e.id] ?? 0,
+        });
+        totalGross = round2(totalGross + b.grossSalary);
+        totalDeductions = round2(totalDeductions + b.totalDeductions);
+        totalNet = round2(totalNet + b.netPay);
+        totalEmployerCost = round2(totalEmployerCost + b.employerCost);
+        return {
+          employeeId: e.id,
+          fullName: e.fullName,
+          position: e.position,
+          branchId: e.branchId,
+          monthlySalary: salary,
+          daysWorked: 30,
+          totalDays: 30,
+          proratedSalary: b.grossSalary,
+          isFullMonth: true,
+          grossSalary: b.grossSalary,
+          inssLaboral: b.inssLaboral,
+          ir: b.ir,
+          inssPatronal: b.inssPatronal,
+          inatec: b.inatec,
+          provisions: b.provisions,
+          loanDeductions: b.loanDeductions,
+          otherDeductions: b.otherDeductions,
+          netPay: b.netPay,
+          employerCost: b.employerCost,
+        };
+      });
+    return ok(res, {
+      payrollRunId: "run-preview",
+      payrollRunStatus: "DRAFT",
+      totalPayroll: totalGross,
+      totalGross,
+      totalDeductions,
+      totalNet,
+      totalEmployerCost,
+      employeeCount: lines.length,
+      rates,
+      employees: lines,
+    });
+  }
+
   // Centro de Comando (pantalla principal de Master): payload mínimo en ceros
   // para que la página renderice (y se vea el recordatorio de pago 15/30).
   if (path === "/api/master/command-center") {

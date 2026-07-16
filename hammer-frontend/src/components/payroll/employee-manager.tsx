@@ -45,6 +45,12 @@ type PayrollEmployee = {
   proratedSalary: number;
   isFullMonth: boolean;
   grossSalary: number;
+  /** Desglose visible: al trabajador SOLO se le deduce INSS (+IR si aplica) y préstamos. */
+  inssLaboral: number;
+  ir: number;
+  inssPatronal: number;
+  inatec: number;
+  provisions: number;
   loanDeductions: number;
   otherDeductions: number;
   netPay: number;
@@ -209,6 +215,12 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
   const [disbursements, setDisbursements] = useState<Disbursement[]>([]);
   const [cashStatus, setCashStatus] = useState<CashStatusRow[]>([]);
 
+  // Selección "esto sí, esto no" del cálculo: roster de la última corrida
+  // COMPLETA + marcas de exclusión (empleado fuera) y de préstamo saltado.
+  const [fullRoster, setFullRoster] = useState<PayrollEmployee[]>([]);
+  const [excludedEmpIds, setExcludedEmpIds] = useState<Set<string>>(new Set());
+  const [skipLoanEmpIds, setSkipLoanEmpIds] = useState<Set<string>>(new Set());
+
   const flash = useCallback((type: "success" | "error", msg: string) => {
     if (type === "success") toast.success(msg);
     else toast.error(msg);
@@ -344,13 +356,27 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
     setShowForm(true);
   };
 
-  const handleCalculatePayroll = async () => {
+  /**
+   * Calcula la nómina. Sin argumentos = corrida COMPLETA (resetea la selección
+   * y fija el roster). Con `selection` = recalcula "esto sí, esto no": solo
+   * los empleados marcados, saltando préstamos donde se desmarcó.
+   */
+  const handleCalculatePayroll = async (selection?: { includeEmployeeIds: string[]; skipLoanEmployeeIds: string[] }) => {
+    if (selection && selection.includeEmployeeIds.length === 0) {
+      flash("error", "Marca al menos un empleado para recalcular");
+      return;
+    }
     setLoading(true);
     try {
       const r = await apiFetch("/api/payroll/calculate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month: payrollMonth, branchId: selectedBranch || undefined, syncToExpenses: false }),
+        body: JSON.stringify({
+          month: payrollMonth,
+          branchId: selectedBranch || undefined,
+          syncToExpenses: false,
+          ...(selection ?? {}),
+        }),
       });
       const raw = await r.json();
       if (!r.ok) {
@@ -359,6 +385,12 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       }
       const data = unwrapApiData(raw) as PayrollResult;
       setPayrollResult(data);
+      if (!selection) {
+        // Corrida completa: el roster de selección parte de todos los incluidos.
+        setFullRoster(data.employees);
+        setExcludedEmpIds(new Set());
+        setSkipLoanEmpIds(new Set());
+      }
       flash("success", `Nomina calculada: ${fmt(data.totalGross)}`);
       if (data.payrollRunStatus === "POSTED") {
         await loadDisbursements(data.payrollRunId);
@@ -372,6 +404,12 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       setLoading(false);
     }
   };
+
+  const handleRecalcWithSelection = () =>
+    handleCalculatePayroll({
+      includeEmployeeIds: fullRoster.filter((e) => !excludedEmpIds.has(e.employeeId)).map((e) => e.employeeId),
+      skipLoanEmployeeIds: [...skipLoanEmpIds],
+    });
 
   const loadDisbursements = useCallback(async (runId: string) => {
     try {
@@ -773,7 +811,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                     </button>
                   </div>
                 </div>
-                <button onClick={handleCalculatePayroll} disabled={loading} className="flex items-center gap-2 bg-[var(--color-info-600)] hover:bg-[var(--color-info-700)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
+                <button onClick={() => void handleCalculatePayroll()} disabled={loading} className="flex items-center gap-2 bg-[var(--color-info-600)] hover:bg-[var(--color-info-700)] text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors">
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Calculator className="h-4 w-4" />}
                   {payrollView === "BIWEEKLY" ? "Calcular quincena" : "Calcular nómina"}
                 </button>
@@ -903,6 +941,18 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
             // desembolso real (net/2 por quincena). Redondeamos a 2 decimales.
             const isBiweekly = payrollView === "BIWEEKLY";
             const half = (v: number) => (isBiweekly ? Math.round((v / 2) * 100) / 100 : v);
+            const isDraft = payrollResult.payrollRunStatus === "DRAFT";
+            // Roster para la selección: la última corrida COMPLETA (así los
+            // excluidos siguen visibles y se pueden volver a marcar).
+            const roster = fullRoster.length > 0 ? fullRoster : payrollResult.employees;
+            const currentById = new Map(payrollResult.employees.map((e) => [e.employeeId, e]));
+            const selectionDirty = excludedEmpIds.size > 0 || skipLoanEmpIds.size > 0;
+            const toggleSet = (set: Set<string>, id: string, setter: (s: Set<string>) => void) => {
+              const next = new Set(set);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              setter(next);
+            };
             return (
             <div className="hm-module-card">
               <div className="hm-module-card-header">
@@ -923,40 +973,107 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                   <div><p className="font-bold text-[var(--color-info-700)]">{fmt(half(payrollResult.totalEmployerCost))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Costo emp.</p></div>
                 </div>
               </div>
+
+              {/* Desglose VISIBLE: al trabajador solo se le deduce INSS (+IR si
+                  aplica) y préstamos. Prestaciones/INATEC/patronal van en
+                  "Costo empresa": las paga el patrón aparte, jamás del salario. */}
               <div className="overflow-x-auto">
                 <table className="hm-table w-full">
                   <thead>
                     <tr>
+                      {isDraft && <th className="text-center" title="Marcar quién entra en esta corrida">¿Entra?</th>}
                       <th className="text-left">Empleado</th>
-                      <th className="text-left">Puesto</th>
                       <th className="text-center">Días</th>
                       <th className="text-right">Bruto</th>
+                      <th className="text-right">INSS laboral</th>
+                      <th className="text-right">IR</th>
                       <th className="text-right">Préstamos</th>
                       <th className="text-right">Neto</th>
-                      <th className="text-right">Costo empresa</th>
+                      <th className="text-right" title="Salario + INSS patronal + INATEC + prestaciones — lo paga el patrón aparte">Costo empresa</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {payrollResult.employees.map((emp) => (
-                      <tr key={emp.employeeId}>
-                        <td className="font-medium text-[var(--color-text)]">{emp.fullName}</td>
-                        <td className="text-[var(--color-text-muted)]">{emp.position}</td>
-                        <td className="text-center">{emp.daysWorked}/{emp.totalDays}</td>
-                        <td className="text-right font-mono">{fmt(half(emp.grossSalary))}</td>
-                        <td className="text-right font-mono text-[var(--color-warning-700)]">{fmt(half(emp.loanDeductions))}</td>
-                        <td className="text-right font-mono font-semibold">{fmt(half(emp.netPay))}</td>
-                        <td className="text-right font-mono">{fmt(half(emp.employerCost))}</td>
-                      </tr>
-                    ))}
-                    {payrollResult.employees.length === 0 && <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">No hay empleados activos para este periodo</td></tr>}
+                    {roster.map((rosterEmp) => {
+                      const excluded = excludedEmpIds.has(rosterEmp.employeeId);
+                      const emp = currentById.get(rosterEmp.employeeId);
+                      const dim = excluded || !emp;
+                      const v = emp ?? rosterEmp;
+                      const loanSkipped = skipLoanEmpIds.has(rosterEmp.employeeId);
+                      const showLoanToggle = isDraft && (v.loanDeductions > 0 || loanSkipped || rosterEmp.loanDeductions > 0);
+                      return (
+                        <tr key={rosterEmp.employeeId} className={dim ? "opacity-45" : ""}>
+                          {isDraft && (
+                            <td className="text-center">
+                              <input
+                                type="checkbox"
+                                checked={!excluded}
+                                onChange={() => toggleSet(excludedEmpIds, rosterEmp.employeeId, setExcludedEmpIds)}
+                                className="h-3.5 w-3.5 cursor-pointer accent-[var(--color-info-600)]"
+                                aria-label={`Incluir a ${rosterEmp.fullName} en la corrida`}
+                              />
+                            </td>
+                          )}
+                          <td className="font-medium text-[var(--color-text)]">
+                            {rosterEmp.fullName}
+                            <span className="block text-[0.7rem] font-normal text-[var(--color-text-muted)]">{rosterEmp.position}</span>
+                          </td>
+                          <td className="text-center">{dim ? "—" : `${v.daysWorked}/${v.totalDays}`}</td>
+                          <td className="text-right font-mono">{dim ? "—" : fmt(half(v.grossSalary))}</td>
+                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim ? "—" : `− ${fmt(half(v.inssLaboral ?? 0))}`}</td>
+                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim || !(v.ir > 0) ? "—" : `− ${fmt(half(v.ir))}`}</td>
+                          <td className="text-right font-mono text-[var(--color-warning-700)]">
+                            <span className="inline-flex items-center gap-1.5">
+                              {showLoanToggle && (
+                                <input
+                                  type="checkbox"
+                                  checked={!loanSkipped}
+                                  onChange={() => toggleSet(skipLoanEmpIds, rosterEmp.employeeId, setSkipLoanEmpIds)}
+                                  className="h-3 w-3 cursor-pointer accent-[var(--color-warning-600)]"
+                                  title="Aplicar la deducción de préstamo en esta corrida (desmarca para no descontarla este mes)"
+                                  aria-label={`Aplicar préstamo de ${rosterEmp.fullName}`}
+                                />
+                              )}
+                              {dim ? "—" : v.loanDeductions > 0 ? `− ${fmt(half(v.loanDeductions))}` : "—"}
+                            </span>
+                          </td>
+                          <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : fmt(half(v.netPay))}</td>
+                          <td className="text-right font-mono">{dim ? "—" : fmt(half(v.employerCost))}</td>
+                        </tr>
+                      );
+                    })}
+                    {roster.length === 0 && <tr><td colSpan={isDraft ? 9 : 8} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">No hay empleados activos para este periodo</td></tr>}
                   </tbody>
                 </table>
               </div>
-              {isBiweekly && (
-                <div className="border-t border-[var(--color-border)] px-4 py-2.5 text-xs text-[var(--color-text-muted)]">
-                  Se muestra el monto de <strong>una quincena</strong> (½ del mes). El mes completo se paga en 2 quincenas: día 15 y fin de mes. El cálculo guardado sigue siendo mensual; el desembolso por quincena se realiza en los botones de pago de arriba tras postear.
+
+              {isDraft && selectionDirty && (
+                <div className="flex flex-wrap items-center gap-3 border-t border-[var(--color-border)] px-4 py-3">
+                  <button
+                    onClick={() => void handleRecalcWithSelection()}
+                    disabled={loading}
+                    className="flex items-center gap-2 rounded-lg bg-[var(--color-info-600)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--color-info-700)] disabled:opacity-50"
+                  >
+                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    Recalcular con selección
+                  </button>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    {excludedEmpIds.size > 0 && `${excludedEmpIds.size} empleado(s) fuera de la corrida. `}
+                    {skipLoanEmpIds.size > 0 && `${skipLoanEmpIds.size} préstamo(s) sin descontar este mes. `}
+                    &quot;Calcular nómina&quot; vuelve a incluir a todos.
+                  </span>
                 </div>
               )}
+
+              <div className="border-t border-[var(--color-border)] px-4 py-2.5 text-xs text-[var(--color-text-muted)]">
+                Al trabajador solo se le deduce <strong>INSS laboral</strong>{" "}
+                (+IR si está marcado en su ficha) y <strong>préstamos</strong>. El INSS patronal, el INATEC y las
+                prestaciones van dentro de &quot;Costo empresa&quot;: las paga el patrón aparte, nunca del salario.
+                {isBiweekly && (
+                  <>
+                    {" "}Se muestra el monto de <strong>una quincena</strong> (½ del mes); el cálculo guardado es mensual y se desembolsa en Cortes Quincenales.
+                  </>
+                )}
+              </div>
             </div>
             );
           })()}

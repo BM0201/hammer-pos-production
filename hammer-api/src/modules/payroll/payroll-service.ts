@@ -456,7 +456,23 @@ export function serializePayrollRunResult(
   };
 }
 
-export async function calculatePayrollRun(year: number, month: number, branchId?: string, actorUserId?: string) {
+export type CalculatePayrollOptions = {
+  /**
+   * Selección "esto sí, esto no": si viene, SOLO estos empleados entran a la
+   * corrida (los demás activos quedan fuera de este período).
+   */
+  includeEmployeeIds?: string[];
+  /** Empleados a los que NO se les aplica deducción de préstamo en esta corrida. */
+  skipLoanEmployeeIds?: string[];
+};
+
+export async function calculatePayrollRun(
+  year: number,
+  month: number,
+  branchId?: string,
+  actorUserId?: string,
+  options?: CalculatePayrollOptions,
+) {
   assertValidPayrollPeriod(year, month);
 
   const existing = await findPayrollRunForPeriod(year, month, branchId ?? null);
@@ -507,11 +523,15 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
     ).map((emp) => [emp.id, emp]),
   );
   const periodEnd = lastMomentOfMonth(year, month);
+  const includeIds = options?.includeEmployeeIds?.length ? new Set(options.includeEmployeeIds) : null;
+  const skipLoanIds = new Set(options?.skipLoanEmployeeIds ?? []);
 
   for (const emp of result.employees) {
     if (emp.daysWorked === 0) continue;
+    // Selección unitaria del cálculo: empleados fuera de la lista no entran.
+    if (includeIds && !includeIds.has(emp.employeeId)) continue;
     const grossSalary = Math.max(0, emp.proratedSalary);
-    const loanDeductions = await calculateLoanDeduction(emp.employeeId, grossSalary);
+    const loanDeductions = skipLoanIds.has(emp.employeeId) ? 0 : await calculateLoanDeduction(emp.employeeId, grossSalary);
     const otherDeductions = 0;
     const empFlags = employeeFlagsById.get(emp.employeeId);
     // Cálculo Nicaragua (payroll-nicaragua.ts): INSS laboral + IR solo si al
@@ -586,10 +606,63 @@ export async function calculatePayrollRun(year: number, month: number, branchId?
     action: "payroll_run.calculated",
     entityType: "PayrollRun",
     entityId: payrollRun.id,
-    metadataJson: { year, month, totalGross, totalDeductions, totalNet, totalEmployerCost },
+    metadataJson: {
+      year,
+      month,
+      totalGross,
+      totalDeductions,
+      totalNet,
+      totalEmployerCost,
+      ...(options?.includeEmployeeIds?.length ? { includeEmployeeIds: options.includeEmployeeIds } : {}),
+      ...(options?.skipLoanEmployeeIds?.length ? { skipLoanEmployeeIds: options.skipLoanEmployeeIds } : {}),
+    },
   });
 
   return { payrollRun, employees: result.employees, rates };
+}
+
+/**
+ * Un abono MANUAL a un préstamo debe reflejarse en lo que RESTA del mes:
+ * recalcula la deducción de préstamos de las líneas del empleado en corridas
+ * DRAFT (con el saldo ya reducido por el abono) y regenera sus desembolsos
+ * PENDING con el nuevo neto. Las corridas POSTED no se tocan (ya afectaron
+ * deducciones reales). Devuelve cuántas líneas se actualizaron.
+ */
+export async function refreshDraftLoanDeductionsForEmployee(employeeId: string): Promise<number> {
+  const lines = await prisma.payrollLine.findMany({
+    where: { employeeId, payrollRun: { status: "DRAFT" } },
+    include: { payrollRun: { select: { id: true } } },
+  });
+
+  let updated = 0;
+  for (const line of lines) {
+    const grossSalary = Number(line.grossSalary);
+    const newLoan = await calculateLoanDeduction(employeeId, grossSalary);
+    const oldLoan = Number(line.loanDeductions);
+    if (Math.abs(newLoan - oldLoan) < 0.005) continue;
+
+    const fixedDeductions = Number(line.inssLaboral) + Number(line.ir) + Number(line.otherDeductions);
+    const oldNet = Number(line.netPay);
+    const newNet = Math.round(Math.max(0, grossSalary - fixedDeductions - newLoan) * 100) / 100;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.payrollLine.update({
+        where: { id: line.id },
+        data: { loanDeductions: decimal(newLoan), netPay: decimal(newNet) },
+      });
+      await tx.payrollRun.update({
+        where: { id: line.payrollRun.id },
+        data: {
+          totalDeductions: { increment: decimal(newLoan - oldLoan) },
+          totalNet: { increment: decimal(newNet - oldNet) },
+        },
+      });
+      // Regenera las mitades PENDING con el nuevo neto (en DRAFT no hay pagados).
+      await generateDisbursementsForRun(line.payrollRun.id, tx);
+    });
+    updated++;
+  }
+  return updated;
 }
 
 /**

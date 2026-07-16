@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     assertFinanceAccess(session!);
 
     const body = await req.json();
-    const { month, branchId, syncToExpenses } = body;
+    const { month, branchId, syncToExpenses, includeEmployeeIds, skipLoanEmployeeIds } = body;
 
     if (!month) {
       return fail("ERROR", "Campo requerido: month (YYYY-MM)", 400);
@@ -29,7 +29,14 @@ export async function POST(req: NextRequest) {
       return fail("ERROR", "Formato de mes inv\u00e1lido. Use YYYY-MM", 400);
     }
 
-    const result = await calculatePayrollRun(year, mon, branchId, session!.userId);
+    // Selecci\u00f3n "esto s\u00ed, esto no": subconjunto de empleados y pr\u00e9stamos a saltar.
+    const asIdArray = (v: unknown): string[] | undefined =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length > 0) : undefined;
+
+    const result = await calculatePayrollRun(year, mon, branchId, session!.userId, {
+      includeEmployeeIds: asIdArray(includeEmployeeIds),
+      skipLoanEmployeeIds: asIdArray(skipLoanEmployeeIds),
+    });
     // Incluye `rates` (tasas usadas) y el desglose INSS/IR/patronal por línea.
     const serialized = serializePayrollRunResult(result.payrollRun, result.employees, result.rates);
 

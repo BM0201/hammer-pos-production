@@ -284,6 +284,33 @@ export function PayrollFinancePanel() {
   const periodLabel = `${MES_LARGO[now.getMonth()]} ${now.getFullYear()}`;
   const payday = nextBiweeklyPayday(now);
 
+  // "Planilla del patrón": lo que llega en las facturas del INSS y del INATEC
+  // (mismo formato del documento real: CUOTA LABORAL + CUOTA PATRONAL = total
+  // INSS; INATEC 2% aparte). La cuota laboral ya se retuvo al trabajador; la
+  // patronal y el INATEC los paga el patrón de su bolsillo. Vencen ~17 del mes
+  // siguiente al período facturado.
+  const patronInvoice = useMemo(() => {
+    const active = employees.filter((e) => e.isActive && inBranchScope(e));
+    let laboral = 0;
+    let patronal = 0;
+    let inatec = 0;
+    for (const emp of active) {
+      const { b } = breakdownOf(emp);
+      laboral += b.inssLaboral;
+      patronal += b.inssPatronal;
+      inatec += b.inatec;
+    }
+    const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 17);
+    return {
+      laboral: round2(laboral),
+      patronal: round2(patronal),
+      inssTotal: round2(laboral + patronal),
+      inatec: round2(inatec),
+      dueLabel: `${dueDate.getDate()} ${MES_LARGO[dueDate.getMonth()].toLowerCase().slice(0, 3)} ${dueDate.getFullYear()}`,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees, inBranchScope, breakdownOf]);
+
   /* ── Acciones ── */
 
   function dismissBanner() {
@@ -525,6 +552,46 @@ export function PayrollFinancePanel() {
         rates={rates}
         estimated={anyEstimated}
       />
+
+      {/* ── 3b · Planilla del patrón: las facturas que llegan (INSS + INATEC) ── */}
+      {heroTotals.activeEmployees > 0 && (
+        <div className="hm-module-card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-[0.8125rem] font-bold text-[var(--color-text)]">
+              Facturas del patrón · {periodLabel}
+              <span className="ml-2 rounded-full border border-[var(--color-warning-100)] bg-[var(--color-warning-50)] px-2 py-0.5 text-[0.5938rem] font-bold uppercase tracking-wide text-[var(--color-warning-700)]">
+                Se pagan aparte · vencen ≈ {patronInvoice.dueLabel}
+              </span>
+            </h3>
+            <span className="text-[0.6875rem] text-[var(--color-text-soft)]">
+              Estimado con los salarios actuales — la factura oficial la emite el INSS/INATEC
+            </span>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {/* Espejo de la factura del INSS: laboral + patronal = total */}
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3.5 py-2.5">
+              <p className="text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">Factura INSS (Régimen {rates.inssRegime === "IVM_RP" ? "IVM-RP" : "Integral"})</p>
+              <div className="mt-1.5 space-y-1 text-[0.8125rem]">
+                <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retenida a los trabajadores</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.laboral)}</span></div>
+                <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.patronal)}</span></div>
+                <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INSS</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(patronInvoice.inssTotal)}</span></div>
+              </div>
+            </div>
+            {/* Espejo de la factura del INATEC (aporte 2%) */}
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3.5 py-2.5">
+              <p className="text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">Factura INATEC (aporte 2%)</p>
+              <div className="mt-1.5 space-y-1 text-[0.8125rem]">
+                <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">2% sobre planilla bruta <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.inatec)}</span></div>
+                <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INATEC</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(patronInvoice.inatec)}</span></div>
+              </div>
+              <p className="mt-2 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
+                Ninguna de estas facturas sale del salario del trabajador: a él solo se le retiene la cuota laboral,
+                que el patrón entera al INSS junto con la patronal.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── 4 · Tabs (mismos del sistema) ──
           "Cortes Quincenales" vive AQUÍ (antes era un tab aparte en Finanzas y
