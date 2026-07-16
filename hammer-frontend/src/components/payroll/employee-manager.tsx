@@ -985,8 +985,8 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                       <th className="text-left">Empleado</th>
                       <th className="text-center">Días</th>
                       <th className="text-right">Bruto</th>
-                      <th className="text-right">INSS laboral</th>
-                      <th className="text-right">IR</th>
+                      <th className="text-right" title="El INSS se cobra UNA vez al mes (factura única): no se descuenta por quincena">{isBiweekly ? "INSS laboral (mes)" : "INSS laboral"}</th>
+                      <th className="text-right">{isBiweekly ? "IR (mes)" : "IR"}</th>
                       <th className="text-right">Préstamos</th>
                       <th className="text-right">Neto</th>
                       <th className="text-right" title="Salario + INSS patronal + INATEC + prestaciones — lo paga el patrón aparte">Costo empresa</th>
@@ -1019,8 +1019,10 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                           </td>
                           <td className="text-center">{dim ? "—" : `${v.daysWorked}/${v.totalDays}`}</td>
                           <td className="text-right font-mono">{dim ? "—" : fmt(half(v.grossSalary))}</td>
-                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim ? "—" : `− ${fmt(half(v.inssLaboral ?? 0))}`}</td>
-                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim || !(v.ir > 0) ? "—" : `− ${fmt(half(v.ir))}`}</td>
+                          {/* INSS/IR son MENSUALES (factura única del INSS): en vista
+                              quincenal se muestran por mes, sin partir en dos. */}
+                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim ? "—" : `− ${fmt(v.inssLaboral ?? 0)}`}</td>
+                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim || !(v.ir > 0) ? "—" : `− ${fmt(v.ir)}`}</td>
                           <td className="text-right font-mono text-[var(--color-warning-700)]">
                             <span className="inline-flex items-center gap-1.5">
                               {showLoanToggle && (
@@ -1071,6 +1073,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                 {isBiweekly && (
                   <>
                     {" "}Se muestra el monto de <strong>una quincena</strong> (½ del mes); el cálculo guardado es mensual y se desembolsa en Cortes Quincenales.
+                    {" "}<strong>INSS e IR van por MES</strong> (la factura del INSS se cobra una sola vez al mes): el neto quincenal ya trae repartida esa deducción mensual, no se resta dos veces.
                   </>
                 )}
               </div>

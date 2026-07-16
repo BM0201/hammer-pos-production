@@ -70,6 +70,8 @@ type EmployeeRow = {
   isActive: boolean;
   /** Retener IR salarial a este trabajador (varía por persona). */
   applyIrRetention?: boolean;
+  /** Salario cotizable reportado al INSS (null = usar el salario real). */
+  inssSalary?: string | null;
   branch: { id: string; code: string; name: string };
   payrollEstimate?: PayrollBreakdown | null;
   payrollRates?: PayrollRates;
@@ -115,13 +117,54 @@ export function PayrollFinancePanel() {
   const [includeProvisions, setIncludeProvisions] = useState(true);
   const provisionsTouched = useRef(false);
 
+  // Pago mensual de las facturas del patrón (INSS/INATEC): registro CONTABLE
+  // de si la factura del período ya se pagó (el INSS se cobra 1 vez al mes).
+  const [contributionPayments, setContributionPayments] = useState<Array<{ kind: string; amount: string | number; paidAt: string }>>([]);
+  const [markingPaid, setMarkingPaid] = useState<string | null>(null);
+
+  const loadContributionPayments = useCallback(async () => {
+    try {
+      const d = new Date();
+      const r = await apiFetch(`/api/payroll/contribution-payments?year=${d.getFullYear()}&month=${d.getMonth() + 1}`);
+      if (!r.ok) return;
+      const data = unwrapApiData(await r.json()) as { payments?: Array<{ kind: string; amount: string | number; paidAt: string }> } | null;
+      setContributionPayments(Array.isArray(data?.payments) ? data.payments : []);
+    } catch {
+      /* estado complementario */
+    }
+  }, []);
+
+  useEffect(() => { void loadContributionPayments(); }, [loadContributionPayments]);
+
+  async function markContributionPaid(kind: "INSS" | "INATEC", amount: number) {
+    setMarkingPaid(kind);
+    try {
+      const d = new Date();
+      const r = await apiFetch("/api/payroll/contribution-payments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ year: d.getFullYear(), month: d.getMonth() + 1, kind, amount }),
+      });
+      if (!r.ok) {
+        toast.error(getErrorMessage(await r.json(), "No se pudo marcar como pagada"));
+        return;
+      }
+      toast.success(`Factura ${kind} del mes marcada como pagada`);
+      await loadContributionPayments();
+    } catch {
+      toast.error("Error de conexión");
+    } finally {
+      setMarkingPaid(null);
+    }
+  }
+
   const [bannerDismissed, setBannerDismissed] = useState(true);
   const [drawerEmployeeId, setDrawerEmployeeId] = useState<string | null>(null);
   const [confirmDeactivateId, setConfirmDeactivateId] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", applyIrRetention: false });
+  const [form, setForm] = useState({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", applyIrRetention: false, inssSalary: "" });
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -195,7 +238,16 @@ export function PayrollFinancePanel() {
   const breakdownOf = useCallback(
     (emp: EmployeeRow): { b: PayrollBreakdown; estimated: boolean } => {
       if (emp.payrollEstimate) return { b: emp.payrollEstimate, estimated: false };
-      return { b: computeMonthlyBreakdown(Number(emp.monthlySalary), rates, emp.startDate, emp.applyIrRetention ?? false), estimated: true };
+      return {
+        b: computeMonthlyBreakdown(
+          Number(emp.monthlySalary),
+          rates,
+          emp.startDate,
+          emp.applyIrRetention ?? false,
+          emp.inssSalary != null ? Number(emp.inssSalary) : undefined,
+        ),
+        estimated: true,
+      };
     },
     [rates],
   );
@@ -327,6 +379,7 @@ export function PayrollFinancePanel() {
       monthlySalary: "",
       startDate: new Date().toISOString().slice(0, 10),
       applyIrRetention: false,
+      inssSalary: "",
     });
     setShowForm(true);
     setTab("employees");
@@ -341,6 +394,7 @@ export function PayrollFinancePanel() {
       monthlySalary: emp.monthlySalary,
       startDate: emp.startDate.slice(0, 10),
       applyIrRetention: emp.applyIrRetention ?? false,
+      inssSalary: emp.inssSalary != null ? String(Number(emp.inssSalary)) : "",
     });
     setShowForm(true);
     setDrawerEmployeeId(null);
@@ -362,7 +416,12 @@ export function PayrollFinancePanel() {
       const r = await apiFetch(url, {
         method: editingId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, monthlySalary: salaryNum }),
+        body: JSON.stringify({
+          ...form,
+          monthlySalary: salaryNum,
+          // Vacío = misma base que el salario real (null en DB).
+          inssSalary: form.inssSalary.trim() ? Number(form.inssSalary) : null,
+        }),
       });
       const raw = await r.json();
       if (!r.ok) {
@@ -568,27 +627,63 @@ export function PayrollFinancePanel() {
             </span>
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {/* Espejo de la factura del INSS: laboral + patronal = total */}
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3.5 py-2.5">
-              <p className="text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">Factura INSS (Régimen {rates.inssRegime === "IVM_RP" ? "IVM-RP" : "Integral"})</p>
-              <div className="mt-1.5 space-y-1 text-[0.8125rem]">
-                <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retenida a los trabajadores</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.laboral)}</span></div>
-                <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.patronal)}</span></div>
-                <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INSS</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(patronInvoice.inssTotal)}</span></div>
-              </div>
-            </div>
-            {/* Espejo de la factura del INATEC (aporte 2%) */}
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3.5 py-2.5">
-              <p className="text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">Factura INATEC (aporte 2%)</p>
-              <div className="mt-1.5 space-y-1 text-[0.8125rem]">
-                <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">2% sobre planilla bruta <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.inatec)}</span></div>
-                <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INATEC</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(patronInvoice.inatec)}</span></div>
-              </div>
-              <p className="mt-2 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
-                Ninguna de estas facturas sale del salario del trabajador: a él solo se le retiene la cuota laboral,
-                que el patrón entera al INSS junto con la patronal.
-              </p>
-            </div>
+            {(() => {
+              const paidChip = (kind: "INSS" | "INATEC", amount: number) => {
+                const paid = contributionPayments.find((p) => p.kind === kind);
+                if (paid) {
+                  return (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-success-100)] bg-[var(--color-success-50)] px-2 py-0.5 text-[0.625rem] font-bold text-[var(--color-success-700)]">
+                      ✓ Pagada {fmtDateShort(paid.paidAt)} · {fmtC(Number(paid.amount))}
+                    </span>
+                  );
+                }
+                return (
+                  <button
+                    onClick={() => void markContributionPaid(kind, amount)}
+                    disabled={markingPaid === kind || amount <= 0}
+                    className="inline-flex items-center gap-1 rounded-full border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-2 py-0.5 text-[0.625rem] font-bold text-[var(--color-warning-700)] transition-colors hover:bg-[var(--color-warning-100)] disabled:opacity-50"
+                    title="Registro contable: marca la factura del mes como pagada (no toca caja ni genera otro gasto — el costo ya vive en el costo laboral)."
+                  >
+                    {markingPaid === kind ? "Guardando…" : "Pendiente — marcar pagada"}
+                  </button>
+                );
+              };
+              return (
+                <>
+                  {/* Espejo de la factura del INSS: laboral + patronal = total */}
+                  <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3.5 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <p className="text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">Factura INSS (Régimen {rates.inssRegime === "IVM_RP" ? "IVM-RP" : "Integral"})</p>
+                      {paidChip("INSS", patronInvoice.inssTotal)}
+                    </div>
+                    <div className="mt-1.5 space-y-1 text-[0.8125rem]">
+                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retenida a los trabajadores</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.laboral)}</span></div>
+                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.patronal)}</span></div>
+                      <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INSS</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(patronInvoice.inssTotal)}</span></div>
+                    </div>
+                    <p className="mt-2 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
+                      El INSS se cobra <strong>una vez al mes</strong> (no por quincena): la factura de {periodLabel.toLowerCase()} vence ≈ {patronInvoice.dueLabel}.
+                      Calculado sobre el salario COTIZABLE de cada trabajador.
+                    </p>
+                  </div>
+                  {/* Espejo de la factura del INATEC (aporte 2%) */}
+                  <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3.5 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <p className="text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">Factura INATEC (aporte 2%)</p>
+                      {paidChip("INATEC", patronInvoice.inatec)}
+                    </div>
+                    <div className="mt-1.5 space-y-1 text-[0.8125rem]">
+                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">2% sobre la base cotizable <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.inatec)}</span></div>
+                      <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INATEC</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(patronInvoice.inatec)}</span></div>
+                    </div>
+                    <p className="mt-2 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
+                      Ninguna de estas facturas sale del salario del trabajador: a él solo se le retiene la cuota laboral,
+                      que el patrón entera al INSS junto con la patronal.
+                    </p>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -756,6 +851,10 @@ export function PayrollFinancePanel() {
                   <label className="grid gap-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
                     Fecha de inicio *
                     <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" />
+                  </label>
+                  <label className="grid gap-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]" title="El salario con el que está registrado en el INSS puede ser distinto al real. INSS e INATEC se calculan sobre esta base (así cuadran con la factura). Vacío = usar el salario real.">
+                    Salario INSS (cotizable)
+                    <input type="number" step="0.01" min="0.01" value={form.inssSalary} onChange={(e) => setForm({ ...form, inssSalary: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" placeholder="Ej: 6519.58 (vacío = salario real)" />
                   </label>
                   {/* Varía por trabajador: quien tributa por su cuenta NO lleva
                       retención de IR (default). Se marca solo si a esta persona

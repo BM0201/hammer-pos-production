@@ -172,6 +172,42 @@ describe("prestaciones en modo ON_PAYMENT (no se provisionan en el mes)", () => 
   });
 });
 
+// ── Base cotizable del INSS (salario reportado ≠ salario real) ───────────────
+
+describe("inssMonthlySalary: el INSS se calcula sobre la base COTIZABLE", () => {
+  it("factura real jun/2026: 2 trabajadores a C$6,519.58 → laboral 912.74 y patronal 2,803.42", () => {
+    // Los trabajadores están registrados en el INSS con 6,519.58 aunque su
+    // salario real sea mayor: la factura oficial se cuadra con esa base.
+    const lines = [10_000, 12_000].map((salary) =>
+      fullMonth(salary, { applyIrRetention: false, inssMonthlySalary: 6_519.58 }),
+    );
+    const laboral = round2(lines.reduce((s, l) => s + l.inssLaboral, 0));
+    const patronal = round2(lines.reduce((s, l) => s + l.inssPatronal, 0));
+    assert.equal(round2(lines[0].inssLaboral), 456.37); // 6,519.58 × 7%
+    assert.equal(laboral, 912.74); // ✓ CUOTA LABORAL de la factura
+    assert.equal(patronal, 2_803.42); // ✓ CUOTA PATRONAL de la factura (21.5%)
+    assert.equal(round2(laboral + patronal), 3_716.16); // ✓ TOTAL factura INSS
+  });
+
+  it("el neto usa el salario real menos el INSS de la base cotizable", () => {
+    const b = fullMonth(10_000, { applyIrRetention: false, inssMonthlySalary: 6_519.58 });
+    assert.equal(b.netPay, round2(10_000 - 456.37)); // 9,543.63
+  });
+
+  it("las prestaciones NO cambian: siguen sobre el salario real", () => {
+    const conBase = fullMonth(10_000, { inssMonthlySalary: 6_519.58 });
+    const sinBase = fullMonth(10_000);
+    assert.equal(conBase.provisions, sinBase.provisions); // 2,500 (sobre 10,000)
+    assert.equal(conBase.aguinaldoAccrual, sinBase.aguinaldoAccrual);
+  });
+
+  it("sin inssMonthlySalary todo sigue igual (base = salario real)", () => {
+    const b = fullMonth(10_000);
+    assert.equal(b.inssLaboral, 700);
+    assert.equal(b.inssPatronal, 2_150);
+  });
+});
+
 // ── Retención de IR por trabajador ───────────────────────────────────────────
 
 describe("applyIrRetention=false (el trabajador tributa por su cuenta)", () => {

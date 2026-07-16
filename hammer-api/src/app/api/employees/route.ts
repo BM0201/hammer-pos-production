@@ -39,14 +39,22 @@ export async function POST(req: NextRequest) {
     assertMaster(session!);
 
     const body = await req.json();
-    const { fullName, position, branchId, monthlySalary, startDate, applyIrRetention } = body;
+    const { fullName, position, branchId, monthlySalary, startDate, applyIrRetention, inssSalary } = body;
 
     if (!fullName || !position || !branchId || !monthlySalary || !startDate) {
       return fail("ERROR", "Campos requeridos: fullName, position, branchId, monthlySalary, startDate", 400);
     }
 
     const employee = await createEmployee(
-      { fullName, position, branchId, monthlySalary: Number(monthlySalary), startDate, applyIrRetention: Boolean(applyIrRetention) },
+      {
+        fullName,
+        position,
+        branchId,
+        monthlySalary: Number(monthlySalary),
+        startDate,
+        applyIrRetention: Boolean(applyIrRetention),
+        inssSalary: inssSalary != null && inssSalary !== "" ? Number(inssSalary) : null,
+      },
       session!.userId,
     );
 

@@ -31,6 +31,8 @@ export type CreateEmployeeInput = {
   startDate: string; // ISO date
   /** Retener IR salarial a este trabajador (varía por persona; default false). */
   applyIrRetention?: boolean;
+  /** Salario cotizable reportado al INSS (null = usar monthlySalary). */
+  inssSalary?: number | null;
 };
 
 export type UpdateEmployeeInput = {
@@ -42,7 +44,14 @@ export type UpdateEmployeeInput = {
   endDate?: string | null;
   isActive?: boolean;
   applyIrRetention?: boolean;
+  inssSalary?: number | null;
 };
+
+function inssSalaryDecimal(value: number | null | undefined): Prisma.Decimal | null {
+  if (value == null) return null;
+  if (!Number.isFinite(value) || value <= 0) throw new Error("INVALID_INPUT: inssSalary debe ser mayor a 0 (o vacío)");
+  return new Prisma.Decimal(value);
+}
 
 type PayrollRunForResponse = Prisma.PayrollRunGetPayload<{
   include: {
@@ -95,6 +104,7 @@ export async function createEmployee(input: CreateEmployeeInput, actorUserId?: s
       monthlySalary: new Prisma.Decimal(input.monthlySalary),
       startDate,
       applyIrRetention: Boolean(input.applyIrRetention),
+      inssSalary: inssSalaryDecimal(input.inssSalary),
     },
     include: { branch: true },
   });
@@ -140,6 +150,11 @@ export async function updateEmployee(id: string, input: UpdateEmployeeInput, act
   }
   if (input.isActive !== undefined) data.isActive = input.isActive;
   if (input.applyIrRetention !== undefined) data.applyIrRetention = Boolean(input.applyIrRetention);
+  if (input.inssSalary !== undefined) {
+    // El form manda string ("6519.58" o "" para limpiar): coerción defensiva.
+    const raw = input.inssSalary as unknown;
+    data.inssSalary = inssSalaryDecimal(raw === null || raw === "" ? null : Number(raw));
+  }
 
   const employee = await prisma.employee.update({ where: { id }, data, include: { branch: true } });
 
@@ -212,6 +227,7 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
       rates: { ...rates, aguinaldoMode: "ACCRUE_MONTHLY", vacacionesMode: "ACCRUE_MONTHLY", indemnizacionMode: "ACCRUE_MONTHLY" },
       indemnizacionRate,
       applyIrRetention: emp.applyIrRetention,
+      inssMonthlySalary: emp.inssSalary != null ? Number(emp.inssSalary) : undefined,
     });
     // Prestaciones ACUMULADAS a la fecha (pasivo por empleado, para drawer/CSV).
     const daysAccrued = vacationDaysAccrued(emp.startDate, at);
@@ -518,7 +534,7 @@ export async function calculatePayrollRun(
     (
       await prisma.employee.findMany({
         where: { id: { in: result.employees.map((emp) => emp.employeeId) } },
-        select: { id: true, startDate: true, applyIrRetention: true },
+        select: { id: true, startDate: true, applyIrRetention: true, inssSalary: true },
       })
     ).map((emp) => [emp.id, emp]),
   );
@@ -546,6 +562,7 @@ export async function calculatePayrollRun(
       rates,
       indemnizacionRate: empFlags ? indemnizacionAccrualRate(monthsOfService(empFlags.startDate, periodEnd)) : undefined,
       applyIrRetention: empFlags?.applyIrRetention ?? false,
+      inssMonthlySalary: empFlags?.inssSalary != null ? Number(empFlags.inssSalary) : undefined,
     });
 
     await prisma.payrollLine.create({

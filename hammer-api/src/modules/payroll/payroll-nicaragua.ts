@@ -149,6 +149,13 @@ export type PayrollLineBreakdownInput = {
    * práctica el flag del empleado decide, y su default en DB es false.
    */
   applyIrRetention?: boolean;
+  /**
+   * Salario COTIZABLE mensual reportado al INSS (Employee.inssSalary) — puede
+   * diferir del salario real. INSS laboral/patronal e INATEC se calculan
+   * sobre ESTA base (así el sistema cuadra con la factura del INSS); las
+   * prestaciones sociales siempre sobre el salario real. Default: monthlySalary.
+   */
+  inssMonthlySalary?: number;
 };
 
 export type PayrollLineBreakdown = {
@@ -199,20 +206,27 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
 
   const prorationFactor = input.totalDays > 0 ? Math.min(1, Math.max(0, input.daysWorked / input.totalDays)) : 1;
 
-  const inssLaboral = round2(grossSalary * inss.laboral);
+  // Base COTIZABLE del INSS: el salario reportado al INSS (puede diferir del
+  // real). INSS laboral/patronal e INATEC salen de esta base — igual que la
+  // factura oficial. Se prorratea con el mismo factor que el salario.
+  const inssMonthlyBase = Math.max(0, input.inssMonthlySalary ?? monthlySalary);
+  const inssBaseForPeriod = inssMonthlyBase * prorationFactor;
+
+  const inssLaboral = round2(inssBaseForPeriod * inss.laboral);
 
   // IR solo si a ESTE empleado se le retiene (varía por trabajador: quien
   // tributa por su cuenta no lleva retención y su neto = bruto − INSS − préstamos).
+  // La base imponible resta el INSS realmente retenido (sobre base cotizable).
   const applyIr = input.applyIrRetention ?? true;
-  const fullMonthInss = monthlySalary * inss.laboral;
+  const fullMonthInss = inssMonthlyBase * inss.laboral;
   const irMonthlyFull = applyIr ? computeAnnualIr((monthlySalary - fullMonthInss) * 12) / 12 : 0;
   const ir = round2(irMonthlyFull * prorationFactor);
 
   const totalDeductions = round2(inssLaboral + ir + loanDeductions + otherDeductions);
   const netPay = round2(Math.max(0, grossSalary - totalDeductions));
 
-  const inssPatronal = round2(grossSalary * inss.patronal);
-  const inatec = round2(grossSalary * rates.inatecRate);
+  const inssPatronal = round2(inssBaseForPeriod * inss.patronal);
+  const inatec = round2(inssBaseForPeriod * rates.inatecRate);
 
   const indemnizacionRate = input.indemnizacionRate ?? INDEMNIZACION_RATE_Y1_3;
   // CIERRE EXACTO: la suma se redondea UNA sola vez (3 × 10,000/12 = 2,500.00,

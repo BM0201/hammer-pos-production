@@ -167,14 +167,19 @@ export function computeMonthlyBreakdown(
   startDate?: string,
   /** Retener IR a este trabajador (varía por persona; default false como en DB). */
   applyIrRetention = false,
+  /** Salario COTIZABLE reportado al INSS (≠ salario real); default = salario. */
+  inssMonthlySalary?: number,
 ): PayrollBreakdown {
   const salary = Math.max(0, monthlySalary);
+  // INSS laboral/patronal e INATEC sobre la base cotizable (como la factura);
+  // prestaciones y neto sobre el salario real.
+  const inssBase = Math.max(0, inssMonthlySalary ?? salary);
   const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
-  const inssLaboral = round2(salary * inss.laboral);
-  const ir = applyIrRetention ? round2(computeAnnualIr((salary - salary * inss.laboral) * 12) / 12) : 0;
+  const inssLaboral = round2(inssBase * inss.laboral);
+  const ir = applyIrRetention ? round2(computeAnnualIr((salary - inssBase * inss.laboral) * 12) / 12) : 0;
   const netPay = round2(Math.max(0, salary - inssLaboral - ir));
-  const inssPatronal = round2(salary * inss.patronal);
-  const inatec = round2(salary * rates.inatecRate);
+  const inssPatronal = round2(inssBase * inss.patronal);
+  const inatec = round2(inssBase * rates.inatecRate);
 
   const at = new Date();
   const months = startDate ? monthsOfService(startDate, at) : 0;

@@ -67,17 +67,22 @@ type MockEmployee = {
   vacationDaysTaken: string;
   /** Retener IR salarial (varía por trabajador; los 3 reales tributan por su cuenta). */
   applyIrRetention: boolean;
+  /** Salario COTIZABLE reportado al INSS (los reales están con 6,519.58). */
+  inssSalary: string | null;
 };
 
 const employees: MockEmployee[] = [
-  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false },
-  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false },
-  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false },
+  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58" },
+  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58" },
+  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58" },
   // Demo de tramos Art. 45 — mismo salario que Carolina para ver que cuestan distinto.
   // Diana además CON retención de IR, para ver la variación por trabajador:
-  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "20", applyIrRetention: true },
-  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "45", applyIrRetention: false },
+  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "20", applyIrRetention: true, inssSalary: null },
+  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "45", applyIrRetention: false, inssSalary: null },
 ];
+
+/** Pagos de facturas del patrón (INSS/INATEC) marcados en el preview. */
+const contributionPayments: Array<{ id: string; year: number; month: number; kind: string; amount: string; paidAt: string }> = [];
 
 /* Cortes quincenales en memoria: dos mitades del NETO por empleado activo
    (misma regla que generateDisbursementsForRun). Se crean al arrancar. */
@@ -176,6 +181,7 @@ function withEstimate(emp: MockEmployee) {
     rates: { ...rates, aguinaldoMode: "ACCRUE_MONTHLY", vacacionesMode: "ACCRUE_MONTHLY", indemnizacionMode: "ACCRUE_MONTHLY" },
     indemnizacionRate,
     applyIrRetention: emp.applyIrRetention,
+    inssMonthlySalary: emp.inssSalary != null ? Number(emp.inssSalary) : undefined,
   });
   const daysAccrued = vacationDaysAccrued(emp.startDate, at);
   const daysTaken = Number(emp.vacationDaysTaken) || 0;
@@ -377,6 +383,7 @@ const server = http.createServer(async (req, res) => {
       isActive: true,
       vacationDaysTaken: "0",
       applyIrRetention: Boolean(body.applyIrRetention),
+      inssSalary: body.inssSalary != null && body.inssSalary !== "" ? String(body.inssSalary) : null,
     };
     employees.push(emp);
     return send(res, 201, { ok: true, data: withEstimate(emp) });
@@ -393,6 +400,7 @@ const server = http.createServer(async (req, res) => {
       if (body.monthlySalary !== undefined) emp.monthlySalary = String(body.monthlySalary);
       if (body.startDate !== undefined) emp.startDate = `${String(body.startDate)}T00:00:00.000Z`;
       if (body.applyIrRetention !== undefined) emp.applyIrRetention = Boolean(body.applyIrRetention);
+      if (body.inssSalary !== undefined) emp.inssSalary = body.inssSalary != null && body.inssSalary !== "" ? String(body.inssSalary) : null;
       return ok(res, withEstimate(emp));
     }
     if (method === "DELETE") {
@@ -534,6 +542,7 @@ const server = http.createServer(async (req, res) => {
           rates: { ...rates, aguinaldoMode: "ACCRUE_MONTHLY", vacacionesMode: "ACCRUE_MONTHLY", indemnizacionMode: "ACCRUE_MONTHLY" },
           indemnizacionRate: indemnizacionAccrualRate(monthsOfService(e.startDate, at)),
           applyIrRetention: e.applyIrRetention,
+          inssMonthlySalary: e.inssSalary != null ? Number(e.inssSalary) : undefined,
           loanDeductions: skipLoans.has(e.id) ? 0 : LOAN_MONTHLY[e.id] ?? 0,
         });
         totalGross = round2(totalGross + b.grossSalary);
@@ -597,6 +606,29 @@ const server = http.createServer(async (req, res) => {
       byBranch: [],
       cashClosures: { pending: [], completedToday: [], history: [] },
     });
+  }
+
+  // Pago mensual de las facturas del patrón (INSS/INATEC): estado contable.
+  if (path === "/api/payroll/contribution-payments" && method === "GET") {
+    const year = Number(url.searchParams.get("year"));
+    const month = Number(url.searchParams.get("month"));
+    return ok(res, { year, month, payments: contributionPayments.filter((p) => p.year === year && p.month === month) });
+  }
+  if (path === "/api/payroll/contribution-payments" && method === "POST") {
+    const body = await readJson(req);
+    const year = Number(body.year);
+    const month = Number(body.month);
+    const kind = String(body.kind);
+    const existing = contributionPayments.find((p) => p.year === year && p.month === month && p.kind === kind);
+    const paidAt = new Date().toISOString();
+    if (existing) {
+      existing.amount = String(body.amount);
+      existing.paidAt = paidAt;
+      return ok(res, existing);
+    }
+    const payment = { id: `contrib-${randomUUID().slice(0, 8)}`, year, month, kind, amount: String(body.amount), paidAt };
+    contributionPayments.push(payment);
+    return ok(res, payment);
   }
 
   if (path === "/api/payroll/rates") {

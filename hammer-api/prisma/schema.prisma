@@ -1662,6 +1662,11 @@ model Employee {
   /// tributan por su cuenta (otro régimen) no llevan retención — default off;
   /// se marca en la ficha cuando a un empleado sí se le retiene.
   applyIrRetention Boolean @default(false)
+  /// Salario COTIZABLE reportado al INSS (puede diferir del salario real).
+  /// INSS laboral/patronal e INATEC se calculan sobre ESTA base (así cuadran
+  /// con la factura del INSS). Null = usar monthlySalary. Las prestaciones
+  /// (aguinaldo/vacaciones/indemnización) siempre usan el salario real.
+  inssSalary Decimal?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -1826,6 +1831,27 @@ model PayrollRateConfig {
   updatedByUserId        String?
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
+}
+
+/// Registro CONTABLE del pago mensual de las facturas del patrón (INSS e
+/// INATEC): el INSS se cobra UNA vez al mes (factura vence ≈17 del mes
+/// siguiente) — aquí queda si ya se pagó o no. Es solo estado/auditoría: el
+/// costo ya está reconocido en employerCost (no genera otro gasto, evitando
+/// doble conteo).
+model EmployerContributionPayment {
+  id           String   @id @default(cuid())
+  /// Período FACTURADO (la factura de junio se paga en julio).
+  year         Int
+  month        Int
+  kind         String /// "INSS" | "INATEC"
+  amount       Decimal
+  paidAt       DateTime @default(now())
+  paidByUserId String?
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  @@unique([year, month, kind])
+  @@index([year, month])
 }
 
 enum PayrollDisbursementPeriod {
