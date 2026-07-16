@@ -9,6 +9,7 @@ export const EXPENSE_CATEGORIES = [
   "MAINTENANCE",
   "TRANSPORT",
   "MARKETING",
+  "TAXES",
   "OTHER",
 ] as const;
 
@@ -20,6 +21,7 @@ export const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
   MAINTENANCE: "Mantenimiento",
   TRANSPORT: "Transporte",
   MARKETING: "Publicidad / Marketing",
+  TAXES: "Impuestos (Alcaldía / DGI)",
   OTHER: "Otros",
 };
 

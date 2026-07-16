@@ -1907,6 +1907,7 @@ enum ExpenseCategory {
   MAINTENANCE
   TRANSPORT
   MARKETING
+  TAXES /// Impuestos del negocio: Alcaldía (municipal) y DGI
   OTHER
 }
 

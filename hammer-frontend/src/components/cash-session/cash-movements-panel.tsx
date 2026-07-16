@@ -61,16 +61,22 @@ type MovementPreset = {
   | { kind: "movement"; type: string; reason: string }
 );
 
+/**
+ * Los gastos REALES del negocio (definidos por el dueño): Luz, Agua, Internet,
+ * Alcaldía y DGI son los importantes; Comida, Suministros y Otros cubren el
+ * día a día. El Retiro no es gasto: es el dinero que se MANDA antes del
+ * cierre (a Master / bóveda) — por eso va aparte y con ese nombre.
+ */
 const MOVEMENT_PRESETS: MovementPreset[] = [
-  { key: "food", kind: "expense", category: "FOOD", label: "Comida / refrigerio", emoji: "🍱", reason: "Comida / refrigerio", hint: "Almuerzos, café, agua para el equipo" },
-  { key: "transport", kind: "expense", category: "TRANSPORT", label: "Transporte / flete", emoji: "🚚", reason: "Transporte / flete", hint: "Taxi, acarreo, combustible del momento" },
-  { key: "utilities", kind: "expense", category: "UTILITIES", label: "Servicios (agua/luz)", emoji: "💡", reason: "Servicios (agua/luz/internet)", hint: "Recibos de agua, luz, internet pagados de caja" },
-  { key: "maintenance", kind: "expense", category: "MAINTENANCE", label: "Reparación / mantenimiento", emoji: "🔧", reason: "Reparación / mantenimiento", hint: "Arreglos del local o del equipo" },
-  { key: "supplies", kind: "expense", category: "OTHER", label: "Suministros / limpieza", emoji: "🧹", reason: "Suministros / limpieza", hint: "Bolsas, papel, artículos de limpieza" },
+  { key: "power", kind: "expense", category: "UTILITIES", label: "Luz", emoji: "💡", reason: "Luz (energía eléctrica)", hint: "Recibo de energía eléctrica (DISNORTE/DISSUR)" },
+  { key: "water", kind: "expense", category: "UTILITIES", label: "Agua", emoji: "🚰", reason: "Agua (ENACAL)", hint: "Recibo de agua potable" },
+  { key: "internet", kind: "expense", category: "UTILITIES", label: "Internet", emoji: "🌐", reason: "Internet", hint: "Recibo de internet / teléfono del local" },
+  { key: "alcaldia", kind: "expense", category: "TAXES", label: "Alcaldía", emoji: "🏛️", reason: "Alcaldía (impuesto municipal)", hint: "Impuesto municipal / matrícula de la Alcaldía" },
+  { key: "dgi", kind: "expense", category: "TAXES", label: "DGI", emoji: "🧾", reason: "DGI (impuestos)", hint: "Pagos de impuestos a la DGI" },
+  { key: "food", kind: "expense", category: "FOOD", label: "Comida", emoji: "🍱", reason: "Comida / refrigerio", hint: "Almuerzos, café, agua para el equipo" },
+  { key: "supplies", kind: "expense", category: "OTHER", label: "Suministros", emoji: "🧹", reason: "Suministros / limpieza", hint: "Bolsas, papel, artículos de limpieza" },
   { key: "other", kind: "expense", category: "OTHER", label: "Otro gasto…", emoji: "✏️", reason: "", requireDetail: true, hint: "Cualquier otro gasto del local — describe qué fue" },
-  { key: "cashout", kind: "movement", type: "CASH_OUT", label: "Retiro de efectivo", emoji: "💵", reason: "Retiro de efectivo", hint: "Dinero que se lleva Master / va a la bóveda (no es gasto)" },
-  { key: "deposit", kind: "movement", type: "BANK_DEPOSIT_OUT", label: "Depósito al banco", emoji: "🏦", reason: "Depósito bancario", hint: "Efectivo que sale hacia el banco (no es gasto)" },
-  { key: "cashin", kind: "movement", type: "CASH_IN", label: "Entrada de efectivo", emoji: "➕", reason: "Entrada de efectivo", hint: "Dinero que ENTRA a la gaveta (vuelto, fondo)" },
+  { key: "cashout", kind: "movement", type: "CASH_OUT", label: "Retiro — envío de dinero", emoji: "💵", reason: "Retiro de efectivo (envío de dinero)", hint: "Dinero que se manda ANTES del cierre (a Master / bóveda) — no es gasto" },
 ];
 
 export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId: string; branchId: string }) {

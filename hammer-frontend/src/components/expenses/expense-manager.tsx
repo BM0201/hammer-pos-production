@@ -167,8 +167,15 @@ export function ExpenseManager({
     if (selectedBranchId === "all") {
       setLoading(true);
       try {
-        const res = await fetch(`/api/expenses?branchId=all&summary=true`);
+        // El presupuesto inteligente también aplica a la vista consolidada:
+        // historial global (todas las sucursales) sin branchId.
+        const [res, histRes] = await Promise.all([
+          fetch(`/api/expenses?branchId=all&summary=true`),
+          fetch(`/api/finance/expense-history`),
+        ]);
         setAllSummary(unwrapApiData(await res.json()));
+        const histData = unwrapApiData(await histRes.json()) as { categories?: ExpenseCategoryStats[] } | null;
+        setExpenseHistory(Array.isArray(histData?.categories) ? histData.categories : []);
         setExpenses([]);
         setSummary(null);
         setPricingConfig(null);
@@ -815,6 +822,61 @@ export function ExpenseManager({
               </table>
             </div>
           </Card>
+
+          {/* Presupuesto inteligente consolidado (todas las sucursales) — el
+              mismo historial real, en global. Para aplicar un sugerido como
+              presupuesto se elige la sucursal (los presupuestos viven por
+              sucursal), por eso aquí es solo lectura. */}
+          {expenseHistory.length > 0 && (
+            <Card className="p-5">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                  <Sparkles className="h-4 w-4 text-[var(--color-info-600)]" />
+                  Presupuesto inteligente · todas las sucursales
+                </h4>
+                <span className="text-[0.6875rem] text-[var(--color-text-muted)]">
+                  Últimos 6 meses de gastos pagados desde caja — para aplicar un sugerido, elige la sucursal
+                </span>
+              </div>
+              <div className="min-w-0 overflow-x-auto">
+                <table className="w-full min-w-[560px] text-left text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                      <th className="py-1.5 pr-3">Categoría</th>
+                      <th className="py-1.5 pr-3">Último gasto</th>
+                      <th className="py-1.5 pr-3 text-right">Promedio mensual</th>
+                      <th className="py-1.5 text-right">Presupuesto sugerido</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--color-border)]">
+                    {expenseHistory.map((c) => (
+                      <tr key={c.category}>
+                        <td className="py-2 pr-3 font-semibold whitespace-nowrap text-[var(--color-text)]">
+                          {CATEGORY_ICONS[c.category] ?? ""} {CATEGORY_LABELS[c.category] ?? c.category}
+                        </td>
+                        <td className="py-2 pr-3">
+                          {c.last ? (
+                            <>
+                              <span className="font-bold tabular-nums text-[var(--color-text)]">{formatC(c.last.amount)}</span>
+                              <span className="ml-1.5 text-[var(--color-text-muted)]">
+                                {new Date(c.last.date).toLocaleDateString("es-NI", { day: "numeric", month: "short", timeZone: "UTC" })} · {c.last.description}
+                              </span>
+                            </>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(c.monthlyAverage)}</td>
+                        <td className="py-2 text-right font-bold tabular-nums text-[var(--color-info-700)]">
+                          {c.suggestedBudget > 0 ? formatC(c.suggestedBudget) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 

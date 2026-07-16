@@ -127,6 +127,9 @@ const paidExpenseHistory: MockPaidExpense[] = [
   { branchId: "br-central", category: "RENT", description: "Alquiler del local", amount: 8000, date: "2026-05-01T00:00:00.000Z" },
   { branchId: "br-central", category: "RENT", description: "Alquiler del local", amount: 8000, date: "2026-06-01T00:00:00.000Z" },
   { branchId: "br-central", category: "RENT", description: "Alquiler del local", amount: 8000, date: "2026-07-01T00:00:00.000Z" },
+  { branchId: "br-central", category: "TAXES", description: "Alcaldía (impuesto municipal)", amount: 1200, date: "2026-05-05T00:00:00.000Z" },
+  { branchId: "br-central", category: "TAXES", description: "Alcaldía (impuesto municipal)", amount: 1200, date: "2026-06-05T00:00:00.000Z" },
+  { branchId: "br-central", category: "TAXES", description: "DGI (impuestos)", amount: 950, date: "2026-06-14T00:00:00.000Z" },
 ];
 
 function paidHistoryStats(branchId: string, category: string) {

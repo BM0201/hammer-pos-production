@@ -25,6 +25,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   MAINTENANCE: "Mantenimiento",
   TRANSPORT:   "Transporte",
   MARKETING:   "Publicidad / Marketing",
+  TAXES:       "Impuestos (Alcaldía/DGI)",
   OTHER:       "Otro",
 };
 
@@ -36,6 +37,7 @@ const CATEGORY_COLOR: Record<string, string> = {
   MAINTENANCE: "text-[var(--color-warning-700)] bg-[var(--color-warning-50)] border-[var(--color-warning-200)]",
   TRANSPORT:   "text-[var(--color-text-muted)] bg-[var(--color-surface-alt)] border-[var(--color-border)]",
   MARKETING:   "text-[var(--color-text-muted)] bg-[var(--color-surface-alt)] border-[var(--color-border)]",
+  TAXES:       "text-[var(--color-danger-700)] bg-[var(--color-danger-50)] border-[var(--color-danger-200)]",
   OTHER:       "text-[var(--color-text-muted)] bg-[var(--color-surface-alt)] border-[var(--color-border)]",
 };
 

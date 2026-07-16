@@ -185,6 +185,26 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
 
   useEffect(() => { void loadTrend(); }, [loadTrend]);
 
+  // Presupuesto inteligente: suma de los sugeridos por historial (6 meses de
+  // gastos reales por categoría). Da contexto al presupuesto configurado — si
+  // el configurado quedó viejo, aquí se ve cuánto debería ser y a dónde ir a
+  // actualizarlo (Gastos operativos › Presupuesto inteligente).
+  const [suggestedBudget, setSuggestedBudget] = useState<number | null>(null);
+  const loadSuggestedBudget = useCallback(async () => {
+    try {
+      const effectiveBranch = fixedBranchId ?? branchFilter;
+      const res = await apiFetch(`/api/finance/expense-history${effectiveBranch ? `?branchId=${effectiveBranch}` : ""}`);
+      if (!res.ok) return; // complementario: no bloquea el resumen
+      const raw = unwrapApiData(await res.json()) as { categories?: Array<{ suggestedBudget: number }> } | null;
+      const total = (raw?.categories ?? []).reduce((s, c) => s + (c.suggestedBudget || 0), 0);
+      setSuggestedBudget(total > 0 ? Math.round(total * 100) / 100 : null);
+    } catch {
+      /* complementario */
+    }
+  }, [fixedBranchId, branchFilter]);
+
+  useEffect(() => { void loadSuggestedBudget(); }, [loadSuggestedBudget]);
+
   // Resumen ejecutivo: últimos 6 meses vs los 6 anteriores (solo si hay historia).
   const exec = useMemo(() => {
     if (trend.length === 0) return null;
@@ -475,8 +495,11 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
             <Card icon={Receipt} label="Presupuesto mensual configurado" value={money(perf.expensesBudgetMonthly)}
               tone={perf.expensesBudgetMonthly > 0 && perf.operatingExpenses > perf.expensesBudgetMonthly ? "warn" : "default"}
               hint={perf.expensesBudgetMonthly > 0
-                ? `Ejecutado: ${Math.round((perf.operatingExpenses / perf.expensesBudgetMonthly) * 100)}% del presupuesto`
-                : "Sin presupuesto configurado"} />
+                ? `Ejecutado: ${Math.round((perf.operatingExpenses / perf.expensesBudgetMonthly) * 100)}%` +
+                  (suggestedBudget != null ? ` · Sugerido por historial: ${money(suggestedBudget)}` : "")
+                : suggestedBudget != null
+                  ? `Sin configurar · Sugerido por historial: ${money(suggestedBudget)}`
+                  : "Sin presupuesto configurado"} />
             <Card icon={Users} label="Planilla pagada (bruto)" value={money(data.payroll.payrollTotal)} hint={`Costo patronal: ${money(data.payroll.employerCostTotal)}`} />
             <Card icon={Landmark} label="Planilla pendiente de pago" value={money(data.payroll.pendingPayrollTotal)} tone={data.payroll.pendingPayrollTotal > 0 ? "warn" : "default"}
               hint={data.payroll.pendingPayrollTotal > 0 ? "Desembolsos programados sin pagar" : "Al día"} />
@@ -517,6 +540,17 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                         : `Disponible: ${money(remaining)}`}
                     </span>
                   </div>
+                  {/* Presupuesto inteligente: si el configurado quedó viejo
+                      (muy por debajo de lo que el negocio gasta de verdad),
+                      el "% ejecutado" alarma sin razón — aquí se muestra la
+                      referencia real y a dónde ir a actualizarla. */}
+                  {suggestedBudget != null && suggestedBudget > perf.expensesBudgetMonthly * 1.2 && (
+                    <p className="rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-warning-50, #fef3c7)", border: "0.5px solid var(--color-warning-200, #fde68a)", color: "var(--color-warning-700, #b45309)" }}>
+                      El presupuesto configurado ({money(perf.expensesBudgetMonthly)}) quedó por debajo de lo que el negocio
+                      gasta de verdad: el historial de los últimos 6 meses sugiere <b>{money(suggestedBudget)}</b>.
+                      Actualízalo en <b>Gastos operativos › Presupuesto inteligente</b> (botón “Usar” por categoría).
+                    </p>
+                  )}
                   <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
                     El “gasto real” suma los egresos de caja de sucursal más la planilla desembolsada; el presupuesto es una referencia y no se resta de la utilidad.
                   </p>

@@ -245,6 +245,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   MAINTENANCE: "Mantenimiento",
   TRANSPORT: "Transporte",
   MARKETING: "Publicidad / Marketing",
+  TAXES: "Impuestos (Alcaldía / DGI)",
   OTHER: "Otros",
 };
 
@@ -256,6 +257,7 @@ export const CATEGORY_ICONS: Record<string, string> = {
   MAINTENANCE: "MNT",
   TRANSPORT: "TRP",
   MARKETING: "MKT",
+  TAXES: "IMP",
   OTHER: "OTR",
 };
 
@@ -267,6 +269,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
   MAINTENANCE: "#8b5cf6",
   TRANSPORT: "#3b82f6",
   MARKETING: "#ec4899",
+  TAXES: "#db2777",
   OTHER: "#6b7280",
 };
 
