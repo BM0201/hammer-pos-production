@@ -20,6 +20,7 @@ import {
   vacationDaysAccrued,
   vacationPayout,
 } from "./prestaciones-sociales";
+import { unjustifiedAbsenceDaysByEmployee } from "./employee-absences-service";
 
 // ── Employee CRUD ──
 
@@ -246,6 +247,8 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
         vacacionesAccrual: b.vacacionesAccrual,
         indemnizacionAccrual: b.indemnizacionAccrual,
         employerCost: b.employerCost,
+        // Salario por día (÷30): referencia de faltas — "una falta injustificada = −C$X".
+        dailyRate: b.dailyRate,
         monthsOfService: round2(months),
         aguinaldoAccrued: aguinaldoAccrued(salary, emp.startDate, at),
         aguinaldoDeadline: aguinaldoPaymentDeadline(at).toISOString().slice(0, 10),
@@ -443,6 +446,8 @@ function serializePayrollLine(line: PayrollLineWithEmployee, prorated?: Prorated
     aguinaldoAccrual: Number(line.aguinaldoAccrual),
     vacacionesAccrual: Number(line.vacacionesAccrual),
     indemnizacionAccrual: Number(line.indemnizacionAccrual),
+    absenceDays: Number(line.absenceDays),
+    absenceDeduction: Number(line.absenceDeduction),
     loanDeductions: Number(line.loanDeductions),
     otherDeductions: Number(line.otherDeductions),
     netPay: Number(line.netPay),
@@ -541,6 +546,12 @@ export async function calculatePayrollRun(
   const periodEnd = lastMomentOfMonth(year, month);
   const includeIds = options?.includeEmployeeIds?.length ? new Set(options.includeEmployeeIds) : null;
   const skipLoanIds = new Set(options?.skipLoanEmployeeIds ?? []);
+  // Asistencia: cada falta INJUSTIFICADA del mes es un día de pago menos.
+  const absenceDaysById = await unjustifiedAbsenceDaysByEmployee(
+    result.employees.map((emp) => emp.employeeId),
+    year,
+    month,
+  );
 
   for (const emp of result.employees) {
     if (emp.daysWorked === 0) continue;
@@ -563,6 +574,7 @@ export async function calculatePayrollRun(
       indemnizacionRate: empFlags ? indemnizacionAccrualRate(monthsOfService(empFlags.startDate, periodEnd)) : undefined,
       applyIrRetention: empFlags?.applyIrRetention ?? false,
       inssMonthlySalary: empFlags?.inssSalary != null ? Number(empFlags.inssSalary) : undefined,
+      absenceDays: absenceDaysById.get(emp.employeeId) ?? 0,
     });
 
     await prisma.payrollLine.create({
@@ -578,6 +590,8 @@ export async function calculatePayrollRun(
         aguinaldoAccrual: decimal(line.aguinaldoAccrual),
         vacacionesAccrual: decimal(line.vacacionesAccrual),
         indemnizacionAccrual: decimal(line.indemnizacionAccrual),
+        absenceDays: decimal(line.absenceDays),
+        absenceDeduction: decimal(line.absenceDeduction),
         loanDeductions: decimal(line.loanDeductions),
         otherDeductions: decimal(line.otherDeductions),
         netPay: decimal(line.netPay),

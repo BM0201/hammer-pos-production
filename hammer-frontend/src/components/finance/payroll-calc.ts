@@ -148,6 +148,10 @@ export type PayrollBreakdown = {
   indemnizacionAccrual: number;
   /** Costo empresa CON provisiones (restar `provisions` si se reconoce al pago). */
   employerCost: number;
+  /** Salario por día (mensual ÷ 30) — cada falta injustificada = −1 día. */
+  dailyRate?: number;
+  absenceDays?: number;
+  absenceDeduction?: number;
   /** Prestaciones acumuladas (pasivo por empleado) — solo cuando las sirve el API. */
   monthsOfService?: number;
   aguinaldoAccrued?: number;
@@ -206,6 +210,7 @@ export function computeMonthlyBreakdown(
     vacacionesAccrual,
     indemnizacionAccrual,
     employerCost,
+    dailyRate: round2(salary / 30),
     ...(startDate
       ? {
           monthsOfService: round2(months),

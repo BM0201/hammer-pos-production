@@ -8,6 +8,7 @@ import {
   Calculator,
   CalendarClock,
   CalendarDays,
+  CalendarX2,
   CheckCircle2,
   Download,
   DollarSign,
@@ -25,6 +26,7 @@ import toast from "react-hot-toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { EmployeeManager } from "@/components/payroll/employee-manager";
 import { BiweeklyCutsPanel } from "@/components/payroll/biweekly-cuts-panel";
+import { AttendancePanel } from "./attendance-panel";
 import { PayrollCostHero, type PayrollHeroTotals } from "./payroll-cost-hero";
 import { PayrollCompositionBar, type PayrollSegmentAmounts } from "./payroll-composition-bar";
 import {
@@ -77,7 +79,7 @@ type EmployeeRow = {
   payrollRates?: PayrollRates;
 };
 
-type PanelTab = "employees" | "payroll" | "cuts" | "loans" | "history";
+type PanelTab = "employees" | "payroll" | "cuts" | "attendance" | "loans" | "history";
 type SortKey = "name" | "salary" | "start";
 
 const BANNER_DISMISS_KEY = "hammer.finance.payrollBanner.dismissed";
@@ -697,6 +699,7 @@ export function PayrollFinancePanel() {
           { key: "employees" as const, label: "Empleados", icon: Users },
           { key: "payroll" as const, label: "Calcular Nómina", icon: Calculator },
           { key: "cuts" as const, label: "Cortes Quincenales", icon: CalendarClock },
+          { key: "attendance" as const, label: "Asistencia", icon: CalendarX2 },
           { key: "loans" as const, label: "Préstamos", icon: DollarSign },
           { key: "history" as const, label: "Historial", icon: History },
         ] as const).map((t) => (
@@ -713,6 +716,9 @@ export function PayrollFinancePanel() {
 
       {/* Corte consolidado: el ÚNICO flujo para pagar quincenas. */}
       {tab === "cuts" && <BiweeklyCutsPanel />}
+
+      {/* Asistencia: faltas injustificadas = día de pago menos (÷30). */}
+      {tab === "attendance" && <AttendancePanel />}
 
       {tab === "employees" && (
         <>
@@ -1216,6 +1222,7 @@ export function PayrollFinancePanel() {
                     Recibo del empleado
                   </h4>
                   <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario base</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(Number(drawerEmployee.monthlySalary))}</span></div>
+                  <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario por día <small className="text-[0.6875rem] text-[var(--color-text-soft)]">÷30 · cada falta injustificada = −1 día</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.dailyRate ?? round2(Number(drawerEmployee.monthlySalary) / 30))}</span></div>
                   <div className={dline}>
                     <span className="text-[var(--color-text-secondary)]">
                       INSS laboral{" "}

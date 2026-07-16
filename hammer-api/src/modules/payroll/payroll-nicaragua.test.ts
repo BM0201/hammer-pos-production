@@ -208,6 +208,43 @@ describe("inssMonthlySalary: el INSS se calcula sobre la base COTIZABLE", () => 
   });
 });
 
+// ── Faltas injustificadas (asistencia correlacionada con el pago) ────────────
+
+describe("absenceDays: cada falta injustificada es un día de pago menos (÷30)", () => {
+  it("salario 12,000 → día = 400; 2 faltas descuentan 800 del neto", () => {
+    const b = fullMonth(12_000, { applyIrRetention: false, inssMonthlySalary: 6_519.58, absenceDays: 2 });
+    assert.equal(b.dailyRate, 400); // 12,000 ÷ 30
+    assert.equal(b.absenceDeduction, 800);
+    // neto = 12,000 − 800 (faltas) − 456.37 (INSS sobre base cotizable)
+    assert.equal(b.netPay, round2(12_000 - 800 - 456.37)); // 10,743.63
+  });
+
+  it("el día no trabajado tampoco es costo para el patrón", () => {
+    const conFalta = fullMonth(12_000, { absenceDays: 1 });
+    const sinFalta = fullMonth(12_000);
+    assert.equal(round2(sinFalta.employerCost - conFalta.employerCost), 400);
+  });
+
+  it("las faltas NO cambian el INSS (se cotiza el mes completo reportado)", () => {
+    const conFalta = fullMonth(12_000, { inssMonthlySalary: 6_519.58, absenceDays: 3 });
+    assert.equal(conFalta.inssLaboral, 456.37);
+    assert.equal(conFalta.inssPatronal, round2(6_519.58 * 0.215));
+  });
+
+  it("sin faltas todo sigue igual (absenceDeduction = 0)", () => {
+    const b = fullMonth(10_000);
+    assert.equal(b.absenceDays, 0);
+    assert.equal(b.absenceDeduction, 0);
+    assert.equal(b.dailyRate, round2(10_000 / 30));
+  });
+
+  it("las faltas se topan al bruto (no producen neto negativo)", () => {
+    const b = fullMonth(10_000, { absenceDays: 45 });
+    assert.equal(b.absenceDeduction, 10_000);
+    assert.equal(b.netPay, 0);
+  });
+});
+
 // ── Retención de IR por trabajador ───────────────────────────────────────────
 
 describe("applyIrRetention=false (el trabajador tributa por su cuenta)", () => {

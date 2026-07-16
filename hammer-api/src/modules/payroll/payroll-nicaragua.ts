@@ -156,6 +156,11 @@ export type PayrollLineBreakdownInput = {
    * prestaciones sociales siempre sobre el salario real. Default: monthlySalary.
    */
   inssMonthlySalary?: number;
+  /**
+   * Faltas INJUSTIFICADAS del período: cada una es un día de pago menos
+   * (salario diario = mensual ÷ 30). Las justificadas no se pasan aquí.
+   */
+  absenceDays?: number;
 };
 
 export type PayrollLineBreakdown = {
@@ -172,6 +177,12 @@ export type PayrollLineBreakdown = {
   netPay: number;
   inssPatronal: number;
   inatec: number;
+  /** Salario por día (mensual ÷ 30) — referencia para faltas y vacaciones. */
+  dailyRate: number;
+  /** Días de falta injustificada del período. */
+  absenceDays: number;
+  /** Pago NO devengado por faltas (días × salario/30, topado al bruto). */
+  absenceDeduction: number;
   /** Provisión del mes de aguinaldo (0 si aguinaldoMode=ON_PAYMENT). */
   aguinaldoAccrual: number;
   /** Provisión del mes de vacaciones (0 si vacacionesMode=ON_PAYMENT). */
@@ -222,8 +233,15 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
   const irMonthlyFull = applyIr ? computeAnnualIr((monthlySalary - fullMonthInss) * 12) / 12 : 0;
   const ir = round2(irMonthlyFull * prorationFactor);
 
+  // Faltas injustificadas: cada día es pago NO devengado (salario/30). No es
+  // una "deducción" al estilo INSS: es salario que no se ganó — por eso baja
+  // el neto Y el costo empresa (el día no trabajado no le cuesta al patrón).
+  const dailyRate = round2(monthlySalary / 30);
+  const absenceDays = Math.max(0, input.absenceDays ?? 0);
+  const absenceDeduction = round2(Math.min(grossSalary, dailyRate * absenceDays));
+
   const totalDeductions = round2(inssLaboral + ir + loanDeductions + otherDeductions);
-  const netPay = round2(Math.max(0, grossSalary - totalDeductions));
+  const netPay = round2(Math.max(0, grossSalary - absenceDeduction - totalDeductions));
 
   const inssPatronal = round2(inssBaseForPeriod * inss.patronal);
   const inatec = round2(inssBaseForPeriod * rates.inatecRate);
@@ -250,8 +268,9 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
   }
 
   // Costo empresa = suma EXACTA de los componentes ya redondeados (cierra
-  // contra lo que se muestra: salario + patronal + INATEC + provisiones).
-  const employerCost = round2(round2(grossSalary) + inssPatronal + inatec + provisions);
+  // contra lo que se muestra: salario devengado + patronal + INATEC +
+  // provisiones). Las faltas restan: el día no trabajado no es costo.
+  const employerCost = round2(round2(grossSalary) - absenceDeduction + inssPatronal + inatec + provisions);
 
   return {
     grossSalary: round2(grossSalary),
@@ -263,6 +282,9 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
     netPay,
     inssPatronal,
     inatec,
+    dailyRate,
+    absenceDays,
+    absenceDeduction,
     aguinaldoAccrual,
     vacacionesAccrual,
     indemnizacionAccrual,

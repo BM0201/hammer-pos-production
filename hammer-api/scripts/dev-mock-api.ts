@@ -84,6 +84,17 @@ const employees: MockEmployee[] = [
 /** Pagos de facturas del patrón (INSS/INATEC) marcados en el preview. */
 const contributionPayments: Array<{ id: string; year: number; month: number; kind: string; amount: string; paidAt: string }> = [];
 
+/** Faltas registradas (asistencia): las INJUSTIFICADAS descuentan día de pago. */
+type MockAbsence = { id: string; employeeId: string; date: string; kind: string; notes: string | null };
+const absences: MockAbsence[] = [
+  { id: "abs-1", employeeId: "emp-marvin", date: "2026-07-08T00:00:00.000Z", kind: "UNJUSTIFIED", notes: "No avisó" },
+];
+
+function unjustifiedDays(employeeId: string, year: number, month: number): number {
+  const prefix = `${year}-${String(month).padStart(2, "0")}`;
+  return absences.filter((a) => a.employeeId === employeeId && a.kind === "UNJUSTIFIED" && a.date.startsWith(prefix)).length;
+}
+
 /* Cortes quincenales en memoria: dos mitades del NETO por empleado activo
    (misma regla que generateDisbursementsForRun). Se crean al arrancar. */
 type MockDisbursement = {
@@ -196,6 +207,7 @@ function withEstimate(emp: MockEmployee) {
       netPay: b.netPay,
       inssPatronal: b.inssPatronal,
       inatec: b.inatec,
+      dailyRate: b.dailyRate,
       provisions: b.provisions,
       aguinaldoAccrual: b.aguinaldoAccrual,
       vacacionesAccrual: b.vacacionesAccrual,
@@ -546,6 +558,7 @@ const server = http.createServer(async (req, res) => {
           applyIrRetention: e.applyIrRetention,
           inssMonthlySalary: e.inssSalary != null ? Number(e.inssSalary) : undefined,
           loanDeductions: skipLoans.has(e.id) ? 0 : LOAN_MONTHLY[e.id] ?? 0,
+          absenceDays: unjustifiedDays(e.id, at.getFullYear(), at.getMonth() + 1),
         });
         totalGross = round2(totalGross + b.grossSalary);
         totalDeductions = round2(totalDeductions + b.totalDeductions);
@@ -608,6 +621,44 @@ const server = http.createServer(async (req, res) => {
       byBranch: [],
       cashClosures: { pending: [], completedToday: [], history: [] },
     });
+  }
+
+  // Asistencia: faltas del mes (las injustificadas descuentan al calcular).
+  if (path === "/api/payroll/absences" && method === "GET") {
+    const year = Number(url.searchParams.get("year"));
+    const month = Number(url.searchParams.get("month"));
+    const prefix = `${year}-${String(month).padStart(2, "0")}`;
+    const list = absences
+      .filter((a) => a.date.startsWith(prefix))
+      .map((a) => {
+        const emp = employees.find((e) => e.id === a.employeeId);
+        return {
+          ...a,
+          employee: { id: a.employeeId, fullName: emp?.fullName ?? "—", position: emp?.position ?? "—", branchId: emp?.branchId ?? "", monthlySalary: emp?.monthlySalary ?? "0" },
+        };
+      })
+      .sort((x, y) => y.date.localeCompare(x.date));
+    return ok(res, { year, month, absences: list });
+  }
+  if (path === "/api/payroll/absences" && method === "POST") {
+    const body = await readJson(req);
+    const employeeId = String(body.employeeId ?? "");
+    const date = `${String(body.date)}T00:00:00.000Z`;
+    const existing = absences.find((a) => a.employeeId === employeeId && a.date === date);
+    if (existing) {
+      existing.kind = String(body.kind ?? "UNJUSTIFIED");
+      existing.notes = body.notes ? String(body.notes) : null;
+      return send(res, 201, { ok: true, data: existing });
+    }
+    const absence: MockAbsence = { id: `abs-${randomUUID().slice(0, 8)}`, employeeId, date, kind: String(body.kind ?? "UNJUSTIFIED"), notes: body.notes ? String(body.notes) : null };
+    absences.push(absence);
+    return send(res, 201, { ok: true, data: absence });
+  }
+  const absMatch = path.match(/^\/api\/payroll\/absences\/([^/]+)$/);
+  if (absMatch && method === "DELETE") {
+    const idx = absences.findIndex((a) => a.id === absMatch[1]);
+    if (idx >= 0) absences.splice(idx, 1);
+    return ok(res, { deleted: true });
   }
 
   // Pago mensual de las facturas del patrón (INSS/INATEC): estado contable.

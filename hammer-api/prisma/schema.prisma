@@ -1676,6 +1676,7 @@ model Employee {
   loans                EmployeeLoan[]
   payrollLines         PayrollLine[]
   payrollDisbursements PayrollDisbursement[]
+  absences             EmployeeAbsence[]
 
   @@index([branchId])
   @@index([isActive])
@@ -1785,6 +1786,9 @@ model PayrollLine {
   aguinaldoAccrual     Decimal @default(0) /// 1/12 (Arts. 93–99 CT)
   vacacionesAccrual    Decimal @default(0) /// 2.5 días/mes (Arts. 76–82 CT)
   indemnizacionAccrual Decimal @default(0) /// tramo Art. 45 según antigüedad
+  /// Faltas INJUSTIFICADAS del período: días y pago no devengado (día × salario/30).
+  absenceDays          Decimal @default(0)
+  absenceDeduction     Decimal @default(0)
   netPay          Decimal
   employerCost    Decimal
   createdAt       DateTime @default(now())
@@ -1831,6 +1835,26 @@ model PayrollRateConfig {
   updatedByUserId        String?
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
+}
+
+/// Asistencia correlacionada con la nómina: cada FALTA INJUSTIFICADA descuenta
+/// un día de pago (salario diario = mensual ÷ 30) en el cálculo del mes. Las
+/// justificadas (permiso, enfermedad con constancia…) quedan registradas pero
+/// NO descuentan.
+model EmployeeAbsence {
+  id              String   @id @default(cuid())
+  employeeId      String
+  /// Día de la falta (fecha pura, medianoche UTC).
+  date            DateTime
+  kind            String /// "UNJUSTIFIED" (descuenta) | "JUSTIFIED" (no descuenta)
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, date])
+  @@index([employeeId, date])
 }
 
 /// Registro CONTABLE del pago mensual de las facturas del patrón (INSS e

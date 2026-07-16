@@ -56,6 +56,9 @@ type PayrollEmployee = {
   inssPatronal: number;
   inatec: number;
   provisions: number;
+  /** Faltas injustificadas del período: días y pago no devengado (día × salario/30). */
+  absenceDays: number;
+  absenceDeduction: number;
   loanDeductions: number;
   otherDeductions: number;
   netPay: number;
@@ -1013,6 +1016,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                       <th className="text-right">Bruto</th>
                       <th className="text-right" title="El INSS se cobra UNA vez al mes (factura única): se descuenta completo en la 2ª quincena">INSS laboral</th>
                       <th className="text-right">IR</th>
+                      <th className="text-right" title="Faltas injustificadas del mes: cada una descuenta un día de pago (salario ÷ 30)">Faltas</th>
                       <th className="text-right">Préstamos</th>
                       {isBiweekly ? (
                         <>
@@ -1056,6 +1060,9 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                               descuentan completos UNA vez, en la 2ª quincena. */}
                           <td className="text-right font-mono text-[var(--color-danger-600)]">{dim ? "—" : `− ${fmt(v.inssLaboral ?? 0)}`}</td>
                           <td className="text-right font-mono text-[var(--color-danger-600)]">{dim || !(v.ir > 0) ? "—" : `− ${fmt(v.ir)}`}</td>
+                          <td className="text-right font-mono text-[var(--color-danger-600)]" title={!dim && v.absenceDays > 0 ? `${v.absenceDays} día(s) de falta injustificada` : undefined}>
+                            {dim || !(v.absenceDeduction > 0) ? "—" : `${v.absenceDays}d · − ${fmt(v.absenceDeduction)}`}
+                          </td>
                           <td className="text-right font-mono text-[var(--color-warning-700)]">
                             <span className="inline-flex items-center gap-1.5">
                               {showLoanToggle && (
@@ -1088,7 +1095,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                         </tr>
                       );
                     })}
-                    {roster.length === 0 && <tr><td colSpan={(isDraft ? 1 : 0) + (isBiweekly ? 9 : 8)} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">No hay empleados activos para este periodo</td></tr>}
+                    {roster.length === 0 && <tr><td colSpan={(isDraft ? 1 : 0) + (isBiweekly ? 10 : 9)} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">No hay empleados activos para este periodo</td></tr>}
                   </tbody>
                 </table>
               </div>
