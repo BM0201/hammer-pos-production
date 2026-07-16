@@ -580,6 +580,8 @@ const server = http.createServer(async (req, res) => {
           inssPatronal: b.inssPatronal,
           inatec: b.inatec,
           provisions: b.provisions,
+          absenceDays: b.absenceDays,
+          absenceDeduction: b.absenceDeduction,
           loanDeductions: b.loanDeductions,
           otherDeductions: b.otherDeductions,
           netPay: b.netPay,
