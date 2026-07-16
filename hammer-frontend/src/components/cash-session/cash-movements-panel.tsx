@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
-import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 
 type CashMovement = {
   id: string;
@@ -35,68 +35,68 @@ const TYPE_COLOR: Record<string, string> = {
   CORRECTION: "text-[var(--color-text-muted)] bg-[var(--color-surface-alt)] border-[var(--color-border)]",
 };
 
+/** Evento para que "Gastos del Local" (panel hermano) se refresque al registrar un gasto aquí. */
+export const GASTOS_LOCAL_REFRESH_EVENT = "hammer:gastos-local-refresh";
+
 /**
- * Registro SIMPLE para el día a día del cajero: botones de los gastos comunes
- * con la razón ya escrita — solo se anota el monto. "Otro" abre el formulario
- * completo (tipo + razón libre) para los casos raros. La PLANILLA no se
- * registra aquí: la postea y paga Master desde Finanzas › Planilla (el
- * descuento de caja por nómina es automático al pagar la quincena).
+ * ÚNICO lugar donde el cajero registra salidas/entradas de caja — a prueba de
+ * errores: botones con la razón ya escrita, solo se anota el monto.
+ *
+ *  - Botones de GASTO → POST /api/branch/expenses: el flujo COMPLETO (registra
+ *    el gasto operativo del día Y descuenta la caja en un solo paso; el
+ *    resumen "Gastos del Local" de abajo se refresca solo).
+ *  - Botones de DINERO (retiro/depósito/entrada) → movimiento de caja puro
+ *    (no son gastos: el dinero cambia de lugar, no se consume).
+ *
+ * La PLANILLA no se registra aquí ni en Gastos del Local: la postea Master y
+ * aparece sola en el resumen el día de pago (descuento de caja automático).
  */
 type MovementPreset = {
   key: string;
   label: string;
   emoji: string;
-  type: string;
-  /** Razón prellenada — el cajero no tiene que redactar nada. */
-  reason: string;
   hint: string;
-};
+} & (
+  | { kind: "expense"; category: string; reason: string; requireDetail?: boolean }
+  | { kind: "movement"; type: string; reason: string }
+);
 
 const MOVEMENT_PRESETS: MovementPreset[] = [
-  { key: "food", label: "Comida / refrigerio", emoji: "🍱", type: "EXPENSE_OUT", reason: "Comida / refrigerio", hint: "Almuerzos, café, agua para el equipo" },
-  { key: "transport", label: "Transporte / flete", emoji: "🚚", type: "EXPENSE_OUT", reason: "Transporte / flete", hint: "Taxi, acarreo, combustible del momento" },
-  { key: "supplies", label: "Suministros / limpieza", emoji: "🧹", type: "EXPENSE_OUT", reason: "Suministros / limpieza", hint: "Bolsas, papel, artículos de limpieza" },
-  { key: "repair", label: "Reparación menor", emoji: "🔧", type: "EXPENSE_OUT", reason: "Reparación menor", hint: "Arreglos pequeños del local o equipo" },
-  { key: "cashout", label: "Retiro de efectivo", emoji: "💵", type: "CASH_OUT", reason: "Retiro de efectivo", hint: "Dinero que se lleva Master / va a la bóveda" },
-  { key: "deposit", label: "Depósito al banco", emoji: "🏦", type: "BANK_DEPOSIT_OUT", reason: "Depósito bancario", hint: "Efectivo que sale hacia el banco" },
-  { key: "cashin", label: "Entrada de efectivo", emoji: "➕", type: "CASH_IN", reason: "Entrada de efectivo", hint: "Dinero que ENTRA a la gaveta (vuelto, fondo)" },
+  { key: "food", kind: "expense", category: "FOOD", label: "Comida / refrigerio", emoji: "🍱", reason: "Comida / refrigerio", hint: "Almuerzos, café, agua para el equipo" },
+  { key: "transport", kind: "expense", category: "TRANSPORT", label: "Transporte / flete", emoji: "🚚", reason: "Transporte / flete", hint: "Taxi, acarreo, combustible del momento" },
+  { key: "utilities", kind: "expense", category: "UTILITIES", label: "Servicios (agua/luz)", emoji: "💡", reason: "Servicios (agua/luz/internet)", hint: "Recibos de agua, luz, internet pagados de caja" },
+  { key: "maintenance", kind: "expense", category: "MAINTENANCE", label: "Reparación / mantenimiento", emoji: "🔧", reason: "Reparación / mantenimiento", hint: "Arreglos del local o del equipo" },
+  { key: "supplies", kind: "expense", category: "OTHER", label: "Suministros / limpieza", emoji: "🧹", reason: "Suministros / limpieza", hint: "Bolsas, papel, artículos de limpieza" },
+  { key: "other", kind: "expense", category: "OTHER", label: "Otro gasto…", emoji: "✏️", reason: "", requireDetail: true, hint: "Cualquier otro gasto del local — describe qué fue" },
+  { key: "cashout", kind: "movement", type: "CASH_OUT", label: "Retiro de efectivo", emoji: "💵", reason: "Retiro de efectivo", hint: "Dinero que se lleva Master / va a la bóveda (no es gasto)" },
+  { key: "deposit", kind: "movement", type: "BANK_DEPOSIT_OUT", label: "Depósito al banco", emoji: "🏦", reason: "Depósito bancario", hint: "Efectivo que sale hacia el banco (no es gasto)" },
+  { key: "cashin", kind: "movement", type: "CASH_IN", label: "Entrada de efectivo", emoji: "➕", reason: "Entrada de efectivo", hint: "Dinero que ENTRA a la gaveta (vuelto, fondo)" },
 ];
 
-/** Tipos del formulario completo ("Otro") — casos que no calzan en un botón. */
-const CREATABLE_TYPES = [
-  { value: "EXPENSE_OUT", label: "Gasto de caja" },
-  { value: "CASH_OUT", label: "Retiro de efectivo" },
-  { value: "CASH_IN", label: "Entrada de efectivo" },
-  { value: "BANK_DEPOSIT_OUT", label: "Depósito bancario" },
-];
-
-export function CashMovementsPanel({ cashSessionId }: { cashSessionId: string }) {
+export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId: string; branchId: string }) {
   const sessionState = useSession();
-  const canCreate =
-    sessionState.status === "authenticated" &&
-    canInAnyAssignedBranch(sessionState.session, CAPABILITIES.CASH_MOVEMENT_CREATE);
+  const session = sessionState.status === "authenticated" ? sessionState.session : null;
+  const canMove = Boolean(session && canInBranch(session, branchId, CAPABILITIES.CASH_MOVEMENT_CREATE));
+  const canExpense = Boolean(session && canInBranch(session, branchId, CAPABILITIES.OPERATING_EXPENSE_CREATE));
+  const canCreate = canMove || canExpense;
 
   const [movements, setMovements] = useState<CashMovement[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
 
-  // form: preset elegido ("other" = formulario completo; null = solo botones)
+  // form: botón elegido → solo falta el monto (y detalle opcional)
   const [preset, setPreset] = useState<MovementPreset | null>(null);
-  const [otherMode, setOtherMode] = useState(false);
-  const [type, setType] = useState("EXPENSE_OUT");
   const [amount, setAmount] = useState("");
-  const [reason, setReason] = useState("");
-  const [notes, setNotes] = useState("");
+  const [detail, setDetail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
 
+  const visiblePresets = MOVEMENT_PRESETS.filter((p) => (p.kind === "expense" ? canExpense : canMove));
+
   function resetForm() {
     setPreset(null);
-    setOtherMode(false);
-    setType("EXPENSE_OUT");
     setAmount("");
-    setReason("");
-    setNotes("");
+    setDetail("");
     setFormError("");
   }
 
@@ -113,34 +113,47 @@ export function CashMovementsPanel({ cashSessionId }: { cashSessionId: string })
   }, [load]);
 
   async function submit() {
+    if (!preset) return;
     setFormError("");
     const amt = parseFloat(amount);
     if (!amount || isNaN(amt) || amt <= 0) {
       setFormError("Anota el monto (mayor a 0).");
       return;
     }
-    // Con botón: la razón ya viene escrita (el detalle es opcional).
-    // Con "Otro": la razón libre sí es obligatoria.
-    let finalType = type;
-    let finalReason = reason.trim();
-    if (preset) {
-      finalType = preset.type;
-      finalReason = finalReason ? `${preset.reason} — ${finalReason}` : preset.reason;
-    } else if (!finalReason || finalReason.length < 2) {
-      setFormError("Escribe una razón (mínimo 2 caracteres).");
+    const trimmedDetail = detail.trim();
+    if (preset.kind === "expense" && preset.requireDetail && trimmedDetail.length < 2) {
+      setFormError("Describe qué fue el gasto (mínimo 2 caracteres).");
       return;
     }
+    const description = preset.reason
+      ? trimmedDetail
+        ? `${preset.reason} — ${trimmedDetail}`
+        : preset.reason
+      : trimmedDetail;
+
     setSubmitting(true);
     try {
-      const response = await apiFetch("/api/cashier/v2/cash-movements", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cashSessionId, type: finalType, amount: amt, reason: finalReason, notes: notes.trim() || null }),
-      });
+      const response =
+        preset.kind === "expense"
+          ? // Flujo COMPLETO: gasto operativo del día + egreso de caja en un paso.
+            await apiFetch("/api/branch/expenses", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ branchId, category: preset.category, description, amount: amt }),
+            })
+          : await apiFetch("/api/cashier/v2/cash-movements", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ cashSessionId, type: preset.type, amount: amt, reason: description, notes: null }),
+            });
       const raw = await response.json();
       if (!response.ok) {
-        setFormError(raw?.error?.message ?? "No se pudo registrar el movimiento.");
+        setFormError(raw?.error?.message ?? "No se pudo registrar.");
         return;
+      }
+      if (preset.kind === "expense" && typeof window !== "undefined") {
+        // El resumen "Gastos del Local" (componente hermano) se refresca solo.
+        window.dispatchEvent(new CustomEvent(GASTOS_LOCAL_REFRESH_EVENT));
       }
       resetForm();
       setOpen(false);
@@ -183,11 +196,11 @@ export function CashMovementsPanel({ cashSessionId }: { cashSessionId: string })
 
       {open && canCreate && (
         <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] p-4 space-y-3">
-          {/* Paso 1 — elegir QUÉ pasó (botones grandes, razón ya escrita) */}
-          {!preset && !otherMode && (
+          {/* Paso 1 — elegir QUÉ pasó (la razón ya viene escrita) */}
+          {!preset && (
             <>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {MOVEMENT_PRESETS.map((p) => (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {visiblePresets.map((p) => (
                   <button
                     key={p.key}
                     type="button"
@@ -199,67 +212,29 @@ export function CashMovementsPanel({ cashSessionId }: { cashSessionId: string })
                     <span className="text-[0.7rem] font-semibold leading-tight text-[var(--color-text)]">{p.label}</span>
                   </button>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => { setOtherMode(true); setFormError(""); }}
-                  className="flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-xl border-[1.5px] border-dashed border-[var(--color-border-strong)] bg-transparent px-2 py-3 text-center transition-colors hover:bg-[var(--color-surface-alt)]"
-                >
-                  <span className="text-xl leading-none" aria-hidden="true">✏️</span>
-                  <span className="text-[0.7rem] font-semibold leading-tight text-[var(--color-text-muted)]">Otro…</span>
-                </button>
               </div>
               <p className="text-[0.6875rem] text-[var(--color-text-soft)]">
-                La <strong>planilla no se registra aquí</strong>: la postea y paga Master desde Finanzas › Planilla
-                (el descuento de caja por nómina es automático).
+                Los gastos quedan registrados también en <strong>Gastos del Local</strong> (abajo) y descuentan la caja
+                en un solo paso. La <strong>planilla aparece ahí sola el día de pago</strong> — la postea Master.
               </p>
             </>
           )}
 
-          {/* Paso 2 — anotar el monto (con botón la razón ya viene lista) */}
-          {(preset || otherMode) && (
+          {/* Paso 2 — anotar el monto */}
+          {preset && (
             <>
               <div className="flex items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-sm font-semibold text-[var(--color-text)]">
-                  {preset ? <>{preset.emoji} {preset.label}</> : <>✏️ Otro movimiento</>}
+                  {preset.emoji} {preset.label}
                 </span>
                 <button
                   type="button"
                   className="text-xs font-semibold text-[var(--color-info-600)] hover:underline"
-                  onClick={() => { resetForm(); }}
+                  onClick={resetForm}
                 >
                   ← Cambiar
                 </button>
               </div>
-
-              {otherMode && (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="grid gap-1 text-xs">
-                    <span className="font-medium text-[var(--color-text-secondary)]">Tipo</span>
-                    <select
-                      className="hm-input rounded-lg text-sm"
-                      value={type}
-                      onChange={(e) => setType(e.target.value)}
-                      disabled={submitting}
-                    >
-                      {CREATABLE_TYPES.map((t) => (
-                        <option key={t.value} value={t.value}>{t.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="grid gap-1 text-xs">
-                    <span className="font-medium text-[var(--color-text-secondary)]">Razón *</span>
-                    <input
-                      className="hm-input rounded-lg text-sm"
-                      type="text"
-                      placeholder="Ej: Compra de suministros de oficina"
-                      maxLength={200}
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      disabled={submitting}
-                    />
-                  </label>
-                </div>
-              )}
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1 text-xs">
@@ -276,36 +251,21 @@ export function CashMovementsPanel({ cashSessionId }: { cashSessionId: string })
                     disabled={submitting}
                   />
                 </label>
-                {preset && (
-                  <label className="grid gap-1 text-xs">
-                    <span className="font-medium text-[var(--color-text-secondary)]">Detalle (opcional)</span>
-                    <input
-                      className="hm-input rounded-lg text-sm"
-                      type="text"
-                      placeholder={`Ej: ${preset.hint}`}
-                      maxLength={160}
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      disabled={submitting}
-                    />
-                  </label>
-                )}
-              </div>
-
-              {otherMode && (
                 <label className="grid gap-1 text-xs">
-                  <span className="font-medium text-[var(--color-text-secondary)]">Notas adicionales (opcional)</span>
-                  <textarea
-                    className="hm-input rounded-lg text-sm resize-none"
-                    rows={2}
-                    maxLength={500}
-                    placeholder="Información adicional..."
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
+                  <span className="font-medium text-[var(--color-text-secondary)]">
+                    {preset.kind === "expense" && preset.requireDetail ? "¿Qué fue? *" : "Detalle (opcional)"}
+                  </span>
+                  <input
+                    className="hm-input rounded-lg text-sm"
+                    type="text"
+                    placeholder={`Ej: ${preset.hint}`}
+                    maxLength={160}
+                    value={detail}
+                    onChange={(e) => setDetail(e.target.value)}
                     disabled={submitting}
                   />
                 </label>
-              )}
+              </div>
 
               {formError && (
                 <p className="text-xs text-[var(--color-danger-600)]">{formError}</p>
@@ -316,7 +276,7 @@ export function CashMovementsPanel({ cashSessionId }: { cashSessionId: string })
                 onClick={submit}
                 disabled={submitting}
               >
-                {submitting ? "Guardando..." : `Guardar${preset ? ` — ${preset.label}` : " movimiento"}`}
+                {submitting ? "Guardando..." : `Guardar — ${preset.label.replace("…", "")}`}
               </button>
             </>
           )}

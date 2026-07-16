@@ -508,9 +508,9 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
         </div>
       )}
 
-      {/* Retiros y movimientos — visible mientras la sesión está abierta */}
+      {/* Gastos y retiros — visible mientras la sesión está abierta */}
       {activeSession && (
-        <CashMovementsPanel cashSessionId={activeSession.id} />
+        <CashMovementsPanel cashSessionId={activeSession.id} branchId={branchId} />
       )}
 
       {/* Separador: fin de turno */}

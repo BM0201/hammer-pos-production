@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
-import { useSession } from "@/lib/client/session";
-import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { GASTOS_LOCAL_REFRESH_EVENT } from "./cash-movements-panel";
 
 type OperatingExpense = {
   id: string;
@@ -40,32 +39,15 @@ const CATEGORY_COLOR: Record<string, string> = {
   OTHER:       "text-[var(--color-text-muted)] bg-[var(--color-surface-alt)] border-[var(--color-border)]",
 };
 
-const CREATABLE_CATEGORIES = [
-  { value: "UTILITIES",   label: "Servicios (agua/luz/internet)" },
-  { value: "RENT",        label: "Alquiler" },
-  { value: "FOOD",        label: "Alimentación" },
-  { value: "MAINTENANCE", label: "Mantenimiento" },
-  { value: "TRANSPORT",   label: "Transporte" },
-  { value: "MARKETING",   label: "Publicidad / Marketing" },
-  { value: "OTHER",       label: "Otro" },
-];
-
+/**
+ * RESUMEN de solo lectura de los gastos operativos de HOY. El registro vive
+ * ARRIBA, en "Gastos y retiros de caja" (un solo lugar, botones simples): al
+ * guardar un gasto allá, este panel se refresca solo (evento). La PLANILLA
+ * aparece aquí sola el día de pago — la postea Master, nadie la registra.
+ */
 export function GastosLocalesPanel({ branchId }: { branchId: string }) {
-  const sessionState = useSession();
-  const canCreate =
-    sessionState.status === "authenticated" &&
-    canInBranch(sessionState.session, branchId, CAPABILITIES.OPERATING_EXPENSE_CREATE);
-
   const [expenses, setExpenses] = useState<OperatingExpense[]>([]);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
-
-  // form
-  const [category, setCategory] = useState("UTILITIES");
-  const [description, setDescription] = useState("");
-  const [amount, setAmount] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState("");
 
   const load = useCallback(async () => {
     const response = await apiFetch(`/api/branch/expenses?branchId=${branchId}`);
@@ -79,6 +61,13 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
     load().finally(() => setLoading(false));
   }, [load]);
 
+  // Refresco automático cuando el panel de arriba registra un gasto.
+  useEffect(() => {
+    const onRefresh = () => { void load(); };
+    window.addEventListener(GASTOS_LOCAL_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(GASTOS_LOCAL_REFRESH_EVENT, onRefresh);
+  }, [load]);
+
   // Group by category for totals
   const byCategory: Record<string, OperatingExpense[]> = {};
   let grandTotal = 0;
@@ -88,47 +77,13 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
     grandTotal += Number(exp.amount);
   }
 
-  async function submit() {
-    setFormError("");
-    const amt = parseFloat(amount);
-    if (!amount || isNaN(amt) || amt <= 0) {
-      setFormError("Ingresa un monto válido mayor a 0.");
-      return;
-    }
-    if (!description.trim() || description.trim().length < 1) {
-      setFormError("La descripción es obligatoria.");
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const response = await apiFetch("/api/branch/expenses", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ branchId, category, description: description.trim(), amount: amt }),
-      });
-      const raw = await response.json();
-      if (!response.ok) {
-        setFormError(raw?.error?.message ?? "No se pudo registrar el gasto.");
-        return;
-      }
-      setDescription("");
-      setAmount("");
-      setOpen(false);
-      await load();
-    } catch {
-      setFormError("Error de red. Intenta de nuevo.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
     <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
         <div>
-          <h3 className="text-sm font-semibold text-[var(--color-text)]">Gastos del Local</h3>
+          <h3 className="text-sm font-semibold text-[var(--color-text)]">Gastos del Local (resumen de hoy)</h3>
           <p className="text-xs text-[var(--color-text-muted)]">
-            Gastos operativos del día — servicios, alquiler, transporte, etc. Se limpian automáticamente al cerrar el día.
+            Se registran arriba, en «Gastos y retiros de caja». La planilla aparece aquí sola el día de pago — la postea Master.
             {expenses.length > 0 && (
               <span className="ml-1 font-semibold text-[var(--color-text-secondary)]">
                 Total: C$ {grandTotal.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -136,83 +91,17 @@ export function GastosLocalesPanel({ branchId }: { branchId: string }) {
             )}
           </p>
         </div>
-        {canCreate && (
-          <button
-            type="button"
-            className="rounded-lg bg-[var(--color-warning-600)] hover:bg-[var(--color-warning-700)] px-3 py-1.5 text-xs font-semibold text-white transition-colors"
-            onClick={() => setOpen((v) => !v)}
-          >
-            {open ? "Cancelar" : "+ Agregar gasto"}
-          </button>
-        )}
       </div>
-
-      {open && canCreate && (
-        <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] p-4 space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-xs">
-              <span className="font-medium text-[var(--color-text-secondary)]">Categoría</span>
-              <select
-                className="hm-input rounded-lg text-sm"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                disabled={submitting}
-              >
-                {CREATABLE_CATEGORIES.map((c) => (
-                  <option key={c.value} value={c.value}>{c.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-1 text-xs">
-              <span className="font-medium text-[var(--color-text-secondary)]">Monto (C$)</span>
-              <input
-                className="hm-input rounded-lg text-sm"
-                type="number"
-                min="0.01"
-                step="0.01"
-                placeholder="0.00"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                disabled={submitting}
-              />
-            </label>
-          </div>
-          <label className="grid gap-1 text-xs">
-            <span className="font-medium text-[var(--color-text-secondary)]">Descripción</span>
-            <input
-              className="hm-input rounded-lg text-sm"
-              type="text"
-              placeholder="Ej: Factura ENATREL"
-              maxLength={200}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={submitting}
-            />
-          </label>
-          {formError && (
-            <p className="text-xs text-[var(--color-danger-600)]">{formError}</p>
-          )}
-          <div className="flex justify-end">
-            <button
-              type="button"
-              className="rounded-lg bg-[var(--color-warning-600)] hover:bg-[var(--color-warning-700)] px-4 py-2 text-sm font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={submit}
-              disabled={submitting}
-            >
-              {submitting ? "Guardando..." : "Guardar gasto"}
-            </button>
-          </div>
-        </div>
-      )}
 
       <div className="divide-y divide-[var(--color-border)]">
         {loading ? (
           <p className="px-4 py-3 text-xs text-[var(--color-text-muted)] animate-pulse">Cargando gastos...</p>
         ) : expenses.length === 0 ? (
           <div className="px-4 py-5 text-center">
-            <p className="text-xs text-[var(--color-text-muted)]">Sin gastos operativos registrados.</p>
+            <p className="text-xs text-[var(--color-text-muted)]">Sin gastos operativos registrados hoy.</p>
             <p className="mt-1 text-[0.65rem] text-[var(--color-text-soft)]">
-              Aquí se muestran únicamente los gastos operativos registrados hoy. Se limpian automáticamente al cerrar el día. Usa &quot;+ Agregar gasto&quot; para servicios, alquiler, transporte, etc.
+              Los gastos que registres arriba aparecen aquí al instante y se limpian solos al cerrar el día.
+              El día de pago (15 y fin de mes) también verás aquí la planilla, ya posteada por Master.
             </p>
           </div>
         ) : (
