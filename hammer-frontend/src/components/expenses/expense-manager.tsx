@@ -904,7 +904,9 @@ export function ExpenseManager({
                 value={newExpense.category}
                 onChange={(e) => setNewExpense((p) => ({ ...p, category: e.target.value }))}
               >
-                {CATEGORIES.map((cat) => (
+                {/* PAYROLL fuera: el costo laboral se sincroniza solo al
+                    postear la nómina — registrarlo a mano lo duplicaría. */}
+                {CATEGORIES.filter((cat) => cat !== "PAYROLL").map((cat) => (
                   <option key={cat} value={cat}>
                     {CATEGORY_ICONS[cat]} {CATEGORY_LABELS[cat]}
                   </option>

@@ -62,6 +62,15 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const parsed = createExpenseSchema.parse(body);
+    // La planilla NO se registra a mano: el costo laboral se sincroniza solo
+    // al postear la nómina — un gasto PAYROLL manual la duplicaría.
+    if (parsed.category === "PAYROLL") {
+      return fail(
+        "VALIDATION_ERROR",
+        "La planilla no se registra como gasto manual: se sincroniza automáticamente al postear la nómina.",
+        400,
+      );
+    }
     const expense = await createOperatingExpense(parsed, session.userId);
 
     return created(expense);

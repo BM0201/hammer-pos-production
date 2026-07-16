@@ -25,6 +25,15 @@ export async function PUT(req: NextRequest, { params }: Params) {
     const { id } = await params;
     const body = await req.json();
     const parsed = updateExpenseSchema.parse(body);
+    // Mismo guard que en la creación: la planilla se sincroniza sola al
+    // postear la nómina — reclasificar un gasto a PAYROLL la duplicaría.
+    if (parsed.category === "PAYROLL") {
+      return fail(
+        "VALIDATION_ERROR",
+        "La planilla no se registra como gasto manual: se sincroniza automáticamente al postear la nómina.",
+        400,
+      );
+    }
     const updated = await updateOperatingExpense(id, parsed, session.userId);
 
     return ok(updated);

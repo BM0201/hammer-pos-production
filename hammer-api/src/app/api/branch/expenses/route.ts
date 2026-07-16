@@ -143,6 +143,16 @@ export async function POST(req: NextRequest) {
 
     requireBranchCapability(session, parsed.data.branchId, CAPABILITIES.OPERATING_EXPENSE_CREATE);
 
+    // La planilla NO se registra a mano (ni desde el POS): el costo laboral se
+    // sincroniza solo al postear la nómina — un gasto PAYROLL manual la duplicaría.
+    if (parsed.data.category === "PAYROLL") {
+      return fail(
+        "VALIDATION_ERROR",
+        "La planilla no se registra aquí: la postea Master y aparece sola el día de pago.",
+        400,
+      );
+    }
+
     // Presupuesto inteligente: antes de registrar, se compara el monto contra
     // el historial REAL de la categoría en esta sucursal. Si se sale de los
     // valores normales, se AVISA (warning en la respuesta + auditoría) pero se
