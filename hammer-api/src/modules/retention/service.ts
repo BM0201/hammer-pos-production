@@ -7,14 +7,22 @@
  * en corridas siguientes (capped=true). Cada corrida con borrados reales queda
  * auditada en AuditLog (module "retention").
  *
- * IMPORTANTE: aquí solo entran tablas de clase ARCHIVO (auditoría/derivados).
+ * IMPORTANTE: aquí entran tablas de clase ARCHIVO (auditoría/derivados, 3 años)
+ * y de clase OBSOLETO OPERATIVO (borradores de nómina abandonados, préstamos
+ * cancelados sin historial, gastos automáticos desactivados — ventanas cortas).
  * Los datos transaccionales del negocio (ventas, pagos, inventario, caja,
- * compras, planilla…) NO se purgan jamás desde este módulo.
+ * compras, planilla POSTEADA…) NO se purgan jamás desde este módulo.
  */
 import { AlertStatus, BrainDecisionStatus, ReorderAlertStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
-import { ARCHIVE_RETENTION_DAYS, retentionCutoff } from "./policy";
+import {
+  ARCHIVE_RETENTION_DAYS,
+  CANCELLED_LOAN_RETENTION_DAYS,
+  INACTIVE_AUTO_EXPENSE_RETENTION_DAYS,
+  STALE_PAYROLL_DRAFT_RETENTION_DAYS,
+  retentionCutoff,
+} from "./policy";
 
 const DEFAULT_BATCH_SIZE = 1000;
 const DEFAULT_MAX_BATCHES_PER_TABLE = 20; // máx 20k filas/tabla/corrida
@@ -39,6 +47,8 @@ export type RetentionSweepResult = {
 type SweepRule = {
   table: string;
   description: string;
+  /** Ventana de retención propia de la regla (ARCHIVO = 3 años; OBSOLETO = corta). */
+  retentionDays: number;
   count: (cutoff: Date) => Promise<number>;
   /** Devuelve ids del siguiente lote a borrar. */
   findBatchIds: (cutoff: Date, take: number) => Promise<string[]>;
@@ -61,7 +71,8 @@ const REORDER_CLOSED: ReorderAlertStatus[] = [
 ];
 
 function buildRules(): SweepRule[] {
-  return [
+  // Clase ARCHIVO: todas comparten la ventana de 3 años.
+  const archiveRules: Array<Omit<SweepRule, "retentionDays">> = [
     {
       table: "AuditLog",
       description: "Bitácora de auditoría (exportable a CSV vía /api/reports/audit antes de purgar)",
@@ -167,6 +178,94 @@ function buildRules(): SweepRule[] {
       deleteByIds: (ids) => prisma.documentPrintLog.deleteMany({ where: { id: { in: ids } } }).then((r) => r.count),
     },
   ];
+
+  // Clase OBSOLETO OPERATIVO: basura que el flujo dejó atrás, ventana corta
+  // propia por regla. Un registro abierto o con historial financiero real
+  // (deducciones/abonos, liga a caja, desembolso pagado) JAMÁS se purga aquí.
+  const staleRules: SweepRule[] = [
+    {
+      table: "PayrollRun (DRAFT)",
+      description: "Borradores de nómina abandonados — nunca posteados y sin actividad",
+      retentionDays: STALE_PAYROLL_DRAFT_RETENTION_DAYS,
+      count: (cutoff) => prisma.payrollRun.count({ where: { status: "DRAFT", updatedAt: { lt: cutoff } } }),
+      findBatchIds: (cutoff, take) =>
+        prisma.payrollRun.findMany({
+          where: { status: "DRAFT", updatedAt: { lt: cutoff } },
+          select: { id: true },
+          take,
+          orderBy: { updatedAt: "asc" },
+        }).then((rows) => rows.map((r) => r.id)),
+      deleteByIds: async (ids) => {
+        // Guards defensivos: un DRAFT no debería tener desembolsos PAGADOS ni
+        // cuotas de préstamo ligadas (eso pasa al postear) — si los tiene, se
+        // conserva y que lo revise un humano.
+        const [paid, withInstallments] = await Promise.all([
+          prisma.payrollDisbursement.findMany({
+            where: { payrollRunId: { in: ids }, status: "PAID" },
+            select: { payrollRunId: true },
+          }),
+          prisma.employeeLoanInstallment.findMany({
+            where: { payrollRunId: { in: ids } },
+            select: { payrollRunId: true },
+          }),
+        ]);
+        const blocked = new Set([...paid.map((p) => p.payrollRunId), ...withInstallments.map((i) => i.payrollRunId)]);
+        const safe = ids.filter((id) => !blocked.has(id));
+        if (safe.length === 0) return 0;
+        await prisma.payrollDisbursement.deleteMany({ where: { payrollRunId: { in: safe } } });
+        await prisma.payrollLine.deleteMany({ where: { payrollRunId: { in: safe } } });
+        return prisma.payrollRun.deleteMany({ where: { id: { in: safe } } }).then((r) => r.count);
+      },
+    },
+    {
+      table: "EmployeeLoan (CANCELLED)",
+      description: "Préstamos cancelados sin deducciones ni abonos reales",
+      retentionDays: CANCELLED_LOAN_RETENTION_DAYS,
+      count: (cutoff) => prisma.employeeLoan.count({ where: { status: "CANCELLED", updatedAt: { lt: cutoff } } }),
+      findBatchIds: (cutoff, take) =>
+        prisma.employeeLoan.findMany({
+          where: { status: "CANCELLED", updatedAt: { lt: cutoff } },
+          select: { id: true },
+          take,
+          orderBy: { updatedAt: "asc" },
+        }).then((rows) => rows.map((r) => r.id)),
+      deleteByIds: async (ids) => {
+        // Guard: si el préstamo llegó a tener deducción de nómina o abono
+        // manual (DEDUCTED/PAID), es historial financiero — se conserva.
+        const withHistory = await prisma.employeeLoanInstallment.findMany({
+          where: { loanId: { in: ids }, status: { in: ["DEDUCTED", "PAID"] } },
+          select: { loanId: true },
+        });
+        const blocked = new Set(withHistory.map((i) => i.loanId));
+        const safe = ids.filter((id) => !blocked.has(id));
+        if (safe.length === 0) return 0;
+        await prisma.employeeLoanInstallment.deleteMany({ where: { loanId: { in: safe } } });
+        return prisma.employeeLoan.deleteMany({ where: { id: { in: safe } } }).then((r) => r.count);
+      },
+    },
+    {
+      table: "OperatingExpense (auto, inactivo)",
+      description: "Gastos automáticos desactivados sin liga a caja (p. ej. duplicados de quincena apagados)",
+      retentionDays: INACTIVE_AUTO_EXPENSE_RETENTION_DAYS,
+      count: (cutoff) =>
+        prisma.operatingExpense.count({
+          where: { isActive: false, isAutoCalculated: true, cashMovementId: null, updatedAt: { lt: cutoff } },
+        }),
+      findBatchIds: (cutoff, take) =>
+        prisma.operatingExpense.findMany({
+          where: { isActive: false, isAutoCalculated: true, cashMovementId: null, updatedAt: { lt: cutoff } },
+          select: { id: true },
+          take,
+          orderBy: { updatedAt: "asc" },
+        }).then((rows) => rows.map((r) => r.id)),
+      deleteByIds: (ids) => prisma.operatingExpense.deleteMany({ where: { id: { in: ids } } }).then((r) => r.count),
+    },
+  ];
+
+  return [
+    ...archiveRules.map((rule) => ({ ...rule, retentionDays: ARCHIVE_RETENTION_DAYS })),
+    ...staleRules,
+  ];
 }
 
 export async function runRetentionSweep(input: {
@@ -185,16 +284,21 @@ export async function runRetentionSweep(input: {
   const results: SweepRuleResult[] = [];
 
   for (const rule of buildRules()) {
-    const matched = await rule.count(cutoff);
+    // Cada regla usa SU ventana: ARCHIVO (3 años) u OBSOLETO OPERATIVO (corta).
+    const ruleCutoff = retentionCutoff(rule.retentionDays, now);
+    const matched = await rule.count(ruleCutoff);
     let deleted = 0;
     let capped = false;
 
     if (!dryRun && matched > 0) {
       for (let batch = 0; batch < maxBatches; batch++) {
-        const ids = await rule.findBatchIds(cutoff, batchSize);
+        const ids = await rule.findBatchIds(ruleCutoff, batchSize);
         if (ids.length === 0) break;
-        deleted += await rule.deleteByIds(ids);
-        if (ids.length < batchSize) break;
+        const deletedInBatch = await rule.deleteByIds(ids);
+        deleted += deletedInBatch;
+        // Si los guards bloquearon todo el lote, cortar: reintentar traería
+        // los mismos ids indefinidamente.
+        if (deletedInBatch === 0 || ids.length < batchSize) break;
         if (batch === maxBatches - 1) capped = true;
       }
     }
@@ -202,7 +306,7 @@ export async function runRetentionSweep(input: {
     results.push({
       table: rule.table,
       description: rule.description,
-      retentionDays: ARCHIVE_RETENTION_DAYS,
+      retentionDays: rule.retentionDays,
       matched,
       deleted,
       capped,

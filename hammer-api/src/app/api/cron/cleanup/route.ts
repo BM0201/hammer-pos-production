@@ -20,6 +20,12 @@ import { expireStaleBrainDecisions } from "@/modules/brain/service";
  *     cerradas, snapshots de precios, analytics mensuales, lotes de
  *     importación, borradores y bitácora de impresión. Borra por lotes;
  *     los datos transaccionales del negocio jamás se tocan.
+ *
+ *  3. OBSOLETO OPERATIVO — basura que el flujo dejó atrás (mismo sweep,
+ *     ventanas cortas por regla): borradores de nómina abandonados (45d),
+ *     préstamos cancelados sin deducciones/abonos reales (90d) y gastos
+ *     automáticos desactivados sin liga a caja (180d). Así el sistema se
+ *     limpia solo, mes a mes, sin tocar nada abierto ni con historial.
  */
 export const runtime = "nodejs";
 export const maxDuration = 60;
