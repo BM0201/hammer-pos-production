@@ -43,6 +43,7 @@ import {
   vacationDaysAccrued,
   vacationPayout,
 } from "../src/modules/payroll/prestaciones-sociales";
+import { checkOutlier, computeCategoryStats } from "../src/modules/finance/expense-intelligence";
 
 const PORT = 4000;
 const SESSION_COOKIE = "__Host-hammer_session=dev-preview; Path=/; Secure; HttpOnly; SameSite=Lax";
@@ -108,6 +109,34 @@ const manualExpenses: MockExpense[] = [
   { id: "exp-rent", branchId: "br-central", category: "RENT", description: "Alquiler del local", amount: "8000", isActive: true, effectiveFrom: "2026-07-01T00:00:00.000Z", effectiveTo: null },
   { id: "exp-luz", branchId: "br-central", category: "UTILITIES", description: "Luz + agua + internet", amount: "2500", isActive: true, effectiveFrom: "2026-07-01T00:00:00.000Z", effectiveTo: null },
 ];
+
+/* Historial de gastos PAGADOS (para el presupuesto inteligente): meses previos
+   sembrados para que el card muestre último gasto / promedio / sugerido y el
+   aviso de montos atípicos tenga contra qué comparar. */
+type MockPaidExpense = { branchId: string; category: string; description: string; amount: number; date: string };
+const paidExpenseHistory: MockPaidExpense[] = [
+  { branchId: "br-central", category: "UTILITIES", description: "Luz mayo (DISNORTE)", amount: 2400, date: "2026-05-10T00:00:00.000Z" },
+  { branchId: "br-central", category: "UTILITIES", description: "Luz junio (DISNORTE)", amount: 2650, date: "2026-06-10T00:00:00.000Z" },
+  { branchId: "br-central", category: "UTILITIES", description: "Agua junio (ENACAL)", amount: 480, date: "2026-06-12T00:00:00.000Z" },
+  { branchId: "br-central", category: "FOOD", description: "Comida / refrigerio — almuerzos", amount: 350, date: "2026-06-05T00:00:00.000Z" },
+  { branchId: "br-central", category: "FOOD", description: "Comida / refrigerio — café y agua", amount: 180, date: "2026-06-20T00:00:00.000Z" },
+  { branchId: "br-central", category: "FOOD", description: "Comida / refrigerio", amount: 260, date: "2026-07-03T00:00:00.000Z" },
+  { branchId: "br-central", category: "TRANSPORT", description: "Transporte / flete — acarreo hierro", amount: 600, date: "2026-06-08T00:00:00.000Z" },
+  { branchId: "br-central", category: "TRANSPORT", description: "Transporte / flete — taxi banco", amount: 150, date: "2026-06-25T00:00:00.000Z" },
+  { branchId: "br-central", category: "TRANSPORT", description: "Transporte / flete", amount: 400, date: "2026-07-02T00:00:00.000Z" },
+  { branchId: "br-central", category: "RENT", description: "Alquiler del local", amount: 8000, date: "2026-05-01T00:00:00.000Z" },
+  { branchId: "br-central", category: "RENT", description: "Alquiler del local", amount: 8000, date: "2026-06-01T00:00:00.000Z" },
+  { branchId: "br-central", category: "RENT", description: "Alquiler del local", amount: 8000, date: "2026-07-01T00:00:00.000Z" },
+];
+
+function paidHistoryStats(branchId: string, category: string) {
+  return computeCategoryStats(
+    category,
+    paidExpenseHistory
+      .filter((e) => e.branchId === branchId && e.category === category)
+      .map((e) => ({ amount: e.amount, date: new Date(e.date), description: e.description })),
+  );
+}
 
 const config: { inssRegime: InssRegime; aguinaldoMode: BenefitAccrualMode; vacacionesMode: BenefitAccrualMode; indemnizacionMode: BenefitAccrualMode; salarioMinimoSectorial: number } = {
   inssRegime: "INTEGRAL",
@@ -399,6 +428,46 @@ const server = http.createServer(async (req, res) => {
     const exp = manualExpenses.find((e) => e.id === expMatch[1]);
     if (exp) exp.isActive = false;
     return ok(res, { deactivated: true });
+  }
+
+  // Gastos del local (pantalla Caja del POS) + presupuesto inteligente.
+  if (path === "/api/branch/expenses" && method === "GET") {
+    const branchId = url.searchParams.get("branchId") ?? "";
+    const today = new Date().toISOString().slice(0, 10);
+    return ok(
+      res,
+      manualExpenses.filter((e) => e.isActive && (!branchId || e.branchId === branchId) && e.effectiveFrom.slice(0, 10) === today),
+    );
+  }
+  if (path === "/api/branch/expenses" && method === "POST") {
+    const body = await readJson(req);
+    const branchId = String(body.branchId ?? branches[0].id);
+    const category = String(body.category ?? "OTHER");
+    const amountNum = Number(body.amount ?? 0);
+    const description = String(body.description ?? "");
+    const outlier = checkOutlier(amountNum, paidHistoryStats(branchId, category));
+    const now = new Date();
+    const exp: MockExpense = {
+      id: `exp-${randomUUID().slice(0, 8)}`,
+      branchId,
+      category,
+      description,
+      amount: String(amountNum),
+      isActive: true,
+      effectiveFrom: `${now.toISOString().slice(0, 10)}T00:00:00.000Z`,
+      effectiveTo: `${now.toISOString().slice(0, 10)}T00:00:00.000Z`,
+    };
+    manualExpenses.push(exp);
+    paidExpenseHistory.push({ branchId, category, description, amount: amountNum, date: exp.effectiveFrom });
+    return send(res, 201, { ok: true, data: { ...exp, warning: outlier.message } });
+  }
+  if (path === "/api/finance/expense-history") {
+    const branchId = url.searchParams.get("branchId") ?? "br-central";
+    const cats = [...new Set(paidExpenseHistory.filter((e) => e.branchId === branchId).map((e) => e.category))];
+    return ok(res, {
+      historyMonths: 6,
+      categories: cats.map((c) => paidHistoryStats(branchId, c)).sort((a, b) => b.monthlyAverage - a.monthlyAverage),
+    });
   }
 
   // Cortes quincenales: pendientes consolidados, por corrida, y pago en bloque.

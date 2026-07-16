@@ -90,6 +90,9 @@ export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId:
   const [detail, setDetail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
+  // Aviso del presupuesto inteligente: el gasto quedó registrado, pero el
+  // monto se salió de los valores normales de su categoría.
+  const [lastWarning, setLastWarning] = useState("");
 
   const visiblePresets = MOVEMENT_PRESETS.filter((p) => (p.kind === "expense" ? canExpense : canMove));
 
@@ -151,6 +154,8 @@ export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId:
         setFormError(raw?.error?.message ?? "No se pudo registrar.");
         return;
       }
+      const warning = (raw?.data as { warning?: string | null } | undefined)?.warning;
+      setLastWarning(typeof warning === "string" && warning ? warning : "");
       if (preset.kind === "expense" && typeof window !== "undefined") {
         // El resumen "Gastos del Local" (componente hermano) se refresca solo.
         window.dispatchEvent(new CustomEvent(GASTOS_LOCAL_REFRESH_EVENT));
@@ -193,6 +198,21 @@ export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId:
           </button>
         )}
       </div>
+
+      {lastWarning && (
+        <div className="flex items-start gap-2 border-b border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-4 py-2.5">
+          <span aria-hidden="true">⚠️</span>
+          <p className="flex-1 text-xs text-[var(--color-warning-700)]">{lastWarning}</p>
+          <button
+            type="button"
+            className="text-xs font-bold text-[var(--color-warning-700)]"
+            onClick={() => setLastWarning("")}
+            aria-label="Cerrar aviso"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {open && canCreate && (
         <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] p-4 space-y-3">

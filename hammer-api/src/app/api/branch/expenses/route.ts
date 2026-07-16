@@ -10,6 +10,8 @@ import { createOperatingExpense, listExpensesByBranch } from "@/modules/pricing/
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { EXPENSE_CATEGORIES } from "@/modules/pricing/validators";
+import { logAuditEvent } from "@/modules/audit/service";
+import { checkOutlier, computeCategoryStats } from "@/modules/finance/expense-intelligence";
 
 /** Returns year, month (1-based) and day in America/Managua timezone. */
 function getNicaraguaDateParts() {
@@ -141,13 +143,54 @@ export async function POST(req: NextRequest) {
 
     requireBranchCapability(session, parsed.data.branchId, CAPABILITIES.OPERATING_EXPENSE_CREATE);
 
+    // Presupuesto inteligente: antes de registrar, se compara el monto contra
+    // el historial REAL de la categoría en esta sucursal. Si se sale de los
+    // valores normales, se AVISA (warning en la respuesta + auditoría) pero se
+    // registra igual — avisar no es impedir.
+    const since = new Date();
+    since.setUTCMonth(since.getUTCMonth() - 6);
+    const history = await prisma.operatingExpense.findMany({
+      where: {
+        branchId: parsed.data.branchId,
+        category: parsed.data.category,
+        cashMovementId: { not: null },
+        effectiveFrom: { gte: since },
+      },
+      select: { amount: true, effectiveFrom: true, description: true },
+      orderBy: { effectiveFrom: "asc" },
+    });
+    const stats = computeCategoryStats(
+      parsed.data.category,
+      history.map((h) => ({ amount: Number(h.amount), date: h.effectiveFrom, description: h.description })),
+    );
+    const outlier = checkOutlier(parsed.data.amount, stats);
+
     // Un "gasto del local" es dinero realmente desembolsado hoy: además del registro
     // de gasto, genera el egreso de caja correspondiente para que cuente como gasto
     // real pagado y mueva el % ejecutado del presupuesto.
     const expense = await createOperatingExpense(parsed.data, session.userId, {
       registerCashMovement: true,
     });
-    return created(expense);
+
+    if (outlier.isOutlier) {
+      await logAuditEvent({
+        actorUserId: session.userId,
+        branchId: parsed.data.branchId,
+        module: "finance",
+        action: "expense.outlier_amount",
+        entityType: "OperatingExpense",
+        entityId: (expense as { id?: string }).id ?? "unknown",
+        metadataJson: {
+          category: parsed.data.category,
+          amount: parsed.data.amount,
+          typicalAmount: outlier.typicalAmount,
+          threshold: outlier.threshold,
+          lastAmount: outlier.lastAmount,
+        },
+      });
+    }
+
+    return created({ ...expense, warning: outlier.message });
   } catch (error) {
     return toApiErrorResponse(error);
   }

@@ -58,6 +58,16 @@ import {
  * para servir un solo tab a la vez (Gastos, Precios, Fletes, Configuración) sin
  * duplicar código. La meta final es extraerla a components/finance/*-panel.tsx.
  */
+/** Historial por categoría del presupuesto inteligente (GET /api/finance/expense-history). */
+type ExpenseCategoryStats = {
+  category: string;
+  last: { amount: number; date: string; description: string } | null;
+  monthlyAverage: number;
+  typicalAmount: number;
+  suggestedBudget: number;
+  sampleSize: number;
+};
+
 export function ExpenseManager({
   forcedTab,
   hideTabBar = false,
@@ -71,6 +81,7 @@ export function ExpenseManager({
   // "all" = vista consolidada de solo lectura; registrar/editar exige sucursal.
   const isAllBranches = selectedBranchId === "all";
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
+  const [expenseHistory, setExpenseHistory] = useState<ExpenseCategoryStats[]>([]);
   const [loading, setLoading] = useState(false);
   const [internalTab, setInternalTab] = useState<ExpenseManagerTab>(forcedTab ?? "expenses");
   // Cuando el contenedor (Finanzas) fija un tab, este componente lo respeta y oculta su barra.
@@ -170,18 +181,21 @@ export function ExpenseManager({
     }
     setLoading(true);
     try {
-      const [expRes, sumRes, cfgRes] = await Promise.all([
+      const [expRes, sumRes, cfgRes, histRes] = await Promise.all([
         fetch(`/api/expenses?branchId=${selectedBranchId}`),
         fetch(`/api/expenses?branchId=${selectedBranchId}&summary=true`),
         fetch(`/api/pricing/config?branchId=${selectedBranchId}`),
+        fetch(`/api/finance/expense-history?branchId=${selectedBranchId}`),
       ]);
       const expData = unwrapApiData(await expRes.json());
       const sumData = unwrapApiData(await sumRes.json());
       const cfgData = unwrapApiData(await cfgRes.json());
+      const histData = unwrapApiData(await histRes.json()) as { categories?: ExpenseCategoryStats[] } | null;
 
       setExpenses(expData);
       setSummary(sumData);
       setPricingConfig(cfgData);
+      setExpenseHistory(Array.isArray(histData?.categories) ? histData.categories : []);
       setProductContext(null);
       setCommercialAlerts([]);
 
@@ -860,6 +874,85 @@ export function ExpenseManager({
               </div>
             </div>
           </Card>
+
+          {/* ── Presupuesto inteligente: el historial arma el presupuesto ──
+              En vez de inventar un monto fijo, cada categoría muestra su
+              ÚLTIMO gasto real y el promedio mensual de los últimos 6 meses;
+              "Usar" precarga el formulario con el presupuesto sugerido. Los
+              montos fuera de lo normal avisan solos al registrarse. */}
+          {expenseHistory.length > 0 && (
+            <Card className="p-5">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                  <Sparkles className="h-4 w-4 text-[var(--color-info-600)]" />
+                  Presupuesto inteligente · según tu historial real
+                </h4>
+                <span className="text-[0.6875rem] text-[var(--color-text-muted)]">
+                  Últimos 6 meses de gastos pagados desde caja
+                </span>
+              </div>
+              <p className="mb-3 text-xs text-[var(--color-text-muted)]">
+                El presupuesto se arma con lo que de verdad gastas: aquí ves el último pago de cada categoría y su
+                promedio mensual. Si un gasto nuevo se sale de los valores normales, el sistema avisa al registrarlo.
+              </p>
+              <div className="min-w-0 overflow-x-auto">
+                <table className="w-full min-w-[640px] text-left text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                      <th className="py-1.5 pr-3">Categoría</th>
+                      <th className="py-1.5 pr-3">Último gasto</th>
+                      <th className="py-1.5 pr-3 text-right">Promedio mensual</th>
+                      <th className="py-1.5 pr-3 text-right">Presupuesto sugerido</th>
+                      <th className="py-1.5" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--color-border)]">
+                    {expenseHistory.map((c) => (
+                      <tr key={c.category}>
+                        <td className="py-2 pr-3 font-semibold whitespace-nowrap text-[var(--color-text)]">
+                          {CATEGORY_ICONS[c.category] ?? ""} {CATEGORY_LABELS[c.category] ?? c.category}
+                        </td>
+                        <td className="py-2 pr-3">
+                          {c.last ? (
+                            <>
+                              <span className="font-bold tabular-nums text-[var(--color-text)]">{formatC(c.last.amount)}</span>
+                              <span className="ml-1.5 text-[var(--color-text-muted)]">
+                                {new Date(c.last.date).toLocaleDateString("es-NI", { day: "numeric", month: "short", timeZone: "UTC" })} · {c.last.description}
+                              </span>
+                            </>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(c.monthlyAverage)}</td>
+                        <td className="py-2 pr-3 text-right font-bold tabular-nums text-[var(--color-info-700)]">
+                          {c.suggestedBudget > 0 ? formatC(c.suggestedBudget) : "—"}
+                        </td>
+                        <td className="py-2 text-right">
+                          {c.suggestedBudget > 0 && (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              title="Precarga el formulario de arriba con este presupuesto — revisa y presiona Agregar"
+                              onClick={() =>
+                                setNewExpense({
+                                  category: c.category,
+                                  description: `Presupuesto ${CATEGORY_LABELS[c.category] ?? c.category} (según historial)`,
+                                  amount: String(c.suggestedBudget),
+                                })
+                              }
+                            >
+                              Usar
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
 
           {/* ── Costo laboral (planilla) — APARTE de los demás gastos ──
               Lo que cuesta tener a cada empleado (salario + INSS patronal +
