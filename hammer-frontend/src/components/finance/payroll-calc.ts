@@ -221,6 +221,16 @@ export function computeMonthlyBreakdown(
   };
 }
 
+/* ── Reparto quincenal (espejo de biweekly-split.ts del backend) ────────────
+ * 1ª quincena = medio salario completo; las deducciones mensuales (INSS/IR/
+ * préstamos, que se cobran UNA vez al mes) se descuentan en la 2ª (fin de mes).
+ */
+export function splitNetPayBiweekly(grossSalary: number, netPay: number): { firstHalf: number; secondHalf: number } {
+  const net = Math.max(0, netPay);
+  const firstHalf = round2(Math.min(round2(Math.max(0, grossSalary) / 2), net));
+  return { firstHalf, secondHalf: round2(net - firstHalf) };
+}
+
 /* ── Formato ─────────────────────────────────────────────────────────────── */
 
 export const fmtC = (v: number | string | null | undefined) =>

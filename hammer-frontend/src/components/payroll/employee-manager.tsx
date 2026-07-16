@@ -20,6 +20,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { splitNetPayBiweekly } from "@/components/finance/payroll-calc";
 import toast from "react-hot-toast";
 
 type Branch = { id: string; code: string; name: string };
@@ -961,10 +962,11 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
           </div>
 
           {payrollResult && (() => {
-            // En vista quincenal dividimos entre 2 (mitad), igual que el
-            // desembolso real (net/2 por quincena). Redondeamos a 2 decimales.
+            // Vista quincenal: muestra el desglose REAL por quincena — la 1ª
+            // paga medio salario completo y las deducciones mensuales
+            // (INSS/IR/préstamos, que se cobran UNA vez al mes) caen en la 2ª
+            // (misma regla que el desembolso real: biweekly-split.ts).
             const isBiweekly = payrollView === "BIWEEKLY";
-            const half = (v: number) => (isBiweekly ? Math.round((v / 2) * 100) / 100 : v);
             const isDraft = payrollResult.payrollRunStatus === "DRAFT";
             // Roster para la selección: la última corrida COMPLETA (así los
             // excluidos siguen visibles y se pueden volver a marcar).
@@ -983,18 +985,18 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                 <div>
                   <span className="font-semibold text-sm text-[var(--color-text)]">
                     Resultado: {payrollMonth}
-                    {isBiweekly && <span className="ml-2 inline-flex items-center rounded-full bg-[var(--color-info-50)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--color-info-700)]">Vista quincenal (½ del mes)</span>}
+                    {isBiweekly && <span className="ml-2 inline-flex items-center rounded-full bg-[var(--color-info-50)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--color-info-700)]">Desglose por quincena</span>}
                   </span>
                   <p className="text-xs text-[var(--color-text-muted)]">
                     {payrollResult.employees.length} empleados · {payrollResult.payrollRunStatus}
-                    {isBiweekly && " · montos por quincena"}
+                    {isBiweekly && " · deducciones mensuales en la 2ª quincena"}
                   </p>
                 </div>
                 <div className="hidden sm:flex gap-5 text-right text-sm">
-                  <div><p className="font-bold text-[var(--color-text)]">{fmt(half(payrollResult.totalGross))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Bruto</p></div>
-                  <div><p className="font-bold text-[var(--color-warning-700)]">{fmt(half(payrollResult.totalDeductions))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Deducc.</p></div>
-                  <div><p className="font-bold text-[var(--color-success-700)]">{fmt(half(payrollResult.totalNet))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Neto</p></div>
-                  <div><p className="font-bold text-[var(--color-info-700)]">{fmt(half(payrollResult.totalEmployerCost))}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Costo emp.</p></div>
+                  <div><p className="font-bold text-[var(--color-text)]">{fmt(payrollResult.totalGross)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Bruto (mes)</p></div>
+                  <div><p className="font-bold text-[var(--color-warning-700)]">{fmt(payrollResult.totalDeductions)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Deducc. (mes)</p></div>
+                  <div><p className="font-bold text-[var(--color-success-700)]">{fmt(payrollResult.totalNet)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Neto (mes)</p></div>
+                  <div><p className="font-bold text-[var(--color-info-700)]">{fmt(payrollResult.totalEmployerCost)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Costo emp. (mes)</p></div>
                 </div>
               </div>
 
@@ -1009,10 +1011,17 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                       <th className="text-left">Empleado</th>
                       <th className="text-center">Días</th>
                       <th className="text-right">Bruto</th>
-                      <th className="text-right" title="El INSS se cobra UNA vez al mes (factura única): no se descuenta por quincena">{isBiweekly ? "INSS laboral (mes)" : "INSS laboral"}</th>
-                      <th className="text-right">{isBiweekly ? "IR (mes)" : "IR"}</th>
+                      <th className="text-right" title="El INSS se cobra UNA vez al mes (factura única): se descuenta completo en la 2ª quincena">INSS laboral</th>
+                      <th className="text-right">IR</th>
                       <th className="text-right">Préstamos</th>
-                      <th className="text-right">Neto</th>
+                      {isBiweekly ? (
+                        <>
+                          <th className="text-right" title="Medio salario completo, sin deducciones">1ª quincena (día 15)</th>
+                          <th className="text-right" title="Medio salario menos TODAS las deducciones del mes (INSS, IR, préstamos)">2ª quincena (fin de mes)</th>
+                        </>
+                      ) : (
+                        <th className="text-right">Neto</th>
+                      )}
                       <th className="text-right" title="Salario + INSS patronal + INATEC + prestaciones — lo paga el patrón aparte">Costo empresa</th>
                     </tr>
                   </thead>
@@ -1042,9 +1051,9 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                             <span className="block text-[0.7rem] font-normal text-[var(--color-text-muted)]">{rosterEmp.position}</span>
                           </td>
                           <td className="text-center">{dim ? "—" : `${v.daysWorked}/${v.totalDays}`}</td>
-                          <td className="text-right font-mono">{dim ? "—" : fmt(half(v.grossSalary))}</td>
-                          {/* INSS/IR son MENSUALES (factura única del INSS): en vista
-                              quincenal se muestran por mes, sin partir en dos. */}
+                          <td className="text-right font-mono">{dim ? "—" : fmt(v.grossSalary)}</td>
+                          {/* INSS/IR son MENSUALES (factura única del INSS): se
+                              descuentan completos UNA vez, en la 2ª quincena. */}
                           <td className="text-right font-mono text-[var(--color-danger-600)]">{dim ? "—" : `− ${fmt(v.inssLaboral ?? 0)}`}</td>
                           <td className="text-right font-mono text-[var(--color-danger-600)]">{dim || !(v.ir > 0) ? "—" : `− ${fmt(v.ir)}`}</td>
                           <td className="text-right font-mono text-[var(--color-warning-700)]">
@@ -1059,15 +1068,27 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                                   aria-label={`Aplicar préstamo de ${rosterEmp.fullName}`}
                                 />
                               )}
-                              {dim ? "—" : v.loanDeductions > 0 ? `− ${fmt(half(v.loanDeductions))}` : "—"}
+                              {dim ? "—" : v.loanDeductions > 0 ? `− ${fmt(v.loanDeductions)}` : "—"}
                             </span>
                           </td>
-                          <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : fmt(half(v.netPay))}</td>
-                          <td className="text-right font-mono">{dim ? "—" : fmt(half(v.employerCost))}</td>
+                          {isBiweekly ? (
+                            (() => {
+                              const q = splitNetPayBiweekly(v.grossSalary, v.netPay);
+                              return (
+                                <>
+                                  <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : fmt(q.firstHalf)}</td>
+                                  <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : fmt(q.secondHalf)}</td>
+                                </>
+                              );
+                            })()
+                          ) : (
+                            <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : fmt(v.netPay)}</td>
+                          )}
+                          <td className="text-right font-mono">{dim ? "—" : fmt(v.employerCost)}</td>
                         </tr>
                       );
                     })}
-                    {roster.length === 0 && <tr><td colSpan={isDraft ? 9 : 8} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">No hay empleados activos para este periodo</td></tr>}
+                    {roster.length === 0 && <tr><td colSpan={(isDraft ? 1 : 0) + (isBiweekly ? 9 : 8)} className="px-4 py-6 text-center text-sm text-[var(--color-text-soft)]">No hay empleados activos para este periodo</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1096,8 +1117,9 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                 prestaciones van dentro de &quot;Costo empresa&quot;: las paga el patrón aparte, nunca del salario.
                 {isBiweekly && (
                   <>
-                    {" "}Se muestra el monto de <strong>una quincena</strong> (½ del mes); el cálculo guardado es mensual y se desembolsa en Cortes Quincenales.
-                    {" "}<strong>INSS e IR van por MES</strong> (la factura del INSS se cobra una sola vez al mes): el neto quincenal ya trae repartida esa deducción mensual, no se resta dos veces.
+                    {" "}<strong>La 1ª quincena paga medio salario completo</strong>; el INSS, el IR y los préstamos
+                    (que se cobran <strong>una sola vez al mes</strong>) se descuentan completos en la{" "}
+                    <strong>2ª quincena (fin de mes)</strong>. Así la resta cuadra a simple vista: 2ª = ½ salario − deducciones del mes.
                   </>
                 )}
               </div>

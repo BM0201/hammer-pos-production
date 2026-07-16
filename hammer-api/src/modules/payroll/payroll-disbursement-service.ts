@@ -2,6 +2,7 @@ import { Prisma, PayrollDisbursementPeriod, PayrollDisbursementStatus } from "@p
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { tryApplyPayrollCashOutNow } from "@/modules/payroll/payroll-cash-sync";
+import { splitNetPayBiweekly } from "@/modules/payroll/biweekly-split";
 
 function decimal(v: number): Prisma.Decimal {
   return new Prisma.Decimal(v);
@@ -22,8 +23,11 @@ function scheduledSecondHalf(year: number, month: number): Date {
 }
 
 /**
- * Genera (o regenera) los dos disbursements 50/50 de cada PayrollLine de una corrida.
- * Seguro de repetir: borra solo los PENDING existentes; lanza error si alguno ya está PAID.
+ * Genera (o regenera) los dos disbursements de cada PayrollLine de una corrida
+ * con la regla del mes: 1ª quincena = medio salario completo; las deducciones
+ * mensuales (INSS/IR/préstamos, que se cobran UNA vez al mes) van en la 2ª
+ * (ver biweekly-split.ts). Seguro de repetir: borra solo los PENDING
+ * existentes; lanza error si alguno ya está PAID.
  */
 export async function generateDisbursementsForRun(
   payrollRunId: string,
@@ -55,9 +59,7 @@ export async function generateDisbursementsForRun(
       where: { payrollLineId: line.id, status: PayrollDisbursementStatus.PENDING },
     });
 
-    const netPay = Number(line.netPay);
-    const firstHalf = round2(netPay / 2);
-    const secondHalf = round2(netPay - firstHalf);
+    const { firstHalf, secondHalf } = splitNetPayBiweekly(Number(line.grossSalary), Number(line.netPay));
     const branchId = line.employee.branchId;
 
     await db.payrollDisbursement.createMany({

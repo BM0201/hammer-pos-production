@@ -280,11 +280,13 @@ function allBranchesSummary() {
   };
 }
 
-/** Dos mitades PENDING del neto por empleado activo (regla real 50/50). */
+/** Dos quincenas PENDING por empleado activo (regla real: 1ª = ½ salario
+ *  completo; las deducciones mensuales caen en la 2ª — biweekly-split.ts). */
 function seedDisbursements() {
   for (const e of employees.filter((x) => x.isActive)) {
     const net = withEstimate(e).payrollEstimate!.netPay;
-    const first = round2(net / 2);
+    const gross = Number(e.monthlySalary);
+    const first = round2(Math.min(round2(gross / 2), net));
     const second = round2(net - first);
     disbursements.push(
       { id: `disb-${e.id}-1`, branchId: e.branchId, employeeId: e.id, period: "FIRST_HALF", amount: String(first), status: "PENDING", scheduledDate: "2026-07-15T00:00:00.000Z", paidAt: null },
