@@ -351,6 +351,7 @@ model Branch {
   branchProductSettings       BranchProductSetting[]
   employees                   Employee[]
   employeeLoans               EmployeeLoan[]
+  attendanceRollCalls         AttendanceRollCall[]
   payrollRuns                 PayrollRun[]
   payrollDisbursements        PayrollDisbursement[]
   discounts                   Discount[]
@@ -1855,6 +1856,26 @@ model EmployeeAbsence {
 
   @@unique([employeeId, date])
   @@index([employeeId, date])
+}
+
+/// Pase de asistencia diario POR SUCURSAL: se toma desde el POS antes de
+/// abrir caja (ventana emergente con el personal activo de la sucursal).
+/// Registra QUE se pasó lista y quién; las faltas marcadas viven en
+/// EmployeeAbsence. Único por sucursal+día — el modal solo aparece una vez.
+model AttendanceRollCall {
+  id            String   @id @default(cuid())
+  branchId      String
+  /// Día del pase (fecha pura, medianoche UTC).
+  date          DateTime
+  takenByUserId String?
+  presentCount  Int      @default(0)
+  absentCount   Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([branchId, date])
 }
 
 /// Registro CONTABLE del pago mensual de las facturas del patrón (INSS e

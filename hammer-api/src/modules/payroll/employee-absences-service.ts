@@ -89,6 +89,103 @@ export async function listAbsences(filters: { year: number; month: number; emplo
   });
 }
 
+/* ── Pase de asistencia diario (desde el POS, antes de abrir caja) ─────────── */
+
+export type RollCallStatus = "PRESENT" | "UNJUSTIFIED" | "JUSTIFIED";
+const ROLL_CALL_STATUSES: readonly RollCallStatus[] = ["PRESENT", "UNJUSTIFIED", "JUSTIFIED"];
+
+/**
+ * Estado del pase de hoy para una sucursal: si ya se tomó, el personal ACTIVO
+ * de la sucursal (con su puesto) y las marcas del día (para corregir).
+ */
+export async function getRollCall(branchId: string, dateIso: string) {
+  const date = absenceDate(dateIso);
+  const nextDay = new Date(date.getTime() + 24 * 60 * 60 * 1000);
+  const [rollCall, roster] = await Promise.all([
+    prisma.attendanceRollCall.findUnique({ where: { branchId_date: { branchId, date } } }),
+    prisma.employee.findMany({
+      where: { branchId, isActive: true },
+      select: { id: true, fullName: true, position: true },
+      orderBy: { fullName: "asc" },
+    }),
+  ]);
+  const marks = await prisma.employeeAbsence.findMany({
+    where: { employeeId: { in: roster.map((e) => e.id) }, date: { gte: date, lt: nextDay } },
+    select: { employeeId: true, kind: true, notes: true },
+  });
+  return {
+    taken: Boolean(rollCall),
+    takenAt: rollCall?.createdAt.toISOString() ?? null,
+    presentCount: rollCall?.presentCount ?? null,
+    absentCount: rollCall?.absentCount ?? null,
+    roster,
+    marks: marks.map((m) => ({ employeeId: m.employeeId, kind: m.kind, notes: m.notes })),
+  };
+}
+
+/**
+ * Toma (o corrige) el pase del día: PRESENT borra cualquier falta previa de
+ * esa fecha; UNJUSTIFIED/JUSTIFIED registran la falta (upsert). Deja el
+ * registro AttendanceRollCall — el modal del POS solo aparece una vez al día.
+ */
+export async function takeRollCall(
+  input: {
+    branchId: string;
+    date: string;
+    entries: Array<{ employeeId: string; status: RollCallStatus; notes?: string | null }>;
+  },
+  actorUserId?: string,
+) {
+  const date = absenceDate(input.date);
+  if (date > new Date()) throw new Error("INVALID_INPUT: no se pasa asistencia de fechas futuras");
+  for (const entry of input.entries) {
+    if (!ROLL_CALL_STATUSES.includes(entry.status)) {
+      throw new Error("INVALID_INPUT: status debe ser PRESENT, UNJUSTIFIED o JUSTIFIED");
+    }
+  }
+  // Solo personal ACTIVO de ESTA sucursal (nadie marca faltas de otra).
+  const roster = await prisma.employee.findMany({
+    where: { branchId: input.branchId, isActive: true },
+    select: { id: true },
+  });
+  const rosterIds = new Set(roster.map((e) => e.id));
+  const entries = input.entries.filter((e) => rosterIds.has(e.employeeId));
+
+  let present = 0;
+  let absent = 0;
+  for (const entry of entries) {
+    if (entry.status === "PRESENT") {
+      present++;
+      await prisma.employeeAbsence.deleteMany({ where: { employeeId: entry.employeeId, date } });
+    } else {
+      absent++;
+      await prisma.employeeAbsence.upsert({
+        where: { employeeId_date: { employeeId: entry.employeeId, date } },
+        create: { employeeId: entry.employeeId, date, kind: entry.status, notes: entry.notes ?? null, createdByUserId: actorUserId ?? null },
+        update: { kind: entry.status, notes: entry.notes ?? null },
+      });
+    }
+  }
+
+  const rollCall = await prisma.attendanceRollCall.upsert({
+    where: { branchId_date: { branchId: input.branchId, date } },
+    create: { branchId: input.branchId, date, takenByUserId: actorUserId ?? null, presentCount: present, absentCount: absent },
+    update: { takenByUserId: actorUserId ?? null, presentCount: present, absentCount: absent },
+  });
+
+  await logAuditEvent({
+    actorUserId: actorUserId ?? undefined,
+    branchId: input.branchId,
+    module: "payroll",
+    action: "attendance_roll_call.taken",
+    entityType: "AttendanceRollCall",
+    entityId: rollCall.id,
+    metadataJson: { date: input.date, presentCount: present, absentCount: absent },
+  });
+
+  return { rollCall, presentCount: present, absentCount: absent };
+}
+
 /** Días de falta INJUSTIFICADA por empleado en el mes — alimenta la corrida. */
 export async function unjustifiedAbsenceDaysByEmployee(
   employeeIds: string[],

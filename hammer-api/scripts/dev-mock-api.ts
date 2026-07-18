@@ -90,6 +90,9 @@ const absences: MockAbsence[] = [
   { id: "abs-1", employeeId: "emp-marvin", date: "2026-07-08T00:00:00.000Z", kind: "UNJUSTIFIED", notes: "No avisó" },
 ];
 
+/** Pases de asistencia tomados (para que el modal solo aparezca 1 vez/día). */
+const rollCalls: Array<{ branchId: string; date: string }> = [];
+
 function unjustifiedDays(employeeId: string, year: number, month: number): number {
   const prefix = `${year}-${String(month).padStart(2, "0")}`;
   return absences.filter((a) => a.employeeId === employeeId && a.kind === "UNJUSTIFIED" && a.date.startsWith(prefix)).length;
@@ -623,6 +626,47 @@ const server = http.createServer(async (req, res) => {
       byBranch: [],
       cashClosures: { pending: [], completedToday: [], history: [] },
     });
+  }
+
+  // Pase de asistencia (POS, antes de abrir caja): estado + roster + toma.
+  if (path === "/api/payroll/attendance/roll-call" && method === "GET") {
+    const branchId = url.searchParams.get("branchId") ?? "";
+    const date = `${url.searchParams.get("date")}T00:00:00.000Z`;
+    const roster = employees
+      .filter((e) => e.isActive && e.branchId === branchId)
+      .map((e) => ({ id: e.id, fullName: e.fullName, position: e.position }));
+    const taken = rollCalls.some((r) => r.branchId === branchId && r.date === date);
+    const marks = absences
+      .filter((a) => a.date === date && roster.some((e) => e.id === a.employeeId))
+      .map((a) => ({ employeeId: a.employeeId, kind: a.kind, notes: a.notes }));
+    return ok(res, { taken, takenAt: null, presentCount: null, absentCount: null, roster, marks });
+  }
+  if (path === "/api/payroll/attendance/roll-call" && method === "POST") {
+    const body = await readJson(req);
+    const branchId = String(body.branchId ?? "");
+    const date = `${String(body.date)}T00:00:00.000Z`;
+    const entries = Array.isArray(body.entries) ? (body.entries as Array<{ employeeId: string; status: string; notes?: string }>) : [];
+    let present = 0;
+    let absent = 0;
+    for (const entry of entries) {
+      const idx = absences.findIndex((a) => a.employeeId === entry.employeeId && a.date === date);
+      if (entry.status === "PRESENT") {
+        present++;
+        if (idx >= 0) absences.splice(idx, 1);
+      } else {
+        absent++;
+        if (idx >= 0) {
+          absences[idx].kind = entry.status;
+          absences[idx].notes = entry.notes ?? null;
+        } else {
+          absences.push({ id: `abs-${randomUUID().slice(0, 8)}`, employeeId: entry.employeeId, date, kind: entry.status, notes: entry.notes ?? null });
+        }
+      }
+    }
+    if (!rollCalls.some((r) => r.branchId === branchId && r.date === date)) {
+      rollCalls.push({ branchId, date });
+    }
+    return ok(res, { presentCount: present, absentCount: absent });
   }
 
   // Asistencia: faltas del mes (las injustificadas descuentan al calcular).

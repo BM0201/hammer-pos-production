@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
 import { CashMovementsPanel } from "./cash-movements-panel";
+import { AttendanceRollCallModal, localToday } from "./attendance-roll-call-modal";
 
 type CashBox = {
   id: string;
@@ -90,6 +91,9 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
   const [message, setMessage] = useState("");
   const [reconcilingSessionId, setReconcilingSessionId] = useState("");
   const [busyAction, setBusyAction] = useState<"open" | "requestClose" | "close" | "review" | null>(null);
+  // Pase de asistencia previo a la apertura (una vez al día por sucursal).
+  const [showRollCall, setShowRollCall] = useState(false);
+  const [rollCallDone, setRollCallDone] = useState(false);
   const [loadError, setLoadError] = useState(false);
   // CORRECCIÓN 2 (UX): el formulario de revisión de cierre automático se muestra
   // colapsado por defecto para que el botón "Abrir sesión" quede siempre visible.
@@ -242,7 +246,34 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  /**
+   * Pase de asistencia ANTES de abrir caja: si hoy aún no se pasó lista en la
+   * sucursal, se abre la ventana emergente; al confirmarla se continúa con la
+   * apertura. Solo se pide una vez al día por sucursal.
+   */
   async function openSession() {
+    if (!selectedCashBoxId || busyAction) return;
+    if (!rollCallDone) {
+      try {
+        const r = await apiFetch(`/api/payroll/attendance/roll-call?branchId=${branchId}&date=${localToday()}`);
+        if (r.ok) {
+          const raw = (await r.json()) as { data?: { taken?: boolean } };
+          if (!raw?.data?.taken) {
+            setShowRollCall(true);
+            return;
+          }
+        }
+        // Si el estado no se pudo consultar (p. ej. sin permiso del endpoint),
+        // no se bloquea la operación: la caja abre igual.
+      } catch {
+        /* sin bloqueo */
+      }
+      setRollCallDone(true);
+    }
+    await doOpenSession();
+  }
+
+  async function doOpenSession() {
     if (!selectedCashBoxId || busyAction) return;
     setBusyAction("open");
     setMessage("Abriendo sesión...");
@@ -511,6 +542,19 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
       {/* Gastos y retiros — visible mientras la sesión está abierta */}
       {activeSession && (
         <CashMovementsPanel cashSessionId={activeSession.id} branchId={branchId} />
+      )}
+
+      {/* Pase de asistencia — emergente ANTES de abrir caja (1 vez al día). */}
+      {showRollCall && (
+        <AttendanceRollCallModal
+          branchId={branchId}
+          onConfirmed={() => {
+            setShowRollCall(false);
+            setRollCallDone(true);
+            void doOpenSession();
+          }}
+          onCancel={() => setShowRollCall(false)}
+        />
       )}
 
       {/* Separador: fin de turno */}
