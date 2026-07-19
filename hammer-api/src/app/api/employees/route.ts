@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     assertMaster(session!);
 
     const body = await req.json();
-    const { fullName, position, branchId, monthlySalary, startDate, applyIrRetention, inssSalary } = body;
+    const { fullName, position, branchId, monthlySalary, startDate, applyIrRetention, inssSalary, nationalId } = body;
 
     if (!fullName || !position || !branchId || !monthlySalary || !startDate) {
       return fail("ERROR", "Campos requeridos: fullName, position, branchId, monthlySalary, startDate", 400);
@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
         startDate,
         applyIrRetention: Boolean(applyIrRetention),
         inssSalary: inssSalary != null && inssSalary !== "" ? Number(inssSalary) : null,
+        nationalId: typeof nationalId === "string" ? nationalId : null,
       },
       session!.userId,
     );

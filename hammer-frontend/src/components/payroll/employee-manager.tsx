@@ -37,6 +37,8 @@ type Employee = {
   applyIrRetention?: boolean;
   /** Salario cotizable reportado al INSS (null = usar el salario real). */
   inssSalary?: string | null;
+  /** Número de cédula de identidad. */
+  nationalId?: string | null;
   branch: { id: string; code: string; name: string };
 };
 type PayrollEmployee = {
@@ -186,7 +188,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", inssSalary: "", applyIrRetention: false });
+  const [form, setForm] = useState({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", inssSalary: "", applyIrRetention: false, nationalId: "" });
 
   const [payrollMonth, setPayrollMonth] = useState(() => {
     const d = new Date();
@@ -331,7 +333,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       flash("success", editingId ? "Empleado actualizado" : "Empleado creado exitosamente");
       setShowForm(false);
       setEditingId(null);
-      setForm({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", inssSalary: "", applyIrRetention: false });
+      setForm({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", inssSalary: "", applyIrRetention: false, nationalId: "" });
       await loadEmployees();
     } catch {
       flash("error", "Error de conexion al guardar");
@@ -367,6 +369,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       startDate: emp.startDate.slice(0, 10),
       inssSalary: emp.inssSalary != null ? String(Number(emp.inssSalary)) : "",
       applyIrRetention: emp.applyIrRetention ?? false,
+      nationalId: emp.nationalId ?? "",
     });
     setShowForm(true);
   };
@@ -676,7 +679,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
         </select>
         {activeTab === "employees" && (
           <button
-            onClick={() => { setShowForm(true); setEditingId(null); setForm({ fullName: "", position: "Vendedor", branchId: branches[0]?.id ?? "", monthlySalary: "", startDate: new Date().toISOString().slice(0, 10), inssSalary: "", applyIrRetention: false }); }}
+            onClick={() => { setShowForm(true); setEditingId(null); setForm({ fullName: "", position: "Vendedor", branchId: branches[0]?.id ?? "", monthlySalary: "", startDate: new Date().toISOString().slice(0, 10), inssSalary: "", applyIrRetention: false, nationalId: "" }); }}
             className="ml-auto flex items-center gap-2 bg-[var(--color-info-600)] hover:bg-[var(--color-info-700)] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
           >
             <Plus className="h-4 w-4" /> Agregar Empleado
@@ -722,6 +725,10 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                 <label className="grid gap-1 text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide" title="El salario con el que está registrado en el INSS puede ser distinto al real. INSS e INATEC se calculan sobre esta base (así cuadran con la factura del INSS). Vacío = usar el salario real.">
                   Salario INSS (cotizable)
                   <input type="number" step="0.01" min="0.01" value={form.inssSalary} onChange={(e) => setForm({ ...form, inssSalary: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" placeholder="Ej: 6519.58 (vacío = salario real)" />
+                </label>
+                <label className="grid gap-1 text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
+                  Número de cédula
+                  <input value={form.nationalId} maxLength={20} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" placeholder="Ej: 401-123456-0001A" />
                 </label>
                 <label className="flex cursor-pointer select-none items-center gap-2 self-end pb-2 text-[0.78rem] font-normal normal-case tracking-normal text-[var(--color-text-secondary)]" title="El IR salarial (Ley 822) se retiene solo a los trabajadores que no tributan por su cuenta.">
                   <input

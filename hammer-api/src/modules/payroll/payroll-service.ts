@@ -34,6 +34,8 @@ export type CreateEmployeeInput = {
   applyIrRetention?: boolean;
   /** Salario cotizable reportado al INSS (null = usar monthlySalary). */
   inssSalary?: number | null;
+  /** Número de cédula de identidad. */
+  nationalId?: string | null;
 };
 
 export type UpdateEmployeeInput = {
@@ -46,6 +48,7 @@ export type UpdateEmployeeInput = {
   isActive?: boolean;
   applyIrRetention?: boolean;
   inssSalary?: number | null;
+  nationalId?: string | null;
 };
 
 function inssSalaryDecimal(value: number | null | undefined): Prisma.Decimal | null {
@@ -106,6 +109,7 @@ export async function createEmployee(input: CreateEmployeeInput, actorUserId?: s
       startDate,
       applyIrRetention: Boolean(input.applyIrRetention),
       inssSalary: inssSalaryDecimal(input.inssSalary),
+      nationalId: input.nationalId?.trim() || null,
     },
     include: { branch: true },
   });
@@ -156,6 +160,7 @@ export async function updateEmployee(id: string, input: UpdateEmployeeInput, act
     const raw = input.inssSalary as unknown;
     data.inssSalary = inssSalaryDecimal(raw === null || raw === "" ? null : Number(raw));
   }
+  if (input.nationalId !== undefined) data.nationalId = input.nationalId?.trim() || null;
 
   const employee = await prisma.employee.update({ where: { id }, data, include: { branch: true } });
 
@@ -198,14 +203,46 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
   if (filters?.isActive !== undefined) where.isActive = filters.isActive;
   if (filters?.position) where.position = filters.position;
 
-  const [employees, rates] = await Promise.all([
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
+  const yearStart = new Date(Date.UTC(now.getFullYear(), 0, 1));
+
+  const [employees, rates, monthAbsences, yearAbsences, activeLoans] = await Promise.all([
     prisma.employee.findMany({
       where,
       include: { branch: { select: { id: true, code: true, name: true } } },
       orderBy: [{ isActive: "desc" }, { fullName: "asc" }],
     }),
     getPayrollRates(),
+    // Faltas del MES por empleado (injustificadas y justificadas por separado).
+    prisma.employeeAbsence.groupBy({
+      by: ["employeeId", "kind"],
+      where: { date: { gte: monthStart } },
+      _count: { _all: true },
+    }),
+    // Faltas injustificadas del AÑO (historial disciplinario).
+    prisma.employeeAbsence.groupBy({
+      by: ["employeeId"],
+      where: { kind: "UNJUSTIFIED", date: { gte: yearStart } },
+      _count: { _all: true },
+    }),
+    // Saldo de préstamos ACTIVOS: en una liquidación se descuenta del total.
+    prisma.employeeLoan.groupBy({
+      by: ["employeeId"],
+      where: { status: "ACTIVE", outstandingBalance: { gt: 0 } },
+      _sum: { outstandingBalance: true },
+    }),
   ]);
+
+  const monthAbsenceMap = new Map<string, { unjustified: number; justified: number }>();
+  for (const g of monthAbsences) {
+    const entry = monthAbsenceMap.get(g.employeeId) ?? { unjustified: 0, justified: 0 };
+    if (g.kind === "UNJUSTIFIED") entry.unjustified += g._count._all;
+    else entry.justified += g._count._all;
+    monthAbsenceMap.set(g.employeeId, entry);
+  }
+  const yearAbsenceMap = new Map(yearAbsences.map((g) => [g.employeeId, g._count._all]));
+  const loanOutstandingMap = new Map(activeLoans.map((g) => [g.employeeId, Number(g._sum.outstandingBalance ?? 0)]));
 
   // Estimación de mes completo por empleado ACTIVO (sin préstamos ni prorrateo):
   // permite que la tabla de Finanzas muestre neto y costo empresa sin correr
@@ -260,6 +297,11 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
         indemnizacionRateActual: indemnizacionRate,
         // Warning (no bloqueo): salario por debajo del mínimo sectorial configurado.
         belowMinimumWage: rates.salarioMinimoSectorial > 0 && salary < rates.salarioMinimoSectorial,
+        // Perfil del trabajador: faltas y préstamos (para la liquidación).
+        absencesMonthUnjustified: monthAbsenceMap.get(emp.id)?.unjustified ?? 0,
+        absencesMonthJustified: monthAbsenceMap.get(emp.id)?.justified ?? 0,
+        absencesYearUnjustified: yearAbsenceMap.get(emp.id) ?? 0,
+        loanOutstanding: round2(loanOutstandingMap.get(emp.id) ?? 0),
       },
       payrollRates: rates,
     };

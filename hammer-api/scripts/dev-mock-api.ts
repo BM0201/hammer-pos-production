@@ -69,17 +69,22 @@ type MockEmployee = {
   applyIrRetention: boolean;
   /** Salario COTIZABLE reportado al INSS (los reales están con 6,519.58). */
   inssSalary: string | null;
+  /** Número de cédula de identidad. */
+  nationalId: string | null;
 };
 
 const employees: MockEmployee[] = [
-  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58" },
-  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58" },
-  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58" },
+  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-070390-0001A" },
+  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-150988-0002B" },
+  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-220595-0003C" },
   // Demo de tramos Art. 45 — mismo salario que Carolina para ver que cuestan distinto.
   // Diana además CON retención de IR, para ver la variación por trabajador:
-  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "20", applyIrRetention: true, inssSalary: null },
-  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "45", applyIrRetention: false, inssSalary: null },
+  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "20", applyIrRetention: true, inssSalary: null, nationalId: null },
+  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "45", applyIrRetention: false, inssSalary: null, nationalId: null },
 ];
+
+/** Saldos de préstamos ACTIVOS (se descuentan al liquidar): Harry debe 2,000. */
+const LOAN_OUTSTANDING: Record<string, number> = { "emp-harry": 2000 };
 
 /** Pagos de facturas del patrón (INSS/INATEC) marcados en el preview. */
 const contributionPayments: Array<{ id: string; year: number; month: number; kind: string; amount: string; paidAt: string }> = [];
@@ -226,6 +231,11 @@ function withEstimate(emp: MockEmployee) {
       indemnizacionAccrued: indemnizacionAccruedTotal(salary, emp.startDate, at),
       indemnizacionRateActual: indemnizacionRate,
       belowMinimumWage: config.salarioMinimoSectorial > 0 && salary < config.salarioMinimoSectorial,
+      // Perfil del trabajador: faltas del mes/año y préstamos pendientes.
+      absencesMonthUnjustified: unjustifiedDays(emp.id, at.getFullYear(), at.getMonth() + 1),
+      absencesMonthJustified: absences.filter((a) => a.employeeId === emp.id && a.kind === "JUSTIFIED" && a.date.startsWith(`${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}`)).length,
+      absencesYearUnjustified: absences.filter((a) => a.employeeId === emp.id && a.kind === "UNJUSTIFIED" && a.date.startsWith(String(at.getFullYear()))).length,
+      loanOutstanding: LOAN_OUTSTANDING[emp.id] ?? 0,
     },
     payrollRates: rates,
   };
@@ -401,6 +411,7 @@ const server = http.createServer(async (req, res) => {
       vacationDaysTaken: "0",
       applyIrRetention: Boolean(body.applyIrRetention),
       inssSalary: body.inssSalary != null && body.inssSalary !== "" ? String(body.inssSalary) : null,
+      nationalId: typeof body.nationalId === "string" && body.nationalId.trim() ? String(body.nationalId).trim() : null,
     };
     employees.push(emp);
     return send(res, 201, { ok: true, data: withEstimate(emp) });
@@ -418,6 +429,7 @@ const server = http.createServer(async (req, res) => {
       if (body.startDate !== undefined) emp.startDate = `${String(body.startDate)}T00:00:00.000Z`;
       if (body.applyIrRetention !== undefined) emp.applyIrRetention = Boolean(body.applyIrRetention);
       if (body.inssSalary !== undefined) emp.inssSalary = body.inssSalary != null && body.inssSalary !== "" ? String(body.inssSalary) : null;
+      if (body.nationalId !== undefined) emp.nationalId = typeof body.nationalId === "string" && body.nationalId.trim() ? String(body.nationalId).trim() : null;
       return ok(res, withEstimate(emp));
     }
     if (method === "DELETE") {

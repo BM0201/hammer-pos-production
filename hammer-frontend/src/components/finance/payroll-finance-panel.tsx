@@ -38,12 +38,15 @@ import {
   fmtRatePct,
   fmtRatePct3,
   fmtSeniority,
+  indemnizacionPayout,
   initials,
   nextBiweeklyPayday,
   resolveInssRates,
   round2,
+  SEVERANCE_CAUSALES,
   type PayrollBreakdown,
   type PayrollRates,
+  type SeveranceCausal,
 } from "./payroll-calc";
 
 /**
@@ -74,6 +77,8 @@ type EmployeeRow = {
   applyIrRetention?: boolean;
   /** Salario cotizable reportado al INSS (null = usar el salario real). */
   inssSalary?: string | null;
+  /** Número de cédula de identidad. */
+  nationalId?: string | null;
   branch: { id: string; code: string; name: string };
   payrollEstimate?: PayrollBreakdown | null;
   payrollRates?: PayrollRates;
@@ -162,11 +167,20 @@ export function PayrollFinancePanel() {
 
   const [bannerDismissed, setBannerDismissed] = useState(true);
   const [drawerEmployeeId, setDrawerEmployeeId] = useState<string | null>(null);
+  // Liquidación (drawer): calculadora según causal + confirmación de baja.
+  const [liquidationOpen, setLiquidationOpen] = useState(false);
+  const [severanceCausal, setSeveranceCausal] = useState<SeveranceCausal>("DESPIDO_SIN_CAUSA");
+  const [confirmLiquidation, setConfirmLiquidation] = useState(false);
+  useEffect(() => {
+    setLiquidationOpen(false);
+    setSeveranceCausal("DESPIDO_SIN_CAUSA");
+    setConfirmLiquidation(false);
+  }, [drawerEmployeeId]);
   const [confirmDeactivateId, setConfirmDeactivateId] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", applyIrRetention: false, inssSalary: "" });
+  const [form, setForm] = useState({ fullName: "", position: "Vendedor", branchId: "", monthlySalary: "", startDate: "", applyIrRetention: false, inssSalary: "", nationalId: "" });
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -382,6 +396,7 @@ export function PayrollFinancePanel() {
       startDate: new Date().toISOString().slice(0, 10),
       applyIrRetention: false,
       inssSalary: "",
+      nationalId: "",
     });
     setShowForm(true);
     setTab("employees");
@@ -397,6 +412,7 @@ export function PayrollFinancePanel() {
       startDate: emp.startDate.slice(0, 10),
       applyIrRetention: emp.applyIrRetention ?? false,
       inssSalary: emp.inssSalary != null ? String(Number(emp.inssSalary)) : "",
+      nationalId: emp.nationalId ?? "",
     });
     setShowForm(true);
     setDrawerEmployeeId(null);
@@ -862,6 +878,10 @@ export function PayrollFinancePanel() {
                     Salario INSS (cotizable)
                     <input type="number" step="0.01" min="0.01" value={form.inssSalary} onChange={(e) => setForm({ ...form, inssSalary: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" placeholder="Ej: 6519.58 (vacío = salario real)" />
                   </label>
+                  <label className="grid gap-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                    Número de cédula
+                    <input value={form.nationalId} maxLength={20} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} className="hm-input rounded-lg text-sm font-normal normal-case" placeholder="Ej: 401-123456-0001A" />
+                  </label>
                   {/* Varía por trabajador: quien tributa por su cuenta NO lleva
                       retención de IR (default). Se marca solo si a esta persona
                       sí se le retiene en nómina. */}
@@ -1171,6 +1191,10 @@ export function PayrollFinancePanel() {
                     {drawerEmployee.position} · {branch?.code} — {branch?.name} · desde {fmtDateShort(drawerEmployee.startDate)}
                     {drawerEmployee.endDate ? ` · fin ${fmtDateShort(drawerEmployee.endDate)}` : ""}
                   </p>
+                  <p className="text-[0.72rem] text-[var(--color-text-muted)]">
+                    Salario {fmtC(Number(drawerEmployee.monthlySalary))}
+                    {drawerEmployee.nationalId ? ` · Cédula ${drawerEmployee.nationalId}` : " · Cédula sin registrar"}
+                  </p>
                 </div>
                 <button onClick={() => setDrawerEmployeeId(null)} aria-label="Cerrar detalle" className="hm-icon-btn ml-auto">
                   <X className="h-4 w-4" />
@@ -1289,6 +1313,114 @@ export function PayrollFinancePanel() {
                     salario; exenta de IR hasta 5 meses + C$500,000 (Ley 822). El aguinaldo es exento de todo (Art. 97 CT);
                     las vacaciones pagadas en dinero gravan INSS e IR el mes en que se pagan.
                   </p>
+                </section>
+
+                {/* ── Asistencia + Liquidación: el dinero del trabajador según ley ── */}
+                <section className="mb-6">
+                  <h4 className="mb-2.5 flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-soft)] after:h-px after:flex-1 after:bg-[var(--color-border)]">
+                    Asistencia y liquidación
+                  </h4>
+                  <div className={dline}>
+                    <span className="text-[var(--color-text-secondary)]">Faltas este mes <small className="text-[0.6875rem] text-[var(--color-text-soft)]">las injustificadas restan {fmtC(b.dailyRate ?? round2(Number(drawerEmployee.monthlySalary) / 30))}/día</small></span>
+                    <span className="font-mono tabular-nums text-[var(--color-text)]">
+                      {b.absencesMonthUnjustified ?? 0} injust. · {b.absencesMonthJustified ?? 0} just.
+                    </span>
+                  </div>
+                  <div className={dline}>
+                    <span className="text-[var(--color-text-secondary)]">Faltas injustificadas del año</span>
+                    <span className="font-mono tabular-nums text-[var(--color-text)]">{b.absencesYearUnjustified ?? 0}</span>
+                  </div>
+                  {(b.loanOutstanding ?? 0) > 0 && (
+                    <div className={dline}>
+                      <span className="text-[var(--color-text-secondary)]">Préstamos pendientes <small className="text-[0.6875rem] text-[var(--color-text-soft)]">se descuentan al liquidar</small></span>
+                      <span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(b.loanOutstanding ?? 0)}</span>
+                    </div>
+                  )}
+
+                  {!liquidationOpen ? (
+                    <button
+                      onClick={() => setLiquidationOpen(true)}
+                      className="mt-2 w-full rounded-lg border-[1.5px] border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-4 py-2 text-sm font-semibold text-[var(--color-danger-700)] transition-colors hover:bg-[var(--color-danger-100)]"
+                    >
+                      Liquidar (calcular según ley)
+                    </button>
+                  ) : (() => {
+                    // Cálculo de liquidación según la causal (Arts. 45/48 CT):
+                    const salary = Number(drawerEmployee.monthlySalary);
+                    const causalDef = SEVERANCE_CAUSALES.find((c) => c.value === severanceCausal) ?? SEVERANCE_CAUSALES[0];
+                    const aguinaldo = b.aguinaldoAccrued ?? 0; // EXENTO de todo (Art. 97)
+                    const vacBruto = b.vacationBalanceValue ?? 0; // GRAVABLE: INSS laboral al pagarse
+                    const vacInss = round2(vacBruto * inssResolved.laboral);
+                    const vacNeto = round2(vacBruto - vacInss);
+                    const indemnizacion = causalDef.paysIndemnizacion
+                      ? Math.max(indemnizacionPayout(salary, drawerEmployee.startDate), round2(Math.max(b.indemnizacionAccrued ?? 0, salary)))
+                      : 0;
+                    const prestamos = b.loanOutstanding ?? 0;
+                    const total = round2(aguinaldo + vacNeto + indemnizacion - prestamos);
+                    return (
+                      <div className="mt-2 rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-surface-alt)] p-3">
+                        <label className="grid gap-1 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                          Causal de terminación
+                          <select
+                            value={severanceCausal}
+                            onChange={(e) => { setSeveranceCausal(e.target.value as SeveranceCausal); setConfirmLiquidation(false); }}
+                            className="hm-input rounded-lg text-sm font-normal normal-case"
+                          >
+                            {SEVERANCE_CAUSALES.map((c) => (
+                              <option key={c.value} value={c.value}>{c.label}{c.paysIndemnizacion ? "" : " — sin indemnización"}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="mt-2 space-y-1 text-[0.8125rem]">
+                          <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Aguinaldo proporcional {chipExento}</span><span className="font-mono tabular-nums">{fmtC(aguinaldo)}</span></div>
+                          <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Vacaciones ({(b.vacationDaysBalance ?? 0).toLocaleString("es-NI", { maximumFractionDigits: 1 })} días)</span><span className="font-mono tabular-nums">{fmtC(vacBruto)}</span></div>
+                          {vacInss > 0 && (
+                            <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)] pl-3">− INSS {fmtRatePct(inssResolved.laboral)} sobre vacaciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">gravables al pagarse</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(vacInss)}</span></div>
+                          )}
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-[var(--color-text-secondary)]">Indemnización Art. 45 {causalDef.paysIndemnizacion ? chipExento : <span className="ml-1.5 text-[0.6875rem] text-[var(--color-text-soft)]">(no aplica por la causal)</span>}</span>
+                            <span className="font-mono tabular-nums">{fmtC(indemnizacion)}</span>
+                          </div>
+                          {prestamos > 0 && (
+                            <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Préstamos pendientes</span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(prestamos)}</span></div>
+                          )}
+                          <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1.5 text-sm font-bold">
+                            <span className="text-[var(--color-text)]">TOTAL A PAGAR</span>
+                            <span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(Math.max(0, total))}</span>
+                          </div>
+                        </div>
+                        <p className="mt-2 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
+                          Aguinaldo e indemnización: exentos (Arts. 93–99 y 45 CT, Ley 822). Vacaciones pagadas: gravan
+                          INSS al pagarse. El salario pendiente del mes en curso se paga por la nómina normal, aparte.
+                        </p>
+                        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                          {!confirmLiquidation ? (
+                            <>
+                              <button
+                                onClick={() => setConfirmLiquidation(true)}
+                                className="rounded-lg bg-[var(--color-danger-600)] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-danger-700)]"
+                              >
+                                Dar de baja (liquidar)
+                              </button>
+                              <button onClick={() => setLiquidationOpen(false)} className="rounded-lg px-3 py-2 text-sm text-[var(--color-text-muted)] hover:bg-[var(--color-surface)]">Cerrar</button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-xs font-semibold text-[var(--color-danger-700)]">¿Confirmar baja de {drawerEmployee.fullName} con total {fmtC(Math.max(0, total))}?</span>
+                              <button
+                                onClick={() => { void handleDeactivate(drawerEmployee.id); }}
+                                disabled={loading}
+                                className="rounded-lg bg-[var(--color-danger-600)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                              >
+                                Sí, dar de baja
+                              </button>
+                              <button onClick={() => setConfirmLiquidation(false)} className="rounded-lg px-3 py-1.5 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-surface)]">No</button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </section>
               </div>
 

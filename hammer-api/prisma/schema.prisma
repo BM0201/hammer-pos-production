@@ -1668,6 +1668,8 @@ model Employee {
   /// con la factura del INSS). Null = usar monthlySalary. Las prestaciones
   /// (aguinaldo/vacaciones/indemnización) siempre usan el salario real.
   inssSalary Decimal?
+  /// Número de cédula de identidad (documento del trabajador).
+  nationalId String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

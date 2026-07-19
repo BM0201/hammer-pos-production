@@ -102,6 +102,26 @@ export function indemnizacionAccruedTotal(monthlySalary: number, startDate: Date
   return round2(Math.min(salary * (tramo1 / 12) + salary * ((20 / 30) / 12) * tramo2, salary * 5));
 }
 
+/** Monto a PAGAR de indemnización al liquidar: el acumulado con piso de 1 mes (Art. 45). */
+export function indemnizacionPayout(monthlySalary: number, startDate: Date | string, at: Date = new Date()): number {
+  const salary = Math.max(0, monthlySalary);
+  if (salary <= 0 || monthsOfService(startDate, at) <= 0) return 0;
+  return round2(Math.max(indemnizacionAccruedTotal(salary, startDate, at), salary));
+}
+
+/**
+ * Causales de terminación (Arts. 45/48 CT): definen si la indemnización por
+ * antigüedad SE PAGA o no en la liquidación.
+ */
+export const SEVERANCE_CAUSALES = [
+  { value: "DESPIDO_SIN_CAUSA", label: "Despido sin causa justa", paysIndemnizacion: true },
+  { value: "MUTUO_ACUERDO", label: "Mutuo acuerdo", paysIndemnizacion: true },
+  { value: "RENUNCIA_CON_PREAVISO", label: "Renuncia con preaviso escrito (15 días)", paysIndemnizacion: true },
+  { value: "DESPIDO_CON_CAUSA", label: "Despido con causa justa (Art. 48)", paysIndemnizacion: false },
+  { value: "RENUNCIA_SIN_PREAVISO", label: "Renuncia sin preaviso", paysIndemnizacion: false },
+] as const;
+export type SeveranceCausal = (typeof SEVERANCE_CAUSALES)[number]["value"];
+
 /** Inicio del período legal dic→nov del aguinaldo vigente a la fecha. */
 export function aguinaldoPeriodStart(at: Date = new Date()): Date {
   const year = at.getUTCMonth() === 11 ? at.getUTCFullYear() : at.getUTCFullYear() - 1;
@@ -163,6 +183,11 @@ export type PayrollBreakdown = {
   indemnizacionAccrued?: number;
   indemnizacionRateActual?: number;
   belowMinimumWage?: boolean;
+  /** Perfil del trabajador (para el drawer y la liquidación). */
+  absencesMonthUnjustified?: number;
+  absencesMonthJustified?: number;
+  absencesYearUnjustified?: number;
+  loanOutstanding?: number;
 };
 
 export function computeMonthlyBreakdown(
