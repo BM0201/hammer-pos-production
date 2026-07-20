@@ -36,7 +36,7 @@ type Absence = {
 
 const KIND_LABEL: Record<string, string> = { UNJUSTIFIED: "Injustificada", JUSTIFIED: "Justificada" };
 
-type RollCallMarkStatus = "PRESENT" | "UNJUSTIFIED" | "JUSTIFIED";
+type RollCallMarkStatus = "PRESENT" | "PRESENT_LATE" | "UNJUSTIFIED" | "JUSTIFIED";
 type RollCallMark = {
   employeeId: string;
   status: RollCallMarkStatus;
@@ -53,8 +53,10 @@ type PendingRollCall = {
   marks: RollCallMark[];
 };
 
+/** El cajero solo marca Presente/Ausente — este detalle lo agrega Master al confirmar. */
 const MARK_STATUS_OPTIONS: Array<{ value: RollCallMarkStatus; label: string; activeCls: string }> = [
   { value: "PRESENT", label: "Presente", activeCls: "bg-[var(--color-success-600)] text-white border-transparent" },
+  { value: "PRESENT_LATE", label: "Llegó tarde", activeCls: "bg-[var(--color-info-600)] text-white border-transparent" },
   { value: "JUSTIFIED", label: "Falta just.", activeCls: "bg-[var(--color-warning-600)] text-white border-transparent" },
   { value: "UNJUSTIFIED", label: "Falta injust.", activeCls: "bg-[var(--color-danger-600)] text-white border-transparent" },
 ];
@@ -75,6 +77,7 @@ function PendingAttendanceReview() {
   const [pending, setPending] = useState<PendingRollCall[]>([]);
   const [loading, setLoading] = useState(true);
   const [overrides, setOverrides] = useState<Record<string, Record<string, RollCallMarkStatus>>>({});
+  const [notesOverrides, setNotesOverrides] = useState<Record<string, Record<string, string>>>({});
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -96,20 +99,33 @@ function PendingAttendanceReview() {
     return overrides[rollCallId]?.[mark.employeeId] ?? mark.status;
   }
 
+  function notesOf(rollCallId: string, mark: RollCallMark): string {
+    return notesOverrides[rollCallId]?.[mark.employeeId] ?? mark.notes ?? "";
+  }
+
   function setOverride(rollCallId: string, employeeId: string, status: RollCallMarkStatus) {
     setOverrides((prev) => ({ ...prev, [rollCallId]: { ...prev[rollCallId], [employeeId]: status } }));
+  }
+
+  function setNotesOverride(rollCallId: string, employeeId: string, notes: string) {
+    setNotesOverrides((prev) => ({ ...prev, [rollCallId]: { ...prev[rollCallId], [employeeId]: notes } }));
   }
 
   async function confirm(rollCall: PendingRollCall) {
     setConfirmingId(rollCall.id);
     try {
       const rollCallOverrides = overrides[rollCall.id] ?? {};
-      const corrections = Object.entries(rollCallOverrides)
-        .filter(([employeeId, status]) => {
-          const original = rollCall.marks.find((m) => m.employeeId === employeeId)?.status;
-          return original !== status;
+      const rollCallNotes = notesOverrides[rollCall.id] ?? {};
+      const employeeIds = new Set([...Object.keys(rollCallOverrides), ...Object.keys(rollCallNotes)]);
+      const corrections = [...employeeIds]
+        .map((employeeId) => {
+          const mark = rollCall.marks.find((m) => m.employeeId === employeeId);
+          const status = rollCallOverrides[employeeId] ?? mark?.status ?? "PRESENT";
+          const notes = rollCallNotes[employeeId] ?? mark?.notes ?? "";
+          return { employeeId, status, notes, changed: status !== mark?.status || notes !== (mark?.notes ?? "") };
         })
-        .map(([employeeId, status]) => ({ employeeId, status }));
+        .filter((c) => c.changed)
+        .map(({ employeeId, status, notes }) => ({ employeeId, status, notes: notes.trim() || undefined }));
 
       const r = await apiFetch(`/api/payroll/attendance/roll-call/${rollCall.id}/confirm`, {
         method: "POST",
@@ -167,32 +183,51 @@ function PendingAttendanceReview() {
             <div className="divide-y divide-[var(--color-border)]">
               {rc.marks.map((mark) => {
                 const status = statusOf(rc.id, mark);
+                const notes = notesOf(rc.id, mark);
                 return (
-                  <div key={mark.employeeId} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-[var(--color-text)]">{mark.employee.fullName}</p>
-                      <p className="text-xs text-[var(--color-text-muted)]">
-                        {mark.employee.position} · llegó {fmtTime(mark.arrivalAt)}
-                      </p>
+                  <div key={mark.employeeId} className="py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-[var(--color-text)]">{mark.employee.fullName}</p>
+                        <p className="text-xs text-[var(--color-text-muted)]">
+                          {mark.employee.position}
+                          {mark.arrivalAt ? ` · llegó ${fmtTime(mark.arrivalAt)}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-1" role="radiogroup" aria-label={`Asistencia de ${mark.employee.fullName}`}>
+                        {MARK_STATUS_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={status === opt.value}
+                            onClick={() => setOverride(rc.id, mark.employeeId, opt.value)}
+                            className={`rounded-lg border px-2 py-1 text-[0.7rem] font-semibold transition-colors ${
+                              status === opt.value
+                                ? opt.activeCls
+                                : "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="flex gap-1" role="radiogroup" aria-label={`Asistencia de ${mark.employee.fullName}`}>
-                      {MARK_STATUS_OPTIONS.map((opt) => (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          role="radio"
-                          aria-checked={status === opt.value}
-                          onClick={() => setOverride(rc.id, mark.employeeId, opt.value)}
-                          className={`rounded-lg border px-2 py-1 text-[0.7rem] font-semibold transition-colors ${
-                            status === opt.value
-                              ? opt.activeCls
-                              : "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+                    {status !== "PRESENT" && (
+                      <input
+                        className="hm-input mt-1.5 w-full rounded-lg text-xs font-normal normal-case"
+                        placeholder={
+                          status === "JUSTIFIED"
+                            ? "Motivo de la justificación (ej: constancia médica)"
+                            : status === "PRESENT_LATE"
+                              ? "Nota (opcional, ej: llegó 20 min tarde)"
+                              : "Nota (opcional)"
+                        }
+                        maxLength={300}
+                        value={notes}
+                        onChange={(e) => setNotesOverride(rc.id, mark.employeeId, e.target.value)}
+                      />
+                    )}
                   </div>
                 );
               })}

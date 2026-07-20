@@ -89,10 +89,20 @@ export async function listAbsences(filters: { year: number; month: number; emplo
   });
 }
 
-/* ── Pase de asistencia diario (desde el POS, antes de abrir caja) ─────────── */
+/* ── Pase de asistencia diario (desde el POS, antes del primer cobro) ──────── */
 
-export type RollCallStatus = "PRESENT" | "UNJUSTIFIED" | "JUSTIFIED";
-const ROLL_CALL_STATUSES: readonly RollCallStatus[] = ["PRESENT", "UNJUSTIFIED", "JUSTIFIED"];
+/**
+ * El cajero solo manda PRESENT/UNJUSTIFIED (Presente/Ausente, simple). Master
+ * agrega matiz al confirmar: PRESENT_LATE (llegó tarde — informativo, no
+ * descuenta) y JUSTIFIED (falta con justificación) solo se usan ahí.
+ */
+export type RollCallStatus = "PRESENT" | "PRESENT_LATE" | "UNJUSTIFIED" | "JUSTIFIED";
+const ROLL_CALL_STATUSES: readonly RollCallStatus[] = ["PRESENT", "PRESENT_LATE", "UNJUSTIFIED", "JUSTIFIED"];
+
+/** true si el estado cuenta como "vino" (no genera EmployeeAbsence). */
+function attendedStatus(status: RollCallStatus): boolean {
+  return status === "PRESENT" || status === "PRESENT_LATE";
+}
 
 /**
  * Estado del pase de hoy para una sucursal: si ya se tomó, el personal ACTIVO
@@ -141,7 +151,7 @@ export async function takeRollCall(
   if (date > new Date()) throw new Error("INVALID_INPUT: no se pasa asistencia de fechas futuras");
   for (const entry of input.entries) {
     if (!ROLL_CALL_STATUSES.includes(entry.status)) {
-      throw new Error("INVALID_INPUT: status debe ser PRESENT, UNJUSTIFIED o JUSTIFIED");
+      throw new Error("INVALID_INPUT: status debe ser PRESENT, PRESENT_LATE, UNJUSTIFIED o JUSTIFIED");
     }
   }
   // Solo personal ACTIVO de ESTA sucursal (nadie marca faltas de otra).
@@ -158,7 +168,7 @@ export async function takeRollCall(
   let present = 0;
   let absent = 0;
   for (const entry of entries) {
-    if (entry.status === "PRESENT") {
+    if (attendedStatus(entry.status)) {
       present++;
       await prisma.employeeAbsence.deleteMany({ where: { employeeId: entry.employeeId, date } });
     } else {
@@ -186,12 +196,12 @@ export async function takeRollCall(
         rollCallId: rollCall.id,
         employeeId: entry.employeeId,
         status: entry.status,
-        arrivalAt: entry.status === "PRESENT" ? takenAt : null,
+        arrivalAt: attendedStatus(entry.status) ? takenAt : null,
         notes: entry.notes ?? null,
       },
       update: {
         status: entry.status,
-        arrivalAt: entry.status === "PRESENT" ? takenAt : null,
+        arrivalAt: attendedStatus(entry.status) ? takenAt : null,
         notes: entry.notes ?? null,
       },
     });
@@ -255,7 +265,7 @@ export async function confirmRollCall(
   const markByEmployee = new Map(rollCall.marks.map((m) => [m.employeeId, m]));
   for (const c of corrections) {
     if (!ROLL_CALL_STATUSES.includes(c.status)) {
-      throw new Error("INVALID_INPUT: status debe ser PRESENT, UNJUSTIFIED o JUSTIFIED");
+      throw new Error("INVALID_INPUT: status debe ser PRESENT, PRESENT_LATE, UNJUSTIFIED o JUSTIFIED");
     }
     if (!markByEmployee.has(c.employeeId)) {
       throw new Error("INVALID_INPUT: el empleado no pertenece a este pase");
@@ -265,9 +275,9 @@ export async function confirmRollCall(
   for (const c of corrections) {
     await prisma.attendanceMark.update({
       where: { rollCallId_employeeId: { rollCallId, employeeId: c.employeeId } },
-      data: { status: c.status, notes: c.notes ?? null, arrivalAt: c.status === "PRESENT" ? new Date() : null },
+      data: { status: c.status, notes: c.notes ?? null, arrivalAt: attendedStatus(c.status) ? new Date() : null },
     });
-    if (c.status === "PRESENT") {
+    if (attendedStatus(c.status)) {
       await prisma.employeeAbsence.deleteMany({ where: { employeeId: c.employeeId, date: rollCall.date } });
     } else {
       await prisma.employeeAbsence.upsert({
@@ -279,7 +289,7 @@ export async function confirmRollCall(
   }
 
   const finalMarks = await prisma.attendanceMark.findMany({ where: { rollCallId } });
-  const presentCount = finalMarks.filter((m) => m.status === "PRESENT").length;
+  const presentCount = finalMarks.filter((m) => attendedStatus(m.status as RollCallStatus)).length;
   const absentCount = finalMarks.length - presentCount;
 
   const updated = await prisma.attendanceRollCall.update({

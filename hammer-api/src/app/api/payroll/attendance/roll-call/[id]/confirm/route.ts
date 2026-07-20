@@ -14,7 +14,7 @@ const confirmSchema = z.object({
     .array(
       z.object({
         employeeId: z.string().min(1),
-        status: z.enum(["PRESENT", "UNJUSTIFIED", "JUSTIFIED"]),
+        status: z.enum(["PRESENT", "PRESENT_LATE", "UNJUSTIFIED", "JUSTIFIED"]),
         notes: z.string().max(300).optional(),
       }),
     )

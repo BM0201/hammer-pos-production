@@ -146,6 +146,10 @@ type MockRollCall = {
 const rollCalls: MockRollCall[] = [];
 
 type MockAttendanceMark = { id: string; rollCallId: string; employeeId: string; status: string; arrivalAt: string | null; notes: string | null };
+/** PRESENT y PRESENT_LATE cuentan como "vino" — no generan falta. */
+function attended(status: string): boolean {
+  return status === "PRESENT" || status === "PRESENT_LATE";
+}
 const attendanceMarks: MockAttendanceMark[] = [];
 
 function unjustifiedDays(employeeId: string, year: number, month: number): number {
@@ -722,7 +726,7 @@ const server = http.createServer(async (req, res) => {
     let absent = 0;
     for (const entry of entries) {
       const idx = absences.findIndex((a) => a.employeeId === entry.employeeId && a.date === date);
-      if (entry.status === "PRESENT") {
+      if (attended(entry.status)) {
         present++;
         if (idx >= 0) absences.splice(idx, 1);
       } else {
@@ -754,7 +758,7 @@ const server = http.createServer(async (req, res) => {
         rollCallId: rc.id,
         employeeId: entry.employeeId,
         status: entry.status,
-        arrivalAt: entry.status === "PRESENT" ? takenAt : null,
+        arrivalAt: attended(entry.status) ? takenAt : null,
         notes: entry.notes ?? null,
       };
       if (markIdx >= 0) attendanceMarks[markIdx] = mark;
@@ -795,9 +799,9 @@ const server = http.createServer(async (req, res) => {
       if (markIdx < 0) continue;
       attendanceMarks[markIdx].status = c.status;
       attendanceMarks[markIdx].notes = c.notes ?? null;
-      attendanceMarks[markIdx].arrivalAt = c.status === "PRESENT" ? new Date().toISOString() : null;
+      attendanceMarks[markIdx].arrivalAt = attended(c.status) ? new Date().toISOString() : null;
       const absIdx = absences.findIndex((a) => a.employeeId === c.employeeId && a.date === rc.date);
-      if (c.status === "PRESENT") {
+      if (attended(c.status)) {
         if (absIdx >= 0) absences.splice(absIdx, 1);
       } else if (absIdx >= 0) {
         absences[absIdx].kind = c.status;
@@ -807,7 +811,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
     const finalMarks = attendanceMarks.filter((m) => m.rollCallId === rc.id);
-    rc.presentCount = finalMarks.filter((m) => m.status === "PRESENT").length;
+    rc.presentCount = finalMarks.filter((m) => attended(m.status)).length;
     rc.absentCount = finalMarks.length - rc.presentCount;
     rc.reviewStatus = "CONFIRMED";
     rc.reviewedByUserId = sessionUser.userId;

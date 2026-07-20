@@ -13,6 +13,7 @@ import { useOfflineCart } from "./hooks/use-offline-cart";
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { PrintModal } from "@/components/print/print-modal";
+import { AttendanceRollCallModal, localToday } from "@/components/cash-session/attendance-roll-call-modal";
 import { PosCatalogPanel } from "./components/pos-catalog-panel";
 import { PosTicketPanel } from "./components/pos-ticket-panel";
 import { ChargeDialog } from "./components/charge-dialog";
@@ -48,6 +49,12 @@ export function BranchPos({ branchId }: { branchId: string }) {
   const [openingBalance, setOpeningBalance] = useState("0");
   const [isOpeningSession, setIsOpeningSession] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
+
+  // Pase de asistencia: la caja ya está abierta (con su monto contado) — esto
+  // es el recordatorio justo ANTES del primer cobro del día, no antes de abrir
+  // caja. "checked" evita repreguntar tras confirmar o si la consulta falla
+  // (no bloquea la venta si el estado no se pudo consultar).
+  const [rollCallStatus, setRollCallStatus] = useState<"checking" | "needed" | "clear">("checking");
 
   const { isOffline, pendingCount, syncState, lastSyncResult, syncQueue, refreshPendingCount } = useOfflineMode();
   const offlineCart = useOfflineCart();
@@ -118,6 +125,28 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   useEffect(() => () => { if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current); }, []);
   useEffect(() => { searchInputRef.current?.focus(); }, []);
+
+  // Con la caja ya abierta, se revisa si hoy se pasó lista en esta sucursal —
+  // si no, se pide antes de dejar cobrar la primera venta del día.
+  useEffect(() => {
+    if (!hasOpenCashSession) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await apiFetch(`/api/payroll/attendance/roll-call?branchId=${branchId}&date=${localToday()}`);
+        if (cancelled) return;
+        if (r.ok) {
+          const raw = (await r.json()) as { data?: { taken?: boolean } };
+          setRollCallStatus(raw?.data?.taken ? "clear" : "needed");
+        } else {
+          setRollCallStatus("clear");
+        }
+      } catch {
+        if (!cancelled) setRollCallStatus("clear");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [hasOpenCashSession, branchId]);
 
   // ── Cash session gate: open session handler ──
   async function handleOpenSession() {
@@ -270,6 +299,16 @@ export function BranchPos({ branchId }: { branchId: string }) {
           )}
         </div>
       </section>
+    );
+  }
+
+  // ── Pase de asistencia: antes del primer cobro del día ──
+  if (hasOpenCashSession && rollCallStatus === "needed") {
+    return (
+      <AttendanceRollCallModal
+        branchId={branchId}
+        onConfirmed={() => setRollCallStatus("clear")}
+      />
     );
   }
 

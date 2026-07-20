@@ -10,7 +10,8 @@ import { ok, validationFail } from "@/lib/api/response";
 import { getRollCall, takeRollCall } from "@/modules/payroll/employee-absences-service";
 
 /**
- * Pase de asistencia diario desde el POS (antes de abrir caja).
+ * Pase de asistencia diario desde el POS (pantalla Cobros, antes del primer
+ * cobro del día — la caja ya está abierta con su monto contado).
  *
  * Capability: CASH_SESSION_OPEN — quien puede abrir la caja de la sucursal
  * puede pasar lista de SU sucursal (no requiere acceso de Finanzas: el
@@ -24,7 +25,7 @@ const takeSchema = z.object({
     .array(
       z.object({
         employeeId: z.string().min(1),
-        status: z.enum(["PRESENT", "UNJUSTIFIED", "JUSTIFIED"]),
+        status: z.enum(["PRESENT", "PRESENT_LATE", "UNJUSTIFIED", "JUSTIFIED"]),
         notes: z.string().max(300).optional(),
       }),
     )
