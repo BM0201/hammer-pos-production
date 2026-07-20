@@ -259,7 +259,11 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
   return employees.map((emp) => {
     if (!emp.isActive) return { ...emp, payrollEstimate: null, payrollRates: rates };
     const salary = Number(emp.monthlySalary);
-    const months = monthsOfService(emp.startDate, at);
+    // Ancla de antigüedad: si ya se liquidó-y-recontrató, el reloj de
+    // indemnización/vacaciones/aguinaldo se resetea desde ahí (evita la "bola
+    // de nieve") — startDate real solo se usa mientras nunca se ha liquidado.
+    const anchor = emp.lastLiquidationAt ?? emp.startDate;
+    const months = monthsOfService(anchor, at);
     const indemnizacionRate = indemnizacionAccrualRate(months);
     // Modos forzados a ACCRUE_MONTHLY: `provisions` viaja siempre calculado y
     // el control del cliente decide si sumarlo (los modos de la config marcan
@@ -277,10 +281,10 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
     // Prestaciones ACUMULADAS a la fecha (pasivo por empleado, para drawer/CSV).
     // Acumulado por PERÍODO DE ANIVERSARIO LABORAL (no un histórico sin
     // cortes): el total es el mismo, pero auditable año por año.
-    const daysAccrued = vacationDaysAccrued(emp.startDate, at);
+    const daysAccrued = vacationDaysAccrued(anchor, at);
     const daysTaken = vacationTakenMap.get(emp.id) ?? 0;
     const vacationDaysBalance = round2(daysAccrued - daysTaken);
-    const period = currentVacationPeriod(emp.startDate, at);
+    const period = currentVacationPeriod(anchor, at);
     return {
       ...emp,
       payrollEstimate: {
@@ -297,7 +301,7 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
         // Salario por día (÷30): referencia de faltas — "una falta injustificada = −C$X".
         dailyRate: b.dailyRate,
         monthsOfService: round2(months),
-        aguinaldoAccrued: aguinaldoAccrued(salary, emp.startDate, at),
+        aguinaldoAccrued: aguinaldoAccrued(salary, anchor, at),
         aguinaldoDeadline: aguinaldoPaymentDeadline(at).toISOString().slice(0, 10),
         vacationDaysAccrued: daysAccrued,
         vacationDaysTaken: daysTaken,
@@ -308,7 +312,7 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
         vacationPeriodAccrued: period?.accruedDays ?? 0,
         vacationPeriodStart: period?.start.toISOString().slice(0, 10) ?? null,
         vacationPeriodEnd: period?.end.toISOString().slice(0, 10) ?? null,
-        indemnizacionAccrued: indemnizacionAccruedTotal(salary, emp.startDate, at),
+        indemnizacionAccrued: indemnizacionAccruedTotal(salary, anchor, at),
         indemnizacionRateActual: indemnizacionRate,
         // Warning (no bloqueo): salario por debajo del mínimo sectorial configurado.
         belowMinimumWage: rates.salarioMinimoSectorial > 0 && salary < rates.salarioMinimoSectorial,
@@ -596,7 +600,7 @@ export async function calculatePayrollRun(
     (
       await prisma.employee.findMany({
         where: { id: { in: result.employees.map((emp) => emp.employeeId) } },
-        select: { id: true, startDate: true, applyIrRetention: true, inssSalary: true },
+        select: { id: true, startDate: true, lastLiquidationAt: true, applyIrRetention: true, inssSalary: true },
       })
     ).map((emp) => [emp.id, emp]),
   );
@@ -628,7 +632,9 @@ export async function calculatePayrollRun(
       loanDeductions,
       otherDeductions,
       rates,
-      indemnizacionRate: empFlags ? indemnizacionAccrualRate(monthsOfService(empFlags.startDate, periodEnd)) : undefined,
+      indemnizacionRate: empFlags
+        ? indemnizacionAccrualRate(monthsOfService(empFlags.lastLiquidationAt ?? empFlags.startDate, periodEnd))
+        : undefined,
       applyIrRetention: empFlags?.applyIrRetention ?? false,
       inssMonthlySalary: empFlags?.inssSalary != null ? Number(empFlags.inssSalary) : undefined,
       absenceDays: absenceDaysById.get(emp.employeeId) ?? 0,

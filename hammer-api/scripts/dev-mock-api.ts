@@ -40,6 +40,7 @@ import {
   currentVacationPeriod,
   indemnizacionAccrualRate,
   indemnizacionAccruedTotal,
+  indemnizacionPayout,
   monthsOfService,
   vacationDaysAccrued,
   vacationPayout,
@@ -71,17 +72,43 @@ type MockEmployee = {
   inssSalary: string | null;
   /** Número de cédula de identidad. */
   nationalId: string | null;
+  /** Última liquidación y recontratación (rollover) — null = nunca se liquidó. */
+  lastLiquidationAt: string | null;
 };
 
 const employees: MockEmployee[] = [
-  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-070390-0001A" },
-  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-150988-0002B" },
-  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-220595-0003C" },
+  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-070390-0001A", lastLiquidationAt: null },
+  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-150988-0002B", lastLiquidationAt: null },
+  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-220595-0003C", lastLiquidationAt: null },
   // Demo de tramos Art. 45 — mismo salario que Carolina para ver que cuestan distinto.
   // Diana además CON retención de IR, para ver la variación por trabajador:
-  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: true, inssSalary: null, nationalId: null },
-  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: null, nationalId: null },
+  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: true, inssSalary: null, nationalId: null, lastLiquidationAt: null },
+  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: null, nationalId: null, lastLiquidationAt: null },
 ];
+
+/** Liquidaciones registradas (ROLLOVER o TERMINATION) — historial en memoria. */
+type MockSettlement = {
+  id: string;
+  employeeId: string;
+  kind: "ROLLOVER" | "TERMINATION";
+  causal: string | null;
+  date: string;
+  aguinaldoPaid: number;
+  vacationDaysPaid: number;
+  vacationValuePaid: number;
+  indemnizacionPaid: number;
+  loanDeduction: number;
+  totalPaid: number;
+  notes: string | null;
+};
+const settlements: MockSettlement[] = [];
+const CAUSAL_PAYS_INDEMNIZACION: Record<string, boolean> = {
+  DESPIDO_SIN_CAUSA: true,
+  MUTUO_ACUERDO: true,
+  RENUNCIA_CON_PREAVISO: true,
+  DESPIDO_CON_CAUSA: false,
+  RENUNCIA_SIN_PREAVISO: false,
+};
 
 /** Saldos de préstamos ACTIVOS (se descuentan al liquidar): Harry debe 2,000. */
 const LOAN_OUTSTANDING: Record<string, number> = { "emp-harry": 2000 };
@@ -200,7 +227,11 @@ function withEstimate(emp: MockEmployee) {
 
   const at = new Date();
   const salary = Number(emp.monthlySalary);
-  const months = monthsOfService(emp.startDate, at);
+  // Ancla de antigüedad: si ya se liquidó-y-recontrató, el reloj se resetea
+  // desde ahí (evita la "bola de nieve" de indemnización) — igual que en
+  // payroll-service.ts.
+  const anchor = emp.lastLiquidationAt ?? emp.startDate;
+  const months = monthsOfService(anchor, at);
   const indemnizacionRate = indemnizacionAccrualRate(months);
   const b = computePayrollLineBreakdown({
     monthlySalary: salary,
@@ -212,10 +243,10 @@ function withEstimate(emp: MockEmployee) {
     applyIrRetention: emp.applyIrRetention,
     inssMonthlySalary: emp.inssSalary != null ? Number(emp.inssSalary) : undefined,
   });
-  const daysAccrued = vacationDaysAccrued(emp.startDate, at);
+  const daysAccrued = vacationDaysAccrued(anchor, at);
   const daysTaken = vacationDaysTaken(emp.id);
   const vacationDaysBalance = round2(daysAccrued - daysTaken);
-  const period = currentVacationPeriod(emp.startDate, at);
+  const period = currentVacationPeriod(anchor, at);
 
   return {
     ...emp,
@@ -233,7 +264,7 @@ function withEstimate(emp: MockEmployee) {
       indemnizacionAccrual: b.indemnizacionAccrual,
       employerCost: b.employerCost,
       monthsOfService: round2(months),
-      aguinaldoAccrued: aguinaldoAccrued(salary, emp.startDate, at),
+      aguinaldoAccrued: aguinaldoAccrued(salary, anchor, at),
       aguinaldoDeadline: aguinaldoPaymentDeadline(at).toISOString().slice(0, 10),
       vacationDaysAccrued: daysAccrued,
       vacationDaysTaken: daysTaken,
@@ -243,7 +274,7 @@ function withEstimate(emp: MockEmployee) {
       vacationPeriodAccrued: period?.accruedDays ?? 0,
       vacationPeriodStart: period?.start.toISOString().slice(0, 10) ?? null,
       vacationPeriodEnd: period?.end.toISOString().slice(0, 10) ?? null,
-      indemnizacionAccrued: indemnizacionAccruedTotal(salary, emp.startDate, at),
+      indemnizacionAccrued: indemnizacionAccruedTotal(salary, anchor, at),
       indemnizacionRateActual: indemnizacionRate,
       belowMinimumWage: config.salarioMinimoSectorial > 0 && salary < config.salarioMinimoSectorial,
       // Perfil del trabajador: faltas del mes/año y préstamos pendientes.
@@ -426,6 +457,7 @@ const server = http.createServer(async (req, res) => {
       applyIrRetention: Boolean(body.applyIrRetention),
       inssSalary: body.inssSalary != null && body.inssSalary !== "" ? String(body.inssSalary) : null,
       nationalId: typeof body.nationalId === "string" && body.nationalId.trim() ? String(body.nationalId).trim() : null,
+      lastLiquidationAt: null,
     };
     employees.push(emp);
     return send(res, 201, { ok: true, data: withEstimate(emp) });
@@ -719,6 +751,73 @@ const server = http.createServer(async (req, res) => {
     const idx = vacationEntries.findIndex((v) => v.id === vacMatch[1]);
     if (idx >= 0) vacationEntries.splice(idx, 1);
     return ok(res, { deleted: true });
+  }
+
+  // Liquidación: ROLLOVER (liquidación y recontratación inmediata — sigue
+  // activo, resetea antigüedad) o TERMINATION (baja definitiva, requiere causal).
+  if (path === "/api/payroll/settlements" && method === "GET") {
+    const employeeId = url.searchParams.get("employeeId") ?? "";
+    const list = settlements.filter((s) => s.employeeId === employeeId).sort((a, b) => b.date.localeCompare(a.date));
+    return ok(res, { employeeId, settlements: list });
+  }
+  if (path === "/api/payroll/settlements" && method === "POST") {
+    const body = await readJson(req);
+    const employeeId = String(body.employeeId ?? "");
+    const emp = employees.find((e) => e.id === employeeId);
+    if (!emp) return send(res, 404, { ok: false, error: { code: "NOT_FOUND", message: "Empleado no existe" } });
+    if (!emp.isActive) return send(res, 400, { ok: false, error: { code: "VALIDATION_ERROR", message: "El trabajador ya esta inactivo" } });
+    const kind = body.kind === "TERMINATION" ? "TERMINATION" : "ROLLOVER";
+    const causal = kind === "TERMINATION" ? String(body.causal ?? "DESPIDO_SIN_CAUSA") : null;
+
+    const at = new Date();
+    const anchor = emp.lastLiquidationAt ?? emp.startDate;
+    const salary = Number(emp.monthlySalary);
+    const aguinaldo = aguinaldoAccrued(salary, anchor, at);
+    const daysAccrued = vacationDaysAccrued(anchor, at);
+    const daysTaken = vacationDaysTaken(emp.id);
+    const vacationDaysBalance = Math.max(0, round2(daysAccrued - daysTaken));
+    const vacationValue = vacationPayout(vacationDaysBalance, salary);
+    const paysIndemnizacion = kind === "ROLLOVER" ? true : (CAUSAL_PAYS_INDEMNIZACION[causal ?? ""] ?? false);
+    const indemnizacion = paysIndemnizacion ? indemnizacionPayout(salary, anchor, at) : 0;
+    const loanOutstanding = round2(LOAN_OUTSTANDING[emp.id] ?? 0);
+    const totalPaid = Math.max(0, round2(aguinaldo + vacationValue + indemnizacion - loanOutstanding));
+
+    if (vacationDaysBalance > 0) {
+      vacationEntries.push({
+        id: `vac-${randomUUID().slice(0, 8)}`,
+        employeeId: emp.id,
+        date: at.toISOString(),
+        days: vacationDaysBalance,
+        kind: "PAGADAS",
+        notes: kind === "ROLLOVER" ? "Liquidación y recontratación inmediata" : "Liquidación por baja",
+      });
+    }
+    LOAN_OUTSTANDING[emp.id] = 0;
+
+    const settlement: MockSettlement = {
+      id: `settle-${randomUUID().slice(0, 8)}`,
+      employeeId: emp.id,
+      kind,
+      causal,
+      date: at.toISOString(),
+      aguinaldoPaid: aguinaldo,
+      vacationDaysPaid: vacationDaysBalance,
+      vacationValuePaid: vacationValue,
+      indemnizacionPaid: indemnizacion,
+      loanDeduction: loanOutstanding,
+      totalPaid,
+      notes: typeof body.notes === "string" ? body.notes : null,
+    };
+    settlements.push(settlement);
+
+    if (kind === "ROLLOVER") {
+      emp.lastLiquidationAt = at.toISOString();
+    } else {
+      emp.isActive = false;
+      emp.endDate = at.toISOString();
+    }
+
+    return send(res, 201, { ok: true, data: settlement });
   }
 
   // Asistencia: faltas del mes (las injustificadas descuentan al calcular).

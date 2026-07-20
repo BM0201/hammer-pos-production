@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Users,
   Plus,
@@ -18,9 +18,12 @@ import {
   Wallet,
   X,
   Trash2,
+  ClipboardCheck,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { splitNetPayBiweekly } from "@/components/finance/payroll-calc";
+import { DEFAULT_PAYROLL_RATES, splitNetPayBiweekly, type PayrollBreakdown, type PayrollRates } from "@/components/finance/payroll-calc";
+import { AttendancePanel } from "@/components/finance/attendance-panel";
+import { EmployeeProfileDrawer } from "@/components/payroll/employee-profile-drawer";
 import toast from "react-hot-toast";
 
 type Branch = { id: string; code: string; name: string };
@@ -39,7 +42,11 @@ type Employee = {
   inssSalary?: string | null;
   /** Número de cédula de identidad. */
   nationalId?: string | null;
+  /** Última liquidación y recontratación (rollover) — null = nunca se liquidó. */
+  lastLiquidationAt?: string | null;
   branch: { id: string; code: string; name: string };
+  payrollEstimate?: PayrollBreakdown | null;
+  payrollRates?: PayrollRates;
 };
 type PayrollEmployee = {
   employeeId: string;
@@ -121,7 +128,7 @@ type EmployeeLoan = {
   employee: { id: string; fullName: string; position: string };
   branch: { id: string; code: string; name: string };
 };
-type ActiveTab = "employees" | "payroll" | "loans" | "history";
+type ActiveTab = "employees" | "attendance" | "payroll" | "loans" | "history";
 
 /** Clave de persistencia del tab activo de planilla (sobrevive recargas). */
 const PAYROLL_TAB_STORAGE_KEY = "hammer.payroll.activeTab";
@@ -175,7 +182,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
     }
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem(PAYROLL_TAB_STORAGE_KEY);
-    if (saved === "employees" || saved === "payroll" || saved === "loans" || saved === "history") {
+    if (saved === "employees" || saved === "attendance" || saved === "payroll" || saved === "loans" || saved === "history") {
       setActiveTabState(saved);
     }
   }, [forcedTab]);
@@ -210,6 +217,15 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
     installmentFrequency: "MONTHLY" as "MONTHLY" | "BIWEEKLY",
     notes: "",
   });
+
+  // Perfil del trabajador (RRHH): mismo drawer que Finanzas › Planilla —
+  // cédula, asistencia, prestaciones acumuladas y liquidación.
+  const [drawerEmployeeId, setDrawerEmployeeId] = useState<string | null>(null);
+  const drawerEmployee = drawerEmployeeId ? employees.find((e) => e.id === drawerEmployeeId) ?? null : null;
+  const payrollRates = useMemo<PayrollRates>(
+    () => employees.find((e) => e.payrollRates)?.payrollRates ?? DEFAULT_PAYROLL_RATES,
+    [employees],
+  );
 
   // Inline confirmations & payment (replaces window.prompt / confirm)
   const [confirmDeactivateEmpId, setConfirmDeactivateEmpId] = useState<string | null>(null);
@@ -659,6 +675,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       <div className="erp-tabs-pill">
         {([
           { key: "employees" as const, label: "Empleados", icon: Users },
+          { key: "attendance" as const, label: "Asistencia", icon: ClipboardCheck },
           { key: "payroll" as const, label: "Calcular Nómina", icon: Calculator },
           { key: "loans" as const, label: "Préstamos", icon: DollarSign },
           { key: "history" as const, label: "Historial", icon: History },
@@ -671,6 +688,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       )}
 
       {/* ── Branch filter + Add button ── */}
+      {activeTab !== "attendance" && (
       <div className="flex items-center gap-3">
         <label className="text-sm font-medium text-[var(--color-text-secondary)] whitespace-nowrap">Sucursal:</label>
         <select value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)} className="hm-input rounded-lg text-sm">
@@ -686,6 +704,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
           </button>
         )}
       </div>
+      )}
 
       {/* ── Employees tab ── */}
       {activeTab === "employees" && (
@@ -771,7 +790,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                 ) : employees.map((emp) => {
                   const isConfirmingDeactivate = confirmDeactivateEmpId === emp.id;
                   return (
-                    <tr key={emp.id}>
+                    <tr key={emp.id} onClick={() => setDrawerEmployeeId(emp.id)} className="cursor-pointer">
                       <td className="font-medium text-[var(--color-text)]">{emp.fullName}</td>
                       <td className="text-[var(--color-text-muted)]"><span className="inline-flex items-center gap-1"><Briefcase className="h-3.5 w-3.5" />{emp.position}</span></td>
                       <td className="text-[var(--color-text-muted)]">{emp.branch?.code ?? "—"}</td>
@@ -783,7 +802,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                           emp.isActive ? "bg-[var(--color-success-100)] text-[var(--color-success-700)]" : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"
                         }`}>{emp.isActive ? "Activo" : "Inactivo"}</span>
                       </td>
-                      <td className="text-right">
+                      <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         {isConfirmingDeactivate ? (
                           <div className="flex justify-end items-center gap-1 flex-wrap">
                             <span className="text-xs text-[var(--color-danger-700)]">¿Desactivar?</span>
@@ -809,6 +828,9 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
           </div>
         </div>
       )}
+
+      {/* ── Attendance tab ── */}
+      {activeTab === "attendance" && <AttendancePanel />}
 
       {/* ── Payroll tab ── */}
       {activeTab === "payroll" && (
@@ -1411,6 +1433,14 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
           </div>
         </div>
       )}
+
+      <EmployeeProfileDrawer
+        employee={drawerEmployee}
+        rates={payrollRates}
+        onClose={() => setDrawerEmployeeId(null)}
+        onChanged={loadEmployees}
+        onEdit={drawerEmployee ? () => { handleEdit(drawerEmployee); setDrawerEmployeeId(null); } : undefined}
+      />
     </div>
   );
 }

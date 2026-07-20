@@ -18,9 +18,9 @@ export default function MasterUsersPage() {
           style={{ background: "linear-gradient(to bottom, var(--color-master-400), var(--color-master-600))" }}
         />
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-[var(--color-text)]">Personal & Roles</h1>
+          <h1 className="text-xl font-bold tracking-tight text-[var(--color-text)]">RRHH</h1>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Gestión integral de usuarios, roles por sucursal, empleados y nómina
+            Recursos Humanos: usuarios y roles por sucursal, trabajadores, asistencia, vacaciones y liquidaciones
           </p>
         </div>
       </div>
@@ -32,7 +32,7 @@ export default function MasterUsersPage() {
         </button>
         <button className={tab === "employees" ? "active" : ""} onClick={() => setTab("employees")}>
           <UserCheck className="h-3.5 w-3.5" />
-          Personal & Nómina
+          Trabajadores
         </button>
       </div>
 
