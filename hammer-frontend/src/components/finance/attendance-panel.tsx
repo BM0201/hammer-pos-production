@@ -130,18 +130,25 @@ function PendingAttendanceReview() {
     }
   }
 
-  if (loading) return null;
-  if (pending.length === 0) return null;
-
   return (
-    <div className="hm-module-card border-[var(--color-warning-200)] bg-[var(--color-warning-50)]/40 p-4 space-y-3">
+    <div
+      className={`hm-module-card p-4 space-y-3 ${
+        pending.length > 0 ? "border-[var(--color-warning-200)] bg-[var(--color-warning-50)]/40" : ""
+      }`}
+    >
       <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
-        <ShieldCheck className="h-4 w-4 text-[var(--color-warning-600)]" /> Pendientes de confirmar ({pending.length})
+        <ShieldCheck className="h-4 w-4 text-[var(--color-warning-600)]" /> Pendientes de confirmar{pending.length > 0 ? ` (${pending.length})` : ""}
       </h3>
       <p className="text-xs text-[var(--color-text-muted)]">
-        El cajero pasó esta lista desde el POS. Revisa la hora de llegada de cada quien y corrige cualquier marca
-        antes de confirmar — una vez confirmado, la asistencia queda como real para la nómina.
+        El cajero pasa esta lista desde el POS antes de abrir caja. Aquí revisas la hora de llegada de cada quien y
+        corriges cualquier marca falsa antes de confirmar — solo Master puede confirmar, para evitar que se marquen
+        presentes entre compañeros.
       </p>
+      {loading ? (
+        <p className="text-xs text-[var(--color-text-muted)] animate-pulse">Cargando…</p>
+      ) : pending.length === 0 ? (
+        <p className="text-xs text-[var(--color-text-soft)]">Sin pases pendientes — todo lo tomado hoy ya está confirmado.</p>
+      ) : (
       <div className="space-y-3">
         {pending.map((rc) => (
           <div key={rc.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
@@ -193,6 +200,7 @@ function PendingAttendanceReview() {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

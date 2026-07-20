@@ -7,7 +7,6 @@ import {
   Edit2,
   UserMinus,
   Calculator,
-  History,
   Building2,
   DollarSign,
   Briefcase,
@@ -19,6 +18,7 @@ import {
   X,
   Trash2,
   ClipboardCheck,
+  CalendarRange,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { DEFAULT_PAYROLL_RATES, splitNetPayBiweekly, type PayrollBreakdown, type PayrollRates } from "@/components/finance/payroll-calc";
@@ -181,8 +181,11 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       return;
     }
     if (typeof window === "undefined") return;
+    // Sin forcedTab esto es RRHH (Finanzas siempre manda forcedTab): solo
+    // Empleados/Asistencia son de RRHH — Calcular Nómina/Préstamos/Historial
+    // son de Finanzas y no deben quedar guardados como tab de esta pantalla.
     const saved = window.localStorage.getItem(PAYROLL_TAB_STORAGE_KEY);
-    if (saved === "employees" || saved === "attendance" || saved === "payroll" || saved === "loans" || saved === "history") {
+    if (saved === "employees" || saved === "attendance") {
       setActiveTabState(saved);
     }
   }, [forcedTab]);
@@ -647,11 +650,16 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
           <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: "linear-gradient(90deg, var(--color-success-400), var(--color-success-600))" }} />
           <div className="flex items-center gap-3 pt-1">
             <div className="hm-icon-wrap hm-icon-wrap-sm bg-[var(--color-success-50)] border border-[var(--color-success-100)]">
-              <DollarSign className="h-4 w-4 text-[var(--color-success-600)]" />
+              <CalendarRange className="h-4 w-4 text-[var(--color-success-600)]" />
             </div>
             <div>
-              <p className="hm-num-xl">{fmt(employees.filter((e) => e.isActive).reduce((s, e) => s + Number(e.monthlySalary), 0))}</p>
-              <p className="text-xs text-[var(--color-text-soft)]">Nómina mensual base</p>
+              <p className="hm-num-xl">
+                {employees
+                  .filter((e) => e.isActive)
+                  .reduce((s, e) => s + (e.payrollEstimate?.vacationDaysBalance ?? 0), 0)
+                  .toLocaleString("es-NI", { maximumFractionDigits: 0 })}
+              </p>
+              <p className="text-xs text-[var(--color-text-soft)]">Días de vacación acumulados</p>
             </div>
           </div>
         </div>
@@ -670,15 +678,13 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       </div>
       )}
 
-      {/* ── Tab bar ── */}
+      {/* ── Tab bar (RRHH: solo lo que le compete — Calcular Nómina/Préstamos/
+          Historial son de Finanzas y viven allá, embebidos vía forcedTab) ── */}
       {!hideTabBar && (
       <div className="erp-tabs-pill">
         {([
           { key: "employees" as const, label: "Empleados", icon: Users },
           { key: "attendance" as const, label: "Asistencia", icon: ClipboardCheck },
-          { key: "payroll" as const, label: "Calcular Nómina", icon: Calculator },
-          { key: "loans" as const, label: "Préstamos", icon: DollarSign },
-          { key: "history" as const, label: "Historial", icon: History },
         ] as const).map((t) => (
           <button key={t.key} onClick={() => setActiveTab(t.key)} className={activeTab === t.key ? "active" : ""}>
             <t.icon className="h-3.5 w-3.5" /> {t.label}

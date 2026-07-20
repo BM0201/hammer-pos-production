@@ -8,7 +8,6 @@ import {
   Calculator,
   CalendarClock,
   CalendarDays,
-  CalendarX2,
   CheckCircle2,
   Download,
   DollarSign,
@@ -27,7 +26,6 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { EmployeeManager } from "@/components/payroll/employee-manager";
 import { BiweeklyCutsPanel } from "@/components/payroll/biweekly-cuts-panel";
 import { EmployeeProfileDrawer } from "@/components/payroll/employee-profile-drawer";
-import { AttendancePanel } from "./attendance-panel";
 import { PayrollCostHero, type PayrollHeroTotals } from "./payroll-cost-hero";
 import {
   DEFAULT_PAYROLL_RATES,
@@ -80,7 +78,7 @@ type EmployeeRow = {
   payrollRates?: PayrollRates;
 };
 
-type PanelTab = "employees" | "payroll" | "cuts" | "attendance" | "loans" | "history";
+type PanelTab = "employees" | "payroll" | "cuts" | "loans" | "history";
 type SortKey = "name" | "salary" | "start";
 
 const BANNER_DISMISS_KEY = "hammer.finance.payrollBanner.dismissed";
@@ -693,13 +691,14 @@ export function PayrollFinancePanel() {
       {/* ── 4 · Tabs (mismos del sistema) ──
           "Cortes Quincenales" vive AQUÍ (antes era un tab aparte en Finanzas y
           duplicaba el pago que también ofrecía Calcular Nómina): un solo lugar
-          para pagar quincenas. */}
+          para pagar quincenas. Asistencia NO vive aquí — es de RRHH (Personal
+          & Roles); Finanzas solo ve su impacto en el cálculo (columna Faltas /
+          drawer), sin duplicar la pantalla de registro. */}
       <div className="erp-tabs-pill">
         {([
           { key: "employees" as const, label: "Empleados", icon: Users },
           { key: "payroll" as const, label: "Calcular Nómina", icon: Calculator },
           { key: "cuts" as const, label: "Cortes Quincenales", icon: CalendarClock },
-          { key: "attendance" as const, label: "Asistencia", icon: CalendarX2 },
           { key: "loans" as const, label: "Préstamos", icon: DollarSign },
           { key: "history" as const, label: "Historial", icon: History },
         ] as const).map((t) => (
@@ -716,9 +715,6 @@ export function PayrollFinancePanel() {
 
       {/* Corte consolidado: el ÚNICO flujo para pagar quincenas. */}
       {tab === "cuts" && <BiweeklyCutsPanel />}
-
-      {/* Asistencia: faltas injustificadas = día de pago menos (÷30). */}
-      {tab === "attendance" && <AttendancePanel />}
 
       {tab === "employees" && (
         <>
