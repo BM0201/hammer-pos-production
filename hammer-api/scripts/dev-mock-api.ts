@@ -767,7 +767,7 @@ const server = http.createServer(async (req, res) => {
   if (path === "/api/payroll/attendance/roll-call/pending" && method === "GET") {
     const branchId = url.searchParams.get("branchId");
     const list = rollCalls
-      .filter((r) => r.reviewStatus === "PENDING" && (!branchId || r.branchId === branchId))
+      .filter((r) => r.reviewStatus === "PENDING" && (!branchId || r.branchId === branchId) && attendanceMarks.some((m) => m.rollCallId === r.id))
       .map((r) => ({
         id: r.id,
         date: r.date,

@@ -222,7 +222,10 @@ export type RollCallReviewStatus = (typeof ROLL_CALL_REVIEW_STATUSES)[number];
  */
 export async function listPendingRollCalls(branchId?: string) {
   const rollCalls = await prisma.attendanceRollCall.findMany({
-    where: { reviewStatus: "PENDING", ...(branchId ? { branchId } : {}) },
+    // Solo pases con marcas por trabajador (los tomados antes de que existiera
+    // esta función quedaron PENDING por el default de la migración pero no
+    // tienen nada que revisar — sin esto, aparecían vacíos en la cola).
+    where: { reviewStatus: "PENDING", marks: { some: {} }, ...(branchId ? { branchId } : {}) },
     include: {
       branch: { select: { id: true, code: true, name: true } },
       marks: {
