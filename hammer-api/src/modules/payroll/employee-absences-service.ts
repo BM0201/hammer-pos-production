@@ -116,6 +116,7 @@ export async function getRollCall(branchId: string, dateIso: string) {
   return {
     taken: Boolean(rollCall),
     takenAt: rollCall?.createdAt.toISOString() ?? null,
+    reviewStatus: rollCall?.reviewStatus ?? null,
     presentCount: rollCall?.presentCount ?? null,
     absentCount: rollCall?.absentCount ?? null,
     roster,
@@ -151,6 +152,9 @@ export async function takeRollCall(
   const rosterIds = new Set(roster.map((e) => e.id));
   const entries = input.entries.filter((e) => rosterIds.has(e.employeeId));
 
+  // Marca esta toma para todos los que confirmen PRESENT (para "hora de
+  // llegada" real de cada quien — antes esto no se guardaba en ningún lado).
+  const takenAt = new Date();
   let present = 0;
   let absent = 0;
   for (const entry of entries) {
@@ -169,9 +173,29 @@ export async function takeRollCall(
 
   const rollCall = await prisma.attendanceRollCall.upsert({
     where: { branchId_date: { branchId: input.branchId, date } },
-    create: { branchId: input.branchId, date, takenByUserId: actorUserId ?? null, presentCount: present, absentCount: absent },
-    update: { takenByUserId: actorUserId ?? null, presentCount: present, absentCount: absent },
+    // Re-tomar el pase (corrección) vuelve a dejarlo PENDIENTE: Master debe
+    // revisar de nuevo — evita que una corrección del cajero quede sin ojo.
+    create: { branchId: input.branchId, date, takenByUserId: actorUserId ?? null, presentCount: present, absentCount: absent, reviewStatus: "PENDING" },
+    update: { takenByUserId: actorUserId ?? null, presentCount: present, absentCount: absent, reviewStatus: "PENDING", reviewedByUserId: null, reviewedAt: null },
   });
+
+  for (const entry of entries) {
+    await prisma.attendanceMark.upsert({
+      where: { rollCallId_employeeId: { rollCallId: rollCall.id, employeeId: entry.employeeId } },
+      create: {
+        rollCallId: rollCall.id,
+        employeeId: entry.employeeId,
+        status: entry.status,
+        arrivalAt: entry.status === "PRESENT" ? takenAt : null,
+        notes: entry.notes ?? null,
+      },
+      update: {
+        status: entry.status,
+        arrivalAt: entry.status === "PRESENT" ? takenAt : null,
+        notes: entry.notes ?? null,
+      },
+    });
+  }
 
   await logAuditEvent({
     actorUserId: actorUserId ?? undefined,
@@ -184,6 +208,100 @@ export async function takeRollCall(
   });
 
   return { rollCall, presentCount: present, absentCount: absent };
+}
+
+/* ── Confirmación por Master (anti "buddy punching") ───────────────────────── */
+
+export const ROLL_CALL_REVIEW_STATUSES = ["PENDING", "CONFIRMED"] as const;
+export type RollCallReviewStatus = (typeof ROLL_CALL_REVIEW_STATUSES)[number];
+
+/**
+ * Pases de asistencia PENDIENTES de confirmar por Master, con la marca de
+ * cada trabajador (estado + hora de llegada) para que Master vea y corrija
+ * antes de confirmar que la asistencia es real.
+ */
+export async function listPendingRollCalls(branchId?: string) {
+  const rollCalls = await prisma.attendanceRollCall.findMany({
+    where: { reviewStatus: "PENDING", ...(branchId ? { branchId } : {}) },
+    include: {
+      branch: { select: { id: true, code: true, name: true } },
+      marks: {
+        include: { employee: { select: { id: true, fullName: true, position: true } } },
+        orderBy: { employee: { fullName: "asc" } },
+      },
+    },
+    orderBy: [{ date: "desc" }],
+  });
+  return rollCalls;
+}
+
+/**
+ * Master confirma (o corrige y confirma) un pase: `corrections` permite
+ * cambiar el estado de trabajadores marcados falsamente antes de confirmar —
+ * la corrección también ajusta EmployeeAbsence para que la nómina refleje lo
+ * REAL, no lo que el cajero marcó.
+ */
+export async function confirmRollCall(
+  rollCallId: string,
+  corrections: Array<{ employeeId: string; status: RollCallStatus; notes?: string | null }> = [],
+  actorUserId?: string,
+) {
+  const rollCall = await prisma.attendanceRollCall.findUnique({ where: { id: rollCallId }, include: { marks: true } });
+  if (!rollCall) throw new Error("ROLL_CALL_NOT_FOUND");
+
+  const markByEmployee = new Map(rollCall.marks.map((m) => [m.employeeId, m]));
+  for (const c of corrections) {
+    if (!ROLL_CALL_STATUSES.includes(c.status)) {
+      throw new Error("INVALID_INPUT: status debe ser PRESENT, UNJUSTIFIED o JUSTIFIED");
+    }
+    if (!markByEmployee.has(c.employeeId)) {
+      throw new Error("INVALID_INPUT: el empleado no pertenece a este pase");
+    }
+  }
+
+  for (const c of corrections) {
+    await prisma.attendanceMark.update({
+      where: { rollCallId_employeeId: { rollCallId, employeeId: c.employeeId } },
+      data: { status: c.status, notes: c.notes ?? null, arrivalAt: c.status === "PRESENT" ? new Date() : null },
+    });
+    if (c.status === "PRESENT") {
+      await prisma.employeeAbsence.deleteMany({ where: { employeeId: c.employeeId, date: rollCall.date } });
+    } else {
+      await prisma.employeeAbsence.upsert({
+        where: { employeeId_date: { employeeId: c.employeeId, date: rollCall.date } },
+        create: { employeeId: c.employeeId, date: rollCall.date, kind: c.status, notes: c.notes ?? null, createdByUserId: actorUserId ?? null },
+        update: { kind: c.status, notes: c.notes ?? null },
+      });
+    }
+  }
+
+  const finalMarks = await prisma.attendanceMark.findMany({ where: { rollCallId } });
+  const presentCount = finalMarks.filter((m) => m.status === "PRESENT").length;
+  const absentCount = finalMarks.length - presentCount;
+
+  const updated = await prisma.attendanceRollCall.update({
+    where: { id: rollCallId },
+    data: {
+      reviewStatus: "CONFIRMED",
+      reviewedByUserId: actorUserId ?? null,
+      reviewedAt: new Date(),
+      presentCount,
+      absentCount,
+    },
+    include: { marks: { include: { employee: { select: { id: true, fullName: true, position: true } } } } },
+  });
+
+  await logAuditEvent({
+    actorUserId: actorUserId ?? undefined,
+    branchId: rollCall.branchId,
+    module: "payroll",
+    action: "attendance_roll_call.confirmed",
+    entityType: "AttendanceRollCall",
+    entityId: rollCallId,
+    metadataJson: { date: rollCall.date.toISOString().slice(0, 10), corrections: corrections.length, presentCount, absentCount },
+  });
+
+  return updated;
 }
 
 /** Días de falta INJUSTIFICADA por empleado en el mes — alimenta la corrida. */

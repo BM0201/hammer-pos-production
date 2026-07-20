@@ -1685,6 +1685,7 @@ model Employee {
   payrollLines         PayrollLine[]
   payrollDisbursements PayrollDisbursement[]
   absences             EmployeeAbsence[]
+  attendanceMarks      AttendanceMark[]
 
   @@index([branchId])
   @@index([isActive])
@@ -1922,20 +1923,51 @@ model EmployeeAbsence {
 /// abrir caja (ventana emergente con el personal activo de la sucursal).
 /// Registra QUE se pasó lista y quién; las faltas marcadas viven en
 /// EmployeeAbsence. Único por sucursal+día — el modal solo aparece una vez.
+///
+/// `reviewStatus`: el pase lo toma el CAJERO — para evitar marcas falsas entre
+/// compañeros ("buddy punching"), Master debe CONFIRMAR (o corregir) cada
+/// pase; PENDING hasta que Master revise. Cada re-toma del día vuelve a dejarlo
+/// en PENDING (una corrección del cajero también necesita re-revisión).
 model AttendanceRollCall {
-  id            String   @id @default(cuid())
-  branchId      String
+  id             String    @id @default(cuid())
+  branchId       String
   /// Día del pase (fecha pura, medianoche UTC).
-  date          DateTime
-  takenByUserId String?
-  presentCount  Int      @default(0)
-  absentCount   Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  date           DateTime
+  takenByUserId  String?
+  presentCount   Int       @default(0)
+  absentCount    Int       @default(0)
+  reviewStatus   String    @default("PENDING") /// PENDING | CONFIRMED
+  reviewedByUserId String?
+  reviewedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  branch Branch @relation(fields: [branchId], references: [id])
+  branch Branch           @relation(fields: [branchId], references: [id])
+  marks  AttendanceMark[]
 
   @@unique([branchId, date])
+}
+
+/// Marca POR TRABAJADOR de un pase de asistencia: estado + hora real de
+/// llegada (solo tiene sentido si PRESENT). Antes la presencia era implícita
+/// (ausencia de fila en EmployeeAbsence); ahora queda un registro explícito y
+/// auditable por trabajador, con la hora, para que Master pueda confirmar o
+/// corregir marcas falsas.
+model AttendanceMark {
+  id         String    @id @default(cuid())
+  rollCallId String
+  employeeId String
+  status     String /// PRESENT | UNJUSTIFIED | JUSTIFIED
+  /// Hora en que se tomó el pase (se guarda para PRESENT como "hora de llegada").
+  arrivalAt  DateTime?
+  notes      String?
+  createdAt  DateTime  @default(now())
+
+  rollCall AttendanceRollCall @relation(fields: [rollCallId], references: [id])
+  employee Employee           @relation(fields: [employeeId], references: [id])
+
+  @@unique([rollCallId, employeeId])
+  @@index([employeeId])
 }
 
 /// Registro CONTABLE del pago mensual de las facturas del patrón (INSS e

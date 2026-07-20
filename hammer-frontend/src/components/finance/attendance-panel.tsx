@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarX2, Loader2, Trash2 } from "lucide-react";
+import { CalendarX2, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import toast from "react-hot-toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { useSession } from "@/lib/client/session";
+import { isMasterOrAbove } from "@/modules/rbac/role-routing";
 import { fmtC, fmtDateShort, round2 } from "./payroll-calc";
 
 /**
@@ -34,7 +36,171 @@ type Absence = {
 
 const KIND_LABEL: Record<string, string> = { UNJUSTIFIED: "Injustificada", JUSTIFIED: "Justificada" };
 
+type RollCallMarkStatus = "PRESENT" | "UNJUSTIFIED" | "JUSTIFIED";
+type RollCallMark = {
+  employeeId: string;
+  status: RollCallMarkStatus;
+  arrivalAt: string | null;
+  notes: string | null;
+  employee: { id: string; fullName: string; position: string };
+};
+type PendingRollCall = {
+  id: string;
+  date: string;
+  presentCount: number;
+  absentCount: number;
+  branch: { id: string; code: string; name: string };
+  marks: RollCallMark[];
+};
+
+const MARK_STATUS_OPTIONS: Array<{ value: RollCallMarkStatus; label: string; activeCls: string }> = [
+  { value: "PRESENT", label: "Presente", activeCls: "bg-[var(--color-success-600)] text-white border-transparent" },
+  { value: "JUSTIFIED", label: "Falta just.", activeCls: "bg-[var(--color-warning-600)] text-white border-transparent" },
+  { value: "UNJUSTIFIED", label: "Falta injust.", activeCls: "bg-[var(--color-danger-600)] text-white border-transparent" },
+];
+
+/** "hh:mm am/pm" en hora LOCAL del dispositivo, para la hora de llegada. */
+function fmtTime(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString("es-NI", { hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * Pases de asistencia PENDIENTES de confirmar (solo Master): el cajero pasa
+ * lista desde el POS, pero para evitar marcas falsas entre compañeros
+ * ("buddy punching") Master debe confirmar o corregir cada pase antes de que
+ * quede como definitivo.
+ */
+function PendingAttendanceReview() {
+  const [pending, setPending] = useState<PendingRollCall[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [overrides, setOverrides] = useState<Record<string, Record<string, RollCallMarkStatus>>>({});
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await apiFetch("/api/payroll/attendance/roll-call/pending");
+      const data = unwrapApiData(await r.json());
+      setPending(Array.isArray(data) ? (data as PendingRollCall[]) : []);
+    } catch {
+      toast.error("Error al cargar pases pendientes de confirmar");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  function statusOf(rollCallId: string, mark: RollCallMark): RollCallMarkStatus {
+    return overrides[rollCallId]?.[mark.employeeId] ?? mark.status;
+  }
+
+  function setOverride(rollCallId: string, employeeId: string, status: RollCallMarkStatus) {
+    setOverrides((prev) => ({ ...prev, [rollCallId]: { ...prev[rollCallId], [employeeId]: status } }));
+  }
+
+  async function confirm(rollCall: PendingRollCall) {
+    setConfirmingId(rollCall.id);
+    try {
+      const rollCallOverrides = overrides[rollCall.id] ?? {};
+      const corrections = Object.entries(rollCallOverrides)
+        .filter(([employeeId, status]) => {
+          const original = rollCall.marks.find((m) => m.employeeId === employeeId)?.status;
+          return original !== status;
+        })
+        .map(([employeeId, status]) => ({ employeeId, status }));
+
+      const r = await apiFetch(`/api/payroll/attendance/roll-call/${rollCall.id}/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ corrections }),
+      });
+      if (!r.ok) {
+        const raw = (await r.json()) as { error?: { message?: string } };
+        toast.error(raw?.error?.message ?? "No se pudo confirmar el pase");
+        return;
+      }
+      toast.success(corrections.length > 0 ? "Asistencia confirmada con correcciones" : "Asistencia confirmada");
+      await load();
+    } catch {
+      toast.error("Error de conexión");
+    } finally {
+      setConfirmingId(null);
+    }
+  }
+
+  if (loading) return null;
+  if (pending.length === 0) return null;
+
+  return (
+    <div className="hm-module-card border-[var(--color-warning-200)] bg-[var(--color-warning-50)]/40 p-4 space-y-3">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+        <ShieldCheck className="h-4 w-4 text-[var(--color-warning-600)]" /> Pendientes de confirmar ({pending.length})
+      </h3>
+      <p className="text-xs text-[var(--color-text-muted)]">
+        El cajero pasó esta lista desde el POS. Revisa la hora de llegada de cada quien y corrige cualquier marca
+        antes de confirmar — una vez confirmado, la asistencia queda como real para la nómina.
+      </p>
+      <div className="space-y-3">
+        {pending.map((rc) => (
+          <div key={rc.id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-[var(--color-text)]">
+                {rc.branch.code} — {rc.branch.name} <span className="text-[var(--color-text-muted)]">· {fmtDateShort(rc.date)}</span>
+              </p>
+              <button
+                onClick={() => void confirm(rc)}
+                disabled={confirmingId === rc.id}
+                className="rounded-lg bg-[var(--color-info-600)] px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[var(--color-info-700)] disabled:opacity-50"
+              >
+                {confirmingId === rc.id ? "Confirmando…" : "Confirmar asistencia"}
+              </button>
+            </div>
+            <div className="divide-y divide-[var(--color-border)]">
+              {rc.marks.map((mark) => {
+                const status = statusOf(rc.id, mark);
+                return (
+                  <div key={mark.employeeId} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-[var(--color-text)]">{mark.employee.fullName}</p>
+                      <p className="text-xs text-[var(--color-text-muted)]">
+                        {mark.employee.position} · llegó {fmtTime(mark.arrivalAt)}
+                      </p>
+                    </div>
+                    <div className="flex gap-1" role="radiogroup" aria-label={`Asistencia de ${mark.employee.fullName}`}>
+                      {MARK_STATUS_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={status === opt.value}
+                          onClick={() => setOverride(rc.id, mark.employeeId, opt.value)}
+                          className={`rounded-lg border px-2 py-1 text-[0.7rem] font-semibold transition-colors ${
+                            status === opt.value
+                              ? opt.activeCls
+                              : "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function AttendancePanel() {
+  const sessionState = useSession();
+  const isMaster = sessionState.status === "authenticated" &&
+    isMasterOrAbove(sessionState.session.roleCode as string, sessionState.session.globalRoles as unknown as string[]);
   const now = new Date();
   const [period, setPeriod] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
@@ -137,6 +303,9 @@ export function AttendancePanel() {
 
   return (
     <div className="space-y-4">
+      {/* ── Pendientes de confirmar (solo Master) ── */}
+      {isMaster && <PendingAttendanceReview />}
+
       {/* ── Registro ── */}
       <div className="hm-module-card p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

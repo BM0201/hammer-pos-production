@@ -133,7 +133,20 @@ const absences: MockAbsence[] = [
 ];
 
 /** Pases de asistencia tomados (para que el modal solo aparezca 1 vez/día). */
-const rollCalls: Array<{ branchId: string; date: string }> = [];
+type MockRollCall = {
+  id: string;
+  branchId: string;
+  date: string;
+  presentCount: number;
+  absentCount: number;
+  reviewStatus: "PENDING" | "CONFIRMED";
+  reviewedByUserId: string | null;
+  reviewedAt: string | null;
+};
+const rollCalls: MockRollCall[] = [];
+
+type MockAttendanceMark = { id: string; rollCallId: string; employeeId: string; status: string; arrivalAt: string | null; notes: string | null };
+const attendanceMarks: MockAttendanceMark[] = [];
 
 function unjustifiedDays(employeeId: string, year: number, month: number): number {
   const prefix = `${year}-${String(month).padStart(2, "0")}`;
@@ -693,17 +706,18 @@ const server = http.createServer(async (req, res) => {
     const roster = employees
       .filter((e) => e.isActive && e.branchId === branchId)
       .map((e) => ({ id: e.id, fullName: e.fullName, position: e.position }));
-    const taken = rollCalls.some((r) => r.branchId === branchId && r.date === date);
+    const rc = rollCalls.find((r) => r.branchId === branchId && r.date === date);
     const marks = absences
       .filter((a) => a.date === date && roster.some((e) => e.id === a.employeeId))
       .map((a) => ({ employeeId: a.employeeId, kind: a.kind, notes: a.notes }));
-    return ok(res, { taken, takenAt: null, presentCount: null, absentCount: null, roster, marks });
+    return ok(res, { taken: Boolean(rc), takenAt: null, reviewStatus: rc?.reviewStatus ?? null, presentCount: rc?.presentCount ?? null, absentCount: rc?.absentCount ?? null, roster, marks });
   }
   if (path === "/api/payroll/attendance/roll-call" && method === "POST") {
     const body = await readJson(req);
     const branchId = String(body.branchId ?? "");
     const date = `${String(body.date)}T00:00:00.000Z`;
     const entries = Array.isArray(body.entries) ? (body.entries as Array<{ employeeId: string; status: string; notes?: string }>) : [];
+    const takenAt = new Date().toISOString();
     let present = 0;
     let absent = 0;
     for (const entry of entries) {
@@ -721,10 +735,84 @@ const server = http.createServer(async (req, res) => {
         }
       }
     }
-    if (!rollCalls.some((r) => r.branchId === branchId && r.date === date)) {
-      rollCalls.push({ branchId, date });
+    // Re-tomar el pase (corrección) vuelve a dejarlo PENDIENTE: Master debe revisar de nuevo.
+    let rc = rollCalls.find((r) => r.branchId === branchId && r.date === date);
+    if (!rc) {
+      rc = { id: `rc-${randomUUID().slice(0, 8)}`, branchId, date, presentCount: present, absentCount: absent, reviewStatus: "PENDING", reviewedByUserId: null, reviewedAt: null };
+      rollCalls.push(rc);
+    } else {
+      rc.presentCount = present;
+      rc.absentCount = absent;
+      rc.reviewStatus = "PENDING";
+      rc.reviewedByUserId = null;
+      rc.reviewedAt = null;
+    }
+    for (const entry of entries) {
+      const markIdx = attendanceMarks.findIndex((m) => m.rollCallId === rc!.id && m.employeeId === entry.employeeId);
+      const mark: MockAttendanceMark = {
+        id: markIdx >= 0 ? attendanceMarks[markIdx].id : `mark-${randomUUID().slice(0, 8)}`,
+        rollCallId: rc.id,
+        employeeId: entry.employeeId,
+        status: entry.status,
+        arrivalAt: entry.status === "PRESENT" ? takenAt : null,
+        notes: entry.notes ?? null,
+      };
+      if (markIdx >= 0) attendanceMarks[markIdx] = mark;
+      else attendanceMarks.push(mark);
     }
     return ok(res, { presentCount: present, absentCount: absent });
+  }
+
+  // Pases pendientes de confirmar por Master (anti "buddy punching").
+  if (path === "/api/payroll/attendance/roll-call/pending" && method === "GET") {
+    const branchId = url.searchParams.get("branchId");
+    const list = rollCalls
+      .filter((r) => r.reviewStatus === "PENDING" && (!branchId || r.branchId === branchId))
+      .map((r) => ({
+        id: r.id,
+        date: r.date,
+        presentCount: r.presentCount,
+        absentCount: r.absentCount,
+        branch: branches.find((b) => b.id === r.branchId) ?? { id: r.branchId, code: "?", name: "?" },
+        marks: attendanceMarks
+          .filter((m) => m.rollCallId === r.id)
+          .map((m) => {
+            const emp = employees.find((e) => e.id === m.employeeId);
+            return { employeeId: m.employeeId, status: m.status, arrivalAt: m.arrivalAt, notes: m.notes, employee: { id: m.employeeId, fullName: emp?.fullName ?? "—", position: emp?.position ?? "—" } };
+          }),
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    return ok(res, list);
+  }
+  const confirmMatch = path.match(/^\/api\/payroll\/attendance\/roll-call\/([^/]+)\/confirm$/);
+  if (confirmMatch && method === "POST") {
+    const rc = rollCalls.find((r) => r.id === confirmMatch[1]);
+    if (!rc) return send(res, 404, { ok: false, error: { code: "NOT_FOUND", message: "Pase no existe" } });
+    const body = await readJson(req);
+    const corrections = Array.isArray(body.corrections) ? (body.corrections as Array<{ employeeId: string; status: string; notes?: string }>) : [];
+    for (const c of corrections) {
+      const markIdx = attendanceMarks.findIndex((m) => m.rollCallId === rc.id && m.employeeId === c.employeeId);
+      if (markIdx < 0) continue;
+      attendanceMarks[markIdx].status = c.status;
+      attendanceMarks[markIdx].notes = c.notes ?? null;
+      attendanceMarks[markIdx].arrivalAt = c.status === "PRESENT" ? new Date().toISOString() : null;
+      const absIdx = absences.findIndex((a) => a.employeeId === c.employeeId && a.date === rc.date);
+      if (c.status === "PRESENT") {
+        if (absIdx >= 0) absences.splice(absIdx, 1);
+      } else if (absIdx >= 0) {
+        absences[absIdx].kind = c.status;
+        absences[absIdx].notes = c.notes ?? null;
+      } else {
+        absences.push({ id: `abs-${randomUUID().slice(0, 8)}`, employeeId: c.employeeId, date: rc.date, kind: c.status, notes: c.notes ?? null });
+      }
+    }
+    const finalMarks = attendanceMarks.filter((m) => m.rollCallId === rc.id);
+    rc.presentCount = finalMarks.filter((m) => m.status === "PRESENT").length;
+    rc.absentCount = finalMarks.length - rc.presentCount;
+    rc.reviewStatus = "CONFIRMED";
+    rc.reviewedByUserId = sessionUser.userId;
+    rc.reviewedAt = new Date().toISOString();
+    return ok(res, rc);
   }
 
   // Ledger de vacaciones: historial por empleado + registro de días gozados/pagados.
