@@ -14,6 +14,7 @@ import { getPayrollRates } from "./payroll-rate-config";
 import {
   aguinaldoAccrued,
   aguinaldoPaymentDeadline,
+  currentVacationPeriod,
   indemnizacionAccrualRate,
   indemnizacionAccruedTotal,
   monthsOfService,
@@ -21,6 +22,7 @@ import {
   vacationPayout,
 } from "./prestaciones-sociales";
 import { unjustifiedAbsenceDaysByEmployee } from "./employee-absences-service";
+import { vacationDaysTakenByEmployee } from "./employee-vacation-service";
 
 // ── Employee CRUD ──
 
@@ -207,12 +209,14 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
   const monthStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
   const yearStart = new Date(Date.UTC(now.getFullYear(), 0, 1));
 
-  const [employees, rates, monthAbsences, yearAbsences, activeLoans] = await Promise.all([
-    prisma.employee.findMany({
-      where,
-      include: { branch: { select: { id: true, code: true, name: true } } },
-      orderBy: [{ isActive: "desc" }, { fullName: "asc" }],
-    }),
+  const employeesRaw = await prisma.employee.findMany({
+    where,
+    include: { branch: { select: { id: true, code: true, name: true } } },
+    orderBy: [{ isActive: "desc" }, { fullName: "asc" }],
+  });
+  const employeeIds = employeesRaw.map((e) => e.id);
+
+  const [rates, monthAbsences, yearAbsences, activeLoans, vacationTakenMap] = await Promise.all([
     getPayrollRates(),
     // Faltas del MES por empleado (injustificadas y justificadas por separado).
     prisma.employeeAbsence.groupBy({
@@ -232,7 +236,10 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
       where: { status: "ACTIVE", outstandingBalance: { gt: 0 } },
       _sum: { outstandingBalance: true },
     }),
+    // Días de vacación ya consumidos (ledger — reemplaza el contador suelto).
+    vacationDaysTakenByEmployee(employeeIds),
   ]);
+  const employees = employeesRaw;
 
   const monthAbsenceMap = new Map<string, { unjustified: number; justified: number }>();
   for (const g of monthAbsences) {
@@ -268,9 +275,12 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
       inssMonthlySalary: emp.inssSalary != null ? Number(emp.inssSalary) : undefined,
     });
     // Prestaciones ACUMULADAS a la fecha (pasivo por empleado, para drawer/CSV).
+    // Acumulado por PERÍODO DE ANIVERSARIO LABORAL (no un histórico sin
+    // cortes): el total es el mismo, pero auditable año por año.
     const daysAccrued = vacationDaysAccrued(emp.startDate, at);
-    const daysTaken = Number(emp.vacationDaysTaken) || 0;
+    const daysTaken = vacationTakenMap.get(emp.id) ?? 0;
     const vacationDaysBalance = round2(daysAccrued - daysTaken);
+    const period = currentVacationPeriod(emp.startDate, at);
     return {
       ...emp,
       payrollEstimate: {
@@ -293,6 +303,11 @@ export async function listEmployees(filters?: { branchId?: string; isActive?: bo
         vacationDaysTaken: daysTaken,
         vacationDaysBalance,
         vacationBalanceValue: vacationPayout(Math.max(0, vacationDaysBalance), salary),
+        // Período de aniversario laboral EN CURSO (auditable año por año).
+        vacationPeriodIndex: period?.index ?? null,
+        vacationPeriodAccrued: period?.accruedDays ?? 0,
+        vacationPeriodStart: period?.start.toISOString().slice(0, 10) ?? null,
+        vacationPeriodEnd: period?.end.toISOString().slice(0, 10) ?? null,
         indemnizacionAccrued: indemnizacionAccruedTotal(salary, emp.startDate, at),
         indemnizacionRateActual: indemnizacionRate,
         // Warning (no bloqueo): salario por debajo del mínimo sectorial configurado.

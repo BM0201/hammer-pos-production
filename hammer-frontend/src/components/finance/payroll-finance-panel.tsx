@@ -176,6 +176,45 @@ export function PayrollFinancePanel() {
     setSeveranceCausal("DESPIDO_SIN_CAUSA");
     setConfirmLiquidation(false);
   }, [drawerEmployeeId]);
+
+  // Ledger de vacaciones (drawer): mini-form para registrar días gozados o
+  // pagados — reemplaza el contador suelto por un evento real con fecha.
+  const [vacationFormOpen, setVacationFormOpen] = useState(false);
+  const [vacationForm, setVacationForm] = useState({ date: new Date().toISOString().slice(0, 10), days: "", kind: "GOZADAS" as "GOZADAS" | "PAGADAS" });
+  const [vacationSaving, setVacationSaving] = useState(false);
+  useEffect(() => {
+    setVacationFormOpen(false);
+    setVacationForm({ date: new Date().toISOString().slice(0, 10), days: "", kind: "GOZADAS" });
+  }, [drawerEmployeeId]);
+
+  async function submitVacationEntry(employeeId: string) {
+    const days = Number(vacationForm.days);
+    if (!vacationForm.days || Number.isNaN(days) || days <= 0) {
+      toast.error("Ingresa un número de días mayor a 0");
+      return;
+    }
+    setVacationSaving(true);
+    try {
+      const r = await apiFetch("/api/payroll/vacation-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employeeId, date: vacationForm.date, days, kind: vacationForm.kind }),
+      });
+      if (!r.ok) {
+        toast.error(getErrorMessage(await r.json(), "No se pudo registrar"));
+        return;
+      }
+      toast.success(vacationForm.kind === "GOZADAS" ? "Vacaciones gozadas registradas" : "Vacaciones pagadas registradas");
+      setVacationFormOpen(false);
+      setVacationForm({ date: new Date().toISOString().slice(0, 10), days: "", kind: "GOZADAS" });
+      await loadEmployees();
+    } catch {
+      toast.error("Error de conexión");
+    } finally {
+      setVacationSaving(false);
+    }
+  }
+
   const [confirmDeactivateId, setConfirmDeactivateId] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -1298,6 +1337,51 @@ export function PayrollFinancePanel() {
                     </span>
                     <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.vacationBalanceValue ?? 0)}</span>
                   </div>
+                  <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 pl-0">
+                    <p className="text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
+                      {b.vacationPeriodIndex != null ? (
+                        <>
+                          Año {b.vacationPeriodIndex + 1} de servicio
+                          {b.vacationPeriodStart && b.vacationPeriodEnd ? ` (${fmtDateShort(b.vacationPeriodStart)} → ${fmtDateShort(b.vacationPeriodEnd)})` : ""}:{" "}
+                          <strong className="text-[var(--color-text-muted)]">{(b.vacationPeriodAccrued ?? 0).toLocaleString("es-NI", { maximumFractionDigits: 1 })}/30 días</strong> acumulados este período.
+                        </>
+                      ) : (
+                        "Sin período de aniversario laboral en curso."
+                      )}
+                    </p>
+                    <button
+                      onClick={() => setVacationFormOpen((v) => !v)}
+                      className="shrink-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-[0.6875rem] font-semibold text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)]"
+                    >
+                      {vacationFormOpen ? "Cancelar" : "Registrar"}
+                    </button>
+                  </div>
+                  {vacationFormOpen && (
+                    <div className="mb-2 grid grid-cols-1 gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2.5 sm:grid-cols-4">
+                      <label className="grid gap-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                        Fecha
+                        <input type="date" max={new Date().toISOString().slice(0, 10)} value={vacationForm.date} onChange={(e) => setVacationForm({ ...vacationForm, date: e.target.value })} className="hm-input rounded-md text-xs font-normal normal-case" />
+                      </label>
+                      <label className="grid gap-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                        Días
+                        <input type="number" step="0.5" min="0.5" value={vacationForm.days} onChange={(e) => setVacationForm({ ...vacationForm, days: e.target.value })} className="hm-input rounded-md text-xs font-normal normal-case" placeholder="Ej: 5" />
+                      </label>
+                      <label className="grid gap-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]" title="Gozadas: descansadas, salario normal. Pagadas: en dinero, gravan INSS/IR.">
+                        Tipo
+                        <select value={vacationForm.kind} onChange={(e) => setVacationForm({ ...vacationForm, kind: e.target.value as "GOZADAS" | "PAGADAS" })} className="hm-input rounded-md text-xs font-normal normal-case">
+                          <option value="GOZADAS">Gozadas (descanso)</option>
+                          <option value="PAGADAS">Pagadas (dinero)</option>
+                        </select>
+                      </label>
+                      <button
+                        onClick={() => void submitVacationEntry(drawerEmployee.id)}
+                        disabled={vacationSaving}
+                        className="self-end rounded-md bg-[var(--color-info-600)] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[var(--color-info-700)] disabled:opacity-50"
+                      >
+                        {vacationSaving ? "Guardando…" : "Guardar"}
+                      </button>
+                    </div>
+                  )}
                   <div className={dline}>
                     <span className="text-[var(--color-text-secondary)]">
                       Indemnización Art. 45{" "}

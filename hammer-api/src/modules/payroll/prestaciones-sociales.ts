@@ -160,9 +160,72 @@ export function aguinaldoAccrued(monthlySalary: number, startDate: Date | string
 
 /* ── Vacaciones (Arts. 76–82 CT) ────────────────────────────────────────────── */
 
-/** Días acumulados de vacaciones: 2.5 por mes trabajado (fracción por días/30). */
+/** Días de vacación acumulados por mes trabajado (2.5 = 15 por semestre). */
+export const VACATION_DAYS_PER_MONTH = 2.5;
+
+export type VacationPeriod = {
+  /** 0 = primer año de servicio, 1 = segundo año, etc. */
+  index: number;
+  /** Inicio del período (aniversario laboral de ese año). */
+  start: Date;
+  /** Fin del período (exclusivo) — el siguiente aniversario. */
+  end: Date;
+  /** Días acumulados EN ESTE período a la fecha `at` (tope 30 si ya cerró). */
+  accruedDays: number;
+  /** true si el período ya se completó (12 meses cumplidos, ya no acumula más). */
+  closed: boolean;
+};
+
+function addMonthsUTC(date: Date, months: number): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, date.getUTCDate()));
+}
+
+/**
+ * Desglosa el servicio en PERÍODOS DE ANIVERSARIO LABORAL (bloques de 12
+ * meses desde `startDate`), cada uno con lo acumulado a la fecha. Reemplaza el
+ * acumulado histórico "de por vida" (2.5 × meses totales sin cortes): el total
+ * es matemáticamente el mismo, pero ahora se puede auditar año por año — "año
+ * 3: 18.5/30 días" en vez de un número gigante sin forma de verificar si está
+ * bien. Práctica estándar de nómina en vez de un acumulado sin cortes.
+ */
+export function vacationPeriodsToDate(startDate: Date | string, at: Date = new Date()): VacationPeriod[] {
+  const start = toDate(startDate);
+  if (isNaN(start.getTime()) || at <= start) return [];
+
+  const periods: VacationPeriod[] = [];
+  let periodStart = start;
+  let index = 0;
+  while (periodStart < at) {
+    const periodEnd = addMonthsUTC(start, (index + 1) * 12);
+    const closed = at >= periodEnd;
+    const monthsInPeriod = closed ? 12 : monthsBetween(periodStart, at);
+    periods.push({
+      index,
+      start: periodStart,
+      end: periodEnd,
+      accruedDays: round2(Math.min(monthsInPeriod, 12) * VACATION_DAYS_PER_MONTH),
+      closed,
+    });
+    periodStart = periodEnd;
+    index++;
+  }
+  return periods;
+}
+
+/** El período de aniversario laboral EN CURSO (el último, aún abierto). */
+export function currentVacationPeriod(startDate: Date | string, at: Date = new Date()): VacationPeriod | null {
+  const periods = vacationPeriodsToDate(startDate, at);
+  return periods.length > 0 ? periods[periods.length - 1] : null;
+}
+
+/**
+ * Días acumulados TOTALES a la fecha: suma de todos los períodos de
+ * aniversario (mismo total que 2.5 × meses de servicio — los períodos
+ * particionan el tiempo sin huecos ni solapes, solo lo organizan por año).
+ */
 export function vacationDaysAccrued(startDate: Date | string, at: Date = new Date()): number {
-  return round2(2.5 * monthsBetween(startDate, at));
+  const periods = vacationPeriodsToDate(startDate, at);
+  return round2(periods.reduce((sum, p) => sum + p.accruedDays, 0));
 }
 
 /**

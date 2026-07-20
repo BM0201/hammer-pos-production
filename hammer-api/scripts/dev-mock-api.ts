@@ -37,6 +37,7 @@ import {
 import {
   aguinaldoAccrued,
   aguinaldoPaymentDeadline,
+  currentVacationPeriod,
   indemnizacionAccrualRate,
   indemnizacionAccruedTotal,
   monthsOfService,
@@ -64,7 +65,6 @@ type MockEmployee = {
   startDate: string;
   endDate: string | null;
   isActive: boolean;
-  vacationDaysTaken: string;
   /** Retener IR salarial (varía por trabajador; los 3 reales tributan por su cuenta). */
   applyIrRetention: boolean;
   /** Salario COTIZABLE reportado al INSS (los reales están con 6,519.58). */
@@ -74,17 +74,27 @@ type MockEmployee = {
 };
 
 const employees: MockEmployee[] = [
-  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-070390-0001A" },
-  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-150988-0002B" },
-  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "0", applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-220595-0003C" },
+  { id: "emp-carolina", fullName: "Carolina Méndez", position: "Vendedor", branchId: "br-central", monthlySalary: "10000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-070390-0001A" },
+  { id: "emp-harry", fullName: "Harry López", position: "Supervisor", branchId: "br-central", monthlySalary: "12000", startDate: "2026-01-04T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-150988-0002B" },
+  { id: "emp-marvin", fullName: "Marvin Ruiz", position: "Bodeguero", branchId: "br-central", monthlySalary: "9500", startDate: "2026-03-15T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: "6519.58", nationalId: "401-220595-0003C" },
   // Demo de tramos Art. 45 — mismo salario que Carolina para ver que cuestan distinto.
   // Diana además CON retención de IR, para ver la variación por trabajador:
-  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "20", applyIrRetention: true, inssSalary: null, nationalId: null },
-  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, vacationDaysTaken: "45", applyIrRetention: false, inssSalary: null, nationalId: null },
+  { id: "emp-diana", fullName: "Diana Castillo (4a 5m)", position: "Administrador", branchId: "br-demo", monthlySalary: "10000", startDate: "2022-02-01T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: true, inssSalary: null, nationalId: null },
+  { id: "emp-ernesto", fullName: "Ernesto Vargas (7a — tope)", position: "Supervisor", branchId: "br-demo", monthlySalary: "10000", startDate: "2019-05-01T00:00:00.000Z", endDate: null, isActive: true, applyIrRetention: false, inssSalary: null, nationalId: null },
 ];
 
 /** Saldos de préstamos ACTIVOS (se descuentan al liquidar): Harry debe 2,000. */
 const LOAN_OUTSTANDING: Record<string, number> = { "emp-harry": 2000 };
+
+/** Ledger de vacaciones (reemplaza el contador suelto): días GOZADAS/PAGADAS con fecha. */
+type MockVacationEntry = { id: string; employeeId: string; date: string; days: number; kind: string; notes: string | null };
+const vacationEntries: MockVacationEntry[] = [
+  { id: "vac-1", employeeId: "emp-diana", date: "2026-06-01T00:00:00.000Z", days: 20, kind: "GOZADAS", notes: "Saldo histórico migrado (demo)" },
+  { id: "vac-2", employeeId: "emp-ernesto", date: "2026-06-01T00:00:00.000Z", days: 45, kind: "GOZADAS", notes: "Saldo histórico migrado (demo)" },
+];
+function vacationDaysTaken(employeeId: string): number {
+  return round2(vacationEntries.filter((v) => v.employeeId === employeeId).reduce((sum, v) => sum + v.days, 0));
+}
 
 /** Pagos de facturas del patrón (INSS/INATEC) marcados en el preview. */
 const contributionPayments: Array<{ id: string; year: number; month: number; kind: string; amount: string; paidAt: string }> = [];
@@ -203,8 +213,9 @@ function withEstimate(emp: MockEmployee) {
     inssMonthlySalary: emp.inssSalary != null ? Number(emp.inssSalary) : undefined,
   });
   const daysAccrued = vacationDaysAccrued(emp.startDate, at);
-  const daysTaken = Number(emp.vacationDaysTaken) || 0;
+  const daysTaken = vacationDaysTaken(emp.id);
   const vacationDaysBalance = round2(daysAccrued - daysTaken);
+  const period = currentVacationPeriod(emp.startDate, at);
 
   return {
     ...emp,
@@ -228,6 +239,10 @@ function withEstimate(emp: MockEmployee) {
       vacationDaysTaken: daysTaken,
       vacationDaysBalance,
       vacationBalanceValue: vacationPayout(Math.max(0, vacationDaysBalance), salary),
+      vacationPeriodIndex: period?.index ?? null,
+      vacationPeriodAccrued: period?.accruedDays ?? 0,
+      vacationPeriodStart: period?.start.toISOString().slice(0, 10) ?? null,
+      vacationPeriodEnd: period?.end.toISOString().slice(0, 10) ?? null,
       indemnizacionAccrued: indemnizacionAccruedTotal(salary, emp.startDate, at),
       indemnizacionRateActual: indemnizacionRate,
       belowMinimumWage: config.salarioMinimoSectorial > 0 && salary < config.salarioMinimoSectorial,
@@ -408,7 +423,6 @@ const server = http.createServer(async (req, res) => {
       startDate: `${String(body.startDate ?? new Date().toISOString().slice(0, 10))}T00:00:00.000Z`,
       endDate: null,
       isActive: true,
-      vacationDaysTaken: "0",
       applyIrRetention: Boolean(body.applyIrRetention),
       inssSalary: body.inssSalary != null && body.inssSalary !== "" ? String(body.inssSalary) : null,
       nationalId: typeof body.nationalId === "string" && body.nationalId.trim() ? String(body.nationalId).trim() : null,
@@ -679,6 +693,32 @@ const server = http.createServer(async (req, res) => {
       rollCalls.push({ branchId, date });
     }
     return ok(res, { presentCount: present, absentCount: absent });
+  }
+
+  // Ledger de vacaciones: historial por empleado + registro de días gozados/pagados.
+  if (path === "/api/payroll/vacation-entries" && method === "GET") {
+    const employeeId = url.searchParams.get("employeeId") ?? "";
+    const entries = vacationEntries.filter((v) => v.employeeId === employeeId).sort((a, b) => b.date.localeCompare(a.date));
+    return ok(res, { employeeId, entries });
+  }
+  if (path === "/api/payroll/vacation-entries" && method === "POST") {
+    const body = await readJson(req);
+    const entry: MockVacationEntry = {
+      id: `vac-${randomUUID().slice(0, 8)}`,
+      employeeId: String(body.employeeId ?? ""),
+      date: `${String(body.date)}T00:00:00.000Z`,
+      days: Number(body.days ?? 0),
+      kind: String(body.kind ?? "GOZADAS"),
+      notes: body.notes ? String(body.notes) : null,
+    };
+    vacationEntries.push(entry);
+    return send(res, 201, { ok: true, data: entry });
+  }
+  const vacMatch = path.match(/^\/api\/payroll\/vacation-entries\/([^/]+)$/);
+  if (vacMatch && method === "DELETE") {
+    const idx = vacationEntries.findIndex((v) => v.id === vacMatch[1]);
+    if (idx >= 0) vacationEntries.splice(idx, 1);
+    return ok(res, { deleted: true });
   }
 
   // Asistencia: faltas del mes (las injustificadas descuentan al calcular).

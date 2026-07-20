@@ -14,6 +14,7 @@ import {
   aguinaldoAccrued,
   aguinaldoPaymentDeadline,
   aguinaldoPeriodStart,
+  currentVacationPeriod,
   indemnizacionAccrualRate,
   indemnizacionAccruedTotal,
   indemnizacionPayout,
@@ -22,6 +23,7 @@ import {
   monthsOfService,
   vacationDaysAccrued,
   vacationPayout,
+  vacationPeriodsToDate,
 } from "./prestaciones-sociales";
 import { computePayrollLineBreakdown, round2 } from "./payroll-nicaragua";
 
@@ -143,6 +145,61 @@ describe("vacaciones (2.5 días/mes, pago en dinero gravable)", () => {
 
   it("pagar 10 días con salario 10,000 → C$3,333.33 (bruto GRAVABLE)", () => {
     assert.equal(vacationPayout(10, 10_000), 3_333.33);
+  });
+});
+
+describe("vacationPeriodsToDate (acumulado POR PERÍODO de aniversario laboral)", () => {
+  it("dentro del primer año: un solo período abierto, sin cortes", () => {
+    const periods = vacationPeriodsToDate(utc(2026, 1, 4), utc(2026, 7, 4));
+    assert.equal(periods.length, 1);
+    assert.equal(periods[0].index, 0);
+    assert.equal(periods[0].closed, false);
+    assert.equal(periods[0].accruedDays, 15); // 6 meses × 2.5
+  });
+
+  it("año exacto cumplido: el período 0 cierra con el tope de 30 días y abre el período 1", () => {
+    const periods = vacationPeriodsToDate(utc(2022, 1, 4), utc(2023, 1, 4));
+    assert.equal(periods.length, 1);
+    assert.equal(periods[0].closed, true);
+    assert.equal(periods[0].accruedDays, 30); // 12 × 2.5, tope del período
+  });
+
+  it("4 años 6 meses: 4 períodos cerrados (30 c/u) + el 5º abierto a medio año", () => {
+    const periods = vacationPeriodsToDate(utc(2022, 1, 4), utc(2026, 7, 4));
+    assert.equal(periods.length, 5);
+    for (let i = 0; i < 4; i++) {
+      assert.equal(periods[i].closed, true, `período ${i} debería estar cerrado`);
+      assert.equal(periods[i].accruedDays, 30, `período ${i} debería topar en 30`);
+    }
+    assert.equal(periods[4].closed, false);
+    assert.equal(periods[4].accruedDays, 15); // medio año del 5º período
+  });
+
+  it("currentVacationPeriod devuelve el último período (el que sigue acumulando)", () => {
+    const period = currentVacationPeriod(utc(2022, 1, 4), utc(2026, 7, 4));
+    assert.equal(period?.index, 4);
+    assert.equal(period?.closed, false);
+    assert.equal(period?.accruedDays, 15);
+  });
+
+  it("sin servicio (fecha futura o igual al ingreso) → sin períodos", () => {
+    assert.deepEqual(vacationPeriodsToDate(utc(2026, 1, 4), utc(2026, 1, 4)), []);
+    assert.equal(currentVacationPeriod(utc(2026, 1, 4), utc(2025, 1, 4)), null);
+  });
+
+  it("el TOTAL acumulado por períodos es idéntico al acumulado histórico sin cortes (2.5 × meses)", () => {
+    // El rediseño por período organiza el número para que sea auditable, pero
+    // el pasivo total (lo que legalmente se le debe al trabajador) no cambia.
+    const cases: Array<[Date, Date]> = [
+      [utc(2022, 1, 4), utc(2026, 7, 13)],
+      [utc(2019, 5, 1), utc(2026, 7, 13)],
+      [utc(2026, 3, 15), utc(2026, 11, 30)],
+    ];
+    for (const [start, at] of cases) {
+      const byPeriod = vacationDaysAccrued(start, at);
+      const historic = round2(2.5 * monthsBetween(start, at));
+      assert.equal(byPeriod, historic, `${start.toISOString()} → ${at.toISOString()}`);
+    }
   });
 });
 

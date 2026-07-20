@@ -1656,9 +1656,6 @@ model Employee {
   startDate     DateTime
   endDate       DateTime?
   isActive      Boolean   @default(true)
-  /// Días de vacaciones ya consumidos (gozados + pagados en dinero). El saldo
-  /// legal = 2.5 × meses de servicio − este acumulado (Arts. 76–82 CT).
-  vacationDaysTaken Decimal @default(0)
   /// Retener IR salarial (Ley 822) en nómina. Varía POR TRABAJADOR: quienes
   /// tributan por su cuenta (otro régimen) no llevan retención — default off;
   /// se marca en la ficha cuando a un empleado sí se le retiene.
@@ -1675,6 +1672,7 @@ model Employee {
 
   branch               Branch                  @relation(fields: [branchId], references: [id])
   salaryHistory        EmployeeSalaryHistory[]
+  vacationEntries      VacationEntry[]
   operatingExpenses    OperatingExpense[]
   loans                EmployeeLoan[]
   payrollLines         PayrollLine[]
@@ -1838,6 +1836,28 @@ model PayrollRateConfig {
   updatedByUserId        String?
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
+}
+
+/// Ledger de vacaciones: cada entrada es un evento REAL con fecha (gozadas =
+/// descansadas, o pagadas en dinero) — reemplaza el contador suelto que antes
+/// vivía en Employee (vacationDaysTaken), que dependía de que alguien lo
+/// actualizara sin dejar rastro de CUÁNDO ni QUÉ pasó. El saldo se calcula
+/// como acumulado por período de aniversario laboral (vacationPeriodsToDate)
+/// menos la suma de este ledger (Arts. 76–82 CT).
+model VacationEntry {
+  id              String   @id @default(cuid())
+  employeeId      String
+  /// Día en que se gozó o pagó (fecha pura, medianoche UTC).
+  date            DateTime
+  days            Decimal
+  kind            String /// "GOZADAS" (descansadas, salario normal) | "PAGADAS" (en dinero, gravable)
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, date])
 }
 
 /// Asistencia correlacionada con la nómina: cada FALTA INJUSTIFICADA descuenta
