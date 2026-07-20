@@ -38,6 +38,42 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
+/**
+ * Resuelve (EXECUTED) la decisión de Brain "Dia operativo cerrado con
+ * advertencias" de un día al aprobarlo — Master ya revisó y aceptó el cierre,
+ * así que la advertencia dejó de estar pendiente. Antes esta decisión nunca se
+ * tocaba después de creada: quedaba OPEN para siempre salvo el barrido pasivo
+ * de 7 días (expireStaleBrainDecisions), lo que hacía que días ya aprobados
+ * hace semanas siguieran apareciendo como pendientes en el Brain.
+ *
+ * No toca decisiones ya DISMISSED (Master las descartó explícitamente) — solo
+ * cierra las que seguían abiertas.
+ */
+async function resolveClosedWithWarningsDecisionTx(
+  tx: Prisma.TransactionClient,
+  dayId: string,
+  actorUserId: string,
+) {
+  const fingerprint = `operations:closed-with-warnings:${dayId}`;
+  const { count } = await tx.brainDecision.updateMany({
+    where: { fingerprint, status: { notIn: ["EXECUTED", "DISMISSED"] } },
+    data: { status: "EXECUTED", resolvedAt: new Date(), resolvedByUserId: actorUserId },
+  });
+  if (count > 0) {
+    const decision = await tx.brainDecision.findUnique({ where: { fingerprint }, select: { id: true } });
+    if (decision) {
+      await tx.brainDecisionActionLog.create({
+        data: {
+          decisionId: decision.id,
+          actorUserId,
+          action: "EXECUTED",
+          note: "Resuelto automáticamente al aprobar el día operativo.",
+        },
+      });
+    }
+  }
+}
+
 /** Hora (0–23) a la que termina el día de negocio. 0 = medianoche (comportamiento por defecto). */
 export const DEFAULT_BUSINESS_DAY_ENDS_AT_HOURS = 0;
 
@@ -948,8 +984,16 @@ export async function closeOperationalDay(input: {
       });
 
       if (preview.warnings.length > 0 || Math.abs(summary.cashDifferenceTotal) > 100) {
+        const warningsFingerprint = `operations:closed-with-warnings:${day.id}`;
+        // No se reabre si Master ya la descartó explícitamente (DISMISSED) — un
+        // re-cierre (día reabierto para ajuste) SÍ reabre si estaba ya resuelta
+        // (EXECUTED por una aprobación previa), porque es una nueva advertencia.
+        const existingWarningDecision = await tx.brainDecision.findUnique({
+          where: { fingerprint: warningsFingerprint },
+          select: { status: true },
+        });
         await tx.brainDecision.upsert({
-          where: { fingerprint: `operations:closed-with-warnings:${day.id}` },
+          where: { fingerprint: warningsFingerprint },
           create: {
             category: BrainDecisionCategory.SYSTEM,
             severity: preview.blockers.length > 0 ? BrainDecisionSeverity.HIGH : BrainDecisionSeverity.MEDIUM,
@@ -963,10 +1007,15 @@ export async function closeOperationalDay(input: {
             priorityScore: decimal(70),
             proposedActionType: "REVIEW_OPERATIONAL_DAY",
             evidenceJson: toJsonValue({ operationalDayId: day.id, checklist: preview, summary }),
-            fingerprint: `operations:closed-with-warnings:${day.id}`,
+            fingerprint: warningsFingerprint,
             idempotencyKey: `brain:operations:closed-with-warnings:${day.id}`,
           },
-          update: { status: "OPEN", evidenceJson: toJsonValue({ operationalDayId: day.id, checklist: preview, summary }) },
+          update: {
+            evidenceJson: toJsonValue({ operationalDayId: day.id, checklist: preview, summary }),
+            ...(existingWarningDecision?.status === "DISMISSED"
+              ? {}
+              : { status: "OPEN", resolvedAt: null, resolvedByUserId: null }),
+          },
         });
       }
 
@@ -1405,8 +1454,13 @@ export async function approveOperationalDayReview(input: {
       });
 
       for (const blocker of softBlockers) {
+        const exceptionFingerprint = `operations:approve-exception:${day.id}:${blocker.code}`;
+        const existingExceptionDecision = await tx.brainDecision.findUnique({
+          where: { fingerprint: exceptionFingerprint },
+          select: { status: true },
+        });
         await tx.brainDecision.upsert({
-          where: { fingerprint: `operations:approve-exception:${day.id}:${blocker.code}` },
+          where: { fingerprint: exceptionFingerprint },
           create: {
             category: BrainDecisionCategory.SYSTEM,
             severity: BrainDecisionSeverity.MEDIUM,
@@ -1417,15 +1471,20 @@ export async function approveOperationalDayReview(input: {
             proposedActionType: "REVIEW_OPERATIONAL_DAY",
             branchId: day.branchId,
             evidenceJson: toJsonValue({ operationalDayId: day.id, blocker, note: input.note }),
-            fingerprint: `operations:approve-exception:${day.id}:${blocker.code}`,
+            fingerprint: exceptionFingerprint,
             idempotencyKey: `brain:operations:approve-exception:${day.id}:${blocker.code}`,
           },
           update: {
-            status: "OPEN",
             evidenceJson: toJsonValue({ operationalDayId: day.id, blocker, note: input.note }),
+            // No se reabre si Master ya la descartó explícitamente.
+            ...(existingExceptionDecision?.status === "DISMISSED" ? {} : { status: "OPEN" }),
           },
         });
       }
+
+      // Master ya revisó y aceptó el cierre (con excepción) — la advertencia
+      // de "cerrado con advertencias" deja de estar pendiente.
+      await resolveClosedWithWarningsDecisionTx(tx, day.id, input.actorUserId);
 
       return approvedWithExceptions;
     }
@@ -1447,6 +1506,10 @@ export async function approveOperationalDayReview(input: {
         metadataJson: toJsonValue({ summary, delta, warnings: warningList }),
       },
     });
+
+    // Master ya revisó y aceptó el cierre — la advertencia de "cerrado con
+    // advertencias" (si la hubo) deja de estar pendiente.
+    await resolveClosedWithWarningsDecisionTx(tx, day.id, input.actorUserId);
 
     return approved;
   });
