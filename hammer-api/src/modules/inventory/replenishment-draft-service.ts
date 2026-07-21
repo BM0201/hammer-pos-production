@@ -73,7 +73,11 @@ const INCLUDE_DRAFT = {
   branch: { select: { id: true, code: true, name: true } },
   createdBy: { select: { id: true, fullName: true, username: true } },
   approvedBy: { select: { id: true, fullName: true, username: true } },
-  items: true,
+  items: {
+    include: {
+      supplierRef: { select: { id: true, name: true, ruc: true, paymentTerms: true } },
+    },
+  },
 } as const;
 
 /* ─── List drafts ─── */
@@ -181,6 +185,12 @@ export async function getReplenishmentDraft(draftId: string) {
       linkedPurchaseOrderId: item.linkedPurchaseOrderId,
       notes: item.notes,
       updatedAt: item.updatedAt.toISOString(),
+      supplierId: item.supplierId,
+      supplierName: item.supplierRef?.name ?? null,
+      supplierRuc: item.supplierRef?.ruc ?? null,
+      supplierPaymentTerms: item.supplierRef?.paymentTerms ?? null,
+      estimatedUnitCost: item.estimatedUnitCost !== null ? toNum(item.estimatedUnitCost) : null,
+      addedManually: item.addedManually,
     })),
   };
 }
