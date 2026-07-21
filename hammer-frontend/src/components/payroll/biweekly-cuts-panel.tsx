@@ -254,27 +254,27 @@ export function BiweeklyCutsPanel() {
 
       {/* Detalle */}
       {items.length > 0 && (
-        <div className="rounded-xl overflow-hidden" style={{ border: "0.5px solid var(--color-border)" }}>
-          <table className="w-full text-sm">
+        <div className="overflow-hidden rounded-xl border border-[var(--color-border)]">
+          <table className="hm-sheet-table w-full">
             <thead>
-              <tr style={{ background: "var(--color-surface-raised)", color: "var(--color-text-muted)" }}>
-                <th className="text-left px-3 py-2 font-medium">Empleado</th>
-                <th className="text-left px-3 py-2 font-medium">Sucursal</th>
-                <th className="text-left px-3 py-2 font-medium">Período</th>
-                <th className="text-left px-3 py-2 font-medium">Corrida</th>
-                <th className="text-left px-3 py-2 font-medium">Programado</th>
-                <th className="text-right px-3 py-2 font-medium">Monto</th>
+              <tr>
+                <th className="text-left">Empleado</th>
+                <th className="text-left">Sucursal</th>
+                <th className="text-left">Período</th>
+                <th className="text-left">Corrida</th>
+                <th className="text-left">Programado</th>
+                <th className="text-right">Monto</th>
               </tr>
             </thead>
             <tbody>
               {items.map((d) => (
-                <tr key={d.id} style={{ borderTop: "0.5px solid var(--color-border)", color: "var(--color-text-secondary)" }}>
-                  <td className="px-3 py-2" style={{ color: "var(--color-text)" }}>{d.employee.fullName}</td>
-                  <td className="px-3 py-2">{branchLabel(d.branchId)}</td>
-                  <td className="px-3 py-2">{d.period === "FIRST_HALF" ? "1ra" : "2da"}</td>
-                  <td className="px-3 py-2">{MONTHS_ES[(d.payrollRun.month - 1) % 12]} {d.payrollRun.year}</td>
-                  <td className="px-3 py-2">{fmtScheduled(d.scheduledDate)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums" style={{ color: "var(--color-text)" }}>{fmtMoney(d.amount)}</td>
+                <tr key={d.id}>
+                  <td className="font-medium text-[var(--color-text)]">{d.employee.fullName}</td>
+                  <td>{branchLabel(d.branchId)}</td>
+                  <td>{d.period === "FIRST_HALF" ? "1ra" : "2da"}</td>
+                  <td>{MONTHS_ES[(d.payrollRun.month - 1) % 12]} {d.payrollRun.year}</td>
+                  <td>{fmtScheduled(d.scheduledDate)}</td>
+                  <td className="hm-num text-[var(--color-text)]">{fmtMoney(d.amount)}</td>
                 </tr>
               ))}
             </tbody>

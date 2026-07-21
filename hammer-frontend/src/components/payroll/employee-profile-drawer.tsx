@@ -261,7 +261,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
 
         <div className="flex-1 overflow-y-auto px-5 py-5">
           <section className="mb-6">
-            <h4 className="mb-2.5 flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-soft)] after:h-px after:flex-1 after:bg-[var(--color-border)]">
+            <h4 className="hm-section-rule mb-2.5">
               ¿A dónde va cada córdoba?
               {estimated && <span className="hm-badge hm-badge-warning text-[0.5rem] normal-case tracking-normal">Estimado</span>}
             </h4>
@@ -296,7 +296,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
           </section>
 
           <section className="mb-6">
-            <h4 className="mb-2.5 flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-soft)] after:h-px after:flex-1 after:bg-[var(--color-border)]">
+            <h4 className="hm-section-rule mb-2.5">
               Recibo del empleado
             </h4>
             <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario base</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(salary)}</span></div>
@@ -327,7 +327,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
           </section>
 
           <section className="mb-6">
-            <h4 className="mb-2.5 flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-soft)] after:h-px after:flex-1 after:bg-[var(--color-border)]">
+            <h4 className="hm-section-rule mb-2.5">
               Prestaciones acumuladas
             </h4>
             <div className={dline}>
@@ -413,7 +413,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
 
           {employee.isActive && (
             <section className="mb-6">
-              <h4 className="mb-2.5 flex items-center gap-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-soft)] after:h-px after:flex-1 after:bg-[var(--color-border)]">
+              <h4 className="hm-section-rule mb-2.5">
                 Asistencia y liquidación
               </h4>
               <div className={dline}>

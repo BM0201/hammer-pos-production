@@ -2078,3 +2078,130 @@ a:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .pay-row, .pay-compbar .pay-seg { animation: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   RRHH v9 · Directorio Pragmático
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── KPI clicable que actúa como filtro ── */
+.hm-kpi-filter {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: 0.4375rem 0.8125rem;
+  font-size: 0.78125rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: border-color 150ms var(--ease-smooth), background-color 150ms var(--ease-smooth), color 150ms var(--ease-smooth);
+}
+.hm-kpi-filter b {
+  font-size: 0.9375rem;
+  font-weight: 800;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.hm-kpi-filter:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+.hm-kpi-filter:disabled {
+  cursor: default;
+}
+.hm-kpi-filter[data-active="true"] {
+  border-color: var(--color-master-600);
+  background: var(--color-master-50);
+  color: var(--color-master-700);
+}
+[data-theme="dark"] .hm-kpi-filter[data-active="true"] {
+  border-color: var(--color-master-400);
+}
+.hm-kpi-filter[data-active="true"] b {
+  color: var(--color-master-700);
+}
+.hm-kpi-filter:active:not(:disabled) { transform: scale(0.97); }
+
+/* ── Título de sección con regla — reemplaza cards anidadas ── */
+.hm-section-rule {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.hm-section-rule::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* ── Fila densa de lista maestro–detalle ── */
+.hm-row-dense {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6875rem 0.875rem;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-smooth);
+}
+.hm-row-dense:last-child { border-bottom: none; }
+.hm-row-dense:hover { background: var(--color-surface-alt); }
+.hm-row-dense[data-selected="true"] { background: var(--color-master-50); }
+
+/* ── Tabla-hoja para asistencia y datos tabulares ── */
+.hm-sheet-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.hm-sheet-table th {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--color-text-soft);
+  background: var(--color-surface-muted);
+  border-bottom: 1.5px solid var(--color-border-strong);
+  padding: 0.5625rem 0.9375rem;
+  text-align: left;
+}
+.hm-sheet-table td {
+  font-size: 0.8125rem;
+  padding: 0.6875rem 0.9375rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  vertical-align: middle;
+}
+.hm-sheet-table tbody tr:hover td { background: var(--color-surface-alt); }
+.hm-sheet-table tbody tr:last-child td { border-bottom: none; }
+.hm-num {
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ── Contador compacto de toolbar ── */
+.hm-counter { text-align: right; line-height: 1.15; }
+.hm-counter b {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+.hm-counter span {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-soft);
+}
+.hm-counter.ok b { color: var(--color-success-700); }
+.hm-counter.warn b { color: var(--color-warning-700); }
+.hm-counter.bad b { color: var(--color-danger-700); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hm-kpi-filter, .hm-row-dense { transition-duration: 0.01ms !important; }
+}

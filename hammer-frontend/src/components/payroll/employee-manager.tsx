@@ -7,7 +7,6 @@ import {
   Edit2,
   UserMinus,
   Calculator,
-  Building2,
   DollarSign,
   Briefcase,
   Loader2,
@@ -18,7 +17,6 @@ import {
   X,
   Trash2,
   ClipboardCheck,
-  CalendarRange,
   CalendarDays,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
@@ -633,50 +631,23 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
 
   return (
     <div className="space-y-4">
-      {/* ── KPI Tiles ── */}
+      {/* ── KPIs (informativos — no filtran la tabla, ver hm-kpi-filter:disabled) ── */}
       {!hideKpis && (
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="hm-kpi-tile hm-shine">
-          <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: "linear-gradient(90deg, var(--color-info-400), var(--color-info-600))" }} />
-          <div className="flex items-center gap-3 pt-1">
-            <div className="hm-icon-wrap hm-icon-wrap-sm bg-[var(--color-info-50)] border border-[var(--color-info-100)]">
-              <Users className="h-4 w-4 text-[var(--color-info-600)]" />
-            </div>
-            <div>
-              <p className="hm-num-xl">{employees.filter((e) => e.isActive).length}</p>
-              <p className="text-xs text-[var(--color-text-soft)]">Empleados activos</p>
-            </div>
-          </div>
-        </div>
-        <div className="hm-kpi-tile hm-shine">
-          <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: "linear-gradient(90deg, var(--color-success-400), var(--color-success-600))" }} />
-          <div className="flex items-center gap-3 pt-1">
-            <div className="hm-icon-wrap hm-icon-wrap-sm bg-[var(--color-success-50)] border border-[var(--color-success-100)]">
-              <CalendarRange className="h-4 w-4 text-[var(--color-success-600)]" />
-            </div>
-            <div>
-              <p className="hm-num-xl">
-                {employees
-                  .filter((e) => e.isActive)
-                  .reduce((s, e) => s + (e.payrollEstimate?.vacationDaysBalance ?? 0), 0)
-                  .toLocaleString("es-NI", { maximumFractionDigits: 0 })}
-              </p>
-              <p className="text-xs text-[var(--color-text-soft)]">Días de vacación acumulados</p>
-            </div>
-          </div>
-        </div>
-        <div className="hm-kpi-tile hm-shine">
-          <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: "linear-gradient(90deg, var(--color-warning-400), var(--color-warning-600))" }} />
-          <div className="flex items-center gap-3 pt-1">
-            <div className="hm-icon-wrap hm-icon-wrap-sm bg-[var(--color-warning-50)] border border-[var(--color-warning-100)]">
-              <Building2 className="h-4 w-4 text-[var(--color-warning-600)]" />
-            </div>
-            <div>
-              <p className="hm-num-xl">{new Set(employees.filter((e) => e.isActive).map((e) => e.branchId)).size}</p>
-              <p className="text-xs text-[var(--color-text-soft)]">Sucursales con personal</p>
-            </div>
-          </div>
-        </div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="hm-kpi-filter" disabled>
+          <b>{employees.filter((e) => e.isActive).length}</b> empleados activos
+        </button>
+        <button type="button" className="hm-kpi-filter" disabled>
+          <b>
+            {employees
+              .filter((e) => e.isActive)
+              .reduce((s, e) => s + (e.payrollEstimate?.vacationDaysBalance ?? 0), 0)
+              .toLocaleString("es-NI", { maximumFractionDigits: 0 })}
+          </b> días de vacación acumulados
+        </button>
+        <button type="button" className="hm-kpi-filter" disabled>
+          <b>{new Set(employees.filter((e) => e.isActive).map((e) => e.branchId)).size}</b> sucursales con personal
+        </button>
       </div>
       )}
 

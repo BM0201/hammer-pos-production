@@ -7,7 +7,7 @@ import {
   ShieldAlert,
   UserPlus,
   KeyRound,
-  Link2,
+  Plus,
   UserRoundCheck,
   X,
   Copy,
@@ -787,6 +787,8 @@ export function UsersAdmin() {
   const [searchQuery, setSearchQuery] = useState("");
   const [branchFilterId, setBranchFilterId] = useState<string>("");
   const [tableView, setTableView] = useState(false);
+  // Filtro rápido por KPI (clic para aplicar, clic de nuevo para limpiar).
+  const [kpiFilter, setKpiFilter] = useState<"active" | "withoutMemberships" | "pendingPasswordChange" | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createTempPassword, setCreateTempPassword] = useState<string | null>(null);
 
@@ -878,6 +880,9 @@ export function UsersAdmin() {
       if (branchFilterId && !u.userBranchRoles.some((m) => m.branchId === branchFilterId && m.isActive)) {
         return false;
       }
+      if (kpiFilter === "active" && !u.isActive) return false;
+      if (kpiFilter === "withoutMemberships" && !(u.userBranchRoles.length === 0 && !u.globalRole)) return false;
+      if (kpiFilter === "pendingPasswordChange" && !u.mustChangePassword) return false;
       if (!q) return true;
       return (
         u.username.toLowerCase().includes(q) ||
@@ -885,9 +890,12 @@ export function UsersAdmin() {
         u.email.toLowerCase().includes(q)
       );
     });
-  }, [users, searchQuery, branchFilterId]);
+  }, [users, searchQuery, branchFilterId, kpiFilter]);
 
-  const hasListFilters = Boolean(searchQuery.trim() || branchFilterId);
+  const hasListFilters = Boolean(searchQuery.trim() || branchFilterId || kpiFilter);
+  const toggleKpiFilter = useCallback((value: "active" | "withoutMemberships" | "pendingPasswordChange") => {
+    setKpiFilter((current) => (current === value ? null : value));
+  }, []);
 
   // KPIs derivados de `users` ya cargado — sin llamadas extra a la API
   const kpis = useMemo(
@@ -1369,42 +1377,31 @@ export function UsersAdmin() {
 
   return (
     <section className="space-y-4" data-testid="users-admin-root">
-      {/* ── Resumen + Nuevo usuario ── */}
-      <div className="hm-module-card">
-        <div className="hm-module-card-header">
-          <div className="flex items-center gap-2">
-            <UserRoundCheck className="h-3.5 w-3.5 text-[var(--color-info-600)]" />
-            <span className="font-semibold text-sm text-[var(--color-text)]">Resumen de personal</span>
-          </div>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={initialLoading}
-            onClick={() => setCreateModalOpen(true)}
-            icon={<UserPlus className="h-4 w-4" />}
-          >
-            Nuevo usuario
-          </Button>
+      {/* ── KPIs (clicables, actúan como filtro) + Nuevo usuario ── */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="hm-kpi-filter" data-active={kpiFilter === null} onClick={() => setKpiFilter(null)}>
+            <b>{kpis.total}</b> usuarios
+          </button>
+          <button type="button" className="hm-kpi-filter" data-active={kpiFilter === "active"} onClick={() => toggleKpiFilter("active")}>
+            <b>{kpis.active}</b> activos
+          </button>
+          <button type="button" className="hm-kpi-filter" data-active={kpiFilter === "withoutMemberships"} onClick={() => toggleKpiFilter("withoutMemberships")}>
+            <b>{kpis.withoutMemberships}</b> sin membresías
+          </button>
+          <button type="button" className="hm-kpi-filter" data-active={kpiFilter === "pendingPasswordChange"} onClick={() => toggleKpiFilter("pendingPasswordChange")}>
+            <b>{kpis.pendingPasswordChange}</b> clave pendiente
+          </button>
         </div>
-        {/* Franja de KPIs — al hacerse clicables, cada chip aplicaría su filtro rápido correspondiente */}
-        <div className="flex flex-wrap gap-2 px-4 py-3">
-          <div className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm">
-            <span className="font-bold text-[var(--color-text)]">{kpis.total}</span>{" "}
-            <span className="text-xs text-[var(--color-text-muted)]">usuarios en total</span>
-          </div>
-          <div className="rounded-lg border border-[var(--color-success-200)] px-3 py-1.5 text-sm">
-            <span className="font-bold text-[var(--color-success-700)]">{kpis.active}</span>{" "}
-            <span className="text-xs text-[var(--color-text-muted)]">activos</span>
-          </div>
-          <div className="rounded-lg border border-[var(--color-danger-200)] px-3 py-1.5 text-sm">
-            <span className="font-bold text-[var(--color-danger-600)]">{kpis.withoutMemberships}</span>{" "}
-            <span className="text-xs text-[var(--color-text-muted)]">sin membresías</span>
-          </div>
-          <div className="rounded-lg border border-[var(--color-warning-200)] px-3 py-1.5 text-sm">
-            <span className="font-bold text-[var(--color-warning-700)]">{kpis.pendingPasswordChange}</span>{" "}
-            <span className="text-xs text-[var(--color-text-muted)]">pendientes de cambio de clave</span>
-          </div>
-        </div>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={initialLoading}
+          onClick={() => setCreateModalOpen(true)}
+          icon={<UserPlus className="h-4 w-4" />}
+        >
+          Nuevo usuario
+        </Button>
       </div>
 
       <CreateUserModal
@@ -1518,7 +1515,7 @@ export function UsersAdmin() {
                   </div>
                 )}
                 <div className="max-h-[32rem] overflow-auto rounded-xl border border-[var(--color-border)]">
-                  <table className="hm-table w-full">
+                  <table className="hm-sheet-table w-full">
                     <thead>
                       <tr>
                         <th className="w-8">
@@ -1605,7 +1602,7 @@ export function UsersAdmin() {
                 </div>
               </div>
             ) : (
-              <ul className="max-h-[32rem] space-y-1.5 overflow-y-auto pr-0.5">
+              <ul className="max-h-[32rem] overflow-y-auto">
                 {filteredUsers.length === 0 && (
                   <li className="rounded-lg border border-dashed border-[var(--color-border)] p-4 text-sm text-center text-[var(--color-text-muted)]">
                     {hasListFilters ? "Sin resultados para ese filtro." : "No hay usuarios registrados."}
@@ -1618,43 +1615,37 @@ export function UsersAdmin() {
                     <li key={user.id}>
                       <button
                         type="button"
-                        className={`w-full rounded-xl border p-3 text-left transition-all duration-150 ${
-                          isSelected
-                            ? "border-[var(--color-info-300)] bg-[var(--color-info-50)] shadow-sm"
-                            : "border-[var(--color-border)] hover:bg-[var(--color-surface-alt)] hover:border-[var(--color-info-200)]"
-                        }`}
+                        className="hm-row-dense w-full text-left"
+                        data-selected={isSelected}
                         onClick={() => { setSelectedUserId(user.id); setEditingUsername(false); }}
                       >
-                        <div className="flex items-center gap-2.5">
-                          <div className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-[0.625rem] font-bold ${
-                            user.isActive
-                              ? "bg-[var(--color-info-100)] text-[var(--color-info-700)]"
-                              : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"
-                          }`}>
-                            {initials}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-semibold text-sm text-[var(--color-text)]">{user.username}</span>
-                              <span className={`inline-flex rounded-full px-1.5 py-0.5 text-[0.5rem] font-bold ${
-                                user.isActive
-                                  ? "bg-[var(--color-success-100)] text-[var(--color-success-700)]"
-                                  : "bg-[var(--color-warning-100)] text-[var(--color-warning-700)]"
-                              }`}>
-                                {user.isActive ? "Activo" : "Inactivo"}
-                              </span>
-                              {user.mustChangePassword && (
-                                <span className="inline-flex rounded-full px-1.5 py-0.5 text-[0.5rem] font-bold bg-[var(--color-warning-100)] text-[var(--color-warning-700)]">
-                                  Cambiar clave
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-[0.6875rem] text-[var(--color-text-muted)] mt-0.5 truncate">{user.fullName}</p>
-                            <p className="text-[0.625rem] text-[var(--color-text-soft)] truncate">
-                              {user.globalRole ? <><strong>{user.globalRole}</strong> · </> : ""}{user.userBranchRoles.length} membresía{user.userBranchRoles.length !== 1 ? "s" : ""}
-                            </p>
-                          </div>
+                        <div className="hm-avatar h-[2.125rem] w-[2.125rem] shrink-0 text-[0.6875rem]" style={{
+                          background: user.isActive ? "var(--color-info-100)" : "var(--color-surface-alt)",
+                          color: user.isActive ? "var(--color-info-700)" : "var(--color-text-muted)",
+                        }}>
+                          {initials}
                         </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[0.84375rem] font-bold text-[var(--color-text)]">{user.username}</span>
+                            {user.globalRole && (
+                              <span className="hm-badge hm-badge-warning text-[0.5625rem]">{user.globalRole}</span>
+                            )}
+                            {user.mustChangePassword && (
+                              <span className="hm-badge hm-badge-info text-[0.5625rem]">Clave pendiente</span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 truncate text-[0.71875rem] text-[var(--color-text-muted)]">
+                            {user.fullName} · {user.email || "sin correo"}
+                          </p>
+                        </div>
+                        <span className="flex shrink-0 items-center gap-1.5 text-[0.71875rem] text-[var(--color-text-muted)]">
+                          <span
+                            className="h-[0.4375rem] w-[0.4375rem] rounded-full"
+                            style={{ background: user.isActive ? "var(--color-success-500)" : "var(--color-text-soft)" }}
+                          />
+                          {user.isActive ? "Activo" : "Inactivo"}
+                        </span>
                       </button>
                     </li>
                   );
@@ -1666,16 +1657,35 @@ export function UsersAdmin() {
 
         {/* ── User Detail Panel ── */}
         <div className="hm-module-card">
-          <div className="hm-module-card-header">
-            <span className="font-semibold text-sm text-[var(--color-text)]">
-              {selectedUser ? `Edición — @${selectedUser.username}` : "Edición operativa"}
-            </span>
-          </div>
-
           {selectedUser ? (
-            <div className="p-4 space-y-4">
-              {/* User info */}
-              <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm grid gap-2 sm:grid-cols-2">
+            <div>
+              {/* Cabecera: avatar + nombre + @usuario · creado + estado */}
+              <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-3.5">
+                <div
+                  className="hm-avatar h-[2.625rem] w-[2.625rem] shrink-0 text-sm"
+                  style={{ background: "var(--color-master-100)", color: "var(--color-master-700)" }}
+                >
+                  {selectedUser.fullName.split(" ").slice(0, 2).map((n) => n[0] ?? "").join("").toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-[var(--color-text)]">{selectedUser.fullName}</p>
+                  <p className="text-[0.71875rem] text-[var(--color-text-muted)]">
+                    @{selectedUser.username} · creado {fmtDate(selectedUser.createdAt)}
+                  </p>
+                </div>
+                <span className="flex shrink-0 items-center gap-1.5 text-[0.75rem] font-semibold text-[var(--color-text-secondary)]">
+                  <span
+                    className="h-[0.4375rem] w-[0.4375rem] rounded-full"
+                    style={{ background: selectedUser.isActive ? "var(--color-success-500)" : "var(--color-text-soft)" }}
+                  />
+                  {selectedUser.isActive ? "Activo" : "Inactivo"}
+                </span>
+              </div>
+
+              <div className="p-4 space-y-5">
+                {/* ── Identidad ── */}
+                <div className="space-y-2.5">
+                  <p className="hm-section-rule">Identidad</p>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Usuario</span>
                   {editingUsername ? (
@@ -1740,7 +1750,7 @@ export function UsersAdmin() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-1.5 flex-wrap sm:col-span-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Correo</span>
                   {editingEmail ? (
                     <div className="flex items-center gap-1 flex-1">
@@ -1773,8 +1783,12 @@ export function UsersAdmin() {
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-1.5 flex-wrap sm:col-span-2">
-                  <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Rol global</span>
+                </div>
+
+                {/* ── Rol global ── */}
+                <div className="space-y-2.5">
+                  <p className="hm-section-rule">Rol global</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
                   {selectedUser.globalRole === "MASTER" ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-warning-100)] px-2 py-0.5 text-[0.625rem] font-bold text-[var(--color-warning-700)]">
                       <ShieldCheck className="h-3 w-3" /> MASTER
@@ -1816,71 +1830,11 @@ export function UsersAdmin() {
                     </Button>
                   )}
                 </div>
-                <div className="flex items-center gap-1.5 sm:col-span-2">
-                  <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Clave</span>
-                  {selectedUser.mustChangePassword
-                    ? <span className="text-[var(--color-warning-700)]">Pendiente de cambio al próximo login</span>
-                    : <span className="text-[var(--color-success-700)]">Configurada por el usuario</span>
-                  }
                 </div>
-                {/* TODO: "Último acceso" requiere agregar lastLoginAt al modelo User en hammer-api/prisma/schema.prisma y poblarlo en el login flow */}
-                <div className="sm:col-span-2 text-[0.6875rem] text-[var(--color-text-soft)]">
-                  Creado el {fmtDate(selectedUser.createdAt)}
-                </div>
-              </div>
 
-              {/* Actions */}
-              <div className="flex flex-wrap items-start gap-2">
-                {confirmDeactivate ? (
-                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-3 py-2 text-sm text-[var(--color-danger-700)]">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    <span>¿Desactivar a <strong>@{selectedUser.username}</strong>? Se cierran sus sesiones; sus roles se conservan.</span>
-                    <Button variant="danger" size="sm" loading={deletingUser} onClick={() => { deactivateUser(selectedUser); setConfirmDeactivate(false); }}>Confirmar</Button>
-                    <Button variant="ghost" size="sm" onClick={() => setConfirmDeactivate(false)}>Cancelar</Button>
-                  </div>
-                ) : selectedUser.isActive ? (
-                  <Button type="button" variant="danger" loading={deletingUser} disabled={savingUser} onClick={() => setConfirmDeactivate(true)} icon={<Trash2 className="h-4 w-4" />}>
-                    Desactivar
-                  </Button>
-                ) : (
-                  <Button type="button" variant="primary" loading={savingUser} disabled={deletingUser} onClick={() => saveUser(selectedUser, { isActive: true }, "toggle")} icon={<UserRoundCheck className="h-4 w-4" />}>
-                    Reactivar
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={savingUser || resetModalLoading || deletingUser}
-                  onClick={() => setResetModalOpen(true)}
-                  icon={<KeyRound className="h-4 w-4" />}
-                >
-                  Resetear contraseña
-                </Button>
-
-                {/* Eliminación permanente — solo para usuarios sin actividad. */}
-                {(selectedUser.activityCount ?? 0) === 0 && (
-                  confirmHardDelete ? (
-                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-danger-300)] bg-[var(--color-danger-50)] px-3 py-2 text-sm text-[var(--color-danger-700)]">
-                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                      <span>¿Eliminar <strong>definitivamente</strong> a <strong>@{selectedUser.username}</strong>? Esta acción no se puede deshacer.</span>
-                      <Button variant="danger" size="sm" loading={deletingUser} onClick={() => { hardDeleteUser(selectedUser); setConfirmHardDelete(false); }}>Eliminar</Button>
-                      <Button variant="ghost" size="sm" onClick={() => setConfirmHardDelete(false)}>Cancelar</Button>
-                    </div>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={savingUser || resetModalLoading || deletingUser}
-                      onClick={() => setConfirmHardDelete(true)}
-                      className="text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
-                      icon={<Trash2 className="h-4 w-4" />}
-                    >
-                      Eliminar permanentemente
-                    </Button>
-                  )
-                )}
-              </div>
-
+                {/* ── Membresías por sucursal ── */}
+                <div className="space-y-2.5">
+                <p className="hm-section-rule">Membresías por sucursal</p>
               {/* Membership assignment — oculto para CONTADOR (rol global de solo
                   contabilidad que abarca todas las sucursales; no requiere membresía). */}
               {selectedUser.globalRole === "ACCOUNTANT" ? (
@@ -1892,14 +1846,7 @@ export function UsersAdmin() {
                   </p>
                 </div>
               ) : (
-              <div className="rounded-xl border border-[var(--color-border)] overflow-hidden">
-                <div className="hm-module-card-header">
-                  <div className="flex items-center gap-2">
-                    <Link2 className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
-                    <span className="font-semibold text-sm text-[var(--color-text)]">Asignar membresía</span>
-                  </div>
-                </div>
-                <div className="p-3 space-y-2">
+              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 space-y-2">
                   <form className="grid gap-2 sm:grid-cols-3" onSubmit={addMembershipPreset}>
                     <select
                       className="hm-input rounded-lg text-sm"
@@ -1924,8 +1871,8 @@ export function UsersAdmin() {
                         </option>
                       ))}
                     </select>
-                    <Button type="submit" variant="success" size="sm" loading={assigningMembership} disabled={!membershipForm.branchId || !arePresetRolesAvailable(selectedMembershipBranch, selectedMembershipPreset)}>
-                      Asignar perfil
+                    <Button type="submit" variant="success" size="sm" loading={assigningMembership} disabled={!membershipForm.branchId || !arePresetRolesAvailable(selectedMembershipBranch, selectedMembershipPreset)} icon={<Plus className="h-3.5 w-3.5" />}>
+                      Agregar membresía
                     </Button>
                   </form>
                   <RolePresetPicker
@@ -1934,19 +1881,12 @@ export function UsersAdmin() {
                     isRoleAvailable={isRoleAvailable}
                   />
                 </div>
-              </div>
               )}
 
               {/* Memberships table — oculta para CONTADOR (no tiene membresías). */}
               {selectedUser.globalRole !== "ACCOUNTANT" && (
-              <div className="rounded-xl border border-[var(--color-border)] overflow-hidden">
-                <div className="hm-card-header-teal px-4 py-3 flex items-center gap-2">
-                  <Link2 className="h-4 w-4" />
-                  <span className="text-sm font-bold">Membresías asignadas</span>
-                  <span className="ml-auto rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-bold">{sortedMemberships.length}</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="hm-table w-full">
+              <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+                  <table className="hm-sheet-table w-full">
                     <thead>
                       <tr>
                         <th className="text-left">Sucursal</th>
@@ -1959,7 +1899,7 @@ export function UsersAdmin() {
                       {sortedMemberships.length === 0 ? (
                         <tr>
                           <td colSpan={4} className="px-4 py-6 text-center text-sm text-[var(--color-text-muted)]">
-                            Sin membresías. Asigna una sucursal y perfil arriba.
+                            Sin membresías. Agrega una sucursal y perfil arriba.
                           </td>
                         </tr>
                       ) : (
@@ -1969,7 +1909,7 @@ export function UsersAdmin() {
                           const isConfirmingRemove = confirmRemoveMembershipId === membership.id;
                           return (
                             <tr key={membership.id}>
-                              <td>{membership.branch.code} · {membership.branch.name}</td>
+                              <td><span className="font-bold text-[var(--color-text)]">{membership.branch.code}</span> <span className="text-[var(--color-text-muted)]">{membership.branch.name}</span></td>
                               <td>{ROLE_LABEL[membership.roleCode] ?? membership.roleCode}</td>
                               <td>
                                 <span className={`inline-flex rounded-full px-2 py-0.5 text-[0.5625rem] font-bold ${
@@ -2019,9 +1959,73 @@ export function UsersAdmin() {
                       )}
                     </tbody>
                   </table>
-                </div>
               </div>
               )}
+                </div>
+
+                {/* ── Seguridad ── */}
+                <div className="space-y-2.5">
+                  <p className="hm-section-rule">Seguridad</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Clave</span>
+                    {selectedUser.mustChangePassword
+                      ? <span className="text-[var(--color-warning-700)]">Pendiente de cambio al próximo login</span>
+                      : <span className="text-[var(--color-success-700)]">Configurada por el usuario</span>
+                    }
+                  </div>
+
+                  <div className="flex flex-wrap items-start gap-2">
+                    {confirmDeactivate ? (
+                      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-3 py-2 text-sm text-[var(--color-danger-700)]">
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                        <span>¿Desactivar a <strong>@{selectedUser.username}</strong>? Se cierran sus sesiones; sus roles se conservan.</span>
+                        <Button variant="danger" size="sm" loading={deletingUser} onClick={() => { deactivateUser(selectedUser); setConfirmDeactivate(false); }}>Confirmar</Button>
+                        <Button variant="ghost" size="sm" onClick={() => setConfirmDeactivate(false)}>Cancelar</Button>
+                      </div>
+                    ) : selectedUser.isActive ? (
+                      <Button type="button" variant="danger" loading={deletingUser} disabled={savingUser} onClick={() => setConfirmDeactivate(true)} icon={<Trash2 className="h-4 w-4" />}>
+                        Desactivar
+                      </Button>
+                    ) : (
+                      <Button type="button" variant="primary" loading={savingUser} disabled={deletingUser} onClick={() => saveUser(selectedUser, { isActive: true }, "toggle")} icon={<UserRoundCheck className="h-4 w-4" />}>
+                        Reactivar
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={savingUser || resetModalLoading || deletingUser}
+                      onClick={() => setResetModalOpen(true)}
+                      icon={<KeyRound className="h-4 w-4" />}
+                    >
+                      Resetear contraseña
+                    </Button>
+
+                    {/* Eliminación permanente — solo para usuarios sin actividad. */}
+                    {(selectedUser.activityCount ?? 0) === 0 && (
+                      confirmHardDelete ? (
+                        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-danger-300)] bg-[var(--color-danger-50)] px-3 py-2 text-sm text-[var(--color-danger-700)]">
+                          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                          <span>¿Eliminar <strong>definitivamente</strong> a <strong>@{selectedUser.username}</strong>? Esta acción no se puede deshacer.</span>
+                          <Button variant="danger" size="sm" loading={deletingUser} onClick={() => { hardDeleteUser(selectedUser); setConfirmHardDelete(false); }}>Eliminar</Button>
+                          <Button variant="ghost" size="sm" onClick={() => setConfirmHardDelete(false)}>Cancelar</Button>
+                        </div>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          disabled={savingUser || resetModalLoading || deletingUser}
+                          onClick={() => setConfirmHardDelete(true)}
+                          className="text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
+                          icon={<Trash2 className="h-4 w-4" />}
+                        >
+                          Eliminar permanentemente
+                        </Button>
+                      )
+                    )}
+                  </div>
+                </div>
+              </div>
 
               {/* Password Reset Modal */}
               {resetModalOpen && selectedUser && (
