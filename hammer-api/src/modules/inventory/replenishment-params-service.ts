@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { resolveReceptionForOrders } from "@/modules/purchase-orders/service";
+import { logAuditEvent } from "@/modules/audit/service";
 
 /* ════════════════════════════════════════════════════════════════
  * Reposición v2 — parámetros unificados (Fase 1.1)
@@ -233,4 +234,153 @@ export async function getInboundQuantities(branchId: string, productIds: string[
   }
 
   return result;
+}
+
+/* ════════════════════════════════════════════════════════════════
+ * Reposición v2 — "En camino" documento a documento (para la vista dedicada)
+ * ════════════════════════════════════════════════════════════════ */
+
+export type InboundDocumentSummary = {
+  kind: "PURCHASE_ORDER" | "TRANSFER";
+  documentId: string;
+  documentNumber: string;
+  originLabel: string;
+  productCount: number;
+  totalPendingQuantity: number;
+  estimatedValue: number;
+  createdAt: string;
+  expectedAt: string;
+  status: "APPROVED" | "IN_TRANSIT" | "PARTIALLY_RECEIVED";
+};
+
+/** Lista documentos comprometidos (PO aprobados + traslados en tránsito) hacia una sucursal, uno por documento (no por producto) — para la vista "En camino". */
+export async function getInboundDocuments(branchId: string): Promise<InboundDocumentSummary[]> {
+  const [orders, transfers] = await Promise.all([
+    prisma.purchaseOrder.findMany({
+      where: { branchId, status: "APPROVED" },
+      select: {
+        id: true,
+        orderNumber: true,
+        createdAt: true,
+        supplierNameSnapshot: true,
+        supplier: true,
+        lines: { select: { id: true, productId: true, quantity: true, finalUnitCost: true } },
+      },
+    }),
+    prisma.transfer.findMany({
+      where: { toBranchId: branchId, status: { in: ["APPROVED", "IN_TRANSIT", "PARTIALLY_RECEIVED"] } },
+      select: {
+        id: true,
+        transferNumber: true,
+        status: true,
+        createdAt: true,
+        dispatchedAt: true,
+        fromBranch: { select: { code: true, name: true } },
+        lines: { select: { productId: true, quantityRequested: true, quantityDispatched: true, quantityReceived: true, unitCostSnapshot: true } },
+      },
+    }),
+  ]);
+
+  const docs: InboundDocumentSummary[] = [];
+
+  if (orders.length > 0) {
+    const receptionByOrderId = await resolveReceptionForOrders(
+      orders.map((po) => ({ id: po.id, status: "APPROVED", lines: po.lines.map((l) => ({ id: l.id, productId: l.productId, quantity: l.quantity })) })),
+    );
+    for (const po of orders) {
+      const reception = receptionByOrderId.get(po.id);
+      let totalPending = 0;
+      let estimatedValue = 0;
+      let productCount = 0;
+      for (const line of po.lines) {
+        const pending = reception?.lines.get(line.id)?.pendingQuantity ?? Number(line.quantity);
+        if (pending <= 0) continue;
+        totalPending += pending;
+        estimatedValue += pending * Number(line.finalUnitCost ?? 0);
+        productCount++;
+      }
+      if (productCount === 0) continue;
+      docs.push({
+        kind: "PURCHASE_ORDER",
+        documentId: po.id,
+        documentNumber: po.orderNumber,
+        originLabel: po.supplierNameSnapshot ?? po.supplier ?? "Proveedor sin nombre",
+        productCount,
+        totalPendingQuantity: totalPending,
+        estimatedValue,
+        createdAt: po.createdAt.toISOString(),
+        expectedAt: po.createdAt.toISOString(),
+        status: "APPROVED",
+      });
+    }
+  }
+
+  for (const transfer of transfers) {
+    let totalPending = 0;
+    let estimatedValue = 0;
+    let productCount = 0;
+    for (const line of transfer.lines) {
+      const pending = transfer.status === "APPROVED"
+        ? Number(line.quantityRequested)
+        : Number(line.quantityDispatched) - Number(line.quantityReceived);
+      if (pending <= 0) continue;
+      totalPending += pending;
+      estimatedValue += pending * Number(line.unitCostSnapshot ?? 0);
+      productCount++;
+    }
+    if (productCount === 0) continue;
+    docs.push({
+      kind: "TRANSFER",
+      documentId: transfer.id,
+      documentNumber: transfer.transferNumber,
+      originLabel: `${transfer.fromBranch.code} — ${transfer.fromBranch.name}`,
+      productCount,
+      totalPendingQuantity: totalPending,
+      estimatedValue,
+      createdAt: transfer.createdAt.toISOString(),
+      expectedAt: (transfer.dispatchedAt ?? transfer.createdAt).toISOString(),
+      status: transfer.status as "APPROVED" | "IN_TRANSIT" | "PARTIALLY_RECEIVED",
+    });
+  }
+
+  return docs.sort((a, b) => new Date(a.expectedAt).getTime() - new Date(b.expectedAt).getTime());
+}
+
+/* ════════════════════════════════════════════════════════════════
+ * Reposición v2 — Parámetros (Fase 2, vista de administración)
+ * ════════════════════════════════════════════════════════════════ */
+
+export type ReplenishmentParamRow = ReplenishmentParams & { productId: string; sku: string; name: string };
+
+/** Lista todos los productos activos con sus parámetros efectivos resueltos, para la vista Parámetros. */
+export async function listReplenishmentParams(branchId: string, limit = 500): Promise<ReplenishmentParamRow[]> {
+  const products = await prisma.product.findMany({
+    where: { isActive: true, isTimber: false },
+    select: { id: true, sku: true, name: true },
+    orderBy: { name: "asc" },
+    take: limit,
+  });
+  const paramsByProductId = await resolveReplenishmentParamsBatch(branchId, products.map((p) => p.id));
+  return products.map((p) => ({ productId: p.id, sku: p.sku, name: p.name, ...(paramsByProductId.get(p.id) ?? AUTO_PARAMS) }));
+}
+
+/** Activa/desactiva la exclusión de reposición para un producto en una sucursal. */
+export async function setReplenishmentExcluded(input: { branchId: string; productId: string; excluded: boolean; actorUserId: string }) {
+  const setting = await prisma.branchProductSetting.upsert({
+    where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+    create: { branchId: input.branchId, productId: input.productId, replenishmentExcluded: input.excluded },
+    update: { replenishmentExcluded: input.excluded },
+  });
+
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: input.branchId,
+    module: "inventory",
+    action: "REPLENISHMENT_EXCLUDED_TOGGLED",
+    entityType: "BranchProductSetting",
+    entityId: setting.id,
+    metadataJson: { productId: input.productId, excluded: input.excluded },
+  });
+
+  return setting;
 }

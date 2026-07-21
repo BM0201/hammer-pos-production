@@ -31,6 +31,7 @@ export async function listReorderPolicies(params: {
     include: {
       product: { select: { id: true, sku: true, name: true, unit: true } },
       branch: { select: { id: true, code: true, name: true } },
+      preferredSupplierRef: { select: { id: true, name: true } },
     },
     orderBy: [{ branch: { code: "asc" } }, { product: { name: "asc" } }],
   });
@@ -56,6 +57,7 @@ export async function upsertReorderPolicy(input: UpsertPolicyInput, userId: stri
       targetQuantity: new Prisma.Decimal(input.targetQuantity),
       safetyStock: new Prisma.Decimal(input.safetyStock ?? 0),
       preferredSupplier: input.preferredSupplier ?? null,
+      preferredSupplierId: input.preferredSupplierId ?? null,
       leadTimeDays: input.leadTimeDays ?? 0,
       isActive: input.isActive ?? true,
       updatedByUserId: userId,
@@ -66,6 +68,7 @@ export async function upsertReorderPolicy(input: UpsertPolicyInput, userId: stri
       targetQuantity: new Prisma.Decimal(input.targetQuantity),
       safetyStock: new Prisma.Decimal(input.safetyStock ?? 0),
       preferredSupplier: input.preferredSupplier ?? null,
+      preferredSupplierId: input.preferredSupplierId ?? null,
       leadTimeDays: input.leadTimeDays ?? 0,
       isActive: input.isActive ?? true,
       updatedByUserId: userId,
@@ -73,6 +76,7 @@ export async function upsertReorderPolicy(input: UpsertPolicyInput, userId: stri
     include: {
       product: { select: { id: true, sku: true, name: true } },
       branch: { select: { id: true, code: true, name: true } },
+      preferredSupplierRef: { select: { id: true, name: true } },
     },
   });
 
@@ -110,6 +114,7 @@ export async function bulkUpsertReorderPolicies(inputs: UpsertPolicyInput[], use
           targetQuantity: new Prisma.Decimal(input.targetQuantity),
           safetyStock: new Prisma.Decimal(input.safetyStock ?? 0),
           preferredSupplier: input.preferredSupplier ?? null,
+          preferredSupplierId: input.preferredSupplierId ?? null,
           leadTimeDays: input.leadTimeDays ?? 0,
           isActive: input.isActive ?? true,
           updatedByUserId: userId,
@@ -120,6 +125,7 @@ export async function bulkUpsertReorderPolicies(inputs: UpsertPolicyInput[], use
           targetQuantity: new Prisma.Decimal(input.targetQuantity),
           safetyStock: new Prisma.Decimal(input.safetyStock ?? 0),
           preferredSupplier: input.preferredSupplier ?? null,
+          preferredSupplierId: input.preferredSupplierId ?? null,
           leadTimeDays: input.leadTimeDays ?? 0,
           isActive: input.isActive ?? true,
           updatedByUserId: userId,

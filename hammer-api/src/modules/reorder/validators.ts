@@ -33,6 +33,8 @@ export const upsertPolicySchema = z.object({
   minQuantity: z.number().min(0).optional().default(0),
   safetyStock: z.number().min(0).optional().default(0),
   preferredSupplier: z.string().nullable().optional(),
+  /// Reposición v2: proveedor real (FK) — prioridad sobre preferredSupplier (texto libre legacy)
+  preferredSupplierId: z.string().nullable().optional(),
   leadTimeDays: z.number().int().min(0).optional().default(0),
   isActive: z.boolean().optional().default(true),
 });
