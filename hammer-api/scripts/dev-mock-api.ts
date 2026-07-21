@@ -819,6 +819,32 @@ const server = http.createServer(async (req, res) => {
     return ok(res, rc);
   }
 
+  // Calendario de asistencia del mes por sucursal.
+  if (path === "/api/payroll/attendance/calendar" && method === "GET") {
+    const branchId = url.searchParams.get("branchId") ?? "";
+    const year = Number(url.searchParams.get("year"));
+    const month = Number(url.searchParams.get("month"));
+    const prefix = `${year}-${String(month).padStart(2, "0")}`;
+    const rollCallIds = new Set(rollCalls.filter((r) => r.branchId === branchId && r.date.startsWith(prefix)).map((r) => r.id));
+    const marksList = attendanceMarks
+      .filter((m) => rollCallIds.has(m.rollCallId))
+      .map((m) => {
+        const rc = rollCalls.find((r) => r.id === m.rollCallId)!;
+        const emp = employees.find((e) => e.id === m.employeeId);
+        return {
+          date: rc.date.slice(0, 10),
+          employeeId: m.employeeId,
+          employeeName: emp?.fullName ?? "—",
+          position: emp?.position ?? "—",
+          status: m.status,
+          arrivalAt: m.arrivalAt,
+          notes: m.notes,
+        };
+      })
+      .sort((a, b) => a.date.localeCompare(b.date));
+    return ok(res, { branchId, year, month, marks: marksList });
+  }
+
   // Ledger de vacaciones: historial por empleado + registro de días gozados/pagados.
   if (path === "/api/payroll/vacation-entries" && method === "GET") {
     const employeeId = url.searchParams.get("employeeId") ?? "";

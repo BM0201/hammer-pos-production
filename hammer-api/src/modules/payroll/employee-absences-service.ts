@@ -333,3 +333,31 @@ export async function unjustifiedAbsenceDaysByEmployee(
   });
   return new Map(grouped.map((g) => [g.employeeId, g._count._all]));
 }
+
+/**
+ * Calendario de asistencia de una sucursal en un mes: una marca por
+ * trabajador por día (PRESENT/PRESENT_LATE/JUSTIFIED/UNJUSTIFIED), para
+ * pintar el mes con un color por estado — la vista "quién vino cada día"
+ * que antes no existía (solo se veía el pase del día en curso).
+ */
+export async function listAttendanceCalendar(branchId: string, year: number, month: number) {
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1));
+  const marks = await prisma.attendanceMark.findMany({
+    where: { rollCall: { branchId, date: { gte: start, lt: end } } },
+    include: {
+      employee: { select: { id: true, fullName: true, position: true } },
+      rollCall: { select: { date: true } },
+    },
+    orderBy: [{ rollCall: { date: "asc" } }, { employee: { fullName: "asc" } }],
+  });
+  return marks.map((m) => ({
+    date: m.rollCall.date.toISOString().slice(0, 10),
+    employeeId: m.employeeId,
+    employeeName: m.employee.fullName,
+    position: m.employee.position,
+    status: m.status,
+    arrivalAt: m.arrivalAt?.toISOString() ?? null,
+    notes: m.notes,
+  }));
+}
