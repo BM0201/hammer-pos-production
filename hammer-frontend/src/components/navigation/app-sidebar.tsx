@@ -93,7 +93,7 @@ function buildNavSections(
         title: "OPERACION",
         items: [
           { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus, capabilities: [CAPABILITIES.PURCHASES_VIEW] },
-          { href: "/app/master/transfers", label: "Reposición", icon: ArrowLeftRight, capabilities: [CAPABILITIES.TRANSFERS_VIEW] },
+          { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight, capabilities: [CAPABILITIES.TRANSFERS_VIEW] },
           { href: "/app/master/sales/orders", label: "Ordenes", icon: ShoppingCart, capabilities: [CAPABILITIES.MASTER_SALES_VIEW] },
           { href: "/app/master/operations", label: "Dia Operativo 360", icon: ClipboardList, capabilities: [CAPABILITIES.MASTER_DASHBOARD_VIEW, CAPABILITIES.OPERATIONS_VIEW] },
           { href: "/app/master/timber", label: "Madera", icon: TreePine },
@@ -150,7 +150,7 @@ function buildNavSections(
         title: "OPERACION",
         items: [
           { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus },
-          { href: "/app/master/transfers", label: "Reposición", icon: ArrowLeftRight },
+          { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight },
           { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart },
           { href: "/app/master/operations", label: "Dia Operativo 360", icon: ClipboardList },
           { href: "/app/master/timber", label: "Madera", icon: TreePine },
@@ -199,7 +199,7 @@ function buildNavSections(
         title: "OPERACION",
         items: [
           { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus },
-          { href: "/app/master/transfers", label: "Reposición", icon: ArrowLeftRight },
+          { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight },
           { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart },
           { href: "/app/master/operations", label: "Dia Operativo 360", icon: ClipboardList },
           { href: "/app/master/production", label: "Produccion Materiales", icon: Factory },

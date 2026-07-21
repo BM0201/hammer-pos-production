@@ -3431,7 +3431,7 @@ function PricingPanel({
 
 /* ═══════════════════════════════════════════════════════════
    TRANSFERS PANEL — redirect shortcut to dedicated page
-   The full transfer management lives at /app/master/transfers
+   The full transfer management lives at /app/master/replenishment (tab Traslados)
    ═══════════════════════════════════════════════════════════ */
 function TransfersPanel({ branches }: { branches: Branch[] }) {
   const [summary, setSummary] = useState<{ total: number; draft: number; transit: number } | null>(null);
@@ -3478,7 +3478,7 @@ function TransfersPanel({ branches }: { branches: Branch[] }) {
           </p>
         </div>
         <Link
-          href={"/app/master/transfers" as Route}
+          href={"/app/master/replenishment" as Route}
           className="flex items-center justify-center gap-2 w-full rounded-xl bg-[var(--color-master-600)] hover:bg-[var(--color-master-700)] px-4 py-3 text-sm font-semibold text-white transition-colors"
         >
           <Shuffle className="h-4 w-4" />
