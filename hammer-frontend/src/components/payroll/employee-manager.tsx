@@ -19,10 +19,12 @@ import {
   Trash2,
   ClipboardCheck,
   CalendarRange,
+  CalendarDays,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { DEFAULT_PAYROLL_RATES, splitNetPayBiweekly, type PayrollBreakdown, type PayrollRates } from "@/components/finance/payroll-calc";
 import { AttendancePanel } from "@/components/finance/attendance-panel";
+import { AttendanceCalendar } from "@/components/payroll/attendance-calendar";
 import { EmployeeProfileDrawer } from "@/components/payroll/employee-profile-drawer";
 import toast from "react-hot-toast";
 
@@ -128,7 +130,7 @@ type EmployeeLoan = {
   employee: { id: string; fullName: string; position: string };
   branch: { id: string; code: string; name: string };
 };
-type ActiveTab = "employees" | "attendance" | "payroll" | "loans" | "history";
+type ActiveTab = "employees" | "attendance" | "calendar" | "payroll" | "loans" | "history";
 
 /** Clave de persistencia del tab activo de planilla (sobrevive recargas). */
 const PAYROLL_TAB_STORAGE_KEY = "hammer.payroll.activeTab";
@@ -185,7 +187,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
     // Empleados/Asistencia son de RRHH — Calcular Nómina/Préstamos/Historial
     // son de Finanzas y no deben quedar guardados como tab de esta pantalla.
     const saved = window.localStorage.getItem(PAYROLL_TAB_STORAGE_KEY);
-    if (saved === "employees" || saved === "attendance") {
+    if (saved === "employees" || saved === "attendance" || saved === "calendar") {
       setActiveTabState(saved);
     }
   }, [forcedTab]);
@@ -685,6 +687,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
         {([
           { key: "employees" as const, label: "Empleados", icon: Users },
           { key: "attendance" as const, label: "Asistencia", icon: ClipboardCheck },
+          { key: "calendar" as const, label: "Calendario", icon: CalendarDays },
         ] as const).map((t) => (
           <button key={t.key} onClick={() => setActiveTab(t.key)} className={activeTab === t.key ? "active" : ""}>
             <t.icon className="h-3.5 w-3.5" /> {t.label}
@@ -694,7 +697,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
       )}
 
       {/* ── Branch filter + Add button ── */}
-      {activeTab !== "attendance" && (
+      {activeTab !== "attendance" && activeTab !== "calendar" && (
       <div className="flex items-center gap-3">
         <label className="text-sm font-medium text-[var(--color-text-secondary)] whitespace-nowrap">Sucursal:</label>
         <select value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)} className="hm-input rounded-lg text-sm">
@@ -837,6 +840,9 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
 
       {/* ── Attendance tab ── */}
       {activeTab === "attendance" && <AttendancePanel />}
+
+      {/* ── Calendario tab ── */}
+      {activeTab === "calendar" && <AttendanceCalendar />}
 
       {/* ── Payroll tab ── */}
       {activeTab === "payroll" && (
