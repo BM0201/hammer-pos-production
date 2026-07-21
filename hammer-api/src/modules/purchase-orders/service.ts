@@ -111,7 +111,7 @@ async function supplierSnapshot(tx: Prisma.TransactionClient, supplierId?: strin
   return snapshot;
 }
 
-async function updateGlobalProductCostForReceiptTx(
+export async function updateGlobalProductCostForReceiptTx(
   tx: Prisma.TransactionClient,
   input: {
     actorUserId: string;
