@@ -212,10 +212,10 @@ export async function updateGlobalProductCostForReceiptTx(
  * pendiente. Sirve tanto al detalle (una orden, líneas completas) como a la
  * lista (muchas órdenes, un solo groupBy — nunca un query por pedido).
  */
-type ReceptionOrderInput = { id: string; status: string; lines: { id: string; productId: string; quantity: Prisma.Decimal }[] };
-type ReceptionState = "NONE" | "PARTIAL" | "FULL";
+export type ReceptionOrderInput = { id: string; status: string; lines: { id: string; productId: string; quantity: Prisma.Decimal }[] };
+export type ReceptionState = "NONE" | "PARTIAL" | "FULL";
 
-async function resolveReceptionForOrders(orders: ReceptionOrderInput[]) {
+export async function resolveReceptionForOrders(orders: ReceptionOrderInput[]) {
   const distinctProductIds = Array.from(new Set(orders.flatMap((po) => po.lines.map((l) => l.productId))));
   const resolutions = await Promise.all(
     distinctProductIds.map(async (productId) => [productId, await resolveInventoryProductForMovement(prisma, productId)] as const),
@@ -271,6 +271,42 @@ async function resolveReceptionForOrders(orders: ReceptionOrderInput[]) {
     result.set(po.id, { receptionState, lines: lineMap });
   }
   return result;
+}
+
+/**
+ * Reposición v2 (Fase 1.4): último costo de compra SIN IVA conocido para un producto.
+ * Fuente de verdad para el Plan — nunca C$0 silencioso, nunca WAC-con-IVA reusado
+ * como si fuera sin IVA (los dos bugs que motivaron la fusión de motores de reposición).
+ * PurchaseOrderLine.unitCostBeforeTax YA está separado del IVA por diseño de
+ * createPurchaseOrder, así que no hace falta ninguna división — se usa tal cual.
+ */
+export async function getLastPurchaseUnitCostBeforeTax(db: Prisma.TransactionClient | typeof prisma, productId: string): Promise<{
+  unitCostBeforeTax: number;
+  source: "LAST_RECEIVED_LINE" | "WAC_FALLBACK" | "NONE";
+  warning: string | null;
+}> {
+  const line = await db.purchaseOrderLine.findFirst({
+    where: { productId, purchaseOrder: { status: { in: ["RECEIVED", "APPROVED"] } } },
+    orderBy: { purchaseOrder: { createdAt: "desc" } },
+    select: { unitCostBeforeTax: true },
+  });
+  if (line) {
+    return { unitCostBeforeTax: Number(line.unitCostBeforeTax), source: "LAST_RECEIVED_LINE", warning: null };
+  }
+
+  const product = await db.product.findUnique({
+    where: { id: productId },
+    select: { averageCost: true, globalCost: true, lastPurchaseCost: true },
+  });
+  const wac = product?.averageCost ?? product?.globalCost ?? product?.lastPurchaseCost ?? null;
+  if (wac !== null) {
+    return {
+      unitCostBeforeTax: Number(wac),
+      source: "WAC_FALLBACK",
+      warning: "Sin pedidos de compra previos para este producto; costo estimado desde el promedio de inventario (puede incluir IVA histórico) — revisar antes de aprobar.",
+    };
+  }
+  return { unitCostBeforeTax: 0, source: "NONE", warning: "Sin historial de costo para este producto; revisar antes de aprobar." };
 }
 
 /* ── List ── */

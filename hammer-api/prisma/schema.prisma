@@ -372,6 +372,7 @@ model Branch {
   creditNotes                 CreditNote[]                  @relation("BranchCreditNotes")
   replenishmentDrafts         ReplenishmentDraft[]          @relation("BranchReplenishmentDrafts")
   replenishmentDraftItems     ReplenishmentDraftItem[]      @relation("ReplenishmentDraftItemBranch")
+  replenishmentSignalSnapshot ReplenishmentSignalSnapshot?
 }
 
 model User {
@@ -1103,23 +1104,26 @@ model InventoryImportLine {
 }
 
 model BranchProductSetting {
-  id                   String    @id @default(cuid())
-  branchId             String
-  productId            String
-  isAvailable          Boolean   @default(true)
-  minStock             Decimal?
-  maxStock             Decimal?
-  reorderPoint         Decimal?
-  branchCost           Decimal?
-  branchPrice          Decimal?
-  minPrice             Decimal?
-  wholesalePrice       Decimal?
-  priceSource          String?
-  marginPercent        Decimal?
-  lastPriceUpdateAt    DateTime?
-  priceUpdatedByUserId String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  id                    String    @id @default(cuid())
+  branchId              String
+  productId             String
+  isAvailable           Boolean   @default(true)
+  minStock              Decimal?
+  maxStock              Decimal?
+  reorderPoint          Decimal?
+  /// Reposición v2: excluye el producto del motor de reposición en esta sucursal
+  /// (nunca genera señal). Distinto de isAvailable (visibilidad en catálogo/POS).
+  replenishmentExcluded Boolean   @default(false)
+  branchCost            Decimal?
+  branchPrice           Decimal?
+  minPrice              Decimal?
+  wholesalePrice        Decimal?
+  priceSource           String?
+  marginPercent         Decimal?
+  lastPriceUpdateAt     DateTime?
+  priceUpdatedByUserId  String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   branch  Branch  @relation(fields: [branchId], references: [id])
   product Product @relation(fields: [productId], references: [id])
@@ -1648,33 +1652,33 @@ model InternalFreightTripLine {
  */
 
 model Employee {
-  id            String    @id @default(cuid())
-  fullName      String
-  position      String /// "Supervisor", "Vendedor", "Cajero", "Bodeguero", etc.
-  branchId      String
-  monthlySalary Decimal
-  startDate     DateTime
-  endDate       DateTime?
-  isActive      Boolean   @default(true)
+  id                String    @id @default(cuid())
+  fullName          String
+  position          String /// "Supervisor", "Vendedor", "Cajero", "Bodeguero", etc.
+  branchId          String
+  monthlySalary     Decimal
+  startDate         DateTime
+  endDate           DateTime?
+  isActive          Boolean   @default(true)
   /// Retener IR salarial (Ley 822) en nómina. Varía POR TRABAJADOR: quienes
   /// tributan por su cuenta (otro régimen) no llevan retención — default off;
   /// se marca en la ficha cuando a un empleado sí se le retiene.
-  applyIrRetention Boolean @default(false)
+  applyIrRetention  Boolean   @default(false)
   /// Salario COTIZABLE reportado al INSS (puede diferir del salario real).
   /// INSS laboral/patronal e INATEC se calculan sobre ESTA base (así cuadran
   /// con la factura del INSS). Null = usar monthlySalary. Las prestaciones
   /// (aguinaldo/vacaciones/indemnización) siempre usan el salario real.
-  inssSalary Decimal?
+  inssSalary        Decimal?
   /// Número de cédula de identidad (documento del trabajador).
-  nationalId String?
+  nationalId        String?
   /// Última LIQUIDACIÓN Y RECONTRATACIÓN (rollover, sigue activo): resetea el
   /// reloj de antigüedad para indemnización/vacaciones SIN interrumpir el
   /// empleo — evita que la indemnización acumule como bola de nieve sin
   /// límite si nunca se liquida. `startDate` NUNCA cambia (ingreso real
   /// original); null = nunca se ha liquidado, todo se ancla en startDate.
   lastLiquidationAt DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   branch               Branch                  @relation(fields: [branchId], references: [id])
   salaryHistory        EmployeeSalaryHistory[]
@@ -1778,30 +1782,30 @@ model PayrollRun {
 }
 
 model PayrollLine {
-  id              String   @id @default(cuid())
-  payrollRunId    String
-  employeeId      String
-  grossSalary     Decimal
-  loanDeductions  Decimal  @default(0)
-  otherDeductions Decimal  @default(0)
+  id                   String   @id @default(cuid())
+  payrollRunId         String
+  employeeId           String
+  grossSalary          Decimal
+  loanDeductions       Decimal  @default(0)
+  otherDeductions      Decimal  @default(0)
   /// Desglose Nicaragua (payroll-nicaragua.ts): retenciones al empleado…
-  inssLaboral     Decimal  @default(0)
-  ir              Decimal  @default(0) /// IR salarial mensual (tabla Ley 822)
+  inssLaboral          Decimal  @default(0)
+  ir                   Decimal  @default(0) /// IR salarial mensual (tabla Ley 822)
   /// …y cargas patronales que componen el costo empresa.
-  inssPatronal    Decimal  @default(0)
-  inatec          Decimal  @default(0)
-  provisions      Decimal  @default(0) /// suma de las tres provisiones del período
+  inssPatronal         Decimal  @default(0)
+  inatec               Decimal  @default(0)
+  provisions           Decimal  @default(0) /// suma de las tres provisiones del período
   /// Desglose por prestación (0 en corridas históricas o en modo ON_PAYMENT):
-  aguinaldoAccrual     Decimal @default(0) /// 1/12 (Arts. 93–99 CT)
-  vacacionesAccrual    Decimal @default(0) /// 2.5 días/mes (Arts. 76–82 CT)
-  indemnizacionAccrual Decimal @default(0) /// tramo Art. 45 según antigüedad
+  aguinaldoAccrual     Decimal  @default(0) /// 1/12 (Arts. 93–99 CT)
+  vacacionesAccrual    Decimal  @default(0) /// 2.5 días/mes (Arts. 76–82 CT)
+  indemnizacionAccrual Decimal  @default(0) /// tramo Art. 45 según antigüedad
   /// Faltas INJUSTIFICADAS del período: días y pago no devengado (día × salario/30).
-  absenceDays          Decimal @default(0)
-  absenceDeduction     Decimal @default(0)
-  netPay          Decimal
-  employerCost    Decimal
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  absenceDays          Decimal  @default(0)
+  absenceDeduction     Decimal  @default(0)
+  netPay               Decimal
+  employerCost         Decimal
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   payrollRun       PayrollRun                @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
   employee         Employee                  @relation(fields: [employeeId], references: [id])
@@ -1884,11 +1888,11 @@ model EmployeeSettlement {
   /// Causal de terminación (solo TERMINATION) — ver SEVERANCE_CAUSALES.
   causal            String?
   date              DateTime @default(now())
-  aguinaldoPaid     Decimal @default(0)
-  vacationDaysPaid  Decimal @default(0)
-  vacationValuePaid Decimal @default(0)
-  indemnizacionPaid Decimal @default(0)
-  loanDeduction     Decimal @default(0)
+  aguinaldoPaid     Decimal  @default(0)
+  vacationDaysPaid  Decimal  @default(0)
+  vacationValuePaid Decimal  @default(0)
+  indemnizacionPaid Decimal  @default(0)
+  loanDeduction     Decimal  @default(0)
   totalPaid         Decimal
   notes             String?
   createdByUserId   String?
@@ -1929,18 +1933,18 @@ model EmployeeAbsence {
 /// pase; PENDING hasta que Master revise. Cada re-toma del día vuelve a dejarlo
 /// en PENDING (una corrección del cajero también necesita re-revisión).
 model AttendanceRollCall {
-  id             String    @id @default(cuid())
-  branchId       String
+  id               String    @id @default(cuid())
+  branchId         String
   /// Día del pase (fecha pura, medianoche UTC).
-  date           DateTime
-  takenByUserId  String?
-  presentCount   Int       @default(0)
-  absentCount    Int       @default(0)
-  reviewStatus   String    @default("PENDING") /// PENDING | CONFIRMED
+  date             DateTime
+  takenByUserId    String?
+  presentCount     Int       @default(0)
+  absentCount      Int       @default(0)
+  reviewStatus     String    @default("PENDING") /// PENDING | CONFIRMED
   reviewedByUserId String?
-  reviewedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  reviewedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   branch Branch           @relation(fields: [branchId], references: [id])
   marks  AttendanceMark[]
@@ -2245,7 +2249,9 @@ model Supplier {
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
-  purchaseOrders PurchaseOrder[]
+  purchaseOrders          PurchaseOrder[]
+  reorderPolicies         StockReorderPolicy[]     @relation("ReorderPolicyPreferredSupplier")
+  replenishmentDraftItems ReplenishmentDraftItem[] @relation("ReplenishmentDraftItemSupplier")
 
   @@index([name])
   @@index([isActive])
@@ -2618,23 +2624,26 @@ enum ReorderSuggestionStatus {
 
 /// Per-product per-branch reorder policy (configurable thresholds)
 model StockReorderPolicy {
-  id                String   @id @default(cuid())
-  branchId          String
-  productId         String
-  minQuantity       Decimal  @default(0) /// Absolute minimum — CRITICAL alert if below
-  reorderPoint      Decimal /// When stock <= this, generate alert
-  targetQuantity    Decimal /// Desired stock level after replenishment
-  safetyStock       Decimal  @default(0) /// Extra buffer above targetQuantity
-  preferredSupplier String? /// Preferred supplier name for purchases
-  leadTimeDays      Int      @default(0) /// Average supplier delivery time in days
-  isActive          Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  updatedByUserId   String?
+  id                  String   @id @default(cuid())
+  branchId            String
+  productId           String
+  minQuantity         Decimal  @default(0) /// Absolute minimum — CRITICAL alert if below
+  reorderPoint        Decimal /// When stock <= this, generate alert
+  targetQuantity      Decimal /// Desired stock level after replenishment
+  safetyStock         Decimal  @default(0) /// Extra buffer above targetQuantity
+  preferredSupplier   String? /// Preferred supplier name for purchases (legacy free-text, kept for history)
+  /// Reposición v2: proveedor real (FK). Si está seteado, tiene prioridad sobre preferredSupplier.
+  preferredSupplierId String?
+  leadTimeDays        Int      @default(0) /// Average supplier delivery time in days
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  updatedByUserId     String?
 
-  branch    Branch  @relation(fields: [branchId], references: [id])
-  product   Product @relation(fields: [productId], references: [id])
-  updatedBy User?   @relation("ReorderPolicyUpdatedBy", fields: [updatedByUserId], references: [id])
+  branch               Branch    @relation(fields: [branchId], references: [id])
+  product              Product   @relation(fields: [productId], references: [id])
+  updatedBy            User?     @relation("ReorderPolicyUpdatedBy", fields: [updatedByUserId], references: [id])
+  preferredSupplierRef Supplier? @relation("ReorderPolicyPreferredSupplier", fields: [preferredSupplierId], references: [id])
 
   @@unique([branchId, productId])
   @@index([branchId, isActive])
@@ -3105,15 +3114,35 @@ model ReplenishmentDraftItem {
   status                ReplenishmentDraftItemStatus  @default(PENDING_REVIEW)
   linkedTransferId      String?
   linkedPurchaseOrderId String?
+  /// Reposición v2: proveedor real para agrupar la conversión del Plan (items PURCHASE)
+  supplierId            String?
+  /// Reposición v2: último costo de compra sin IVA, snapshot al agregar al plan
+  estimatedUnitCost     Decimal?
+  /// Reposición v2: true si el item se agregó a mano (no viene de una señal)
+  addedManually         Boolean                       @default(false)
   notes                 String?
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
 
-  draft   ReplenishmentDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
-  product Product            @relation("ReplenishmentDraftItemProduct", fields: [productId], references: [id])
-  branch  Branch             @relation("ReplenishmentDraftItemBranch", fields: [branchId], references: [id])
+  draft       ReplenishmentDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  product     Product            @relation("ReplenishmentDraftItemProduct", fields: [productId], references: [id])
+  branch      Branch             @relation("ReplenishmentDraftItemBranch", fields: [branchId], references: [id])
+  supplierRef Supplier?          @relation("ReplenishmentDraftItemSupplier", fields: [supplierId], references: [id])
 
   @@index([draftId])
   @@index([productId, branchId])
   @@index([status])
+}
+
+/// Reposición v2: snapshot ligero de conteos por severidad, recalculado tras cierre de
+/// día / recepción de PO / recepción de traslado / refresh manual — no es la fuente de
+/// verdad (las señales se calculan en lectura), solo alimenta el badge del sidebar y el Brain.
+model ReplenishmentSignalSnapshot {
+  branchId      String   @id
+  criticalCount Int      @default(0)
+  lowCount      Int      @default(0)
+  coveredCount  Int      @default(0)
+  generatedAt   DateTime @default(now())
+
+  branch Branch @relation(fields: [branchId], references: [id])
 }

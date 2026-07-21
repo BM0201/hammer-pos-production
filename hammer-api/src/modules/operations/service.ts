@@ -16,6 +16,7 @@ import { isHardApproveBlocker } from "@/modules/operations/approve-policy";
 import { getSalesSummaryForOperationalDayTx } from "@/modules/sales/realtime-sales-summary";
 import { OPERATIONAL_DAY_AUTO_SETTING_KEY, normalizeOperationalDayAutoConfig } from "@/modules/operations/auto-day-config";
 import { cashTenderTotal, isCashOutflowType, tenderTotalsByMethod } from "@/modules/cash-session/expected-cash";
+import { refreshReplenishmentSignalSnapshot } from "@/modules/inventory/replenishment-service";
 
 export const OPERATIONAL_TIMEZONE = "America/Managua";
 const TIMEZONE = OPERATIONAL_TIMEZONE;
@@ -913,7 +914,7 @@ export async function closeOperationalDay(input: {
 
   // ── Fase 2: calcular + validar + finalizar (con reversión ante error) ──────
   try {
-    return await prisma.$transaction(async (tx) => {
+    const closed = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${input.id} FOR UPDATE`;
       const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
       if (day.status !== OperationalDayStatus.CLOSING) throw new Error("OPERATIONAL_DAY_NOT_CLOSING");
@@ -1021,6 +1022,13 @@ export async function closeOperationalDay(input: {
 
       return closed;
     });
+
+    // Fase 1.5 (Reposición v2): refrescar snapshot de señales DESPUÉS del cierre,
+    // nunca dentro de la transacción del día (el ciclo del día es sensible).
+    // Best-effort: un fallo acá jamás debe revertir ni bloquear el cierre.
+    refreshReplenishmentSignalSnapshot(closed.branchId).catch(() => {});
+
+    return closed;
   } catch (error) {
     // El día quedó en CLOSING por un fallo/blocker → revertir a OPEN.
     await revertClosingToOpenTx(

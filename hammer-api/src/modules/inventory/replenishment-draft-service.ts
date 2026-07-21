@@ -1,9 +1,21 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { getReplenishmentRecommendations } from "./replenishment-service";
+import { getReplenishmentRecommendations, type ReplenishmentSignal } from "./replenishment-service";
 import { createTransfer } from "@/modules/transfers/service";
-import { createPurchaseOrder } from "@/modules/purchase-orders/service";
+import { createPurchaseOrder, getLastPurchaseUnitCostBeforeTax } from "@/modules/purchase-orders/service";
 import { logAuditEvent } from "@/modules/audit/service";
+
+const SIGNAL_SOURCE_TO_DRAFT_SOURCE: Record<string, string> = {
+  TRANSFER: "OTHER_BRANCH",
+  PRODUCTION: "PRODUCTION",
+  PURCHASE: "SUPPLIER",
+};
+const SIGNAL_SEVERITY_TO_CRITICALITY: Record<string, string> = {
+  CRITICAL: "CRITICAL",
+  LOW: "LOW",
+  COVERED: "OBSERVE",
+  NO_DEMAND: "NORMAL",
+};
 
 /* ─── Types ─── */
 
@@ -485,7 +497,7 @@ export async function convertReplenishmentDraft(
         userId: actorUserId,
         fromBranchId,
         toBranchId: draft.branchId,
-        notes: `Generado desde Borrador de Reposición ${draftId}`,
+        notes: `[Reposición v2] Plan ${draftId}`,
         lines: items.map((i) => ({
           productId: i.productId,
           quantity: Number(i.finalQuantity),
@@ -506,34 +518,48 @@ export async function convertReplenishmentDraft(
     }
   }
 
-  // Group SUPPLIER items → one purchase order
+  // Group SUPPLIER items by real supplierId → un pedido de compra POR PROVEEDOR,
+  // con el último costo de compra sin IVA (nunca C$0, nunca WAC-con-IVA duplicado).
   const supplierItems = actionableItems.filter((i) => i.recommendedSource === "SUPPLIER");
-  if (supplierItems.length > 0) {
+  const supplierGroups = new Map<string, typeof supplierItems>();
+  for (const item of supplierItems) {
+    const key = item.supplierId ?? "__sin_proveedor__";
+    if (!supplierGroups.has(key)) supplierGroups.set(key, []);
+    supplierGroups.get(key)!.push(item);
+  }
+
+  for (const [supplierKey, items] of supplierGroups) {
     try {
+      const lines = [];
+      for (const item of items) {
+        const unitCostBeforeTax = item.estimatedUnitCost !== null
+          ? Number(item.estimatedUnitCost)
+          : (await getLastPurchaseUnitCostBeforeTax(prisma, item.productId)).unitCostBeforeTax;
+        if (unitCostBeforeTax <= 0) {
+          result.warnings.push(`${item.productName}: sin costo de compra conocido — revisar antes de aprobar el pedido.`);
+        }
+        lines.push({ productId: item.productId, quantity: Number(item.finalQuantity), unitCostBeforeTax });
+      }
+
       const po = await createPurchaseOrder({
         userId: actorUserId,
         branchId: draft.branchId,
-        notes: `Generado desde Borrador de Reposición ${draftId}`,
+        supplierId: supplierKey === "__sin_proveedor__" ? undefined : supplierKey,
+        notes: `[Reposición v2] Plan ${draftId}`,
         purchaseTaxTreatment: "INCLUDE_IN_COST",
-        lines: supplierItems.map((i) => ({
-          productId: i.productId,
-          quantity: Number(i.finalQuantity),
-          unitCostBeforeTax: 0,
-          taxRate: 0,
-          unitTaxAmount: 0,
-        })),
+        lines,
       });
 
       await prisma.replenishmentDraftItem.updateMany({
-        where: { id: { in: supplierItems.map((i) => i.id) } },
+        where: { id: { in: items.map((i) => i.id) } },
         data: { linkedPurchaseOrderId: po.id, status: "PURCHASE_REQUEST_CREATED" },
       });
 
       result.purchaseOrdersCreated.push(po.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error desconocido";
-      result.warnings.push(`Error creando compra: ${msg}`);
-      for (const item of supplierItems) result.skipped.push(item.id);
+      result.warnings.push(`Error creando compra para proveedor ${supplierKey}: ${msg}`);
+      for (const item of items) result.skipped.push(item.id);
     }
   }
 
@@ -591,4 +617,190 @@ export async function convertReplenishmentDraft(
   });
 
   return result;
+}
+
+/* ════════════════════════════════════════════════════════════════
+ * Reposición v2 — Plan (Fase 1.4): agregar señales / item manual / quitar / descartar
+ * ════════════════════════════════════════════════════════════════ */
+
+async function getOrCreateActiveDraft(branchId: string, actorUserId: string) {
+  const existing = await prisma.replenishmentDraft.findFirst({
+    where: { branchId, status: { in: ["DRAFT", "REVIEWED"] } },
+    orderBy: { createdAt: "desc" },
+  });
+  if (existing) return existing;
+  return prisma.replenishmentDraft.create({
+    data: { branchId, createdByUserId: actorUserId, status: "DRAFT", includePreventive: false, includeSensitive: false },
+  });
+}
+
+/** Agrega una o más señales (de getReplenishmentSignals) al plan activo de la sucursal — lo crea si no existe. */
+export async function addSignalsToPlan(branchId: string, signals: ReplenishmentSignal[], actorUserId: string) {
+  if (signals.length === 0) throw new Error("No hay señales para agregar.");
+  const draft = await getOrCreateActiveDraft(branchId, actorUserId);
+
+  const existingItems = await prisma.replenishmentDraftItem.findMany({
+    where: { draftId: draft.id, productId: { in: signals.map((s) => s.productId) } },
+    select: { id: true, productId: true },
+  });
+  const existingItemIdByProductId = new Map(existingItems.map((i) => [i.productId, i.id]));
+
+  let addedCount = 0;
+  for (const signal of signals) {
+    const primarySource = signal.sources[0] as ReplenishmentSignal["sources"][number] | undefined;
+    const quantity = primarySource?.quantity ?? signal.netNeed;
+    const estimatedUnitCost = primarySource?.type === "PURCHASE"
+      ? (await getLastPurchaseUnitCostBeforeTax(prisma, signal.productId)).unitCostBeforeTax
+      : null;
+
+    const data = {
+      productId: signal.productId,
+      branchId,
+      productName: signal.name,
+      sku: signal.sku,
+      currentStock: new Prisma.Decimal(signal.stockOnHand),
+      salesLast30Days: new Prisma.Decimal(0),
+      salesLast60Days: new Prisma.Decimal(0),
+      salesLast90Days: new Prisma.Decimal(0),
+      criticality: (SIGNAL_SEVERITY_TO_CRITICALITY[signal.severity] ?? "NORMAL") as any,
+      recommendedSource: (primarySource ? SIGNAL_SOURCE_TO_DRAFT_SOURCE[primarySource.type] : "DO_NOT_REPLENISH") as any,
+      sourceBranchId: primarySource?.type === "TRANSFER" ? primarySource.branchId ?? null : null,
+      supplierId: primarySource?.type === "PURCHASE" ? primarySource.supplierId ?? null : null,
+      estimatedUnitCost: estimatedUnitCost === null ? null : new Prisma.Decimal(estimatedUnitCost),
+      suggestedQuantity: new Prisma.Decimal(quantity),
+      finalQuantity: new Prisma.Decimal(quantity),
+      reason: signal.message,
+      warnings: signal.warnings as unknown as Prisma.InputJsonValue,
+      status: "PENDING_REVIEW" as const,
+    };
+
+    const existingItemId = existingItemIdByProductId.get(signal.productId);
+    if (existingItemId) {
+      await prisma.replenishmentDraftItem.update({ where: { id: existingItemId }, data });
+    } else {
+      await prisma.replenishmentDraftItem.create({ data: { ...data, draftId: draft.id } });
+      addedCount++;
+    }
+  }
+
+  await logAuditEvent({
+    actorUserId,
+    branchId,
+    module: "inventory",
+    action: "REPLENISHMENT_SIGNALS_ADDED_TO_PLAN",
+    entityType: "ReplenishmentDraft",
+    entityId: draft.id,
+    metadataJson: { signalsCount: signals.length, added: addedCount },
+  });
+
+  return getReplenishmentDraft(draft.id);
+}
+
+/** Agrega un producto al plan a mano (no viene de una señal). */
+export async function addManualItemToPlan(input: {
+  branchId: string;
+  productId: string;
+  quantity: number;
+  source: "TRANSFER" | "PRODUCTION" | "PURCHASE";
+  sourceBranchId?: string;
+  supplierId?: string;
+  actorUserId: string;
+}) {
+  if (input.quantity <= 0) throw new Error("La cantidad debe ser mayor que 0.");
+  const product = await prisma.product.findUniqueOrThrow({
+    where: { id: input.productId },
+    select: { id: true, sku: true, name: true, categoryId: true, category: { select: { name: true } } },
+  });
+  const draft = await getOrCreateActiveDraft(input.branchId, input.actorUserId);
+  const estimatedUnitCost = input.source === "PURCHASE"
+    ? (await getLastPurchaseUnitCostBeforeTax(prisma, input.productId)).unitCostBeforeTax
+    : null;
+
+  const item = await prisma.replenishmentDraftItem.create({
+    data: {
+      draftId: draft.id,
+      productId: product.id,
+      branchId: input.branchId,
+      categoryId: product.categoryId,
+      categoryName: product.category.name,
+      productName: product.name,
+      sku: product.sku,
+      currentStock: new Prisma.Decimal(0),
+      criticality: "NORMAL",
+      recommendedSource: SIGNAL_SOURCE_TO_DRAFT_SOURCE[input.source] as any,
+      sourceBranchId: input.source === "TRANSFER" ? input.sourceBranchId ?? null : null,
+      supplierId: input.source === "PURCHASE" ? input.supplierId ?? null : null,
+      estimatedUnitCost: estimatedUnitCost === null ? null : new Prisma.Decimal(estimatedUnitCost),
+      suggestedQuantity: new Prisma.Decimal(input.quantity),
+      finalQuantity: new Prisma.Decimal(input.quantity),
+      reason: "Agregado manualmente al plan.",
+      warnings: [],
+      addedManually: true,
+      status: "QUANTITY_EDITED",
+    },
+  });
+
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: input.branchId,
+    module: "inventory",
+    action: "REPLENISHMENT_MANUAL_ITEM_ADDED",
+    entityType: "ReplenishmentDraftItem",
+    entityId: item.id,
+    metadataJson: { productId: product.id, quantity: input.quantity, source: input.source },
+  });
+
+  return getReplenishmentDraft(draft.id);
+}
+
+/** Quita una línea del plan por completo (distinto de marcarla IGNORED). Solo mientras el plan no esté aprobado/convertido. */
+export async function removeReplenishmentDraftItem(draftId: string, itemId: string, actorUserId: string) {
+  const item = await prisma.replenishmentDraftItem.findUniqueOrThrow({
+    where: { id: itemId },
+    select: { id: true, draftId: true, draft: { select: { status: true, branchId: true } } },
+  });
+  if (item.draftId !== draftId) throw new Error("El item no pertenece al borrador indicado.");
+  if (item.draft.status !== "DRAFT" && item.draft.status !== "REVIEWED") {
+    throw new Error(`No se puede modificar un plan con estado ${item.draft.status}.`);
+  }
+
+  await prisma.replenishmentDraftItem.delete({ where: { id: itemId } });
+
+  await logAuditEvent({
+    actorUserId,
+    branchId: item.draft.branchId,
+    module: "inventory",
+    action: "REPLENISHMENT_DRAFT_ITEM_REMOVED",
+    entityType: "ReplenishmentDraftItem",
+    entityId: itemId,
+    metadataJson: { draftId },
+  });
+
+  return { ok: true };
+}
+
+/** Descarta un plan completo (no convertido). */
+export async function discardReplenishmentDraft(draftId: string, actorUserId: string) {
+  const draft = await prisma.replenishmentDraft.findUniqueOrThrow({ where: { id: draftId } });
+  const nonDiscardable: string[] = ["CONVERTED_TO_TRANSFER", "CONVERTED_TO_PURCHASE_REQUEST", "CONVERTED_TO_PRODUCTION_ORDER"];
+  if (nonDiscardable.includes(draft.status)) {
+    throw new Error("No se puede descartar un plan que ya fue convertido.");
+  }
+
+  const updated = await prisma.replenishmentDraft.update({
+    where: { id: draftId },
+    data: { status: "CANCELLED" },
+  });
+
+  await logAuditEvent({
+    actorUserId,
+    branchId: draft.branchId,
+    module: "inventory",
+    action: "REPLENISHMENT_DRAFT_DISCARDED",
+    entityType: "ReplenishmentDraft",
+    entityId: draftId,
+    metadataJson: {},
+  });
+
+  return updated;
 }

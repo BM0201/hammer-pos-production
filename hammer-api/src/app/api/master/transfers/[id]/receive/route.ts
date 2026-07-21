@@ -1,6 +1,8 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { receiveTransfer } from "@/modules/transfers/service";
+import { refreshReplenishmentSignalSnapshot } from "@/modules/inventory/replenishment-service";
+import { prisma } from "@/lib/prisma";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok } from "@/lib/api/response";
@@ -22,7 +24,15 @@ export async function POST(
     assertMaster(session);
 
     const { id } = await params;
-    return ok(await receiveTransfer(id, session.userId, await readOptionalJson(request)));
+    const result = await receiveTransfer(id, session.userId, await readOptionalJson(request));
+
+    // Reposición v2 (Fase 1.5): refrescar snapshot de señales de la sucursal destino — best-effort.
+    (async () => {
+      const transfer = await prisma.transfer.findUnique({ where: { id }, select: { toBranchId: true } });
+      if (transfer) await refreshReplenishmentSignalSnapshot(transfer.toBranchId);
+    })().catch(() => {});
+
+    return ok(result);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

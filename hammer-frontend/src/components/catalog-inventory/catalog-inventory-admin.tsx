@@ -1369,7 +1369,7 @@ export function CatalogInventoryAdmin() {
         </>
       ) : null}
       {data && tab === "transfers" ? <TransfersPanel branches={data.branches} /> : null}
-      {data && tab === "reorder" ? <ReplenishmentPanel alerts={data.reorderAlerts} branches={data.branches} selectedBranchId={branchId} /> : null}
+      {data && tab === "reorder" ? <ReplenishmentPanel branches={data.branches} selectedBranchId={branchId} /> : null}
       {data && tab === "audit" ? <AuditPanel logs={data.auditLogs} /> : null}
     </section>
   );
@@ -3498,7 +3498,7 @@ function TransfersPanel({ branches }: { branches: Branch[] }) {
 /* ═══════════════════════════════════════════════════════════
    REORDER PANEL
    ═══════════════════════════════════════════════════════════ */
-function ReplenishmentPanel({ alerts, branches, selectedBranchId }: { alerts: ReorderAlert[]; branches: Branch[]; selectedBranchId?: string }) {
+function ReplenishmentPanel({ branches, selectedBranchId }: { branches: Branch[]; selectedBranchId?: string }) {
   const [branchId, setBranchId] = useState(selectedBranchId || branches[0]?.id || "");
   const [loading, setLoading] = useState(false);
   const [recommendations, setRecommendations] = useState<ReplenishmentRecommendation[]>([]);
@@ -3723,30 +3723,7 @@ function ReplenishmentPanel({ alerts, branches, selectedBranchId }: { alerts: Re
           ) : null}
         </div>
       </Card>
-
-      <ReorderPanel alerts={alerts} />
     </div>
-  );
-}
-
-function ReorderPanel({ alerts }: { alerts: ReorderAlert[] }) {
-  return (
-    <Card noPadding>
-      <div className="hm-card-header-amber">
-        <h2 className="text-sm font-semibold flex items-center gap-2"><Settings2 className="h-4 w-4" /> Alertas de reposición</h2>
-      </div>
-      <div className="p-4 space-y-2">
-        {alerts.length === 0 ? (
-          <p className="text-sm text-[var(--color-text-muted)] py-4 text-center">Sin alertas de reposición.</p>
-        ) : alerts.map((alert) => (
-          <div key={alert.id} className="rounded-lg border border-[var(--color-border)] p-3 text-sm">
-            <div className="flex justify-between"><strong>{alert.product.sku} · {alert.product.name}</strong><Badge variant="warning">{alert.alertType}</Badge></div>
-            <p className="text-xs text-[var(--color-text-muted)]">{alert.branch.code} · Actual {qty(alert.currentQuantity)} · Sugerido {qty(alert.suggestedQuantity)}</p>
-            <p className="text-xs">{alert.reason}</p>
-          </div>
-        ))}
-      </div>
-    </Card>
   );
 }
 

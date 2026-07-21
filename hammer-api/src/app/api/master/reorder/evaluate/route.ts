@@ -3,11 +3,13 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { requireCsrf } from "@/modules/security/csrf";
 import { toApiErrorResponse } from "@/lib/api/errors";
-import { ok } from "@/lib/api/response";
-import { evaluateReorderNeeds } from "@/modules/reorder/service";
-import { evaluateParamsSchema } from "@/modules/reorder/validators";
+import { fail } from "@/lib/api/response";
 
-/** POST /api/master/reorder/evaluate — run reorder evaluation scan */
+/**
+ * POST /api/master/reorder/evaluate — DEPRECADO.
+ * El Motor 1 (umbrales estáticos) fue migrado a Reposición v2.
+ * Usa /app/master/replenishment — las señales se calculan en lectura, no hay "evaluar".
+ */
 export async function POST(req: NextRequest) {
   try {
     const session = await getCurrentSession();
@@ -15,11 +17,7 @@ export async function POST(req: NextRequest) {
     await requireCsrf(req, session);
     assertMaster(session!);
 
-    const body = await req.json().catch(() => ({}));
-    const params = evaluateParamsSchema.parse(body);
-    const result = await evaluateReorderNeeds(params);
-
-    return ok(result);
+    return fail("GONE", "Migrado a Reposición v2 — usa /app/master/replenishment", 410);
   } catch (err) {
     return toApiErrorResponse(err);
   }

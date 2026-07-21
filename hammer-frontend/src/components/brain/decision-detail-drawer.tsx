@@ -59,8 +59,8 @@ export function DecisionDetailDrawer({
       window.location.href = "/app/master/pricing";
       return;
     }
-    if (action.includes("INVENTORY") || action.includes("REORDER") || action.includes("STOCK")) {
-      window.location.href = "/app/master/reorder";
+    if (action.includes("INVENTORY") || action.includes("REORDER") || action.includes("STOCK") || action.includes("REPLENISHMENT")) {
+      window.location.href = "/app/master/replenishment";
       return;
     }
     if (action.includes("CASH") || action.includes("REVIEW_CASH")) {
@@ -205,7 +205,7 @@ function labelForAction(action: string) {
   if (action.includes("TRANSFER")) return "Crear borrador traslado";
   if (action.includes("RECALCULATE_CASH") || action.includes("REFRESH_OPERATIONAL_DAY")) return "Recalcular";
   if (action.includes("PRICE") || action.includes("PRICING")) return "Abrir pricing";
-  if (action.includes("INVENTORY") || action.includes("REORDER") || action.includes("STOCK")) return "Abrir inventario";
+  if (action.includes("INVENTORY") || action.includes("REORDER") || action.includes("STOCK") || action.includes("REPLENISHMENT")) return "Abrir Reposición";
   if (action.includes("REVIEW_CASH") || action.includes("CASH")) return "Ir a Caja";
   if (action.includes("DISCOUNT")) return "Revisar descuentos";
   if (action.includes("CONFIG") || action.includes("PRINT")) return "Abrir configuracion";

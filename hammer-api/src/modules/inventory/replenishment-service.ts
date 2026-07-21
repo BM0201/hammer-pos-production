@@ -5,6 +5,7 @@ import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-
 import { createPurchaseOrder } from "@/modules/purchase-orders/service";
 import { createTransfer } from "@/modules/transfers/service";
 import { logAuditEvent } from "@/modules/audit/service";
+import { resolveReplenishmentParamsBatch, getInboundQuantities, type ReplenishmentMode, type InboundDocument } from "@/modules/inventory/replenishment-params-service";
 
 export type ReplenishmentCriticality =
   | "CRITICAL"
@@ -488,6 +489,236 @@ export async function getReplenishmentRecommendations(params: RecommendationPara
     },
   };
   return { branchId: params.branchId, generatedAt: new Date().toISOString(), recommendations: filtered, summary };
+}
+
+/* ════════════════════════════════════════════════════════════════
+ * Reposición v2 — Señales (Fase 1.3)
+ *
+ * Evolución de getReplenishmentRecommendations (que se deja intacta —
+ * catalog-inventory-admin.tsx sigue llamándola tal cual). Diferencias:
+ * - Usa resolveReplenishmentParamsBatch para respetar override manual /
+ *   exclusión en vez de solo el piso legacy de BranchProductSetting.
+ * - Descuenta lo "en camino" (PO aprobados + traslados en tránsito) de la
+ *   necesidad para no volver a sugerir lo que ya se pidió.
+ * - Severidad de una sola dimensión, en el orden exacto de la spec:
+ *   CRITICAL > LOW > COVERED > NO_DEMAND > (sin señal, se omite del listado).
+ * ════════════════════════════════════════════════════════════════ */
+
+export type ReplenishmentSeverity = "CRITICAL" | "LOW" | "COVERED" | "NO_DEMAND";
+export type ReplenishmentSourceType = "TRANSFER" | "PRODUCTION" | "PURCHASE";
+
+export type ReplenishmentSignalSource = {
+  type: ReplenishmentSourceType;
+  quantity: number;
+  branchId?: string;
+  branchName?: string;
+  supplierId?: string | null;
+  supplierName?: string | null;
+};
+
+export type ReplenishmentSignal = {
+  productId: string;
+  sku: string;
+  name: string;
+  branchId: string;
+  mode: ReplenishmentMode;
+  stockOnHand: number;
+  averageDailyDemand: number;
+  abcClass: "A" | "B" | "C";
+  xyzClass: "X" | "Y" | "Z";
+  combinedClass: string;
+  leadTimeDays: number;
+  coverageDaysRemaining: number | null;
+  reorderPoint: number;
+  targetQuantity: number;
+  inboundQuantity: number;
+  inboundDocuments: InboundDocument[];
+  grossNeed: number;
+  netNeed: number;
+  estimatedCost: number | null;
+  severity: ReplenishmentSeverity;
+  sources: ReplenishmentSignalSource[];
+  message: string;
+  warnings: string[];
+};
+
+export async function getReplenishmentSignals(branchId: string) {
+  const balances = await prisma.inventoryBalance.findMany({
+    where: { branchId, product: { isActive: true, isTimber: false } },
+    include: {
+      product: {
+        select: { id: true, sku: true, name: true, categoryId: true, averageDailySales: true },
+      },
+    },
+    orderBy: { inventoryValue: "desc" },
+  });
+
+  const productIds = balances.map((b) => b.productId);
+  const pairs = productIds.map((productId) => ({ branchId, productId }));
+
+  const [sales, recipesSet, pricingByKey, commercialByKey, policyByKey, branchSettingRows, paramsByProductId, inboundByProductId] = await Promise.all([
+    getSalesMaps(branchId, productIds),
+    prisma.productionRecipe.findMany({ where: { finishedProductId: { in: productIds }, isActive: true }, select: { finishedProductId: true } })
+      .then((rows) => new Set(rows.map((r) => r.finishedProductId))),
+    getEffectiveProductPricingBatch(prisma, pairs),
+    buildCommercialIntelligenceBatch(pairs),
+    resolvePolicyForProductBatch(pairs),
+    productIds.length > 0
+      ? prisma.branchProductSetting.findMany({
+          where: { branchId, productId: { in: productIds } },
+          select: { productId: true, minStock: true, maxStock: true, reorderPoint: true },
+        })
+      : Promise.resolve([]),
+    resolveReplenishmentParamsBatch(branchId, productIds),
+    getInboundQuantities(branchId, productIds),
+  ]);
+  const branchSettingByProductId = new Map(branchSettingRows.map((row) => [row.productId, row]));
+
+  const signals: ReplenishmentSignal[] = [];
+
+  for (const balance of balances) {
+    const params = paramsByProductId.get(balance.productId);
+    if (params?.mode === "EXCLUDED") continue;
+
+    const key = `${branchId}:${balance.productId}`;
+    const pricing = pricingByKey.get(key);
+    const commercial = commercialByKey.get(key);
+    const categoryPolicy = policyByKey.get(key);
+    if (!pricing || !commercial || !categoryPolicy) continue;
+    const branchSetting = branchSettingByProductId.get(balance.productId) ?? null;
+
+    const warnings: string[] = [];
+    const unitsSoldLast30Days = sales.last30.get(balance.productId) ?? 0;
+    const unitsSoldLast90Days = sales.last90.get(balance.productId) ?? 0;
+    let averageDailyDemand = unitsSoldLast30Days > 0 ? unitsSoldLast30Days / 30 : unitsSoldLast90Days > 0 ? unitsSoldLast90Days / 90 : 0;
+    if (averageDailyDemand <= 0 && balance.product.averageDailySales) averageDailyDemand = finiteNumber(balance.product.averageDailySales);
+
+    const stockOnHand = finiteNumber(balance.quantityOnHand);
+    const safetyDays = xyzSafetyDays(commercial.xyzClass) + abcSafetyDays(commercial.abcClass);
+    const coverageDays = defaultCoverageDays(commercial.combinedClass);
+
+    let leadTimeDays: number;
+    let reorderPoint: number;
+    let targetQuantity: number;
+    if (params?.mode === "MANUAL_OVERRIDE") {
+      leadTimeDays = Math.max(1, params.leadTimeDays ?? DEFAULT_LEAD_TIME_DAYS);
+      reorderPoint = params.reorderPoint ?? 0;
+      targetQuantity = (params.targetQuantity ?? 0) + (params.safetyStock ?? 0);
+    } else {
+      leadTimeDays = DEFAULT_LEAD_TIME_DAYS;
+      reorderPoint = Math.max(averageDailyDemand * (leadTimeDays + safetyDays), finiteNumber(branchSetting?.reorderPoint), finiteNumber(branchSetting?.minStock));
+      targetQuantity = Math.max(averageDailyDemand * (leadTimeDays + safetyDays + coverageDays), reorderPoint, finiteNumber(branchSetting?.maxStock));
+    }
+
+    const inbound = inboundByProductId.get(balance.productId);
+    const inboundQuantity = inbound?.totalQuantity ?? 0;
+    const grossNeed = Math.max(0, money(targetQuantity - stockOnHand));
+    const netNeed = Math.max(0, money(targetQuantity - stockOnHand - inboundQuantity));
+    const coverageDaysRemaining = averageDailyDemand > 0 ? stockOnHand / averageDailyDemand : null;
+
+    let severity: ReplenishmentSeverity | null = null;
+    if (coverageDaysRemaining !== null && coverageDaysRemaining < leadTimeDays) severity = "CRITICAL";
+    else if (stockOnHand <= reorderPoint) severity = "LOW";
+    else if (grossNeed > 0 && netNeed <= 0) severity = "COVERED";
+    else if (averageDailyDemand === 0 && stockOnHand > 0) severity = "NO_DEMAND";
+    if (severity === null) continue; // "sin señal" — todo bien, se omite del listado
+
+    const sources: ReplenishmentSignalSource[] = [];
+    let remaining = netNeed;
+    if (remaining > 0) {
+      const sourceOpportunity = await getSourceBranchOpportunity({ toBranchId: branchId, productId: balance.productId, suggestedNeedQty: remaining });
+      if (sourceOpportunity && sourceOpportunity.suggestedTransferQty > 0) {
+        sources.push({
+          type: "TRANSFER",
+          quantity: sourceOpportunity.suggestedTransferQty,
+          branchId: sourceOpportunity.fromBranchId,
+          branchName: sourceOpportunity.fromBranchName,
+        });
+        remaining = money(remaining - sourceOpportunity.suggestedTransferQty);
+      }
+    }
+    if (remaining > 0 && recipesSet.has(balance.productId)) {
+      sources.push({ type: "PRODUCTION", quantity: remaining });
+      remaining = 0;
+    }
+    if (remaining > 0) {
+      sources.push({
+        type: "PURCHASE",
+        quantity: remaining,
+        supplierId: params?.preferredSupplierId ?? null,
+        supplierName: params?.preferredSupplierName ?? null,
+      });
+    }
+
+    let message: string;
+    if (severity === "CRITICAL" || severity === "LOW") {
+      const srcText = sources.find((s) => s.type === "TRANSFER")
+        ? ` ${sources.find((s) => s.type === "TRANSFER")!.branchName} tiene excedente para transferir.`
+        : sources.find((s) => s.type === "PURCHASE")?.supplierName
+          ? ` Comprar a ${sources.find((s) => s.type === "PURCHASE")!.supplierName}.`
+          : "";
+      message = `${balance.product.name}: stock (${stockOnHand}) bajo punto de reorden (${money(reorderPoint)}).${srcText}`;
+    } else if (severity === "COVERED") {
+      message = `${balance.product.name}: necesidad cubierta por ${money(inboundQuantity)} unidades ya en camino.`;
+    } else {
+      message = `${balance.product.name}: sin ventas recientes; no comprar sin confirmar demanda.`;
+    }
+
+    if (pricing.effectivePrice === null) warnings.push("Producto sin precio de venta asignado en esta sucursal.");
+
+    signals.push({
+      productId: balance.productId,
+      sku: balance.product.sku,
+      name: balance.product.name,
+      branchId,
+      mode: params?.mode ?? "AUTO",
+      stockOnHand,
+      averageDailyDemand: Number(averageDailyDemand.toFixed(4)),
+      abcClass: commercial.abcClass,
+      xyzClass: commercial.xyzClass,
+      combinedClass: commercial.combinedClass,
+      leadTimeDays,
+      coverageDaysRemaining: coverageDaysRemaining === null ? null : Number(coverageDaysRemaining.toFixed(2)),
+      reorderPoint: money(reorderPoint),
+      targetQuantity: money(targetQuantity),
+      inboundQuantity: money(inboundQuantity),
+      inboundDocuments: inbound?.documents ?? [],
+      grossNeed,
+      netNeed,
+      estimatedCost: pricing.effectiveCost === null ? null : money(Number(pricing.effectiveCost) * netNeed),
+      severity,
+      sources,
+      message,
+      warnings,
+    });
+  }
+
+  const summary = {
+    criticalCount: signals.filter((s) => s.severity === "CRITICAL").length,
+    lowCount: signals.filter((s) => s.severity === "LOW").length,
+    coveredCount: signals.filter((s) => s.severity === "COVERED").length,
+    noDemandCount: signals.filter((s) => s.severity === "NO_DEMAND").length,
+    inboundDescontadoCount: signals.filter((s) => s.inboundQuantity > 0).length,
+  };
+
+  return { branchId, generatedAt: new Date().toISOString(), signals, summary };
+}
+
+/**
+ * Reposición v2 (Fase 1.5): recalcula el snapshot ligero de conteos por severidad
+ * para una sucursal. Se llama DESPUÉS de: cierre de día operativo (nunca dentro de
+ * esa transacción — el ciclo del día es sensible), recepción de PO, recepción de
+ * traslado, o desde un endpoint manual de refresh. Nunca es la fuente de verdad
+ * (las señales se calculan en lectura) — solo alimenta el badge del sidebar/Brain.
+ */
+export async function refreshReplenishmentSignalSnapshot(branchId: string) {
+  const { summary } = await getReplenishmentSignals(branchId);
+  await prisma.replenishmentSignalSnapshot.upsert({
+    where: { branchId },
+    create: { branchId, criticalCount: summary.criticalCount, lowCount: summary.lowCount, coveredCount: summary.coveredCount },
+    update: { criticalCount: summary.criticalCount, lowCount: summary.lowCount, coveredCount: summary.coveredCount, generatedAt: new Date() },
+  });
+  return summary;
 }
 
 export async function getTransferOpportunities(params: { branchId: string; leadTimeDays?: number; coverageDays?: number }) {

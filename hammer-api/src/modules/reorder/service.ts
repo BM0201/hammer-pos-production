@@ -240,6 +240,13 @@ type EvaluationResult = {
   skippedDuplicates: number;
 };
 
+/**
+ * @deprecated Motor 1 (umbrales estáticos) migrado a Reposición v2 — ver
+ * `hammer-api/src/modules/inventory/replenishment-service.ts` (`getReplenishmentSignals`).
+ * Ya no se invoca desde ninguna ruta (el endpoint responde 410). Se conserva solo
+ * para no romper el tipo de retorno de `listReorderAlerts`/`listSuggestionBatches`,
+ * que siguen activos como lectura histórica.
+ */
 export async function evaluateReorderNeeds(params?: { branchId?: string }): Promise<EvaluationResult> {
   // 1. Get all active policies (filtered by branch if specified)
   const policies = await prisma.stockReorderPolicy.findMany({
@@ -565,6 +572,13 @@ export async function evaluateReorderNeeds(params?: { branchId?: string }): Prom
  *  CONVERT — Alert → PurchaseOrder or Transfer
  * ════════════════════════════════════════════════════════════════ */
 
+/**
+ * @deprecated Migrado a Reposición v2 — convertir un Plan (`replenishment-draft-service.ts`)
+ * agrupa por proveedor real y usa el último costo de compra sin IVA. Ya no se invoca
+ * desde ninguna ruta (el endpoint responde 410). Se conserva únicamente porque
+ * `brain/actions/execute-decision.ts` aún puede resolver decisiones históricas
+ * persistidas antes de la migración sin lanzar un error no controlado.
+ */
 export async function convertAlertToPurchaseOrder(alertId: string, userId: string) {
   const alert = await prisma.reorderAlert.findUnique({
     where: { id: alertId },
@@ -629,6 +643,9 @@ export async function convertAlertToPurchaseOrder(alertId: string, userId: strin
   return { alert: updatedAlert, purchaseOrder: po };
 }
 
+/**
+ * @deprecated Migrado a Reposición v2 — ver nota en `convertAlertToPurchaseOrder`.
+ */
 export async function convertAlertToTransfer(alertId: string, userId: string) {
   const alert = await prisma.reorderAlert.findUnique({
     where: { id: alertId },
@@ -713,6 +730,12 @@ export async function convertAlertToTransfer(alertId: string, userId: string) {
  *  BATCH CONVERT — Convert entire suggestion batch
  * ════════════════════════════════════════════════════════════════ */
 
+/**
+ * @deprecated Migrado a Reposición v2 — ver nota en `convertAlertToPurchaseOrder`.
+ * Además, esta función tenía el bug que motivó la migración: pasaba WAC (con IVA
+ * incluido según el tratamiento fiscal histórico) como `unitCost` a `createPurchaseOrder`,
+ * que lo trata como `unitCostBeforeTax` y le vuelve a aplicar `taxRate` — doble IVA.
+ */
 export async function convertBatchToPurchaseOrder(batchId: string, userId: string) {
   const batch = await prisma.reorderSuggestionBatch.findUnique({
     where: { id: batchId },
@@ -794,6 +817,9 @@ export async function convertBatchToPurchaseOrder(batchId: string, userId: strin
   return { batch, purchaseOrder: po };
 }
 
+/**
+ * @deprecated Migrado a Reposición v2 — ver nota en `convertAlertToPurchaseOrder`.
+ */
 export async function convertBatchToTransfer(batchId: string, userId: string) {
   const batch = await prisma.reorderSuggestionBatch.findUnique({
     where: { id: batchId },
