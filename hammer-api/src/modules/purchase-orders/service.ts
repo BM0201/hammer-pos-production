@@ -205,9 +205,77 @@ async function updateGlobalProductCostForReceiptTx(
   };
 }
 
+/* ── Recepción (Fase A — cálculo derivado en lectura, sin migraciones) ──
+ * Reutiliza EXACTAMENTE la misma lógica que receivePurchaseOrder: resuelve el
+ * producto de inventario canónico por línea (conversión de unidades/fusión),
+ * agrega lo ya recibido con un groupBy de inventoryMovement, y deriva
+ * pendiente. Sirve tanto al detalle (una orden, líneas completas) como a la
+ * lista (muchas órdenes, un solo groupBy — nunca un query por pedido).
+ */
+type ReceptionOrderInput = { id: string; status: string; lines: { id: string; productId: string; quantity: Prisma.Decimal }[] };
+type ReceptionState = "NONE" | "PARTIAL" | "FULL";
+
+async function resolveReceptionForOrders(orders: ReceptionOrderInput[]) {
+  const distinctProductIds = Array.from(new Set(orders.flatMap((po) => po.lines.map((l) => l.productId))));
+  const resolutions = await Promise.all(
+    distinctProductIds.map(async (productId) => [productId, await resolveInventoryProductForMovement(prisma, productId)] as const),
+  );
+  const resolutionByProductId = new Map(resolutions);
+  const inventoryProductIds = Array.from(new Set(resolutions.map(([, r]) => r.inventoryProductId)));
+  const orderIds = orders.map((po) => po.id);
+
+  const movements = inventoryProductIds.length > 0 && orderIds.length > 0
+    ? await prisma.inventoryMovement.groupBy({
+        by: ["referenceId", "productId"],
+        where: {
+          referenceType: "PurchaseOrder",
+          referenceId: { in: orderIds },
+          movementType: "PURCHASE_IN",
+          productId: { in: inventoryProductIds },
+        },
+        _sum: { quantity: true },
+      })
+    : [];
+  const receivedBaseByOrderAndProduct = new Map<string, number>();
+  for (const m of movements) {
+    receivedBaseByOrderAndProduct.set(`${m.referenceId}:${m.productId}`, Number(m._sum.quantity ?? 0));
+  }
+
+  const result = new Map<string, { receptionState: ReceptionState; lines: Map<string, { receivedQuantity: number; pendingQuantity: number }> }>();
+  for (const po of orders) {
+    const lineMap = new Map<string, { receivedQuantity: number; pendingQuantity: number }>();
+    let totalRequestedBase = 0;
+    let totalReceivedCappedBase = 0;
+    for (const line of po.lines) {
+      const resolution = resolutionByProductId.get(line.productId)!;
+      const requestedBaseQty = resolution.conversion
+        ? Number(convertSaleQtyToBaseQty({ quantity: line.quantity, conversionFactor: resolution.conversion.conversionFactor }))
+        : Number(line.quantity);
+      const receivedBaseQty = receivedBaseByOrderAndProduct.get(`${po.id}:${resolution.inventoryProductId}`) ?? 0;
+      const pendingBaseQty = Math.max(0, requestedBaseQty - receivedBaseQty);
+      const receivedSaleQty = resolution.conversion
+        ? Number(convertBaseQtyToSaleQty({ baseQuantity: receivedBaseQty, conversionFactor: resolution.conversion.conversionFactor }))
+        : receivedBaseQty;
+      const pendingSaleQty = resolution.conversion
+        ? Number(convertBaseQtyToSaleQty({ baseQuantity: pendingBaseQty, conversionFactor: resolution.conversion.conversionFactor }))
+        : pendingBaseQty;
+      lineMap.set(line.id, { receivedQuantity: money(receivedSaleQty), pendingQuantity: money(pendingSaleQty) });
+      totalRequestedBase += requestedBaseQty;
+      totalReceivedCappedBase += Math.min(receivedBaseQty, requestedBaseQty);
+    }
+    let receptionState: ReceptionState;
+    if (po.status === "RECEIVED") receptionState = "FULL";
+    else if (totalReceivedCappedBase <= 0) receptionState = "NONE";
+    else if (totalReceivedCappedBase >= totalRequestedBase) receptionState = "FULL";
+    else receptionState = "PARTIAL";
+    result.set(po.id, { receptionState, lines: lineMap });
+  }
+  return result;
+}
+
 /* ── List ── */
 export async function listPurchaseOrders(params?: { status?: PurchaseOrderStatus }) {
-  return prisma.purchaseOrder.findMany({
+  const orders = await prisma.purchaseOrder.findMany({
     where: params?.status ? { status: params.status } : undefined,
     include: {
       branch: true,
@@ -217,6 +285,12 @@ export async function listPurchaseOrders(params?: { status?: PurchaseOrderStatus
     },
     orderBy: { createdAt: "desc" },
   });
+
+  const receptionByOrderId = await resolveReceptionForOrders(
+    orders.map((po) => ({ id: po.id, status: po.status, lines: po.lines.map((l) => ({ id: l.id, productId: l.productId, quantity: l.quantity })) })),
+  );
+
+  return orders.map((po) => ({ ...po, receptionState: receptionByOrderId.get(po.id)?.receptionState ?? "NONE" }));
 }
 
 /* ── Get by ID ── */
@@ -231,7 +305,21 @@ export async function getPurchaseOrder(id: string) {
     },
   });
   if (!po) throw new Error("NOT_FOUND");
-  return po;
+
+  const receptionByOrderId = await resolveReceptionForOrders([
+    { id: po.id, status: po.status, lines: po.lines.map((l) => ({ id: l.id, productId: l.productId, quantity: l.quantity })) },
+  ]);
+  const reception = receptionByOrderId.get(po.id);
+
+  return {
+    ...po,
+    receptionState: reception?.receptionState ?? "NONE",
+    lines: po.lines.map((line) => ({
+      ...line,
+      receivedQuantity: reception?.lines.get(line.id)?.receivedQuantity ?? 0,
+      pendingQuantity: reception?.lines.get(line.id)?.pendingQuantity ?? Number(line.quantity),
+    })),
+  };
 }
 
 /* ── Create ── */

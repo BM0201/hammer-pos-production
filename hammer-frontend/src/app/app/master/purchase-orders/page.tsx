@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import toast from "react-hot-toast";
 import {
   Plus,
@@ -17,9 +17,12 @@ import {
   Truck,
   DollarSign,
   ReceiptText,
+  Search,
+  Printer,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money, fmtDateTime } from "@/lib/format";
+import { openPrintableDocument, recordPrintAudit } from "@/lib/printing";
+import { money, qty, fmtDate, fmtDateTime } from "@/lib/format";
 
 /* ── Types ── */
 type Product = { id: string; sku: string; name: string; unit: string };
@@ -51,6 +54,8 @@ type POLine = {
   allocatedDiscountPerUnit?: number;
   finalUnitCost?: number;
   subtotal: number;
+  receivedQuantity?: number;
+  pendingQuantity?: number;
 };
 type PurchaseOrder = {
   id: string;
@@ -73,28 +78,348 @@ type PurchaseOrder = {
   createdBy: { username: string; fullName: string };
   lines: (POLine & { product: Product })[];
   createdAt: string;
+  receptionState?: "NONE" | "PARTIAL" | "FULL";
 };
 type Branch = { id: string; code: string; name: string };
 type PurchaseOrderLineForm = { productId: string; quantity: string; unitCostBeforeTax: string; taxRate: string };
+type DateRange = "" | "today" | "7d" | "30d";
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function withinDateRange(dateIso: string, range: DateRange): boolean {
+  if (!range) return true;
+  const date = new Date(dateIso);
+  const now = new Date();
+  if (range === "today") return date.toDateString() === now.toDateString();
+  const days = range === "7d" ? 7 : 30;
+  const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  return date >= cutoff;
+}
+
+/** Espejo cliente de la prorrata de costo final que hace createPurchaseOrder — solo para previsualizar, no autoritativo. */
+function estimateFinalUnitCosts(
+  lines: PurchaseOrderLineForm[],
+  freightAmount: number,
+  otherChargesAmount: number,
+  globalDiscountAmount: number,
+  taxTreatment: "INCLUDE_IN_COST" | "SEPARATE_CREDIT",
+): number[] {
+  const parsed = lines.map((l) => {
+    const quantity = parseFloat(l.quantity) || 0;
+    const unitCostBeforeTax = parseFloat(l.unitCostBeforeTax) || 0;
+    const taxRate = parseFloat(l.taxRate) || 0;
+    const unitTaxAmount = unitCostBeforeTax * (taxRate / 100);
+    const subtotalBeforeTax = quantity * unitCostBeforeTax;
+    return { quantity, unitCostBeforeTax, unitTaxAmount, subtotalBeforeTax };
+  });
+  const subtotalBeforeTaxTotal = parsed.reduce((acc, l) => acc + l.subtotalBeforeTax, 0);
+  const totalAllocationBase = subtotalBeforeTaxTotal > 0 ? subtotalBeforeTaxTotal : parsed.reduce((acc, l) => acc + l.quantity, 0);
+  return parsed.map((l) => {
+    if (l.quantity <= 0) return 0;
+    const weight = totalAllocationBase > 0 ? (subtotalBeforeTaxTotal > 0 ? l.subtotalBeforeTax : l.quantity) / totalAllocationBase : 0;
+    const allocFreight = (freightAmount * weight) / l.quantity;
+    const allocOther = (otherChargesAmount * weight) / l.quantity;
+    const allocDiscount = (globalDiscountAmount * weight) / l.quantity;
+    return Math.max(0, l.unitCostBeforeTax + (taxTreatment === "INCLUDE_IN_COST" ? l.unitTaxAmount : 0) + allocFreight + allocOther - allocDiscount);
+  });
+}
+
 /* ── Status Badge ── */
-function StatusBadge({ status }: { status: string }) {
-  const cfg: Record<string, { bg: string; text: string; label: string }> = {
-    DRAFT: { bg: "bg-[var(--color-warning-100)]", text: "text-[var(--color-warning-700)]", label: "Borrador" },
-    PENDING: { bg: "bg-orange-100", text: "text-orange-800", label: "Pendiente" },
-    APPROVED: { bg: "bg-[var(--color-success-50)]", text: "text-[var(--color-success-700)]", label: "Aprobado" },
-    RECEIVED: { bg: "bg-[var(--color-info-50)]", text: "text-[var(--color-info-700)]", label: "Recibido" },
-    CANCELLED: { bg: "bg-[var(--color-danger-50)]", text: "text-[var(--color-danger-700)]", label: "Cancelado" },
+function StatusBadge({ status, receptionState }: { status: string; receptionState?: string }) {
+  if (status === "APPROVED" && receptionState === "PARTIAL") {
+    return <span className="hm-badge hm-badge-warning">Recibido parcial</span>;
+  }
+  const cfg: Record<string, { className: string; label: string }> = {
+    DRAFT: { className: "hm-badge hm-badge-warning", label: "Borrador" },
+    APPROVED: { className: "hm-badge hm-badge-success", label: "Aprobado" },
+    RECEIVED: { className: "hm-badge hm-badge-info", label: "Recibido" },
+    CANCELLED: { className: "hm-badge hm-badge-danger", label: "Cancelado" },
   };
-  const c = cfg[status] || { bg: "bg-[var(--color-surface-alt)]", text: "text-[var(--color-text)]", label: status };
+  const c = cfg[status] ?? { className: "hm-badge hm-badge-neutral", label: status };
+  return <span className={c.className}>{c.label}</span>;
+}
+
+/* ── Combobox de producto (búsqueda por SKU/nombre, sin librerías nuevas) ── */
+function ProductCombobox({
+  products,
+  value,
+  onSelect,
+}: {
+  products: Product[];
+  value: Product | null;
+  onSelect: (product: Product) => void;
+}) {
+  const [query, setQuery] = useState(value ? `${value.sku} — ${value.name}` : "");
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const blurTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setQuery(value ? `${value.sku} — ${value.name}` : "");
+  }, [value?.id]);
+
+  useEffect(() => () => { if (blurTimeout.current) clearTimeout(blurTimeout.current); }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const base = !q ? products : products.filter((p) => p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
+    return base.slice(0, 30);
+  }, [products, query]);
+
+  function selectProduct(p: Product) {
+    onSelect(p);
+    setQuery(`${p.sku} — ${p.name}`);
+    setOpen(false);
+  }
+
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${c.bg} ${c.text}`}>
-      {c.label}
-    </span>
+    <div className="relative">
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); setHighlight(0); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => { blurTimeout.current = setTimeout(() => setOpen(false), 150); }}
+        onKeyDown={(e) => {
+          if (!open) return;
+          if (e.key === "ArrowDown") { e.preventDefault(); setHighlight((h) => Math.min(h + 1, filtered.length - 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setHighlight((h) => Math.max(h - 1, 0)); }
+          else if (e.key === "Enter") { e.preventDefault(); if (filtered[highlight]) selectProduct(filtered[highlight]); }
+          else if (e.key === "Escape") setOpen(false);
+        }}
+        placeholder="Buscar por SKU o nombre..."
+        className="hm-input w-full rounded-lg text-sm"
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-lg">
+          {filtered.map((p, i) => (
+            <button
+              type="button"
+              key={p.id}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => selectProduct(p)}
+              className={`flex w-full items-center gap-2 border-b border-[var(--color-border)] px-2.5 py-2 text-left text-[0.78rem] last:border-b-0 ${
+                i === highlight ? "bg-[var(--color-master-50)]" : "hover:bg-[var(--color-surface-alt)]"
+              }`}
+            >
+              <span className="min-w-[4.5rem] font-mono text-[0.68rem] text-[var(--color-text-muted)]">{p.sku}</span>
+              <span className="flex-1 truncate text-[var(--color-text)]">{p.name}</span>
+              <span className="text-[0.68rem] text-[var(--color-text-soft)]">{p.unit}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Modal de recepción parcial (Fase B1) ── */
+function ReceivePurchaseOrderModal({
+  order,
+  onClose,
+  onSubmitted,
+}: {
+  order: PurchaseOrder;
+  onClose: () => void;
+  onSubmitted: () => Promise<void> | void;
+}) {
+  const [quantities, setQuantities] = useState<Record<string, string>>(() =>
+    Object.fromEntries(order.lines.map((l) => [l.id as string, String(l.pendingQuantity ?? 0)])),
+  );
+  const [allowOverReceive, setAllowOverReceive] = useState(false);
+  const [freightAmount, setFreightAmount] = useState("0");
+  const [otherChargesAmount, setOtherChargesAmount] = useState("0");
+  const [notes, setNotes] = useState("");
+  const [updateGlobalCost, setUpdateGlobalCost] = useState(true);
+  const [createPriceReviewAlerts, setCreatePriceReviewAlerts] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const totalToReceive = order.lines.reduce((acc, line) => acc + (parseFloat(quantities[line.id as string] ?? "0") || 0), 0);
+  const linesWithQty = order.lines.filter((line) => (parseFloat(quantities[line.id as string] ?? "0") || 0) > 0).length;
+
+  async function handleSubmit() {
+    const items = order.lines
+      .map((line) => ({
+        purchaseOrderLineId: line.id as string,
+        productId: line.productId,
+        quantityReceived: parseFloat(quantities[line.id as string] ?? "0") || 0,
+      }))
+      .filter((item) => item.quantityReceived > 0);
+
+    if (items.length === 0) {
+      setLocalError("Ingrese al menos una cantidad a recibir.");
+      return;
+    }
+
+    if (!allowOverReceive) {
+      const overLine = order.lines.find((line) => {
+        const requested = parseFloat(quantities[line.id as string] ?? "0") || 0;
+        return requested > (line.pendingQuantity ?? 0) + 1e-6;
+      });
+      if (overLine) {
+        setLocalError(`La cantidad a recibir de "${overLine.product.name}" supera lo pendiente. Active "Permitir sobre-recepción" o ajuste la cantidad.`);
+        return;
+      }
+    }
+
+    try {
+      setSubmitting(true);
+      setLocalError(null);
+      const res = await apiFetch(`/api/master/purchase-orders/${order.id}/receive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId: order.branch.id,
+          items,
+          freightAmount: parseFloat(freightAmount) || 0,
+          otherChargesAmount: parseFloat(otherChargesAmount) || 0,
+          updateBranchCost: updateGlobalCost,
+          updateGlobalCost,
+          createPriceReviewAlerts,
+          allowOverReceive,
+          notes: notes || undefined,
+        }),
+      });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al recibir inventario");
+      const data = unwrapApiData(raw);
+      const warningCount = Array.isArray(data?.warnings) ? data.warnings.length : 0;
+      toast.success(
+        `Recibidas ${items.length} línea${items.length === 1 ? "" : "s"}${warningCount ? ` · ${warningCount} alerta${warningCount === 1 ? "" : "s"} de precio` : ""}`,
+      );
+      await onSubmitted();
+      onClose();
+    } catch (error) {
+      setLocalError(getErrorMessage(error, "Error al recibir inventario"));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgb(28_25_23/0.45)] p-4" onClick={onClose}>
+      <div
+        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-modal)]"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Recibir pedido ${order.orderNumber}`}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
+          <div>
+            <h2 className="text-[1.0625rem] font-bold tracking-tight text-[var(--color-text)]">Recepción de mercadería</h2>
+            <p className="text-[0.78rem] text-[var(--color-text-soft)]">
+              Pedido {order.orderNumber} · {(order.supplierRef?.name ?? order.supplierNameSnapshot ?? order.supplier) || "sin proveedor"}
+            </p>
+          </div>
+          <button onClick={onClose} className="hm-icon-btn" aria-label="Cerrar"><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          {localError && (
+            <div className="hm-alert hm-alert-danger text-[0.8125rem]">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              {localError}
+            </div>
+          )}
+
+          <table className="hm-sheet-table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th className="hm-num">Pedida</th>
+                <th className="hm-num">Recibida</th>
+                <th className="hm-num">Pendiente</th>
+                <th className="hm-num">A recibir</th>
+              </tr>
+            </thead>
+            <tbody>
+              {order.lines.map((line) => (
+                <tr key={line.id}>
+                  <td>
+                    <span className="font-medium text-[var(--color-text)]">{line.product.name}</span>
+                    <span className="ml-1.5 font-mono text-[0.68rem] text-[var(--color-text-muted)]">{line.product.sku}</span>
+                  </td>
+                  <td className="hm-num">{qty(line.quantity)}</td>
+                  <td className="hm-num">{qty(line.receivedQuantity ?? 0)}</td>
+                  <td className={`hm-num ${(line.pendingQuantity ?? 0) > 0 ? "text-[var(--color-warning-700)]" : ""}`}>{qty(line.pendingQuantity ?? 0)}</td>
+                  <td className="hm-num">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.0001"
+                      max={allowOverReceive ? undefined : (line.pendingQuantity ?? 0)}
+                      value={quantities[line.id as string] ?? "0"}
+                      onChange={(e) => setQuantities((current) => ({ ...current, [line.id as string]: e.target.value }))}
+                      className="hm-input w-24 rounded-lg text-right text-sm"
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <label className="flex items-start gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
+            <input type="checkbox" checked={allowOverReceive} onChange={(e) => setAllowOverReceive(e.target.checked)} className="mt-0.5 h-4 w-4" />
+            <span>
+              Permitir sobre-recepción
+              <span className="block text-[0.72rem] text-[var(--color-text-muted)]">
+                Permite recibir más cantidad de la pendiente (ajustes o mercadería adicional del proveedor).
+              </span>
+            </span>
+          </label>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="text-[0.8125rem] font-medium text-[var(--color-text-secondary)]">
+              Flete de esta recepción
+              <input type="number" min="0" step="0.01" value={freightAmount} onChange={(e) => setFreightAmount(e.target.value)} className="hm-input mt-1 w-full rounded-lg text-sm" />
+            </label>
+            <label className="text-[0.8125rem] font-medium text-[var(--color-text-secondary)]">
+              Otros cargos de esta recepción
+              <input type="number" min="0" step="0.01" value={otherChargesAmount} onChange={(e) => setOtherChargesAmount(e.target.value)} className="hm-input mt-1 w-full rounded-lg text-sm" />
+            </label>
+          </div>
+
+          <label className="block text-[0.8125rem] font-medium text-[var(--color-text-secondary)]">
+            Notas de esta recepción
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="hm-input mt-1 w-full rounded-lg text-sm" />
+          </label>
+
+          <div className="flex flex-wrap gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2.5 text-[0.8125rem] text-[var(--color-text-secondary)]">
+            <label className="inline-flex items-center gap-2">
+              <input type="checkbox" checked={updateGlobalCost} onChange={(e) => setUpdateGlobalCost(e.target.checked)} className="h-4 w-4" />
+              Actualizar costo global con la recepción
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input type="checkbox" checked={createPriceReviewAlerts} onChange={(e) => setCreatePriceReviewAlerts(e.target.checked)} className="h-4 w-4" />
+              Revisar precio vs costo al recibir
+            </label>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-[var(--color-border)] px-5 py-4">
+          <p className="text-[0.78rem] text-[var(--color-text-soft)]">
+            {linesWithQty} línea{linesWithQty === 1 ? "" : "s"} · {qty(totalToReceive)} unidades a recibir
+          </p>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">
+              Cancelar
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50"
+            >
+              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+              Confirmar recepción
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -107,11 +432,25 @@ export default function PurchaseOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
-  const [filterStatus, setFilterStatus] = useState<string>("");
+
+  // Lista operable (Fase B4): filtrado 100% cliente — ver nota en resumen final
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [branchFilter, setBranchFilter] = useState("");
+  const [dateRange, setDateRange] = useState<DateRange>("");
+
+  // Detalle como drawer (Fase C4)
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedOrderDetail, setSelectedOrderDetail] = useState<PurchaseOrder | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [receiveUpdateBranchCost, setReceiveUpdateBranchCost] = useState(true);
-  const [receiveCreatePriceReviewAlerts, setReceiveCreatePriceReviewAlerts] = useState(true);
+  const [confirmApproveId, setConfirmApproveId] = useState<string | null>(null);
+  const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+
+  // Modal de recepción parcial (Fase B1)
+  const [receiveOrder, setReceiveOrder] = useState<PurchaseOrder | null>(null);
+
   const [supplierQuery, setSupplierQuery] = useState("");
   const [showSupplierQuickCreate, setShowSupplierQuickCreate] = useState(false);
   const [supplierDraft, setSupplierDraft] = useState({
@@ -140,20 +479,17 @@ export default function PurchaseOrdersPage() {
   const fetchOrders = useCallback(async () => {
     try {
       setLoading(true);
-      const url = filterStatus
-        ? `/api/master/purchase-orders?status=${filterStatus}`
-        : "/api/master/purchase-orders";
-      const res = await fetch(url);
+      const res = await apiFetch("/api/master/purchase-orders");
       const raw = await res.json();
       if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al cargar pedidos");
-      const orders = unwrapApiData(raw);
-      setOrders(Array.isArray(orders) ? orders : []);
+      const data = unwrapApiData(raw);
+      setOrders(Array.isArray(data) ? data : []);
     } catch (error) {
       setError(getErrorMessage(error, "Error al cargar pedidos"));
     } finally {
       setLoading(false);
     }
-  }, [filterStatus]);
+  }, []);
 
   const fetchMeta = useCallback(async () => {
     try {
@@ -175,6 +511,49 @@ export default function PurchaseOrdersPage() {
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
   useEffect(() => { fetchMeta(); }, [fetchMeta]);
 
+  const loadDetail = useCallback(async (id: string) => {
+    try {
+      setDetailLoading(true);
+      const res = await apiFetch(`/api/master/purchase-orders/${id}`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al cargar el pedido");
+      setSelectedOrderDetail(unwrapApiData(raw) as PurchaseOrder);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al cargar el pedido"));
+      setSelectedOrderId(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedOrderId) { setSelectedOrderDetail(null); return; }
+    loadDetail(selectedOrderId);
+  }, [selectedOrderId, loadDetail]);
+
+  async function openReceiveModal(id: string) {
+    try {
+      setActionLoading(id);
+      const res = await apiFetch(`/api/master/purchase-orders/${id}`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al cargar el pedido");
+      setReceiveOrder(unwrapApiData(raw) as PurchaseOrder);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al cargar el pedido"));
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handlePrint(id: string) {
+    try {
+      await openPrintableDocument(`/api/printing/purchase-orders/${id}/receipt?format=HTML`);
+      await recordPrintAudit({ entityType: "PurchaseOrder", entityId: id, documentType: "PURCHASE_RECEIPT" });
+    } catch (error) {
+      toast.error(getErrorMessage(error, "No se pudo imprimir el pedido"));
+    }
+  }
+
   const openCreate = () => {
     setFormBranchId(branches[0]?.id || "");
     setFormSupplierId("");
@@ -189,7 +568,6 @@ export default function PurchaseOrdersPage() {
     setGlobalDiscountAmount("0");
     setFormLines([{ productId: "", quantity: "1", unitCostBeforeTax: "0", taxRate: "15" }]);
     setShowModal(true);
-    setSelectedOrder(null);
   };
 
   const handleCreate = async () => {
@@ -229,7 +607,7 @@ export default function PurchaseOrdersPage() {
       const raw = await res.json();
       if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al crear pedido");
 
-      toast.success("✅ Pedido creado exitosamente");
+      toast.success("Pedido creado exitosamente");
       setShowModal(false);
       fetchOrders();
     } catch (error) {
@@ -266,15 +644,16 @@ export default function PurchaseOrdersPage() {
   };
 
   const handleApprove = async (id: string) => {
-    if (!confirm("¿Aprobar este pedido? El inventario se recibirá en un paso separado.")) return;
     try {
       setActionLoading(id);
       setError(null);
       const res = await apiFetch(`/api/master/purchase-orders/${id}/approve`, { method: "POST" });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al aprobar"); }
-      toast.success("✅ Pedido aprobado");
-      fetchOrders();
-      setSelectedOrder(null);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al aprobar");
+      toast.success("Pedido aprobado");
+      setConfirmApproveId(null);
+      await fetchOrders();
+      if (selectedOrderId === id) await loadDetail(id);
     } catch (error) {
       toast.error(getErrorMessage(error, "Error al aprobar"));
     } finally {
@@ -282,44 +661,16 @@ export default function PurchaseOrdersPage() {
     }
   };
 
-  const handleReceive = async (id: string) => {
-    if (!confirm("¿Recibir inventario pendiente de este pedido? Esta acción actualizará existencias y costo promedio.")) return;
-    try {
-      setActionLoading(id);
-      setError(null);
-      const res = await apiFetch(`/api/master/purchase-orders/${id}/receive`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          branchId: selectedOrder?.branch.id,
-          updateBranchCost: receiveUpdateBranchCost,
-          updateGlobalCost: receiveUpdateBranchCost,
-          createPriceReviewAlerts: receiveCreatePriceReviewAlerts,
-        }),
-      });
-      const raw = await res.json();
-      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al recibir inventario");
-      const data = unwrapApiData(raw);
-      const warningCount = Array.isArray(data?.warnings) ? data.warnings.length : 0;
-      toast.success(warningCount ? `Inventario recibido con ${warningCount} alerta(s) de precio` : "Inventario recibido");
-      fetchOrders();
-      setSelectedOrder(null);
-    } catch (error) {
-      toast.error(getErrorMessage(error, "Error al recibir inventario"));
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
   const handleCancel = async (id: string) => {
-    if (!confirm("¿Cancelar este pedido?")) return;
     try {
       setActionLoading(id);
       const res = await apiFetch(`/api/master/purchase-orders/${id}/cancel`, { method: "POST" });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message ?? e.message ?? "Error al cancelar"); }
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al cancelar");
       toast.success("Pedido cancelado");
-      fetchOrders();
-      setSelectedOrder(null);
+      setConfirmCancelId(null);
+      if (selectedOrderId === id) setSelectedOrderId(null);
+      await fetchOrders();
     } catch (error) {
       toast.error(getErrorMessage(error, "Error al cancelar"));
     } finally {
@@ -349,33 +700,51 @@ export default function PurchaseOrdersPage() {
       .some((value) => value?.toLowerCase().includes(q));
   });
   const selectedSupplier = suppliers.find((supplier) => supplier.id === formSupplierId) ?? null;
+  const estimatedFinalUnitCosts = useMemo(
+    () => estimateFinalUnitCosts(formLines, parseFloat(freightAmount) || 0, parseFloat(otherChargesAmount) || 0, parseFloat(globalDiscountAmount) || 0, purchaseTaxTreatment),
+    [formLines, freightAmount, otherChargesAmount, globalDiscountAmount, purchaseTaxTreatment],
+  );
+
+  // Fase B4: filtros de lista — todo client-side (el endpoint de lista no soporta querystring adicional)
+  const scopedOrders = useMemo(() => {
+    return orders.filter((o) => {
+      if (branchFilter && o.branch.id !== branchFilter) return false;
+      if (!withinDateRange(o.date, dateRange)) return false;
+      const q = searchQuery.trim().toLowerCase();
+      if (q) {
+        const matchesNumber = o.orderNumber.toLowerCase().includes(q);
+        const matchesSupplier = ((o.supplierRef?.name ?? o.supplierNameSnapshot ?? o.supplier) || "").toLowerCase().includes(q);
+        if (!matchesNumber && !matchesSupplier) return false;
+      }
+      return true;
+    });
+  }, [orders, branchFilter, dateRange, searchQuery]);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { "": scopedOrders.length, DRAFT: 0, APPROVED: 0, RECEIVED: 0, CANCELLED: 0 };
+    for (const o of scopedOrders) counts[o.status] = (counts[o.status] ?? 0) + 1;
+    return counts;
+  }, [scopedOrders]);
+
+  const filteredOrders = useMemo(
+    () => (statusFilter ? scopedOrders.filter((o) => o.status === statusFilter) : scopedOrders),
+    [scopedOrders, statusFilter],
+  );
 
   return (
     <section className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div
-            className="h-8 w-1 rounded-full"
-            style={{
-              background: "linear-gradient(to bottom, var(--color-master-400), var(--color-master-600))",
-            }}
-          />
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-[var(--color-text)]">
-              Pedidos de Compra
-            </h1>
-            <p className="text-sm text-[var(--color-text-muted)]">
-              Crear, aprobar pedidos y recibir mercadería al inventario.
-            </p>
-          </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-[1.1875rem] font-bold tracking-[-0.02em] text-[var(--color-text)]">Pedidos de Compra</h1>
+          <p className="text-[0.78rem] text-[var(--color-text-muted)]">Crear, aprobar pedidos y recibir mercadería al inventario.</p>
         </div>
         <button
           onClick={openCreate}
           className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] transition-colors"
         >
           <Plus className="h-4 w-4" />
-          Crear Pedido
+          Nuevo pedido
         </button>
       </div>
 
@@ -387,21 +756,58 @@ export default function PurchaseOrdersPage() {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2 text-sm">
-        {["", "DRAFT", "APPROVED", "RECEIVED", "CANCELLED"].map((s) => (
-          <button
-            key={s}
-            onClick={() => setFilterStatus(s)}
-            className={`rounded-lg border px-3 py-1.5 font-medium transition-colors ${
-              filterStatus === s
-                ? "bg-[var(--color-master-600)] text-white border-[var(--color-master-600)]"
-                : "bg-[var(--color-surface)] text-[var(--color-text-secondary)] border-[var(--color-border)] hover:bg-[var(--color-surface-alt)]"
-            }`}
-          >
-            {s === "" ? "Todos" : s === "DRAFT" ? "Borradores" : s === "APPROVED" ? "Aprobados" : s === "RECEIVED" ? "Recibidos" : "Cancelados"}
-          </button>
-        ))}
+      {/* Filtros: estado (KPI-filter), búsqueda, sucursal, rango de fecha */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className="hm-kpi-filter" data-active={statusFilter === ""} onClick={() => setStatusFilter("")}>
+          <b>{statusCounts[""] ?? 0}</b> Todos
+        </button>
+        <button type="button" className="hm-kpi-filter" data-active={statusFilter === "DRAFT"} onClick={() => setStatusFilter("DRAFT")}>
+          <b>{statusCounts.DRAFT ?? 0}</b> Borradores
+        </button>
+        <button type="button" className="hm-kpi-filter" data-active={statusFilter === "APPROVED"} onClick={() => setStatusFilter("APPROVED")}>
+          <b>{statusCounts.APPROVED ?? 0}</b> Aprobados
+        </button>
+        <button type="button" className="hm-kpi-filter" data-active={statusFilter === "RECEIVED"} onClick={() => setStatusFilter("RECEIVED")}>
+          <b>{statusCounts.RECEIVED ?? 0}</b> Recibidos
+        </button>
+        <button type="button" className="hm-kpi-filter" data-active={statusFilter === "CANCELLED"} onClick={() => setStatusFilter("CANCELLED")}>
+          <b>{statusCounts.CANCELLED ?? 0}</b> Cancelados
+        </button>
+
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-text-soft)]" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Buscar por número o proveedor..."
+            className="hm-input w-full rounded-lg pl-8 text-sm"
+          />
+        </div>
+
+        <select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} className="hm-input rounded-lg text-sm" aria-label="Filtrar por sucursal">
+          <option value="">Todas las sucursales</option>
+          {branches.map((b) => (
+            <option key={b.id} value={b.id}>{b.code} · {b.name}</option>
+          ))}
+        </select>
+
+        <div className="flex gap-1">
+          {([["", "Todo"], ["today", "Hoy"], ["7d", "7 días"], ["30d", "30 días"]] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setDateRange(value)}
+              className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                dateRange === value
+                  ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] text-[var(--color-master-700)]"
+                  : "border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Orders Table */}
@@ -410,19 +816,18 @@ export default function PurchaseOrdersPage() {
           <Loader2 className="h-6 w-6 animate-spin text-[var(--color-master-500)]" />
           <span className="ml-2 text-sm text-[var(--color-text-muted)]">Cargando pedidos...</span>
         </div>
-      ) : orders.length === 0 ? (
+      ) : filteredOrders.length === 0 ? (
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-center">
           <FileText className="h-12 w-12 mx-auto text-[var(--color-text-muted)] mb-3" />
-          <p className="text-[var(--color-text-muted)]">No hay pedidos de compra.</p>
+          <p className="text-[var(--color-text-muted)]">{orders.length === 0 ? "No hay pedidos de compra." : "No hay pedidos que coincidan con los filtros."}</p>
         </div>
       ) : (
         <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-          <div className="hm-card-header-green px-5 py-3 flex items-center gap-2">
-            <ShoppingCart className="h-5 w-5" />
-            <h2 className="font-semibold">Pedidos de Compra</h2>
-            <span className="ml-auto text-xs opacity-80">{orders.length} registros</span>
+          <div className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-4 py-2.5">
+            <span className="text-sm font-semibold text-[var(--color-text)]">Pedidos</span>
+            <span className="text-xs text-[var(--color-text-muted)]">{filteredOrders.length} de {orders.length}</span>
           </div>
-          <table className="hm-table">
+          <table className="hm-sheet-table">
             <thead>
               <tr>
                 <th>Pedido</th>
@@ -430,73 +835,79 @@ export default function PurchaseOrdersPage() {
                 <th>Proveedor</th>
                 <th>Sucursal</th>
                 <th>Estado</th>
-                <th className="text-right">Total</th>
+                <th>Recepción</th>
+                <th className="hm-num">Total</th>
                 <th className="text-center">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => (
+              {filteredOrders.map((order) => (
                 <tr
                   key={order.id}
-                  className="cursor-pointer"
-                  onClick={() => setSelectedOrder(order)}
+                  className={`cursor-pointer ${selectedOrderId === order.id ? "bg-[var(--color-master-50)]" : ""}`}
+                  onClick={() => setSelectedOrderId(order.id)}
                 >
                   <td className="font-mono text-xs font-bold text-[var(--color-text)]">
                     {order.orderNumber}
                   </td>
-                  <td className="text-[var(--color-text-secondary)]">
-                    {fmtDateTime(order.date)}
-                  </td>
+                  <td className="hm-num">{fmtDate(order.date)}</td>
                   <td className="text-[var(--color-text)]">{(order.supplierRef?.name ?? order.supplierNameSnapshot ?? order.supplier) || <span className="text-[var(--color-text-muted)]">—</span>}</td>
                   <td>
-                    <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--color-master-50)] text-[var(--color-master-700)] text-xs font-bold">
+                    <span className="inline-flex items-center justify-center rounded-lg bg-[var(--color-master-50)] px-2 py-0.5 text-xs font-bold text-[var(--color-master-700)]">
                       {order.branch.code}
                     </span>
                   </td>
-                  <td><StatusBadge status={order.status} /></td>
-                  <td className="text-right font-mono font-semibold text-[var(--color-text)]">
+                  <td><StatusBadge status={order.status} receptionState={order.receptionState} /></td>
+                  <td>
+                    {order.status === "APPROVED" && order.receptionState === "PARTIAL" ? (
+                      <span className="text-xs text-[var(--color-warning-700)]">Parcial</span>
+                    ) : null}
+                  </td>
+                  <td className="hm-num font-semibold text-[var(--color-text)]">
                     {money(order.total)}
                   </td>
-                  <td className="text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setSelectedOrder(order); }}
-                        className="rounded-lg p-1.5 text-[var(--color-info-600)] hover:bg-[var(--color-info-50)] transition-colors"
-                        title="Ver detalle"
-                      >
-                        <Eye className="h-4 w-4" />
-                      </button>
-                      {order.status === "DRAFT" && (
-                        <>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleApprove(order.id); }}
-                            disabled={actionLoading === order.id}
-                            className="rounded-lg p-1.5 text-[var(--color-success-600)] hover:bg-[var(--color-success-50)] transition-colors disabled:opacity-50"
-                            title="Aprobar"
-                          >
-                            {actionLoading === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleCancel(order.id); }}
-                            disabled={actionLoading === order.id}
-                            className="rounded-lg p-1.5 text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)] transition-colors disabled:opacity-50"
-                            title="Cancelar"
-                          >
-                            <Ban className="h-4 w-4" />
-                          </button>
-                        </>
-                      )}
-                      {order.status === "APPROVED" && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleReceive(order.id); }}
-                          disabled={actionLoading === order.id}
-                          className="rounded-lg p-1.5 text-[var(--color-info-700)] hover:bg-[var(--color-info-50)] transition-colors disabled:opacity-50"
-                          title="Recibir inventario"
-                        >
-                          {actionLoading === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+                  <td className="text-center" onClick={(e) => e.stopPropagation()}>
+                    {confirmApproveId === order.id ? (
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => handleApprove(order.id)} disabled={actionLoading === order.id} className="hm-icon-btn text-[var(--color-success-600)]" title="Confirmar aprobación">
+                          {actionLoading === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
                         </button>
-                      )}
-                    </div>
+                        <button onClick={() => setConfirmApproveId(null)} className="hm-icon-btn" title="Cancelar"><X className="h-4 w-4" /></button>
+                      </div>
+                    ) : confirmCancelId === order.id ? (
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => handleCancel(order.id)} disabled={actionLoading === order.id} className="hm-icon-btn hm-icon-btn-danger" title="Confirmar cancelación">
+                          {actionLoading === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                        </button>
+                        <button onClick={() => setConfirmCancelId(null)} className="hm-icon-btn" title="Volver"><X className="h-4 w-4" /></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => setSelectedOrderId(order.id)} className="hm-icon-btn" title="Ver detalle">
+                          <Eye className="h-4 w-4" />
+                        </button>
+                        {order.status === "DRAFT" && (
+                          <>
+                            <button onClick={() => setConfirmApproveId(order.id)} className="hm-icon-btn text-[var(--color-success-600)]" title="Aprobar">
+                              <CheckCircle className="h-4 w-4" />
+                            </button>
+                            <button onClick={() => setConfirmCancelId(order.id)} className="hm-icon-btn hm-icon-btn-danger" title="Cancelar">
+                              <Ban className="h-4 w-4" />
+                            </button>
+                          </>
+                        )}
+                        {order.status === "APPROVED" && (
+                          <button onClick={() => openReceiveModal(order.id)} disabled={actionLoading === order.id} className="hm-icon-btn text-[var(--color-info-700)]" title="Recibir inventario">
+                            {actionLoading === order.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+                          </button>
+                        )}
+                        {(order.status === "APPROVED" || order.status === "RECEIVED") && (
+                          <button onClick={() => handlePrint(order.id)} className="hm-icon-btn" title="Imprimir recepción">
+                            <Printer className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -505,169 +916,221 @@ export default function PurchaseOrdersPage() {
         </div>
       )}
 
-      {/* Detail Panel */}
-      {selectedOrder && (
-        <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-md">
-          <div className="hm-card-header-amber px-5 py-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ReceiptText className="h-5 w-5" />
-              <h2 className="font-semibold">Pedido {selectedOrder.orderNumber}</h2>
-              <StatusBadge status={selectedOrder.status} />
-            </div>
-            <button onClick={() => setSelectedOrder(null)} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
-          </div>
-
-          <div className="p-5 space-y-4">
-            {/* Meta */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-              <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
-                <p className="text-xs font-bold uppercase text-slate-600 mb-1"><Truck className="h-3 w-3 inline mr-1" />Proveedor</p>
-                <p className="font-semibold text-[var(--color-text)]">{(selectedOrder.supplierRef?.name ?? selectedOrder.supplierNameSnapshot ?? selectedOrder.supplier) || "—"}</p>
-                {selectedOrder.supplierRef?.phone && <p className="text-xs text-[var(--color-text-muted)]">{selectedOrder.supplierRef.phone}</p>}
+      {/* Detail Drawer (Fase C4) */}
+      {selectedOrderId && (
+        <>
+          <div className="fixed inset-0 z-40 bg-[rgb(28_25_23/0.45)] transition-opacity duration-200" onClick={() => setSelectedOrderId(null)} aria-hidden="true" />
+          <aside
+            className="fixed bottom-0 right-0 top-0 z-50 flex w-[min(720px,100vw)] flex-col border-l border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-modal)] transition-transform duration-300 motion-reduce:transition-none"
+            style={{ transitionTimingFunction: "var(--ease-drawer)" }}
+            role="dialog"
+            aria-modal="true"
+            aria-label={selectedOrderDetail ? `Pedido ${selectedOrderDetail.orderNumber}` : "Detalle de pedido"}
+          >
+            <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-5 pb-4 pt-5">
+              <ReceiptText className="h-5 w-5 text-[var(--color-text-muted)]" />
+              <div className="min-w-0">
+                <h2 className="truncate text-[1.0625rem] font-bold tracking-tight text-[var(--color-text)]">
+                  Pedido {selectedOrderDetail?.orderNumber ?? "…"}
+                </h2>
+                {selectedOrderDetail && <StatusBadge status={selectedOrderDetail.status} receptionState={selectedOrderDetail.receptionState} />}
               </div>
-              <div className="rounded-lg bg-blue-50 border border-blue-200 p-3">
-                <p className="text-xs font-bold uppercase text-blue-600 mb-1"><Building2 className="h-3 w-3 inline mr-1" />Sucursal</p>
-                <p className="font-semibold text-[var(--color-text)]">{selectedOrder.branch.code} — {selectedOrder.branch.name}</p>
-              </div>
-              <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
-                <p className="text-xs font-bold uppercase text-slate-600 mb-1">Creado por</p>
-                <p className="font-medium text-[var(--color-text)]">{selectedOrder.createdBy.fullName || selectedOrder.createdBy.username}</p>
-                <p className="text-xs text-[var(--color-text-muted)]">{fmtDateTime(selectedOrder.createdAt)}</p>
-              </div>
-              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
-                <p className="text-xs font-bold uppercase text-emerald-600 mb-1"><DollarSign className="h-3 w-3 inline mr-1" />Total</p>
-                <p className="text-xl font-extrabold text-[var(--color-text)]">{money(selectedOrder.total)}</p>
-              </div>
+              <button onClick={() => setSelectedOrderId(null)} className="hm-icon-btn ml-auto" aria-label="Cerrar detalle"><X className="h-4 w-4" /></button>
             </div>
 
-            {selectedOrder.supplierRef && (
-              <div className="grid grid-cols-1 gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs md:grid-cols-4">
-                <div><span className="font-bold text-[var(--color-text-secondary)]">RUC</span><p>{selectedOrder.supplierRef.ruc || "—"}</p></div>
-                <div><span className="font-bold text-[var(--color-text-secondary)]">Contacto</span><p>{selectedOrder.supplierRef.contactName || selectedOrder.supplierRef.phone || "—"}</p></div>
-                <div><span className="font-bold text-[var(--color-text-secondary)]">Banco</span><p>{selectedOrder.supplierRef.bankName || "—"}</p></div>
-                <div><span className="font-bold text-[var(--color-text-secondary)]">Cuenta / plazo</span><p>{selectedOrder.supplierRef.bankAccountNumber || selectedOrder.supplierRef.paymentTerms || "—"}</p></div>
-              </div>
-            )}
-
-            {/* Financial breakdown */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] p-3 text-xs">
-              <div><span className="font-bold text-[var(--color-text-secondary)]">Modo IVA</span><p className="font-medium text-[var(--color-text)]">{selectedOrder.purchaseTaxTreatment === "SEPARATE_CREDIT" ? "Crédito fiscal" : "Incluido en costo"}</p></div>
-              <div><span className="font-bold text-[var(--color-text-secondary)]">Subtotal sin IVA</span><p className="font-medium text-[var(--color-text)]">{money(selectedOrder.subtotalBeforeTax ?? 0)}</p></div>
-              <div><span className="font-bold text-[var(--color-text-secondary)]">IVA</span><p className="font-medium text-[var(--color-text)]">{money(selectedOrder.taxAmount ?? 0)}</p></div>
-              <div><span className="font-bold text-[var(--color-text-secondary)]">Flete / otros</span><p className="font-medium text-[var(--color-text)]">{money((Number(selectedOrder.freightAmount ?? 0) + Number(selectedOrder.otherChargesAmount ?? 0)))}</p></div>
-              <div><span className="font-bold text-[var(--color-text-secondary)]">Descuento</span><p className="font-medium text-red-600">{money(selectedOrder.globalDiscountAmount ?? 0)}</p></div>
-            </div>
-
-            {selectedOrder.notes && (
-              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-[var(--color-text-secondary)] flex items-start gap-2">
-                <FileText className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
-                {selectedOrder.notes}
-              </div>
-            )}
-
-            {/* Lines table */}
-            <table className="hm-table">
-              <thead>
-                <tr>
-                  <th>Producto</th>
-                  <th>SKU</th>
-                  <th className="text-right">Cant.</th>
-                  <th className="text-right">Costo s/IVA</th>
-                  <th className="text-right">IVA unit.</th>
-                  <th className="text-right">Costo c/IVA</th>
-                  <th className="text-right">Costo final</th>
-                  <th className="text-right">Subtotal</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedOrder.lines.map((line, i) => (
-                  <tr key={i}>
-                    <td className="font-medium text-[var(--color-text)]">{line.product.name}</td>
-                    <td className="font-mono text-xs text-[var(--color-text-muted)]">{line.product.sku}</td>
-                    <td className="text-right font-mono">{Number(line.quantity)}</td>
-                    <td className="text-right font-mono">{money(line.unitCostBeforeTax ?? line.unitCost)}</td>
-                    <td className="text-right font-mono">{money(line.unitTaxAmount ?? 0)}</td>
-                    <td className="text-right font-mono">{money(line.costWithTax ?? line.unitCost)}</td>
-                    <td className="text-right font-mono">{money(line.finalUnitCost ?? line.unitCost)}</td>
-                    <td className="text-right font-mono font-bold text-[var(--color-text)]">{money(line.subtotal)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            {/* Actions */}
-            {(selectedOrder.status === "DRAFT" || selectedOrder.status === "APPROVED") && (
-              <div className="flex gap-3 pt-2 border-t border-[var(--color-border)]">
-                {selectedOrder.status === "DRAFT" && (
-                  <>
-                    <button
-                      onClick={() => handleApprove(selectedOrder.id)}
-                      disabled={!!actionLoading}
-                      className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-                    >
-                      {actionLoading === selectedOrder.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
-                      Aprobar Pedido
-                    </button>
-                    <button
-                      onClick={() => handleCancel(selectedOrder.id)}
-                      disabled={!!actionLoading}
-                      className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-danger-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-                    >
-                      <Ban className="h-4 w-4" /> Cancelar
-                    </button>
-                  </>
-                )}
-                {selectedOrder.status === "APPROVED" && (
-                  <div className="flex flex-col gap-3">
-                    <div className="flex flex-wrap gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
-                      <label className="inline-flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={receiveUpdateBranchCost}
-                          onChange={(e) => setReceiveUpdateBranchCost(e.target.checked)}
-                          className="h-4 w-4"
-                        />
-                        Actualizar costo global con recepción
-                      </label>
-                      <label className="inline-flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={receiveCreatePriceReviewAlerts}
-                          onChange={(e) => setReceiveCreatePriceReviewAlerts(e.target.checked)}
-                          className="h-4 w-4"
-                        />
-                        Revisar precio vs costo al recibir
-                      </label>
+            <div className="flex-1 overflow-y-auto px-5 py-5">
+              {detailLoading && !selectedOrderDetail ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-5 w-5 animate-spin text-[var(--color-master-500)]" />
+                </div>
+              ) : selectedOrderDetail ? (
+                <>
+                  {/* Resumen */}
+                  <section className="mb-6">
+                    <h4 className="hm-section-rule mb-2.5">Resumen</h4>
+                    <div className="space-y-1.5 text-[0.8125rem]">
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 text-[var(--color-text-secondary)]"><Truck className="h-3.5 w-3.5" />Proveedor</span>
+                        <span className="font-medium text-[var(--color-text)]">{(selectedOrderDetail.supplierRef?.name ?? selectedOrderDetail.supplierNameSnapshot ?? selectedOrderDetail.supplier) || "—"}</span>
+                      </div>
+                      {selectedOrderDetail.supplierRef?.phone && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[var(--color-text-secondary)]">Teléfono</span>
+                          <span className="text-[var(--color-text)]">{selectedOrderDetail.supplierRef.phone}</span>
+                        </div>
+                      )}
+                      {selectedOrderDetail.supplierRef?.ruc && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[var(--color-text-secondary)]">RUC</span>
+                          <span className="text-[var(--color-text)]">{selectedOrderDetail.supplierRef.ruc}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 text-[var(--color-text-secondary)]"><Building2 className="h-3.5 w-3.5" />Sucursal</span>
+                        <span className="font-medium text-[var(--color-text)]">{selectedOrderDetail.branch.code} — {selectedOrderDetail.branch.name}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--color-text-secondary)]">Creado por</span>
+                        <span className="text-[var(--color-text)]">{selectedOrderDetail.createdBy.fullName || selectedOrderDetail.createdBy.username} · {fmtDateTime(selectedOrderDetail.createdAt)}</span>
+                      </div>
                     </div>
-                    <button
-                      onClick={() => handleReceive(selectedOrder.id)}
-                      disabled={!!actionLoading}
-                      className="flex w-fit items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-                    >
-                      {actionLoading === selectedOrder.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
-                      Recibir Inventario Pendiente
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+
+                    <div className="mt-3 rounded-lg bg-[var(--color-surface-muted)] p-3 text-[0.8125rem]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--color-text-secondary)]">Modo IVA</span>
+                        <span className="text-[var(--color-text)]">{selectedOrderDetail.purchaseTaxTreatment === "SEPARATE_CREDIT" ? "Crédito fiscal" : "Incluido en costo"}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--color-text-secondary)]">Subtotal sin IVA</span>
+                        <span className="hm-num text-[var(--color-text)]">{money(selectedOrderDetail.subtotalBeforeTax ?? 0)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--color-text-secondary)]">IVA</span>
+                        <span className="hm-num text-[var(--color-text)]">{money(selectedOrderDetail.taxAmount ?? 0)}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--color-text-secondary)]">Flete / otros</span>
+                        <span className="hm-num text-[var(--color-text)]">{money(Number(selectedOrderDetail.freightAmount ?? 0) + Number(selectedOrderDetail.otherChargesAmount ?? 0))}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--color-text-secondary)]">Descuento</span>
+                        <span className="hm-num text-[var(--color-danger-600)]">{money(selectedOrderDetail.globalDiscountAmount ?? 0)}</span>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between border-t border-[var(--color-border)] pt-2">
+                        <span className="font-semibold text-[var(--color-text-secondary)]">Total</span>
+                        <span className="hm-num text-[1.125rem] font-extrabold text-[var(--color-text)]">{money(selectedOrderDetail.total)}</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  {/* Líneas */}
+                  <section className="mb-6">
+                    <h4 className="hm-section-rule mb-2.5">Líneas</h4>
+                    <table className="hm-sheet-table">
+                      <thead>
+                        <tr>
+                          <th>Producto</th>
+                          <th className="hm-num">Cant.</th>
+                          <th className="hm-num">Recibida</th>
+                          <th className="hm-num">Pendiente</th>
+                          <th className="hm-num">Costo final</th>
+                          <th className="hm-num">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedOrderDetail.lines.map((line, i) => (
+                          <tr key={line.id ?? i}>
+                            <td>
+                              <span className="font-medium text-[var(--color-text)]">{line.product.name}</span>
+                              <span className="ml-1.5 font-mono text-[0.68rem] text-[var(--color-text-muted)]">{line.product.sku}</span>
+                            </td>
+                            <td className="hm-num">{qty(line.quantity)}</td>
+                            <td className="hm-num">{qty(line.receivedQuantity ?? 0)}</td>
+                            <td className={`hm-num ${(line.pendingQuantity ?? 0) > 0 ? "text-[var(--color-warning-700)]" : ""}`}>{qty(line.pendingQuantity ?? 0)}</td>
+                            <td className="hm-num">{money(line.finalUnitCost ?? line.unitCost)}</td>
+                            <td className="hm-num font-semibold text-[var(--color-text)]">{money(line.subtotal)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </section>
+
+                  {/* Notas */}
+                  {selectedOrderDetail.notes && (
+                    <section className="mb-6">
+                      <h4 className="hm-section-rule mb-2.5">Notas</h4>
+                      <p className="rounded-lg bg-[var(--color-surface-muted)] p-3 text-[0.8125rem] text-[var(--color-text-secondary)]">{selectedOrderDetail.notes}</p>
+                    </section>
+                  )}
+
+                  {/* Acciones */}
+                  <section>
+                    <h4 className="hm-section-rule mb-2.5">Acciones</h4>
+
+                    {confirmApproveId === selectedOrderDetail.id ? (
+                      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3 py-2 text-sm">
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0 text-[var(--color-info-700)]" />
+                        <span className="text-[var(--color-info-700)]">¿Aprobar este pedido? El inventario se recibirá en un paso separado.</span>
+                        <button onClick={() => handleApprove(selectedOrderDetail.id)} disabled={actionLoading === selectedOrderDetail.id} className="ml-auto rounded-lg bg-[var(--color-success-600)] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[var(--color-success-700)] disabled:opacity-50">
+                          Confirmar
+                        </button>
+                        <button onClick={() => setConfirmApproveId(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">
+                          Cancelar
+                        </button>
+                      </div>
+                    ) : confirmCancelId === selectedOrderDetail.id ? (
+                      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-3 py-2 text-sm">
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0 text-[var(--color-danger-700)]" />
+                        <span className="text-[var(--color-danger-700)]">¿Cancelar este pedido? Esta acción no se puede deshacer.</span>
+                        <button onClick={() => handleCancel(selectedOrderDetail.id)} disabled={actionLoading === selectedOrderDetail.id} className="ml-auto rounded-lg bg-[var(--color-danger-600)] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[var(--color-danger-700)] disabled:opacity-50">
+                          Confirmar
+                        </button>
+                        <button onClick={() => setConfirmCancelId(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">
+                          Cancelar
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {selectedOrderDetail.status === "DRAFT" && (
+                          <button onClick={() => setConfirmApproveId(selectedOrderDetail.id)} className="flex items-center gap-2 rounded-lg bg-[var(--color-success-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-success-700)]">
+                            <CheckCircle className="h-4 w-4" /> Aprobar
+                          </button>
+                        )}
+                        {selectedOrderDetail.status === "APPROVED" && (
+                          <button
+                            onClick={() => openReceiveModal(selectedOrderDetail.id)}
+                            disabled={actionLoading === selectedOrderDetail.id}
+                            className="flex items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] disabled:opacity-50"
+                          >
+                            {actionLoading === selectedOrderDetail.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />} Recibir
+                          </button>
+                        )}
+                        {(selectedOrderDetail.status === "APPROVED" || selectedOrderDetail.status === "RECEIVED") && (
+                          <button onClick={() => handlePrint(selectedOrderDetail.id)} className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">
+                            <Printer className="h-4 w-4" /> Imprimir
+                          </button>
+                        )}
+                        {selectedOrderDetail.status === "DRAFT" && (
+                          <button onClick={() => setConfirmCancelId(selectedOrderDetail.id)} className="ml-auto flex items-center gap-2 rounded-lg border border-[var(--color-danger-200)] px-4 py-2 text-sm font-semibold text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]">
+                            <Ban className="h-4 w-4" /> Cancelar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                </>
+              ) : null}
+            </div>
+          </aside>
+        </>
+      )}
+
+      {/* Receive Modal (Fase B1) */}
+      {receiveOrder && (
+        <ReceivePurchaseOrderModal
+          order={receiveOrder}
+          onClose={() => setReceiveOrder(null)}
+          onSubmitted={async () => {
+            await fetchOrders();
+            if (selectedOrderId === receiveOrder.id) await loadDetail(receiveOrder.id);
+          }}
+        />
       )}
 
       {/* Create Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(28_25_23/0.45)] p-4">
           <div className="w-full max-w-6xl max-h-[92vh] overflow-y-auto rounded-xl bg-[var(--color-surface)] border border-[var(--color-border-strong)] shadow-2xl overflow-hidden">
-            <div className="hm-card-header-green px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center justify-between border-b border-[var(--color-border)] px-6 py-4">
               <div>
-                <h2 className="text-lg font-bold flex items-center gap-2"><ShoppingCart className="h-5 w-5" /> Crear pedido de compra</h2>
-                <p className="text-xs opacity-90">Compra a proveedor para recepcion futura de inventario.</p>
+                <h2 className="flex items-center gap-2 text-lg font-bold text-[var(--color-text)]"><ShoppingCart className="h-5 w-5" /> Crear pedido de compra</h2>
+                <p className="text-xs text-[var(--color-text-muted)]">Compra a proveedor para recepcion futura de inventario.</p>
               </div>
-              <button onClick={() => setShowModal(false)} className="text-white/80 hover:text-white transition-colors"><X className="h-5 w-5" /></button>
+              <button onClick={() => setShowModal(false)} className="hm-icon-btn"><X className="h-5 w-5" /></button>
             </div>
             <div className="p-6 space-y-5">
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+            <div className="hm-alert hm-alert-warning">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
               Para inventario existente inicial, usa Existencias / Carga inicial. No crees pedidos falsos.
             </div>
 
@@ -677,7 +1140,7 @@ export default function PurchaseOrdersPage() {
                 <select
                   value={formBranchId}
                   onChange={(e) => setFormBranchId(e.target.value)}
-                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                  className="hm-input w-full rounded-lg text-sm"
                 >
                   <option value="">Seleccionar...</option>
                   {branches.map((b) => (
@@ -695,7 +1158,7 @@ export default function PurchaseOrdersPage() {
                       setFormSupplierId(e.target.value);
                       setFormSupplier(supplier?.name ?? "");
                     }}
-                    className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                    className="hm-input min-w-0 flex-1 rounded-lg text-sm"
                   >
                     <option value="">Sin proveedor registrado</option>
                     {filteredSuppliers.map((supplier) => (
@@ -716,7 +1179,7 @@ export default function PurchaseOrdersPage() {
                   value={supplierQuery}
                   onChange={(e) => setSupplierQuery(e.target.value)}
                   placeholder="Buscar proveedor por nombre, RUC o teléfono"
-                  className="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                  className="hm-input mt-2 w-full rounded-lg text-sm"
                 />
               </div>
             </div>
@@ -753,7 +1216,7 @@ export default function PurchaseOrdersPage() {
                       <input
                         value={supplierDraft[field]}
                         onChange={(e) => setSupplierDraft((draft) => ({ ...draft, [field]: e.target.value }))}
-                        className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                        className="hm-input mt-1 w-full rounded-lg text-sm"
                       />
                     </label>
                   ))}
@@ -778,7 +1241,7 @@ export default function PurchaseOrdersPage() {
                 value={formNotes}
                 onChange={(e) => setFormNotes(e.target.value)}
                 rows={2}
-                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                className="hm-input w-full rounded-lg text-sm"
               />
             </div>
 
@@ -792,7 +1255,7 @@ export default function PurchaseOrdersPage() {
                   <select
                     value={purchaseTaxTreatment}
                     onChange={(e) => setPurchaseTaxTreatment(e.target.value as "INCLUDE_IN_COST" | "SEPARATE_CREDIT")}
-                    className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
+                    className="hm-input mt-1 w-full rounded-lg text-sm"
                   >
                     <option value="INCLUDE_IN_COST">Incluir IVA en costo del producto</option>
                     <option value="SEPARATE_CREDIT">Separar IVA como credito fiscal</option>
@@ -800,15 +1263,15 @@ export default function PurchaseOrdersPage() {
                 </label>
                 <label className="text-sm font-medium text-[var(--color-text-secondary)]">
                   Flete
-                  <input type="number" min="0" step="0.01" value={freightAmount} onChange={(e) => setFreightAmount(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]" />
+                  <input type="number" min="0" step="0.01" value={freightAmount} onChange={(e) => setFreightAmount(e.target.value)} className="hm-input mt-1 w-full rounded-lg text-sm" />
                 </label>
                 <label className="text-sm font-medium text-[var(--color-text-secondary)]">
                   Otros cargos
-                  <input type="number" min="0" step="0.01" value={otherChargesAmount} onChange={(e) => setOtherChargesAmount(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]" />
+                  <input type="number" min="0" step="0.01" value={otherChargesAmount} onChange={(e) => setOtherChargesAmount(e.target.value)} className="hm-input mt-1 w-full rounded-lg text-sm" />
                 </label>
                 <label className="text-sm font-medium text-[var(--color-text-secondary)]">
                   Descuento global
-                  <input type="number" min="0" step="0.01" value={globalDiscountAmount} onChange={(e) => setGlobalDiscountAmount(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]" />
+                  <input type="number" min="0" step="0.01" value={globalDiscountAmount} onChange={(e) => setGlobalDiscountAmount(e.target.value)} className="hm-input mt-1 w-full rounded-lg text-sm" />
                 </label>
               </div>
               <p className="text-xs text-[var(--color-text-muted)]">
@@ -816,13 +1279,16 @@ export default function PurchaseOrdersPage() {
               </p>
             </div>
 
-            <div className="sticky top-0 z-10 grid gap-2 rounded-xl border border-[var(--color-border-strong)] bg-white/95 p-3 shadow-sm backdrop-blur md:grid-cols-6">
-              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Lineas</span><p className="font-bold">{formLines.filter((line) => line.productId).length}</p></div>
-              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Subtotal</span><p className="font-bold">{money(formSubtotalBeforeTax)}</p></div>
-              <div className="text-xs"><span className="text-[var(--color-text-muted)]">IVA</span><p className="font-bold">{money(formTaxAmount)}</p></div>
-              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Cargos</span><p className="font-bold">{money((parseFloat(freightAmount) || 0) + (parseFloat(otherChargesAmount) || 0))}</p></div>
-              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Descuento</span><p className="font-bold text-red-600">{money(parseFloat(globalDiscountAmount) || 0)}</p></div>
-              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Total estimado</span><p className="text-base font-extrabold">{money(formTotalPaid)}</p></div>
+            <div
+              className="sticky top-0 z-10 grid gap-2 rounded-xl border border-[var(--color-border-strong)] p-3 shadow-sm backdrop-blur md:grid-cols-6"
+              style={{ background: "color-mix(in srgb, var(--color-surface) 92%, transparent)" }}
+            >
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Lineas</span><p className="hm-num font-bold">{formLines.filter((line) => line.productId).length}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Subtotal</span><p className="hm-num font-bold">{money(formSubtotalBeforeTax)}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">IVA</span><p className="hm-num font-bold">{money(formTaxAmount)}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Cargos</span><p className="hm-num font-bold">{money((parseFloat(freightAmount) || 0) + (parseFloat(otherChargesAmount) || 0))}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Descuento</span><p className="hm-num font-bold text-[var(--color-danger-600)]">{money(parseFloat(globalDiscountAmount) || 0)}</p></div>
+              <div className="text-xs"><span className="text-[var(--color-text-muted)]">Total estimado</span><p className="hm-num text-base font-extrabold">{money(formTotalPaid)}</p></div>
             </div>
 
             {/* Lines */}
@@ -837,72 +1303,71 @@ export default function PurchaseOrdersPage() {
                 </button>
               </div>
 
-              {formLines.map((line, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-4">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Producto</label>}
-                    <select
-                      value={line.productId}
-                      onChange={(e) => updateLine(idx, "productId", e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
-                    >
-                      <option value="">Seleccionar producto...</option>
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>
-                      ))}
-                    </select>
+              {formLines.map((line, idx) => {
+                const selectedProduct = products.find((p) => p.id === line.productId) ?? null;
+                const usedElsewhere = !!line.productId && formLines.filter((l) => l.productId === line.productId).length > 1;
+                const lineSubtotal = (parseFloat(line.quantity) || 0) * (parseFloat(line.unitCostBeforeTax) || 0);
+                return (
+                  <div key={idx} className="grid grid-cols-1 gap-2 rounded-lg border border-[var(--color-border)] p-3 md:grid-cols-12 md:items-end md:border-0 md:p-0">
+                    <div className="md:col-span-4">
+                      {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Producto</label>}
+                      <ProductCombobox products={products} value={selectedProduct} onSelect={(p) => updateLine(idx, "productId", p.id)} />
+                      {selectedProduct && <p className="mt-1 text-[0.68rem] text-[var(--color-text-muted)]">Unidad: {selectedProduct.unit}</p>}
+                      {usedElsewhere && <p className="mt-1 text-[0.68rem] text-[var(--color-warning-700)]">Este producto ya está en otra línea.</p>}
+                    </div>
+                    <div className="md:col-span-2">
+                      {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Cantidad</label>}
+                      <input
+                        type="number"
+                        min="1"
+                        value={line.quantity}
+                        onChange={(e) => updateLine(idx, "quantity", e.target.value)}
+                        className="hm-input w-full rounded-lg text-sm"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Costo sin IVA</label>}
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={line.unitCostBeforeTax}
+                        onChange={(e) => updateLine(idx, "unitCostBeforeTax", e.target.value)}
+                        className="hm-input w-full rounded-lg text-sm"
+                      />
+                    </div>
+                    <div className="md:col-span-1">
+                      {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">IVA %</label>}
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={line.taxRate}
+                        onChange={(e) => updateLine(idx, "taxRate", e.target.value)}
+                        className="hm-input w-full rounded-lg text-sm"
+                      />
+                    </div>
+                    <div className="md:col-span-2 md:text-right">
+                      {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Subtotal</label>}
+                      <span className="hm-num block text-sm font-medium text-[var(--color-text)]">{money(lineSubtotal)}</span>
+                      <span className="block text-[0.65rem] text-[var(--color-text-muted)]">Costo final unit. estimado: {money(estimatedFinalUnitCosts[idx] ?? 0)}</span>
+                    </div>
+                    <div className="flex justify-end md:col-span-1 md:justify-center">
+                      {formLines.length > 1 && (
+                        <button onClick={() => removeLine(idx)} className="hm-icon-btn hm-icon-btn-danger" title="Quitar línea">
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="col-span-2">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Cantidad</label>}
-                    <input
-                      type="number"
-                      min="1"
-                      value={line.quantity}
-                      onChange={(e) => updateLine(idx, "quantity", e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Costo sin IVA</label>}
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={line.unitCostBeforeTax}
-                      onChange={(e) => updateLine(idx, "unitCostBeforeTax", e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
-                    />
-                  </div>
-                  <div className="col-span-1">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">IVA %</label>}
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={line.taxRate}
-                      onChange={(e) => updateLine(idx, "taxRate", e.target.value)}
-                      className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2 text-sm text-[var(--color-text)]"
-                    />
-                  </div>
-                  <div className="col-span-2 text-right">
-                    {idx === 0 && <label className="block text-xs text-[var(--color-text-muted)] mb-1">Subtotal</label>}
-                    <span className="text-sm font-medium text-[var(--color-text)]">
-                      C${((parseFloat(line.quantity) || 0) * (parseFloat(line.unitCostBeforeTax) || 0)).toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="col-span-1 text-center">
-                    {formLines.length > 1 && (
-                      <button onClick={() => removeLine(idx)} className="text-[var(--color-danger-600)] hover:text-[var(--color-danger-700)] text-lg">✕</button>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
 
               <div className="flex justify-end border-t border-[var(--color-border)] pt-3">
                 <div className="text-right text-sm">
-                  <p className="text-[var(--color-text-muted)]">Subtotal sin IVA: C${formSubtotalBeforeTax.toFixed(2)}</p>
-                  <p className="text-[var(--color-text-muted)]">IVA: C${formTaxAmount.toFixed(2)}</p>
-                  <p className="text-lg font-bold text-[var(--color-text)]">Total pagado: C${formTotalPaid.toFixed(2)}</p>
+                  <p className="text-[var(--color-text-muted)]">Subtotal sin IVA: <span className="hm-num inline-block">{money(formSubtotalBeforeTax)}</span></p>
+                  <p className="text-[var(--color-text-muted)]">IVA: <span className="hm-num inline-block">{money(formTaxAmount)}</span></p>
+                  <p className="text-lg font-bold text-[var(--color-text)]">Total pagado: <span className="hm-num inline-block">{money(formTotalPaid)}</span></p>
                 </div>
               </div>
             </div>
