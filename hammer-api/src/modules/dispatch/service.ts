@@ -48,7 +48,7 @@ export async function listDispatchHistory(params: { branchId: string; includeAll
   });
 }
 
-export async function markOrderDispatched(input: { orderId: string; actorUserId: string; notes?: string | null }) {
+export async function markOrderDispatched(input: { orderId: string; actorUserId: string; notes?: string | null; force?: boolean }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({
       where: { id: input.orderId },
@@ -59,18 +59,33 @@ export async function markOrderDispatched(input: { orderId: string; actorUserId:
       throw new Error("DISPATCH_ALREADY_COMPLETED");
     }
 
-    const transition = await tx.saleOrder.updateMany({
-      where: {
-        id: input.orderId,
-        status: SaleOrderStatus.DISPATCH_PENDING,
-      },
-      data: {
-        status: SaleOrderStatus.DISPATCHED,
-      },
-    });
+    const previousStatus = order.status;
 
-    if (transition.count !== 1) {
-      throw new Error("DISPATCH_INVALID_STATUS");
+    if (input.force) {
+      // Override aprobado por Master (C2): la orden no está en DISPATCH_PENDING
+      // (por eso se pidió la excepción), pero no puede estar CANCELLED — eso
+      // significa que ya no hay nada que despachar, con o sin override.
+      if (order.status === SaleOrderStatus.CANCELLED) {
+        throw new Error("DISPATCH_ORDER_CANCELLED");
+      }
+      await tx.saleOrder.update({
+        where: { id: input.orderId },
+        data: { status: SaleOrderStatus.DISPATCHED },
+      });
+    } else {
+      const transition = await tx.saleOrder.updateMany({
+        where: {
+          id: input.orderId,
+          status: SaleOrderStatus.DISPATCH_PENDING,
+        },
+        data: {
+          status: SaleOrderStatus.DISPATCHED,
+        },
+      });
+
+      if (transition.count !== 1) {
+        throw new Error("DISPATCH_INVALID_STATUS");
+      }
     }
 
     const ticket = await tx.dispatchTicket.create({
@@ -92,13 +107,14 @@ export async function markOrderDispatched(input: { orderId: string; actorUserId:
         actorUserId: input.actorUserId,
         branchId: order.branchId,
         module: "dispatch",
-        action: DISPATCH_AUDIT_EVENTS.DISPATCHED,
+        action: input.force ? DISPATCH_AUDIT_EVENTS.DISPATCH_OVERRIDE_EXECUTED : DISPATCH_AUDIT_EVENTS.DISPATCHED,
         entityType: "SaleOrder",
         entityId: order.id,
         metadataJson: {
           dispatchTicketId: ticket.id,
-          previousStatus: SaleOrderStatus.DISPATCH_PENDING,
+          previousStatus,
           newStatus: updatedOrder.status,
+          forced: Boolean(input.force),
         },
       },
     });

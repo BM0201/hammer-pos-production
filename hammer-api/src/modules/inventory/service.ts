@@ -1574,6 +1574,19 @@ export async function createOpeningBalanceBulk(input: {
   };
 }
 
+// Decide qué movimiento ejecutar para llevar el stock de currentQuantity a
+// desiredQuantity. Reutilizada tanto por el ajuste directo (bajo umbral) como
+// por la ejecución de un STOCK_ADJUSTMENT aprobado (C2) — antes esa segunda
+// ruta no existía y aprobar la solicitud no cambiaba el stock.
+export function resolveStockAdjustmentMovement(
+  desiredQuantity: number,
+  currentQuantity: number,
+): { movementType: "ADJUSTMENT_IN" | "ADJUSTMENT_OUT"; quantity: number } | null {
+  const delta = desiredQuantity - currentQuantity;
+  if (Math.abs(delta) <= 1e-9) return null;
+  return { movementType: delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT", quantity: Math.abs(delta) };
+}
+
 export async function requestStockAdjustment(input: {
   actorUserId: string;
   branchId: string;

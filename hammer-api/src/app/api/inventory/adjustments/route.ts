@@ -1,6 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import { createInventoryMovement, listInventoryBalances, requestStockAdjustment, INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD } from "@/modules/inventory/service";
+import { createInventoryMovement, listInventoryBalances, requestStockAdjustment, resolveStockAdjustmentMovement, INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD } from "@/modules/inventory/service";
 import { stockAdjustmentSchema } from "@/modules/inventory/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { canExecuteDirectStockAdjustment } from "@/modules/inventory/policy";
@@ -60,22 +60,20 @@ export async function POST(request: Request) {
 
     const balances = await listInventoryBalances({ branchId: parsed.data.branchId, productId: parsed.data.productId });
     const currentQuantity = Number(balances[0]?.quantityOnHand ?? 0);
-    const delta = parsed.data.desiredQuantity - currentQuantity;
-    const absDelta = Math.abs(delta);
+    const movement = resolveStockAdjustmentMovement(parsed.data.desiredQuantity, currentQuantity);
 
-    if (absDelta === 0) {
+    if (!movement) {
       return ok({ status: "NO_CHANGES", message: "El inventario ya coincide con la cantidad solicitada." });
     }
 
-    if (absDelta <= INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD && canExecuteDirectStockAdjustment(session.roleCode)) {
-      const movementType = delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT";
+    if (movement.quantity <= INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD && canExecuteDirectStockAdjustment(session.roleCode)) {
       const unitCost = Number(balances[0]?.weightedAverageCost ?? 0);
       const data = await createInventoryMovement({
         actorUserId: session.userId,
         branchId: parsed.data.branchId,
         productId: parsed.data.productId,
-        movementType,
-        quantity: absDelta,
+        movementType: movement.movementType,
+        quantity: movement.quantity,
         unitCost,
         referenceType: "ADJUSTMENT_DIRECT",
         referenceId: parsed.data.productId,
@@ -92,7 +90,7 @@ export async function POST(request: Request) {
       desiredQuantity: parsed.data.desiredQuantity,
       reason: parsed.data.reason,
       currentQuantity,
-      adjustmentDelta: delta,
+      adjustmentDelta: parsed.data.desiredQuantity - currentQuantity,
     });
 
     return ok(response);
