@@ -5,6 +5,7 @@ import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku
 import { mapProductWithEffectivePricing, resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
 import { formatDualStock } from "@/modules/inventory/unit-conversion";
 import type { ProductStockConversion } from "@/modules/inventory/unit-conversion";
+import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 
 type CatalogProductWithBranchPricing = {
   id: string;
@@ -545,9 +546,19 @@ export async function updateProduct(productId: string, input: {
 }) {
   const previous = await prisma.product.findUnique({
     where: { id: productId },
-    select: { id: true, sku: true, categoryId: true, category: { select: { name: true } } },
+    select: { id: true, sku: true, categoryId: true, category: { select: { name: true } }, standardSalePrice: true, globalCost: true },
   });
   if (!previous) throw new Error("NOT_FOUND");
+
+  // Auditoría 2026-07-22 (ALTO Catálogo): bloqueo de precio bajo costo,
+  // ausente hasta ahora en la edición de producto global.
+  if (input.standardSalePrice !== undefined || input.globalCost !== undefined) {
+    const nextPrice = input.standardSalePrice !== undefined ? input.standardSalePrice : Number(previous.standardSalePrice);
+    const nextCost = input.globalCost !== undefined
+      ? input.globalCost
+      : (previous.globalCost === null ? null : Number(previous.globalCost));
+    assertPriceNotBelowCost({ price: nextPrice, cost: nextCost });
+  }
 
   let nextCategory: { id: string; name: string; isActive: boolean } | null = null;
   if (input.categoryId) {

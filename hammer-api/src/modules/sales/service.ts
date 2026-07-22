@@ -6,6 +6,7 @@ import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/tot
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
+import { getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx, businessDateFromNow } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
@@ -1237,11 +1238,21 @@ export async function cancelSaleOrderTx(
         });
         inventoryReversals.push({ movementId: res.movement.id, productId: mv.productId, quantity: qty });
       } else {
-        // Costo cero: restauramos cantidad sin alterar WAC.
+        // Costo cero: restauramos cantidad sin alterar WAC (un WAC no puede
+        // "promediarse" contra un costo 0 sin corromperse). Auditoría
+        // 2026-07-22 (ALTO Catálogo): esto operaba directo sobre mv.productId,
+        // que en un producto derivado de una fusión NO es donde vive el
+        // balance real (vive en el canónico) — y no sincronizaba
+        // empaque cerrado/suelto. Se resuelve igual que el camino normal
+        // (createInventoryMovementTx) y se revierte el delta de empaque
+        // exacto que la venta original registró (closedPackageBefore/After),
+        // en vez de recalcular la conversión desde cero.
+        const shared = await getSharedInventoryBalance(tx, { branchId: mv.branchId, productId: mv.productId });
+        const inventoryProductId = shared.inventoryProductId;
         const createdMv = await tx.inventoryMovement.create({
           data: {
             branchId: mv.branchId,
-            productId: mv.productId,
+            productId: inventoryProductId,
             movementType: InventoryMovementType.RETURN_IN,
             quantity: mv.quantity,
             unitCost: mv.unitCost,
@@ -1250,27 +1261,35 @@ export async function cancelSaleOrderTx(
             notes: `Reversión (costo 0) por anulación de orden ${order.orderNumber}`,
           },
         });
-        const bal = await tx.inventoryBalance.findUnique({
-          where: { branchId_productId: { branchId: mv.branchId, productId: mv.productId } },
-        });
+        const bal = shared.balance;
         if (bal) {
           const newQty = bal.quantityOnHand.add(mv.quantity);
+          const updateData: Prisma.InventoryBalanceUpdateInput = {
+            quantityOnHand: newQty,
+            inventoryValue: newQty.mul(bal.weightedAverageCost),
+          };
+          if (shared.conversion?.tracksPackages && mv.closedPackageBefore !== null && mv.closedPackageAfter !== null) {
+            const packageDelta = mv.closedPackageBefore.sub(mv.closedPackageAfter);
+            const looseDelta = (mv.looseUnitBefore ?? new Prisma.Decimal(0)).sub(mv.looseUnitAfter ?? new Prisma.Decimal(0));
+            updateData.closedPackageQuantity = bal.closedPackageQuantity.add(packageDelta);
+            updateData.looseUnitQuantity = bal.looseUnitQuantity.add(looseDelta);
+          }
           await tx.inventoryBalance.update({
             where: { id: bal.id },
-            data: { quantityOnHand: newQty, inventoryValue: newQty.mul(bal.weightedAverageCost) },
+            data: updateData,
           });
         } else {
           await tx.inventoryBalance.create({
             data: {
               branchId: mv.branchId,
-              productId: mv.productId,
+              productId: inventoryProductId,
               quantityOnHand: mv.quantity,
               weightedAverageCost: 0,
               inventoryValue: 0,
             },
           });
         }
-        inventoryReversals.push({ movementId: createdMv.id, productId: mv.productId, quantity: qty });
+        inventoryReversals.push({ movementId: createdMv.id, productId: inventoryProductId, quantity: qty });
       }
     }
   }

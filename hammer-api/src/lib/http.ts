@@ -69,6 +69,9 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "PRICE_APPLICATION_BLOCKED") {
       return errJson("PRICE_APPLICATION_BLOCKED", "El precio no puede aplicarse porque no cumple la rentabilidad minima.", 409);
     }
+    if (error.message === "BELOW_COST_NOT_ALLOWED") {
+      return errJson("BELOW_COST_NOT_ALLOWED", "El precio no puede ser menor al costo. Corrige el costo y el precio juntos.", 409);
+    }
 
     // Stock errors
     if (error.message === "INSUFFICIENT_STOCK" || error.message === "INSUFFICIENT_STOCK_AT_PAYMENT") {

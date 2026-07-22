@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { readCsvContent, readExcelBase64 } from "@/modules/import-excel/excel-reader";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 
 export const INVENTORY_IMPORT_BATCH_STATUS = {
   UPLOADED: "UPLOADED",
@@ -946,6 +948,22 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
           }
           if (!product) throw new ImportLineExecutionError("Producto no encontrado.", line.id, line.rowNumber);
 
+          // Auditoría 2026-07-22 (ALTO Catálogo): bloqueo de precio bajo costo,
+          // ausente hasta ahora en la importación Excel. Ambos caminos de abajo
+          // solo tocan standardSalePrice (no costo en la misma fila), así que se
+          // compara contra el globalCost YA guardado del producto.
+          if (standardSalePrice !== null && ((importType === "CATALOG_WITH_INITIAL_STOCK") || ((importType === "GLOBAL_PRICES_COSTS" || importType === "BRANCH_PRICES_COSTS") && !line.targetBranchId))) {
+            const productCost = await tx.product.findUnique({ where: { id: product.id }, select: { globalCost: true } });
+            try {
+              assertPriceNotBelowCost({
+                price: standardSalePrice,
+                cost: productCost?.globalCost === null || productCost?.globalCost === undefined ? null : Number(productCost.globalCost),
+              });
+            } catch {
+              throw new ImportLineExecutionError("Precio menor al costo.", line.id, line.rowNumber);
+            }
+          }
+
           if (importType === "CATALOG_WITH_INITIAL_STOCK") {
             const category = line.categoryCode ? (categoryByCode.get(line.categoryCode.toUpperCase()) ?? categoryByNameExec.get(line.categoryCode.toUpperCase())) : null;
             await tx.product.update({
@@ -987,6 +1005,14 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
           }
 
           if ((importType === "BRANCH_PRICES_COSTS" || importType === "GLOBAL_PRICES_COSTS") && line.targetBranchId && (unitCost !== null || standardSalePrice !== null)) {
+            const pricing = await getEffectiveProductPricing(tx, { branchId: line.targetBranchId, productId: product.id });
+            const nextPrice = standardSalePrice ?? (pricing.branchPrice === null ? null : Number(pricing.branchPrice));
+            const nextCost = unitCost ?? (pricing.effectiveCost === null ? null : Number(pricing.effectiveCost));
+            try {
+              assertPriceNotBelowCost({ price: nextPrice, cost: nextCost });
+            } catch {
+              throw new ImportLineExecutionError("Precio menor al costo.", line.id, line.rowNumber);
+            }
             await upsertBranchSettingTx(tx, {
               branchId: line.targetBranchId,
               productId: product.id,

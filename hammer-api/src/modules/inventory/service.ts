@@ -1258,7 +1258,20 @@ async function createOpeningBalanceTx(
       let nextQty = input.stockMode === "SET_PHYSICAL_STOCK"
         ? baseQuantity
         : balance.quantityOnHand.plus(baseQuantity);
-      const nextWac = balance.weightedAverageCost;
+      // Auditoría 2026-07-22 (ALTO Catálogo): la primera carga de existencias
+      // de un producto/sucursal arranca con weightedAverageCost=0 (upsert de
+      // arriba). Si el modo es SET_BRANCH_COST y sí viene un costo explícito,
+      // úsalo como WAC inicial en vez de arrastrar el 0 — de lo contrario
+      // costMode=SET_BRANCH_COST/QUANTITY_ONLY podían dejar el costo real
+      // (el que alimenta COGS/márgenes) en 0 para siempre, saltándose el
+      // guard ZERO_COST_INBOUND que sí protege una compra normal.
+      const isFirstEverStock = balance.weightedAverageCost.lte(0) && balance.quantityOnHand.lte(0);
+      const nextWac = input.costMode === "SET_BRANCH_COST" && isFirstEverStock && unitCost.gt(0)
+        ? unitCost
+        : balance.weightedAverageCost;
+      if (movementType === "ADJUSTMENT_IN" && nextWac.lte(0)) {
+        throw new WacValidationError("ZERO_COST_INBOUND", "Inbound movements require a positive unit cost.");
+      }
       let closedPackageBefore: Prisma.Decimal | null = null;
       let closedPackageAfter: Prisma.Decimal | null = null;
       let looseUnitBefore: Prisma.Decimal | null = null;

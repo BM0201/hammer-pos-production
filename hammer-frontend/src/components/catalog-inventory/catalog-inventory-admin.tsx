@@ -535,7 +535,8 @@ export function CatalogInventoryAdmin() {
       body: JSON.stringify({ branchId: branch.id, productId: product.id, [field]: numeric }),
     });
     if (!response.ok) {
-      toast.error("No se pudo guardar la configuracion por sucursal.");
+      const raw = await response.json().catch(() => null);
+      toast.error(raw?.error?.message ?? "No se pudo guardar la configuracion por sucursal.");
       return;
     }
     toast.success(`Precio guardado para ${branch.code}`);
@@ -554,7 +555,8 @@ export function CatalogInventoryAdmin() {
       body: JSON.stringify({ globalCost: numeric }),
     });
     if (!response.ok) {
-      toast.error("No se pudo guardar el costo universal.");
+      const raw = await response.json().catch(() => null);
+      toast.error(raw?.error?.message ?? "No se pudo guardar el costo universal.");
       return;
     }
     toast.success(`Costo universal actualizado para ${product.sku}`);

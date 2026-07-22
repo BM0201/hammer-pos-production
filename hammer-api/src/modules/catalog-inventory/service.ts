@@ -2,6 +2,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { formatDualStock } from "@/modules/inventory/unit-conversion";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import type { CatalogInventoryQuery, UpdateBranchProductSettingInput, MassDeleteProductsInput } from "./validators";
 
 const CRITICAL_STOCK_FALLBACK = 1;
@@ -435,6 +437,16 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
   ]);
   if (!branch) throw new Error("INVALID_INPUT: branchId no existe.");
   if (!product) throw new Error("INVALID_INPUT: productId no existe.");
+
+  // Auditoría 2026-07-22 (ALTO Catálogo): bloqueo de precio bajo costo,
+  // ausente hasta ahora en la edición inline de precio por sucursal.
+  if (input.branchPrice !== undefined && input.branchPrice !== null) {
+    const pricing = await getEffectiveProductPricing(prisma, { branchId: input.branchId, productId: input.productId });
+    assertPriceNotBelowCost({
+      price: input.branchPrice,
+      cost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost),
+    });
+  }
 
   const data = {
     isAvailable: input.isAvailable,
