@@ -87,7 +87,12 @@ const batchInputActualSchema = z.object({
 });
 
 export const completeBatchSchema = z.object({
-  producedGoodQuantity: z.number().positive("Unidades buenas debe ser mayor a 0"),
+  // Auditoría 2026-07-22 (ALTO Producción): .positive() rechazaba una pérdida
+  // total (todo el insumo consumido, cero unidades buenas producidas) — el
+  // lote nunca podía "completarse" y los insumos consumidos físicamente
+  // nunca se deducían del inventario del sistema. 0 es un resultado real y
+  // válido (mal batch, receta fallida, etc.), solo negativo no tiene sentido.
+  producedGoodQuantity: z.number().min(0, "Unidades buenas no puede ser negativo"),
   producedBadQuantity: z.number().min(0).default(0),
   laborCost: z.number().min(0).default(0),
   overheadCost: z.number().min(0).default(0),

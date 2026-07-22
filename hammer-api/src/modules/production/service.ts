@@ -445,7 +445,11 @@ export async function completeBatch(
     producedGoodQuantity: input.producedGoodQuantity,
     targetMarginPct: batch.recipe.targetMarginPct,
   });
-  if (costs.unitCost <= 0) {
+  // Auditoría 2026-07-22 (ALTO Producción): con producedGoodQuantity=0
+  // (pérdida total) calculateBatchCosts ya devuelve unitCost=0 a propósito
+  // (no hay unidad buena a la que repartirle costo) — eso es válido, no un
+  // error. Solo es inválido reclamar unidades buenas (>0) a costo cero.
+  if (input.producedGoodQuantity > 0 && costs.unitCost <= 0) {
     throw new Error("INVALID_INPUT: El costo unitario producido debe ser mayor a 0.");
   }
 
@@ -506,20 +510,35 @@ export async function completeBatch(
       inputsConsumed += 1;
     }
 
-    // 3. Create PRODUCTION_OUTPUT movement (add finished product)
-    await createInventoryMovementTx(tx, {
-      actorUserId: input.actorUserId,
-      branchId: batch.branchId,
-      productId: batch.recipe.finishedProductId,
-      movementType: "PRODUCTION_OUTPUT",
-      quantity: input.producedGoodQuantity,
-      unitCost: costs.unitCost,
-      referenceType: "ProductionBatch",
-      referenceId: batch.id,
-      notes: `Producción lote ${batch.batchNumber}`,
-    });
-
-    outputsCreated += 1;
+    // 3. Create PRODUCTION_OUTPUT movement (add finished product) — se omite
+    // en pérdida total (producedGoodQuantity=0): no hay nada que agregar al
+    // inventario, y createInventoryMovementTx exige cantidad > 0 para
+    // cualquier movimiento. Los insumos ya se dedujeron arriba de todas
+    // formas (paso 2), que es justamente lo que antes no ocurría.
+    if (input.producedGoodQuantity > 0) {
+      await createInventoryMovementTx(tx, {
+        actorUserId: input.actorUserId,
+        branchId: batch.branchId,
+        productId: batch.recipe.finishedProductId,
+        movementType: "PRODUCTION_OUTPUT",
+        quantity: input.producedGoodQuantity,
+        unitCost: costs.unitCost,
+        referenceType: "ProductionBatch",
+        referenceId: batch.id,
+        notes: `Producción lote ${batch.batchNumber}`,
+      });
+      outputsCreated += 1;
+    } else {
+      warnings.push("Lote completado con pérdida total: insumos consumidos, sin producto terminado.");
+      await logAuditEvent({
+        actorUserId: input.actorUserId,
+        module: "production",
+        action: "BATCH_TOTAL_LOSS",
+        entityType: "ProductionBatch",
+        entityId: batch.id,
+        metadataJson: { batchNumber: batch.batchNumber },
+      });
+    }
 
     const finishedPricing = await tx.product.findUnique({
       where: { id: batch.recipe.finishedProductId },
