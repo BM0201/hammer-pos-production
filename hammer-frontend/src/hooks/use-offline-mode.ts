@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getOfflineQueue, getPendingCount, updateOfflineSale } from "@/lib/offline-db";
+import { apiFetch } from "@/lib/client/api";
 
 export type SyncState = "idle" | "syncing" | "done" | "partial_error";
 
@@ -38,9 +39,8 @@ export function useOfflineMode() {
 
     for (const sale of pending) {
       try {
-        const res = await fetch("/api/sales/sync-offline", {
+        const res = await apiFetch("/api/sales/sync-offline", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(sale),
         });
         if (res.ok) {

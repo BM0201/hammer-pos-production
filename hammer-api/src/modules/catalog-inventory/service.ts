@@ -480,6 +480,19 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
 export async function massDeleteAllProducts(input: MassDeleteProductsInput, actorUserId: string) {
   const totalProducts = await prisma.product.count();
 
+  /* ── Safety: esta herramienta borra en cascada el historial de ventas e
+   * inventario completo (ver más abajo) — es para resetear datos de prueba
+   * ANTES de operar con clientes reales, nunca después. Una vez que existe
+   * al menos un pago POSTED (una venta real cobrada), queda bloqueada de
+   * forma permanente e incondicional: ninguna frase de confirmación puede
+   * saltarse esto. */
+  const postedPaymentsCount = await prisma.payment.count({ where: { status: "POSTED" } });
+  if (postedPaymentsCount > 0) {
+    throw new Error(
+      "INVALID_INPUT: No se puede borrar — el sistema ya tiene pagos reales registrados (histórico de ventas). Esta herramienta solo está disponible antes de operar con datos reales.",
+    );
+  }
+
   /* ── Safety: verify the confirmation phrase matches ── */
   const expectedPhrase = `Borrar los ${totalProducts} productos`;
   if (input.confirmation !== expectedPhrase) {

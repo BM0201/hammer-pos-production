@@ -9,6 +9,7 @@ import { requireBranchCapability } from "@/modules/rbac/guards";
 import { CAPABILITIES } from "@/modules/rbac/policies";
 import { requireCsrf } from "@/modules/security/csrf";
 import { assertBranchWorkflowAction, WORKFLOW_ACTIONS } from "@/modules/workflow/branch-workflow";
+import { fail } from "@/lib/api/response";
 
 export async function POST(request: Request) {
   try {
@@ -19,6 +20,14 @@ export async function POST(request: Request) {
     const parsed = postPaymentSchema.safeParse(await request.json());
     if (!parsed.success) {
       return validationFail(parsed.error.flatten());
+    }
+
+    // No hay ledger de crédito (límite, cobro posterior) — aceptar CREDIT aquí
+    // dejaría salir mercadería sin que entre dinero ni quede deuda registrada
+    // en ningún lado. Igual que en venta directa, queda deshabilitado.
+    const usesCredit = parsed.data.method === "CREDIT" || (parsed.data.tenders ?? []).some((t) => t.method === "CREDIT");
+    if (usesCredit) {
+      return fail("CREDIT_PAYMENT_UNSUPPORTED", "Crédito no disponible: no existe control de límite ni cobro posterior para este método.", 400);
     }
 
     const order = await prisma.saleOrder.findUniqueOrThrow({ where: { id: parsed.data.saleOrderId } });

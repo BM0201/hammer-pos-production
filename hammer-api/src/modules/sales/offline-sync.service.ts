@@ -3,6 +3,10 @@ import { OperationalDayStatus, Prisma, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { consumeSharedStockForSaleTx } from "@/modules/inventory/service";
 import { logAuditEvent } from "@/modules/audit/service";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
+import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
+import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 
 export type OfflineSyncLine = {
   productId: string;
@@ -16,6 +20,8 @@ export type OfflineSyncInput = {
   branchId: string;
   cashSessionId: string;
   actorUserId: string;
+  actorRole?: string;
+  overrideReason?: string;
   lines: OfflineSyncLine[];
   grandTotal: number;
   notes?: string;
@@ -71,6 +77,60 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
   });
   if (duplicate) {
     return { orderId: duplicate.id, orderNumber: duplicate.orderNumber, alreadySynced: true };
+  }
+
+  // ── 3b. Política de descuento/costo por línea — MISMA validación que una venta
+  // online (addSaleOrderLine). El POS offline puede mandar unitPrice/discountAmount
+  // libres; sin este chequeo el límite de descuento por rol y el bloqueo de venta
+  // bajo costo quedaban completamente evadidos al sincronizar. ────────────────────
+  for (const line of input.lines) {
+    const pricing = await getEffectiveProductPricing(prisma, { branchId: input.branchId, productId: line.productId });
+    const categoryPolicy = await resolvePolicyForProduct({ branchId: input.branchId, productId: line.productId });
+    const commercialIntelligence = await buildCommercialIntelligenceForProduct({ branchId: input.branchId, productId: line.productId });
+
+    const quantity = new Prisma.Decimal(line.quantity);
+    const unitPrice = new Prisma.Decimal(line.unitPrice);
+    const discountAmount = new Prisma.Decimal(line.discountAmount);
+    const discountPerUnit = quantity.gt(0) ? discountAmount.div(quantity) : new Prisma.Decimal(0);
+    const netUnitPriceAfterDiscount = unitPrice.sub(discountPerUnit);
+    const discountPercent = unitPrice.gt(0) ? discountPerUnit.div(unitPrice).mul(100) : new Prisma.Decimal(0);
+
+    const policy = validateDiscountForRole({
+      role: input.actorRole,
+      discountPercent,
+      effectiveCost: pricing.effectiveCost,
+      netUnitPriceAfterDiscount,
+      overrideReason: input.overrideReason,
+      categoryId: categoryPolicy.categoryId,
+      categoryName: categoryPolicy.categoryName,
+      categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+      commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+      combinedClass: commercialIntelligence.combinedClass,
+      riskLevel: commercialIntelligence.riskLevel,
+    });
+
+    if (!policy.allowed) {
+      await logAuditEvent({
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "sales",
+        action: "OFFLINE_SYNC_LINE_DENIED",
+        entityType: "Product",
+        entityId: line.productId,
+        metadataJson: {
+          offlineId: input.offlineId,
+          reason: policy.code,
+          effectiveCost: pricing.effectiveCost?.toString() ?? null,
+          netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
+          userRole: input.actorRole ?? null,
+          discountPercent: discountPercent.toString(),
+          roleMaxDiscountPercent: getMaxDiscountPercentForRole(input.actorRole),
+          combinedClass: commercialIntelligence.combinedClass,
+        },
+      });
+      const error = new Error(policy.code ?? "DISCOUNT_LIMIT_EXCEEDED");
+      throw error;
+    }
   }
 
   // ── 4. Fetch branch code for order number ──────────────────────────────────

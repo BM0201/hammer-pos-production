@@ -203,8 +203,22 @@ export async function getMonthlyExpensesByBranch(branchId: string): Promise<Pris
   );
 }
 
-export async function getExpenseSummaryByBranch(branchId: string) {
-  const expenses = await listExpensesByBranch(branchId);
+export async function getExpenseSummaryByBranch(branchId: string, db: typeof prisma = prisma) {
+  // Mismo filtro de vigencia que getMonthlyExpensesByBranch: sin esto, un gasto
+  // (en especial la sincronización automática de planilla, que crea un registro
+  // nuevo por mes y nunca desactiva los anteriores) se sigue sumando para siempre
+  // aunque su período ya haya terminado.
+  const now = new Date();
+  const expenses = await db.operatingExpense.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      effectiveFrom: { lte: now },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
+    },
+    include: { branch: { select: { id: true, code: true, name: true } } },
+    orderBy: [{ category: "asc" }, { description: "asc" }],
+  });
 
   const byCategory: Record<string, { total: number; count: number; items: typeof expenses }> = {};
   let grandTotal = 0;
@@ -227,14 +241,19 @@ export async function getExpenseSummaryByBranch(branchId: string) {
  * (vista "Todas las sucursales" del manager — solo lectura, para análisis).
  * Un solo groupBy por sucursal+categoría, sin N+1.
  */
-export async function getExpenseSummaryAllBranches() {
+export async function getExpenseSummaryAllBranches(db: typeof prisma = prisma) {
+  const now = new Date();
   const [grouped, branches] = await Promise.all([
-    prisma.operatingExpense.groupBy({
+    db.operatingExpense.groupBy({
       by: ["branchId", "category"],
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
+      },
       _sum: { amount: true },
     }),
-    prisma.branch.findMany({
+    db.branch.findMany({
       where: { isActive: true },
       select: { id: true, code: true, name: true },
       orderBy: { code: "asc" },
