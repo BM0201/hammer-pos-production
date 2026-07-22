@@ -12,6 +12,8 @@ import { getUserById } from "@/modules/users/service";
 import { disableMfa } from "@/modules/auth/mfa-service";
 import { assertCanManageUser } from "@/modules/auth/role-hierarchy";
 import { getClientIp } from "@/lib/client-ip";
+import { requireCsrf } from "@/modules/security/csrf";
+import { toHttpErrorResponse } from "@/lib/http";
 
 export async function DELETE(
   request: Request,
@@ -19,6 +21,16 @@ export async function DELETE(
 ) {
   const session = await getCurrentSession();
   if (!session) return unauthorized();
+
+  // Auditoría 2026-07-22 (ALTO Seguridad): esta ruta reinicia el MFA de OTRO
+  // usuario (sin su código TOTP) y no exigía CSRF — un DELETE cross-site
+  // aprovechando la cookie de sesión de un Master/SystemAdmin autenticado
+  // podía desactivar el MFA de cualquier usuario de menor jerarquía.
+  try {
+    await requireCsrf(request, session);
+  } catch (err) {
+    return toHttpErrorResponse(err);
+  }
 
   const { id: targetId } = await params;
   const target = await getUserById(targetId);
