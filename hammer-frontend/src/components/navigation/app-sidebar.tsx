@@ -43,6 +43,9 @@ import {
   Factory,
   History,
   LogOut,
+  Merge,
+  ScrollText,
+  ReceiptText,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -55,6 +58,114 @@ type SidebarRoleStyle = CSSProperties & {
   "--sidebar-role-active-text": string;
   "--sidebar-role-icon": string;
 };
+
+/**
+ * Fuente única del menú master. Owner y SystemAdmin lo consumen tal cual + sus
+ * propios extras (ver OWNER_EXTRAS/SYSADMIN_EXTRAS) — nunca lo copian. Qué ve
+ * cada rol lo decide el filtrado por capabilities existente (canSee/hasEffectiveCapability),
+ * no una lista aparte por rol.
+ */
+const MASTER_NAV: NavSection[] = [
+  {
+    title: "GENERAL",
+    items: [
+      { href: "/app/master", label: "Centro de Comando", icon: Globe },
+    ],
+  },
+  {
+    title: "COMERCIAL",
+    items: [
+      { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart, capabilities: [CAPABILITIES.MASTER_SALES_VIEW] },
+      { href: "/app/master/discounts", label: "Descuentos", icon: Tag, capabilities: [CAPABILITIES.PRICING_VIEW, CAPABILITIES.PRICING_EDIT_GLOBAL] },
+    ],
+  },
+  {
+    title: "INVENTARIO & ABASTECIMIENTO",
+    items: [
+      { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE, CAPABILITIES.INVENTORY_VIEW] },
+      { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus, capabilities: [CAPABILITIES.PURCHASES_VIEW] },
+      { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight, capabilities: [CAPABILITIES.TRANSFERS_VIEW] },
+      { href: "/app/master/production", label: "Producción de Materiales", icon: Factory, capabilities: [CAPABILITIES.PRODUCTION_DASHBOARD_VIEW] },
+      { href: "/app/master/timber", label: "Madera", icon: TreePine },
+      { href: "/app/master/inventory-fusion", label: "Fusión de Inventario", icon: Merge, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE] },
+    ],
+  },
+  {
+    title: "OPERACIÓN",
+    items: [
+      { href: "/app/master/operations", label: "Día Operativo 360", icon: ClipboardList, capabilities: [CAPABILITIES.MASTER_DASHBOARD_VIEW, CAPABILITIES.OPERATIONS_VIEW] },
+      { href: "/app/master/cash-boxes", label: "Cajas", icon: Wallet, capabilities: [CAPABILITIES.MASTER_ACCESS] },
+      { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", icon: ReceiptText, capabilities: [CAPABILITIES.FINANCE_VIEW] },
+    ],
+  },
+  {
+    title: "ADMINISTRACIÓN",
+    items: [
+      { href: "/app/master/users", label: "RRHH", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
+      { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark, capabilities: [CAPABILITIES.FINANCE_VIEW, CAPABILITIES.PRICING_VIEW] },
+      { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
+      { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
+      { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },
+      { href: "/app/master/audit", label: "Auditoría", icon: ScrollText, capabilities: [CAPABILITIES.AUDIT_VIEW] },
+      { href: "/app/master/settings/print", label: "Impresión", icon: Printer },
+    ],
+  },
+  {
+    title: "INTELIGENCIA",
+    items: [
+      { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain, capabilities: [CAPABILITIES.BRAIN_VIEW] },
+      { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
+      { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart, capabilities: [CAPABILITIES.MASTER_INVENTORY_VIEW] },
+      { href: "/app/master/history", label: "Historial Completo", icon: History },
+    ],
+  },
+];
+
+/** Únicamente lo que hoy es exclusivo de Owner — el resto lo hereda de MASTER_NAV. */
+const OWNER_EXTRAS: NavSection[] = [
+  {
+    title: "GENERAL",
+    items: [
+      { href: "/app/owner", label: "Panel Propietario", icon: LayoutDashboard, capabilities: [CAPABILITIES.MASTER_DASHBOARD_VIEW, CAPABILITIES.MASTER_ACCESS] },
+      { href: "/app/owner/module-config", label: "Config. Módulos", icon: Settings, capabilities: [CAPABILITIES.SYSTEM_ADMIN_SETTINGS, CAPABILITIES.MASTER_ACCESS] },
+    ],
+  },
+];
+
+/** Únicamente lo que hoy es exclusivo de SystemAdmin — el resto lo hereda de MASTER_NAV. */
+const SYSADMIN_EXTRAS: NavSection[] = [
+  {
+    title: "GENERAL",
+    items: [
+      { href: "/app/system-admin", label: "Dashboard Admin", icon: Shield },
+    ],
+  },
+  {
+    title: "SISTEMA",
+    items: [
+      { href: "/app/system-admin/role-config", label: "Config. de Roles", icon: Users },
+      { href: "/app/system-admin/settings", label: "Configuraciones", icon: Settings },
+    ],
+  },
+];
+
+/** Concatena grupos de secciones fusionando por título (evita títulos repetidos al mezclar extras + canónico). */
+function mergeSections(...sectionGroups: NavSection[][]): NavSection[] {
+  const merged: NavSection[] = [];
+  const indexByTitle = new Map<string, number>();
+  for (const group of sectionGroups) {
+    for (const section of group) {
+      const existingIndex = indexByTitle.get(section.title);
+      if (existingIndex === undefined) {
+        indexByTitle.set(section.title, merged.length);
+        merged.push({ title: section.title, items: [...section.items] });
+      } else {
+        merged[existingIndex] = { ...merged[existingIndex], items: [...merged[existingIndex].items, ...section.items] };
+      }
+    }
+  }
+  return merged;
+}
 
 function buildNavSections(
   session: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships" | "effectiveCapabilities">,
@@ -72,166 +183,25 @@ function buildNavSections(
       .map((entry) => ({ ...entry, items: entry.items.filter(canSee) }))
       .filter((entry) => entry.items.length > 0);
 
-  /* ── OWNER gets a strategic owner nav ── */
+  /* ── OWNER: extras propios + el canónico completo, filtrado por capabilities ── */
   if (isOwnerRole(roleCode as string, globalRoles as unknown as string[])) {
-    return visibleSections([
-      {
-        title: "GENERAL",
-        items: [
-          { href: "/app/owner", label: "Panel Propietario", icon: LayoutDashboard, capabilities: [CAPABILITIES.MASTER_DASHBOARD_VIEW, CAPABILITIES.MASTER_ACCESS] },
-          { href: "/app/owner/module-config", label: "Config. Modulos", icon: Settings, capabilities: [CAPABILITIES.SYSTEM_ADMIN_SETTINGS, CAPABILITIES.MASTER_ACCESS] },
-        ],
-      },
-      {
-        title: "ADMINISTRACION",
-        items: [
-          { href: "/app/master/catalog-inventory", label: "Catalogo e Inventario", icon: Boxes, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE, CAPABILITIES.INVENTORY_VIEW] },
-          { href: "/app/master/discounts", label: "Descuentos", icon: Tag, capabilities: [CAPABILITIES.PRICING_VIEW, CAPABILITIES.PRICING_EDIT_GLOBAL] },
-        ],
-      },
-      {
-        title: "OPERACION",
-        items: [
-          { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus, capabilities: [CAPABILITIES.PURCHASES_VIEW] },
-          { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight, capabilities: [CAPABILITIES.TRANSFERS_VIEW] },
-          { href: "/app/master/sales/orders", label: "Ordenes", icon: ShoppingCart, capabilities: [CAPABILITIES.MASTER_SALES_VIEW] },
-          { href: "/app/master/operations", label: "Dia Operativo 360", icon: ClipboardList, capabilities: [CAPABILITIES.MASTER_DASHBOARD_VIEW, CAPABILITIES.OPERATIONS_VIEW] },
-          { href: "/app/master/timber", label: "Madera", icon: TreePine },
-        ],
-      },
-      {
-        title: "CONTROL",
-        items: [
-          { href: "/app/master/users", label: "RRHH", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
-          { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark, capabilities: [CAPABILITIES.FINANCE_VIEW, CAPABILITIES.PRICING_VIEW] },
-          { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
-          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
-          { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },
-          { href: "/app/master/audit", label: "Auditoria", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
-          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
-        ],
-      },
-      {
-        title: "REPORTES",
-        items: [
-          { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain, capabilities: [CAPABILITIES.BRAIN_VIEW] },
-          { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart, capabilities: [CAPABILITIES.MASTER_INVENTORY_VIEW] },
-          { href: "/app/master/history", label: "Historial Completo", icon: History },
-        ],
-      },
-    ]);
+    return visibleSections(mergeSections(OWNER_EXTRAS, MASTER_NAV));
   }
 
-  /* ── SYSTEM_ADMIN gets a super admin nav ── */
+  /* ── SYSTEM_ADMIN: extras propios + el canónico completo, filtrado por capabilities ── */
   if (isSystemAdminRole(roleCode as string, globalRoles as unknown as string[])) {
-    return visibleSections([
-      {
-        title: "GENERAL",
-        items: [
-          { href: "/app/system-admin", label: "Dashboard Admin", icon: Shield },
-        ],
-      },
-      {
-        title: "SISTEMA",
-        items: [
-          { href: "/app/system-admin/role-config", label: "Config. de Roles", icon: Users },
-          { href: "/app/system-admin/settings", label: "Configuraciones", icon: Settings },
-          { href: "/app/master/settings/print", label: "Impresión", icon: Printer },
-        ],
-      },
-      {
-        title: "ADMINISTRACION",
-        items: [
-          { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes },
-          { href: "/app/master/discounts", label: "Descuentos", icon: Tag },
-        ],
-      },
-      {
-        title: "OPERACION",
-        items: [
-          { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus },
-          { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight },
-          { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart },
-          { href: "/app/master/operations", label: "Dia Operativo 360", icon: ClipboardList },
-          { href: "/app/master/timber", label: "Madera", icon: TreePine },
-        ],
-      },
-      {
-        title: "CONTROL",
-        items: [
-          { href: "/app/master/users", label: "RRHH", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
-          { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark, capabilities: [CAPABILITIES.FINANCE_VIEW, CAPABILITIES.PRICING_VIEW] },
-          { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
-          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
-          { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },
-          { href: "/app/master/audit", label: "Auditoría", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
-          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
-        ],
-      },
-      {
-        title: "REPORTES",
-        items: [
-          { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain },
-          { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart },
-          { href: "/app/master/history", label: "Historial Completo", icon: History },
-        ],
-      },
-    ]);
+    return visibleSections(mergeSections(SYSADMIN_EXTRAS, MASTER_NAV));
   }
 
-  /* ── MASTER gets a corporate/strategic nav ── */
+  /* ── MASTER: el canónico tal cual ── */
   if (isMasterRole(roleCode as string, globalRoles as unknown as string[])) {
-    return visibleSections([
-      {
-        title: "GENERAL",
-        items: [
-          { href: "/app/master", label: "Centro de Comando", icon: Globe },
-        ],
-      },
-      {
-        title: "ADMINISTRACION",
-        items: [
-          { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes },
-          { href: "/app/master/discounts", label: "Descuentos", icon: Tag },
-        ],
-      },
-      {
-        title: "OPERACION",
-        items: [
-          { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus },
-          { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight },
-          { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart },
-          { href: "/app/master/operations", label: "Dia Operativo 360", icon: ClipboardList },
-          { href: "/app/master/production", label: "Produccion Materiales", icon: Factory },
-          { href: "/app/master/timber", label: "Madera", icon: TreePine },
-        ],
-      },
-      {
-        title: "CONTROL",
-        items: [
-          { href: "/app/master/users", label: "RRHH", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
-          { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark, capabilities: [CAPABILITIES.FINANCE_VIEW, CAPABILITIES.PRICING_VIEW] },
-          { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
-          { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
-          { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },
-          { href: "/app/master/audit", label: "Auditoría", icon: ClipboardList, capabilities: [CAPABILITIES.AUDIT_VIEW] },
-          { href: "/app/master/reports", label: "Reportes & KPIs", icon: BarChart3, capabilities: [CAPABILITIES.REPORTS_EXPORT] },
-          { href: "/app/master/inventory-fusion", label: "Fusión de Inventario", icon: ArrowLeftRight, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE] },
-          { href: "/app/master/settings/print", label: "Impresión", icon: Printer },
-        ],
-      },
-      {
-        title: "REPORTES",
-        items: [
-          { href: "/app/master/brain", label: "Centro de Decisiones", icon: Brain },
-          { href: "/app/master/analytics/abc-xyz", label: "Analytics ABC-XYZ", icon: PieChart },
-          { href: "/app/master/history", label: "Historial Completo", icon: History },
-        ],
-      },
-    ]);
+    return visibleSections(MASTER_NAV);
   }
 
-  /* ── Contador (ACCOUNTANT) solo ve el área de contabilidad ── */
+  /* ── Contador (ACCOUNTANT) solo ve el área de contabilidad. Se mantiene como
+     lista explícita (no fusionada con MASTER_NAV): varios ítems del canónico
+     no tienen capabilities propias (p.ej. "Centro de Comando", "Historial
+     Completo") y quedarían visibles igual para este rol si se fusionara. ── */
   if (isAccountantRole(roleCode as string, globalRoles as unknown as string[])) {
     return visibleSections([
       {
