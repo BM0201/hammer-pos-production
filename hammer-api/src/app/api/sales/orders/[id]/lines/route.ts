@@ -62,6 +62,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     // ── Auto-apply active discounts ──
     let discountAmount = parsed.data.discountAmount ?? 0;
+    let discountFromActiveCampaign = false;
     if (parsed.data.discountPercent !== undefined && discountAmount === 0) {
       const pricing = await getEffectiveProductPricing(prisma, { branchId: order.branchId, productId: parsed.data.productId });
       const unitPrice = parsed.data.unitPrice ?? Number(pricing.effectivePrice);
@@ -78,19 +79,30 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           const pricing = await getEffectiveProductPricing(prisma, { branchId: order.branchId, productId: parsed.data.productId });
           const unitPrice = parsed.data.unitPrice ?? Number(pricing.effectivePrice);
           discountAmount = calculateDiscountForProduct(product, unitPrice, activeDiscounts) * parsed.data.quantity;
+          // Toda campaña activa (Discount) exige assertMaster para crearse —
+          // ver C8: la autoridad de este descuento es quien la creó, no el
+          // cajero que la vende. addSaleOrderLine valida el riesgo con eso.
+          discountFromActiveCampaign = discountAmount > 0;
         }
       } catch {
         // If discount calculation fails, proceed without discount
       }
     }
 
+    // El Master ya justificó este descuento al crear/activar la campaña (su
+    // nombre/descripción es esa justificación) — sin esto, validateDiscountForRole
+    // seguiría pidiendo una razón de override aunque el rol resuelto sea MASTER.
+    const overrideReason = parsed.data.overrideReason
+      ?? (discountFromActiveCampaign ? "Descuento aplicado por campaña activa (creada por Master)." : undefined);
+
     const data = await addSaleOrderLine({
       ...parsed.data,
       discountAmount,
+      discountFromActiveCampaign,
       saleOrderId: id,
       actorUserId: session.userId,
       actorRole: session.roleCode,
-      overrideReason: parsed.data.overrideReason,
+      overrideReason,
     });
     return created(data);
   } catch (error) {

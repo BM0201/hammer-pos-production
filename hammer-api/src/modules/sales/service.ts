@@ -244,6 +244,18 @@ export async function addSaleOrderLine(input: {
   actorUserId: string;
   actorRole?: string;
   overrideReason?: string | null;
+  // Auditoría 2026-07-22, hallazgo C8: el motor de descuentos sugeridos
+  // (ABC-XYZ) recomienda hasta 15% en clase CZ, pero la política de riesgo
+  // bloquea CUALQUIER descuento >0% en CZ salvo Master — así que una campaña
+  // ya aprobada por un Master (createDiscount exige assertMaster) quedaba
+  // invendible en caja para cualquier cajero mientras la campaña seguía activa.
+  // Decisión de negocio: el creador de la campaña manda, no el rol de quien
+  // vende. Cuando el descuento viene de una campaña activa (no de que el
+  // cajero lo haya tecleado manualmente), se valida el límite de rol/riesgo
+  // contra la autoridad de la campaña (Master, ya que createDiscount lo exige),
+  // no contra actorRole. El chequeo de venta-bajo-costo NO se ve afectado por
+  // esto — sigue exigiendo su propia razón de override, sin importar el origen.
+  discountFromActiveCampaign?: boolean;
 }) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
@@ -265,8 +277,11 @@ export async function addSaleOrderLine(input: {
     const discountPerUnit = discountAmount.div(quantity);
     const netUnitPriceAfterDiscount = unitPrice.sub(discountPerUnit);
     const discountPercent = unitPrice.gt(0) ? discountPerUnit.div(unitPrice).mul(100) : new Prisma.Decimal(0);
+    // Descuento de campaña activa -> la autoridad es quien creó/activó la
+    // campaña (siempre Master, ver createDiscount), no el rol de quien vende.
+    const discountPolicyRole = input.discountFromActiveCampaign ? "MASTER" : input.actorRole;
     const policy = validateDiscountForRole({
-      role: input.actorRole,
+      role: discountPolicyRole,
       discountPercent,
       effectiveCost: pricing.effectiveCost,
       netUnitPriceAfterDiscount,
@@ -294,15 +309,17 @@ export async function addSaleOrderLine(input: {
             effectiveCost: pricing.effectiveCost?.toString() ?? null,
             netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
             userRole: input.actorRole ?? null,
+            discountFromActiveCampaign: Boolean(input.discountFromActiveCampaign),
+            discountPolicyRole,
             overrideReason: input.overrideReason ?? null,
             priceSource: pricing.priceSource,
             costSource: pricing.costSource,
             discountPercent: discountPercent.toString(),
-            roleMaxDiscountPercent: getMaxDiscountPercentForRole(input.actorRole),
+            roleMaxDiscountPercent: getMaxDiscountPercentForRole(discountPolicyRole),
             categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
             commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
             effectiveMaxDiscountPercent: effectiveDiscountLimitForAudit({
-              role: input.actorRole,
+              role: discountPolicyRole,
               categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
               commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
             }),
@@ -364,6 +381,8 @@ export async function addSaleOrderLine(input: {
           marginPercentSnapshot: snapshots.marginPercentSnapshot?.toString() ?? null,
           netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
           discountPercent: discountPercent.toString(),
+          discountFromActiveCampaign: Boolean(input.discountFromActiveCampaign),
+          discountPolicyRole,
           overrideReason: input.overrideReason ?? null,
           policyWarnings: policy.warnings,
           commercialIntelligence: {
