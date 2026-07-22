@@ -102,7 +102,7 @@ export async function PATCH(
       if (err.message.includes("NOT_FOUND")) {
         return fail("NOT_FOUND", err.message, 404);
       }
-      if (err.message.includes("CANNOT") || err.message === "TRIP_HAS_NO_LINES") {
+      if (err.message.includes("CANNOT") || err.message === "TRIP_HAS_NO_LINES" || err.message === "TRIP_ALREADY_CONFIRMED") {
         return fail("CONFLICT", err.message, 409);
       }
       if (err.message === "TRIP_REQUIRES_COST") {

@@ -652,13 +652,27 @@ export async function confirmTimberTrip(id: string, userId?: string) {
       }
     }
 
-    const updated = await tx.timberTrip.update({
-      where: { id },
+    // Auditoría 2026-07-22 (ALTO Madera): el status se validaba ANTES de abrir
+    // la transacción y la transición final usaba un update plano — un doble
+    // clic o un retry concurrente podían pasar ambos el chequeo inicial e
+    // inyectar el mismo viaje dos veces en inventario. Opción A (mismo patrón
+    // que executeSaleReturn/executeSaleCancellation): updateMany guardado por
+    // status dentro de la misma transacción — si otro request ya confirmó
+    // este viaje, count=0 y se revierte TODO lo de esta transacción
+    // (incluidos los movimientos de inventario ya creados arriba).
+    const transition = await tx.timberTrip.updateMany({
+      where: { id, status: { in: ["DRAFT", "CUBICADO"] } },
       data: {
         status: "TRANSFERRED",
         confirmedById: userId,
         confirmedAt: new Date(),
       },
+    });
+    if (transition.count === 0) {
+      throw new Error("TRIP_ALREADY_CONFIRMED");
+    }
+    const updated = await tx.timberTrip.findUniqueOrThrow({
+      where: { id },
       include: { lines: true, destinationBranch: true },
     });
 
