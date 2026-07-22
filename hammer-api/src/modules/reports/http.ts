@@ -5,8 +5,9 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { canExportReports, resolveReportBranchScope } from "@/modules/reports/access";
 import { buildReportPdf } from "@/modules/reports/pdf";
 import { getReportDefinition } from "@/modules/reports/report-definitions";
-import { formatDateLocal, formatStatus, safeText } from "@/modules/reports/report-formatters";
+import { formatStatus, safeText } from "@/modules/reports/report-formatters";
 import { reportQuerySchema } from "@/modules/reports/validators";
+import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 
 export async function resolveReportRequest(request: Request) {
   const session = await getCurrentSession();
@@ -37,8 +38,17 @@ export async function resolveReportRequest(request: Request) {
       ? await prisma.branch.findUnique({ where: { id: selectedBranchId }, select: { code: true, name: true } })
       : null;
 
+    // dateFrom/dateTo llegan como "YYYY-MM-DD" (día de negocio en Managua).
+    // dateFrom = inicio de ESE día en Managua; dateTo = inicio del día
+    // SIGUIENTE en Managua (límite exclusivo) — así un pago hecho a las
+    // 20:00 Managua cae en el día correcto y no se corta a medianoche UTC.
+    const dateFrom = parsed.data.dateFrom ? getOperationalWindowForManaguaDate(parsed.data.dateFrom).start : undefined;
+    const dateTo = parsed.data.dateTo ? getOperationalWindowForManaguaDate(parsed.data.dateTo).end : undefined;
+
     return {
-      query: parsed.data,
+      query: { ...parsed.data, dateFrom, dateTo },
+      dateFromLabel: parsed.data.dateFrom ?? null,
+      dateToLabel: parsed.data.dateTo ?? null,
       branchIds,
       format,
       generatedBy: session.username,
@@ -50,6 +60,14 @@ export async function resolveReportRequest(request: Request) {
     }
     throw error;
   }
+}
+
+// dateFromLabel/dateToLabel son "YYYY-MM-DD" en calendario Managua — se
+// formatean como texto puro, SIN pasar por Date/formatDateLocal (que
+// interpretaría el string como instante UTC y correría el día hacia atrás).
+function formatManaguaDateLabel(raw: string) {
+  const [year, month, day] = raw.split("-");
+  return `${day}/${month}/${year}`;
 }
 
 export function csvReportResponse(filename: string, csv: string) {
@@ -73,6 +91,8 @@ export function reportResponse(
       status?: string;
       actorUsername?: string;
     };
+    dateFromLabel?: string | null;
+    dateToLabel?: string | null;
     generatedBy?: string;
     branchLabel?: string;
   },
@@ -91,8 +111,8 @@ export function reportResponse(
   if (request.format === "pdf") {
     const definition = getReportDefinition(reportKey ?? filename.replace(/^reporte-/i, "").replace(/\.csv$/i, ""));
     const filters = [
-      { label: "Desde", value: request.query?.dateFrom ? formatDateLocal(request.query.dateFrom) : "Sin limite" },
-      { label: "Hasta", value: request.query?.dateTo ? formatDateLocal(request.query.dateTo) : "Sin limite" },
+      { label: "Desde", value: request.dateFromLabel ? formatManaguaDateLabel(request.dateFromLabel) : "Sin limite" },
+      { label: "Hasta", value: request.dateToLabel ? formatManaguaDateLabel(request.dateToLabel) : "Sin limite" },
       { label: "Sucursal", value: safeText(request.branchLabel, "Todas las sucursales") },
       { label: "Estado", value: request.query?.status ? formatStatus(request.query.status) : "Todos" },
       { label: "Usuario/Cajero", value: safeText(request.query?.actorUsername, "Todos") },

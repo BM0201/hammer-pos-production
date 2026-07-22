@@ -64,24 +64,24 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
   // Payment-level aggregation by day (totals include transport)
   const paymentByDay = await prisma.$queryRaw<DayPaymentRow[]>`
     SELECT
-      DATE(p."paidAt")::text                          AS date,
+      (p."paidAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Managua')::date::text AS date,
       SUM(p.amount)::float8                           AS total_sold,
       COUNT(DISTINCT p."saleOrderId")::int            AS orders_count
     FROM "Payment" p
     INNER JOIN "SaleOrder" o ON o.id = p."saleOrderId"
     WHERE p.status = 'POSTED'
       AND p."paidAt" >= ${dateFrom}
-      AND p."paidAt" <= ${dateTo}
+      AND p."paidAt" < ${dateTo}
       ${branchSql}
       ${statusSql}
-    GROUP BY DATE(p."paidAt")
+    GROUP BY (p."paidAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Managua')::date
     ORDER BY 1
   `;
 
   // Line-level aggregation by day (product units; excludes transport)
   const linesByDay = await prisma.$queryRaw<DayLineRow[]>`
     SELECT
-      DATE(p."paidAt")::text                          AS date,
+      (p."paidAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Managua')::date::text AS date,
       SUM(l.quantity)::float8                         AS units_sold,
       COUNT(DISTINCT l."productId")::int              AS distinct_products
     FROM "SaleOrderLine" l
@@ -89,10 +89,10 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
     INNER JOIN "Payment" p ON p."saleOrderId" = o.id
     WHERE p.status = 'POSTED'
       AND p."paidAt" >= ${dateFrom}
-      AND p."paidAt" <= ${dateTo}
+      AND p."paidAt" < ${dateTo}
       ${branchSql}
       ${statusSql}
-    GROUP BY DATE(p."paidAt")
+    GROUP BY (p."paidAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Managua')::date
     ORDER BY 1
   `;
 
@@ -123,7 +123,7 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
     INNER JOIN "Payment" p ON p."saleOrderId" = o.id
     WHERE p.status = 'POSTED'
       AND p."paidAt" >= ${dateFrom}
-      AND p."paidAt" <= ${dateTo}
+      AND p."paidAt" < ${dateTo}
       ${branchSql}
       ${statusSql}
   `;
@@ -144,7 +144,7 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
     LEFT JOIN "Category" cat ON cat.id = pr."categoryId"
     WHERE p.status = 'POSTED'
       AND p."paidAt" >= ${dateFrom}
-      AND p."paidAt" <= ${dateTo}
+      AND p."paidAt" < ${dateTo}
       ${branchSql}
       ${statusSql}
     GROUP BY l."productId", pr.sku, pr.name, cat.name
@@ -165,7 +165,7 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
     INNER JOIN "Branch" b ON b.id = o."branchId"
     WHERE p.status = 'POSTED'
       AND p."paidAt" >= ${dateFrom}
-      AND p."paidAt" <= ${dateTo}
+      AND p."paidAt" < ${dateTo}
       ${branchSql}
       ${statusSql}
     GROUP BY o."branchId", b.code, b.name
@@ -186,7 +186,7 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
     LEFT JOIN "Category" cat ON cat.id = pr."categoryId"
     WHERE p.status = 'POSTED'
       AND p."paidAt" >= ${dateFrom}
-      AND p."paidAt" <= ${dateTo}
+      AND p."paidAt" < ${dateTo}
       ${branchSql}
       ${statusSql}
     GROUP BY cat.id, cat.name
@@ -222,12 +222,12 @@ export async function getSalesProductsByDay(
 
   const statusSql = Prisma.sql`AND o.status IN ('PAID', 'DISPATCH_PENDING', 'DISPATCHED')`;
   const dateSql = filters.date
-    ? Prisma.sql`AND DATE(p."paidAt") = ${filters.date}::date`
+    ? Prisma.sql`AND (p."paidAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Managua')::date = ${filters.date}::date`
     : Prisma.sql``;
 
   return prisma.$queryRaw<ProductsByDayRow[]>`
     SELECT
-      DATE(p."paidAt")::text                            AS date,
+      (p."paidAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Managua')::date::text AS date,
       l."productId"                                     AS product_id,
       pr.sku,
       pr.name,
@@ -241,11 +241,11 @@ export async function getSalesProductsByDay(
     LEFT JOIN "Category" cat ON cat.id = pr."categoryId"
     WHERE p.status = 'POSTED'
       AND p."paidAt" >= ${dateFrom}
-      AND p."paidAt" <= ${dateTo}
+      AND p."paidAt" < ${dateTo}
       ${branchSql}
       ${statusSql}
       ${dateSql}
-    GROUP BY DATE(p."paidAt"), l."productId", pr.sku, pr.name, cat.name
+    GROUP BY (p."paidAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Managua')::date, l."productId", pr.sku, pr.name, cat.name
     ORDER BY 1, total_qty DESC
     LIMIT 1000
   `;

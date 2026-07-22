@@ -10,12 +10,15 @@ type ReportFilters = {
   actorUsername?: string;
 };
 
-function dateWhere(filters: ReportFilters, field: "createdAt" | "paidAt" | "occurredAt" | "dispatchedAt") {
+// dateFrom = inicio (inclusive) del día de negocio Managua; dateTo = inicio
+// (exclusivo) del día SIGUIENTE en Managua — ver resolveReportRequest
+// (reports/http.ts). Por eso el límite superior usa "lt", no "lte".
+export function dateWhere(filters: ReportFilters, field: "createdAt" | "paidAt" | "occurredAt" | "dispatchedAt") {
   if (!filters.dateFrom && !filters.dateTo) return {};
   return {
     [field]: {
       ...(filters.dateFrom ? { gte: filters.dateFrom } : {}),
-      ...(filters.dateTo ? { lte: filters.dateTo } : {}),
+      ...(filters.dateTo ? { lt: filters.dateTo } : {}),
     },
   };
 }
@@ -286,7 +289,7 @@ export async function getPayrollReportRows(filters: ReportFilters) {
           ? {
               createdAt: {
                 ...(filters.dateFrom ? { gte: filters.dateFrom } : {}),
-                ...(filters.dateTo ? { lte: filters.dateTo } : {}),
+                ...(filters.dateTo ? { lt: filters.dateTo } : {}),
               },
             }
           : {}),
@@ -326,7 +329,7 @@ export async function getEmployeeLoansReportRows(filters: ReportFilters) {
         ? {
             issuedAt: {
               ...(filters.dateFrom ? { gte: filters.dateFrom } : {}),
-              ...(filters.dateTo ? { lte: filters.dateTo } : {}),
+              ...(filters.dateTo ? { lt: filters.dateTo } : {}),
             },
           }
         : {}),

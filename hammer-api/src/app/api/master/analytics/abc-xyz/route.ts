@@ -3,6 +3,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { prisma } from "@/lib/prisma";
 import { toHttpErrorResponse } from "@/lib/http";
 import { ok } from "@/lib/api/response";
+import { businessDateYmd } from "@/modules/sales/realtime-sales-summary";
 
 type SuggestionResult = {
   suggestedAbcClassification: "A" | "B" | "C" | null;
@@ -111,7 +112,10 @@ export async function GET() {
 
     const dailySalesByProduct = new Map<string, Map<string, number>>();
     for (const row of movementRows) {
-      const dateKey = row.createdAt.toISOString().slice(0, 10);
+      // Día de negocio en Managua, no UTC — agrupar por fecha UTC corría la
+      // demanda del día equivocado (venta a las 20:00 Managua = 02:00 UTC del
+      // día siguiente) y sesgaba la varianza usada para clasificar X/Y/Z.
+      const dateKey = businessDateYmd(row.createdAt);
       if (!dailySalesByProduct.has(row.productId)) {
         dailySalesByProduct.set(row.productId, new Map());
       }

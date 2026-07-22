@@ -5,6 +5,7 @@ import { canExportReports, resolveReportBranchScope } from "@/modules/reports/ac
 import { prisma } from "@/lib/prisma";
 import { PaymentStatus, SaleOrderStatus } from "@prisma/client";
 import { toHttpErrorResponse } from "@/lib/http";
+import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 
 export async function GET(request: Request) {
   try {
@@ -19,8 +20,9 @@ export async function GET(request: Request) {
     const branchIds = resolveReportBranchScope(session, branchIdParam);
 
     const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setUTCHours(0, 0, 0, 0);
+    // Día de negocio en Managua, no UTC — un pago cobrado a las 20:00 Managua
+    // debe contar como "hoy" aunque en UTC ya sean las 02:00 del día siguiente.
+    const todayStart = getOperationalWindowForManaguaDate(now).start;
     const thirtyDaysAgo = new Date(now);
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -42,7 +44,7 @@ export async function GET(request: Request) {
         _sum: { amount: true },
         _count: { _all: true },
       }),
-      // Cobrado hoy (UTC)
+      // Cobrado hoy (día de negocio Managua)
       prisma.payment.aggregate({
         where: { status: PaymentStatus.POSTED, paidAt: { gte: todayStart }, ...nestedBranch },
         _sum: { amount: true },
