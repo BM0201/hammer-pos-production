@@ -607,28 +607,41 @@ export async function convertAlertToPurchaseOrder(alertId: string, userId: strin
   });
   const unitCost = balance ? Number(balance.weightedAverageCost) : 0;
 
-  // Create PO via existing service
-  const po = await createPurchaseOrder({
-    userId,
-    branchId: alert.branchId,
-    supplier: alert.preferredSupplier ?? undefined,
-    notes: `[Reposición] ${alert.reason}`,
-    lines: [{
-      productId: alert.productId,
-      quantity: Number(alert.suggestedQuantity),
-      unitCost,
-    }],
-  });
+  // Auditoría 2026-07-22 (ALTO Transversal): crear el PO y marcar la alerta
+  // como convertida iban sueltos, sin transacción — si el proceso fallaba
+  // entre ambos pasos, la alerta seguía OPEN con un PO ya creado, y un
+  // reintento (Brain puede reprocesar decisiones atascadas) creaba un
+  // SEGUNDO PO duplicado para la misma necesidad. Una sola transacción, con
+  // updateMany guardado por status (Opción A) para además blindar contra una
+  // conversión concurrente del mismo alertId.
+  const { po, updatedAlert } = await prisma.$transaction(async (tx) => {
+    const createdPo = await createPurchaseOrder({
+      userId,
+      branchId: alert.branchId,
+      supplier: alert.preferredSupplier ?? undefined,
+      notes: `[Reposición] ${alert.reason}`,
+      lines: [{
+        productId: alert.productId,
+        quantity: Number(alert.suggestedQuantity),
+        unitCost,
+      }],
+    }, tx);
 
-  // Update alert status
-  const updatedAlert = await prisma.reorderAlert.update({
-    where: { id: alertId },
-    data: {
-      status: "CONVERTED_TO_PURCHASE_ORDER",
-      linkedPurchaseOrderId: po.id,
-      resolvedAt: new Date(),
-      resolvedByUserId: userId,
-    },
+    const transition = await tx.reorderAlert.updateMany({
+      where: { id: alertId, status: "OPEN" },
+      data: {
+        status: "CONVERTED_TO_PURCHASE_ORDER",
+        linkedPurchaseOrderId: createdPo.id,
+        resolvedAt: new Date(),
+        resolvedByUserId: userId,
+      },
+    });
+    if (transition.count === 0) {
+      throw new Error("ALERT_ALREADY_CONVERTED");
+    }
+
+    const alertAfter = await tx.reorderAlert.findUniqueOrThrow({ where: { id: alertId } });
+    return { po: createdPo, updatedAlert: alertAfter };
   });
 
   await logAuditEvent({
@@ -689,27 +702,35 @@ export async function convertAlertToTransfer(alertId: string, userId: string) {
     throw new Error("INVALID_INPUT: La sucursal origen ya no tiene stock disponible para transferir");
   }
 
-  // Create Transfer via existing service
-  const transfer = await createTransfer({
-    userId,
-    fromBranchId: alert.nearestSourceBranchId,
-    toBranchId: alert.branchId,
-    notes: `[Reposición] ${alert.reason}`,
-    lines: [{
-      productId: alert.productId,
-      quantity: finalQty,
-    }],
-  });
+  // Auditoría 2026-07-22 (ALTO Transversal): ver nota en
+  // convertAlertToPurchaseOrder — mismo fix, misma razón.
+  const { transfer, updatedAlert } = await prisma.$transaction(async (tx) => {
+    const createdTransfer = await createTransfer({
+      userId,
+      fromBranchId: alert.nearestSourceBranchId!,
+      toBranchId: alert.branchId,
+      notes: `[Reposición] ${alert.reason}`,
+      lines: [{
+        productId: alert.productId,
+        quantity: finalQty,
+      }],
+    }, tx);
 
-  // Update alert status
-  const updatedAlert = await prisma.reorderAlert.update({
-    where: { id: alertId },
-    data: {
-      status: "CONVERTED_TO_TRANSFER",
-      linkedTransferId: transfer.id,
-      resolvedAt: new Date(),
-      resolvedByUserId: userId,
-    },
+    const transition = await tx.reorderAlert.updateMany({
+      where: { id: alertId, status: "OPEN" },
+      data: {
+        status: "CONVERTED_TO_TRANSFER",
+        linkedTransferId: createdTransfer.id,
+        resolvedAt: new Date(),
+        resolvedByUserId: userId,
+      },
+    });
+    if (transition.count === 0) {
+      throw new Error("ALERT_ALREADY_CONVERTED");
+    }
+
+    const alertAfter = await tx.reorderAlert.findUniqueOrThrow({ where: { id: alertId } });
+    return { transfer: createdTransfer, updatedAlert: alertAfter };
   });
 
   await logAuditEvent({

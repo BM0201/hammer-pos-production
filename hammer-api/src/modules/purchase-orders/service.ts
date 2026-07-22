@@ -379,7 +379,7 @@ type CreatePOInput = {
   }[];
 };
 
-export async function createPurchaseOrder(input: CreatePOInput) {
+export async function createPurchaseOrder(input: CreatePOInput, db: Prisma.TransactionClient | typeof prisma = prisma) {
   if (!input.lines.length) throw new Error("INVALID_INPUT: Debe agregar al menos una línea");
   if (!input.branchId) throw new Error("INVALID_INPUT: branchId es requerido");
   if (!input.userId) throw new Error("INVALID_INPUT: userId es requerido");
@@ -449,9 +449,9 @@ export async function createPurchaseOrder(input: CreatePOInput) {
   });
 
   const total = new Prisma.Decimal(totalPaidNumber);
-  const supplier = await supplierSnapshot(prisma, input.supplierId ?? null);
+  const supplier = await supplierSnapshot(db, input.supplierId ?? null);
 
-  const po = await prisma.purchaseOrder.create({
+  const po = await db.purchaseOrder.create({
     data: {
       orderNumber: generateOrderNumber(),
       supplierId: supplier?.id ?? null,

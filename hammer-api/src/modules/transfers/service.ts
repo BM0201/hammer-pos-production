@@ -66,7 +66,7 @@ export async function getTransfer(id: string) {
   return transfer;
 }
 
-export async function createTransfer(input: CreateTransferInput) {
+export async function createTransfer(input: CreateTransferInput, db: Prisma.TransactionClient | typeof prisma = prisma) {
   if (!input.lines.length) throw new Error("INVALID_INPUT: Debe agregar al menos una linea");
   if (!input.fromBranchId) throw new Error("INVALID_INPUT: fromBranchId es requerido");
   if (!input.toBranchId) throw new Error("INVALID_INPUT: toBranchId es requerido");
@@ -79,7 +79,7 @@ export async function createTransfer(input: CreateTransferInput) {
   }
 
   const balanceRows = await Promise.all(input.lines.map(async (line) => {
-    const shared = await getSharedInventoryBalance(prisma, { branchId: input.fromBranchId, productId: line.productId });
+    const shared = await getSharedInventoryBalance(db, { branchId: input.fromBranchId, productId: line.productId });
     const unitCostSnapshot = shared.balance
       ? (shared.conversion
           ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: shared.balance.weightedAverageCost, conversionFactor: shared.conversion.conversionFactor })
@@ -89,7 +89,7 @@ export async function createTransfer(input: CreateTransferInput) {
   }));
   const unitCostByProductId = new Map(balanceRows);
 
-  const transfer = await prisma.transfer.create({
+  const transfer = await db.transfer.create({
     data: {
       transferNumber: generateTransferNumber(),
       fromBranchId: input.fromBranchId,
