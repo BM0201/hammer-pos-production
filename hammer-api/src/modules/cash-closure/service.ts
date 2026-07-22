@@ -164,28 +164,35 @@ export async function reopenCashClosure(input: {
     throw new Error("CLOSURE_PERMANENTLY_CLOSED");
   }
 
-  // Update the closure to reopened state
-  const updated = await prisma.cashClosure.update({
-    where: { id: closure.id },
-    data: {
-      isReopened: true,
-      reopenedAt: new Date(),
-      reopenedByUserId: input.actorUserId,
-      reopenCount: { increment: 1 },
-      emergencySalesCount: 0, // Reset counter on each reopen
-    },
-  });
+  // Auditoría 2026-07-22, hallazgo C9: update + cashClosureLog.create iban
+  // sueltos (sin $transaction) — un fallo a mitad de camino dejaba el cierre
+  // ya reabierto pero sin su entrada de bitácora. Una sola transacción para
+  // que ambos cambios se confirmen o fallen juntos.
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await tx.cashClosure.update({
+      where: { id: closure.id },
+      data: {
+        isReopened: true,
+        reopenedAt: new Date(),
+        reopenedByUserId: input.actorUserId,
+        reopenCount: { increment: 1 },
+        emergencySalesCount: 0, // Reset counter on each reopen
+      },
+    });
 
-  await prisma.cashClosureLog.create({
-    data: {
-      cashClosureId: closure.id,
-      action: "REOPEN",
-      performedByUserId: input.actorUserId,
-      metadataJson: {
-        reason: input.reason ?? "Emergency reopening",
-        reopenCount: updated.reopenCount,
-      } as unknown as Prisma.JsonObject,
-    },
+    await tx.cashClosureLog.create({
+      data: {
+        cashClosureId: closure.id,
+        action: "REOPEN",
+        performedByUserId: input.actorUserId,
+        metadataJson: {
+          reason: input.reason ?? "Emergency reopening",
+          reopenCount: result.reopenCount,
+        } as unknown as Prisma.JsonObject,
+      },
+    });
+
+    return result;
   });
 
   await logAuditEvent({
@@ -220,29 +227,42 @@ export async function recordEmergencySale(branchId: string, saleOrderId: string,
     return { remainingSales: 0, permanentlyClosed: false };
   }
 
-  const newCount = closure.emergencySalesCount + 1;
-  const shouldPermanentlyClose = newCount >= closure.maxEmergencySales;
+  // Auditoría 2026-07-22, hallazgo C9: el conteo se leía en JS
+  // (closure.emergencySalesCount + 1) y se escribía como literal — dos ventas
+  // de emergencia concurrentes podían leer el mismo valor y pisarse el
+  // incremento (lost update), dejando pasar más ventas que maxEmergencySales.
+  // {increment:1} es un UPDATE atómico a nivel de fila en Postgres: la
+  // segunda transacción concurrente espera el lock de fila y ve el valor ya
+  // incrementado, no el leído antes de la carrera. Todo el ciclo (contador +
+  // posible cierre permanente + bitácora) va en una sola transacción.
+  const result = await prisma.$transaction(async (tx) => {
+    const updated = await tx.cashClosure.update({
+      where: { id: closure.id },
+      data: { emergencySalesCount: { increment: 1 } },
+    });
 
-  await prisma.cashClosure.update({
-    where: { id: closure.id },
-    data: {
-      emergencySalesCount: newCount,
-      isPermanentlyClosed: shouldPermanentlyClose,
-      closureType: shouldPermanentlyClose ? "PERMANENT" : closure.closureType,
-    },
-  });
+    const shouldPermanentlyClose = updated.emergencySalesCount >= updated.maxEmergencySales;
+    const finalClosure = shouldPermanentlyClose
+      ? await tx.cashClosure.update({
+          where: { id: closure.id },
+          data: { isPermanentlyClosed: true, closureType: "PERMANENT" },
+        })
+      : updated;
 
-  await prisma.cashClosureLog.create({
-    data: {
-      cashClosureId: closure.id,
-      action: shouldPermanentlyClose ? "PERMANENT_CLOSE" : "EMERGENCY_SALE",
-      performedByUserId: actorUserId,
-      metadataJson: {
-        saleOrderId,
-        emergencySalesCount: newCount,
-        maxEmergencySales: closure.maxEmergencySales,
-      } as unknown as Prisma.JsonObject,
-    },
+    await tx.cashClosureLog.create({
+      data: {
+        cashClosureId: closure.id,
+        action: shouldPermanentlyClose ? "PERMANENT_CLOSE" : "EMERGENCY_SALE",
+        performedByUserId: actorUserId,
+        metadataJson: {
+          saleOrderId,
+          emergencySalesCount: finalClosure.emergencySalesCount,
+          maxEmergencySales: finalClosure.maxEmergencySales,
+        } as unknown as Prisma.JsonObject,
+      },
+    });
+
+    return { finalClosure, shouldPermanentlyClose };
   });
 
   await logAuditEvent({
@@ -255,14 +275,14 @@ export async function recordEmergencySale(branchId: string, saleOrderId: string,
     metadataJson: {
       reason: "LEGACY_EMERGENCY_SALE_COUNTER_ONLY",
       saleOrderId,
-      emergencySalesCount: newCount,
-      wouldHavePermanentlyClosedLegacyClosure: shouldPermanentlyClose,
+      emergencySalesCount: result.finalClosure.emergencySalesCount,
+      wouldHavePermanentlyClosedLegacyClosure: result.shouldPermanentlyClose,
     },
   });
 
   return {
-    remainingSales: Math.max(0, closure.maxEmergencySales - newCount),
-    permanentlyClosed: shouldPermanentlyClose,
+    remainingSales: Math.max(0, result.finalClosure.maxEmergencySales - result.finalClosure.emergencySalesCount),
+    permanentlyClosed: result.shouldPermanentlyClose,
   };
 }
 
