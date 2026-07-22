@@ -618,6 +618,47 @@ export async function executeSaleReturn(returnId: string, input: ExecuteSaleRetu
           }),
         },
       });
+
+      // Auditoría 2026-07-22 (ALTO Órdenes): una devolución liquidada con
+      // CREDIT_NOTE nunca generaba un Refund — Finanzas (computeRealPerformance,
+      // finance/service.ts) solo resta refunds vía Refund.status=POSTED, así
+      // que estas devoluciones nunca bajaban de las ventas brutas/margen
+      // reportado, aunque el cliente ya no vaya a pagar ese monto en efectivo.
+      // No es dinero que salió de caja (no hay CashMovement aquí, correcto),
+      // pero SÍ es ingreso que la empresa no va a cobrar — debe reflejarse.
+      const refund = await tx.refund.create({
+        data: {
+          saleReturnId: saleReturn.id,
+          paymentId: saleReturn.saleOrder.payments[0]?.id ?? null,
+          cashSessionId: null,
+          branchId: saleReturn.branchId,
+          customerId: saleReturn.customerId,
+          method: RefundMethod.CREDIT_NOTE,
+          amount: totalRefundable,
+          status: RefundStatus.POSTED,
+          requiresApproval: true,
+          postedByUserId: actor.userId,
+          approvedByMasterId: saleReturn.approvedByMasterId,
+          postedAt: new Date(),
+        },
+      });
+      refundId = refund.id;
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.userId,
+          branchId: saleReturn.branchId,
+          module: "sales_returns",
+          action: "REFUND_POSTED",
+          entityType: "Refund",
+          entityId: refund.id,
+          metadataJson: toJsonValue({
+            method: RefundMethod.CREDIT_NOTE,
+            amount: totalRefundable.toString(),
+            saleReturnId: saleReturn.id,
+            creditNoteId: note.id,
+          }),
+        },
+      });
     } else {
       if (input.refundMethod === RefundMethod.CASH) {
         const session = await tx.cashSession.findUniqueOrThrow({ where: { id: input.cashSessionId! } });

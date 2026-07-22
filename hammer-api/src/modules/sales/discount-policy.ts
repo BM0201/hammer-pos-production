@@ -23,6 +23,31 @@ export type DiscountPolicyValidationResult = {
 
 const ZERO = new Prisma.Decimal(0);
 
+/**
+ * Auditoría 2026-07-22 (ALTO Órdenes): calcular el % de descuento contra
+ * unitPrice permitía evadir el límite de descuento por rol/riesgo por
+ * completo — con discountAmount=0 y un unitPrice manual por debajo del
+ * precio real de catálogo, discountPercent daba 0% sin importar cuánto
+ * más bajo fuera ese unitPrice. Se calcula contra el precio de catálogo
+ * real (catalogPrice) cuando existe, para que cualquier camino hacia un
+ * precio neto más bajo — discountAmount o unitPrice manual — quede sujeto
+ * a la misma política. Sin cambio de comportamiento cuando unitPrice no
+ * se manda (unitPrice === catalogPrice).
+ */
+export function computeDiscountAgainstCatalogPrice(input: {
+  catalogPrice: Prisma.Decimal | null;
+  unitPrice: Prisma.Decimal;
+  discountAmount: Prisma.Decimal;
+  quantity: Prisma.Decimal;
+}): { netUnitPriceAfterDiscount: Prisma.Decimal; discountPercent: Prisma.Decimal } {
+  const discountPerUnit = input.discountAmount.div(input.quantity);
+  const netUnitPriceAfterDiscount = input.unitPrice.sub(discountPerUnit);
+  const referencePrice = input.catalogPrice ?? input.unitPrice;
+  const impliedDiscountPerUnit = referencePrice.sub(netUnitPriceAfterDiscount);
+  const discountPercent = referencePrice.gt(0) ? impliedDiscountPerUnit.div(referencePrice).mul(100) : ZERO;
+  return { netUnitPriceAfterDiscount, discountPercent };
+}
+
 export function getMaxDiscountPercentForRole(role: string | null | undefined): number {
   switch ((role ?? "").toUpperCase()) {
     case "MASTER":

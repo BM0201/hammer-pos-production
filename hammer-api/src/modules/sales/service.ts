@@ -10,7 +10,7 @@ import { getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx, businessDateFromNow } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
+import { computeDiscountAgainstCatalogPrice, getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
@@ -275,9 +275,12 @@ export async function addSaleOrderLine(input: {
     const quantity = new Prisma.Decimal(input.quantity);
     const unitPrice = input.unitPrice === undefined ? pricing.effectivePrice! : new Prisma.Decimal(input.unitPrice);
     const discountAmount = new Prisma.Decimal(input.discountAmount);
-    const discountPerUnit = discountAmount.div(quantity);
-    const netUnitPriceAfterDiscount = unitPrice.sub(discountPerUnit);
-    const discountPercent = unitPrice.gt(0) ? discountPerUnit.div(unitPrice).mul(100) : new Prisma.Decimal(0);
+    const { netUnitPriceAfterDiscount, discountPercent } = computeDiscountAgainstCatalogPrice({
+      catalogPrice: pricing.effectivePrice,
+      unitPrice,
+      discountAmount,
+      quantity,
+    });
     // Descuento de campaña activa -> la autoridad es quien creó/activó la
     // campaña (siempre Master, ver createDiscount), no el rol de quien vende.
     const discountPolicyRole = input.discountFromActiveCampaign ? "MASTER" : input.actorRole;
@@ -444,9 +447,15 @@ export async function updateSaleOrderLine(input: {
     const pricing = await getEffectiveProductPricing(tx, { branchId: order.branchId, productId: existing.productId });
     const categoryPolicy = await resolvePolicyForProduct({ branchId: order.branchId, productId: existing.productId });
     const commercialIntelligence = await buildCommercialIntelligenceForProduct({ branchId: order.branchId, productId: existing.productId });
-    const discountPerUnit = discountAmount.div(quantity);
-    const netUnitPriceAfterDiscount = unitPrice.sub(discountPerUnit);
-    const discountPercent = unitPrice.gt(0) ? discountPerUnit.div(unitPrice).mul(100) : new Prisma.Decimal(0);
+    // Auditoría 2026-07-22 (ALTO Órdenes): ver addSaleOrderLine — mismo fix,
+    // calcula el % de descuento contra el precio de catálogo real, no contra
+    // un unitPrice que el caller puede fijar manualmente.
+    const { netUnitPriceAfterDiscount, discountPercent } = computeDiscountAgainstCatalogPrice({
+      catalogPrice: pricing.effectivePrice,
+      unitPrice,
+      discountAmount,
+      quantity,
+    });
     const policy = validateDiscountForRole({
       role: input.actorRole,
       discountPercent,
@@ -1548,10 +1557,35 @@ export async function getSaleOrderDetailForManagement(orderId: string) {
         },
         orderBy: { createdAt: "asc" },
       },
+      returns: {
+        include: {
+          items: { select: { saleOrderLineId: true, quantity: true, refundableAmount: true, condition: true } },
+        },
+        orderBy: { createdAt: "asc" },
+      },
     },
   });
 
   if (!order) throw new Error("NOT_FOUND");
+
+  // Auditoría 2026-07-22 (ALTO Órdenes): SaleOrderStatus nunca transiciona a
+  // RETURN_* (esos valores del enum están vestigiales — el estado real de una
+  // devolución vive en SaleReturn.status, un modelo aparte) y el detalle de
+  // orden para Master no incluía las devoluciones — una orden totalmente
+  // devuelta se veía igual que una pagada/completa, sin ninguna señal visible.
+  // Se agrega el detalle de las devoluciones y cuánta cantidad de cada línea
+  // ya fue devuelta (EXECUTED), sin tocar el status de la orden.
+  const returnedQtyByLine = new Map<string, number>();
+  for (const saleReturn of order.returns) {
+    if (saleReturn.status !== "EXECUTED") continue;
+    for (const item of saleReturn.items) {
+      returnedQtyByLine.set(item.saleOrderLineId, (returnedQtyByLine.get(item.saleOrderLineId) ?? 0) + Number(item.quantity));
+    }
+  }
+  const totalRefundedAmount = order.returns
+    .filter((saleReturn) => saleReturn.status === "EXECUTED")
+    .reduce((sum, saleReturn) => sum + saleReturn.items.reduce((lineSum, item) => lineSum + Number(item.refundableAmount), 0), 0);
+  const fullyReturned = order.lines.length > 0 && order.lines.every((line) => (returnedQtyByLine.get(line.id) ?? 0) >= Number(line.quantity));
 
   // Historial de auditoría asociado a esta orden (anulación, intentos, etc.).
   const auditLogs = await prisma.auditLog.findMany({
@@ -1573,6 +1607,19 @@ export async function getSaleOrderDetailForManagement(orderId: string) {
     orderNumber: order.orderNumber,
     status: order.status,
     cancellable: isSaleOrderCancellable(order.status),
+    returns: {
+      fullyReturned,
+      totalRefundedAmount,
+      items: order.returns.map((saleReturn) => ({
+        id: saleReturn.id,
+        returnNumber: saleReturn.returnNumber,
+        status: saleReturn.status,
+        returnType: saleReturn.returnType,
+        createdAt: saleReturn.createdAt.toISOString(),
+        executedAt: saleReturn.executedAt ? saleReturn.executedAt.toISOString() : null,
+        refundableAmount: saleReturn.items.reduce((sum, item) => sum + Number(item.refundableAmount), 0),
+      })),
+    },
     requiresTransport: order.requiresTransport,
     transportAmount: Number(order.transportAmount),
     createdAt: order.createdAt.toISOString(),

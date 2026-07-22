@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
-import { validateDiscountForRole } from "@/modules/sales/discount-policy";
+import { computeDiscountAgainstCatalogPrice, validateDiscountForRole } from "@/modules/sales/discount-policy";
 
 function decimal(value: number) {
   return new Prisma.Decimal(value);
@@ -86,6 +86,76 @@ test("C8 (fix): una campaña tan agresiva que vende bajo costo tambien queda per
   });
 
   assert.equal(result.allowed, true);
+});
+
+/**
+ * Auditoría 2026-07-22 (ALTO Órdenes): sales/service.ts calculaba
+ * discountPercent contra unitPrice (que el caller puede fijar manualmente
+ * en vez de usar discountAmount) — un cajero podía pasar unitPrice=70 en un
+ * producto de catálogo C$100, con discountAmount=0, y el sistema veía
+ * discountPercent=0% (nada que validar), evadiendo por completo el límite
+ * de descuento por rol (5% para cajero) y el bloqueo de riesgo CZ.
+ */
+test("C-Ordenes (bug documentado): unitPrice manual bajo el precio real da 0% de descuento aparente", () => {
+  // Catálogo: C$100. Cajero pasa unitPrice=70 directo, discountAmount=0.
+  // Antes del fix: discountPercent = discountAmount/unitPrice = 0/70 = 0%.
+  const buggyDiscountPercent = decimal(0).div(decimal(70)).mul(100);
+  assert.equal(buggyDiscountPercent.toString(), "0");
+});
+
+test("C-Ordenes (fix): el mismo caso ahora mide el 30% real de descuento contra el precio de catalogo", () => {
+  const result = computeDiscountAgainstCatalogPrice({
+    catalogPrice: decimal(100),
+    unitPrice: decimal(70),
+    discountAmount: decimal(0),
+    quantity: decimal(1),
+  });
+
+  assert.equal(result.netUnitPriceAfterDiscount.toString(), "70");
+  assert.equal(result.discountPercent.toString(), "30");
+});
+
+test("C-Ordenes (fix): ese 30% ahora es bloqueado para un cajero (limite 5%)", () => {
+  const result = computeDiscountAgainstCatalogPrice({
+    catalogPrice: decimal(100),
+    unitPrice: decimal(70),
+    discountAmount: decimal(0),
+    quantity: decimal(1),
+  });
+
+  const policy = validateDiscountForRole({
+    role: "CAJA",
+    discountPercent: result.discountPercent,
+    effectiveCost: decimal(50),
+    netUnitPriceAfterDiscount: result.netUnitPriceAfterDiscount,
+  });
+
+  assert.equal(policy.allowed, false);
+  assert.equal(policy.code, "DISCOUNT_LIMIT_EXCEEDED");
+});
+
+test("C-Ordenes: sin manipular unitPrice, el calculo no cambia (unitPrice === catalogPrice)", () => {
+  // Venta normal con 10% de descuento explicito via discountAmount.
+  const result = computeDiscountAgainstCatalogPrice({
+    catalogPrice: decimal(100),
+    unitPrice: decimal(100),
+    discountAmount: decimal(10),
+    quantity: decimal(1),
+  });
+
+  assert.equal(result.netUnitPriceAfterDiscount.toString(), "90");
+  assert.equal(result.discountPercent.toString(), "10");
+});
+
+test("C-Ordenes: un unitPrice manual POR ENCIMA del catalogo (markup) no genera un descuento negativo bloqueante", () => {
+  const result = computeDiscountAgainstCatalogPrice({
+    catalogPrice: decimal(100),
+    unitPrice: decimal(120),
+    discountAmount: decimal(0),
+    quantity: decimal(1),
+  });
+
+  assert.equal(result.discountPercent.lte(0), true, "un markup no debe verse como descuento positivo");
 });
 
 test("una venta manual (sin campaña) de un cajero sigue bloqueada igual que antes en CZ", () => {

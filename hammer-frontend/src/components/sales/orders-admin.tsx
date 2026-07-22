@@ -58,6 +58,19 @@ type OrderDetail = {
     grandTotal: number;
   };
   documentMode: string | null;
+  returns: {
+    fullyReturned: boolean;
+    totalRefundedAmount: number;
+    items: {
+      id: string;
+      returnNumber: string;
+      status: string;
+      returnType: string;
+      createdAt: string;
+      executedAt: string | null;
+      refundableAmount: number;
+    }[];
+  };
   requiresManualInvoice: boolean;
   manualInvoice: {
     series: string | null;
@@ -382,6 +395,13 @@ function DetailPanel({
               <span className="ml-2">
                 <Badge color={statusColor(detail.status)}>{statusLabel(detail.status)}</Badge>
               </span>
+              {detail.returns.items.length > 0 && (
+                <span className="ml-2">
+                  <Badge color={detail.returns.fullyReturned ? "red" : "yellow"}>
+                    {detail.returns.fullyReturned ? "Devuelta por completo" : "Con devolución parcial"}
+                  </Badge>
+                </span>
+              )}
               <p className="text-xs text-[var(--color-text-muted)]">{detail.branch.name}</p>
             </>
           ) : (
