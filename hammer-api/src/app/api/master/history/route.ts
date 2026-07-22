@@ -43,8 +43,20 @@ export async function GET(request: Request) {
     const startDate = url.searchParams.get("startDate");
     const endDate = url.searchParams.get("endDate");
     const typeFilter = url.searchParams.get("type"); // sale | payment | production | operational_day
-    const page = Math.max(1, Number(url.searchParams.get("page") ?? "1"));
+    // Auditoría 2026-07-22 (ALTO Reportes): las 4 fuentes se paginaban de forma
+    // INDEPENDIENTE (mismo skip/take por fuente) y luego se mezclaban — la
+    // página 2 no es "los siguientes N de cada fuente", es "los siguientes N
+    // del listado GLOBAL ya intercalado por fecha", así que ese skip por
+    // fuente saltaba registros de las fuentes menos frecuentes y repetía
+    // registros de las más frecuentes. Fix: cada fuente trae TODO desde el
+    // inicio hasta el corte de esta página (page*limit, sin skip), se
+    // mezclan las 4, se ordenan por fecha global y se corta la ventana exacta
+    // de la página al final. Correcto sin duplicar/saltar; el costo crece con
+    // la página, aceptable para una vista de auditoría Master de bajo tráfico.
+    // page se acota para evitar una consulta desmedida con un page arbitrario.
+    const page = Math.min(500, Math.max(1, Number(url.searchParams.get("page") ?? "1")));
     const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? "30")));
+    const fetchDepth = page * limit;
 
     const entries: HistoryEntry[] = [];
 
@@ -73,8 +85,7 @@ export async function GET(request: Request) {
           customer: { select: { displayName: true } },
         },
         orderBy: { createdAt: "desc" },
-        take: limit,
-        skip: (page - 1) * limit,
+        take: fetchDepth,
       });
 
       for (const s of sales) {
@@ -121,8 +132,7 @@ export async function GET(request: Request) {
           receivedBy: { select: { fullName: true, username: true } },
         },
         orderBy: { createdAt: "desc" },
-        take: limit,
-        skip: (page - 1) * limit,
+        take: fetchDepth,
       });
 
       for (const p of payments) {
@@ -165,8 +175,7 @@ export async function GET(request: Request) {
           createdBy: { select: { fullName: true, username: true } },
         },
         orderBy: { createdAt: "desc" },
-        take: limit,
-        skip: (page - 1) * limit,
+        take: fetchDepth,
       });
 
       for (const b of batches) {
@@ -211,8 +220,7 @@ export async function GET(request: Request) {
           approvedBy: { select: { fullName: true, username: true } },
         },
         orderBy: { businessDate: "desc" },
-        take: limit,
-        skip: (page - 1) * limit,
+        take: fetchDepth,
       });
 
       for (const d of days) {
@@ -236,7 +244,7 @@ export async function GET(request: Request) {
     entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     return ok({
-      entries: entries.slice(0, limit),
+      entries: entries.slice((page - 1) * limit, page * limit),
       page,
       limit,
     });
