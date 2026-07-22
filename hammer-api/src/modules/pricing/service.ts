@@ -6,7 +6,7 @@ import type { ApplyPricingInput, CreateExpenseInput, UpdateExpenseInput, UpsertP
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
-import { getActiveCashSession, syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
+import { getActiveCashSession, syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 
 /* ══════════════════════════════════════════════════════
  *  OPERATING EXPENSES
@@ -63,6 +63,18 @@ export async function createOperatingExpense(
   }
 
   const result = await prisma.$transaction(async (tx) => {
+    // Auditoría 2026-07-22 (ALTO Finanzas): registrar un gasto con salida de
+    // caja no validaba que el actor fuera el operador asignado de esa sesión
+    // — cualquier usuario autenticado podía generar un EXPENSE_OUT en la caja
+    // de otro. Mismo guard ya usado en createCashMovement (cash-session/service.ts).
+    if (!(await userCanOperateCashSessionTx(tx, {
+      cashSessionId: activeSession.id,
+      userId: actorUserId,
+      branchId: input.branchId,
+    }))) {
+      throw new Error("CASH_SESSION_OPERATOR_REQUIRED");
+    }
+
     const movement = await tx.cashMovement.create({
       data: {
         cashSessionId: activeSession.id,
