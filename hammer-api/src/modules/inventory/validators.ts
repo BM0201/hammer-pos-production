@@ -54,11 +54,21 @@ export const manualInventoryAdjustmentSchema = z.object({
   branchId: z.string().cuid(),
   productId: z.string().cuid(),
   adjustmentType: z.enum(["ADJUSTMENT_IN", "ADJUSTMENT_OUT", "PHYSICAL_COUNT", "DAMAGE", "RETURN", "OTHER"]),
-  quantity: z.coerce.number().positive("La cantidad debe ser mayor que cero."),
+  // Fusión de Inventario v2, Fase 1.3: en PHYSICAL_COUNT con physicalCount
+  // (producto de grupo con paquetes), quantity no aplica — la composición
+  // dual reemplaza la cifra única. Para cualquier otro caso sigue requerida.
+  quantity: z.coerce.number().positive("La cantidad debe ser mayor que cero.").optional(),
   unit: z.string().min(1).max(32).optional(),
+  physicalCount: z.object({
+    closedPackageQuantity: z.coerce.number().min(0, "Las cajas contadas no pueden ser negativas."),
+    looseUnitQuantity: z.coerce.number().min(0, "Las sueltas contadas no pueden ser negativas."),
+  }).optional(),
   reason: z.string().min(5, "El motivo es obligatorio.").max(300),
   notes: z.string().max(500).optional().nullable(),
-});
+}).refine(
+  (data) => data.adjustmentType === "PHYSICAL_COUNT" && data.physicalCount ? true : data.quantity !== undefined,
+  { message: "La cantidad es obligatoria salvo en conteo físico dual (cajas + sueltas).", path: ["quantity"] },
+);
 
 export const openingBalanceSchema = z.object({
   branchId: z.string().cuid(),

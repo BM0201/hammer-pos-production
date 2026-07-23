@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Prisma } from "@prisma/client";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { createFusionFakeTx, type FusionWorldConfig } from "@/modules/inventory/fusion-test-support";
 
@@ -77,6 +78,41 @@ test("Test 1 — Vender 2 cajas y cancelar: el balance vuelve a EXACTAMENTE la c
   assert.equal(afterCancel.closedPackageQuantity.toNumber(), balanceBeforeSale.closedPackageQuantity.toNumber(), "las 2 cajas vuelven como CAJAS, no como sueltas");
   assert.equal(afterCancel.looseUnitQuantity.toNumber(), balanceBeforeSale.looseUnitQuantity.toNumber(), "las sueltas no debieron moverse en ningun momento");
   assert.equal(afterCancel.quantityOnHand.toNumber(), balanceBeforeSale.quantityOnHand.toNumber(), "composicion previa restaurada exactamente");
+});
+
+test("Test 3 — Conteo fisico \"3 cajas + 10 lb\": el balance refleja esa composicion literal (composition EXPLICIT)", async () => {
+  // Estado previo desalineado a proposito (5 cajas + 20 lb) para probar que
+  // el conteo dual REEMPLAZA la composicion, no la ajusta a ciegas por una
+  // sola cifra convertida — mismo mecanismo que el nuevo branch dual de
+  // createManualInventoryAdjustment (physicalCount).
+  const { tx, getBalance } = createFusionFakeTx({
+    ...BASE_CONFIG,
+    initialCanonicalBalance: { quantityOnHand: 5 * 25 + 20, closedPackageQuantity: 5, looseUnitQuantity: 20, weightedAverageCost: 10 },
+  });
+  const balance = getBalance();
+
+  const targetClosed = 3;
+  const targetLoose = 10;
+  const closedDelta = new Prisma.Decimal(targetClosed).sub(balance.closedPackageQuantity);
+  const looseDelta = new Prisma.Decimal(targetLoose).sub(balance.looseUnitQuantity);
+  const netBaseDelta = closedDelta.mul(25).add(looseDelta);
+
+  await createInventoryMovementTx(tx, {
+    actorUserId: "user-1",
+    branchId: BASE_CONFIG.branchId,
+    productId: BASE_CONFIG.canonicalProductId,
+    movementType: netBaseDelta.gte(0) ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
+    quantity: Number(netBaseDelta.abs()),
+    unitCost: 10,
+    referenceType: "MANUAL_ADJUSTMENT",
+    referenceId: "count-1",
+    composition: { kind: "EXPLICIT", closedDelta, looseDelta },
+  });
+
+  const after = getBalance();
+  assert.equal(after.closedPackageQuantity.toNumber(), 3, "el conteo dice 3 cajas — literal, no una conversion de una sola cifra");
+  assert.equal(after.looseUnitQuantity.toNumber(), 10, "el conteo dice 10 lb sueltas — literal");
+  assert.equal(after.quantityOnHand.toNumber(), 3 * 25 + 10, "invariante: quantityOnHand = closed*factor + loose");
 });
 
 test("Test 2 — Vender 30 lb con 8 sueltas + 12 cajas: auto-apertura de 1 caja, reserva respetada, invariante intacta", async () => {

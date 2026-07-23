@@ -382,10 +382,21 @@ type ManualAdjustmentInput = {
   branchId: string;
   productId: string;
   adjustmentType: "ADJUSTMENT_IN" | "ADJUSTMENT_OUT" | "PHYSICAL_COUNT" | "DAMAGE" | "RETURN" | "OTHER";
-  quantity: number;
+  // Opcional únicamente cuando physicalCount aplica (conteo dual, Fase 1.3) —
+  // fuera de ese caso sigue siendo obligatoria (validado en runtime abajo).
+  quantity?: number;
   unit?: string;
   reason: string;
   notes?: string | null;
+  /**
+   * Fusión de Inventario v2, Fase 1.3 — conteo físico DUAL para un producto
+   * de un grupo con paquetes ("conté 3 cajas cerradas + 10 libras sueltas").
+   * Cuando viene y el producto pertenece a un grupo tracksPackages, tiene
+   * prioridad sobre `quantity`/`unit` y se aplica con composition EXPLICIT
+   * (el delta exacto contra el conteo/composición actual, no una conversión
+   * inferida desde una sola cifra).
+   */
+  physicalCount?: { closedPackageQuantity: number; looseUnitQuantity: number };
 };
 
 type OpeningBalanceInput = {
@@ -986,6 +997,111 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
   return prisma.$transaction(async (tx) => {
     const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
     const conversion = shared.conversion;
+
+    // Fusión de Inventario v2, Fase 1.3 — conteo físico DUAL: cuando el
+    // producto pertenece a un grupo con paquetes y el caller manda
+    // physicalCount, se aplica el delta EXACTO de cajas/sueltas (composition
+    // EXPLICIT) en vez de convertir una sola cifra a una unidad — evita que
+    // "conté 3 cajas + 10 lb" se interprete mal como "X lb sueltas".
+    if (input.adjustmentType === "PHYSICAL_COUNT" && input.physicalCount && conversion?.tracksPackages) {
+      const currentClosed = shared.balance?.closedPackageQuantity ?? new Prisma.Decimal(0);
+      const currentLoose = shared.balance?.looseUnitQuantity ?? new Prisma.Decimal(0);
+      const closedDelta = new Prisma.Decimal(input.physicalCount.closedPackageQuantity).sub(currentClosed);
+      const looseDelta = new Prisma.Decimal(input.physicalCount.looseUnitQuantity).sub(currentLoose);
+
+      if (closedDelta.eq(0) && looseDelta.eq(0)) {
+        return {
+          ok: true,
+          skipped: true,
+          message: "El conteo coincide con la composición actual.",
+          productId: input.productId,
+          branchId: input.branchId,
+          previousStock: Number(shared.balance?.quantityOnHand ?? 0),
+          newStock: Number(shared.balance?.quantityOnHand ?? 0),
+          sharedStock: formatDualStock({
+            baseQuantity: shared.balance?.quantityOnHand ?? new Prisma.Decimal(0),
+            conversionFactor: conversion.conversionFactor,
+            baseUnit: conversion.baseUnit,
+            saleUnit: conversion.saleUnit,
+            closedPackageQuantity: currentClosed,
+            looseUnitQuantity: currentLoose,
+            packageUnit: conversion.packageUnit,
+            tracksPackages: conversion.tracksPackages,
+          }),
+        };
+      }
+
+      const netBaseDelta = closedDelta.mul(new Prisma.Decimal(conversion.conversionFactorToBase ?? conversion.conversionFactor)).add(looseDelta);
+      const baseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+      if (netBaseDelta.gt(0) && baseWac.lte(0)) {
+        throw new Error("NO_EFFECTIVE_COST_FOR_MANUAL_ADJUSTMENT");
+      }
+
+      const movementResult = await createInventoryMovementTx(tx, {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        productId: conversion.canonicalProductId,
+        movementType: netBaseDelta.gte(0) ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
+        quantity: Number(netBaseDelta.abs()),
+        unitCost: Number(baseWac),
+        referenceType: "MANUAL_ADJUSTMENT",
+        referenceId: `MANUAL-${Date.now()}`,
+        notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+        composition: { kind: "EXPLICIT", closedDelta, looseDelta },
+      });
+
+      await logAuditEvent({
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "inventory",
+        action: "MANUAL_INVENTORY_ADJUSTMENT",
+        entityType: "Product",
+        entityId: input.productId,
+        metadataJson: {
+          productId: input.productId,
+          adjustmentType: input.adjustmentType,
+          physicalCount: input.physicalCount,
+          closedDelta: closedDelta.toString(),
+          looseDelta: looseDelta.toString(),
+          reason: input.reason,
+          notes: input.notes ?? null,
+          previousClosed: currentClosed.toString(),
+          previousLoose: currentLoose.toString(),
+          stockConversion: {
+            stockGroupId: conversion.stockGroupId,
+            stockGroupCode: conversion.stockGroupCode,
+            baseUnit: conversion.baseUnit,
+            packageUnit: conversion.packageUnit,
+          },
+        },
+      });
+
+      return {
+        ok: true,
+        movementId: movementResult.movement.id,
+        productId: input.productId,
+        branchId: input.branchId,
+        movementType: netBaseDelta.gte(0) ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
+        previousStock: Number(shared.balance?.quantityOnHand ?? 0),
+        newStock: Number(movementResult.balance.quantityOnHand),
+        previousBaseStock: Number(shared.balance?.quantityOnHand ?? 0),
+        newBaseStock: Number(movementResult.balance.quantityOnHand),
+        sharedStock: formatDualStock({
+          baseQuantity: movementResult.balance.quantityOnHand,
+          conversionFactor: conversion.conversionFactor,
+          baseUnit: conversion.baseUnit,
+          saleUnit: conversion.saleUnit,
+          closedPackageQuantity: movementResult.balance.closedPackageQuantity,
+          looseUnitQuantity: movementResult.balance.looseUnitQuantity,
+          packageUnit: conversion.packageUnit,
+          tracksPackages: conversion.tracksPackages,
+        }),
+      };
+    }
+
+    if (input.quantity === undefined) {
+      throw new Error("VALIDATION_ERROR: La cantidad es obligatoria fuera del conteo físico dual (cajas + sueltas).");
+    }
     const selectedUnit = (input.unit ?? conversion?.saleUnit ?? "").toUpperCase();
     const isBaseUnitAdjustment = !!conversion && selectedUnit === conversion.baseUnit.toUpperCase();
     const currentBaseQty = shared.balance?.quantityOnHand ?? new Prisma.Decimal(0);
@@ -1057,6 +1173,14 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
       throw new Error("NO_EFFECTIVE_COST_FOR_MANUAL_ADJUSTMENT");
     }
 
+    // Fusión de Inventario v2, Fase 1.3: un ajuste de SALIDA sobre el lado
+    // suelto de un grupo con paquetes debe recomponer (abrir cajas) en vez
+    // de lanzar INSUFFICIENT_LOOSE_UNIT_STOCK apenas faltan sueltas — ese
+    // error queda reservado para cuando ni abriendo alcanza (BASE_AUTO ya lo
+    // lanza en ese caso). No aplica si el movimiento apunta directo a la
+    // presentación cerrada (ahí "falta stock" significa faltan cajas, no
+    // sueltas — no tiene sentido "abrir" para completar cajas).
+    const targetsLooseSide = Boolean(conversion?.tracksPackages) && movementProductId === conversion?.canonicalProductId;
     const movementResult = await createInventoryMovementTx(tx, {
       actorUserId: input.actorUserId,
       branchId: input.branchId,
@@ -1066,6 +1190,7 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
       unitCost: Number(unitCost),
       referenceType: "MANUAL_ADJUSTMENT",
       referenceId: `MANUAL-${Date.now()}`,
+      composition: movementType === "ADJUSTMENT_OUT" && targetsLooseSide ? { kind: "BASE_AUTO" } : undefined,
       notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
     });
 

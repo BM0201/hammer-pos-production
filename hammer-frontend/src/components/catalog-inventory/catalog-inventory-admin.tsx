@@ -2805,6 +2805,10 @@ function MovementsPanel({
     unit: firstProduct?.stockConversion?.saleUnit ?? firstProduct?.unit ?? "UN",
     reason: "",
     notes: "",
+    // Fusión de Inventario v2, Fase 1.3: conteo físico dual ("conté X cajas
+    // cerradas + Y sueltas") para productos de un grupo con paquetes.
+    closedPackageCount: "0",
+    looseUnitCount: "0",
   });
 
 
@@ -2864,13 +2868,30 @@ function MovementsPanel({
   const direction = ["ADJUSTMENT_OUT", "DAMAGE"].includes(adjustment.adjustmentType) ? -1 : 1;
   const previewFinalBase = adjustment.adjustmentType === "PHYSICAL_COUNT" ? changeBaseQty : currentBaseStock + (direction * changeBaseQty);
 
+  // Fusión de Inventario v2, Fase 1.3: conteo físico dual — solo aplica en
+  // PHYSICAL_COUNT sobre un producto de grupo con paquetes ("cajas cerradas +
+  // sueltas"), un solo campo de cantidad para todo lo demás.
+  const isDualPhysicalCount = adjustment.adjustmentType === "PHYSICAL_COUNT" && Boolean(adjustmentProduct?.stockConversion?.tracksPackages);
+  const currentBranchBalance = adjustmentProduct?.allSharedInventoryBalances?.find((item) => item.branchId === activeBranchId);
+  const currentClosedCount = numberOrNull(currentBranchBalance?.closedPackageQuantity) ?? 0;
+  const currentLooseCount = numberOrNull(currentBranchBalance?.looseUnitQuantity) ?? 0;
+
   async function submitAdjustment(event: React.FormEvent) {
     event.preventDefault();
     if (!activeBranchId) { toast.error("Selecciona una sucursal."); return; }
     if (!adjustment.productId) { toast.error("Selecciona un producto."); return; }
     if (!adjustment.reason.trim()) { toast.error("El motivo es obligatorio."); return; }
-    if (!Number.isFinite(adjustmentQty) || adjustmentQty <= 0) { toast.error("La cantidad debe ser mayor que cero."); return; }
-    if (previewFinalBase < 0) { toast.error("La salida supera el stock disponible."); return; }
+    const closedCountValue = Number(adjustment.closedPackageCount);
+    const looseCountValue = Number(adjustment.looseUnitCount);
+    if (isDualPhysicalCount) {
+      if (!Number.isFinite(closedCountValue) || closedCountValue < 0 || !Number.isFinite(looseCountValue) || looseCountValue < 0) {
+        toast.error("Las cajas y sueltas contadas no pueden ser negativas.");
+        return;
+      }
+    } else {
+      if (!Number.isFinite(adjustmentQty) || adjustmentQty <= 0) { toast.error("La cantidad debe ser mayor que cero."); return; }
+      if (previewFinalBase < 0) { toast.error("La salida supera el stock disponible."); return; }
+    }
     setSubmitting(true);
     try {
       const response = await apiFetch("/api/inventory/manual-adjustment", {
@@ -2880,17 +2901,18 @@ function MovementsPanel({
           branchId: activeBranchId,
           productId: adjustment.productId,
           adjustmentType: adjustment.adjustmentType,
-          quantity: adjustmentQty,
-          unit: adjustment.unit,
           reason: adjustment.reason.trim(),
           notes: adjustment.notes.trim() || undefined,
+          ...(isDualPhysicalCount
+            ? { physicalCount: { closedPackageQuantity: closedCountValue, looseUnitQuantity: looseCountValue } }
+            : { quantity: adjustmentQty, unit: adjustment.unit }),
         }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? "No se pudo registrar el ajuste.");
       toast.success("Ajuste manual registrado.");
       setShowAdjustment(false);
-      setAdjustment((prev) => ({ ...prev, quantity: "1", reason: "", notes: "" }));
+      setAdjustment((prev) => ({ ...prev, quantity: "1", reason: "", notes: "", closedPackageCount: "0", looseUnitCount: "0" }));
       await onDone();
     } finally {
       setSubmitting(false);
@@ -3028,7 +3050,15 @@ function MovementsPanel({
                 const nextProduct = products.find((p) => p.id === e.target.value);
                 setAdjustment({ ...adjustment, productId: e.target.value, unit: nextProduct?.stockConversion?.saleUnit ?? nextProduct?.unit ?? "UN" });
               }}>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
-              <select className="hm-input" value={adjustment.adjustmentType} onChange={(e) => setAdjustment({ ...adjustment, adjustmentType: e.target.value })}>
+              <select className="hm-input" value={adjustment.adjustmentType} onChange={(e) => {
+                const nextType = e.target.value;
+                // Al entrar a conteo fisico dual, precarga la composicion
+                // ACTUAL para que el usuario solo corrija lo que cambio.
+                const prefillDual = nextType === "PHYSICAL_COUNT" && adjustmentProduct?.stockConversion?.tracksPackages
+                  ? { closedPackageCount: String(currentClosedCount), looseUnitCount: String(currentLooseCount) }
+                  : {};
+                setAdjustment({ ...adjustment, adjustmentType: nextType, ...prefillDual });
+              }}>
                 <option value="ADJUSTMENT_IN">Entrada manual</option>
                 <option value="ADJUSTMENT_OUT">Salida manual</option>
                 <option value="PHYSICAL_COUNT">Correccion por conteo fisico</option>
@@ -3036,27 +3066,51 @@ function MovementsPanel({
                 <option value="RETURN">Devolucion</option>
                 <option value="OTHER">Otro</option>
               </select>
-              <div className="grid grid-cols-[1fr_140px] gap-2">
-                <Input type="number" min="0.0001" step="0.0001" value={adjustment.quantity} onChange={(e) => setAdjustment({ ...adjustment, quantity: e.target.value })} placeholder="Cantidad" />
-                <select className="hm-input" value={adjustment.unit} onChange={(e) => setAdjustment({ ...adjustment, unit: e.target.value })}>
-                  {adjustmentProduct?.stockConversion ? (
-                    <>
-                      <option value={adjustmentProduct.stockConversion.saleUnit}>{adjustmentProduct.stockConversion.saleUnit}</option>
-                      <option value={adjustmentProduct.stockConversion.baseUnit}>{adjustmentProduct.stockConversion.baseUnit}</option>
-                    </>
-                  ) : <option value={adjustmentProduct?.unit ?? "UN"}>{adjustmentProduct?.unit ?? "UN"}</option>}
-                </select>
-              </div>
+              {isDualPhysicalCount ? (
+                <div className="md:col-span-2 grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block text-xs text-[var(--color-text-muted)]">
+                      {adjustmentProduct?.stockConversion?.packageUnit ?? "Cajas"} cerradas contadas
+                    </label>
+                    <Input type="number" min="0" step="1" value={adjustment.closedPackageCount} onChange={(e) => setAdjustment({ ...adjustment, closedPackageCount: e.target.value })} placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-[var(--color-text-muted)]">
+                      {adjustmentProduct?.stockConversion?.baseUnit ?? "Sueltas"} contadas
+                    </label>
+                    <Input type="number" min="0" step="0.0001" value={adjustment.looseUnitCount} onChange={(e) => setAdjustment({ ...adjustment, looseUnitCount: e.target.value })} placeholder="0" />
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-[1fr_140px] gap-2">
+                  <Input type="number" min="0.0001" step="0.0001" value={adjustment.quantity} onChange={(e) => setAdjustment({ ...adjustment, quantity: e.target.value })} placeholder="Cantidad" />
+                  <select className="hm-input" value={adjustment.unit} onChange={(e) => setAdjustment({ ...adjustment, unit: e.target.value })}>
+                    {adjustmentProduct?.stockConversion ? (
+                      <>
+                        <option value={adjustmentProduct.stockConversion.saleUnit}>{adjustmentProduct.stockConversion.saleUnit}</option>
+                        <option value={adjustmentProduct.stockConversion.baseUnit}>{adjustmentProduct.stockConversion.baseUnit}</option>
+                      </>
+                    ) : <option value={adjustmentProduct?.unit ?? "UN"}>{adjustmentProduct?.unit ?? "UN"}</option>}
+                  </select>
+                </div>
+              )}
               <Input className="md:col-span-2" value={adjustment.reason} onChange={(e) => setAdjustment({ ...adjustment, reason: e.target.value })} placeholder="Motivo obligatorio" />
               <Input className="md:col-span-2" value={adjustment.notes} onChange={(e) => setAdjustment({ ...adjustment, notes: e.target.value })} placeholder="Observacion opcional" />
               <div className="md:col-span-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-sm">
                 <div className="font-semibold text-[var(--color-text)]">Vista previa</div>
-                <div className="mt-1 grid gap-1 text-xs text-[var(--color-text-muted)] sm:grid-cols-3">
-                  <span>Actual: {qty(currentBaseStock)} {adjustmentProduct?.stockConversion?.baseUnit ?? adjustmentProduct?.unit ?? ""}</span>
-                  <span>Cambio base: {qty(direction * changeBaseQty)}</span>
-                  <span>Final: {qty(previewFinalBase)} {adjustmentProduct?.stockConversion?.baseUnit ?? adjustmentProduct?.unit ?? ""}</span>
-                </div>
-                {adjustmentProduct?.stockConversion ? (
+                {isDualPhysicalCount ? (
+                  <div className="mt-1 grid gap-1 text-xs text-[var(--color-text-muted)] sm:grid-cols-2">
+                    <span>Composicion actual: {qty(currentClosedCount)} {adjustmentProduct?.stockConversion?.packageUnit} + {qty(currentLooseCount)} {adjustmentProduct?.stockConversion?.baseUnit}</span>
+                    <span>Composicion nueva: {qty(Number(adjustment.closedPackageCount) || 0)} {adjustmentProduct?.stockConversion?.packageUnit} + {qty(Number(adjustment.looseUnitCount) || 0)} {adjustmentProduct?.stockConversion?.baseUnit}</span>
+                  </div>
+                ) : (
+                  <div className="mt-1 grid gap-1 text-xs text-[var(--color-text-muted)] sm:grid-cols-3">
+                    <span>Actual: {qty(currentBaseStock)} {adjustmentProduct?.stockConversion?.baseUnit ?? adjustmentProduct?.unit ?? ""}</span>
+                    <span>Cambio base: {qty(direction * changeBaseQty)}</span>
+                    <span>Final: {qty(previewFinalBase)} {adjustmentProduct?.stockConversion?.baseUnit ?? adjustmentProduct?.unit ?? ""}</span>
+                  </div>
+                )}
+                {adjustmentProduct?.stockConversion && !isDualPhysicalCount ? (
                   <div className="mt-2 text-xs text-[var(--color-text-muted)]">
                     Stock final convertible: {qty(previewFinalBase)} varillas{adjustmentFactor ? ` / ${qty(previewFinalBase / adjustmentFactor)} quintales` : ""}
                   </div>
