@@ -1,4 +1,4 @@
-import { Prisma, PaymentStatus, SaleOrderStatus } from "@prisma/client";
+import { Prisma, PaymentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
@@ -23,6 +23,39 @@ function num(value: Prisma.Decimal | number | null | undefined): number {
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/**
+ * Auditoría 2026-07-22 (ALTO Finanzas, resuelto): reportes de meses ya
+ * cerrados cambiaban retroactivamente al anular una venta que cruza el
+ * corte de mes. Causa: el filtro de pagos usaba el status ACTUAL
+ * (payment.status=POSTED, saleOrder.status≠CANCELLED) en vez del estado
+ * "vigente al cierre del período" — así que cancelar en julio una venta de
+ * junio hacía desaparecer esa venta de un reporte de junio vuelto a generar
+ * en agosto, aunque en junio (cuando cerró ese período) la venta seguía
+ * siendo válida.
+ *
+ * Decisión de diseño (igual que la práctica contable estándar: un período
+ * cerrado no se reabre — la reversión se asienta en el período en que
+ * ocurre, no reescribiendo el original): un pago cuenta para el período
+ * [start, end) si seguía POSTED, o si se anuló pero la anulación
+ * (SaleOrder.cancelledAt, sellado en cancelSaleOrder) ocurrió DESPUÉS de
+ * que ese período cerrara. Esto no requiere migración: cancelledAt ya
+ * existe y se sella en la misma transacción que voidea el pago.
+ *
+ * El lado del costo (COGS) ya era correcto sin tocar nada: cogsOut/
+ * cogsReturned se calculan por la fecha REAL del InventoryMovement
+ * (SALE_OUT en el mes de la venta, RETURN_IN en el mes de la anulación),
+ * sin ningún filtro de status — por eso nunca cambia retroactivamente.
+ */
+export function paymentValidAsOfPeriodEnd(end: Date, branchId: string | null): Prisma.PaymentWhereInput {
+  return {
+    saleOrder: branchId ? { branchId } : {},
+    OR: [
+      { status: PaymentStatus.POSTED },
+      { status: PaymentStatus.VOIDED, saleOrder: { cancelledAt: { gte: end } } },
+    ],
+  };
 }
 
 /**
@@ -293,9 +326,8 @@ async function computeRealPerformance(
   const [payments, refunds, movements, branches, cashExpenseMovs, payrollDisbursed] = await Promise.all([
     prisma.payment.findMany({
       where: {
-        status: PaymentStatus.POSTED,
         paidAt: { gte: start, lt: end },
-        saleOrder: { ...(branchId ? { branchId } : {}), status: { not: SaleOrderStatus.CANCELLED } },
+        ...paymentValidAsOfPeriodEnd(end, branchId),
       },
       select: { amount: true, saleOrder: { select: { branchId: true } } },
     }),
@@ -483,9 +515,8 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
   const [payments, refunds, movements, cashExpenseMovs, payrollDisbursed] = await Promise.all([
     prisma.payment.findMany({
       where: {
-        status: PaymentStatus.POSTED,
         paidAt: { gte: start, lt: end },
-        saleOrder: { ...(branchId ? { branchId } : {}), status: { not: SaleOrderStatus.CANCELLED } },
+        ...paymentValidAsOfPeriodEnd(end, branchId),
       },
       select: { amount: true, paidAt: true },
     }),
