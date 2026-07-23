@@ -3,7 +3,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
-import { deleteStockGroup, updateStockGroup, type StockGroupMemberInput } from "@/modules/catalog/stock-group-crud";
+import { unmergeStockGroup, updateStockGroup, type StockGroupMemberInput } from "@/modules/catalog/stock-group-crud";
 
 export async function PUT(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -47,6 +47,10 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
   }
 }
 
+// Desfusiona: reasigna el stock consolidado al producto indicado (default: el
+// canónico/base — el caso simple, sin stock que reasignar) y desactiva el
+// grupo. Reemplaza el viejo bloqueo STOCK_NOT_ZERO — ver /unmerge-preview
+// para ver los números antes de confirmar cuando el destino no es el default.
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
@@ -55,9 +59,10 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     assertMaster(session);
 
     const { id } = await context.params;
-    const group = await deleteStockGroup(id, session.userId);
+    const targetProductId = new URL(request.url).searchParams.get("targetProductId") ?? undefined;
+    const result = await unmergeStockGroup({ stockGroupId: id, targetProductId, actorUserId: session.userId });
 
-    return ok(group);
+    return ok(result.group);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

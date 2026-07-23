@@ -305,30 +305,29 @@ describe("H.8 reconsolidación al cambiar factor de conversión", () => {
   });
 });
 
-// ─── H.9 deleteStockGroup con stock > 0 debe fallar ─────────────────────────
+// ─── H.9 desfusión (Fase 2.2) — reemplaza el bloqueo STOCK_NOT_ZERO ─────────
+// Ya no se bloquea eliminar una fusión con stock: se reasigna todo el
+// consolidado (base) al producto de destino, convertido a su propia unidad
+// de venta vía el factor. Estas pruebas documentan esa conversión.
 
-describe("H.9 guardia de eliminación con stock", () => {
-  function guardDeleteWithStock(totalStock: number): void {
-    if (totalStock > 0) {
-      throw new Error(
-        "STOCK_NOT_ZERO: No se puede eliminar una fusión con stock. " +
-          "Primero exporte, reasigne o repare el inventario.",
-      );
-    }
+describe("H.9 conversión de cantidad al desfusionar", () => {
+  function targetQtyFromBase(baseQty: number, targetConversionFactor: number): number {
+    return targetConversionFactor === 1 ? baseQty : baseQty / targetConversionFactor;
   }
 
-  it("lanza STOCK_NOT_ZERO cuando hay stock positivo", () => {
-    assert.throws(
-      () => guardDeleteWithStock(10),
-      (err: Error) => err.message.includes("STOCK_NOT_ZERO"),
-    );
+  it("destino = canónico (factor 1): la cantidad base pasa sin cambio", () => {
+    assert.equal(targetQtyFromBase(653, 1), 653);
   });
 
-  it("no lanza cuando el stock es cero", () => {
-    assert.doesNotThrow(() => guardDeleteWithStock(0));
+  it("destino = presentación empacada (factor 216): la base se convierte a kilos", () => {
+    assert.equal(targetQtyFromBase(1296, 216), 6);
   });
 
-  it("no lanza cuando el stock es negativo (caso de datos corruptos)", () => {
-    assert.doesNotThrow(() => guardDeleteWithStock(-5));
+  it("destino = quintal (factor 14): 112 varillas equivalen a 8 quintales", () => {
+    assert.equal(targetQtyFromBase(112, 14), 8);
+  });
+
+  it("stock cero se reasigna sin error (caso simple, antes bloqueado)", () => {
+    assert.equal(targetQtyFromBase(0, 216), 0);
   });
 });

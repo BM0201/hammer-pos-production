@@ -1001,52 +1001,199 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
   return group;
 }
 
-export async function deleteStockGroup(id: string, actorUserId: string) {
-  const group = await prisma.$transaction(async (tx) => {
-    const current = await tx.productStockGroup.findUnique({
-      where: { id },
-      include: {
-        products: {
-          where: { isActive: true, isCanonical: true },
-          select: { productId: true, isCanonical: true },
+// ─── Desfusión (Fase 2.2) — reemplaza el delete-callejón ─────────────────────
+
+type UnmergeGroupInfo = {
+  id: string;
+  code: string;
+  name: string;
+  tracksPackages: boolean;
+  members: Array<{ productId: string; isCanonical: boolean; conversionFactor: Prisma.Decimal }>;
+};
+
+async function loadGroupForUnmerge(tx: Prisma.TransactionClient, stockGroupId: string): Promise<UnmergeGroupInfo> {
+  const group = await tx.productStockGroup.findUnique({
+    where: { id: stockGroupId },
+    include: {
+      products: {
+        where: { isActive: true },
+        select: { productId: true, isCanonical: true, conversionFactor: true },
+      },
+    },
+  });
+  if (!group) throw new Error("NOT_FOUND: Fusión no encontrada.");
+  return {
+    id: group.id,
+    code: group.code,
+    name: group.name,
+    tracksPackages: group.tracksPackages,
+    members: group.products,
+  };
+}
+
+export type UnmergeBranchPreview = {
+  branchId: string;
+  branchCode: string;
+  targetNewQty: string;
+  otherMemberIdsZeroed: string[];
+};
+
+export type UnmergePreview = {
+  stockGroupId: string;
+  stockGroupCode: string;
+  totalStock: string;
+  targetProductId: string;
+  branches: UnmergeBranchPreview[];
+};
+
+/**
+ * Preview de desfusión: muestra cómo quedaría el stock si se reasigna TODO
+ * el consolidado (que hoy vive en el canónico) al producto `targetProductId`.
+ * No escribe nada.
+ */
+export async function previewUnmergeStockGroupTx(
+  tx: Prisma.TransactionClient,
+  input: { stockGroupId: string; targetProductId?: string },
+): Promise<UnmergePreview> {
+  const group = await loadGroupForUnmerge(tx, input.stockGroupId);
+  const canonical = group.members.find((m) => m.isCanonical);
+  if (!canonical) throw new Error(`VALIDATION_ERROR: La fusión ${group.code} no tiene producto principal activo.`);
+  const targetProductId = input.targetProductId ?? canonical.productId;
+  const target = group.members.find((m) => m.productId === targetProductId);
+  if (!target) throw new Error("VALIDATION_ERROR: El producto de destino no pertenece a esta fusión.");
+
+  const allProductIds = group.members.map((m) => m.productId);
+  const otherMemberIds = allProductIds.filter((id) => id !== targetProductId);
+
+  const branches = await tx.branch.findMany({ where: { isActive: true }, select: { id: true, code: true }, orderBy: { code: "asc" } });
+  const balances = await tx.inventoryBalance.findMany({ where: { productId: { in: allProductIds } } });
+  const byBranchProduct = new Map(balances.map((b) => [`${b.branchId}:${b.productId}`, b]));
+
+  const branchPreviews: UnmergeBranchPreview[] = [];
+  let totalStock = new Prisma.Decimal(0);
+  for (const branch of branches) {
+    const canonicalBalance = byBranchProduct.get(`${branch.id}:${canonical.productId}`);
+    const baseQty = canonicalBalance?.quantityOnHand ?? new Prisma.Decimal(0);
+    totalStock = totalStock.add(baseQty);
+    const targetQty = target.conversionFactor.eq(1) ? baseQty : baseQty.div(target.conversionFactor);
+    branchPreviews.push({
+      branchId: branch.id,
+      branchCode: branch.code,
+      targetNewQty: targetQty.toString(),
+      otherMemberIdsZeroed: otherMemberIds,
+    });
+  }
+
+  return {
+    stockGroupId: group.id,
+    stockGroupCode: group.code,
+    totalStock: totalStock.toString(),
+    targetProductId,
+    branches: branchPreviews,
+  };
+}
+
+export function previewUnmergeStockGroup(input: { stockGroupId: string; targetProductId?: string }) {
+  return prisma.$transaction((tx) => previewUnmergeStockGroupTx(tx, input));
+}
+
+/**
+ * Desfusiona: reasigna todo el stock consolidado (base) a `targetProductId`
+ * — convertido a la unidad de venta propia de ese producto vía su factor —
+ * deja a cero físico los demás miembros, y desactiva el grupo. Reemplaza el
+ * viejo bloqueo STOCK_NOT_ZERO: ahora siempre hay un camino con inventario
+ * vivo, auditado por sucursal.
+ */
+export async function unmergeStockGroupTx(
+  tx: Prisma.TransactionClient,
+  input: { stockGroupId: string; targetProductId?: string; actorUserId: string; reason?: string },
+) {
+  const group = await loadGroupForUnmerge(tx, input.stockGroupId);
+  const canonical = group.members.find((m) => m.isCanonical);
+  if (!canonical) throw new Error(`VALIDATION_ERROR: La fusión ${group.code} no tiene producto principal activo.`);
+  const targetProductId = input.targetProductId ?? canonical.productId;
+  const target = group.members.find((m) => m.productId === targetProductId);
+  if (!target) throw new Error("VALIDATION_ERROR: El producto de destino no pertenece a esta fusión.");
+
+  const allProductIds = group.members.map((m) => m.productId);
+  const otherMemberIds = allProductIds.filter((id) => id !== targetProductId);
+
+  const branches = await tx.branch.findMany({ where: { isActive: true }, select: { id: true, code: true }, orderBy: { code: "asc" } });
+  const results: Array<{ branchId: string; branchCode: string; targetNewQty: string }> = [];
+
+  for (const branch of branches) {
+    for (const productId of allProductIds) {
+      await tx.$queryRaw`
+        SELECT id FROM "InventoryBalance"
+        WHERE "branchId" = ${branch.id}
+          AND "productId" = ${productId}
+        FOR UPDATE
+      `;
+    }
+
+    const balances = await tx.inventoryBalance.findMany({ where: { branchId: branch.id, productId: { in: allProductIds } } });
+    const byProduct = new Map(balances.map((b) => [b.productId, b]));
+    const canonicalBalance = byProduct.get(canonical.productId);
+    const baseQty = canonicalBalance?.quantityOnHand ?? new Prisma.Decimal(0);
+    const wac = canonicalBalance?.weightedAverageCost ?? new Prisma.Decimal(0);
+    const targetQty = target.conversionFactor.eq(1) ? baseQty : baseQty.div(target.conversionFactor);
+    const targetWac = target.conversionFactor.eq(1) ? wac : wac.mul(target.conversionFactor);
+
+    await tx.inventoryBalance.upsert({
+      where: { branchId_productId: { branchId: branch.id, productId: target.productId } },
+      create: {
+        branchId: branch.id,
+        productId: target.productId,
+        quantityOnHand: targetQty,
+        closedPackageQuantity: 0,
+        looseUnitQuantity: 0,
+        weightedAverageCost: targetWac,
+        inventoryValue: targetQty.mul(targetWac),
+      },
+      update: {
+        quantityOnHand: targetQty,
+        closedPackageQuantity: 0,
+        looseUnitQuantity: 0,
+        weightedAverageCost: targetWac,
+        inventoryValue: targetQty.mul(targetWac),
+      },
+    });
+
+    if (otherMemberIds.length > 0) {
+      await tx.inventoryBalance.updateMany({
+        where: { branchId: branch.id, productId: { in: otherMemberIds } },
+        data: { quantityOnHand: 0, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 0, inventoryValue: 0 },
+      });
+    }
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: branch.id,
+        module: "catalog",
+        action: "STOCK_GROUP_UNMERGED",
+        entityType: "ProductStockGroup",
+        entityId: group.id,
+        metadataJson: {
+          groupCode: group.code,
+          reason: input.reason ?? "unmerge stock group",
+          targetProductId: target.productId,
+          previousCanonicalBaseQty: baseQty.toString(),
+          targetNewQty: targetQty.toString(),
+          zeroedProductIds: otherMemberIds,
         },
       },
     });
-    if (!current) throw new Error("NOT_FOUND: Fusión no encontrada.");
 
-    // Block deletion if any branch still holds stock on the canonical product.
-    // Allowing deletion with live stock would silently orphan inventory.
-    const canonicalProductId = current.products.find((m) => m.isCanonical)?.productId;
-    if (canonicalProductId) {
-      const stockCheck = await tx.inventoryBalance.aggregate({
-        where: { productId: canonicalProductId },
-        _sum: { quantityOnHand: true },
-      });
-      const totalStock = Number(stockCheck._sum.quantityOnHand ?? 0);
-      if (totalStock > 0) {
-        throw new Error(
-          "STOCK_NOT_ZERO: No se puede eliminar una fusión con stock. " +
-            "Primero exporte, reasigne o repare el inventario.",
-        );
-      }
-    }
+    results.push({ branchId: branch.id, branchCode: branch.code, targetNewQty: targetQty.toString() });
+  }
 
-    await tx.productStockGroupMember.updateMany({
-      where: { stockGroupId: id },
-      data: { isActive: false },
-    });
+  await tx.productStockGroupMember.updateMany({ where: { stockGroupId: group.id }, data: { isActive: false } });
+  const updatedGroup = await tx.productStockGroup.update({ where: { id: group.id }, data: { isActive: false } });
 
-    return tx.productStockGroup.update({ where: { id }, data: { isActive: false } });
-  });
+  return { group: updatedGroup, branches: results };
+}
 
-  await logAuditEvent({
-    actorUserId,
-    module: "catalog",
-    action: "STOCK_GROUP_DELETED",
-    entityType: "ProductStockGroup",
-    entityId: group.id,
-    metadataJson: { code: group.code, name: group.name },
-  });
-
-  return group;
+export async function unmergeStockGroup(input: { stockGroupId: string; targetProductId?: string; actorUserId: string; reason?: string }) {
+  return prisma.$transaction((tx) => unmergeStockGroupTx(tx, input));
 }
