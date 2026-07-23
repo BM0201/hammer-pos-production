@@ -194,6 +194,31 @@ export async function listInventoryMovements(params: { branchId: string; product
   return result.rows;
 }
 
+/**
+ * Fusión de Inventario v2, Fase 1.1 — declaración EXPLÍCITA de qué parte de
+ * la composición cerrado/suelto mueve un movimiento, en vez de que
+ * createInventoryMovementTx la infiera únicamente por tipo de producto.
+ *
+ *  - PACKAGES: mueve cajas/paquetes cerrados.
+ *  - LOOSE: mueve unidades sueltas (falla si no alcanza — usar BASE_AUTO
+ *    para permitir apertura automática).
+ *  - BASE_AUTO: en base; si faltan sueltas para una salida, abre paquetes
+ *    cerrados dentro de la MISMA transacción (respetando la reserva mínima
+ *    y autoOpenForUnitSale) antes de aplicar el movimiento principal.
+ *  - EXPLICIT: fija el delta exacto de closedPackageQuantity/
+ *    looseUnitQuantity (para reversiones y conteos físicos). Con costo 0
+ *    (dato legado sin costo registrado) se restaura la cantidad SIN tocar
+ *    el WAC — promediar contra costo 0 lo corrompería.
+ *
+ * Sin `composition`, se infiere como antes de este cambio (compatibilidad):
+ * PACKAGES si el producto resuelto es la presentación cerrada, LOOSE si no.
+ */
+export type MovementComposition =
+  | { kind: "PACKAGES" }
+  | { kind: "LOOSE" }
+  | { kind: "BASE_AUTO" }
+  | { kind: "EXPLICIT"; closedDelta: Prisma.Decimal | number; looseDelta: Prisma.Decimal | number };
+
 type InventoryMovementInput = {
   actorUserId: string;
   branchId: string;
@@ -204,6 +229,7 @@ type InventoryMovementInput = {
   referenceType: string;
   referenceId: string;
   notes?: string | null;
+  composition?: MovementComposition;
 };
 
 type ConsumeSharedStockForSaleInput = {
@@ -392,7 +418,6 @@ export async function createInventoryMovementTx(
 ) {
   const movementQty = new Prisma.Decimal(input.quantity);
   const movementUnitCost = new Prisma.Decimal(input.unitCost);
-  const inbound = isInboundMovement(input.movementType);
   const resolved = await resolveInventoryProductForMovement(tx, input.productId);
   const inventoryProductId = resolved.inventoryProductId;
   const tracksPackages = Boolean(resolved.conversion?.tracksPackages);
@@ -401,9 +426,28 @@ export async function createInventoryMovementTx(
       ?? resolved.conversion?.conversionFactor
       ?? 1,
   );
-  const baseMovementQty = resolved.conversion
-    ? convertSaleQtyToBaseQty({ quantity: movementQty, conversionFactor: resolved.conversion.conversionFactor })
-    : movementQty;
+
+  // composition efectiva: la declara el caller, o se infiere como antes de
+  // Fase 1.1 (compatibilidad) cuando no se especifica.
+  const composition: MovementComposition = input.composition
+    ?? (tracksPackages && resolved.conversion?.isPackagePresentation ? { kind: "PACKAGES" } : { kind: "LOOSE" });
+
+  // Para EXPLICIT, el signo/magnitud del movimiento lo dictan los deltas de
+  // composición (closedDelta/looseDelta), no input.quantity/movementType —
+  // se derivan aquí para que WAC y las validaciones operen consistentes.
+  let baseMovementQty: Prisma.Decimal;
+  let inbound: boolean;
+  if (composition.kind === "EXPLICIT") {
+    const netBaseDelta = new Prisma.Decimal(composition.closedDelta).mul(packageFactor)
+      .add(new Prisma.Decimal(composition.looseDelta));
+    baseMovementQty = netBaseDelta.abs();
+    inbound = netBaseDelta.gte(0);
+  } else {
+    inbound = isInboundMovement(input.movementType);
+    baseMovementQty = resolved.conversion
+      ? convertSaleQtyToBaseQty({ quantity: movementQty, conversionFactor: resolved.conversion.conversionFactor })
+      : movementQty;
+  }
   const baseMovementUnitCost = resolved.conversion
     ? convertSaleUnitCostToBaseUnitCost({ saleUnitCost: movementUnitCost, conversionFactor: resolved.conversion.conversionFactor })
     : movementUnitCost;
@@ -415,7 +459,13 @@ export async function createInventoryMovementTx(
   if (baseMovementUnitCost.lt(new Prisma.Decimal(0))) {
     throw new WacValidationError("NEGATIVE_UNIT_COST", "Unit cost cannot be negative.");
   }
-  if (inbound && baseMovementUnitCost.eq(new Prisma.Decimal(0))) {
+  // EXPLICIT con costo 0 es la reversión de una venta cuyo movimiento
+  // original no tenía costo registrado (dato legado) — restaura cantidad
+  // SIN tocar el WAC (promediar contra costo 0 lo corrompería). Único
+  // camino eximido del guard ZERO_COST_INBOUND; cualquier otra composición
+  // con costo 0 en una entrada sigue bloqueada como siempre.
+  const zeroCostExplicitRestore = composition.kind === "EXPLICIT" && baseMovementUnitCost.eq(0);
+  if (inbound && baseMovementUnitCost.eq(new Prisma.Decimal(0)) && !zeroCostExplicitRestore) {
     throw new WacValidationError("ZERO_COST_INBOUND", "Inbound movements require a positive unit cost.");
   }
 
@@ -449,7 +499,7 @@ export async function createInventoryMovementTx(
   `;
 
   // Step 3: Read the current balance row after lock acquisition.
-  const balance = await tx.inventoryBalance.findUnique({
+  let balance = await tx.inventoryBalance.findUnique({
     where: {
       branchId_productId: {
         branchId: input.branchId,
@@ -462,13 +512,124 @@ export async function createInventoryMovementTx(
     throw new Error("INVENTORY_BALANCE_NOT_FOUND");
   }
 
-  const next = recalculateWeightedAverage({
-    currentQty: balance.quantityOnHand,
-    currentWac: balance.weightedAverageCost,
-    movementQty: baseMovementQty,
-    movementUnitCost: baseMovementUnitCost,
-    inbound,
-  });
+  // ── BASE_AUTO: si faltan sueltas para una salida, abrir paquetes cerrados
+  // DENTRO de esta misma transacción antes del movimiento principal.
+  // Generaliza la lógica que antes vivía solo en consumeSharedStockForSaleTx.
+  const autoOpenMovements: Prisma.InventoryMovementGetPayload<{}>[] = [];
+  if (tracksPackages && resolved.conversion && composition.kind === "BASE_AUTO" && !inbound) {
+    const reserve = new Prisma.Decimal(resolved.conversion.minimumClosedPackageReserve ?? DEFAULT_MINIMUM_CLOSED_PACKAGE_RESERVE);
+    const deficit = baseMovementQty.sub(balance.looseUnitQuantity);
+    if (deficit.gt(0)) {
+      const maxOpenablePackages = Prisma.Decimal.max(0, balance.closedPackageQuantity.sub(reserve));
+      const packagesToOpen = new Prisma.Decimal(Math.ceil(Number(deficit.div(packageFactor))));
+
+      if (!resolved.conversion.autoOpenForUnitSale || packagesToOpen.gt(maxOpenablePackages)) {
+        throw new InventoryStockError(
+          "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK",
+          "No hay suficientes unidades sueltas y no se puede abrir el ultimo kilo/caja cerrado.",
+        );
+      }
+
+      const packageMember = await tx.productStockGroupMember.findFirst({
+        where: { stockGroupId: resolved.conversion.stockGroupId, isActive: true, isPackagePresentation: true },
+        select: { productId: true },
+      });
+
+      let closed = balance.closedPackageQuantity;
+      let loose = balance.looseUnitQuantity;
+      let equivalent = balance.quantityOnHand;
+      for (let index = 0; index < Number(packagesToOpen); index += 1) {
+        const closedBefore = closed;
+        const looseBefore = loose;
+        const equivalentBefore = equivalent;
+        const closedAfter = closedBefore.sub(1);
+        const looseAfter = looseBefore.add(packageFactor);
+        const equivalentAfter = closedAfter.mul(packageFactor).add(looseAfter);
+
+        const openMovement = await tx.inventoryMovement.create({
+          data: {
+            branchId: input.branchId,
+            productId: inventoryProductId,
+            movementType: "PACKAGE_AUTO_OPENED",
+            quantity: new Prisma.Decimal(1),
+            unitCost: balance.weightedAverageCost,
+            referenceType: input.referenceType,
+            referenceId: input.referenceId,
+            notes: "Apertura automatica para venta unitaria",
+            inputProductId: packageMember?.productId ?? input.productId,
+            inputQuantity: new Prisma.Decimal(1),
+            inputUnit: resolved.conversion.packageUnit,
+            packageUnit: resolved.conversion.packageUnit,
+            baseUnit: resolved.conversion.baseUnit,
+            conversionFactorSnapshot: packageFactor,
+            estimatedUnits: packageFactor,
+            actualUnits: packageFactor,
+            closedPackageBefore: closedBefore,
+            closedPackageAfter: closedAfter,
+            looseUnitBefore: looseBefore,
+            looseUnitAfter: looseAfter,
+            equivalentBaseBefore: equivalentBefore,
+            equivalentBaseAfter: equivalentAfter,
+            reason: "AUTO_OPEN_FOR_UNIT_SALE",
+            userId: input.actorUserId,
+          },
+        });
+        autoOpenMovements.push(openMovement);
+        closed = closedAfter;
+        loose = looseAfter;
+        equivalent = equivalentAfter;
+      }
+
+      balance = await tx.inventoryBalance.update({
+        where: { id: balance.id },
+        data: {
+          closedPackageQuantity: closed,
+          looseUnitQuantity: loose,
+          quantityOnHand: equivalent,
+          inventoryValue: equivalent.mul(balance.weightedAverageCost),
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: input.branchId,
+          module: "inventory",
+          action: "PACKAGE_AUTO_OPENED",
+          entityType: "ProductStockGroup",
+          entityId: resolved.conversion.stockGroupId,
+          metadataJson: {
+            reason: "AUTO_OPEN_FOR_UNIT_SALE",
+            branchId: input.branchId,
+            stockGroupId: resolved.conversion.stockGroupId,
+            packageProductId: packageMember?.productId ?? null,
+            looseProductId: resolved.conversion.canonicalProductId,
+            packageUnit: resolved.conversion.packageUnit,
+            baseUnit: resolved.conversion.baseUnit,
+            conversionFactorSnapshot: packageFactor.toString(),
+            packagesOpened: packagesToOpen.toString(),
+            referenceType: input.referenceType,
+            referenceId: input.referenceId,
+            userId: input.actorUserId,
+            movementIds: autoOpenMovements.map((m) => m.id),
+          },
+        },
+      });
+    }
+  }
+
+  const next = zeroCostExplicitRestore
+    ? {
+        newQty: inbound ? balance.quantityOnHand.add(baseMovementQty) : balance.quantityOnHand.sub(baseMovementQty),
+        newWac: balance.weightedAverageCost,
+      }
+    : recalculateWeightedAverage({
+        currentQty: balance.quantityOnHand,
+        currentWac: balance.weightedAverageCost,
+        movementQty: baseMovementQty,
+        movementUnitCost: baseMovementUnitCost,
+        inbound,
+      });
 
   let closedPackageBefore: Prisma.Decimal | null = null;
   let closedPackageAfter: Prisma.Decimal | null = null;
@@ -486,26 +647,36 @@ export async function createInventoryMovementTx(
     closedPackageAfter = closedPackageBefore;
     looseUnitAfter = looseUnitBefore;
 
-    if (inbound) {
-      if (resolved.conversion.isPackagePresentation) {
+    if (composition.kind === "EXPLICIT") {
+      const closedDelta = new Prisma.Decimal(composition.closedDelta);
+      const looseDelta = new Prisma.Decimal(composition.looseDelta);
+      closedPackageAfter = closedPackageBefore.add(closedDelta);
+      looseUnitAfter = looseUnitBefore.add(looseDelta);
+      if (closedPackageAfter.lt(0)) throw new Error("INSUFFICIENT_CLOSED_PACKAGE_STOCK");
+      if (looseUnitAfter.lt(0)) throw new Error("INSUFFICIENT_LOOSE_UNIT_STOCK");
+    } else if (composition.kind === "PACKAGES") {
+      if (inbound) {
         closedPackageAfter = closedPackageAfter.add(movementQty);
         effectiveMovementType = input.movementType === "PURCHASE_IN" ? "PACKAGE_IN" : input.movementType;
       } else {
+        if (closedPackageBefore.lt(movementQty)) {
+          throw new Error("INSUFFICIENT_CLOSED_PACKAGE_STOCK");
+        }
+        closedPackageAfter = closedPackageAfter.sub(movementQty);
+        effectiveMovementType = input.movementType === "SALE_OUT" ? "PACKAGE_SALE_OUT" : input.movementType;
+      }
+    } else {
+      // LOOSE, o BASE_AUTO ya resuelto arriba (deficit cubierto con auto-apertura si hacía falta).
+      if (inbound) {
         looseUnitAfter = looseUnitAfter.add(baseMovementQty);
         effectiveMovementType = input.movementType === "RETURN_IN" ? "LOOSE_UNIT_RETURN_IN" : input.movementType;
+      } else {
+        if (looseUnitBefore.lt(baseMovementQty)) {
+          throw new Error("INSUFFICIENT_LOOSE_UNIT_STOCK");
+        }
+        looseUnitAfter = looseUnitAfter.sub(baseMovementQty);
+        effectiveMovementType = input.movementType === "SALE_OUT" ? "LOOSE_UNIT_SALE_OUT" : input.movementType;
       }
-    } else if (resolved.conversion.isPackagePresentation) {
-      if (closedPackageBefore.lt(movementQty)) {
-        throw new Error("INSUFFICIENT_CLOSED_PACKAGE_STOCK");
-      }
-      closedPackageAfter = closedPackageAfter.sub(movementQty);
-      effectiveMovementType = input.movementType === "SALE_OUT" ? "PACKAGE_SALE_OUT" : input.movementType;
-    } else {
-      if (looseUnitBefore.lt(baseMovementQty)) {
-        throw new Error("INSUFFICIENT_LOOSE_UNIT_STOCK");
-      }
-      looseUnitAfter = looseUnitAfter.sub(baseMovementQty);
-      effectiveMovementType = input.movementType === "SALE_OUT" ? "LOOSE_UNIT_SALE_OUT" : input.movementType;
     }
 
     equivalentBaseAfter = closedPackageAfter.mul(packageFactor).add(looseUnitAfter);
@@ -543,7 +714,7 @@ export async function createInventoryMovementTx(
     where: { id: balance.id },
     data: {
       quantityOnHand: effectiveQuantityOnHand,
-      ...(tracksPackages && closedPackageAfter && looseUnitAfter ? {
+      ...(tracksPackages && closedPackageAfter !== null && looseUnitAfter !== null ? {
         closedPackageQuantity: closedPackageAfter,
         looseUnitQuantity: looseUnitAfter,
       } : {}),
@@ -566,6 +737,7 @@ export async function createInventoryMovementTx(
         unitCost: input.unitCost,
         originalProductId: input.productId,
         inventoryProductId,
+        composition: composition.kind,
         unitConversion: resolved.conversion ? {
           stockGroupId: resolved.conversion.stockGroupId,
           stockGroupCode: resolved.conversion.stockGroupCode,
@@ -583,7 +755,7 @@ export async function createInventoryMovementTx(
     },
   });
 
-  return { movement, balance: updatedBalance };
+  return { movement, balance: updatedBalance, autoOpenMovements };
 }
 
 export async function createInventoryMovement(input: InventoryMovementInput) {
@@ -627,219 +799,34 @@ export async function consumeSharedStockForSaleTx(
   const referenceType = input.referenceType ?? "SALE";
   const referenceId = input.referenceId ?? input.saleOrderId ?? input.paymentId ?? `SALE-${Date.now()}`;
 
-  if (!conversion?.tracksPackages) {
-    const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
-    const baseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
-    const result = await createInventoryMovementTx(tx, {
-      actorUserId: input.userId,
-      branchId: input.branchId,
-      productId: input.productId,
-      movementType: InventoryMovementType.SALE_OUT,
-      quantity: Number(requestedQty),
-      // baseWac is cost per base unit; createInventoryMovementTx expects sale-unit cost
-      // and divides internally by conversionFactor, so we multiply back here.
-      unitCost: movementSaleUnitCostFromBaseWac(baseWac, conversion),
-      referenceType,
-      referenceId,
-      notes: input.notes ?? null,
-    });
-    return { movements: [result.movement], balance: result.balance };
-  }
+  const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
+  const baseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
 
-  if (conversion.isPackagePresentation) {
-    const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
-    const baseWac = shared.balance?.weightedAverageCost ?? new Prisma.Decimal(0);
-    const result = await createInventoryMovementTx(tx, {
-      actorUserId: input.userId,
-      branchId: input.branchId,
-      productId: input.productId,
-      movementType: InventoryMovementType.SALE_OUT,
-      quantity: Number(requestedQty),
-      unitCost: movementSaleUnitCostFromBaseWac(baseWac, conversion),
-      referenceType,
-      referenceId,
-      notes: input.notes ?? null,
-    });
-    return { movements: [result.movement], balance: result.balance };
-  }
-
-  const factor = new Prisma.Decimal(conversion.conversionFactorToBase ?? conversion.conversionFactor);
-  const reserve = new Prisma.Decimal(conversion.minimumClosedPackageReserve ?? DEFAULT_MINIMUM_CLOSED_PACKAGE_RESERVE);
-  if (factor.lte(0)) {
-    throw new Error("VALIDATION_ERROR: El factor de empaque debe ser mayor que 0.");
-  }
-
-  await tx.inventoryBalance.upsert({
-    where: {
-      branchId_productId: {
-        branchId: input.branchId,
-        productId: resolved.inventoryProductId,
-      },
-    },
-    create: {
-      branchId: input.branchId,
-      productId: resolved.inventoryProductId,
-      quantityOnHand: 0,
-      closedPackageQuantity: 0,
-      looseUnitQuantity: 0,
-      weightedAverageCost: 0,
-      inventoryValue: 0,
-    },
-    update: {},
-  });
-
-  await tx.$queryRaw`
-    SELECT id
-    FROM "InventoryBalance"
-    WHERE "branchId" = ${input.branchId}
-      AND "productId" = ${resolved.inventoryProductId}
-    FOR UPDATE
-  `;
-
-  const balance = await tx.inventoryBalance.findUnique({
-    where: {
-      branchId_productId: {
-        branchId: input.branchId,
-        productId: resolved.inventoryProductId,
-      },
-    },
-  });
-  if (!balance) throw new Error("INVENTORY_BALANCE_NOT_FOUND");
-
-  const deficit = requestedQty.sub(balance.looseUnitQuantity);
-  const autoOpenMovements = [];
-
-  if (deficit.gt(0)) {
-    const maxOpenablePackages = Prisma.Decimal.max(0, balance.closedPackageQuantity.sub(reserve));
-    const packagesToOpen = new Prisma.Decimal(Math.ceil(Number(deficit.div(factor))));
-
-    if (!conversion.autoOpenForUnitSale || packagesToOpen.gt(maxOpenablePackages)) {
-      throw new InventoryStockError(
-        "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK",
-        "No hay suficientes unidades sueltas y no se puede abrir el ultimo kilo/caja cerrado.",
-      );
-    }
-
-    const packageMember = await tx.productStockGroupMember.findFirst({
-      where: {
-        stockGroupId: conversion.stockGroupId,
-        isActive: true,
-        isPackagePresentation: true,
-      },
-      select: { productId: true },
-    });
-
-    let closed = balance.closedPackageQuantity;
-    let loose = balance.looseUnitQuantity;
-    let equivalent = balance.quantityOnHand;
-    for (let index = 0; index < Number(packagesToOpen); index += 1) {
-      const closedBefore = closed;
-      const looseBefore = loose;
-      const equivalentBefore = equivalent;
-      const closedAfter = closedBefore.sub(1);
-      const looseAfter = looseBefore.add(factor);
-      const equivalentAfter = closedAfter.mul(factor).add(looseAfter);
-
-      const movement = await tx.inventoryMovement.create({
-        data: {
-          branchId: input.branchId,
-          productId: resolved.inventoryProductId,
-          movementType: "PACKAGE_AUTO_OPENED",
-          quantity: new Prisma.Decimal(1),
-          unitCost: balance.weightedAverageCost,
-          referenceType,
-          referenceId,
-          notes: "Apertura automatica para venta unitaria",
-          inputProductId: packageMember?.productId ?? input.productId,
-          inputQuantity: new Prisma.Decimal(1),
-          inputUnit: conversion.packageUnit,
-          packageUnit: conversion.packageUnit,
-          baseUnit: conversion.baseUnit,
-          conversionFactorSnapshot: factor,
-          estimatedUnits: factor,
-          actualUnits: factor,
-          closedPackageBefore: closedBefore,
-          closedPackageAfter: closedAfter,
-          looseUnitBefore: looseBefore,
-          looseUnitAfter: looseAfter,
-          equivalentBaseBefore: equivalentBefore,
-          equivalentBaseAfter: equivalentAfter,
-          reason: "AUTO_OPEN_FOR_UNIT_SALE",
-          userId: input.userId,
-        },
-      });
-      autoOpenMovements.push(movement);
-      closed = closedAfter;
-      loose = looseAfter;
-      equivalent = equivalentAfter;
-    }
-
-    await tx.inventoryBalance.update({
-      where: { id: balance.id },
-      data: {
-        closedPackageQuantity: closed,
-        looseUnitQuantity: loose,
-        quantityOnHand: equivalent,
-        inventoryValue: equivalent.mul(balance.weightedAverageCost),
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        actorUserId: input.userId,
-        branchId: input.branchId,
-        module: "inventory",
-        action: "PACKAGE_AUTO_OPENED",
-        entityType: "ProductStockGroup",
-        entityId: conversion.stockGroupId,
-        metadataJson: {
-          reason: "AUTO_OPEN_FOR_UNIT_SALE",
-          branchId: input.branchId,
-          stockGroupId: conversion.stockGroupId,
-          closedPackageProductId: packageMember?.productId ?? null,
-          looseUnitProductId: conversion.canonicalProductId,
-          packageUnit: conversion.packageUnit,
-          baseUnit: conversion.baseUnit,
-          conversionFactorSnapshot: factor.toString(),
-          estimatedUnits: factor.mul(packagesToOpen).toString(),
-          actualUnits: factor.mul(packagesToOpen).toString(),
-          closedBefore: balance.closedPackageQuantity.toString(),
-          closedAfter: closed.toString(),
-          looseBefore: balance.looseUnitQuantity.toString(),
-          looseAfter: loose.toString(),
-          equivalentBefore: balance.quantityOnHand.toString(),
-          equivalentAfter: equivalent.toString(),
-          saleOrderId: input.saleOrderId ?? null,
-          paymentId: input.paymentId ?? null,
-          userId: input.userId,
-          movementIds: autoOpenMovements.map((movement) => movement.id),
-        },
-      },
-    });
-  }
-
-  const refreshed = await tx.inventoryBalance.findUnique({
-    where: {
-      branchId_productId: {
-        branchId: input.branchId,
-        productId: resolved.inventoryProductId,
-      },
-    },
-  });
-  const baseWacAfterOpen = refreshed?.weightedAverageCost ?? balance.weightedAverageCost;
-  const saleResult = await createInventoryMovementTx(tx, {
+  // Fusión de Inventario v2, Fase 1.1: consumeSharedStockForSaleTx ya no
+  // duplica la lógica de apertura automática de paquetes — la absorbe
+  // createInventoryMovementTx vía composition: BASE_AUTO (abre cajas
+  // cerradas dentro de la MISMA transacción si faltan sueltas, respetando
+  // la reserva mínima y autoOpenForUnitSale; sin cambio para no-tracksPackages
+  // ni para venta directa de la presentación cerrada, que ya funcionaban
+  // correctamente por inferencia).
+  const result = await createInventoryMovementTx(tx, {
     actorUserId: input.userId,
     branchId: input.branchId,
     productId: input.productId,
     movementType: InventoryMovementType.SALE_OUT,
     quantity: Number(requestedQty),
-    unitCost: movementSaleUnitCostFromBaseWac(baseWacAfterOpen, conversion),
+    // baseWac is cost per base unit; createInventoryMovementTx expects sale-unit cost
+    // and divides internally by conversionFactor, so we multiply back here.
+    unitCost: movementSaleUnitCostFromBaseWac(baseWac, conversion),
     referenceType,
     referenceId,
     notes: input.notes ?? null,
+    composition: conversion?.tracksPackages && !conversion.isPackagePresentation
+      ? { kind: "BASE_AUTO" }
+      : undefined,
   });
 
-  return { movements: [...autoOpenMovements, saleResult.movement], balance: saleResult.balance };
+  return { movements: [...result.autoOpenMovements, result.movement], balance: result.balance };
 }
 
 export async function openStockPackage(input: OpenPackageInput) {
