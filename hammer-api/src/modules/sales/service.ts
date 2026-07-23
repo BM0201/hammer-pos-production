@@ -6,7 +6,6 @@ import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/tot
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
-import { getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx, businessDateFromNow } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
@@ -1215,8 +1214,17 @@ export async function cancelSaleOrderTx(
   }
 
   // ── 1) Reversión de inventario ───────────────────────────────────────
+  // Fusión de Inventario v2, Fase 1.2: la reversión filtraba movementType
+  // "SALE_OUT" EXACTO — pero createInventoryMovementTx graba la venta de un
+  // producto con empaque como PACKAGE_SALE_OUT/LOOSE_UNIT_SALE_OUT, nunca
+  // como SALE_OUT literal. Cancelar la venta de un producto con cajas/sueltas
+  // no encontraba NADA que revertir: el stock quedaba permanentemente
+  // descuadrado, no solo mal repartido entre cajas y sueltas.
   const saleOutMovements = await tx.inventoryMovement.findMany({
-    where: { referenceId: order.id, movementType: InventoryMovementType.SALE_OUT },
+    where: {
+      referenceId: order.id,
+      movementType: { in: [InventoryMovementType.SALE_OUT, "PACKAGE_SALE_OUT", "LOOSE_UNIT_SALE_OUT"] },
+    },
   });
   const alreadyReversed = await tx.inventoryMovement.count({
     where: {
@@ -1233,73 +1241,38 @@ export async function cancelSaleOrderTx(
       const cost = Number(mv.unitCost);
       if (qty <= 0) continue;
 
-      if (cost > 0) {
-        const res = await createInventoryMovementTx(tx, {
-          actorUserId: input.actorUserId,
-          branchId: mv.branchId,
-          productId: mv.productId,
-          movementType: InventoryMovementType.RETURN_IN,
-          quantity: qty,
-          unitCost: cost,
-          referenceType: "SALE_CANCELLATION",
-          referenceId: order.id,
-          notes: `Reversión por anulación de orden ${order.orderNumber}`,
-        });
-        inventoryReversals.push({ movementId: res.movement.id, productId: mv.productId, quantity: qty });
-      } else {
-        // Costo cero: restauramos cantidad sin alterar WAC (un WAC no puede
-        // "promediarse" contra un costo 0 sin corromperse). Auditoría
-        // 2026-07-22 (ALTO Catálogo): esto operaba directo sobre mv.productId,
-        // que en un producto derivado de una fusión NO es donde vive el
-        // balance real (vive en el canónico) — y no sincronizaba
-        // empaque cerrado/suelto. Se resuelve igual que el camino normal
-        // (createInventoryMovementTx) y se revierte el delta de empaque
-        // exacto que la venta original registró (closedPackageBefore/After),
-        // en vez de recalcular la conversión desde cero.
-        const shared = await getSharedInventoryBalance(tx, { branchId: mv.branchId, productId: mv.productId });
-        const inventoryProductId = shared.inventoryProductId;
-        const createdMv = await tx.inventoryMovement.create({
-          data: {
-            branchId: mv.branchId,
-            productId: inventoryProductId,
-            movementType: InventoryMovementType.RETURN_IN,
-            quantity: mv.quantity,
-            unitCost: mv.unitCost,
-            referenceType: "SALE_CANCELLATION",
-            referenceId: order.id,
-            notes: `Reversión (costo 0) por anulación de orden ${order.orderNumber}`,
-          },
-        });
-        const bal = shared.balance;
-        if (bal) {
-          const newQty = bal.quantityOnHand.add(mv.quantity);
-          const updateData: Prisma.InventoryBalanceUpdateInput = {
-            quantityOnHand: newQty,
-            inventoryValue: newQty.mul(bal.weightedAverageCost),
-          };
-          if (shared.conversion?.tracksPackages && mv.closedPackageBefore !== null && mv.closedPackageAfter !== null) {
-            const packageDelta = mv.closedPackageBefore.sub(mv.closedPackageAfter);
-            const looseDelta = (mv.looseUnitBefore ?? new Prisma.Decimal(0)).sub(mv.looseUnitAfter ?? new Prisma.Decimal(0));
-            updateData.closedPackageQuantity = bal.closedPackageQuantity.add(packageDelta);
-            updateData.looseUnitQuantity = bal.looseUnitQuantity.add(looseDelta);
-          }
-          await tx.inventoryBalance.update({
-            where: { id: bal.id },
-            data: updateData,
-          });
-        } else {
-          await tx.inventoryBalance.create({
-            data: {
-              branchId: mv.branchId,
-              productId: inventoryProductId,
-              quantityOnHand: mv.quantity,
-              weightedAverageCost: 0,
-              inventoryValue: 0,
-            },
-          });
-        }
-        inventoryReversals.push({ movementId: createdMv.id, productId: inventoryProductId, quantity: qty });
-      }
+      // Auditoría (Fase 1.2, Fusión de Inventario v2): revertir "a ciegas"
+      // (cantidad/costo brutos, sin composición) hacía que paquetes vendidos
+      // regresaran como sueltas — corrompiendo la composición para siempre.
+      // Se restaura el delta EXACTO que la venta registró en su PROPIO
+      // movimiento (closedPackageBefore/After, looseUnitBefore/After) vía
+      // composition: EXPLICIT — funciona igual para venta de paquete, de
+      // suelta, o sin fusión (closedDelta=0). Las aperturas automáticas
+      // asociadas (PACKAGE_AUTO_OPENED) NO se deshacen — la caja ya se abrió
+      // físicamente — así que la reversión devuelve la composición
+      // POST-apertura, no la anterior a la venta.
+      const closedDelta = mv.closedPackageBefore !== null && mv.closedPackageAfter !== null
+        ? mv.closedPackageBefore.sub(mv.closedPackageAfter)
+        : new Prisma.Decimal(0);
+      const looseDelta = mv.looseUnitBefore !== null && mv.looseUnitAfter !== null
+        ? mv.looseUnitBefore.sub(mv.looseUnitAfter)
+        : mv.quantity;
+
+      const res = await createInventoryMovementTx(tx, {
+        actorUserId: input.actorUserId,
+        branchId: mv.branchId,
+        productId: mv.productId,
+        movementType: InventoryMovementType.RETURN_IN,
+        quantity: qty,
+        unitCost: cost,
+        referenceType: "SALE_CANCELLATION",
+        referenceId: order.id,
+        notes: cost > 0
+          ? `Reversión por anulación de orden ${order.orderNumber}`
+          : `Reversión (costo 0) por anulación de orden ${order.orderNumber}`,
+        composition: { kind: "EXPLICIT", closedDelta, looseDelta },
+      });
+      inventoryReversals.push({ movementId: res.movement.id, productId: mv.productId, quantity: qty });
     }
   }
 

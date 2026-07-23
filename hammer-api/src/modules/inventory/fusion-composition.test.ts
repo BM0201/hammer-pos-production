@@ -26,6 +26,59 @@ const BASE_CONFIG: FusionWorldConfig = {
   initialCanonicalBalance: { quantityOnHand: 0, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 10 },
 };
 
+test("Test 1 — Vender 2 cajas y cancelar: el balance vuelve a EXACTAMENTE la composicion previa (cajas como cajas)", async () => {
+  // Reproduce el mecanismo que ahora usa cancelSaleOrderTx (Fase 1.2): la
+  // venta se registra con composition PACKAGES; la cancelacion lee
+  // closedPackageBefore/After del propio movimiento de venta y revierte con
+  // composition EXPLICIT usando ese delta exacto — sin este fix, la reversion
+  // sumaba las 2 cajas como sueltas (50 lb) en vez de restaurarlas como cajas.
+  const { tx, getBalance } = createFusionFakeTx({
+    ...BASE_CONFIG,
+    initialCanonicalBalance: { quantityOnHand: 12 * 25 + 8, closedPackageQuantity: 12, looseUnitQuantity: 8, weightedAverageCost: 10 },
+  });
+  const balanceBeforeSale = { ...getBalance() };
+
+  // Venta de 2 cajas directo (composition PACKAGES — igual que
+  // consumeSharedStockForSaleTx cuando el producto vendido es la
+  // presentacion cerrada).
+  const sale = await createInventoryMovementTx(tx, {
+    actorUserId: "user-1",
+    branchId: BASE_CONFIG.branchId,
+    productId: BASE_CONFIG.packageProductId!,
+    movementType: "SALE_OUT",
+    quantity: 2,
+    unitCost: 250, // costo por caja (25 lb x 10/lb)
+    referenceType: "SALE",
+    referenceId: "order-1",
+    composition: { kind: "PACKAGES" },
+  });
+
+  const afterSale = getBalance();
+  assert.equal(afterSale.closedPackageQuantity.toNumber(), 10, "12 - 2 cajas vendidas = 10");
+  assert.equal(afterSale.looseUnitQuantity.toNumber(), 8, "las sueltas no deben tocarse al vender cajas directo");
+
+  // Cancelacion: mismo mecanismo que cancelSaleOrderTx — lee el delta EXACTO
+  // del movimiento de venta y lo revierte con composition EXPLICIT.
+  const closedDelta = sale.movement.closedPackageBefore!.sub(sale.movement.closedPackageAfter!);
+  const looseDelta = sale.movement.looseUnitBefore!.sub(sale.movement.looseUnitAfter!);
+  await createInventoryMovementTx(tx, {
+    actorUserId: "user-1",
+    branchId: BASE_CONFIG.branchId,
+    productId: BASE_CONFIG.canonicalProductId, // InventoryMovement.productId siempre es el canonico ya resuelto
+    movementType: "RETURN_IN",
+    quantity: 2,
+    unitCost: 250,
+    referenceType: "SALE_CANCELLATION",
+    referenceId: "order-1",
+    composition: { kind: "EXPLICIT", closedDelta, looseDelta },
+  });
+
+  const afterCancel = getBalance();
+  assert.equal(afterCancel.closedPackageQuantity.toNumber(), balanceBeforeSale.closedPackageQuantity.toNumber(), "las 2 cajas vuelven como CAJAS, no como sueltas");
+  assert.equal(afterCancel.looseUnitQuantity.toNumber(), balanceBeforeSale.looseUnitQuantity.toNumber(), "las sueltas no debieron moverse en ningun momento");
+  assert.equal(afterCancel.quantityOnHand.toNumber(), balanceBeforeSale.quantityOnHand.toNumber(), "composicion previa restaurada exactamente");
+});
+
 test("Test 2 — Vender 30 lb con 8 sueltas + 12 cajas: auto-apertura de 1 caja, reserva respetada, invariante intacta", async () => {
   const { tx, getBalance } = createFusionFakeTx({
     ...BASE_CONFIG,
