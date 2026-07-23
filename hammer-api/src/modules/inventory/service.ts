@@ -16,6 +16,7 @@ import {
   resolveInventoryProductForMovement,
 } from "@/modules/inventory/unit-conversion";
 import { branchProductScopeFilter, excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
+import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
 
 export const INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD = 25;
 
@@ -766,6 +767,35 @@ export async function createInventoryMovementTx(
     },
   });
 
+  // Fusión de Inventario v2, Fase 1.5 — verificador de salud permanente:
+  // chequeo BARATO (solo balances actuales) tras cada movimiento de un grupo
+  // con paquetes. Nunca bloquea la operación del usuario — si el chequeo
+  // mismo falla, o si detecta un descuadre, solo queda registrado en
+  // auditoría con snapshot para que el semáforo de la UI lo muestre.
+  if (tracksPackages && resolved.conversion) {
+    try {
+      const health = await checkStockGroupHealth(tx, { stockGroupId: resolved.conversion.stockGroupId, branchId: input.branchId });
+      if (!health.healthy) {
+        await tx.auditLog.create({
+          data: {
+            actorUserId: input.actorUserId,
+            branchId: input.branchId,
+            module: "inventory",
+            action: "STOCK_GROUP_HEALTH_CHECK_FAILED",
+            entityType: "ProductStockGroup",
+            entityId: resolved.conversion.stockGroupId,
+            metadataJson: {
+              triggeredByMovementId: movement.id,
+              issues: health.issues,
+            },
+          },
+        });
+      }
+    } catch {
+      // El verificador de salud nunca debe tumbar la operación real.
+    }
+  }
+
   return { movement, balance: updatedBalance, autoOpenMovements };
 }
 
@@ -974,6 +1004,28 @@ export async function openStockPackage(input: OpenPackageInput) {
         },
       },
     });
+
+    // Fusión de Inventario v2, Fase 1.5: openStockPackage no pasa por
+    // createInventoryMovementTx (escribe su propio movimiento a mano), así
+    // que el hook de salud se llama aquí también. No bloquea la operación.
+    try {
+      const health = await checkStockGroupHealth(tx, { stockGroupId: group.id, branchId: input.branchId });
+      if (!health.healthy) {
+        await tx.auditLog.create({
+          data: {
+            actorUserId: input.actorUserId,
+            branchId: input.branchId,
+            module: "inventory",
+            action: "STOCK_GROUP_HEALTH_CHECK_FAILED",
+            entityType: "ProductStockGroup",
+            entityId: group.id,
+            metadataJson: { triggeredByMovementId: movement.id, issues: health.issues },
+          },
+        });
+      }
+    } catch {
+      // El verificador de salud nunca debe tumbar la operación real.
+    }
 
     return {
       ok: true,

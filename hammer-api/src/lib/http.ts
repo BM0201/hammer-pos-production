@@ -66,6 +66,9 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message.startsWith("INVALID_INPUT:") || error.message.startsWith("VALIDATION_ERROR:")) {
       return errJson("VALIDATION_ERROR", error.message.replace(/^INVALID_INPUT:\s?/, "").replace(/^VALIDATION_ERROR:\s?/, ""), 400);
     }
+    if (error.message.startsWith("REPAIR_PREVIEW_STALE:")) {
+      return errJson("REPAIR_PREVIEW_STALE", error.message.replace(/^REPAIR_PREVIEW_STALE:\s?/, ""), 409);
+    }
     if (error.message === "PRICE_APPLICATION_BLOCKED") {
       return errJson("PRICE_APPLICATION_BLOCKED", "El precio no puede aplicarse porque no cumple la rentabilidad minima.", 409);
     }

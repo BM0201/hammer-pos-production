@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { NAIL_PACKAGE_PRESETS, detectNailPackagePreset } from "@/modules/inventory/unit-conversion";
@@ -375,6 +376,193 @@ export async function rebuildStockGroupBalancesTx(
   }
 
   return results;
+}
+
+// ─── Reparación GUIADA (Fase 1.6) — preview obligatorio con hash ──────────────
+
+export type StockGroupRepairPreviewBranch = {
+  branchId: string;
+  branchCode: string;
+  before: { quantityOnHand: string; closedPackageQuantity: string; looseUnitQuantity: string; weightedAverageCost: string };
+  after: { quantityOnHand: string; closedPackageQuantity: string; looseUnitQuantity: string; weightedAverageCost: string };
+  changed: boolean;
+  warnings: string[];
+};
+
+export type StockGroupRepairPreview = {
+  stockGroupId: string;
+  stockGroupCode: string;
+  branches: StockGroupRepairPreviewBranch[];
+  anyChange: boolean;
+  hash: string;
+};
+
+/**
+ * Calcula, por sucursal, antes → después → si cambia, SIN escribir nada —
+ * usa las mismas funciones puras (calcBaseConsolidation/
+ * calcTracksPackagesConsolidation) que rebuildStockGroupBalancesTx, pero solo
+ * lee. El hash es la garantía de "nadie repara sin ver": applyStockGroupRepairTx
+ * exige que el hash siga siendo el mismo al momento de aplicar.
+ *
+ * Recibe `tx` inyectado (testeable sin DB real, mismo patrón que
+ * rebuildStockGroupBalancesTx / previewEquivalentStockGroupMigrationTx).
+ */
+export async function previewStockGroupRepairTx(
+  tx: Prisma.TransactionClient,
+  stockGroupId: string,
+): Promise<StockGroupRepairPreview> {
+  const group = await tx.productStockGroup.findUnique({
+    where: { id: stockGroupId, isActive: true },
+    include: {
+      products: {
+        where: { isActive: true },
+        select: { productId: true, conversionFactor: true, isCanonical: true, isPackagePresentation: true },
+        orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
+      },
+    },
+  });
+  if (!group) throw new Error(`NOT_FOUND: Fusión ${stockGroupId} no encontrada o inactiva.`);
+
+  const canonicalMember = group.products.find((m) => m.isCanonical);
+  if (!canonicalMember) {
+    throw new Error(`VALIDATION_ERROR: La fusión ${group.code} no tiene producto principal (canónico) activo.`);
+  }
+  const allProductIds = group.products.map((m) => m.productId);
+  const packageMember = group.tracksPackages
+    ? group.products.find((m) => m.isPackagePresentation && !m.isCanonical) ?? group.products.find((m) => !m.isCanonical)
+    : null;
+  const factor: Prisma.Decimal | null = group.tracksPackages
+    ? new Prisma.Decimal(group.conversionFactorToBase ?? packageMember?.conversionFactor ?? 1)
+    : null;
+
+  const branches = await tx.branch.findMany({
+    where: { isActive: true },
+    select: { id: true, code: true },
+    orderBy: { code: "asc" },
+  });
+
+  const branchPreviews: StockGroupRepairPreviewBranch[] = [];
+
+  for (const branch of branches) {
+    const balances = await tx.inventoryBalance.findMany({
+      where: { branchId: branch.id, productId: { in: allProductIds } },
+    });
+    const balanceByProduct = new Map(balances.map((b) => [b.productId, b]));
+    const canonicalBalance = balanceByProduct.get(canonicalMember.productId) ?? null;
+    const zero = new Prisma.Decimal(0);
+    const before = {
+      quantityOnHand: canonicalBalance?.quantityOnHand ?? zero,
+      closedPackageQuantity: canonicalBalance?.closedPackageQuantity ?? zero,
+      looseUnitQuantity: canonicalBalance?.looseUnitQuantity ?? zero,
+      weightedAverageCost: canonicalBalance?.weightedAverageCost ?? zero,
+    };
+
+    let newQty: Prisma.Decimal;
+    let newClosed = zero;
+    let newLoose = zero;
+    let newWac: Prisma.Decimal;
+    let warnings: string[] = [];
+
+    if (!group.tracksPackages) {
+      const memberInputs = group.products.map((m) => ({
+        conversionFactor: new Prisma.Decimal(m.conversionFactor),
+        balance: balanceByProduct.get(m.productId) ?? null,
+      }));
+      const calc = calcBaseConsolidation(memberInputs);
+      newQty = calc.totalBaseQty;
+      newWac = calc.newWac;
+    } else {
+      const packageBalance = packageMember ? balanceByProduct.get(packageMember.productId) ?? null : null;
+      const calc = calcTracksPackagesConsolidation({ packageBalance, canonicalBalance, factor: factor! });
+      newQty = calc.totalBaseQty;
+      newClosed = calc.finalClosed;
+      newLoose = calc.finalLoose;
+      newWac = calc.newWac;
+      warnings = calc.warnings.map((w) => `[${branch.code}] ${w}`);
+    }
+
+    const changed = !before.quantityOnHand.eq(newQty)
+      || !before.closedPackageQuantity.eq(newClosed)
+      || !before.looseUnitQuantity.eq(newLoose)
+      || !before.weightedAverageCost.eq(newWac);
+
+    branchPreviews.push({
+      branchId: branch.id,
+      branchCode: branch.code,
+      before: {
+        quantityOnHand: before.quantityOnHand.toString(),
+        closedPackageQuantity: before.closedPackageQuantity.toString(),
+        looseUnitQuantity: before.looseUnitQuantity.toString(),
+        weightedAverageCost: before.weightedAverageCost.toString(),
+      },
+      after: {
+        quantityOnHand: newQty.toString(),
+        closedPackageQuantity: newClosed.toString(),
+        looseUnitQuantity: newLoose.toString(),
+        weightedAverageCost: newWac.toString(),
+      },
+      changed,
+      warnings,
+    });
+  }
+
+  const hashInput = JSON.stringify(branchPreviews.map((b) => [b.branchId, b.before, b.after]));
+  const hash = createHash("sha256").update(hashInput).digest("hex");
+
+  return {
+    stockGroupId: group.id,
+    stockGroupCode: group.code,
+    branches: branchPreviews,
+    anyChange: branchPreviews.some((b) => b.changed),
+    hash,
+  };
+}
+
+/**
+ * Aplica la reparación SOLO si el hash coincide con un preview recién
+ * recalculado DENTRO de la misma transacción — si el inventario cambió desde
+ * que se generó el preview que el usuario vio (otra venta, otro ajuste),
+ * rechaza y pide generar uno nuevo. "Nadie repara sin ver" — no hay atajo
+ * que se salte el preview, y el re-chequeo ocurre en la misma tx que el
+ * rebuild (con el FOR UPDATE de rebuildStockGroupBalancesTx) para que no
+ * quede una ventana entre validar el hash y escribir.
+ */
+export async function applyStockGroupRepairTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    stockGroupId: string;
+    actorUserId: string;
+    reason: string;
+    expectedHash: string;
+  },
+): Promise<BranchRebuildResult[]> {
+  const freshPreview = await previewStockGroupRepairTx(tx, input.stockGroupId);
+  if (freshPreview.hash !== input.expectedHash) {
+    throw new Error(
+      "REPAIR_PREVIEW_STALE: El inventario cambió desde que se generó este preview. Generá uno nuevo antes de aplicar.",
+    );
+  }
+  return rebuildStockGroupBalancesTx(tx, {
+    stockGroupId: input.stockGroupId,
+    actorUserId: input.actorUserId,
+    reason: input.reason,
+    mode: "REPAIR",
+  });
+}
+
+// ─── Envoltorios con transacción propia (para rutas API) ─────────────────────
+
+export function previewStockGroupRepair(stockGroupId: string): Promise<StockGroupRepairPreview> {
+  return prisma.$transaction((tx) => previewStockGroupRepairTx(tx, stockGroupId));
+}
+
+export function applyStockGroupRepair(input: {
+  stockGroupId: string;
+  actorUserId: string;
+  reason: string;
+  expectedHash: string;
+}): Promise<BranchRebuildResult[]> {
+  return prisma.$transaction((tx) => applyStockGroupRepairTx(tx, input));
 }
 
 /**
