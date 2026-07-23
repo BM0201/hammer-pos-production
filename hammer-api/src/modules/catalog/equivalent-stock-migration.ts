@@ -268,7 +268,7 @@ export async function previewEquivalentStockGroupMigrationTx(
 // ─── WAC helpers ──────────────────────────────────────────────────────────────
 
 /** Promedio ponderado por unidad base del lado derivado (cada miembro convertido a base). */
-function derivedBaseWac(
+export function derivedBaseWac(
   members: Array<{ qoh: Prisma.Decimal; factor: Prisma.Decimal; wac: Prisma.Decimal }>,
 ): { baseQty: Prisma.Decimal; baseWac: Prisma.Decimal } {
   let baseQty = new Prisma.Decimal(0);

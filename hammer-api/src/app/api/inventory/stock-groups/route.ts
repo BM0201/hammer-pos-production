@@ -3,7 +3,8 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
-import { createStockGroup, listStockGroups, type StockGroupMemberInput } from "@/modules/catalog/stock-group-crud";
+import { listStockGroups, type StockGroupMemberInput } from "@/modules/catalog/stock-group-crud";
+import { createFusionGroup, type FusionBranchResolutionInput } from "@/modules/catalog/fusion-wizard-service";
 
 export async function GET() {
   try {
@@ -36,24 +37,24 @@ export async function POST(request: Request) {
       autoOpenForUnitSale?: boolean;
       categoryId?: string | null;
       members?: StockGroupMemberInput[];
+      branchResolutions?: Record<string, FusionBranchResolutionInput>;
     };
 
-    const group = await createStockGroup(
-      {
-        name: body.name ?? "",
-        code: body.code,
-        baseUnit: body.baseUnit,
-        packageUnit: body.packageUnit,
-        conversionFactorToBase: body.conversionFactorToBase,
-        tracksPackages: body.tracksPackages,
-        approximateFactor: body.approximateFactor,
-        minimumClosedPackageReserve: body.minimumClosedPackageReserve,
-        autoOpenForUnitSale: body.autoOpenForUnitSale,
-        categoryId: body.categoryId ?? null,
-        members: body.members ?? [],
-      },
-      session.userId,
-    );
+    const group = await createFusionGroup({
+      name: body.name ?? "",
+      code: body.code,
+      baseUnit: body.baseUnit,
+      packageUnit: body.packageUnit,
+      conversionFactorToBase: body.conversionFactorToBase,
+      tracksPackages: body.tracksPackages,
+      approximateFactor: body.approximateFactor,
+      minimumClosedPackageReserve: body.minimumClosedPackageReserve,
+      autoOpenForUnitSale: body.autoOpenForUnitSale,
+      categoryId: body.categoryId ?? null,
+      members: body.members ?? [],
+      branchResolutions: body.branchResolutions,
+      actorUserId: session.userId,
+    });
 
     return created(group);
   } catch (error) {

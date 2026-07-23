@@ -594,7 +594,7 @@ export function rebuildPackageStockGroupTx(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function slugifyCode(name: string) {
+export function slugifyCode(name: string) {
   const base = name
     .toUpperCase()
     .normalize("NFD")
@@ -605,7 +605,7 @@ function slugifyCode(name: string) {
   return base || `GRUPO_${Date.now()}`;
 }
 
-function validateMembers(members: StockGroupMemberInput[]) {
+export function validateMembers(members: StockGroupMemberInput[]) {
   if (!Array.isArray(members) || members.length < 2) {
     throw new Error("VALIDATION_ERROR: Una fusión requiere al menos 2 productos (1 principal y 1 derivado).");
   }
@@ -638,7 +638,7 @@ function validateMembers(members: StockGroupMemberInput[]) {
   return canonical;
 }
 
-function validatePackageSettings(input: {
+export function validatePackageSettings(input: {
   tracksPackages?: boolean;
   packageUnit?: string | null;
   conversionFactorToBase?: number | null;
@@ -665,7 +665,7 @@ function validatePackageSettings(input: {
   }
 }
 
-async function assertProductsAvailable(
+export async function assertProductsAvailable(
   tx: Prisma.TransactionClient,
   members: StockGroupMemberInput[],
   allowGroupId?: string,
@@ -823,7 +823,17 @@ export async function listStockGroups() {
   }));
 }
 
-export async function createStockGroup(input: CreateStockGroupInput, actorUserId: string) {
+/**
+ * Fusión de Inventario v2, Fase 2.1 — crea las filas de grupo + miembros
+ * (SIN consolidar balances). Usado exclusivamente por el asistente de
+ * creación (fusion-wizard-service.ts), que decide la composición final vía
+ * el preview con resolución de conflictos del paso 3 antes de escribir
+ * ningún balance — nunca por el flujo viejo "crear y sumar a ciegas".
+ */
+export async function createStockGroupRowsTx(
+  tx: Prisma.TransactionClient,
+  input: CreateStockGroupInput,
+) {
   const name = (input.name ?? "").trim();
   if (!name) throw new Error("VALIDATION_ERROR: El nombre de la fusión es obligatorio.");
 
@@ -842,67 +852,45 @@ export async function createStockGroup(input: CreateStockGroupInput, actorUserId
   const minimumClosedPackageReserve = input.minimumClosedPackageReserve ?? 1;
   const code = (input.code?.trim() || slugifyCode(name)).toUpperCase();
 
-  const group = await prisma.$transaction(async (tx) => {
-    const existing = await tx.productStockGroup.findUnique({ where: { code } });
-    if (existing) {
-      throw new Error("VALIDATION_ERROR: Ya existe una fusión con ese código.");
-    }
+  const existing = await tx.productStockGroup.findUnique({ where: { code } });
+  if (existing) {
+    throw new Error("VALIDATION_ERROR: Ya existe una fusión con ese código.");
+  }
 
-    await assertProductsAvailable(tx, input.members);
+  await assertProductsAvailable(tx, input.members);
 
-    const createdGroup = await tx.productStockGroup.create({
+  const createdGroup = await tx.productStockGroup.create({
+    data: {
+      code,
+      name,
+      baseUnit,
+      packageUnit,
+      conversionFactorToBase:
+        conversionFactorToBase === null ? null : new Prisma.Decimal(conversionFactorToBase),
+      tracksPackages: Boolean(input.tracksPackages),
+      approximateFactor: Boolean(input.approximateFactor),
+      minimumClosedPackageReserve: new Prisma.Decimal(minimumClosedPackageReserve),
+      autoOpenForUnitSale: input.tracksPackages ? (input.autoOpenForUnitSale ?? true) : false,
+      categoryId: input.categoryId ?? null,
+    },
+  });
+
+  for (const member of input.members) {
+    await tx.productStockGroupMember.create({
       data: {
-        code,
-        name,
-        baseUnit,
-        packageUnit,
-        conversionFactorToBase:
-          conversionFactorToBase === null ? null : new Prisma.Decimal(conversionFactorToBase),
-        tracksPackages: Boolean(input.tracksPackages),
-        approximateFactor: Boolean(input.approximateFactor),
-        minimumClosedPackageReserve: new Prisma.Decimal(minimumClosedPackageReserve),
-        autoOpenForUnitSale: input.tracksPackages ? (input.autoOpenForUnitSale ?? true) : false,
-        categoryId: input.categoryId ?? null,
+        stockGroupId: createdGroup.id,
+        productId: member.productId,
+        saleUnit: member.saleUnit.trim(),
+        conversionFactor: new Prisma.Decimal(member.conversionFactor),
+        isCanonical: member.isCanonical,
+        isPackagePresentation: Boolean(
+          member.isPackagePresentation || (!member.isCanonical && input.tracksPackages),
+        ),
       },
     });
+  }
 
-    for (const member of input.members) {
-      await tx.productStockGroupMember.create({
-        data: {
-          stockGroupId: createdGroup.id,
-          productId: member.productId,
-          saleUnit: member.saleUnit.trim(),
-          conversionFactor: new Prisma.Decimal(member.conversionFactor),
-          isCanonical: member.isCanonical,
-          isPackagePresentation: Boolean(
-            member.isPackagePresentation || (!member.isCanonical && input.tracksPackages),
-          ),
-        },
-      });
-    }
-
-    // Consolidate all pre-existing member balances into the canonical product.
-    // For tracksPackages=true this also populates closedPackageQuantity and looseUnitQuantity.
-    await rebuildStockGroupBalancesTx(tx, {
-      stockGroupId: createdGroup.id,
-      actorUserId,
-      reason: "Stock group creation — merging pre-existing member balances",
-      mode: "CREATE",
-    });
-
-    return createdGroup;
-  });
-
-  await logAuditEvent({
-    actorUserId,
-    module: "catalog",
-    action: "STOCK_GROUP_CREATED",
-    entityType: "ProductStockGroup",
-    entityId: group.id,
-    metadataJson: { code: group.code, name: group.name, members: input.members.length },
-  });
-
-  return group;
+  return { group: createdGroup, canonical };
 }
 
 export async function updateStockGroup(id: string, input: UpdateStockGroupInput, actorUserId: string) {
