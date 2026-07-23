@@ -163,7 +163,7 @@ export async function approveTransfer(id: string, userId: string) {
   return result;
 }
 
-export async function dispatchTransfer(id: string, userId: string) {
+export async function dispatchTransfer(id: string, userId: string, options: { allowAutoOpen?: boolean } = {}) {
   const transfer = await prisma.transfer.findUnique({
     where: { id },
     include: { lines: { include: { product: true } }, fromBranch: true, toBranch: true },
@@ -191,6 +191,16 @@ export async function dispatchTransfer(id: string, userId: string) {
     for (const line of transfer.lines) {
       const qty = Number(line.quantityRequested) - Number(line.quantityDispatched);
       if (qty <= 0) continue;
+      // Fusión de Inventario v2, Fase 1.4: el traslado de un producto de grupo
+      // con paquetes declara composición — PACKAGES si el producto trasladado
+      // es la presentación cerrada (por inferencia, sin cambios), LOOSE si es
+      // la base. El pre-chequeo de arriba compara contra el stock TOTAL
+      // (cajas+sueltas), así que un traslado podía pasarlo y aun así fallar
+      // aquí por falta de sueltas específicamente — sin auto-apertura
+      // silenciosa: solo se abre si el usuario lo confirmó explícitamente
+      // (checkbox en la UI de traslado).
+      const shared = await getSharedInventoryBalance(tx, { branchId: transfer.fromBranchId, productId: line.productId });
+      const targetsLooseSide = Boolean(shared.conversion?.tracksPackages) && !shared.conversion?.isPackagePresentation;
       await createInventoryMovementTx(tx, {
         actorUserId: userId,
         branchId: transfer.fromBranchId,
@@ -201,6 +211,7 @@ export async function dispatchTransfer(id: string, userId: string) {
         referenceType: "Transfer",
         referenceId: transfer.id,
         notes: `Despacho ${transfer.transferNumber} -> ${transfer.toBranch.code}`,
+        composition: targetsLooseSide && options.allowAutoOpen ? { kind: "BASE_AUTO" } : undefined,
       });
       await tx.transferLine.update({
         where: { id: line.id },
@@ -272,6 +283,11 @@ export async function receiveTransfer(id: string, userId: string, input: Receive
       const finalUnitCost = Math.round((Number(line.unitCostSnapshot) + (item.allocatedTransferFreightPerUnit ?? freightPerUnit)) * 10000) / 10000;
       if (finalUnitCost <= 0) throw new Error(`INVALID_INPUT: ${line.product.name} no tiene costo final valido para recepcion`);
 
+      // Fusión de Inventario v2, Fase 1.4: sin composition explícita, se
+      // infiere del MISMO line.productId que usó el despacho — PACKAGES si es
+      // la presentación cerrada, LOOSE si es la base — así que el destino
+      // recibe con la MISMA composición que salió del origen (cajas llegan
+      // como cajas) automáticamente, sin necesidad de propagar un flag extra.
       const movementResult = await createInventoryMovementTx(tx, {
         actorUserId: userId,
         branchId: transfer.toBranchId,

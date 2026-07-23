@@ -716,6 +716,10 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
   const [statusFilter, setStatusFilter] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ id: string; kind: "approve" | "dispatch" | "receive" | "cancel" } | null>(null);
+  // Fusión de Inventario v2, Fase 1.4: sin esta confirmación explícita, un
+  // despacho con sueltas insuficientes (aunque el total de cajas+sueltas
+  // alcance) falla en vez de abrir una caja en silencio.
+  const [allowAutoOpenDispatch, setAllowAutoOpenDispatch] = useState(false);
 
   const [suggestions, setSuggestions] = useState<TransferOpportunity[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
@@ -829,6 +833,7 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
       const res = await apiFetch(`/api/master/transfers/${id}/${endpoints[kind]}`, {
         method: "POST",
         ...(kind === "receive" ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ updateBranchCost: true }) } : {}),
+        ...(kind === "dispatch" ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allowAutoOpen: allowAutoOpenDispatch }) } : {}),
       });
       const raw = await res.json();
       if (!res.ok) throw new Error(raw.error?.message ?? "Error al procesar la acción");
@@ -1001,10 +1006,14 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
                   </>
                 )}
                 {selectedTransfer.status === "APPROVED" && (
-                  <>
+                  <div className="flex w-full flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]">
+                      <input type="checkbox" checked={allowAutoOpenDispatch} onChange={(e) => setAllowAutoOpenDispatch(e.target.checked)} />
+                      Abrir cajas/paquetes cerrados si faltan sueltas para completar
+                    </label>
                     <button onClick={() => runAction(selectedTransfer.id, "dispatch")} disabled={!!actionLoading} className="flex items-center gap-2 rounded-lg bg-[var(--color-info-700)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-info-800)] disabled:opacity-50"><Send className="h-4 w-4" /> Despachar</button>
                     <button onClick={() => runAction(selectedTransfer.id, "cancel")} className="ml-auto flex items-center gap-2 rounded-lg border border-[var(--color-danger-200)] px-4 py-2 text-sm font-semibold text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"><Ban className="h-4 w-4" /> Cancelar</button>
-                  </>
+                  </div>
                 )}
                 {(selectedTransfer.status === "IN_TRANSIT" || selectedTransfer.status === "PARTIALLY_RECEIVED") && (
                   <button onClick={() => runAction(selectedTransfer.id, "receive")} disabled={!!actionLoading} className="flex items-center gap-2 rounded-lg bg-[var(--color-success-700)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-success-800)] disabled:opacity-50"><Package className="h-4 w-4" /> Confirmar recepción</button>

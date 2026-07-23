@@ -115,6 +115,100 @@ test("Test 3 — Conteo fisico \"3 cajas + 10 lb\": el balance refleja esa compo
   assert.equal(after.quantityOnHand.toNumber(), 3 * 25 + 10, "invariante: quantityOnHand = closed*factor + loose");
 });
 
+test("Test 5 — Traslado de 2 cajas MGA->MSY: MSY recibe 2 cajas cerradas (no 50 lb sueltas)", async () => {
+  // Mismo mecanismo que dispatchTransfer/receiveTransfer: sin composition
+  // explicita, se infiere del producto trasladado (la presentacion cerrada)
+  // -> PACKAGES en ambos lados, así que el destino recibe con la MISMA
+  // composicion que salio del origen.
+  const origin = createFusionFakeTx({
+    ...BASE_CONFIG,
+    branchId: "branch-mga",
+    initialCanonicalBalance: { quantityOnHand: 12 * 25 + 8, closedPackageQuantity: 12, looseUnitQuantity: 8, weightedAverageCost: 10 },
+  });
+  const destination = createFusionFakeTx({
+    ...BASE_CONFIG,
+    branchId: "branch-msy",
+    initialCanonicalBalance: { quantityOnHand: 0, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 0 },
+  });
+
+  // Despacho (TRANSFER_OUT) en el origen: producto trasladado = la
+  // presentacion cerrada -> composition PACKAGES por inferencia.
+  await createInventoryMovementTx(origin.tx, {
+    actorUserId: "user-1",
+    branchId: "branch-mga",
+    productId: BASE_CONFIG.packageProductId!,
+    movementType: "TRANSFER_OUT",
+    quantity: 2,
+    unitCost: 250,
+    referenceType: "Transfer",
+    referenceId: "transfer-1",
+  });
+
+  // Recepcion (TRANSFER_IN) en el destino: MISMO productId -> MISMA
+  // composicion PACKAGES por inferencia (destino recibe cajas como cajas).
+  await createInventoryMovementTx(destination.tx, {
+    actorUserId: "user-1",
+    branchId: "branch-msy",
+    productId: BASE_CONFIG.packageProductId!,
+    movementType: "TRANSFER_IN",
+    quantity: 2,
+    unitCost: 250,
+    referenceType: "Transfer",
+    referenceId: "transfer-1",
+  });
+
+  const originBalance = origin.getBalance();
+  const destBalance = destination.getBalance();
+  assert.equal(originBalance.closedPackageQuantity.toNumber(), 10, "origen: 12 - 2 cajas despachadas = 10");
+  assert.equal(originBalance.looseUnitQuantity.toNumber(), 8, "origen: las sueltas no se tocan al despachar cajas");
+  assert.equal(destBalance.closedPackageQuantity.toNumber(), 2, "destino recibe 2 CAJAS cerradas");
+  assert.equal(destBalance.looseUnitQuantity.toNumber(), 0, "destino NO recibe 50 lb sueltas (2 cajas x 25 lb mal convertidas)");
+});
+
+test("Traslado sin auto-apertura confirmada: falta de sueltas lanza el error, NO abre una caja en silencio", async () => {
+  const origin = createFusionFakeTx({
+    ...BASE_CONFIG,
+    initialCanonicalBalance: { quantityOnHand: 12 * 25 + 8, closedPackageQuantity: 12, looseUnitQuantity: 8, weightedAverageCost: 10 },
+  });
+
+  // Trasladar 20 lb sueltas cuando solo hay 8: sin composition (equivalente a
+  // que el usuario NO marco la casilla de auto-apertura), debe fallar.
+  await assert.rejects(() => createInventoryMovementTx(origin.tx, {
+    actorUserId: "user-1",
+    branchId: BASE_CONFIG.branchId,
+    productId: BASE_CONFIG.canonicalProductId,
+    movementType: "TRANSFER_OUT",
+    quantity: 20,
+    unitCost: 10,
+    referenceType: "Transfer",
+    referenceId: "transfer-2",
+  }), /INSUFFICIENT_LOOSE_UNIT_STOCK/);
+  assert.equal(origin.getBalance().closedPackageQuantity.toNumber(), 12, "no debe abrir ninguna caja en silencio");
+});
+
+test("Traslado CON auto-apertura confirmada (checkbox): recompone igual que una venta", async () => {
+  const origin = createFusionFakeTx({
+    ...BASE_CONFIG,
+    initialCanonicalBalance: { quantityOnHand: 12 * 25 + 8, closedPackageQuantity: 12, looseUnitQuantity: 8, weightedAverageCost: 10 },
+  });
+
+  await createInventoryMovementTx(origin.tx, {
+    actorUserId: "user-1",
+    branchId: BASE_CONFIG.branchId,
+    productId: BASE_CONFIG.canonicalProductId,
+    movementType: "TRANSFER_OUT",
+    quantity: 20,
+    unitCost: 10,
+    referenceType: "Transfer",
+    referenceId: "transfer-3",
+    composition: { kind: "BASE_AUTO" }, // equivalente a options.allowAutoOpen=true en dispatchTransfer
+  });
+
+  const balance = origin.getBalance();
+  assert.equal(balance.closedPackageQuantity.toNumber(), 11, "abre 1 caja (20-8=12 faltantes, 12/25 redondeado = 1)");
+  assert.equal(balance.looseUnitQuantity.toNumber(), 13, "8 + 25 (caja abierta) - 20 (traslado) = 13");
+});
+
 test("Test 2 — Vender 30 lb con 8 sueltas + 12 cajas: auto-apertura de 1 caja, reserva respetada, invariante intacta", async () => {
   const { tx, getBalance } = createFusionFakeTx({
     ...BASE_CONFIG,

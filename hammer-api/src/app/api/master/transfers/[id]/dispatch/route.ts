@@ -16,7 +16,9 @@ export async function POST(
     assertMaster(session);
 
     const { id } = await params;
-    return ok(await dispatchTransfer(id, session.userId));
+    const body = await request.json().catch(() => ({}));
+    const allowAutoOpen = Boolean((body as { allowAutoOpen?: unknown })?.allowAutoOpen);
+    return ok(await dispatchTransfer(id, session.userId, { allowAutoOpen }));
   } catch (error) {
     return toHttpErrorResponse(error);
   }
