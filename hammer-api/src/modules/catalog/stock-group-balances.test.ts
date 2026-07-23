@@ -187,7 +187,7 @@ describe("H.2 idempotencia de calcTracksPackagesConsolidation", () => {
   });
 });
 
-// ─── H.3 normalizeNailStockGroups idempotencia (lógica de cálculo) ───────────
+// ─── H.3 idempotencia de reparación de clavos (lógica de cálculo) ───────────
 
 describe("H.3 normalización de clavos — reparar datos corruptos sin duplicar stock", () => {
   it("si canonical ya tiene closedPkg>0 y packageProduct tiene qoh>0 (doble conteo previo), consolida una sola vez", () => {

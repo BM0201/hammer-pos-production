@@ -2,12 +2,12 @@ import { CashSessionStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { riskScoreFor } from "@/modules/brain/scoring";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
-import {
-  detectIronSaleUnit,
-  getIronBarsPerQuintal,
-  ironStockGroupCode,
-} from "@/modules/inventory/unit-conversion";
+import { FUSION_PRESETS, matchFusionPreset } from "@/modules/inventory/unit-conversion";
 import { getProductionRecommendationsForBranch } from "@/modules/production/production-recommendation-service";
+
+function normalizeForRole(value: string) {
+  return value.toUpperCase().replace(/\s+/g, " ").trim();
+}
 
 export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
@@ -228,19 +228,23 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
 
   const ironGroups = new Map<string, typeof ironProducts>();
   for (const product of ironProducts) {
-    const groupCode = ironStockGroupCode(product.name);
-    const saleUnit = detectIronSaleUnit(product.name);
-    if (!groupCode || !saleUnit || !getIronBarsPerQuintal(product.name)) continue;
-    const rows = ironGroups.get(groupCode) ?? [];
+    const preset = matchFusionPreset(product.name);
+    if (!preset || !preset.key.startsWith("hierro_")) continue;
+    const rows = ironGroups.get(preset.key) ?? [];
     rows.push(product);
-    ironGroups.set(groupCode, rows);
+    ironGroups.set(preset.key, rows);
   }
 
-  for (const [groupCode, products] of ironGroups.entries()) {
-    const varilla = products.find((product) => detectIronSaleUnit(product.name) === "VARILLA");
-    const quintal = products.find((product) => detectIronSaleUnit(product.name) === "QUINTAL");
-    const barsPerQuintal = getIronBarsPerQuintal(products[0]?.name ?? "") ?? 0;
-    if (!varilla || !quintal || barsPerQuintal <= 0) continue;
+  for (const [presetKey, products] of ironGroups.entries()) {
+    const preset = FUSION_PRESETS.find((p) => p.key === presetKey);
+    if (!preset) continue;
+    // Rol dentro del preset: el nombre del producto contiene la unidad base
+    // (VARILLA) o la unidad de empaque (QUINTAL) — sin parseo de variantes de
+    // presentacion (9V/STD/SEMI/MM): esa complejidad ya no aplica, el usuario
+    // agrupa manualmente en el asistente (Fase 2.1).
+    const varilla = products.find((product) => normalizeForRole(product.name).includes(preset.baseUnit));
+    const quintal = products.find((product) => normalizeForRole(product.name).includes(preset.packageUnit));
+    if (!varilla || !quintal) continue;
 
     const varillaGroupIds = new Set(varilla.stockGroupMemberships.map((item) => item.stockGroupId));
     const sharedGroupAlreadyExists = quintal.stockGroupMemberships.some((item) => varillaGroupIds.has(item.stockGroupId));
@@ -253,29 +257,28 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
     decisions.push({
       category: "INVENTORY",
       severity,
-      title: `Hierro sin stock compartido: ${groupCode}`,
-      description: `${varilla.name} y ${quintal.name} representan el mismo inventario fisico, pero no comparten ProductStockGroup.`,
-      recommendation: `Crear grupo de stock con base VARILLA y factor 1 QUINTAL = ${barsPerQuintal} VARILLA. Usar /api/catalog/stock-groups/bootstrap-iron con apply=true tras revisar el dry-run.`,
+      title: `Hierro sin stock compartido: ${preset.label}`,
+      description: `${varilla.name} y ${quintal.name} representan el mismo inventario fisico, pero no comparten una fusion de stock.`,
+      recommendation: `Crear fusion con base ${preset.baseUnit} y factor 1 ${preset.packageUnit} = ${preset.factor} ${preset.baseUnit} desde el asistente de Fusion de Inventario.`,
       branchId: ctx.branchId ?? null,
       productId: varilla.id,
       confidenceScore: 96,
       riskScore: riskScoreFor(severity, 96),
       proposedActionType: "IRON_UNIT_CONVERSION_REQUIRED",
       proposedActionJson: {
-        endpoint: "/api/catalog/stock-groups/bootstrap-iron",
-        method: "POST",
-        dryRunPayload: { apply: false },
-        applyPayload: { apply: true },
+        uiPath: "/app/master/inventory-fusion",
+        suggestedPresetKey: preset.key,
+        suggestedMembers: [varilla.id, quintal.id],
       },
       evidenceJson: {
-        groupCode,
-        baseUnit: "VARILLA",
-        barsPerQuintal,
+        presetKey: preset.key,
+        baseUnit: preset.baseUnit,
+        factor: preset.factor,
         products: products.map((product) => ({
           id: product.id,
           sku: product.sku,
           name: product.name,
-          saleUnit: detectIronSaleUnit(product.name),
+          role: normalizeForRole(product.name).includes(preset.baseUnit) ? preset.baseUnit : preset.packageUnit,
           stockGroupIds: product.stockGroupMemberships.map((item) => item.stockGroupId),
           stockOnHand: product.inventoryBalances.map((balance) => ({
             branchId: balance.branchId,
@@ -285,7 +288,7 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
         })),
       },
       sourceJson: { detector: "system-detector", rule: "iron-unit-conversion" },
-      fingerprintParts: ["system", "iron-unit-conversion-required", ctx.branchId ?? "all", groupCode],
+      fingerprintParts: ["system", "iron-unit-conversion-required", ctx.branchId ?? "all", presetKey],
     });
   }
 

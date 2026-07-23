@@ -27,93 +27,47 @@ function normalize(value: string) {
 }
 
 /**
- * Returns the bars-per-quintal conversion factor for an iron product.
- * The factor is determined exclusively by the gauge — any suffix like
- * "9V", "12V", "STD", "8MM" in the product name is a pressing-type
- * or size identifier and does NOT change the conversion factor.
- *
- * Standard conversions: 1/4" → 30 bars, 3/8" → 14 bars, 1/2" → 8 bars.
+ * Fusión de Inventario v2, Fase 2.3 — presets de familia como DATOS, no código.
+ * Reemplaza los antiguos detectores hardcodeados de hierro/clavos
+ * (getIronBarsPerQuintal, detectIronSaleUnit, ironStockGroupCode,
+ * detectNailPackagePreset, NAIL_PACKAGE_PRESETS): el factor de conversión y la
+ * unidad de cada familia son datos de catálogo, no lógica especial por
+ * producto. El asistente de creación (Fase 2.1) los usa para sugerir
+ * productos y precargar el factor; el usuario decide y confirma siempre.
  */
-export function getIronBarsPerQuintal(productName: string): number | null {
-  const name = normalize(productName);
-  if (name.includes("1/2")) return 8;
-  if (name.includes("3/8")) return 14;
-  if (name.includes("1/4")) return 30;
-  return null;
-}
+export type FusionPreset = {
+  key: string;
+  label: string;
+  baseUnit: string;
+  packageUnit: string;
+  factor: number;
+  approximateFactor: boolean;
+  namePatterns: string[];
+};
+
+export const FUSION_PRESETS: FusionPreset[] = [
+  { key: "clavo_acero_4", label: 'Clavo acero 4"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 80, approximateFactor: true, namePatterns: ["CLAVO", "ACERO", '4"'] },
+  { key: "clavo_acero_3", label: 'Clavo acero 3"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 105, approximateFactor: true, namePatterns: ["CLAVO", "ACERO", '3"'] },
+  { key: "clavo_acero_2_1_2", label: 'Clavo acero 2 1/2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 142, approximateFactor: true, namePatterns: ["CLAVO", "ACERO", '2 1/2"'] },
+  { key: "clavo_acero_2", label: 'Clavo acero 2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 216, approximateFactor: true, namePatterns: ["CLAVO", "ACERO", '2"'] },
+  { key: "clavo_acero_1_1_2", label: 'Clavo acero 1 1/2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 308, approximateFactor: true, namePatterns: ["CLAVO", "ACERO", '1 1/2"'] },
+  { key: "clavo_acero_1", label: 'Clavo acero 1"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 417, approximateFactor: true, namePatterns: ["CLAVO", "ACERO", '1"'] },
+  { key: "hierro_1_2", label: 'Hierro 1/2"', baseUnit: "VARILLA", packageUnit: "QUINTAL", factor: 8, approximateFactor: false, namePatterns: ["HIERRO", "1/2"] },
+  { key: "hierro_3_8", label: 'Hierro 3/8"', baseUnit: "VARILLA", packageUnit: "QUINTAL", factor: 14, approximateFactor: false, namePatterns: ["HIERRO", "3/8"] },
+  { key: "hierro_1_4", label: 'Hierro 1/4"', baseUnit: "VARILLA", packageUnit: "QUINTAL", factor: 30, approximateFactor: false, namePatterns: ["HIERRO", "1/4"] },
+];
 
 /**
- * Determines the sale unit from the product name.
- * Products named "VARILLA HIERRO …" are the canonical unit (1 VARILLA = base).
- * Products named "QUINTAL HIERRO …" are explicitly the quintal presentation.
- * Anything else starting with "HIERRO" defaults to QUINTAL (sold by quintal).
+ * Encuentra el preset cuyo patrón de nombre coincide con el nombre del
+ * producto. Cuando varios presets podrían coincidir (p.ej. "CLAVO ACERO 2
+ * 1/2"" contiene la subcadena "2"" del preset de 2"), gana el patrón MÁS
+ * específico (más largo) — mismo criterio que el detector viejo de clavos.
  */
-export function detectIronSaleUnit(productName: string): "VARILLA" | "QUINTAL" | null {
+export function matchFusionPreset(productName: string): FusionPreset | null {
   const name = normalize(productName);
-  if (name.startsWith("VARILLA HIERRO") || name.startsWith("VARILLA DE HIERRO")) return "VARILLA";
-  if (name.startsWith("QUINTAL HIERRO") || name.startsWith("QUINTAL DE HIERRO")) return "QUINTAL";
-  if (name.includes("HIERRO")) return "QUINTAL";
-  return null;
-}
-
-/**
- * Derives the stock-group code for an iron product.
- * Different physical variants (9V, STD, 8MM, SEMI) get SEPARATE groups
- * so they don't share inventory with each other — but all variants of the
- * same gauge use the same conversion factor (see getIronBarsPerQuintal).
- *
- * Rules (most-specific first):
- *  - Explicit "XV" → HIERRO_<gauge>_<X>V  (e.g., HIERRO_3_8_9V)   ← pressing type identifier
- *  - MM dimension  → HIERRO_<gauge>_<N>MM (e.g., HIERRO_3_8_8MM)
- *  - "STD"         → HIERRO_<gauge>_STD   (e.g., HIERRO_3_8_STD)
- *  - "SEMI"        → HIERRO_<gauge>_SEMI  (e.g., HIERRO_1_4_SEMI)
- *  - fallback      → HIERRO_<gauge>       (generic, for any un-suffixed variant)
- */
-export function ironStockGroupCode(productName: string): string | null {
-  const name = normalize(productName);
-  if (!name.includes("HIERRO")) return null;
-
-  const sizeCode = name.includes("1/2") ? "1_2"
-    : name.includes("3/8") ? "3_8"
-    : name.includes("1/4") ? "1_4"
-    : null;
-  if (!sizeCode) return null;
-
-  // 1. Explicit V suffix (most specific)
-  const vMatch = name.match(/\b(\d{1,3})V\b/);
-  if (vMatch && vMatch[1]) {
-    const count = parseInt(vMatch[1], 10);
-    if (count >= 1 && count <= 100) return `HIERRO_${sizeCode}_${count}V`;
-  }
-
-  // 2. MM dimension (e.g., 8MM, 5.5MM, 6MM → safe slug)
-  const mmMatch = name.match(/\b(\d+(?:[._]\d+)?)MM\b/);
-  if (mmMatch && mmMatch[1]) {
-    const slug = mmMatch[1].replace(".", "_");
-    return `HIERRO_${sizeCode}_${slug}MM`;
-  }
-
-  // 3. Named variants
-  if (name.includes("SEMI")) return `HIERRO_${sizeCode}_SEMI`;
-  if (name.includes("STD"))  return `HIERRO_${sizeCode}_STD`;
-
-  return `HIERRO_${sizeCode}`;
-}
-
-export const NAIL_PACKAGE_PRESETS = [
-  { key: "clavo_acero_4", label: 'Clavo acero 4"', measure: '4"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 80 },
-  { key: "clavo_acero_3", label: 'Clavo acero 3"', measure: '3"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 105 },
-  { key: "clavo_acero_2_1_2", label: 'Clavo acero 2 1/2"', measure: '2 1/2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 142 },
-  { key: "clavo_acero_2", label: 'Clavo acero 2"', measure: '2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 216 },
-  { key: "clavo_acero_1_1_2", label: 'Clavo acero 1 1/2"', measure: '1 1/2"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 308 },
-  { key: "clavo_acero_1", label: 'Clavo acero 1"', measure: '1"', baseUnit: "UNIDAD", packageUnit: "KILO", factor: 417 },
-] as const;
-
-export function detectNailPackagePreset(productName: string) {
-  const name = normalize(productName);
-  if (!name.includes("CLAVO") || !name.includes("ACERO")) return null;
-  const ordered = [...NAIL_PACKAGE_PRESETS].sort((a, b) => b.measure.length - a.measure.length);
-  return ordered.find((preset) => name.includes(preset.measure.toUpperCase())) ?? null;
+  const longestPatternLength = (preset: FusionPreset) => Math.max(...preset.namePatterns.map((p) => p.length));
+  const ordered = [...FUSION_PRESETS].sort((a, b) => longestPatternLength(b) - longestPatternLength(a));
+  return ordered.find((preset) => preset.namePatterns.every((pattern) => name.includes(normalize(pattern)))) ?? null;
 }
 
 export function formatPackageLooseStock(input: {
