@@ -41,13 +41,15 @@ function createWizardFakeTx(balancesInit: Array<{ branchId: string; productId: s
     { id: "branch-msy", code: "MSY" },
   ];
   const auditLogs: Array<Record<string, unknown>> = [];
+  const existingCodes = new Set<string>();
   let groupCounter = 0;
 
   const tx = {
     productStockGroup: {
-      findUnique: async () => null, // ningún código previo existe
+      findUnique: async (args: { where: { code: string } }) => (existingCodes.has(args.where.code) ? { id: "existing", code: args.where.code } : null),
       create: async (args: { data: Record<string, unknown> }) => {
         groupCounter += 1;
+        existingCodes.add(args.data.code as string);
         return { id: `group-${groupCounter}`, ...args.data };
       },
     },
@@ -222,4 +224,35 @@ test("Crear fusion simple (sin empaque, tipo hierro): sin conflicto resuelve sol
   const canonicalBalance = getBalance("branch-mga", VARILLA_ID)!;
   assert.equal(canonicalBalance.quantityOnHand.toString(), "112");
   assert.equal(canonicalBalance.closedPackageQuantity.toString(), "0", "grupo sin tracksPackages no usa closed/loose");
+});
+
+test("Dos fusiones con el mismo nombre (mismo preset, variantes distintas como STD/9V) NO chocan — el codigo se desambigua solo", async () => {
+  // Bug real: el codigo interno se deriva del nombre (nunca se muestra al
+  // usuario). Si dos variantes fisicas distintas (p.ej. Hierro 3/8 STD y
+  // Hierro 3/8 9V) usan el mismo preset y el usuario no edita el nombre,
+  // antes esto bloqueaba la segunda creacion con VALIDATION_ERROR.
+  const { tx } = createWizardFakeTx([]);
+
+  const first = await createFusionGroupTx(tx, {
+    name: "Hierro 3/8",
+    tracksPackages: false,
+    members: [
+      { productId: "prod-varilla-std", saleUnit: "VARILLA", conversionFactor: 1, isCanonical: true, isPackagePresentation: false },
+      { productId: "prod-quintal-std", saleUnit: "QUINTAL", conversionFactor: 14, isCanonical: false, isPackagePresentation: false },
+    ],
+    actorUserId: "user-1",
+  });
+
+  const second = await createFusionGroupTx(tx, {
+    name: "Hierro 3/8",
+    tracksPackages: false,
+    members: [
+      { productId: "prod-varilla-9v", saleUnit: "VARILLA", conversionFactor: 1, isCanonical: true, isPackagePresentation: false },
+      { productId: "prod-quintal-9v", saleUnit: "QUINTAL", conversionFactor: 14, isCanonical: false, isPackagePresentation: false },
+    ],
+    actorUserId: "user-1",
+  });
+
+  assert.notEqual(first.groupCode, second.groupCode, "el segundo debe recibir un codigo distinto, no fallar");
+  assert.equal(second.groupCode, `${first.groupCode}_2`);
 });

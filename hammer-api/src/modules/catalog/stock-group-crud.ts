@@ -881,11 +881,16 @@ export async function createStockGroupRowsTx(
   const conversionFactorToBase =
     input.conversionFactorToBase ?? input.members.find((member) => !member.isCanonical)?.conversionFactor ?? null;
   const minimumClosedPackageReserve = input.minimumClosedPackageReserve ?? 1;
-  const code = (input.code?.trim() || slugifyCode(name)).toUpperCase();
+  const baseCode = (input.code?.trim() || slugifyCode(name)).toUpperCase();
 
-  const existing = await tx.productStockGroup.findUnique({ where: { code } });
-  if (existing) {
-    throw new Error("VALIDATION_ERROR: Ya existe una fusión con ese código.");
+  // El código es un identificador interno (nunca se muestra al usuario) —
+  // varias fusiones distintas pueden generar el mismo código si comparten
+  // nombre o preset (p.ej. "Hierro 3/8" para variantes STD/9V/8MM, que ya no
+  // se distinguen automáticamente tras Fase 2.3). En vez de bloquear la
+  // creación, se desambigua agregando un sufijo numérico.
+  let code = baseCode;
+  for (let suffix = 2; await tx.productStockGroup.findUnique({ where: { code } }); suffix += 1) {
+    code = `${baseCode}_${suffix}`;
   }
 
   await assertProductsAvailable(tx, input.members);
