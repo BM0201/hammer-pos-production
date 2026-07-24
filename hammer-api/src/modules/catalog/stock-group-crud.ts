@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
+import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
 
 export type StockGroupMemberInput = {
   productId: string;
@@ -739,7 +740,14 @@ export async function listStockGroups() {
     balances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]),
   );
 
+  const healthByGroupId = new Map(
+    await Promise.all(
+      groups.map(async (group) => [group.id, await checkStockGroupHealth(prisma, { stockGroupId: group.id })] as const),
+    ),
+  );
+
   return groups.map((group) => ({
+    health: healthByGroupId.get(group.id) ?? { stockGroupId: group.id, stockGroupCode: group.code, healthy: true, issues: [] },
     ...(group.tracksPackages
       ? (() => {
           const canonical = group.products.find((member) => member.isCanonical);
@@ -791,13 +799,36 @@ export async function listStockGroups() {
             displayConversionFactor: Number(factor),
           };
         })()
-      : {
-          branchStocks: [],
-          totalClosedPackageQuantity: 0,
-          totalLooseUnitQuantity: 0,
-          totalEquivalentBaseQuantity: 0,
-          displayConversionFactor: null,
-        }),
+      : (() => {
+          const canonical = group.products.find((member) => member.isCanonical);
+          const derived = group.products.find((member) => !member.isCanonical);
+          const factor = derived?.conversionFactor ?? new Prisma.Decimal(1);
+          const branchStocks = canonical
+            ? branches.map((branch) => {
+                const balance = balanceByBranchProduct.get(`${branch.id}:${canonical.productId}`);
+                const baseQty = new Prisma.Decimal(balance?.quantityOnHand ?? 0);
+                const equivalentDerivedQuantity = factor.gt(0) ? baseQty.div(factor) : new Prisma.Decimal(0);
+                return {
+                  branch,
+                  closedPackageQuantity: 0,
+                  looseUnitQuantity: Number(baseQty),
+                  autoOpenablePackages: 0,
+                  autoOpenableUnitsTotal: 0,
+                  equivalentBaseQuantity: Number(baseQty),
+                  equivalentDerivedQuantity: Number(equivalentDerivedQuantity),
+                  unitSaleAutomaticallyEnabled: false,
+                  onlyClosedReserveRemaining: false,
+                };
+              })
+            : [];
+          return {
+            branchStocks,
+            totalClosedPackageQuantity: 0,
+            totalLooseUnitQuantity: branchStocks.reduce((sum, item) => sum + item.looseUnitQuantity, 0),
+            totalEquivalentBaseQuantity: branchStocks.reduce((sum, item) => sum + item.equivalentBaseQuantity, 0),
+            displayConversionFactor: Number(factor),
+          };
+        })()),
     id: group.id,
     code: group.code,
     name: group.name,
