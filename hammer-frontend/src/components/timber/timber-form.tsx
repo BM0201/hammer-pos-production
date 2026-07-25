@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { calculateTimber } from "@/modules/timber/calculator";
 import { Save, TreePine, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+
+type CalcPreview = { priceGroup: "TABLA" | "TABLILLA" | "CUADRO"; boardFeet: number; baseCost: number; sellingPrice: number; marginPercent: number };
 
 type TimberFormProps = {
   categories: Array<{ id: string; name: string }>;
@@ -34,13 +35,29 @@ export function TimberForm({ categories, initialData, mode }: TimberFormProps) {
   const [length, setLength] = useState(String(initialData?.length ?? "16"));
   const [categoryId, setCategoryId] = useState(initialData?.categoryId ?? "");
 
-  // Real-time calculation preview
-  const preview = useMemo(() => {
+  // El cálculo vive SOLO en el servidor (calculator.ts) — se pide con debounce,
+  // nunca se duplica la fórmula en el cliente.
+  const [preview, setPreview] = useState<CalcPreview | null>(null);
+  useEffect(() => {
     const t = parseFloat(thickness);
     const w = parseFloat(width);
     const l = parseFloat(length);
-    if (!t || !w || !l || t <= 0 || w <= 0 || l <= 0) return null;
-    return calculateTimber({ thickness: t, width: w, length: l });
+    if (!t || !w || !l || t <= 0 || w <= 0 || l <= 0) { setPreview(null); return; }
+    const handle = setTimeout(async () => {
+      try {
+        const res = await apiFetch("/api/timber/calculate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ thickness: t, width: w, length: l, quantity: 1 }),
+        });
+        if (!res.ok) return;
+        const raw = await res.json();
+        setPreview(unwrapApiData(raw).perPiece);
+      } catch {
+        // conserva el último preview válido
+      }
+    }, 250);
+    return () => clearTimeout(handle);
   }, [thickness, width, length]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {

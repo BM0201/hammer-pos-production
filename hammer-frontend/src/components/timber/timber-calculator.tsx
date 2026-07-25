@@ -32,40 +32,12 @@ interface CalcResult {
   profitPerPiece: number;
 }
 
-const VARA_MAP: Record<number, number> = { 16: 6, 14: 5, 11: 4, 8: 3 };
 const LENGTHS = [8, 11, 14, 16];
 
-function classify(t: number, w: number, l: number): PriceGroup {
-  if (l === 8) return "CUADRO";
-  if (t === 1 && (w === 6 || w === 8)) return "TABLILLA";
-  if ((t === 1 || t === 2) && (w === 10 || w === 12)) return "TABLA";
-  return "CUADRO";
-}
+/** Vara length shown while el cálculo real (servidor) todavía no respondió. */
+const FALLBACK_VARA_MAP: Record<number, number> = { 16: 6, 14: 5, 11: 4, 8: 3 };
 
-function calcPiece(t: number, w: number, l: number, pricing: Pricing): CalcResult {
-  const priceGroup = classify(t, w, l);
-  const boardFeet = (t * w * l) / 12;
-  const baseCost = boardFeet * pricing.costPerFoot;
-  const varaLength = VARA_MAP[l] ?? Math.round((l * 12) / 33.87);
-  const pricePerInch =
-    priceGroup === "TABLA" ? pricing.pricePerInchTabla :
-    priceGroup === "TABLILLA" ? pricing.pricePerInchTablilla :
-    pricing.pricePerInchCuadro;
-  const sellingPrice = t * w * varaLength * pricePerInch;
-  const profitPerPiece = sellingPrice - baseCost;
-  const marginPercent = sellingPrice > 0 ? profitPerPiece / sellingPrice : 0;
-
-  return {
-    priceGroup,
-    boardFeet: Math.round(boardFeet * 10000) / 10000,
-    baseCost: Math.round(baseCost * 100) / 100,
-    varaLength,
-    pricePerInch,
-    sellingPrice: Math.round(sellingPrice * 100) / 100,
-    marginPercent: Math.round(marginPercent * 10000) / 10000,
-    profitPerPiece: Math.round(profitPerPiece * 100) / 100,
-  };
-}
+const EMPTY_CALC: CalcResult = { priceGroup: "CUADRO", boardFeet: 0, baseCost: 0, varaLength: 0, pricePerInch: 0, sellingPrice: 0, marginPercent: 0, profitPerPiece: 0 };
 
 const GROUP_COLORS: Record<PriceGroup, string> = {
   TABLA: "var(--color-success-600)",
@@ -112,13 +84,33 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
       .catch(() => { /* use defaults */ });
   }, []);
 
-  const calc = useMemo(() => calcPiece(thickness, width, length, pricing), [thickness, width, length, pricing]);
+  // El cálculo vive SOLO en el servidor (calculator.ts) — nunca se duplica en el
+  // cliente. Se pide con debounce cada vez que cambian las dimensiones/cantidad.
+  const [calc, setCalc] = useState<CalcResult>(EMPTY_CALC);
+  useEffect(() => {
+    const handle = setTimeout(async () => {
+      try {
+        const res = await apiFetch("/api/timber/calculate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ thickness, width, length, quantity: 1 }),
+        });
+        if (!res.ok) return;
+        const raw = await res.json();
+        const data = unwrapApiData(raw);
+        setCalc(data.perPiece);
+      } catch {
+        // conserva el último cálculo válido
+      }
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [thickness, width, length]);
   const maderaCategory = useMemo(() => categories.find((category) => {
     const code = (category.code ?? "").toUpperCase();
     const name = category.name.toUpperCase();
     return category.isActive && (code.startsWith("MAD") || name.includes("MADERA"));
   }) ?? null, [categories]);
-  const suggestedName = useMemo(() => `${woodSubtype} ${thickness}X${width}X${VARA_MAP[length] || length}`, [length, thickness, width, woodSubtype]);
+  const suggestedName = useMemo(() => `${woodSubtype} ${thickness}X${width}X${calc.varaLength || FALLBACK_VARA_MAP[length] || length}`, [length, thickness, width, woodSubtype, calc.varaLength]);
 
   useEffect(() => {
     fetch("/api/catalog/categories")
@@ -178,23 +170,15 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
     }
   }, [pricing]);
 
-  const createProductFromCalculation = useCallback(async () => {
+  const [duplicateWarning, setDuplicateWarning] = useState<{ sku: string; name: string } | null>(null);
+
+  const submitCreateProduct = useCallback(async () => {
     if (!maderaCategory) {
       showToast("error", "No existe una categoria activa de Madera.");
       return;
     }
     setCreatingProduct(true);
     try {
-      const duplicateResponse = await fetch(`/api/catalog/products?q=${encodeURIComponent(suggestedName)}&isActive=true`);
-      if (duplicateResponse.ok) {
-        const raw = await duplicateResponse.json();
-        const existing = unwrapApiData(raw) as Array<{ id: string; name: string; sku: string }>;
-        const duplicate = existing.find((product) => product.name.trim().toUpperCase() === suggestedName.trim().toUpperCase());
-        if (duplicate) {
-          const confirmed = window.confirm(`Ya existe un producto similar: ${duplicate.sku} - ${duplicate.name}. Deseas crear otro de todos modos?`);
-          if (!confirmed) return;
-        }
-      }
       const response = await apiFetch("/api/timber", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -212,12 +196,37 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
         throw new Error(body?.error?.message ?? body?.message ?? "No se pudo crear el producto de madera.");
       }
       showToast("success", "Producto de madera creado en el catalogo.");
+      setDuplicateWarning(null);
     } catch (error) {
       showToast("error", error instanceof Error ? error.message : "Error al crear producto.");
     } finally {
       setCreatingProduct(false);
     }
   }, [maderaCategory, length, skuPreview, suggestedName, thickness, width]);
+
+  const createProductFromCalculation = useCallback(async () => {
+    if (!maderaCategory) {
+      showToast("error", "No existe una categoria activa de Madera.");
+      return;
+    }
+    try {
+      const duplicateResponse = await fetch(`/api/catalog/products?q=${encodeURIComponent(suggestedName)}&isActive=true`);
+      if (duplicateResponse.ok) {
+        const raw = await duplicateResponse.json();
+        const existing = unwrapApiData(raw) as Array<{ id: string; name: string; sku: string }>;
+        const duplicate = existing.find((product) => product.name.trim().toUpperCase() === suggestedName.trim().toUpperCase());
+        if (duplicate) {
+          // Sin confirm() nativo: se muestra una confirmación inline y se
+          // espera la decisión explícita del usuario antes de crear igual.
+          setDuplicateWarning({ sku: duplicate.sku, name: duplicate.name });
+          return;
+        }
+      }
+      await submitCreateProduct();
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "Error al verificar duplicados.");
+    }
+  }, [maderaCategory, suggestedName, submitCreateProduct]);
 
   const applyBranchPrice = useCallback(async () => {
     if (!selectedProductId || !selectedBranchId) {
@@ -377,7 +386,7 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
               className="w-full border border-[var(--color-border-strong)] rounded-lg px-3 py-2.5 text-[var(--color-text)] placeholder-[var(--color-text-soft)] focus:ring-2 focus:ring-[var(--color-info-500)] focus:border-[var(--color-info-500)] transition-colors min-h-[44px] text-sm"
             >
               {LENGTHS.map((l) => (
-                <option key={l} value={l}>{VARA_MAP[l]} pies</option>
+                <option key={l} value={l}>{FALLBACK_VARA_MAP[l]} pies</option>
               ))}
             </select>
           </div>
@@ -400,7 +409,7 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
           <div className="flex items-center gap-2">
             <TreePine className="h-4 w-4" style={{ color: GROUP_COLORS[calc.priceGroup] }} />
             <span className="text-sm font-semibold text-[var(--color-text)]">
-              {thickness}″ × {width}″ × {VARA_MAP[length] || length} pies
+              {thickness}″ × {width}″ × {calc.varaLength || FALLBACK_VARA_MAP[length] || length} pies
             </span>
           </div>
           <Badge variant={GROUP_BADGE_VARIANT[calc.priceGroup]}>
@@ -450,6 +459,14 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
                 Crear producto
               </Button>
             </div>
+            {duplicateWarning && (
+              <div className="mt-3 flex flex-wrap items-center gap-2.5 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3 text-xs text-[var(--color-warning-700)]">
+                <span>Ya existe un producto similar: <b>{duplicateWarning.sku} — {duplicateWarning.name}</b>. ¿Crear otro de todos modos?</span>
+                <span className="flex-1" />
+                <Button variant="ghost" size="sm" onClick={() => setDuplicateWarning(null)}>Cancelar</Button>
+                <Button variant="primary" size="sm" loading={creatingProduct} onClick={submitCreateProduct}>Crear igual</Button>
+              </div>
+            )}
             <div className="mt-3 grid gap-2 border-t border-[var(--color-border)] pt-3 md:grid-cols-[1fr_1fr_auto]">
               <select
                 className="hm-input h-9 text-xs"

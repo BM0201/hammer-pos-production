@@ -34,6 +34,7 @@ export async function POST(request: Request) {
     const calc = calculateTimber(
       { thickness: parsed.thickness, width: parsed.width, length: parsed.length },
       pricing,
+      storedPricing.classification,
     );
 
     const quantity = parsed.quantity;
