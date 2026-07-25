@@ -112,12 +112,54 @@ export interface TimberTripLineResult {
 export interface TimberTripTotals {
   totalPieces: number;
   totalFeet: number;
+  /** Costo de la madera SOLA por pie (sin gastos del viaje) — se conserva para reporte. */
   computedCostPerFoot: number;
+  /** Costo total de la madera sola (sin gastos). */
   woodTripTotalCost: number;
+  /** Suma de los 5 gastos del viaje (flete, combustible, viáticos, permisos, otros). */
+  tripExpensesTotal: number;
+  /** (woodTripTotalCost + tripExpensesTotal) / totalFeet — el costo real usado para todo. */
+  landedCostPerFoot: number;
   totalCostFeet: number;
   totalSale: number;
   totalProfit: number;
   globalMarginPct: number;
+}
+
+export interface TimberTripExpenses {
+  freightAmount?: number;
+  fuelAmount?: number;
+  perDiemAmount?: number;
+  permitsAmount?: number;
+  otherExpensesAmount?: number;
+}
+
+export type ReconciliationStatus = "OK" | "REVIEW" | "NOT_APPLICABLE";
+
+export interface TimberTripReconciliation {
+  invoicedFeet: number | null;
+  differenceFeet: number;
+  differencePercent: number;
+  tolerancePercent: number;
+  status: ReconciliationStatus;
+}
+
+/**
+ * Concilia los pies cubicados contra los pies de la factura del aserradero.
+ * Sin factura registrada → NOT_APPLICABLE (no hay nada que conciliar todavía).
+ */
+export function calculateReconciliation(
+  totalFeet: number,
+  invoicedFeet: number | null | undefined,
+  tolerancePercent: number,
+): TimberTripReconciliation {
+  if (invoicedFeet == null) {
+    return { invoicedFeet: null, differenceFeet: 0, differencePercent: 0, tolerancePercent, status: "NOT_APPLICABLE" };
+  }
+  const differenceFeet = roundTo(totalFeet - invoicedFeet, FEET_DECIMALS);
+  const differencePercent = invoicedFeet > 0 ? roundTo(Math.abs(differenceFeet) / invoicedFeet, PCT_DECIMALS) : 0;
+  const status: ReconciliationStatus = differencePercent <= tolerancePercent ? "OK" : "REVIEW";
+  return { invoicedFeet, differenceFeet, differencePercent, tolerancePercent, status };
 }
 
 export interface TimberTripResult {
@@ -246,6 +288,8 @@ export interface TimberTripCostOptions {
    * board foot and the trip total is computed from it. Overrides woodTripTotalCost.
    */
   costPerFootInput?: number;
+  /** Gastos del viaje (Madera v2 Fase 1.1) — se prorratean por pie sobre el costo aterrizado. */
+  expenses?: TimberTripExpenses;
 }
 
 export function calculateTimberTrip(
@@ -277,7 +321,7 @@ export function calculateTimberTrip(
   const totalPieces = rawLines.reduce((acc, l) => acc + l.pieces, 0);
   const totalFeet = roundTo(rawLines.reduce((acc, l) => acc + l.feet, 0), FEET_DECIMALS);
 
-  // Phase 2: compute cost per foot.
+  // Phase 2: compute cost per foot of the WOOD ALONE (no expenses yet).
   // PER_FOOT mode → use the entered price per board foot directly.
   // TOTAL_COST mode → derive it from the trip total (woodTripTotalCost / totalFeet).
   const computedCostPerFoot = roundTo(
@@ -288,10 +332,34 @@ export function calculateTimberTrip(
         : 0,
     MONEY_DECIMALS,
   );
+  const maderaTotal = roundTo(
+    perFootMode
+      ? computedCostPerFoot * totalFeet
+      : woodTripTotalCost > 0
+        ? woodTripTotalCost
+        : computedCostPerFoot * totalFeet,
+    MONEY_DECIMALS,
+  );
 
-  // Phase 3: calculate cost/profit for each line
+  // Phase 2b: gastos del viaje → costo ATERRIZADO por pie (Madera v2 Fase 1.1).
+  // landedCostPerFoot reemplaza a computedCostPerFoot como el costo usado para
+  // línea, pieza, movimiento de inventario y márgenes — computedCostPerFoot
+  // se conserva solo como "costo de la madera sola" para reporte.
+  const expenses = options.expenses ?? {};
+  const tripExpensesTotal = roundTo(
+    (expenses.freightAmount ?? 0) +
+      (expenses.fuelAmount ?? 0) +
+      (expenses.perDiemAmount ?? 0) +
+      (expenses.permitsAmount ?? 0) +
+      (expenses.otherExpensesAmount ?? 0),
+    MONEY_DECIMALS,
+  );
+  const landedTotal = roundTo(maderaTotal + tripExpensesTotal, MONEY_DECIMALS);
+  const landedCostPerFoot = totalFeet > 0 ? roundTo(landedTotal / totalFeet, FEET_DECIMALS) : 0;
+
+  // Phase 3: calculate cost/profit for each line using the LANDED cost per foot.
   const lineResults: TimberTripLineResult[] = rawLines.map((line) => {
-    const costFeet = roundTo(line.feet * computedCostPerFoot, MONEY_DECIMALS);
+    const costFeet = roundTo(line.feet * landedCostPerFoot, MONEY_DECIMALS);
     const costPerPiece = roundTo(line.pieces > 0 ? costFeet / line.pieces : 0, MONEY_DECIMALS);
     const profit = roundTo(line.saleTotal - costFeet, MONEY_DECIMALS);
     const marginPct = roundTo(line.saleTotal > 0 ? profit / line.saleTotal : 0, PCT_DECIMALS);
@@ -311,6 +379,34 @@ export function calculateTimberTrip(
     };
   });
 
+  // Phase 3b: residuo de redondeo (Madera v2 Fase 1.2) — el redondeo por línea
+  // hace que Σ calculatedCostFeet pueda diferir del total del viaje por
+  // centavos. Se asigna TODA la diferencia a la línea de mayor cantidad de
+  // pies (la que menos distorsiona su costo relativo), y se recalcula su
+  // costo por pieza. Invariante resultante: Σ calculatedCostFeet == landedTotal.
+  if (lineResults.length > 0 && totalFeet > 0) {
+    const sumLineCostFeet = roundTo(lineResults.reduce((acc, l) => acc + l.calculatedCostFeet, 0), MONEY_DECIMALS);
+    const residual = roundTo(landedTotal - sumLineCostFeet, MONEY_DECIMALS);
+    if (residual !== 0) {
+      let largestIdx = 0;
+      for (let i = 1; i < lineResults.length; i += 1) {
+        if (lineResults[i].calculatedFeet > lineResults[largestIdx].calculatedFeet) largestIdx = i;
+      }
+      const target = lineResults[largestIdx];
+      const adjustedCostFeet = roundTo(target.calculatedCostFeet + residual, MONEY_DECIMALS);
+      const adjustedCostPerPiece = roundTo(target.pieces > 0 ? adjustedCostFeet / target.pieces : 0, MONEY_DECIMALS);
+      const adjustedProfit = roundTo(target.calculatedSaleTotal - adjustedCostFeet, MONEY_DECIMALS);
+      const adjustedMarginPct = roundTo(target.calculatedSaleTotal > 0 ? adjustedProfit / target.calculatedSaleTotal : 0, PCT_DECIMALS);
+      lineResults[largestIdx] = {
+        ...target,
+        calculatedCostFeet: adjustedCostFeet,
+        calculatedCostPerPiece: adjustedCostPerPiece,
+        calculatedProfit: adjustedProfit,
+        calculatedMarginPct: adjustedMarginPct,
+      };
+    }
+  }
+
   // Phase 4: totals
   const totalCostFeet = roundTo(lineResults.reduce((acc, l) => acc + l.calculatedCostFeet, 0), MONEY_DECIMALS);
   const totalSale = roundTo(lineResults.reduce((acc, l) => acc + l.calculatedSaleTotal, 0), MONEY_DECIMALS);
@@ -321,14 +417,9 @@ export function calculateTimberTrip(
     totalPieces,
     totalFeet,
     computedCostPerFoot,
-    woodTripTotalCost: roundTo(
-      perFootMode
-        ? computedCostPerFoot * totalFeet
-        : woodTripTotalCost > 0
-          ? woodTripTotalCost
-          : totalCostFeet,
-      MONEY_DECIMALS,
-    ),
+    woodTripTotalCost: maderaTotal,
+    tripExpensesTotal,
+    landedCostPerFoot,
     totalCostFeet,
     totalSale,
     totalProfit,

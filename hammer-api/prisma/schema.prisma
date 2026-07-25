@@ -881,6 +881,25 @@ model TimberPricingConfig {
   pricePerInchTablilla Decimal  @default(6.9)
   /// Price per inch for CUADRO (rest, default C$6.90)
   pricePerInchCuadro   Decimal  @default(6.9)
+
+  /// Madera v2 Fase 4 — configuración como datos (reemplaza constantes hardcodeadas).
+  /// Array de { lengthFeet: number, varas: number, forceCuadro: boolean }. Semilla: VARA_LENGTH_MAP
+  /// + LENGTHS_THAT_FORCE_CUADRO de calculator.ts.
+  cubicationTable Json?
+  /// Anchos (pulgadas) que clasifican como TABLA cuando el grosor es 1 o 2. Semilla: [10, 12].
+  tablaWidths     Json?
+  /// Anchos (pulgadas) que clasifican como TABLILLA cuando el grosor es 1. Semilla: [6, 8].
+  tablillaWidths  Json?
+
+  /// Margen objetivo (0-1) usado para la alerta de margen y la política TARGET_MARGIN. Default 40%.
+  targetMarginPercent Decimal @default(0.40)
+  /// Tolerancia de conciliación con factura (0-1). Default 1%.
+  reconciliationTolerancePercent Decimal @default(0.01)
+  /// Avisar (no bloquear) si un viaje deja margen bajo el objetivo.
+  warnBelowTargetMargin Boolean @default(true)
+  /// Bloquear la confirmación si hay margen negativo, salvo override explícito auditado.
+  blockNegativeMargin   Boolean @default(true)
+
   /// Who last updated
   updatedBy            String?
   updatedAt            DateTime @updatedAt
@@ -908,8 +927,27 @@ model TimberTrip {
 
   /// Total cost of the trip (purchase price of all wood)
   woodTripTotalCost   Decimal @default(0)
-  /// Computed: woodTripTotalCost / totalFeet
+  /// Computed: woodTripTotalCost / totalFeet — costo de la madera SOLA (sin gastos), se conserva para reporte
   computedCostPerFoot Decimal @default(0)
+
+  /// Madera v2 Fase 1.1 — gastos del viaje (aditivo). Se prorratean por pie.
+  freightAmount      Decimal @default(0)
+  fuelAmount         Decimal @default(0)
+  perDiemAmount      Decimal @default(0)
+  permitsAmount      Decimal @default(0)
+  otherExpensesAmount Decimal @default(0)
+  /// Computed: suma de los 5 gastos de arriba
+  tripExpensesTotal  Decimal @default(0)
+  /// Computed: (maderaTotal + tripExpensesTotal) / totalFeet — el costo real que se usa
+  /// para costear líneas, WAC de inventario y márgenes (reemplaza a computedCostPerFoot).
+  landedCostPerFoot  Decimal @default(0)
+
+  /// Madera v2 Fase 1.3 — conciliación con la factura del aserradero (opcional).
+  invoicedFeet Decimal?
+
+  /// Madera v2 Fase 2.3 — política de precio de venta al confirmar el viaje.
+  /// RECALC_FROM_PRICE_PER_INCH (default) · COST_ONLY · TARGET_MARGIN
+  pricePolicy String @default("RECALC_FROM_PRICE_PER_INCH")
 
   /// Pricing snapshot at time of calculation
   pricePerInchTabla    Decimal @default(8.9)
@@ -933,6 +971,10 @@ model TimberTrip {
   createdById   String?
   confirmedById String?
   confirmedAt   DateTime?
+  /// Madera v2 Fase 3 — motivo cuando se confirma con margen negativo (override explícito).
+  marginOverrideReason String?
+  /// Madera v2 Fase 1.3 — confirmación explícita al confirmar fuera de tolerancia de conciliación.
+  reconciliationAcknowledged Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

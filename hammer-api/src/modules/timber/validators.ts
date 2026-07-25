@@ -62,6 +62,17 @@ export const timberTripLineSchema = z.object({
   priceGroup: z.enum(["TABLA", "TABLILLA", "CUADRO"]).optional(),
 });
 
+// Madera v2 Fase 1.1 — gastos del viaje (aditivo, todos opcionales, default 0).
+export const timberTripExpensesSchema = z.object({
+  freightAmount: z.number().nonnegative("El flete debe ser ≥ 0").max(10000000).optional(),
+  fuelAmount: z.number().nonnegative("El combustible debe ser ≥ 0").max(10000000).optional(),
+  perDiemAmount: z.number().nonnegative("Los viáticos deben ser ≥ 0").max(10000000).optional(),
+  permitsAmount: z.number().nonnegative("Los permisos deben ser ≥ 0").max(10000000).optional(),
+  otherExpensesAmount: z.number().nonnegative("Otros gastos deben ser ≥ 0").max(10000000).optional(),
+});
+
+export const timberPricePolicySchema = z.enum(["RECALC_FROM_PRICE_PER_INCH", "COST_ONLY", "TARGET_MARGIN"]);
+
 export const createTimberTripSchema = z.object({
   destinationBranchId: z.string().min(1, "Sucursal destino es requerida"),
   woodTripTotalCost: z.number().nonnegative("Costo total del viaje debe ser ≥ 0").max(100000000).default(0),
@@ -75,6 +86,10 @@ export const createTimberTripSchema = z.object({
   pricePerInchTabla: z.number().nonnegative().optional(),
   pricePerInchTablilla: z.number().nonnegative().optional(),
   pricePerInchCuadro: z.number().nonnegative().optional(),
+  // Madera v2
+  expenses: timberTripExpensesSchema.optional(),
+  invoicedFeet: z.number().positive("Los pies de factura deben ser mayor a 0").max(10000000).optional(),
+  pricePolicy: timberPricePolicySchema.optional(),
   lines: z.array(timberTripLineSchema).min(1, "Debe tener al menos una línea"),
 });
 
@@ -88,6 +103,10 @@ export const updateTimberTripSchema = z.object({
   pricePerInchTabla: z.number().nonnegative().optional(),
   pricePerInchTablilla: z.number().nonnegative().optional(),
   pricePerInchCuadro: z.number().nonnegative().optional(),
+  // Madera v2
+  expenses: timberTripExpensesSchema.optional(),
+  invoicedFeet: z.number().positive("Los pies de factura deben ser mayor a 0").max(10000000).optional().nullable(),
+  pricePolicy: timberPricePolicySchema.optional(),
   lines: z.array(timberTripLineSchema).min(1).optional(),
 });
 
@@ -101,6 +120,8 @@ export const updateTimberPricingConfigSchema = z.object({
 export type CreateTimberProductInput = z.infer<typeof createTimberProductSchema>;
 export type UpdateTimberProductInput = z.infer<typeof updateTimberProductSchema>;
 export type CalculateTimberInput = z.infer<typeof calculateTimberSchema>;
+export type TimberTripExpensesInput = z.infer<typeof timberTripExpensesSchema>;
+export type TimberPricePolicy = z.infer<typeof timberPricePolicySchema>;
 export type CreateTimberTripInput = z.infer<typeof createTimberTripSchema>;
 export type UpdateTimberTripInput = z.infer<typeof updateTimberTripSchema>;
 export type UpdateTimberPricingConfigInput = z.infer<typeof updateTimberPricingConfigSchema>;

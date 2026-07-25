@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import {
   calculateTimber,
   calculateTimberTrip,
+  calculateReconciliation,
   DEFAULT_PRICING,
   type TimberPricing,
   type TimberTripLineInput,
@@ -449,6 +450,7 @@ export async function createTimberTrip(input: CreateTimberTripInput, userId?: st
 
   const calc = calculateTimberTrip(tripLines, input.woodTripTotalCost, tripPricing, {
     costPerFootInput: input.costPerFoot,
+    expenses: input.expenses,
   });
   const tripCode = await generateTripCode();
 
@@ -460,6 +462,15 @@ export async function createTimberTrip(input: CreateTimberTripInput, userId?: st
         status: "DRAFT",
         woodTripTotalCost: new Decimal(calc.totals.woodTripTotalCost),
         computedCostPerFoot: new Decimal(calc.totals.computedCostPerFoot),
+        freightAmount: new Decimal(input.expenses?.freightAmount ?? 0),
+        fuelAmount: new Decimal(input.expenses?.fuelAmount ?? 0),
+        perDiemAmount: new Decimal(input.expenses?.perDiemAmount ?? 0),
+        permitsAmount: new Decimal(input.expenses?.permitsAmount ?? 0),
+        otherExpensesAmount: new Decimal(input.expenses?.otherExpensesAmount ?? 0),
+        tripExpensesTotal: new Decimal(calc.totals.tripExpensesTotal),
+        landedCostPerFoot: new Decimal(calc.totals.landedCostPerFoot),
+        invoicedFeet: input.invoicedFeet != null ? new Decimal(input.invoicedFeet) : null,
+        pricePolicy: input.pricePolicy ?? "RECALC_FROM_PRICE_PER_INCH",
         pricePerInchTabla: new Decimal(tripPricing.pricePerInchTabla),
         pricePerInchTablilla: new Decimal(tripPricing.pricePerInchTablilla),
         pricePerInchCuadro: new Decimal(tripPricing.pricePerInchCuadro),
@@ -525,6 +536,13 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
     pieces: l.pieces,
     priceGroup: l.priceGroup as "TABLA" | "TABLILLA" | "CUADRO",
   }));
+  const expenses = input.expenses ?? {
+    freightAmount: existing.freightAmount.toNumber(),
+    fuelAmount: existing.fuelAmount.toNumber(),
+    perDiemAmount: existing.perDiemAmount.toNumber(),
+    permitsAmount: existing.permitsAmount.toNumber(),
+    otherExpensesAmount: existing.otherExpensesAmount.toNumber(),
+  };
 
   const calc = calculateTimberTrip(
     lines.map((l) => ({
@@ -536,7 +554,7 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
     })),
     woodCost,
     tripPricing,
-    { costPerFootInput: input.costPerFoot },
+    { costPerFootInput: input.costPerFoot, expenses },
   );
 
   const trip = await prisma.$transaction(async (tx) => {
@@ -549,6 +567,15 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
       data: {
         woodTripTotalCost: new Decimal(calc.totals.woodTripTotalCost),
         computedCostPerFoot: new Decimal(calc.totals.computedCostPerFoot),
+        freightAmount: new Decimal(expenses.freightAmount ?? 0),
+        fuelAmount: new Decimal(expenses.fuelAmount ?? 0),
+        perDiemAmount: new Decimal(expenses.perDiemAmount ?? 0),
+        permitsAmount: new Decimal(expenses.permitsAmount ?? 0),
+        otherExpensesAmount: new Decimal(expenses.otherExpensesAmount ?? 0),
+        tripExpensesTotal: new Decimal(calc.totals.tripExpensesTotal),
+        landedCostPerFoot: new Decimal(calc.totals.landedCostPerFoot),
+        invoicedFeet: input.invoicedFeet !== undefined ? (input.invoicedFeet != null ? new Decimal(input.invoicedFeet) : null) : undefined,
+        pricePolicy: input.pricePolicy ?? undefined,
         pricePerInchTabla: new Decimal(tripPricing.pricePerInchTabla),
         pricePerInchTablilla: new Decimal(tripPricing.pricePerInchTablilla),
         pricePerInchCuadro: new Decimal(tripPricing.pricePerInchCuadro),
@@ -714,14 +741,30 @@ export async function cancelTimberTrip(id: string) {
 }
 
 /** Get a single trip with lines */
+/** Tolerancia de conciliación configurada (Madera v2 Fase 1.3 / Fase 4). */
+async function getReconciliationTolerance(): Promise<number> {
+  const cfg = await prisma.timberPricingConfig.findFirst({ orderBy: { updatedAt: "desc" } });
+  return cfg ? cfg.reconciliationTolerancePercent.toNumber() : 0.01;
+}
+
 export async function getTimberTrip(id: string) {
-  return prisma.timberTrip.findUnique({
+  const trip = await prisma.timberTrip.findUnique({
     where: { id },
     include: {
       lines: { orderBy: { createdAt: "asc" } },
       destinationBranch: true,
     },
   });
+  if (!trip) return null;
+
+  const tolerancePercent = await getReconciliationTolerance();
+  const reconciliation = calculateReconciliation(
+    trip.totalFeet.toNumber(),
+    trip.invoicedFeet != null ? trip.invoicedFeet.toNumber() : null,
+    tolerancePercent,
+  );
+
+  return { ...trip, reconciliation };
 }
 
 /** List timber trips with filtering */
