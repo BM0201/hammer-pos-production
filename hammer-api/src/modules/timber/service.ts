@@ -3,9 +3,11 @@ import {
   calculateTimber,
   calculateTimberTrip,
   calculateReconciliation,
+  calculateTargetMarginPrice,
   DEFAULT_PRICING,
   type TimberPricing,
   type TimberTripLineInput,
+  type TimberPriceGroup,
 } from "./calculator";
 import type {
   CreateTimberProductInput,
@@ -15,6 +17,7 @@ import type {
   UpdateTimberPricingConfigInput,
 } from "./validators";
 import { Decimal } from "@prisma/client/runtime/library";
+import { createHash } from "crypto";
 import { parseWoodDimensions } from "@/modules/catalog/sku-generator";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
@@ -35,15 +38,21 @@ async function resolveTimberCategoryTx(tx: Prisma.TransactionClient): Promise<st
 }
 
 /**
- * Find-or-create the Product + TimberProduct that represents a given trip line dimension.
- * The SKU pattern matches createTimberProduct (`MAD-<GRP>-<T>x<W>x<L>`) so the same physical
- * measure always maps to the same inventory product across trips.
+ * Find-or-create the Product + TimberProduct IDENTITY that represents a given trip line
+ * dimension. The SKU pattern matches createTimberProduct (`MAD-<GRP>-<T>x<W>x<L>`) so the same
+ * physical measure always maps to the same inventory product across trips.
+ *
+ * Madera v2 Fase 2 — esta función SOLO resuelve identidad (encuentra o crea la fila). Los
+ * costos/precios los escribe SIEMPRE applyTimberCostsTx, exista o no el producto — antes,
+ * cuando el producto ya existía, esta función retornaba temprano sin actualizar nada, y del
+ * segundo viaje en adelante TimberProduct.baseCost/sellingPrice, Product.standardSalePrice y el
+ * BranchProductSetting de la sucursal destino quedaban congelados en los valores del primer viaje.
  */
-async function resolveTimberProductForLineTx(
+async function resolveTimberProductIdentityTx(
   tx: Prisma.TransactionClient,
   line: TimberTripLine,
   pricing: TimberPricing,
-): Promise<{ productId: string; timberProductId: string }> {
+): Promise<{ productId: string; timberProductId: string; isNewProduct: boolean }> {
   const calc = calculateTimber(
     { thickness: line.thicknessIn, width: line.widthIn, length: line.lengthIn },
     pricing,
@@ -53,7 +62,7 @@ async function resolveTimberProductForLineTx(
   // Already linked on the line → reuse it.
   if (line.timberProductId) {
     const existing = await tx.timberProduct.findUnique({ where: { id: line.timberProductId } });
-    if (existing) return { productId: existing.productId, timberProductId: existing.id };
+    if (existing) return { productId: existing.productId, timberProductId: existing.id, isNewProduct: false };
   }
 
   // Existing product with the deterministic SKU → reuse it.
@@ -62,10 +71,12 @@ async function resolveTimberProductForLineTx(
     include: { timberProduct: true },
   });
   if (existingProduct?.timberProduct) {
-    return { productId: existingProduct.id, timberProductId: existingProduct.timberProduct.id };
+    return { productId: existingProduct.id, timberProductId: existingProduct.timberProduct.id, isNewProduct: false };
   }
 
-  // Otherwise create both Product and TimberProduct.
+  // Otherwise create both Product and TimberProduct. Costos/precios iniciales son
+  // provisionales — applyTimberCostsTx los sobreescribe con los valores reales
+  // inmediatamente después, siempre, en el mismo flujo que los productos existentes.
   const categoryId = await resolveTimberCategoryTx(tx);
   const product = existingProduct
     ?? (await tx.product.create({
@@ -97,7 +108,150 @@ async function resolveTimberProductForLineTx(
     },
   });
 
-  return { productId: product.id, timberProductId: timberProduct.id };
+  return { productId: product.id, timberProductId: timberProduct.id, isNewProduct: true };
+}
+
+export type TimberCostInjectionSnapshot = {
+  baseCost: number | null;
+  sellingPrice: number | null;
+  standardSalePrice: number | null;
+  branchCost: number | null;
+  branchPrice: number | null;
+};
+
+/**
+ * Resuelve el precio de venta según la política del viaje (Madera v2 Fase 2.3).
+ *   RECALC_FROM_PRICE_PER_INCH → precio calculado con el precio por pulgada vigente (default).
+ *   COST_ONLY                  → conserva el precio de venta actual (no lo toca).
+ *   TARGET_MARGIN               → costPerPiece / (1 − margenObjetivo), redondeado hacia arriba.
+ */
+export function resolveSellingPriceForPolicy(input: {
+  pricePolicy: string;
+  recalculatedSellingPrice: number;
+  existingSellingPrice: number | null;
+  costPerPiece: number;
+  targetMarginPercent: number;
+  targetMarginRoundingMultiple: number;
+}): number {
+  switch (input.pricePolicy) {
+    case "COST_ONLY":
+      return input.existingSellingPrice ?? input.recalculatedSellingPrice;
+    case "TARGET_MARGIN":
+      return calculateTargetMarginPrice(input.costPerPiece, input.targetMarginPercent, input.targetMarginRoundingMultiple);
+    case "RECALC_FROM_PRICE_PER_INCH":
+    default:
+      return input.recalculatedSellingPrice;
+  }
+}
+
+/**
+ * Escribe SIEMPRE los 4 costos/precios de una medida de madera — exista o no el producto.
+ * Este es el corazón del fix de Fase 2: antes del segundo viaje en adelante estos valores
+ * quedaban congelados. Ahora cada confirmación los actualiza y deja un evento de auditoría
+ * con el antes → después de los 4 valores.
+ */
+export async function applyTimberCostsTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    actorUserId?: string;
+    branchId: string;
+    productId: string;
+    timberProductId: string;
+    priceGroup: TimberPriceGroup;
+    boardFeet: number;
+    pricePerInch: number;
+    varaLength: number;
+    costPerPiece: number;
+    recalculatedSellingPrice: number;
+    pricePolicy: string;
+    targetMarginPercent: number;
+    targetMarginRoundingMultiple: number;
+  },
+): Promise<{ before: TimberCostInjectionSnapshot; after: TimberCostInjectionSnapshot }> {
+  const [productBefore, timberProductBefore, branchSettingBefore] = await Promise.all([
+    tx.product.findUnique({ where: { id: input.productId }, select: { standardSalePrice: true } }),
+    tx.timberProduct.findUnique({ where: { id: input.timberProductId }, select: { baseCost: true, sellingPrice: true } }),
+    tx.branchProductSetting.findUnique({
+      where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+      select: { branchCost: true, branchPrice: true },
+    }),
+  ]);
+
+  const before: TimberCostInjectionSnapshot = {
+    baseCost: timberProductBefore?.baseCost.toNumber() ?? null,
+    sellingPrice: timberProductBefore?.sellingPrice.toNumber() ?? null,
+    standardSalePrice: productBefore?.standardSalePrice.toNumber() ?? null,
+    branchCost: branchSettingBefore?.branchCost?.toNumber() ?? null,
+    branchPrice: branchSettingBefore?.branchPrice?.toNumber() ?? null,
+  };
+
+  const sellingPrice = resolveSellingPriceForPolicy({
+    pricePolicy: input.pricePolicy,
+    recalculatedSellingPrice: input.recalculatedSellingPrice,
+    existingSellingPrice: before.sellingPrice,
+    costPerPiece: input.costPerPiece,
+    targetMarginPercent: input.targetMarginPercent,
+    targetMarginRoundingMultiple: input.targetMarginRoundingMultiple,
+  });
+
+  await tx.timberProduct.update({
+    where: { id: input.timberProductId },
+    data: {
+      timberType: input.priceGroup,
+      boardFeet: new Decimal(input.boardFeet),
+      baseCost: new Decimal(input.costPerPiece),
+      pricePerInch: new Decimal(input.pricePerInch),
+      sellingPrice: new Decimal(sellingPrice),
+      varaLength: input.varaLength,
+    },
+  });
+
+  await tx.product.update({
+    where: { id: input.productId },
+    data: { standardSalePrice: new Decimal(sellingPrice) },
+  });
+
+  await tx.branchProductSetting.upsert({
+    where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+    create: {
+      branchId: input.branchId,
+      productId: input.productId,
+      branchCost: new Decimal(input.costPerPiece),
+      branchPrice: new Decimal(sellingPrice),
+      priceSource: "TIMBER_TRIP",
+      lastPriceUpdateAt: new Date(),
+      priceUpdatedByUserId: input.actorUserId,
+    },
+    update: {
+      branchCost: new Decimal(input.costPerPiece),
+      branchPrice: new Decimal(sellingPrice),
+      priceSource: "TIMBER_TRIP",
+      lastPriceUpdateAt: new Date(),
+      priceUpdatedByUserId: input.actorUserId,
+    },
+  });
+
+  const after: TimberCostInjectionSnapshot = {
+    baseCost: input.costPerPiece,
+    sellingPrice,
+    standardSalePrice: sellingPrice,
+    branchCost: input.costPerPiece,
+    branchPrice: sellingPrice,
+  };
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "timber",
+      action: "TIMBER_COST_INJECTED",
+      entityType: "Product",
+      entityId: input.productId,
+      metadataJson: { timberProductId: input.timberProductId, before, after },
+    },
+  });
+
+  return { before, after };
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -613,16 +767,178 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
   return { trip, calculation: calc };
 }
 
+type ResolvedLineForInjection = {
+  lineId: string;
+  dimensions: { thickness: number; width: number; length: number };
+  priceGroup: TimberPriceGroup;
+  varaLength: number;
+  pieces: number;
+  boardFeet: number;
+  productId: string | null;
+  timberProductId: string | null;
+  isNewProduct: boolean;
+  costPerPiece: number;
+  pricePerInch: number;
+  recalculatedSellingPrice: number;
+};
+
+/** Resuelve, SIN escribir nada, la identidad (existente o "nuevo") de cada línea. */
+async function resolveLinesForInjectionReadOnly(
+  trip: Prisma.TimberTripGetPayload<{ include: { lines: true } }>,
+): Promise<ResolvedLineForInjection[]> {
+  const resolved: ResolvedLineForInjection[] = [];
+  for (const line of trip.lines) {
+    if (line.pieces <= 0) continue;
+    const sku = `MAD-${line.priceGroup.substring(0, 3)}-${line.thicknessIn}x${line.widthIn}x${line.lengthIn}`;
+    let productId: string | null = null;
+    let timberProductId: string | null = null;
+
+    if (line.timberProductId) {
+      const existing = await prisma.timberProduct.findUnique({ where: { id: line.timberProductId } });
+      if (existing) {
+        productId = existing.productId;
+        timberProductId = existing.id;
+      }
+    }
+    if (!productId) {
+      const existingProduct = await prisma.product.findUnique({ where: { sku }, include: { timberProduct: true } });
+      if (existingProduct?.timberProduct) {
+        productId = existingProduct.id;
+        timberProductId = existingProduct.timberProduct.id;
+      }
+    }
+
+    const costPerPiece = line.calculatedCostPerPiece.gt(0)
+      ? line.calculatedCostPerPiece.toNumber()
+      : line.pieces > 0
+        ? line.calculatedCostFeet.toNumber() / line.pieces
+        : 0;
+
+    resolved.push({
+      lineId: line.id,
+      dimensions: { thickness: line.thicknessIn, width: line.widthIn, length: line.lengthIn },
+      priceGroup: line.priceGroup as TimberPriceGroup,
+      varaLength: line.varaLength,
+      pieces: line.pieces,
+      boardFeet: line.calculatedFeet.div(line.pieces).toNumber(),
+      productId,
+      timberProductId,
+      isNewProduct: productId === null,
+      costPerPiece,
+      pricePerInch: line.calculatedSalePricePerPiece.div(line.thicknessIn * line.widthIn * line.varaLength || 1).toNumber(),
+      recalculatedSellingPrice: line.calculatedSalePricePerPiece.toNumber(),
+    });
+  }
+  return resolved;
+}
+
+export type TimberInjectionLinePreview = {
+  lineId: string;
+  dimensions: { thickness: number; width: number; length: number };
+  isNewProduct: boolean;
+  productId: string | null;
+  piecesToAdd: number;
+  costPerPiece: { before: number | null; after: number };
+  wac: { before: number | null; after: number };
+  branchCost: { before: number | null; after: number };
+  sellingPrice: { before: number | null; after: number };
+};
+
+export type TimberInjectionPreview = {
+  tripId: string;
+  tripCode: string;
+  pricePolicy: string;
+  lines: TimberInjectionLinePreview[];
+  hash: string;
+};
+
+/**
+ * Madera v2 Fase 2.4 — preview de inyección: por línea, el par ANTES → DESPUÉS de costo
+ * unitario, WAC (proyectado con la misma fórmula que usa recalculateWeightedAverage), costo de
+ * sucursal y precio de venta, SIN escribir nada. confirmTimberTrip exige el hash de este preview
+ * para aplicar — si el inventario cambió entre medias, el hash no coincide y rechaza.
+ */
+export async function getTimberTripInjectionPreview(id: string): Promise<TimberInjectionPreview> {
+  const trip = await prisma.timberTrip.findUnique({ where: { id }, include: { lines: true } });
+  if (!trip) throw new Error("TIMBER_TRIP_NOT_FOUND");
+
+  const marginConfig = await getMarginConfig();
+  const resolvedLines = await resolveLinesForInjectionReadOnly(trip);
+
+  const lines: TimberInjectionLinePreview[] = [];
+  for (const line of resolvedLines) {
+    const [timberProductBefore, productBefore, balanceBefore, branchSettingBefore] = await Promise.all([
+      line.timberProductId ? prisma.timberProduct.findUnique({ where: { id: line.timberProductId } }) : null,
+      line.productId ? prisma.product.findUnique({ where: { id: line.productId } }) : null,
+      line.productId
+        ? prisma.inventoryBalance.findUnique({ where: { branchId_productId: { branchId: trip.destinationBranchId, productId: line.productId } } })
+        : null,
+      line.productId
+        ? prisma.branchProductSetting.findUnique({ where: { branchId_productId: { branchId: trip.destinationBranchId, productId: line.productId } } })
+        : null,
+    ]);
+
+    const qohActual = balanceBefore?.quantityOnHand.toNumber() ?? 0;
+    const wacActual = balanceBefore?.weightedAverageCost.toNumber() ?? 0;
+    const wacAfter = (qohActual * wacActual + line.pieces * line.costPerPiece) / (qohActual + line.pieces || 1);
+
+    const sellingPriceBefore = timberProductBefore?.sellingPrice.toNumber() ?? null;
+    const sellingPriceAfter = resolveSellingPriceForPolicy({
+      pricePolicy: trip.pricePolicy,
+      recalculatedSellingPrice: line.recalculatedSellingPrice,
+      existingSellingPrice: sellingPriceBefore,
+      costPerPiece: line.costPerPiece,
+      targetMarginPercent: marginConfig.targetMarginPercent,
+      targetMarginRoundingMultiple: marginConfig.targetMarginRoundingMultiple,
+    });
+
+    lines.push({
+      lineId: line.lineId,
+      dimensions: line.dimensions,
+      isNewProduct: line.isNewProduct,
+      productId: line.productId,
+      piecesToAdd: line.pieces,
+      costPerPiece: { before: timberProductBefore?.baseCost.toNumber() ?? null, after: line.costPerPiece },
+      wac: { before: balanceBefore ? wacActual : null, after: roundMoney(wacAfter) },
+      branchCost: { before: branchSettingBefore?.branchCost?.toNumber() ?? null, after: line.costPerPiece },
+      sellingPrice: { before: productBefore?.standardSalePrice.toNumber() ?? sellingPriceBefore, after: sellingPriceAfter },
+    });
+  }
+
+  const hash = createHash("sha256").update(JSON.stringify(lines)).digest("hex");
+  return { tripId: trip.id, tripCode: trip.tripCode, pricePolicy: trip.pricePolicy, lines, hash };
+}
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+async function getMarginConfig(): Promise<{ targetMarginPercent: number; targetMarginRoundingMultiple: number }> {
+  const cfg = await prisma.timberPricingConfig.findFirst({ orderBy: { updatedAt: "desc" } });
+  return {
+    targetMarginPercent: cfg ? cfg.targetMarginPercent.toNumber() : 0.4,
+    targetMarginRoundingMultiple: cfg ? cfg.targetMarginRoundingMultiple.toNumber() : 1,
+  };
+}
+
 /**
  * Confirm a timber trip and inject all its lines into the destination branch inventory.
  *
  * This is the single step the user expects from the "Confirmar e insertar en inventario"
  * action: a DRAFT/CUBICADO trip is validated, every line is resolved to a (Product +
- * TimberProduct), a TIMBER_INTAKE_IN inventory movement is created for each line into the
- * destination branch (qty = piezas, unitCost = costo por pieza), and the trip transitions
- * to TRANSFERRED. Everything runs inside one transaction so it is all-or-nothing.
+ * TimberProduct), costs/prices are ALWAYS written via applyTimberCostsTx (Madera v2 Fase 2 —
+ * fixes the bug where they froze at the first trip's values), a TIMBER_INTAKE_IN inventory
+ * movement is created for each line, and the trip transitions to TRANSFERRED. Everything runs
+ * inside one transaction so it is all-or-nothing.
+ *
+ * Requires the hash of a freshly-generated injection preview (Fase 2.4) — "nadie inyecta sin
+ * ver". If the trip's reconciliation is out of tolerance, requires explicit acknowledgment too.
  */
-export async function confirmTimberTrip(id: string, userId?: string) {
+export async function confirmTimberTrip(
+  id: string,
+  userId?: string,
+  options: { expectedHash?: string; acknowledgeReconciliation?: boolean } = {},
+) {
   const trip = await prisma.timberTrip.findUnique({
     where: { id },
     include: { lines: true },
@@ -634,11 +950,30 @@ export async function confirmTimberTrip(id: string, userId?: string) {
   if (trip.lines.length === 0) {
     throw new Error("TRIP_HAS_NO_LINES");
   }
-  // A positive cost per board foot is required so inbound inventory movements have a real cost.
-  if (trip.computedCostPerFoot.lte(0)) {
+  // A positive landed cost per board foot is required so inbound inventory movements have a real cost.
+  if (trip.landedCostPerFoot.lte(0)) {
     throw new Error("TRIP_REQUIRES_COST");
   }
 
+  const tolerancePercent = await getReconciliationTolerance();
+  const reconciliation = calculateReconciliation(
+    trip.totalFeet.toNumber(),
+    trip.invoicedFeet != null ? trip.invoicedFeet.toNumber() : null,
+    tolerancePercent,
+  );
+  if (reconciliation.status === "REVIEW" && !options.acknowledgeReconciliation) {
+    throw new Error("RECONCILIATION_REQUIRES_ACK");
+  }
+
+  if (!options.expectedHash) {
+    throw new Error("INJECTION_PREVIEW_REQUIRED");
+  }
+  const freshPreview = await getTimberTripInjectionPreview(id);
+  if (freshPreview.hash !== options.expectedHash) {
+    throw new Error("INJECTION_PREVIEW_STALE");
+  }
+
+  const marginConfig = await getMarginConfig();
   const pricing: TimberPricing = {
     costPerFoot: trip.computedCostPerFoot.toNumber(),
     pricePerInchTabla: trip.pricePerInchTabla.toNumber(),
@@ -649,7 +984,7 @@ export async function confirmTimberTrip(id: string, userId?: string) {
   return prisma.$transaction(async (tx) => {
     for (const line of trip.lines) {
       if (line.pieces <= 0) continue;
-      const { productId, timberProductId } = await resolveTimberProductForLineTx(tx, line, pricing);
+      const { productId, timberProductId } = await resolveTimberProductIdentityTx(tx, line, pricing);
 
       // Unit cost per piece — fall back to cost/feet ÷ pieces when not pre-computed.
       const unitCost = line.calculatedCostPerPiece.gt(0)
@@ -657,6 +992,23 @@ export async function confirmTimberTrip(id: string, userId?: string) {
         : line.pieces > 0
           ? line.calculatedCostFeet.toNumber() / line.pieces
           : 0;
+
+      // Madera v2 Fase 2 — SIEMPRE actualiza costos/precios, exista o no el producto.
+      await applyTimberCostsTx(tx, {
+        actorUserId: userId,
+        branchId: trip.destinationBranchId,
+        productId,
+        timberProductId,
+        priceGroup: line.priceGroup as TimberPriceGroup,
+        boardFeet: line.calculatedFeet.div(line.pieces).toNumber(),
+        pricePerInch: line.calculatedSalePricePerPiece.div((line.thicknessIn * line.widthIn * line.varaLength) || 1).toNumber(),
+        varaLength: line.varaLength,
+        costPerPiece: unitCost,
+        recalculatedSellingPrice: line.calculatedSalePricePerPiece.toNumber(),
+        pricePolicy: trip.pricePolicy,
+        targetMarginPercent: marginConfig.targetMarginPercent,
+        targetMarginRoundingMultiple: marginConfig.targetMarginRoundingMultiple,
+      });
 
       await createInventoryMovementTx(tx, {
         actorUserId: userId ?? "SYSTEM",
@@ -693,6 +1045,7 @@ export async function confirmTimberTrip(id: string, userId?: string) {
         status: "TRANSFERRED",
         confirmedById: userId,
         confirmedAt: new Date(),
+        reconciliationAcknowledged: reconciliation.status === "REVIEW" ? true : trip.reconciliationAcknowledged,
       },
     });
     if (transition.count === 0) {
@@ -716,7 +1069,10 @@ export async function confirmTimberTrip(id: string, userId?: string) {
           totalPieces: trip.totalPieces,
           totalFeet: trip.totalFeet.toString(),
           totalCost: trip.totalCost.toString(),
+          landedCostPerFoot: trip.landedCostPerFoot.toString(),
           linesInjected: trip.lines.length,
+          reconciliationStatus: reconciliation.status,
+          reconciliationAcknowledged: reconciliation.status === "REVIEW",
         },
       },
     });

@@ -893,6 +893,10 @@ model TimberPricingConfig {
 
   /// Margen objetivo (0-1) usado para la alerta de margen y la política TARGET_MARGIN. Default 40%.
   targetMarginPercent Decimal @default(0.40)
+  /// Múltiplo (C$) al que se redondea HACIA ARRIBA el precio de la política TARGET_MARGIN —
+  /// nunca hacia el más cercano, porque redondear al más cercano podría quedar bajo el margen
+  /// objetivo. Default 1 (entero más próximo hacia arriba).
+  targetMarginRoundingMultiple Decimal @default(1)
   /// Tolerancia de conciliación con factura (0-1). Default 1%.
   reconciliationTolerancePercent Decimal @default(0.01)
   /// Avisar (no bloquear) si un viaje deja margen bajo el objetivo.

@@ -462,6 +462,31 @@ export function calculateDistribution(
   return { feetOf12, feetOf10, pctOf12, pctOf10, pctTabla, remainderPct };
 }
 
+/**
+ * Redondea HACIA ARRIBA (nunca al más cercano) al múltiplo indicado.
+ * Usado por la política TARGET_MARGIN — redondear al más cercano podría
+ * bajar el precio y perder el margen objetivo garantizado.
+ */
+export function roundUpToMultiple(value: number, multiple: number): number {
+  if (!(multiple > 0)) return roundTo(value, MONEY_DECIMALS);
+  return roundTo(Math.ceil(value / multiple) * multiple, MONEY_DECIMALS);
+}
+
+/**
+ * Precio de venta que garantiza el margen objetivo tras redondear hacia
+ * arriba: precio = costPerPiece / (1 − margenObjetivo), redondeado hacia
+ * arriba al múltiplo configurado.
+ */
+export function calculateTargetMarginPrice(
+  costPerPiece: number,
+  targetMarginPercent: number,
+  roundingMultiple: number,
+): number {
+  if (targetMarginPercent >= 1) return roundUpToMultiple(costPerPiece, roundingMultiple);
+  const raw = costPerPiece / (1 - targetMarginPercent);
+  return roundUpToMultiple(raw, roundingMultiple);
+}
+
 /** Default pricing configuration */
 export const DEFAULT_PRICING: TimberPricing = {
   costPerFoot: DEFAULT_COST_PER_FOOT,

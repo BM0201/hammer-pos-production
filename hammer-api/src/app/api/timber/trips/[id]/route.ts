@@ -89,7 +89,10 @@ export async function PATCH(
     }
 
     if (action === "confirm") {
-      const trip = await confirmTimberTrip(id, session.userId);
+      const trip = await confirmTimberTrip(id, session.userId, {
+        expectedHash: body.expectedHash,
+        acknowledgeReconciliation: body.acknowledgeReconciliation === true,
+      });
       return ok(trip);
     }
     if (action === "cancel") {
@@ -107,6 +110,15 @@ export async function PATCH(
       }
       if (err.message === "TRIP_REQUIRES_COST") {
         return fail("VALIDATION_ERROR", "El viaje necesita un costo (total o por pie) antes de inyectarse al inventario.", 400);
+      }
+      if (err.message === "INJECTION_PREVIEW_REQUIRED") {
+        return fail("VALIDATION_ERROR", "Generá el preview de inyección antes de confirmar.", 400);
+      }
+      if (err.message === "INJECTION_PREVIEW_STALE") {
+        return fail("CONFLICT", "El inventario cambió desde que se generó este preview. Generá uno nuevo antes de confirmar.", 409);
+      }
+      if (err.message === "RECONCILIATION_REQUIRES_ACK") {
+        return fail("VALIDATION_ERROR", "La conciliación con la factura está fuera de tolerancia — confirmá explícitamente para continuar.", 400);
       }
     }
     return toHttpErrorResponse(err);
