@@ -513,11 +513,11 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
   return (
     <ModalShell title="Nueva fusión" onClose={onClose} wide>
       <div className="mb-4 flex items-center gap-2 text-xs font-semibold text-[var(--color-text-soft)]">
-        <span className={step >= 1 ? "text-[var(--color-master-text)]" : ""}>1 · Productos</span>
+        <span className={step >= 1 ? "text-[var(--color-master-700)]" : ""}>1 · Productos</span>
         <span className="h-px flex-1 bg-[var(--color-border-strong)]" />
-        <span className={step >= 2 ? "text-[var(--color-master-text)]" : ""}>2 · Equivalencia</span>
+        <span className={step >= 2 ? "text-[var(--color-master-700)]" : ""}>2 · Equivalencia</span>
         <span className="h-px flex-1 bg-[var(--color-border-strong)]" />
-        <span className={step >= 3 ? "text-[var(--color-master-text)]" : ""}>3 · Existencias</span>
+        <span className={step >= 3 ? "text-[var(--color-master-700)]" : ""}>3 · Existencias</span>
       </div>
 
       {step === 1 && (
@@ -533,7 +533,7 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
                     key={p.key}
                     type="button"
                     onClick={() => applyPreset(p)}
-                    className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedPreset?.key === p.key ? "border-[var(--color-master)] bg-[var(--color-master-50)] text-[var(--color-master-text)]" : "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"}`}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selectedPreset?.key === p.key ? "border-[var(--color-master-500)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"}`}
                   >
                     {p.label}
                   </button>
@@ -549,7 +549,7 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
                 {m.isCanonical ? (
                   <Badge variant="info">unidad suelta (base)</Badge>
                 ) : (
-                  <button type="button" onClick={() => markAsBase(m.productId)} className="text-[11px] font-semibold text-[var(--color-master-text)] hover:underline">
+                  <button type="button" onClick={() => markAsBase(m.productId)} className="text-[11px] font-semibold text-[var(--color-master-700)] hover:underline">
                     marcar como base
                   </button>
                 )}
@@ -598,7 +598,7 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
             <span className="rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-xs font-semibold">{canonical.saleUnit}</span>
           </div>
 
-          <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-2)]">
+          <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
             <input type="checkbox" checked={tracksPackages} onChange={(e) => setTracksPackages(e.target.checked)} />
             Maneja empaques cerrados/sueltos (el sistema controla cajas cerradas + unidades sueltas por separado)
           </label>
@@ -606,11 +606,11 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
           {tracksPackages && (
             <>
               <Input label="Unidad de empaque" value={packageUnit} onChange={(e) => setPackageUnit(e.target.value)} placeholder="Ej: KILO, CAJA" />
-              <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-2)]">
+              <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
                 <input type="checkbox" checked={approximateFactor} onChange={(e) => setApproximateFactor(e.target.checked)} />
                 El contenido varía (factor aproximado) — al abrir cada empaque se registran las unidades reales
               </label>
-              <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-2)]">
+              <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
                 <input type="checkbox" checked={autoOpenForUnitSale} onChange={(e) => setAutoOpenForUnitSale(e.target.checked)} />
                 Abrir empaque automáticamente cuando el POS venda sueltas y no haya suficientes
               </label>
@@ -665,7 +665,7 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
                       ["USE_CANONICAL_ONLY", "Usá solo las sueltas", `Resultado: ${fmt(b.resultIfUseCanonicalOnly)}`],
                       ["MANUAL_BASE_QTY", "Yo pongo el número — conteo físico", ""],
                     ] as const).map(([value, label, hint]) => (
-                      <label key={value} className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 ${resolutionByBranch[b.branchId] === value ? "border-[var(--color-master)] bg-[var(--color-master-50)]" : "border-[var(--color-border)]"}`}>
+                      <label key={value} className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 ${resolutionByBranch[b.branchId] === value ? "border-[var(--color-master-500)] bg-[var(--color-master-50)]" : "border-[var(--color-border)]"}`}>
                         <input type="radio" className="mt-0.5" checked={resolutionByBranch[b.branchId] === value} onChange={() => setResolutionByBranch((prev) => ({ ...prev, [b.branchId]: value }))} />
                         <span>
                           <b className="block text-[12.5px]">{label}</b>

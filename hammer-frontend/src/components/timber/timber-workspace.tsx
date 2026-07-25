@@ -460,7 +460,7 @@ function StepViajeYCubicacion(props: {
                   </td>
                   <td className="hm-num text-[var(--color-text-muted)]">{fmt(feetPerPiece, 3)}</td>
                   <td className="hm-num">{fmt(feetPerPiece * l.pieces)}</td>
-                  <td>{isEditable && <button onClick={() => removeLine(i)} className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-text)]"><X className="h-3.5 w-3.5" /></button>}</td>
+                  <td>{isEditable && <button onClick={() => removeLine(i)} className="text-[var(--color-text-soft)] hover:text-[var(--color-danger-700)]"><X className="h-3.5 w-3.5" /></button>}</td>
                 </tr>
               );
             })}
@@ -475,8 +475,8 @@ function StepViajeYCubicacion(props: {
         <Card>
           <div className="hm-section-rule">Costo de la madera</div>
           <div className="mb-2.5 flex gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-0.5">
-            <button disabled={!isEditable} onClick={() => setCostMode("PER_FOOT")} className={`flex-1 rounded-md py-1.5 text-[12px] font-semibold ${costMode === "PER_FOOT" ? "bg-[var(--color-surface)] text-[var(--color-master-text)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>Precio por pie</button>
-            <button disabled={!isEditable} onClick={() => setCostMode("TOTAL")} className={`flex-1 rounded-md py-1.5 text-[12px] font-semibold ${costMode === "TOTAL" ? "bg-[var(--color-surface)] text-[var(--color-master-text)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>Total del viaje</button>
+            <button disabled={!isEditable} onClick={() => setCostMode("PER_FOOT")} className={`flex-1 rounded-md py-1.5 text-[12px] font-semibold ${costMode === "PER_FOOT" ? "bg-[var(--color-surface)] text-[var(--color-master-700)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>Precio por pie</button>
+            <button disabled={!isEditable} onClick={() => setCostMode("TOTAL")} className={`flex-1 rounded-md py-1.5 text-[12px] font-semibold ${costMode === "TOTAL" ? "bg-[var(--color-surface)] text-[var(--color-master-700)] shadow-sm" : "text-[var(--color-text-muted)]"}`}>Total del viaje</button>
           </div>
           {costMode === "PER_FOOT" ? (
             <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
@@ -540,7 +540,7 @@ function StepCostosPorMedida({ trip }: { trip: TripDetail }) {
   return (
     <div className="space-y-4">
       {hasNegative && (
-        <div className="rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3.5 text-[12.5px] text-[var(--color-danger-text)]">
+        <div className="rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3.5 text-[12.5px] text-[var(--color-danger-700)]">
           <b className="block text-[13px]">⚠ Con este costo, al menos una medida deja margen negativo</b>
           Revisá el precio por pulgada vigente o ajustalo desde Configuración antes de confirmar el viaje.
         </div>
@@ -561,8 +561,8 @@ function StepCostosPorMedida({ trip }: { trip: TripDetail }) {
                   <td className="hm-num">{fmt(l.calculatedCostFeet)}</td>
                   <td className="hm-num" style={{ fontWeight: 600 }}>{fmt(l.calculatedCostPerPiece)}</td>
                   <td className="hm-num">{fmt(l.calculatedSalePricePerPiece)}</td>
-                  <td className="hm-num" style={negative ? { color: "var(--color-danger-text)" } : undefined}>{fmt(l.calculatedProfit)}</td>
-                  <td className="hm-num" style={negative ? { color: "var(--color-danger-text)", fontWeight: 600 } : { fontWeight: 600 }}>{pct(l.calculatedMarginPct)}</td>
+                  <td className="hm-num" style={negative ? { color: "var(--color-danger-700)" } : undefined}>{fmt(l.calculatedProfit)}</td>
+                  <td className="hm-num" style={negative ? { color: "var(--color-danger-700)", fontWeight: 600 } : { fontWeight: 600 }}>{pct(l.calculatedMarginPct)}</td>
                 </tr>
               );
             })}
@@ -580,11 +580,11 @@ function StepCostosPorMedida({ trip }: { trip: TripDetail }) {
         <div className="space-y-2.5">
           <div>
             <div className="mb-1 flex justify-between text-[12px]"><span>Ancho 12&quot; · tabla</span><b className="font-mono">{fmt(distribution.feetOf12)} pies · {pct(distribution.pct12)}</b></div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-alt)]"><div className="h-full rounded-full bg-[var(--color-master)]" style={{ width: `${distribution.pct12 * 100}%` }} /></div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-alt)]"><div className="h-full rounded-full bg-[var(--color-master-500)]" style={{ width: `${distribution.pct12 * 100}%` }} /></div>
           </div>
           <div>
             <div className="mb-1 flex justify-between text-[12px]"><span>Ancho 10&quot; · tabla</span><b className="font-mono">{fmt(distribution.feetOf10)} pies · {pct(distribution.pct10)}</b></div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-alt)]"><div className="h-full rounded-full bg-[var(--color-teal,#0d9488)]" style={{ width: `${distribution.pct10 * 100}%` }} /></div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-alt)]"><div className="h-full rounded-full bg-[var(--color-info-500)]" style={{ width: `${distribution.pct10 * 100}%` }} /></div>
           </div>
         </div>
       </Card>
@@ -676,7 +676,7 @@ function StepConfirmar({ trip, pricePolicy, setPricePolicy, onSaveFirst, onConfi
                     <td className="hm-num"><span className="text-[var(--color-text-soft)]">{l.costPerPiece.before !== null ? fmt(l.costPerPiece.before) : "—"}</span> → <b>{fmt(l.costPerPiece.after)}</b></td>
                     <td className="hm-num"><span className="text-[var(--color-text-soft)]">{l.wac.before !== null ? fmt(l.wac.before) : "—"}</span> → <b>{fmt(l.wac.after)}</b></td>
                     <td className="hm-num"><span className="text-[var(--color-text-soft)]">{l.branchCost.before !== null ? fmt(l.branchCost.before) : "—"}</span> → <b>{fmt(l.branchCost.after)}</b></td>
-                    <td className="hm-num"><span className="text-[var(--color-text-soft)]">{l.sellingPrice.before !== null ? fmt(l.sellingPrice.before) : "—"}</span> → <b style={{ color: "var(--color-success-text)" }}>{fmt(l.sellingPrice.after)}</b></td>
+                    <td className="hm-num"><span className="text-[var(--color-text-soft)]">{l.sellingPrice.before !== null ? fmt(l.sellingPrice.before) : "—"}</span> → <b style={{ color: "var(--color-success-700)" }}>{fmt(l.sellingPrice.after)}</b></td>
                   </tr>
                 ))}
               </tbody>
