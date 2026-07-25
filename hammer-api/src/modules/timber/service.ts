@@ -602,9 +602,11 @@ export async function createTimberTrip(input: CreateTimberTripInput, userId?: st
     priceGroup: l.priceGroup,
   }));
 
+  const marginConfigForCalc = await getMarginConfig();
   const calc = calculateTimberTrip(tripLines, input.woodTripTotalCost, tripPricing, {
     costPerFootInput: input.costPerFoot,
     expenses: input.expenses,
+    targetMarginPercent: marginConfigForCalc.targetMarginPercent,
   });
   const tripCode = await generateTripCode();
 
@@ -698,6 +700,7 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
     otherExpensesAmount: existing.otherExpensesAmount.toNumber(),
   };
 
+  const marginConfigForCalc = await getMarginConfig();
   const calc = calculateTimberTrip(
     lines.map((l) => ({
       thickness: l.thickness,
@@ -708,7 +711,7 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
     })),
     woodCost,
     tripPricing,
-    { costPerFootInput: input.costPerFoot, expenses },
+    { costPerFootInput: input.costPerFoot, expenses, targetMarginPercent: marginConfigForCalc.targetMarginPercent },
   );
 
   const trip = await prisma.$transaction(async (tx) => {
@@ -913,11 +916,18 @@ function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-async function getMarginConfig(): Promise<{ targetMarginPercent: number; targetMarginRoundingMultiple: number }> {
+async function getMarginConfig(): Promise<{
+  targetMarginPercent: number;
+  targetMarginRoundingMultiple: number;
+  warnBelowTargetMargin: boolean;
+  blockNegativeMargin: boolean;
+}> {
   const cfg = await prisma.timberPricingConfig.findFirst({ orderBy: { updatedAt: "desc" } });
   return {
     targetMarginPercent: cfg ? cfg.targetMarginPercent.toNumber() : 0.4,
     targetMarginRoundingMultiple: cfg ? cfg.targetMarginRoundingMultiple.toNumber() : 1,
+    warnBelowTargetMargin: cfg ? cfg.warnBelowTargetMargin : true,
+    blockNegativeMargin: cfg ? cfg.blockNegativeMargin : true,
   };
 }
 
@@ -937,7 +947,7 @@ async function getMarginConfig(): Promise<{ targetMarginPercent: number; targetM
 export async function confirmTimberTrip(
   id: string,
   userId?: string,
-  options: { expectedHash?: string; acknowledgeReconciliation?: boolean } = {},
+  options: { expectedHash?: string; acknowledgeReconciliation?: boolean; marginOverrideReason?: string } = {},
 ) {
   const trip = await prisma.timberTrip.findUnique({
     where: { id },
@@ -965,6 +975,15 @@ export async function confirmTimberTrip(
     throw new Error("RECONCILIATION_REQUIRES_ACK");
   }
 
+  const marginConfig = await getMarginConfig();
+  // Madera v2 Fase 3 — margen negativo en CUALQUIER línea bloquea la confirmación salvo
+  // override explícito con motivo (queda auditado). Margen bajo el objetivo NUNCA bloquea
+  // por sí solo — eso es solo un aviso visible en el frontend (Fase 5).
+  const hasNegativeMarginLine = trip.lines.some((line) => line.calculatedMarginPct.lt(0));
+  if (marginConfig.blockNegativeMargin && hasNegativeMarginLine && !options.marginOverrideReason?.trim()) {
+    throw new Error("NEGATIVE_MARGIN_REQUIRES_OVERRIDE");
+  }
+
   if (!options.expectedHash) {
     throw new Error("INJECTION_PREVIEW_REQUIRED");
   }
@@ -972,8 +991,6 @@ export async function confirmTimberTrip(
   if (freshPreview.hash !== options.expectedHash) {
     throw new Error("INJECTION_PREVIEW_STALE");
   }
-
-  const marginConfig = await getMarginConfig();
   const pricing: TimberPricing = {
     costPerFoot: trip.computedCostPerFoot.toNumber(),
     pricePerInchTabla: trip.pricePerInchTabla.toNumber(),
@@ -1046,6 +1063,7 @@ export async function confirmTimberTrip(
         confirmedById: userId,
         confirmedAt: new Date(),
         reconciliationAcknowledged: reconciliation.status === "REVIEW" ? true : trip.reconciliationAcknowledged,
+        marginOverrideReason: hasNegativeMarginLine ? options.marginOverrideReason?.trim() : trip.marginOverrideReason,
       },
     });
     if (transition.count === 0) {
@@ -1073,6 +1091,8 @@ export async function confirmTimberTrip(
           linesInjected: trip.lines.length,
           reconciliationStatus: reconciliation.status,
           reconciliationAcknowledged: reconciliation.status === "REVIEW",
+          hasNegativeMarginLine,
+          marginOverrideReason: hasNegativeMarginLine ? options.marginOverrideReason?.trim() ?? null : null,
         },
       },
     });

@@ -107,6 +107,18 @@ export interface TimberTripLineResult {
   calculatedSaleTotal: number;
   calculatedProfit: number;
   calculatedMarginPct: number;
+  /** Precio por pulgada mínimo para que ESTA línea alcance el margen objetivo. */
+  minPricePerInchForTargetMargin: number;
+}
+
+export interface TimberMarginAlerts {
+  targetMarginPercent: number;
+  linesUnderTarget: number;
+  linesWithNegativeMargin: number;
+  /** Por grupo de precio (TABLA/TABLILLA/CUADRO): el MÁXIMO de los mínimos de sus líneas —
+   *  el número al que hay que subir el precio por pulgada del grupo para que TODAS sus
+   *  líneas alcancen el margen objetivo. */
+  minPricePerInchByGroup: Partial<Record<TimberPriceGroup, number>>;
 }
 
 export interface TimberTripTotals {
@@ -166,6 +178,7 @@ export interface TimberTripResult {
   lines: TimberTripLineResult[];
   totals: TimberTripTotals;
   distribution: TimberDistribution;
+  marginAlerts: TimberMarginAlerts;
 }
 
 export interface TimberDistribution {
@@ -290,6 +303,8 @@ export interface TimberTripCostOptions {
   costPerFootInput?: number;
   /** Gastos del viaje (Madera v2 Fase 1.1) — se prorratean por pie sobre el costo aterrizado. */
   expenses?: TimberTripExpenses;
+  /** Margen objetivo (0-1) para las alertas de margen (Madera v2 Fase 3). Default 0.40. */
+  targetMarginPercent?: number;
 }
 
 export function calculateTimberTrip(
@@ -358,6 +373,13 @@ export function calculateTimberTrip(
   const landedCostPerFoot = totalFeet > 0 ? roundTo(landedTotal / totalFeet, FEET_DECIMALS) : 0;
 
   // Phase 3: calculate cost/profit for each line using the LANDED cost per foot.
+  const targetMarginPercent = options.targetMarginPercent ?? 0.4;
+  const minPricePerInchFor = (costPerPiece: number, thickness: number, width: number, varaLength: number): number => {
+    const denom = thickness * width * varaLength;
+    if (!(denom > 0) || targetMarginPercent >= 1) return 0;
+    return roundTo(costPerPiece / (1 - targetMarginPercent) / denom, MONEY_DECIMALS);
+  };
+
   const lineResults: TimberTripLineResult[] = rawLines.map((line) => {
     const costFeet = roundTo(line.feet * landedCostPerFoot, MONEY_DECIMALS);
     const costPerPiece = roundTo(line.pieces > 0 ? costFeet / line.pieces : 0, MONEY_DECIMALS);
@@ -376,6 +398,7 @@ export function calculateTimberTrip(
       calculatedSaleTotal: line.saleTotal,
       calculatedProfit: profit,
       calculatedMarginPct: marginPct,
+      minPricePerInchForTargetMargin: minPricePerInchFor(costPerPiece, line.thickness, line.width, line.varaLength),
     };
   });
 
@@ -403,6 +426,7 @@ export function calculateTimberTrip(
         calculatedCostPerPiece: adjustedCostPerPiece,
         calculatedProfit: adjustedProfit,
         calculatedMarginPct: adjustedMarginPct,
+        minPricePerInchForTargetMargin: minPricePerInchFor(adjustedCostPerPiece, target.dimensions.thickness, target.dimensions.width, target.varaLength),
       };
     }
   }
@@ -426,10 +450,25 @@ export function calculateTimberTrip(
     globalMarginPct,
   };
 
+  // Phase 4b: alertas de margen (Madera v2 Fase 3).
+  const minPricePerInchByGroup: Partial<Record<TimberPriceGroup, number>> = {};
+  for (const line of lineResults) {
+    const current = minPricePerInchByGroup[line.priceGroup];
+    if (current === undefined || line.minPricePerInchForTargetMargin > current) {
+      minPricePerInchByGroup[line.priceGroup] = line.minPricePerInchForTargetMargin;
+    }
+  }
+  const marginAlerts: TimberMarginAlerts = {
+    targetMarginPercent,
+    linesUnderTarget: lineResults.filter((l) => l.calculatedMarginPct < targetMarginPercent).length,
+    linesWithNegativeMargin: lineResults.filter((l) => l.calculatedMarginPct < 0).length,
+    minPricePerInchByGroup,
+  };
+
   // Phase 5: distribution
   const distribution = calculateDistribution(lineResults, totalFeet);
 
-  return { lines: lineResults, totals, distribution };
+  return { lines: lineResults, totals, distribution, marginAlerts };
 }
 
 /**

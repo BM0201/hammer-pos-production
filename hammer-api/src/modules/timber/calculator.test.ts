@@ -132,3 +132,45 @@ test("conciliacion: sin factura registrada es NOT_APPLICABLE", () => {
   const rec = calculateReconciliation(11594.33, null, 0.01);
   assert.equal(rec.status, "NOT_APPLICABLE");
 });
+
+// ─── Madera v2 Fase 3 — margenes y alertas ───────────────────────────────────
+
+test("marginAlerts: viaje aterrizado (C$51.5961/pie) con margen objetivo 40% marca las 6 lineas bajo objetivo y con margen negativo", () => {
+  const result = calculateTimberTrip(GOLDEN_LINES, 0, PRICING, {
+    costPerFootInput: 49,
+    expenses: { freightAmount: 18000, fuelAmount: 6500, perDiemAmount: 3200, permitsAmount: 2400 },
+    targetMarginPercent: 0.4,
+  });
+
+  assert.equal(result.marginAlerts.linesUnderTarget, 6);
+  assert.equal(result.marginAlerts.linesWithNegativeMargin, 6);
+  assert.equal(result.marginAlerts.minPricePerInchByGroup.TABLA, 20.07);
+
+  const line1 = result.lines[0];
+  assert.equal(line1.minPricePerInchForTargetMargin, 19.11);
+  assert.ok(line1.calculatedMarginPct < 0);
+});
+
+test("marginAlerts: precio por pulgada minimo garantiza el margen objetivo si se aplica", () => {
+  const result = calculateTimberTrip(GOLDEN_LINES, 0, PRICING, {
+    costPerFootInput: 49,
+    expenses: { freightAmount: 18000, fuelAmount: 6500, perDiemAmount: 3200, permitsAmount: 2400 },
+    targetMarginPercent: 0.4,
+  });
+
+  const maxMin = result.marginAlerts.minPricePerInchByGroup.TABLA!;
+  const simulated = calculateTimberTrip(GOLDEN_LINES, 0, { ...PRICING, pricePerInchTabla: maxMin }, {
+    costPerFootInput: 49,
+    expenses: { freightAmount: 18000, fuelAmount: 6500, perDiemAmount: 3200, permitsAmount: 2400 },
+    targetMarginPercent: 0.4,
+  });
+  for (const line of simulated.lines) {
+    assert.ok(line.calculatedMarginPct >= 0.4 - 0.0005, `linea ${JSON.stringify(line.dimensions)} debe alcanzar >= 40% (obtuvo ${line.calculatedMarginPct})`);
+  }
+});
+
+test("marginAlerts: sin gastos ni sobrecosto, ninguna linea queda bajo objetivo con el precio por defecto", () => {
+  const result = calculateTimberTrip(GOLDEN_LINES, 0, PRICING, { costPerFootInput: 20, targetMarginPercent: 0.4 });
+  // margen del test dorado es 48.78% global, por encima del 40% objetivo.
+  assert.equal(result.marginAlerts.linesWithNegativeMargin, 0);
+});

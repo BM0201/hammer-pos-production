@@ -92,6 +92,7 @@ export async function PATCH(
       const trip = await confirmTimberTrip(id, session.userId, {
         expectedHash: body.expectedHash,
         acknowledgeReconciliation: body.acknowledgeReconciliation === true,
+        marginOverrideReason: typeof body.marginOverrideReason === "string" ? body.marginOverrideReason : undefined,
       });
       return ok(trip);
     }
@@ -119,6 +120,9 @@ export async function PATCH(
       }
       if (err.message === "RECONCILIATION_REQUIRES_ACK") {
         return fail("VALIDATION_ERROR", "La conciliación con la factura está fuera de tolerancia — confirmá explícitamente para continuar.", 400);
+      }
+      if (err.message === "NEGATIVE_MARGIN_REQUIRES_OVERRIDE") {
+        return fail("VALIDATION_ERROR", "Al menos una medida queda con margen negativo — indicá un motivo para confirmar de todos modos.", 400);
       }
     }
     return toHttpErrorResponse(err);
