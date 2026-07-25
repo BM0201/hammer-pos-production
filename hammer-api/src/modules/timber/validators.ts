@@ -110,11 +110,27 @@ export const updateTimberTripSchema = z.object({
   lines: z.array(timberTripLineSchema).min(1).optional(),
 });
 
+// Madera v2 Fase 4 — configuración como datos: tabla de cubicación, reglas de ancho,
+// margen objetivo/redondeo, tolerancia de conciliación y flags de alerta.
+export const cubicationRowSchema = z.object({
+  lengthFeet: z.number().positive().max(100),
+  varas: z.number().positive().max(50),
+  forceCuadro: z.boolean(),
+});
+
 export const updateTimberPricingConfigSchema = z.object({
   costPerFoot: z.number().positive("Costo por pie debe ser mayor a 0").max(10000),
   pricePerInchTabla: z.number().nonnegative("Precio tabla debe ser ≥ 0").max(10000),
   pricePerInchTablilla: z.number().nonnegative("Precio tablilla debe ser ≥ 0").max(10000),
   pricePerInchCuadro: z.number().nonnegative("Precio cuadro debe ser ≥ 0").max(10000),
+  cubicationTable: z.array(cubicationRowSchema).min(1).optional(),
+  tablaWidths: z.array(z.number().positive().max(48)).min(1).optional(),
+  tablillaWidths: z.array(z.number().positive().max(48)).min(1).optional(),
+  targetMarginPercent: z.number().min(0, "El margen objetivo debe ser ≥ 0").max(0.99, "El margen objetivo debe ser < 100%").optional(),
+  targetMarginRoundingMultiple: z.number().positive("El múltiplo de redondeo debe ser mayor a 0").max(10000).optional(),
+  reconciliationTolerancePercent: z.number().min(0, "La tolerancia debe ser ≥ 0").max(1, "La tolerancia debe ser ≤ 100%").optional(),
+  warnBelowTargetMargin: z.boolean().optional(),
+  blockNegativeMargin: z.boolean().optional(),
 });
 
 export type CreateTimberProductInput = z.infer<typeof createTimberProductSchema>;

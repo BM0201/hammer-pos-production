@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateTimberTrip, calculateReconciliation, type TimberTripLineInput } from "@/modules/timber/calculator";
+import {
+  calculateTimberTrip,
+  calculateReconciliation,
+  classifyTimber,
+  getVaraLength,
+  DEFAULT_CLASSIFICATION_CONFIG,
+  type TimberTripLineInput,
+  type TimberClassificationConfig,
+} from "@/modules/timber/calculator";
 
 const PRICING = {
   costPerFoot: 20,
@@ -173,4 +181,49 @@ test("marginAlerts: sin gastos ni sobrecosto, ninguna linea queda bajo objetivo 
   const result = calculateTimberTrip(GOLDEN_LINES, 0, PRICING, { costPerFootInput: 20, targetMarginPercent: 0.4 });
   // margen del test dorado es 48.78% global, por encima del 40% objetivo.
   assert.equal(result.marginAlerts.linesWithNegativeMargin, 0);
+});
+
+// ─── Madera v2 Fase 4 — configuracion como datos (clasificacion via config) ──
+// El Excel original arrastra 3 errores de copiado que el codigo YA corrige:
+// 1x12x8 cubicando con largo 11, 1x10x8 usando 3 en vez de 8, y 2x8x14 con 4
+// varas en vez de 5. Estos tests son el guardian contra reintroducirlos al
+// mover la clasificacion a config.
+
+test("medidas de 8 pies: varas=3 (config por defecto), forzadas a CUADRO sin importar el ancho", () => {
+  assert.equal(getVaraLength(8), 3);
+  assert.equal(classifyTimber(1, 12, 8), "CUADRO", "1x12x8 se fuerza a CUADRO por longitud 8, no cubica con largo 11");
+  assert.equal(classifyTimber(1, 10, 8), "CUADRO", "1x10x8 se fuerza a CUADRO, el factor de varas sigue siendo 3 (no 8)");
+  assert.equal(classifyTimber(1, 6, 8), "CUADRO");
+});
+
+test("2x8x14: CUADRO (grosor 2 + ancho 8 no es TABLA ni TABLILLA), varas=5 (no 4)", () => {
+  assert.equal(classifyTimber(2, 8, 14), "CUADRO");
+  assert.equal(getVaraLength(14), 5, "largo 14 siempre son 5 varas, nunca 4");
+});
+
+test("clasificacion con config personalizada (Fase 4): anchos TABLA/TABLILLA y tabla de cubicacion configurables", () => {
+  const customConfig: TimberClassificationConfig = {
+    tablaWidths: [9, 12], // ancho 9 tratado como TABLA en vez del default [10,12]
+    tablillaWidths: [6],
+    cubicationTable: [
+      { lengthFeet: 16, varas: 6, forceCuadro: false },
+      { lengthFeet: 9, varas: 3, forceCuadro: true }, // largo 9 nuevo, forzado a CUADRO
+    ],
+  };
+  assert.equal(classifyTimber(1, 9, 16, customConfig), "TABLA", "ancho 9 es TABLA con la config personalizada");
+  assert.equal(classifyTimber(1, 8, 16, customConfig), "CUADRO", "ancho 8 ya no es TABLILLA con la config personalizada (solo 6)");
+  assert.equal(classifyTimber(1, 12, 9, customConfig), "CUADRO", "largo 9 forzado a CUADRO en la config personalizada");
+  assert.equal(getVaraLength(9, customConfig), 3);
+  // Config por defecto no se ve afectada por instancias personalizadas.
+  assert.equal(classifyTimber(1, 10, 16), "TABLA");
+  assert.equal(classifyTimber(1, 9, 16), "CUADRO", "con la config por defecto, ancho 9 sigue siendo CUADRO");
+});
+
+test("DEFAULT_CLASSIFICATION_CONFIG deriva la tabla de cubicacion de VARA_LENGTH_MAP sin duplicar numeros", () => {
+  const row16 = DEFAULT_CLASSIFICATION_CONFIG.cubicationTable.find((r) => r.lengthFeet === 16);
+  assert.equal(row16?.varas, 6);
+  assert.equal(row16?.forceCuadro, false);
+  const row8 = DEFAULT_CLASSIFICATION_CONFIG.cubicationTable.find((r) => r.lengthFeet === 8);
+  assert.equal(row8?.varas, 3);
+  assert.equal(row8?.forceCuadro, true);
 });

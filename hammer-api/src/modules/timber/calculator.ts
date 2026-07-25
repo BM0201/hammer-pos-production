@@ -45,9 +45,6 @@ export const DEFAULT_PRICE_PER_INCH_TABLA = 8.9;
 export const DEFAULT_PRICE_PER_INCH_TABLILLA = 6.9;
 export const DEFAULT_PRICE_PER_INCH_CUADRO = 6.9;
 
-/** Width threshold: >= 10" with thickness 1 or 2 = TABLA */
-export const TABLA_WIDTH_THRESHOLD = 10;
-
 /* ── Types ── */
 
 export type TimberPriceGroup = "TABLA" | "TABLILLA" | "CUADRO";
@@ -202,31 +199,67 @@ function roundTo(value: number, decimals: number): number {
   return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
-/* ── Classification ── */
+/* ── Classification config (Madera v2 Fase 4 — datos, no código) ── */
+
+export type CubicationRow = { lengthFeet: number; varas: number; forceCuadro: boolean };
+
+export interface TimberClassificationConfig {
+  tablaWidths: number[];
+  tablillaWidths: number[];
+  cubicationTable: CubicationRow[];
+}
+
+/**
+ * Semilla de la tabla de cubicación — derivada de VARA_LENGTH_MAP/LENGTHS_THAT_FORCE_CUADRO
+ * para no duplicar los mismos números en dos lugares. Solo se usa para poblar
+ * TimberPricingConfig la primera vez; después de eso, el calculador SIEMPRE recibe la
+ * config real por parámetro (getPricingConfig en service.ts), nunca esta constante.
+ */
+export const DEFAULT_CUBICATION_TABLE: CubicationRow[] = Object.entries(VARA_LENGTH_MAP).map(([lengthFeet, varas]) => ({
+  lengthFeet: Number(lengthFeet),
+  varas,
+  forceCuadro: LENGTHS_THAT_FORCE_CUADRO.has(Number(lengthFeet)),
+}));
+
+export const DEFAULT_TABLA_WIDTHS = [10, 12];
+export const DEFAULT_TABLILLA_WIDTHS = [6, 8];
+
+export const DEFAULT_CLASSIFICATION_CONFIG: TimberClassificationConfig = {
+  tablaWidths: DEFAULT_TABLA_WIDTHS,
+  tablillaWidths: DEFAULT_TABLILLA_WIDTHS,
+  cubicationTable: DEFAULT_CUBICATION_TABLE,
+};
 
 /**
  * Classify timber into price group based on dimensions.
- * - TABLILLA: 1×6, 1×8
- * - TABLA: (1 or 2) × (10 or 12)
- * - CUADRO: everything else, and all 8ft lengths
+ * - TABLILLA: thickness 1 × config.tablillaWidths (default 6, 8)
+ * - TABLA: (thickness 1 or 2) × config.tablaWidths (default 10, 12)
+ * - CUADRO: everything else, and any length flagged forceCuadro in la tabla de cubicación
  */
 export function classifyTimber(
   thickness: number,
   width: number,
   length?: number,
+  config: TimberClassificationConfig = DEFAULT_CLASSIFICATION_CONFIG,
 ): TimberPriceGroup {
-  if (length != null && LENGTHS_THAT_FORCE_CUADRO.has(length)) return "CUADRO";
-  if (thickness === 1 && (width === 6 || width === 8)) return "TABLILLA";
-  if ((thickness === 1 || thickness === 2) && (width === 10 || width === 12)) return "TABLA";
+  if (length != null) {
+    const row = config.cubicationTable.find((r) => r.lengthFeet === length);
+    if (row?.forceCuadro) return "CUADRO";
+  }
+  if (thickness === 1 && config.tablillaWidths.includes(width)) return "TABLILLA";
+  if ((thickness === 1 || thickness === 2) && config.tablaWidths.includes(width)) return "TABLA";
   return "CUADRO";
 }
 
 /**
- * Get vara length from commercial length.
+ * Get vara length from commercial length, usando la tabla de cubicación configurada.
  */
-export function getVaraLength(lengthFeet: number): number {
-  const vara = VARA_LENGTH_MAP[lengthFeet];
-  if (vara != null) return vara;
+export function getVaraLength(
+  lengthFeet: number,
+  config: TimberClassificationConfig = DEFAULT_CLASSIFICATION_CONFIG,
+): number {
+  const row = config.cubicationTable.find((r) => r.lengthFeet === lengthFeet);
+  if (row) return row.varas;
   // Fallback: round(lengthFeet * 12 / 33.87) — traditional vara calculation
   return Math.round((lengthFeet * 12) / 33.87);
 }
@@ -259,11 +292,12 @@ export function calculateBoardFeet(dims: TimberDimensions): number {
 export function calculateTimber(
   dims: TimberDimensions,
   pricing: TimberPricing = DEFAULT_PRICING,
+  classification: TimberClassificationConfig = DEFAULT_CLASSIFICATION_CONFIG,
 ): TimberCalculation {
-  const priceGroup = classifyTimber(dims.thickness, dims.width, dims.length);
+  const priceGroup = classifyTimber(dims.thickness, dims.width, dims.length, classification);
   const boardFeet = calculateBoardFeet(dims);
   const baseCost = boardFeet * pricing.costPerFoot;
-  const varaLength = getVaraLength(dims.length);
+  const varaLength = getVaraLength(dims.length, classification);
   const pricePerInch = getPricePerInch(priceGroup, pricing);
   const sellingPrice = dims.thickness * dims.width * varaLength * pricePerInch;
   const marginPercent = sellingPrice > 0 ? (sellingPrice - baseCost) / sellingPrice : 0;
@@ -305,6 +339,8 @@ export interface TimberTripCostOptions {
   expenses?: TimberTripExpenses;
   /** Margen objetivo (0-1) para las alertas de margen (Madera v2 Fase 3). Default 0.40. */
   targetMarginPercent?: number;
+  /** Tabla de cubicación y reglas de ancho (Madera v2 Fase 4 — datos, no código). */
+  classification?: TimberClassificationConfig;
 }
 
 export function calculateTimberTrip(
@@ -313,11 +349,12 @@ export function calculateTimberTrip(
   pricing: TimberPricing = DEFAULT_PRICING,
   options: TimberTripCostOptions = {},
 ): TimberTripResult {
+  const classification = options.classification ?? DEFAULT_CLASSIFICATION_CONFIG;
   const perFootMode = typeof options.costPerFootInput === "number" && options.costPerFootInput > 0;
   // Phase 1: calculate feet for all lines
   const rawLines = lines.map((line) => {
-    const priceGroup = line.priceGroup ?? classifyTimber(line.thickness, line.width, line.length);
-    const varaLength = getVaraLength(line.length);
+    const priceGroup = line.priceGroup ?? classifyTimber(line.thickness, line.width, line.length, classification);
+    const varaLength = getVaraLength(line.length, classification);
     const feet = roundTo((line.thickness * line.width * line.length * line.pieces) / 12, FEET_DECIMALS);
     const pricePerInch = getPricePerInch(priceGroup, pricing);
     const salePricePerPiece = roundTo(line.thickness * line.width * varaLength * pricePerInch, MONEY_DECIMALS);
@@ -614,5 +651,4 @@ export const TIMBER_CONSTANTS = {
   DEFAULT_PRICE_PER_INCH_TABLA,
   DEFAULT_PRICE_PER_INCH_TABLILLA,
   DEFAULT_PRICE_PER_INCH_CUADRO,
-  TABLA_WIDTH_THRESHOLD,
 } as const;
