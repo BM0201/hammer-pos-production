@@ -69,6 +69,15 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message.startsWith("REPAIR_PREVIEW_STALE:")) {
       return errJson("REPAIR_PREVIEW_STALE", error.message.replace(/^REPAIR_PREVIEW_STALE:\s?/, ""), 409);
     }
+    if (error.message === "INJECTION_PREVIEW_STALE") {
+      return errJson("INJECTION_PREVIEW_STALE", "El costo del inventario cambió desde que se generó el preview. Vuelve a calcular antes de completar el lote.", 409);
+    }
+    if (error.message === "ONLY_COMPLETED_BATCHES_CAN_BE_REVERSED") {
+      return errJson("CONFLICT", "Solo un lote completado puede revertirse.", 409);
+    }
+    if (error.message.startsWith("INSUFFICIENT_STOCK_TO_REVERSE:")) {
+      return errJson("INSUFFICIENT_STOCK_TO_REVERSE", error.message.replace(/^INSUFFICIENT_STOCK_TO_REVERSE:\s?/, ""), 409);
+    }
     if (error.message === "PRICE_APPLICATION_BLOCKED") {
       return errJson("PRICE_APPLICATION_BLOCKED", "El precio no puede aplicarse porque no cumple la rentabilidad minima.", 409);
     }

@@ -151,6 +151,8 @@ enum InventoryMovementType {
   PRODUCTION_CONSUME
   PRODUCTION_OUTPUT
   PRODUCTION_WASTE
+  PRODUCTION_REVERSAL_IN /// Producción v2 Fase 4: devuelve al inventario un insumo consumido por un lote revertido
+  PRODUCTION_REVERSAL_OUT /// Producción v2 Fase 4: retira el producto terminado agregado por un lote revertido
 }
 
 enum BrainDecisionStatus {
@@ -2781,10 +2783,11 @@ model ReorderSuggestionLine {
 /// Estado del lote de producción
 enum ProductionBatchStatus {
   DRAFT /// Borrador
-  PLANNED /// Planificado
+  PLANNED /// Planificado (reserva insumos disponibles)
   IN_PROGRESS /// En proceso
   COMPLETED /// Completado
   CANCELLED /// Cancelado
+  REVERSED /// Producción v2 Fase 4: un COMPLETED revertido — insumos devueltos, terminado retirado
 }
 
 /// Receta de producción (cómo fabricar un producto terminado)
@@ -2803,11 +2806,19 @@ model ProductionRecipe {
   recipeType   String @default("MANUFACTURING") /// MANUFACTURING, CONVERSION, CUTTING, MIXING, PACKAGING, REPACKAGING
   recipeFamily String @default("GENERAL") /// WOOD, CEMENT, STONE, METAL, BLOCKS, PAINT, GENERAL
 
-  targetMarginPct        Float? /// 0.30 = 30%
-  yieldPercent           Float? /// rendimiento esperado; 1 = 100%
-  wastePercent           Float? /// merma esperada; 0.05 = 5%
-  processingCostPerBatch Float?
-  laborCostPerBatch      Float?
+  targetMarginPct Decimal? /// 0.30 = 30%
+  yieldPercent    Decimal? /// rendimiento esperado; 1 = 100%
+  wastePercent    Decimal? /// merma esperada; 0.05 = 5%
+
+  /// Producción v2 Fase 1 — mano de obra es C$0 por defecto (el trabajador ya está en
+  /// planilla). Si se activa, contribuye laborCostPerBatch (monto fijo) al costo del lote.
+  laborEnabled      Boolean  @default(false)
+  laborCostPerBatch Decimal? /// monto fijo por lote cuando laborEnabled=true
+
+  /// Overhead es C$0 por defecto (se produce a mano, sin mezcladora). NONE | FIXED | PCT_MAT.
+  /// processingCostPerBatch es el monto (FIXED) o la fracción 0-1 (PCT_MAT) según el modo.
+  overheadMode           String   @default("NONE")
+  processingCostPerBatch Decimal?
 
   isActive        Boolean  @default(true)
   notes           String?
@@ -2859,16 +2870,35 @@ model ProductionBatch {
   producedGoodQuantity Float? /// 980 unidades buenas
   producedBadQuantity  Float? /// 20 unidades rechazadas
 
-  materialsCost  Float?
-  laborCost      Float?
-  overheadCost   Float?
-  totalCost      Float?
-  unitCost       Float? /// totalCost / producedGoodQuantity
-  suggestedPrice Float? /// unitCost / (1 - targetMargin)
+  materialsCost  Decimal?
+  laborCost      Decimal?
+  overheadCost   Decimal?
+  totalCost      Decimal?
+  unitCost       Decimal? /// costo unitario REAL: totalCost / producedGoodQuantity
+  suggestedPrice Decimal? /// unitCost / (1 - targetMargin)
+
+  /// Producción v2 Fase 5 — costo estándar de la receta al momento de cerrar (frozen),
+  /// para variancia sin recalcular después.
+  standardUnitCost      Decimal?
+  standardMaterialsCost Decimal?
+
+  /// Producción v2 Fase 3 — política de precio al cerrar. RECALC_TARGET_MARGIN (default) |
+  /// KEEP_CURRENT | APPROVAL_IF_DELTA.
+  pricePolicy           String  @default("RECALC_TARGET_MARGIN")
+  priceApprovalRequired Boolean @default(false)
+
+  /// Producción v2 Fase 1 — trabajadores/horas informativos (productividad), NUNCA
+  /// contribuyen al costo. [{ workerName: string, hours: number }]
+  laborEntries Json?
 
   startedAt   DateTime?
   completedAt DateTime?
   cancelledAt DateTime?
+
+  /// Producción v2 Fase 4 — reversión de un lote COMPLETED.
+  reversedAt       DateTime?
+  reversedByUserId String?
+  reversalReason   String?
 
   notes String?
 
@@ -2895,14 +2925,31 @@ model ProductionBatchInput {
   inputProduct   Product @relation("BatchInput", fields: [inputProductId], references: [id])
 
   plannedQuantity Float /// 50 bolsas planeadas
-  actualQuantity  Float? /// 52 bolsas reales consumidas
+  actualQuantity  Float? /// 52 bolsas reales consumidas (= consumo estándar, lo calcula el servidor)
   unit            String /// "bolsa"
 
-  unitCost  Float? /// costo unitario al momento de consumir
-  totalCost Float? /// actualQuantity * unitCost
+  /// Producción v2 Fase 2 — cuánto de plannedQuantity está reservado (aparta stock)
+  /// mientras el lote está PLANNED/IN_PROGRESS. 0 cuando no hay reserva activa.
+  reservedQuantity Decimal @default(0)
+
+  unitCost  Decimal? /// costo unitario real (WAC del sistema al cerrar) — nunca del cliente
+  totalCost Decimal? /// actualQuantity * unitCost
 
   @@index([batchId])
   @@index([inputProductId])
+}
+
+/// Configuración global de Producción (Fase 3) — política de precio y redondeo.
+model ProductionPricingConfig {
+  id                    String   @id @default(cuid())
+  defaultTargetMarginPct Decimal @default(0.30)
+  /// Umbral (0-1) para la política APPROVAL_IF_DELTA: si |precioNuevo/precioActual - 1| lo supera, requiere aprobación.
+  priceApprovalDeltaPct Decimal  @default(0.15)
+  /// Múltiplo (C$) al que se redondea HACIA ARRIBA el precio sugerido — mismo criterio que Madera v2.
+  priceRoundingMultiple Decimal  @default(1)
+  updatedBy             String?
+  updatedAt             DateTime @updatedAt
+  createdAt             DateTime @default(now())
 }
 
 /**

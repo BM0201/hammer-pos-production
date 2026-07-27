@@ -150,7 +150,6 @@ export default function ProductionDashboardPage() {
   }, [selectedBranchId]);
 
   const createSuggestedBatch = async (recommendation: ProductionRecommendation) => {
-    if (!confirm(`Crear lote borrador para ${recommendation.targetProductName}?`)) return;
     setCreatingRecommendationId(recommendation.id);
     setError(null);
     try {

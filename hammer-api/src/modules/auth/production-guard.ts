@@ -24,6 +24,7 @@ export type ProductionPermission =
   | "production.batches.view"
   | "production.batches.create"
   | "production.batches.complete"
+  | "production.batches.reverse"
   | "production.cost.view"
   | "production.dashboard.view";
 
@@ -35,6 +36,7 @@ export const PRODUCTION_PERMISSIONS: readonly ProductionPermission[] = [
   "production.batches.view",
   "production.batches.create",
   "production.batches.complete",
+  "production.batches.reverse",
   "production.cost.view",
   "production.dashboard.view",
 ] as const;

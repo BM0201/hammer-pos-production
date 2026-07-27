@@ -17,6 +17,7 @@ import {
 } from "@/modules/inventory/unit-conversion";
 import { branchProductScopeFilter, excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
+import { getProductionReservedBaseQtyTx } from "@/modules/production/reservations";
 
 export const INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD = 25;
 
@@ -292,7 +293,14 @@ export async function getSaleStockAvailabilityTx(
     const requestedBaseQuantity = conversion
       ? convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor })
       : requestedQty;
-    const availableBaseQuantity = balance?.quantityOnHand ?? new Prisma.Decimal(0);
+    // Producción v2 Fase 2: lo reservado por lotes PLANNED/IN_PROGRESS no
+    // está disponible para venta/traslado — se resta de lo físico. Solo en
+    // esta rama (la común para insumos de producción: cemento, arena,
+    // colorante — no fusiones con presentación de paquete) para mantener el
+    // cambio acotado al caso real; los productos con tracksPackages no son
+    // insumos típicos de receta y no se tocan aquí.
+    const reservedBaseQuantity = await getProductionReservedBaseQtyTx(tx, { branchId: input.branchId, productId: input.productId });
+    const availableBaseQuantity = Prisma.Decimal.max(0, (balance?.quantityOnHand ?? new Prisma.Decimal(0)).sub(reservedBaseQuantity));
     return {
       ok: availableBaseQuantity.gte(requestedBaseQuantity),
       branchId: input.branchId,

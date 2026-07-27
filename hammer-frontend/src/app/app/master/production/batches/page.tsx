@@ -1,9 +1,22 @@
 "use client";
 
-import { Suspense, useEffect, useState, useMemo, useCallback } from "react";
+import { Suspense, useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { Factory, Plus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+
+/**
+ * Producción v2 Fase 6 — "Lotes y variancia" (mockup vista 4). Como el
+ * costeo es solo de materiales, la variancia cuenta una historia limpia:
+ * cuántas unidades se echaron a perder (rendimiento) y si el WAC de los
+ * materiales subió entre lotes — sin ruido de mano de obra ni overhead.
+ * standardUnitCost/unitCost ya vienen calculados y persistidos por el
+ * servidor (Fase 5) — no se re-estima nada en el cliente.
+ */
 
 type Batch = {
   id: string;
@@ -12,38 +25,33 @@ type Batch = {
   plannedQuantity: number;
   producedGoodQuantity: number | null;
   producedBadQuantity: number | null;
-  materialsCost: number | null;
-  totalCost: number | null;
+  standardUnitCost: number | null;
   unitCost: number | null;
-  suggestedPrice: number | null;
   createdAt: string;
   completedAt: string | null;
   recipe: { id: string; name: string; code: string };
   branch: { id: string; code: string; name: string };
-  createdBy: { id: string; fullName: string };
-  _count: { inputs: number };
 };
 
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  DRAFT: { label: "Borrador", color: "bg-[var(--color-surface-alt)] text-[var(--color-text)]" },
-  PLANNED: { label: "Planificado", color: "bg-[var(--color-info-50)] text-[var(--color-info-700)]" },
-  IN_PROGRESS: { label: "En Proceso", color: "bg-[var(--color-warning-100)] text-[var(--color-warning-700)]" },
-  COMPLETED: { label: "Completado", color: "bg-[var(--color-success-50)] text-[var(--color-success-700)]" },
-  CANCELLED: { label: "Cancelado", color: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]" },
+const STATUS_VARIANT: Record<string, "neutral" | "info" | "warning" | "success" | "danger"> = {
+  DRAFT: "neutral", PLANNED: "info", IN_PROGRESS: "warning", COMPLETED: "success", CANCELLED: "danger", REVERSED: "danger",
 };
+const STATUS_LABEL: Record<string, string> = {
+  DRAFT: "Borrador", PLANNED: "Planificado", IN_PROGRESS: "En proceso", COMPLETED: "Completado", CANCELLED: "Cancelado", REVERSED: "Revertido",
+};
+const ALL_STATUSES = ["DRAFT", "PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "REVERSED"];
 
-const ALL_STATUSES = ["", "DRAFT", "PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
+const money = (v: number | null | undefined) => v == null ? "—" : `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const pct1 = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
 
-function getCostDeviation(batch: Batch): { value: number; label: string; color: string } | null {
-  if (batch.status !== "COMPLETED" || batch.unitCost == null || batch.plannedQuantity <= 0) return null;
-  // Desviación = (costo real - costo estimado por materiales) / costo estimado
-  if (batch.materialsCost == null || batch.materialsCost === 0) return null;
-  const estimatedUnitCost = batch.materialsCost / batch.plannedQuantity;
-  const deviation = ((batch.unitCost - estimatedUnitCost) / estimatedUnitCost) * 100;
-  const absVal = Math.abs(deviation);
-  if (absVal < 5) return { value: deviation, label: `${deviation > 0 ? "+" : ""}${deviation.toFixed(1)}%`, color: "text-[var(--color-success-700)]" };
-  if (absVal < 15) return { value: deviation, label: `${deviation > 0 ? "+" : ""}${deviation.toFixed(1)}%`, color: "text-yellow-600" };
-  return { value: deviation, label: `${deviation > 0 ? "+" : ""}${deviation.toFixed(1)}%`, color: "text-[var(--color-danger-600)]" };
+function yieldOf(b: Batch): number | null {
+  if (b.producedGoodQuantity == null || b.producedBadQuantity == null) return null;
+  const total = b.producedGoodQuantity + b.producedBadQuantity;
+  return total > 0 ? b.producedGoodQuantity / total : null;
+}
+function varianceOf(b: Batch): number | null {
+  if (b.unitCost == null || b.standardUnitCost == null || b.standardUnitCost <= 0) return null;
+  return b.unitCost / b.standardUnitCost - 1;
 }
 
 function BatchesContent() {
@@ -52,22 +60,19 @@ function BatchesContent() {
 
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState(initialStatus);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await apiFetch("/api/master/production/batches?limit=200");
-        if (!res.ok) throw new Error("Error al cargar lotes");
+        if (!res.ok) throw new Error();
         const data = unwrapApiData(await res.json()) as Batch[];
         if (!cancelled) setBatches(data);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Error desconocido");
+      } catch {
+        if (!cancelled) showToast("error", "No se pudieron cargar los lotes.");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -75,163 +80,99 @@ function BatchesContent() {
     return () => { cancelled = true; };
   }, []);
 
-  const filtered = useMemo(() => {
-    return batches.filter((b) => {
-      if (statusFilter && b.status !== statusFilter) return false;
-      if (search) {
-        const q = search.toLowerCase();
-        if (!b.batchNumber.toLowerCase().includes(q) && !b.recipe.name.toLowerCase().includes(q) && !b.recipe.code.toLowerCase().includes(q)) return false;
-      }
-      if (dateFrom) {
-        const d = new Date(b.createdAt);
-        if (d < new Date(dateFrom)) return false;
-      }
-      if (dateTo) {
-        const d = new Date(b.createdAt);
-        if (d > new Date(dateTo + "T23:59:59")) return false;
-      }
-      return true;
+  const filtered = useMemo(() => batches.filter((b) => {
+    if (statusFilter && b.status !== statusFilter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!b.batchNumber.toLowerCase().includes(q) && !b.recipe.name.toLowerCase().includes(q) && !b.recipe.code.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  }), [batches, search, statusFilter]);
+
+  const kpis = useMemo(() => {
+    const now = new Date();
+    const thisMonth = batches.filter((b) => {
+      const d = new Date(b.createdAt);
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
     });
-  }, [batches, search, statusFilter, dateFrom, dateTo]);
-
-  const exportToExcel = useCallback(() => {
-    // Generate CSV and download
-    const headers = ["Lote", "Receta", "Sucursal", "Estado", "Planificado", "Producido", "Costo Total", "Costo Unit.", "Fecha"];
-    const rows = filtered.map((b) => [
-      b.batchNumber,
-      b.recipe.name,
-      b.branch.name,
-      STATUS_LABELS[b.status]?.label ?? b.status,
-      b.plannedQuantity.toString(),
-      b.producedGoodQuantity?.toString() ?? "",
-      b.totalCost?.toFixed(2) ?? "",
-      b.unitCost?.toFixed(2) ?? "",
-      new Date(b.createdAt).toLocaleDateString("es"),
-    ]);
-
-    const csv = [headers.join(","), ...rows.map((r) => r.map((c) => `"${c}"`).join(","))].join("\n");
-    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `lotes_produccion_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [filtered]);
+    const completed = batches.filter((b) => b.status === "COMPLETED" && b.producedGoodQuantity != null);
+    const totalProduced = completed.reduce((s, b) => s + (b.producedGoodQuantity ?? 0), 0);
+    const yields = completed.map(yieldOf).filter((y): y is number => y != null);
+    const avgYield = yields.length ? yields.reduce((s, y) => s + y, 0) / yields.length : null;
+    const variances = completed.map(varianceOf).filter((v): v is number => v != null);
+    const avgVariance = variances.length ? variances.reduce((s, v) => s + v, 0) / variances.length : null;
+    return { batchesThisMonth: thisMonth.length, totalProduced, avgYield, avgVariance };
+  }, [batches]);
 
   return (
-    <section className="space-y-6">
-      <div>
-        <div className="flex items-center gap-3 mb-1">
-          <div className="h-8 w-1 rounded-full" style={{ background: "linear-gradient(to bottom, var(--color-master-400), var(--color-master-600))" }} />
-          <h1 className="text-2xl font-bold text-[var(--color-text)]">Lotes de Producción</h1>
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="hm-icon-wrap-md hm-icon-wrap"><Factory className="h-5 w-5" /></div>
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg font-bold text-[var(--color-text)]">Lotes y variancia</h1>
+          <p className="text-[12.5px] text-[var(--color-text-muted)]">Estándar vs. real — el KPI que dice si producir vale la pena.</p>
         </div>
-        <p className="text-sm text-[var(--color-text-muted)] ml-4">Listado y gestión de lotes de producción</p>
+        <Link href="/app/master/production/batches/new"><Button variant="primary" size="sm" icon={<Plus className="h-4 w-4" />}>Nuevo lote</Button></Link>
       </div>
 
-      {/* Search and filters */}
-      <div className="flex flex-col md:flex-row gap-3 items-start md:items-center flex-wrap">
-        <input
-          type="text"
-          placeholder="Buscar por código de lote o receta..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-[200px] px-3 py-2 border border-[var(--color-border)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-master-500)] focus:border-transparent"
-        />
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="px-3 py-2 border border-[var(--color-border)] rounded-lg text-sm bg-[var(--color-surface)] focus:outline-none focus:ring-2 focus:ring-[var(--color-master-500)]"
-        >
+      <div className="grid gap-3 sm:grid-cols-4">
+        <div className="hm-kpi-tile"><span>Lotes este mes</span><b className="hm-num-lg">{kpis.batchesThisMonth}</b></div>
+        <div className="hm-kpi-tile"><span>Unidades producidas</span><b className="hm-num-lg">{kpis.totalProduced.toLocaleString("es-NI")}</b></div>
+        <div className="hm-kpi-tile"><span>Rendimiento promedio</span><b className="hm-num-lg" style={{ color: "var(--color-success-700)" }}>{kpis.avgYield != null ? `${(kpis.avgYield * 100).toFixed(1)}%` : "—"}</b></div>
+        <div className="hm-kpi-tile"><span>Variancia vs estándar</span><b className="hm-num-lg" style={{ color: "var(--color-danger-700)" }}>{kpis.avgVariance != null ? pct1(kpis.avgVariance) : "—"}</b></div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por código de lote o receta…" className="hm-input min-w-[220px] flex-1" />
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="hm-input w-52">
           <option value="">Todos los estados</option>
-          {ALL_STATUSES.filter(Boolean).map((s) => (
-            <option key={s} value={s}>{STATUS_LABELS[s]?.label ?? s}</option>
-          ))}
+          {ALL_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>)}
         </select>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-[var(--color-text-muted)]">Desde:</label>
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-2 py-1.5 border border-[var(--color-border)] rounded-lg text-sm" />
-          <label className="text-xs text-[var(--color-text-muted)]">Hasta:</label>
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-2 py-1.5 border border-[var(--color-border)] rounded-lg text-sm" />
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={exportToExcel}
-            className="px-4 py-2 bg-[var(--color-success-600)] text-white rounded-lg text-sm font-medium hover:bg-[var(--color-success-700)] transition"
-            disabled={filtered.length === 0}
-          >
-            📥 Exportar Excel
-          </button>
-          <Link href="/app/master/production/batches/new" className="px-4 py-2 bg-[var(--color-master-600)] text-white rounded-lg text-sm font-medium hover:bg-[var(--color-master-700)] transition">+ Nuevo Lote</Link>
-        </div>
       </div>
 
-      <p className="text-xs text-[var(--color-text-muted)]">{filtered.length} lote{filtered.length !== 1 ? "s" : ""}</p>
-
-      {/* Table */}
-      <div className="bg-[var(--color-surface)] rounded-xl border shadow-sm">
-        {loading && <p className="px-4 py-8 text-center text-sm text-[var(--color-text-soft)]">Cargando...</p>}
-        {error && <p className="px-4 py-8 text-center text-sm text-[var(--color-danger-600)]">{error}</p>}
-        {!loading && !error && filtered.length === 0 && (
-          <p className="px-4 py-8 text-center text-sm text-[var(--color-text-soft)]">No se encontraron lotes.</p>
-        )}
-
-        {!loading && !error && filtered.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="hm-table w-full text-sm">
-              <thead className="bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] text-xs uppercase tracking-wider">
-                <tr>
-                  <th className="px-4 py-2.5 text-left font-medium">Lote</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Receta</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Sucursal</th>
-                  <th className="px-4 py-2.5 text-center font-medium">Estado</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Planificado</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Producido</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Costo Total</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Costo Unit.</th>
-                  <th className="px-4 py-2.5 text-center font-medium">Desviación</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Fecha</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--color-border)]">
-                {filtered.map((b) => {
-                  const st = STATUS_LABELS[b.status] ?? { label: b.status, color: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]" };
-                  const dev = getCostDeviation(b);
-                  return (
-                    <tr key={b.id} className="hover:bg-[var(--color-surface-alt)]">
-                      <td className="px-4 py-2.5">
-                        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                        <Link href={`/app/master/production/batches/${b.id}` as any} className="text-[var(--color-master-600)] hover:underline font-medium">{b.batchNumber}</Link>
-                      </td>
-                      <td className="px-4 py-2.5 text-[var(--color-text)]">{b.recipe.name}</td>
-                      <td className="px-4 py-2.5 text-[var(--color-text-muted)]">{b.branch.name}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${st.color}`}>{st.label}</span>
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-[var(--color-text)]">{b.plannedQuantity.toLocaleString()}</td>
-                      <td className="px-4 py-2.5 text-right text-[var(--color-text)]">{b.producedGoodQuantity != null ? b.producedGoodQuantity.toLocaleString() : "—"}</td>
-                      <td className="px-4 py-2.5 text-right text-[var(--color-text)]">{b.totalCost != null ? `C$${b.totalCost.toFixed(2)}` : "—"}</td>
-                      <td className="px-4 py-2.5 text-right text-[var(--color-text)]">{b.unitCost != null ? `C$${b.unitCost.toFixed(2)}` : "—"}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        {dev ? (
-                          <span className={`text-xs font-medium ${dev.color}`} title="Desviación costo real vs estimado">{dev.label}</span>
-                        ) : (
-                          <span className="text-[var(--color-text-soft)]">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 text-[var(--color-text-muted)] text-xs">{new Date(b.createdAt).toLocaleDateString("es")}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
+        {loading ? <p className="px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</p>
+          : filtered.length === 0 ? <p className="px-4 py-8 text-center text-sm text-[var(--color-text-muted)]">No se encontraron lotes.</p>
+          : (
+            <div className="overflow-x-auto">
+              <table className="hm-sheet-table">
+                <thead>
+                  <tr>
+                    <th>Lote</th><th>Producto</th><th className="r">Buenas / plan</th><th className="r">Rend.</th>
+                    <th className="r">C.U. estándar</th><th className="r">C.U. real</th><th className="r">Variancia</th><th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((b) => {
+                    const y = yieldOf(b);
+                    const v = varianceOf(b);
+                    return (
+                      <tr key={b.id} className="hm-row-dense">
+                        <td>
+                          <Link href={`/app/master/production/batches/${b.id}`} className="font-mono text-[11px] font-semibold text-[var(--color-master-600)] hover:underline">{b.batchNumber}</Link>
+                          <br /><span className="text-[10.5px] text-[var(--color-text-muted)]">{new Date(b.createdAt).toLocaleDateString("es-NI")}</span>
+                        </td>
+                        <td>{b.recipe.name}</td>
+                        <td className="hm-num">{b.producedGoodQuantity ?? "—"} / {b.plannedQuantity.toLocaleString("es-NI")}</td>
+                        <td className="hm-num">{y != null ? `${(y * 100).toFixed(1)}%` : "—"}</td>
+                        <td className="hm-num" style={{ color: "var(--color-text-soft)" }}>{money(b.standardUnitCost)}</td>
+                        <td className="hm-num" style={{ fontWeight: 600 }}>{money(b.unitCost)}</td>
+                        <td className="hm-num" style={{ color: v != null && v > 0 ? "var(--color-danger-700)" : v != null && v < 0 ? "var(--color-success-700)" : undefined }}>{v != null ? pct1(v) : "—"}</td>
+                        <td><Badge variant={STATUS_VARIANT[b.status] ?? "neutral"}>{STATUS_LABEL[b.status] ?? b.status}</Badge></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
       </div>
 
-      <div className="mt-4">
-        <Link href="/app/master/production" className="text-sm text-[var(--color-master-600)] hover:underline">← Volver al Dashboard</Link>
+      <div className="hm-alert hm-alert-info">
+        ⏪ <div><b>Reversar lote completado:</b> si te equivocaste al cerrar, un lote completado se puede revertir con un movimiento inverso auditado (devuelve los insumos al stock y retira el producto terminado) desde su detalle — sin ajustes manuales que descuadran el inventario.</div>
       </div>
+
+      <Link href="/app/master/production" className="text-[12.5px] font-medium text-[var(--color-master-600)] hover:underline">← Volver al dashboard</Link>
     </section>
   );
 }

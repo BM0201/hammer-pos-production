@@ -7,6 +7,7 @@ const INBOUND_TYPES = new Set([
   "TRANSFER_IN",
   "TIMBER_INTAKE_IN",
   "PRODUCTION_OUTPUT",
+  "PRODUCTION_REVERSAL_IN",
 ] as const);
 
 export function isInboundMovement(movementType: string): boolean {

@@ -118,6 +118,7 @@ export const CAPABILITIES = {
   PRODUCTION_BATCHES_VIEW: "production.batches.view",
   PRODUCTION_BATCHES_CREATE: "production.batches.create",
   PRODUCTION_BATCHES_COMPLETE: "production.batches.complete",
+  PRODUCTION_BATCHES_REVERSE: "production.batches.reverse",
   PRODUCTION_COST_VIEW: "production.cost.view",
   PRODUCTION_DASHBOARD_VIEW: "production.dashboard.view",
 
