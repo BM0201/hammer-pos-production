@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   Activity, Archive, Building2, ScanLine,
   CheckCircle2, ChevronDown, ChevronRight, RefreshCw, Shield, TrendingUp, Zap,
@@ -159,6 +160,13 @@ export default function MasterOperationsPage() {
   const [scanBranchId, setScanBranchId] = useState<string>("");
   const scanBranch = useMemo(() => branches.find((b) => b.id === scanBranchId) ?? null, [branches, scanBranchId]);
 
+  // Día Operativo v2 — picker de 5 vistas (hammer-dia-operativo-mockup.html).
+  const [activeTab, setActiveTab] = useState<"ciclo" | "cerrar" | "pendientes" | "reporte" | "config">("ciclo");
+  const [closeBranchId, setCloseBranchId] = useState("");
+  const closeBranch = useMemo(() => branches.find((b) => b.id === closeBranchId) ?? null, [branches, closeBranchId]);
+  const [reportBranchId, setReportBranchId] = useState("");
+  const reportBranch = useMemo(() => branches.find((b) => b.id === reportBranchId) ?? null, [branches, reportBranchId]);
+
   // ── Load branches once ──
   useEffect(() => {
     apiFetch("/api/branches")
@@ -293,7 +301,24 @@ async function confirmReopenDay(dayId: string, branchCode: string, note: string,
         </Card>
       )}
 
+      <div className="erp-tabs-pill w-fit">
+        {([
+          ["ciclo", "1 · Estado y ciclo"],
+          ["cerrar", "2 · Cerrar el día"],
+          ["pendientes", "3 · Cierres pendientes"],
+          ["reporte", "4 · Reporte del día"],
+          ["config", "5 · Configuración"],
+        ] as const).map(([key, label]) => (
+          <button key={key} type="button" data-active={activeTab === key} onClick={() => setActiveTab(key)}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "ciclo" && <OperationalDayLifecycleDiagram />}
+
       {/* ═══ SECTION 1: Estado Actual ═══════════════════════════════════════ */}
+      {activeTab === "ciclo" && (
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <Activity className="text-[var(--color-text-muted)]" style={{ width: "0.875rem", height: "0.875rem" }} />
@@ -426,8 +451,10 @@ async function confirmReopenDay(dayId: string, branchCode: string, note: string,
           </div>
         )}
       </section>
+      )}
 
       {/* ═══ SECTION 1.5: Escáner y cierre forzado ══════════════════════════ */}
+      {activeTab === "ciclo" && (
       <section className="space-y-3">
         <div className="flex items-center gap-2">
           <ScanLine className="text-[var(--color-text-muted)]" style={{ width: "0.875rem", height: "0.875rem" }} />
@@ -470,9 +497,52 @@ async function confirmReopenDay(dayId: string, branchCode: string, note: string,
           />
         )}
       </section>
+      )}
 
-      {/* ═══ SECTION 1.7: Cierres pendientes (Fase 5.5) ══════════════════════ */}
-      <PendingCloseQueue isMaster onResolved={async () => { await loadLive(); }} />
+      {/* ═══ Vista 2 · Cerrar el día ═══════════════════════════════════════ */}
+      {activeTab === "cerrar" && (
+        <section className="space-y-3">
+          <div className="hm-alert hm-alert-info">
+            El cierre ya es sólido (reclamo atómico, checklist, snapshot). Los totales se suman en <b>decimales exactos</b> (Fase 1) y el <b>modo de fuente</b> (operationalDayId / MIXTO / legacy) se muestra antes de firmar.
+          </div>
+          <Card className="p-3">
+            <label className="grid gap-1 sm:w-72">
+              <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Sucursal</span>
+              <select className="hm-input rounded-lg text-sm" value={closeBranchId} onChange={(e) => setCloseBranchId(e.target.value)}>
+                <option value="">Selecciona una sucursal…</option>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
+              </select>
+            </label>
+          </Card>
+          {closeBranchId && closeBranch && <OperationalDayPanel key={closeBranchId} branchId={closeBranchId} masterMode />}
+        </section>
+      )}
+
+      {/* ═══ Vista 3 · Cierres pendientes (Fase 5.5) ══════════════════════ */}
+      {activeTab === "pendientes" && <PendingCloseQueue isMaster onResolved={async () => { await loadLive(); }} />}
+
+      {/* ═══ Vista 4 · Reporte del día ══════════════════════════════════════ */}
+      {activeTab === "reporte" && (
+        <section className="space-y-3">
+          <div className="hm-alert hm-alert-info">
+            El reporte de un día cerrado es el que se firmó, no uno recalculado (Fase 4) — lee el <b>snapshot inmutable</b>, y la actividad tardía (ventas offline sincronizadas después del cierre) se muestra aparte.
+          </div>
+          <Card className="p-3">
+            <label className="grid gap-1 sm:w-72">
+              <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Sucursal</span>
+              <select className="hm-input rounded-lg text-sm" value={reportBranchId} onChange={(e) => setReportBranchId(e.target.value)}>
+                <option value="">Selecciona una sucursal…</option>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
+              </select>
+            </label>
+            <p className="mt-2 text-[11.5px] text-[var(--color-text-muted)]">Usa &quot;Ver reporte del día&quot; abajo para el snapshot firmado (o en vivo si el día sigue abierto) y la actividad tardía.</p>
+          </Card>
+          {reportBranchId && reportBranch && <OperationalDayPanel key={reportBranchId} branchId={reportBranchId} masterMode />}
+        </section>
+      )}
+
+      {/* ═══ Vista 5 · Configuración ══════════════════════════════════════ */}
+      {activeTab === "config" && <OperationalDayConfigTab branches={branches} />}
 
       {/* ═══ SECTION 2: Bandeja Master ═══════════════════════════════════════ */}
       <section className="space-y-3">
@@ -662,5 +732,195 @@ async function confirmReopenDay(dayId: string, branchCode: string, note: string,
         )}
       </section>
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Vista 1 · Diagrama de ciclo de vida (hammer-dia-operativo-mockup.html)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+type LifecycleNode = { label: string; desc: string; dot: string; border: string; bg?: string };
+
+const NORMAL_PATH: LifecycleNode[] = [
+  { label: "Sin día", desc: "Nadie ha abierto caja. La primera caja del día lo auto-abre.", dot: "var(--color-text-soft)", border: "var(--color-border-strong)" },
+  { label: "Abierto", desc: "Ventas, pagos y cajas se asientan aquí. Ventana 06:00 – 06:00 Managua.", dot: "var(--color-success-500)", border: "var(--color-success-200)" },
+  { label: "Cerrado", desc: "Se congela un snapshot inmutable. Requiere checklist sin bloqueos.", dot: "var(--color-master-500)", border: "var(--color-master-200)" },
+  { label: "Aprobado", desc: "El Master valida el cierre. El día queda firme y archivado.", dot: "var(--color-info-500)", border: "var(--color-info-200)" },
+];
+
+const BRANCH_PATH: LifecycleNode[] = [
+  { label: "Abierto (ayer)", desc: "Pasó la medianoche operativa sin cerrarse.", dot: "var(--color-success-500)", border: "var(--color-success-200)" },
+  { label: "Pendiente de cierre", desc: "Sale de «abierto» — deja de bloquear. Sus cajas huérfanas pasan a revisión. Entra a la cola.", dot: "var(--color-warning-600)", border: "var(--color-warning-200)", bg: "var(--color-warning-50)" },
+  { label: "Cerrado (tardío)", desc: "El Master lo concilia cuando puede, con la fecha y ventana de ese día, no la de hoy.", dot: "var(--color-master-500)", border: "var(--color-master-200)" },
+];
+
+function LifecycleRow({ nodes }: { nodes: LifecycleNode[] }) {
+  return (
+    <div className="flex flex-wrap items-stretch gap-2">
+      {nodes.map((n, i) => (
+        <div key={n.label} className="flex flex-1 items-stretch gap-2" style={{ minWidth: 150 }}>
+          <div className="flex-1 rounded-xl border bg-[var(--color-surface)] p-3" style={{ borderColor: n.border, background: n.bg }}>
+            <div className="flex items-center gap-1.5 text-[12.5px] font-bold text-[var(--color-text)]">
+              <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: n.dot }} />
+              {n.label}
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-[var(--color-text-muted)]">{n.desc}</p>
+          </div>
+          {i < nodes.length - 1 && (
+            <div className="hidden flex-shrink-0 items-center text-[var(--color-text-soft)] sm:flex">→</div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OperationalDayLifecycleDiagram() {
+  return (
+    <Card className="space-y-4 p-4">
+      <p className="text-[12.5px] leading-relaxed text-[var(--color-text-muted)]">
+        <b className="text-[var(--color-text)]">Un día operativo tiene un solo camino, y se entiende de un vistazo.</b>{" "}
+        Lo clave: si un día no se cierra en su fecha, <b className="text-[var(--color-text)]">no queda bloqueando ni se pierde</b> — pasa a{" "}
+        <Badge variant="warning">Pendiente de cierre</Badge> y se va a una cola. Hoy abre siempre, normal. El día pendiente espera, intacto, a que el Master lo concilie con calma.
+      </p>
+
+      <div className="hm-section-rule">Camino normal</div>
+      <LifecycleRow nodes={NORMAL_PATH} />
+
+      <p className="text-[11px] text-[var(--color-text-soft)]">↓ ¿y si nadie lo cierra en su fecha?</p>
+
+      <div className="rounded-xl border border-dashed border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
+        <LifecycleRow nodes={BRANCH_PATH} />
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-surface)] p-3">
+          <p className="mb-1 text-[12px] font-bold text-[var(--color-danger-700)]">Antes (el problema)</p>
+          <p className="text-[11.5px] leading-relaxed text-[var(--color-text-muted)]">
+            El día viejo quedaba <b className="text-[var(--color-text-secondary)]">Abierto</b> para siempre. El auto-cierre solo tocaba el día de hoy; al viejo lo registraba como error en cada corrida y lo dejaba ahí. Y{" "}
+            <b className="text-[var(--color-text-secondary)]">bloqueaba la sucursal</b>: no se podía abrir caja ni vender sin un override que mezclaba las ventas de hoy con el día de ayer.
+          </p>
+        </div>
+        <div className="rounded-xl border border-[var(--color-success-200)] bg-[var(--color-surface)] p-3">
+          <p className="mb-1 text-[12px] font-bold text-[var(--color-success-700)]">Ahora (la lógica)</p>
+          <p className="text-[11.5px] leading-relaxed text-[var(--color-text-muted)]">
+            El día viejo pasa a <b className="text-[var(--color-text-secondary)]">Pendiente de cierre</b> y sale del camino. Como la apertura busca días &quot;abiertos&quot;,{" "}
+            <b className="text-[var(--color-text-secondary)]">hoy abre solo</b>. El viejo espera en la cola, con toda su data. Nada se force-cierra en silencio; nada se pierde; la sucursal nunca se traba.
+          </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Vista 5 · Configuración (tolerancia por sucursal + política de pendientes)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+type CashToleranceConfig = { defaultToleranceAmount: number; byBranch: Record<string, number> };
+
+function OperationalDayConfigTab({ branches }: { branches: Branch[] }) {
+  const [tolerance, setTolerance] = useState<CashToleranceConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/api/master/operations/cash-tolerance-config")
+      .then((r) => r.json())
+      .then((raw) => { if (!cancelled) setTolerance(unwrapApiData(raw) as CashToleranceConfig); })
+      .catch(() => showToast("error", "No se pudo cargar la tolerancia de caja."));
+    return () => { cancelled = true; };
+  }, []);
+
+  async function save() {
+    if (!tolerance) return;
+    setSaving(true);
+    try {
+      const resp = await apiFetch("/api/master/operations/cash-tolerance-config", { method: "PUT", body: JSON.stringify(tolerance) });
+      const raw = await resp.json();
+      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo guardar."); return; }
+      setTolerance(unwrapApiData(raw) as CashToleranceConfig);
+      showToast("success", "Tolerancia de caja guardada.");
+    } catch {
+      showToast("error", "Error de red al guardar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="grid gap-3 lg:grid-cols-2">
+      <Card className="space-y-3 p-4">
+        <div className="hm-section-rule">Tolerancia de diferencia de caja</div>
+        {!tolerance ? (
+          <p className="text-sm text-[var(--color-text-muted)]">Cargando…</p>
+        ) : (
+          <>
+            <label className="grid gap-1 text-sm">
+              <span className="font-medium text-[var(--color-text-secondary)]">Default global (C$)</span>
+              <input
+                type="number" min="0" step="0.01"
+                value={tolerance.defaultToleranceAmount}
+                onChange={(e) => setTolerance({ ...tolerance, defaultToleranceAmount: Number(e.target.value) || 0 })}
+                className="hm-input w-40 font-mono"
+              />
+            </label>
+            <div className="grid gap-2">
+              {branches.map((b) => (
+                <div key={b.id} className="grid grid-cols-[1fr_auto] items-center gap-3">
+                  <span className="text-sm font-semibold text-[var(--color-text)]">{b.code} — {b.name}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-xs text-[var(--color-text-soft)]">C$</span>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={tolerance.byBranch[b.id] ?? tolerance.defaultToleranceAmount}
+                      onChange={(e) => setTolerance({ ...tolerance, byBranch: { ...tolerance.byBranch, [b.id]: Number(e.target.value) || 0 } })}
+                      className="hm-input w-28 font-mono"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hm-alert hm-alert-info">
+              💡 Dentro de la tolerancia → advertencia (no bloquea). Fuera → exige revisión/justificación.
+            </div>
+            <div className="flex justify-end">
+              <Button size="sm" onClick={save} loading={saving}>Guardar tolerancia</Button>
+            </div>
+          </>
+        )}
+      </Card>
+
+      <div className="space-y-3">
+        <Card className="space-y-2 p-4">
+          <div className="hm-section-rule">Día de negocio</div>
+          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Zona horaria</span><b>America/Managua</b></div>
+          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Hora de corte</span><b>06:00 — venta a las 02:00 = día anterior</b></div>
+        </Card>
+
+        <Card className="space-y-2 border-[var(--color-warning-200)] p-4">
+          <div className="hm-section-rule">Días pendientes de cierre</div>
+          <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
+            <b>Pendiente, nunca bloquea</b> <Badge variant="warning">recomendado, siempre activo</Badge> — el día viejo pasa a la cola; hoy abre normal; el Master lo cierra cuando puede.
+          </p>
+          <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
+            El toggle <b>&quot;Cierre automático del día&quot;</b> en{" "}
+            <Link href="/app/master/settings/operational-automation" className="font-semibold text-[var(--color-master-600)] hover:underline">Automatización Operativa</Link>{" "}
+            sigue disponible como alternativa opcional (cierra hoy mismo al pasar la hora de corte, si no tiene cajas abiertas) — pero nunca reemplaza la regla de fondo.
+          </p>
+          <div className="hm-alert hm-alert-warning">
+            ⚠ Nunca se force-cierra un día viejo con cajas abiertas en silencio: eso perdería el conteo físico. Siempre pasa por la cola.
+          </div>
+        </Card>
+
+        <Card className="space-y-1.5 p-4">
+          <div className="hm-section-rule">Integridad</div>
+          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Aritmética de dinero</span><b>Decimal exacto</b></div>
+          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Reporte de día cerrado</span><b>Snapshot inmutable</b></div>
+          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Actividad tardía</span><b>Se muestra aparte</b></div>
+          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Día sin cerrar</span><b>Cola de pendientes</b></div>
+        </Card>
+      </div>
+    </section>
   );
 }
