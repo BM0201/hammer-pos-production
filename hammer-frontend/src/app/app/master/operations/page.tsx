@@ -3,20 +3,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Activity, Archive, Building2, ScanLine,
-  CheckCircle2, ChevronDown, ChevronRight, RefreshCw, Shield, TrendingUp, Zap,
+  AlertTriangle, Building2, CheckCircle2, RefreshCw, Wrench,
 } from "lucide-react";
-import { OperationalDayPanel } from "@/components/operations/operational-day-panel";
 import { OperationalDayScanner } from "@/components/operations/operational-day-scanner";
-import { PendingCloseQueue } from "@/components/operations/pending-close-queue";
-import { KpiCard } from "@/components/dashboard/kpi-card";
+import { OperationalDayChecklist, type ClosePreview } from "@/components/operations/operational-day-checklist";
+import { CloseDayDialog } from "@/components/operations/close-day-dialog";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { showToast } from "@/components/ui/toast";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
+
+/**
+ * Día operativo — Master. Reorganizado (2026-07-28) para seguir
+ * hammer-dia-operativo-mockup.html: tres accesos por palabra (Operación ·
+ * Historial · Ajustes), sin pestañas numeradas. El corazón es una sola lista
+ * de acción que une los días pendientes de cierre y los pendientes de
+ * aprobación — antes eran dos bandejas flotantes separadas.
+ */
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -26,59 +33,46 @@ type BranchLiveStatus = {
   branchId: string;
   branchCode: string;
   branchName: string;
-  businessDate: string | null;
-  operationalDayId: string | null;
-  operationalDayStatus: string | null;
   derivedState:
-    | "NOT_OPENED_TODAY" | "OPEN_TODAY" | "CLOSING"
+    | "NOT_OPENED_TODAY" | "OPEN_TODAY" | "CLOSING" | "PENDING_CLOSE"
     | "CLOSED_PENDING_MASTER" | "APPROVED_ARCHIVED" | "CANCELLED" | "STALE_OPEN_DAY";
-  blockers: {
-    openCashSessions: number;
-    reconcilingCashSessions: number;
-    autoClosedPendingReview: number;
-    staleOpenOperationalDays: number;
-    staleCashSessions: number;
-  };
-  alerts: {
-    pendingPaymentOrdersToday: number;
-    pendingDispatchToday: number;
-    criticalBrainOpen: number;
-  };
   totalBlockers: number;
 };
 
-type LiveBlockersResponse = {
-  total: number;
-  branches: BranchLiveStatus[];
-  computedAt: string;
-};
+type LiveBlockersResponse = { total: number; branches: BranchLiveStatus[] };
 
 type MasterDay = {
   id: string;
-  status: string;
   businessDate: string;
   salesTotal: string | number;
-  openCashSessionsCount: number;
-  autoClosedPendingReviewCount: number;
-  pendingDispatchCount: number;
-  criticalBrainDecisionCount: number;
-  approvedAt: string | null;
-  approvedByMasterId: string | null;
-  summaryJson?: {
-    openingCashTotal?: number;
-    cashTenderNetTotal?: number;
-    cashMovementsNet?: number;
-    cashExpensesTotal?: number;
-    cashOutflowsTotal?: number;
-    expectedCashOnHand?: number;
-    paidSalesTotal?: number;
-    pendingPaymentTotal?: number;
-    cancelledSalesTotal?: number;
-    postedPaymentsCount?: number;
-    voidedPaymentsCount?: number;
-  } | null;
+  cashDifferenceTotal?: string | number | null;
+  closedBy?: { username: string; fullName?: string | null } | null;
+  summaryJson?: { paidSalesTotal?: number } | null;
   branch: Branch;
 };
+
+type PendingCloseDayRow = {
+  id: string; branchId: string; branchCode: string; branchName: string;
+  businessDate: string; daysOverdue: number; salesTotal: number; expectedCashTotal: number;
+  blockers: { autoClosedPendingReviewCount: number; openOrReconcilingCashSessionsCount: number };
+};
+
+type TodayCardData = {
+  branchId: string; branchCode: string; branchName: string; dayId: string; openedAt: string;
+  paidOrdersTotal: number; expectedCashTotal: number; openCashSessionsCount: number;
+};
+
+type ActionRow =
+  | { kind: "CLOSE"; id: string; businessDate: string; daysOverdue: number; branchCode: string; branchName: string; expectedCashTotal: number; detail: string }
+  | { kind: "APPROVE"; id: string; businessDate: string; daysOverdue: number; branchCode: string; branchName: string; salesTotal: number; cashDifferenceTotal: number; closedByName: string | null };
+
+type DailyReport = {
+  orders: Array<{ id: string }>;
+  summary?: { salesTotal?: number; expectedCashTotal?: number; cashDifferenceTotal?: number };
+  lateActivity?: { count: number };
+};
+
+type CashToleranceConfig = { defaultToleranceAmount: number; byBranch: Record<string, number> };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -94,78 +88,68 @@ function timeAgo(date: Date | null) {
   return `hace ${Math.floor(minutes / 60)} h`;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  OPEN: "Abierto", CLOSING: "En cierre", CLOSED: "Cerrado", CANCELLED: "Cancelado",
-  REOPENED_FOR_ADJUSTMENT: "Reabierto (ajuste)",
-};
-const STATUS_BADGE: Record<string, "success" | "warning" | "neutral" | "danger"> = {
-  OPEN: "success", CLOSING: "warning", CLOSED: "neutral", CANCELLED: "danger",
-  REOPENED_FOR_ADJUSTMENT: "warning",
-};
+const daysOverdueFrom = (businessDate: string) =>
+  Math.max(0, Math.floor((Date.now() - new Date(businessDate).getTime()) / 86_400_000));
 
-const DERIVED_LABEL: Record<string, string> = {
-  NOT_OPENED_TODAY:     "No abierto hoy",
-  OPEN_TODAY:           "Abierto hoy",
-  CLOSING:              "En cierre",
-  CLOSED_PENDING_MASTER:"Pendiente aprobación",
-  APPROVED_ARCHIVED:    "Aprobado",
-  CANCELLED:            "Cancelado",
-  STALE_OPEN_DAY:       "Abierto (día anterior)",
-};
+const dayLabel = (businessDate: string) =>
+  new Date(businessDate).toLocaleDateString("es-NI", { timeZone: "UTC", day: "numeric", month: "short" });
 
-const DERIVED_BADGE: Record<string, "success" | "warning" | "neutral" | "danger"> = {
-  NOT_OPENED_TODAY:     "neutral",
-  OPEN_TODAY:           "success",
-  CLOSING:              "warning",
-  CLOSED_PENDING_MASTER:"warning",
-  APPROVED_ARCHIVED:    "success",
-  CANCELLED:            "danger",
-  STALE_OPEN_DAY:       "danger",
-};
+const agoLabel = (daysOverdue: number) =>
+  daysOverdue === 0 ? "hoy" : daysOverdue === 1 ? "hace 1 día" : `hace ${daysOverdue} días`;
+
+function SectionHeading({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div>
+      <h2 className="text-[0.9375rem] font-bold text-[var(--color-text)]">{title}</h2>
+      <p className="text-xs text-[var(--color-text-muted)]">{subtitle}</p>
+    </div>
+  );
+}
+
+const NAV_ITEMS = [["operacion", "Operación"], ["historial", "Historial"], ["ajustes", "Ajustes"]] as const;
+type TabKey = (typeof NAV_ITEMS)[number][0];
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function MasterOperationsPage() {
-  const [branches, setBranches]         = useState<Branch[]>([]);
-  const [liveData, setLiveData]         = useState<LiveBlockersResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<TabKey>("operacion");
+  const [branches, setBranches] = useState<Branch[]>([]);
+
+  // Estado en vivo + Hoy
+  const [liveData, setLiveData] = useState<LiveBlockersResponse | null>(null);
   const [liveUpdatedAt, setLiveUpdatedAt] = useState<Date | null>(null);
+  const [todayCards, setTodayCards] = useState<TodayCardData[]>([]);
+  const [showLifecycleInfo, setShowLifecycleInfo] = useState(false);
 
-  // Bandeja Master
-  const [pendingDays, setPendingDays]   = useState<MasterDay[]>([]);
-  const [pendingRefreshing, setPendingRefreshing] = useState(false);
-  const [approvingId, setApprovingId]   = useState<string | null>(null);
-  const [reopeningId, setReopeningId]   = useState<string | null>(null);
-  const [reopenTarget, setReopenTarget] = useState<{ dayId: string; branchCode: string; wasApproved: boolean } | null>(null);
-  const [reopenNote, setReopenNote]     = useState("");
+  // Pendientes de cierre + pendientes de aprobación (fusionados en una sola lista)
+  const [pendingCloseRows, setPendingCloseRows] = useState<PendingCloseDayRow[]>([]);
+  const [pendingApprovalDays, setPendingApprovalDays] = useState<MasterDay[]>([]);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [reopeningId, setReopeningId] = useState<string | null>(null);
+  const [reopenTarget, setReopenTarget] = useState<{ dayId: string; branchCode: string } | null>(null);
+  const [reopenNote, setReopenNote] = useState("");
 
-  // Biblioteca
-  const [archivedDays, setArchivedDays] = useState<MasterDay[]>([]);
-  const [archiveRefreshing, setArchiveRefreshing] = useState(false);
-  const [showArchive, setShowArchive]   = useState(false);
+  // Conciliación de cierre — compartida entre "Conciliar y cerrar" y "Cerrar día" (Hoy)
+  const [reconcileDayId, setReconcileDayId] = useState<string | null>(null);
+  const [reconcilePreview, setReconcilePreview] = useState<ClosePreview | null>(null);
+
+  // Historial
   const today = new Date().toISOString().split("T")[0];
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
   const [dateFrom, setDateFrom] = useState(sevenDaysAgo);
-  const [dateTo, setDateTo]     = useState(today);
-  const [archiveBranch, setArchiveBranch] = useState("");
+  const [dateTo, setDateTo] = useState(today);
+  const [historyBranch, setHistoryBranch] = useState("");
+  const [historyDays, setHistoryDays] = useState<MasterDay[]>([]);
+  const [historyRefreshing, setHistoryRefreshing] = useState(false);
+  const [selectedHistoryDayId, setSelectedHistoryDayId] = useState<string | null>(null);
+  const [historyReport, setHistoryReport] = useState<DailyReport | null>(null);
+  const [historyReportLoading, setHistoryReportLoading] = useState(false);
 
-  // 360 panel
-  const [selectedBranchId, setSelectedBranchId] = useState("");
-  const selectedBranch = useMemo(() => branches.find((b) => b.id === selectedBranchId) ?? null, [branches, selectedBranchId]);
-
-  // Force cleanup (triggered from a branch row)
-  const [cleanupBranchId, setCleanupBranchId] = useState<string | null>(null);
-  const cleanupBranch = useMemo(() => branches.find((b) => b.id === cleanupBranchId) ?? null, [branches, cleanupBranchId]);
-
-  // Global scanner (dedicated section — pick any branch and scan)
-  const [scanBranchId, setScanBranchId] = useState<string>("");
-  const scanBranch = useMemo(() => branches.find((b) => b.id === scanBranchId) ?? null, [branches, scanBranchId]);
-
-  // Día Operativo v2 — picker de 5 vistas (hammer-dia-operativo-mockup.html).
-  const [activeTab, setActiveTab] = useState<"ciclo" | "cerrar" | "pendientes" | "reporte" | "config">("ciclo");
-  const [closeBranchId, setCloseBranchId] = useState("");
-  const closeBranch = useMemo(() => branches.find((b) => b.id === closeBranchId) ?? null, [branches, closeBranchId]);
-  const [reportBranchId, setReportBranchId] = useState("");
-  const reportBranch = useMemo(() => branches.find((b) => b.id === reportBranchId) ?? null, [branches, reportBranchId]);
+  // Ajustes — tolerancia de caja + herramientas de fuerza
+  const [tolerance, setTolerance] = useState<CashToleranceConfig | null>(null);
+  const [toleranceSaving, setToleranceSaving] = useState(false);
+  const [forceOpen, setForceOpen] = useState(false);
+  const [forceBranchId, setForceBranchId] = useState("");
 
   // ── Load branches once ──
   useEffect(() => {
@@ -175,48 +159,129 @@ export default function MasterOperationsPage() {
       .catch(() => showToast("error", "No se pudieron cargar sucursales."));
   }, []);
 
+  // ── Load "Hoy" cards (uno por sucursal abierta hoy) ──
+  const loadTodayCards = useCallback(async (openBranches: BranchLiveStatus[]) => {
+    const results = await Promise.all(openBranches.map(async (b): Promise<TodayCardData | null> => {
+      try {
+        const resp = await apiFetch(`/api/branch/operations/current?branchId=${b.branchId}`);
+        const raw = await resp.json();
+        if (!resp.ok) return null;
+        const { day } = unwrapApiData(raw) as {
+          day: { id: string; openedAt: string; paidOrdersTotal: string | number; expectedCashTotal?: string | number | null; openCashSessionsCount: number } | null;
+        };
+        if (!day) return null;
+        return {
+          branchId: b.branchId, branchCode: b.branchCode, branchName: b.branchName, dayId: day.id, openedAt: day.openedAt,
+          paidOrdersTotal: Number(day.paidOrdersTotal ?? 0), expectedCashTotal: Number(day.expectedCashTotal ?? 0),
+          openCashSessionsCount: day.openCashSessionsCount ?? 0,
+        };
+      } catch { return null; }
+    }));
+    setTodayCards(results.filter((r): r is TodayCardData => r !== null));
+  }, []);
+
   // ── Load live blockers ──
   const loadLive = useCallback(async () => {
     try {
       const resp = await apiFetch("/api/master/operations/live-blockers");
       const raw = await resp.json();
-      if (resp.ok) { setLiveData(unwrapApiData(raw) as LiveBlockersResponse); setLiveUpdatedAt(new Date()); }
+      if (resp.ok) {
+        const data = unwrapApiData(raw) as LiveBlockersResponse;
+        setLiveData(data);
+        setLiveUpdatedAt(new Date());
+        void loadTodayCards(data.branches.filter((b) => b.derivedState === "OPEN_TODAY"));
+      }
     } catch { /* silent refresh */ }
-  }, []);
+  }, [loadTodayCards]);
 
   useOperationalPolling({ task: loadLive, intervalMs: 30_000, deps: [loadLive] });
 
-  // ── Load pending days (Bandeja Master) ──
-  const loadPending = useCallback(async () => {
-    setPendingRefreshing(true);
+  // ── Load pendientes de cierre / aprobación ──
+  const loadPendingClose = useCallback(async () => {
+    try {
+      const resp = await apiFetch("/api/master/operations/pending-close");
+      const raw = await resp.json();
+      if (resp.ok) setPendingCloseRows(unwrapApiData(raw) as PendingCloseDayRow[]);
+    } catch { /* silent refresh */ }
+  }, []);
+  useOperationalPolling({ task: loadPendingClose, intervalMs: 30_000, deps: [loadPendingClose] });
+
+  const loadPendingApproval = useCallback(async () => {
     try {
       const resp = await apiFetch("/api/master/operations?reviewState=pending");
       const raw = await resp.json();
-      if (resp.ok) setPendingDays(unwrapApiData(raw) as MasterDay[]);
-      else showToast("error", raw?.error?.message ?? "Error cargando bandeja.");
-    } finally { setPendingRefreshing(false); }
+      if (resp.ok) setPendingApprovalDays(unwrapApiData(raw) as MasterDay[]);
+    } catch { /* silent refresh */ }
   }, []);
+  useOperationalPolling({ task: loadPendingApproval, intervalMs: 30_000, deps: [loadPendingApproval] });
 
-  useOperationalPolling({ task: loadPending, intervalMs: 30_000, deps: [loadPending] });
-
-  // ── Load archived days (Biblioteca) ──
-  const loadArchive = useCallback(async () => {
-    setArchiveRefreshing(true);
+  // ── Load historial (días aprobados) ──
+  const loadHistory = useCallback(async () => {
+    setHistoryRefreshing(true);
     try {
       const params = new URLSearchParams({ reviewState: "approved" });
       if (dateFrom) params.set("dateFrom", dateFrom);
-      if (dateTo)   params.set("dateTo",   dateTo);
-      if (archiveBranch) params.set("branchId", archiveBranch);
+      if (dateTo) params.set("dateTo", dateTo);
+      if (historyBranch) params.set("branchId", historyBranch);
       const resp = await apiFetch(`/api/master/operations?${params.toString()}`);
       const raw = await resp.json();
-      if (resp.ok) setArchivedDays(unwrapApiData(raw) as MasterDay[]);
-      else showToast("error", raw?.error?.message ?? "Error cargando biblioteca.");
-    } finally { setArchiveRefreshing(false); }
-  }, [dateFrom, dateTo, archiveBranch]);
+      if (resp.ok) setHistoryDays(unwrapApiData(raw) as MasterDay[]);
+      else showToast("error", raw?.error?.message ?? "Error cargando historial.");
+    } finally {
+      setHistoryRefreshing(false);
+    }
+  }, [dateFrom, dateTo, historyBranch]);
 
-  useEffect(() => { if (showArchive) void loadArchive(); }, [showArchive, loadArchive]);
+  useEffect(() => { if (activeTab === "historial") void loadHistory(); }, [activeTab, loadHistory]);
 
-  // ── Actions ──
+  const selectHistoryDay = useCallback(async (id: string) => {
+    setSelectedHistoryDayId(id);
+    setHistoryReport(null);
+    setHistoryReportLoading(true);
+    try {
+      const resp = await apiFetch(`/api/branch/operations/${id}/daily-report`);
+      const raw = await resp.json();
+      if (resp.ok) setHistoryReport(unwrapApiData(raw) as DailyReport);
+      else showToast("error", raw?.error?.message ?? "No se pudo cargar el reporte.");
+    } catch {
+      showToast("error", "Error de red al cargar el reporte.");
+    } finally {
+      setHistoryReportLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== "historial" || historyDays.length === 0) return;
+    if (!historyDays.some((d) => d.id === selectedHistoryDayId)) void selectHistoryDay(historyDays[0].id);
+  }, [activeTab, historyDays, selectedHistoryDayId, selectHistoryDay]);
+
+  // ── Ajustes: tolerancia de caja ──
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/api/master/operations/cash-tolerance-config")
+      .then((r) => r.json())
+      .then((raw) => { if (!cancelled) setTolerance(unwrapApiData(raw) as CashToleranceConfig); })
+      .catch(() => showToast("error", "No se pudo cargar la tolerancia de caja."));
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveTolerance() {
+    if (!tolerance) return;
+    setToleranceSaving(true);
+    try {
+      const resp = await apiFetch("/api/master/operations/cash-tolerance-config", { method: "PUT", body: JSON.stringify(tolerance) });
+      const raw = await resp.json();
+      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo guardar."); return; }
+      setTolerance(unwrapApiData(raw) as CashToleranceConfig);
+      showToast("success", "Tolerancia de caja guardada.");
+    } catch {
+      showToast("error", "Error de red al guardar.");
+    } finally {
+      setToleranceSaving(false);
+    }
+  }
+
+  // ── Acciones: aprobar / reabrir ──
   async function approveDay(dayId: string, branchCode: string) {
     setApprovingId(dayId);
     try {
@@ -230,697 +295,476 @@ export default function MasterOperationsPage() {
       }
       if (!resp.ok) { showToast("error", `${branchCode}: ${raw?.error?.message ?? "No se pudo aprobar."}`); return; }
       showToast("success", `Día de ${branchCode} aprobado.`);
-      await loadPending();
-      await loadLive();
+      await Promise.all([loadPendingApproval(), loadLive()]);
     } catch { showToast("error", "Error de red al aprobar."); }
     finally { setApprovingId(null); }
   }
 
-async function confirmReopenDay(dayId: string, branchCode: string, note: string, onDone: () => Promise<void>, setReopeningId: (id: string | null) => void) {
-    if (!note.trim()) { showToast("warning", "La nota es requerida."); return; }
-    setReopeningId(dayId);
+  async function confirmReopenDay() {
+    if (!reopenTarget) return;
+    if (!reopenNote.trim()) { showToast("warning", "La nota es requerida."); return; }
+    setReopeningId(reopenTarget.dayId);
     try {
-      const resp = await apiFetch(`/api/master/operations/${dayId}/reopen`, {
-        method: "POST",
-        body: JSON.stringify({ note: note.trim() }),
+      const resp = await apiFetch(`/api/master/operations/${reopenTarget.dayId}/reopen`, {
+        method: "POST", body: JSON.stringify({ note: reopenNote.trim() }),
       });
       const raw = await resp.json();
-      if (!resp.ok) { showToast("error", `${branchCode}: ${raw?.error?.message ?? "No se pudo reabrir."}`); return; }
-      showToast("success", `Día de ${branchCode} reabierto.`);
-      await onDone();
+      if (!resp.ok) { showToast("error", `${reopenTarget.branchCode}: ${raw?.error?.message ?? "No se pudo reabrir."}`); return; }
+      showToast("success", `Día de ${reopenTarget.branchCode} reabierto.`);
+      setReopenTarget(null);
+      await Promise.all([loadPendingApproval(), loadHistory(), loadLive()]);
     } catch { showToast("error", "Error de red al reabrir."); }
     finally { setReopeningId(null); }
   }
 
-  // ── Derived KPIs ──
-  const totalBlockers  = liveData?.total ?? 0;
-  const pendingApproval = pendingDays.length;
-  const pendingSales   = pendingDays.reduce((s, d) => s + Number(d.summaryJson?.paidSalesTotal ?? d.salesTotal), 0);
+  // ── Conciliación de cierre (pendientes de cierre + "Cerrar día" de Hoy) ──
+  function openReconcile(dayId: string) {
+    setReconcileDayId(dayId);
+    setReconcilePreview(null);
+  }
+
+  async function previewReconcile() {
+    if (!reconcileDayId) return;
+    try {
+      const resp = await apiFetch(`/api/branch/operations/${reconcileDayId}/close-preview`, { method: "POST" });
+      const raw = await resp.json();
+      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo previsualizar el cierre."); return; }
+      setReconcilePreview(unwrapApiData(raw) as ClosePreview);
+    } catch { showToast("error", "Error de red al previsualizar."); }
+  }
+
+  async function closeReconcile(note: string, forceClose: boolean) {
+    if (!reconcileDayId) return;
+    try {
+      const resp = await apiFetch(`/api/branch/operations/${reconcileDayId}/close`, {
+        method: "POST", body: JSON.stringify({ note, forceClose }),
+      });
+      const raw = await resp.json();
+      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo cerrar el día."); return; }
+      showToast("success", "Día cerrado — enviado a revisión MASTER.");
+      setReconcileDayId(null);
+      setReconcilePreview(null);
+      await Promise.all([loadLive(), loadPendingClose(), loadPendingApproval()]);
+    } catch { showToast("error", "Error de red al cerrar."); }
+  }
+
+  // ── Lista de acción unificada ──
+  const actionRows: ActionRow[] = useMemo(() => {
+    const closeRows: ActionRow[] = pendingCloseRows.map((r) => ({
+      kind: "CLOSE", id: r.id, businessDate: r.businessDate, daysOverdue: r.daysOverdue,
+      branchCode: r.branchCode, branchName: r.branchName, expectedCashTotal: r.expectedCashTotal,
+      detail: r.blockers.openOrReconcilingCashSessionsCount > 0
+        ? `${r.blockers.openOrReconcilingCashSessionsCount} caja(s) abierta(s)`
+        : r.blockers.autoClosedPendingReviewCount > 0
+          ? `${r.blockers.autoClosedPendingReviewCount} caja(s) sin revisar`
+          : "Solo falta firmar",
+    }));
+    const approveRows: ActionRow[] = pendingApprovalDays.map((d) => ({
+      kind: "APPROVE", id: d.id, businessDate: d.businessDate, daysOverdue: daysOverdueFrom(d.businessDate),
+      branchCode: d.branch.code, branchName: d.branch.name,
+      salesTotal: Number(d.summaryJson?.paidSalesTotal ?? d.salesTotal),
+      cashDifferenceTotal: Number(d.cashDifferenceTotal ?? 0),
+      closedByName: d.closedBy?.fullName ?? d.closedBy?.username ?? null,
+    }));
+    return [...closeRows, ...approveRows].sort((a, b) => b.daysOverdue - a.daysOverdue);
+  }, [pendingCloseRows, pendingApprovalDays]);
+
+  const reconcileLabel = useMemo(() => {
+    if (!reconcileDayId) return null;
+    const fromAction = actionRows.find((r) => r.id === reconcileDayId);
+    if (fromAction) return `${fromAction.branchCode} — ${dayLabel(fromAction.businessDate)}`;
+    const fromToday = todayCards.find((t) => t.dayId === reconcileDayId);
+    return fromToday ? `${fromToday.branchCode} — hoy` : null;
+  }, [reconcileDayId, actionRows, todayCards]);
+
+  const selectedHistoryDay = historyDays.find((d) => d.id === selectedHistoryDayId) ?? null;
+  const forceBranch = branches.find((b) => b.id === forceBranchId) ?? null;
+  const openTodayCount = liveData?.branches.filter((b) => b.derivedState === "OPEN_TODAY").length ?? 0;
+  const totalBlockers = liveData?.total ?? 0;
 
   // ── Render ──
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
-        title="Operación Global"
-        description="Control en tiempo real: estado de sucursales, días pendientes y biblioteca histórica."
-        breadcrumbs={[{ label: "Master", href: "/app/master" }, { label: "Día Operativo 360" }]}
+        title="Día operativo"
+        description="Control en tiempo real: qué requiere tu acción hoy, historial firmado y ajustes."
+        breadcrumbs={[{ label: "Master", href: "/app/master" }, { label: "Día operativo" }]}
       />
 
       {reopenTarget && (
         <Card className="border-[var(--color-warning-200)] p-4">
-          <p className="text-sm font-bold text-[var(--color-text)]">
-            Reabrir día de {reopenTarget.branchCode}
-          </p>
-          <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-            {reopenTarget.wasApproved
-              ? "Este día ya fue aprobado. Escribe una nota de justificación."
-              : "Escribe una nota para reabrir el día (requerido)."}
-          </p>
+          <p className="text-sm font-bold text-[var(--color-text)]">Reabrir día de {reopenTarget.branchCode}</p>
+          <p className="mt-1 text-xs text-[var(--color-text-muted)]">Escribe una nota de justificación (requerida).</p>
           <textarea
-            autoFocus
-            rows={2}
-            value={reopenNote}
-            onChange={(e) => setReopenNote(e.target.value)}
-            placeholder="Motivo de la reapertura…"
-            className="hm-input mt-2 w-full text-sm"
+            autoFocus rows={2} value={reopenNote} onChange={(e) => setReopenNote(e.target.value)}
+            placeholder="Motivo de la reapertura…" className="hm-input mt-2 w-full text-sm"
           />
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setReopenTarget(null)}>Cancelar</Button>
-            <Button
-              variant="primary"
-              size="sm"
-              loading={reopeningId === reopenTarget.dayId}
-              onClick={async () => {
-                await confirmReopenDay(reopenTarget.dayId, reopenTarget.branchCode, reopenNote, async () => { await loadPending(); await loadArchive(); }, setReopeningId);
-                setReopenTarget(null);
-              }}
-            >
+            <Button variant="primary" size="sm" loading={reopeningId === reopenTarget.dayId} onClick={confirmReopenDay}>
               Confirmar reapertura
             </Button>
           </div>
         </Card>
       )}
 
-      <div className="erp-tabs-pill w-fit">
-        {([
-          ["ciclo", "1 · Estado y ciclo"],
-          ["cerrar", "2 · Cerrar el día"],
-          ["pendientes", "3 · Cierres pendientes"],
-          ["reporte", "4 · Reporte del día"],
-          ["config", "5 · Configuración"],
-        ] as const).map(([key, label]) => (
-          <button key={key} type="button" data-active={activeTab === key} onClick={() => setActiveTab(key)}>
+      <nav role="tablist" className="flex items-center gap-0.5 border-b border-[var(--color-border)] pb-3">
+        {NAV_ITEMS.map(([key, label]) => (
+          <button
+            key={key} type="button" role="tab" aria-selected={activeTab === key} onClick={() => setActiveTab(key)}
+            className="rounded-lg px-3.5 py-2 text-sm font-semibold transition-colors"
+            style={activeTab === key
+              ? { color: "var(--color-text)", background: "var(--color-surface)", boxShadow: "var(--shadow-card)" }
+              : { color: "var(--color-text-soft)" }}
+          >
             {label}
           </button>
         ))}
-      </div>
+      </nav>
 
-      {activeTab === "ciclo" && <OperationalDayLifecycleDiagram />}
+      {/* ═══ OPERACIÓN ═══════════════════════════════════════════════════════ */}
+      {activeTab === "operacion" && (
+        <div className="space-y-8">
+          <div className="flex flex-wrap items-baseline gap-5 border-b border-[var(--color-border)] pb-4 text-sm text-[var(--color-text-secondary)]">
+            <span className="flex items-baseline gap-1.5"><b className="hm-num text-lg font-bold text-[var(--color-text)]">{openTodayCount}</b> sucursales abiertas</span>
+            <span className="flex items-baseline gap-1.5"><b className={`hm-num text-lg font-bold ${totalBlockers > 0 ? "text-[var(--color-danger-700)]" : "text-[var(--color-text)]"}`}>{totalBlockers}</b> bloqueos</span>
+            <span className="flex items-baseline gap-1.5"><b className={`hm-num text-lg font-bold ${actionRows.length > 0 ? "text-[var(--color-warning-700)]" : "text-[var(--color-text)]"}`}>{actionRows.length}</b> esperan tu acción</span>
+            <button type="button" onClick={() => setShowLifecycleInfo((v) => !v)} className="text-xs font-semibold text-[var(--color-master-600)] hover:underline">
+              ¿Cómo funciona?
+            </button>
+            <button
+              type="button"
+              onClick={() => { void loadLive(); void loadPendingClose(); void loadPendingApproval(); }}
+              className="ml-auto flex items-center gap-1.5 text-xs text-[var(--color-text-soft)] hover:text-[var(--color-text)]"
+            >
+              <RefreshCw style={{ width: "0.75rem", height: "0.75rem" }} />
+              {timeAgo(liveUpdatedAt)}
+            </button>
+          </div>
 
-      {/* ═══ SECTION 1: Estado Actual ═══════════════════════════════════════ */}
-      {activeTab === "ciclo" && (
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Activity className="text-[var(--color-text-muted)]" style={{ width: "0.875rem", height: "0.875rem" }} />
-          <h2 className="text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
-            Estado Actual — Tiempo Real
-          </h2>
-          <span className="text-[0.625rem] text-[var(--color-text-muted)]">{timeAgo(liveUpdatedAt)}</span>
-          <button type="button" onClick={loadLive} className="ml-auto text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-            <RefreshCw style={{ width: "0.75rem", height: "0.75rem" }} />
-          </button>
-        </div>
+          {showLifecycleInfo && (
+            <Card className="space-y-2 p-4 text-sm leading-relaxed text-[var(--color-text-secondary)]">
+              <p>
+                Un día que no cierra en su fecha <b className="text-[var(--color-text)]">nunca bloquea hoy ni se pierde</b> — pasa a{" "}
+                <Badge variant="warning">Pendiente de cierre</Badge> y espera en la lista de acción hasta que el Master lo concilie con calma.
+              </p>
+              <p>Sus cajas huérfanas pasan a revisión; nada se force-cierra en silencio.</p>
+            </Card>
+          )}
 
-        <div className="hm-kpi-grid">
-          <KpiCard
-            label="Bloqueos operativos"
-            value={totalBlockers}
-            tone={totalBlockers > 0 ? "alert" : "ok"}
-            roleAccent="MASTER"
-            helper={totalBlockers > 0 ? "Cajas/días atascados — requieren acción" : "Sin bloqueos activos"}
-          />
-          <KpiCard
-            label="Días pendientes de aprobación"
-            value={pendingApproval}
-            tone={pendingApproval > 0 ? "ok" : "default"}
-            roleAccent="MASTER"
-            helper={pendingApproval > 0 ? "Días CLOSED listos para aprobar" : "Sin días en espera"}
-          />
-          <KpiCard
-            label="Ventas (pendientes aprobación)"
-            value={money(pendingSales)}
-            tone="ok"
-            roleAccent="MASTER"
-            helper="Suma de días en Bandeja Master"
-          />
-        </div>
-
-        {/* Per-branch live status */}
-        {liveData && liveData.branches.length > 0 && (
-          <Card className="overflow-x-auto">
-            <table className="hm-table w-full text-left text-xs">
-              <thead className="text-[0.6875rem] uppercase text-[var(--color-text-muted)]">
-                <tr>
-                  <th className="py-2">Sucursal</th>
-                  <th>Estado del día</th>
-                  <th className="text-center">Bloqueos</th>
-                  <th className="text-center">Cajas abiertas</th>
-                  <th className="text-center">Auto-cerradas</th>
-                  <th className="text-center">Días atascados</th>
-                  <th className="text-center">Alertas</th>
-                  <th className="text-right">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {liveData.branches.map((b) => (
-                  <tr key={b.branchId} className="border-t border-[var(--color-border)]">
-                    <td className="py-2 font-semibold text-[var(--color-text)]">
-                      <button
-                        type="button"
-                        className="hover:underline text-left text-[var(--color-info-700)]"
-                        onClick={() => setSelectedBranchId(selectedBranchId === b.branchId ? "" : b.branchId)}
-                      >
-                        {b.branchCode}
-                      </button>
-                      <span className="ml-1 hidden text-[var(--color-text-muted)] xl:inline">{b.branchName}</span>
-                    </td>
-                    <td>
-                      <Badge variant={DERIVED_BADGE[b.derivedState] ?? "neutral"}>
-                        {DERIVED_LABEL[b.derivedState] ?? b.derivedState}
-                      </Badge>
-                    </td>
-                    <td className="text-center">
-                      {b.totalBlockers > 0 ? (
-                        <span className="font-bold text-[var(--color-danger-700)]">{b.totalBlockers}</span>
-                      ) : (
-                        <CheckCircle2 className="mx-auto text-[var(--color-success-600)]" style={{ width: "0.875rem", height: "0.875rem" }} />
-                      )}
-                    </td>
-                    <td className="text-center">{b.blockers.openCashSessions || "—"}</td>
-                    <td className="text-center">{b.blockers.autoClosedPendingReview || "—"}</td>
-                    <td className="text-center">{b.blockers.staleOpenOperationalDays || "—"}</td>
-                    <td className="text-center text-[var(--color-text-secondary)]">
-                      {b.alerts.pendingPaymentOrdersToday + b.alerts.pendingDispatchToday + b.alerts.criticalBrainOpen || "—"}
-                    </td>
-                    <td className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          type="button" variant="ghost" size="sm"
-                          onClick={() => setSelectedBranchId(selectedBranchId === b.branchId ? "" : b.branchId)}
-                          className="text-xs"
-                        >
-                          {selectedBranchId === b.branchId ? "Ocultar" : "Ver 360"}
-                        </Button>
-                        {b.totalBlockers > 0 && (
-                          <Button
-                            type="button" variant="ghost" size="sm"
-                            onClick={() => setCleanupBranchId(cleanupBranchId === b.branchId ? null : b.branchId)}
-                            className="text-xs text-[var(--color-warning-700)]"
-                            icon={<Zap style={{ width: "0.7rem", height: "0.7rem" }} />}
-                          >
-                            Limpiar
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+          <div className="space-y-3">
+            <SectionHeading title="Requiere tu acción" subtitle="Ordenado por urgencia. Un día que no cerró en su fecha nunca bloquea hoy — espera aquí." />
+            {actionRows.length === 0 ? (
+              <Card className="border-dashed p-8 text-center">
+                <CheckCircle2 className="mx-auto mb-2 text-[var(--color-success-600)]" style={{ width: "1.5rem", height: "1.5rem" }} />
+                <p className="text-sm text-[var(--color-text-muted)]">Sin días esperando acción.</p>
+              </Card>
+            ) : (
+              <div className="stagger-children space-y-2">
+                {actionRows.map((row) => (
+                  <ActionListRow
+                    key={`${row.kind}-${row.id}`} row={row} approvingId={approvingId} reopeningId={reopeningId}
+                    onReconcile={openReconcile} onApprove={approveDay}
+                    onReopen={(dayId, branchCode) => { setReopenTarget({ dayId, branchCode }); setReopenNote(""); }}
+                  />
                 ))}
-              </tbody>
-            </table>
-          </Card>
-        )}
-
-        {/* Force Cleanup / scanner panel */}
-        {cleanupBranchId && cleanupBranch && (
-          <OperationalDayScanner
-            branchId={cleanupBranchId}
-            branchCode={cleanupBranch.code}
-            onClose={() => setCleanupBranchId(null)}
-            onResolved={async () => { await loadLive(); await loadPending(); }}
-          />
-        )}
-
-        {/* 360 panel */}
-        {selectedBranch && selectedBranchId && (
-          <div>
-            <p className="mb-2 text-[0.625rem] font-bold uppercase tracking-[0.14em] text-[var(--color-text-muted)] flex items-center gap-1.5">
-              <TrendingUp style={{ width: "0.75rem", height: "0.75rem" }} />
-              Vista 360 — {selectedBranch.code}: {selectedBranch.name}
-            </p>
-            <OperationalDayPanel branchId={selectedBranchId} masterMode />
+              </div>
+            )}
           </div>
-        )}
-      </section>
-      )}
 
-      {/* ═══ SECTION 1.5: Escáner y cierre forzado ══════════════════════════ */}
-      {activeTab === "ciclo" && (
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <ScanLine className="text-[var(--color-text-muted)]" style={{ width: "0.875rem", height: "0.875rem" }} />
-          <h2 className="text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
-            Escáner y Cierre Forzado
-          </h2>
+          <div className="space-y-3">
+            <SectionHeading title="Hoy" subtitle="Días abiertos · ventana 06:00 – 06:00" />
+            {todayCards.length === 0 ? (
+              <Card className="border-dashed p-6 text-center text-sm text-[var(--color-text-muted)]">Sin sucursales abiertas hoy.</Card>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {todayCards.map((data) => <TodayCard key={data.branchId} data={data} onCloseDay={openReconcile} />)}
+              </div>
+            )}
+          </div>
+
+          {reconcileDayId && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold text-[var(--color-text)]">Conciliar y cerrar{reconcileLabel ? ` — ${reconcileLabel}` : ""}</h2>
+                <Button variant="ghost" size="sm" onClick={() => { setReconcileDayId(null); setReconcilePreview(null); }}>Cancelar</Button>
+              </div>
+              <OperationalDayChecklist preview={reconcilePreview} onPreview={previewReconcile} />
+              <CloseDayDialog preview={reconcilePreview} isMaster onPreview={previewReconcile} onCloseDay={closeReconcile} />
+            </div>
+          )}
         </div>
-
-        <Card className="p-3">
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="grid gap-1">
-              <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide flex items-center gap-1">
-                <Building2 style={{ width: "0.75rem", height: "0.75rem" }} />
-                Sucursal a escanear
-              </span>
-              <select
-                className="hm-input rounded-lg text-sm"
-                value={scanBranchId}
-                onChange={(e) => setScanBranchId(e.target.value)}
-              >
-                <option value="">Selecciona una sucursal…</option>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>{b.code} — {b.name}</option>
-                ))}
-              </select>
-            </label>
-            <p className="flex-1 min-w-[12rem] text-[0.6875rem] leading-snug text-[var(--color-text-muted)]">
-              Escanea el día operativo de una sucursal para detectar cierres pendientes, cajas atascadas o días sin
-              cerrar. El escáner te dirá cuál es el problema y podrás forzar y actualizar el cierre desde aquí.
-            </p>
-          </div>
-        </Card>
-
-        {scanBranchId && scanBranch && (
-          <OperationalDayScanner
-            key={scanBranchId}
-            branchId={scanBranchId}
-            branchCode={scanBranch.code}
-            onResolved={async () => { await loadLive(); await loadPending(); }}
-          />
-        )}
-      </section>
       )}
 
-      {/* ═══ Vista 2 · Cerrar el día ═══════════════════════════════════════ */}
-      {activeTab === "cerrar" && (
-        <section className="space-y-3">
-          <div className="hm-alert hm-alert-info">
-            El cierre ya es sólido (reclamo atómico, checklist, snapshot). Los totales se suman en <b>decimales exactos</b> (Fase 1) y el <b>modo de fuente</b> (operationalDayId / MIXTO / legacy) se muestra antes de firmar.
-          </div>
-          <Card className="p-3">
-            <label className="grid gap-1 sm:w-72">
-              <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Sucursal</span>
-              <select className="hm-input rounded-lg text-sm" value={closeBranchId} onChange={(e) => setCloseBranchId(e.target.value)}>
-                <option value="">Selecciona una sucursal…</option>
-                {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
-              </select>
-            </label>
-          </Card>
-          {closeBranchId && closeBranch && <OperationalDayPanel key={closeBranchId} branchId={closeBranchId} masterMode />}
-        </section>
-      )}
+      {/* ═══ HISTORIAL ═══════════════════════════════════════════════════════ */}
+      {activeTab === "historial" && (
+        <div className="space-y-3">
+          <SectionHeading title="Historial" subtitle="Días aprobados. Cada uno abre su reporte — el snapshot inmutable con que se firmó." />
 
-      {/* ═══ Vista 3 · Cierres pendientes (Fase 5.5) ══════════════════════ */}
-      {activeTab === "pendientes" && <PendingCloseQueue isMaster onResolved={async () => { await loadLive(); }} />}
-
-      {/* ═══ Vista 4 · Reporte del día ══════════════════════════════════════ */}
-      {activeTab === "reporte" && (
-        <section className="space-y-3">
-          <div className="hm-alert hm-alert-info">
-            El reporte de un día cerrado es el que se firmó, no uno recalculado (Fase 4) — lee el <b>snapshot inmutable</b>, y la actividad tardía (ventas offline sincronizadas después del cierre) se muestra aparte.
-          </div>
-          <Card className="p-3">
-            <label className="grid gap-1 sm:w-72">
-              <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Sucursal</span>
-              <select className="hm-input rounded-lg text-sm" value={reportBranchId} onChange={(e) => setReportBranchId(e.target.value)}>
-                <option value="">Selecciona una sucursal…</option>
-                {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
-              </select>
-            </label>
-            <p className="mt-2 text-[11.5px] text-[var(--color-text-muted)]">Usa &quot;Ver reporte del día&quot; abajo para el snapshot firmado (o en vivo si el día sigue abierto) y la actividad tardía.</p>
-          </Card>
-          {reportBranchId && reportBranch && <OperationalDayPanel key={reportBranchId} branchId={reportBranchId} masterMode />}
-        </section>
-      )}
-
-      {/* ═══ Vista 5 · Configuración ══════════════════════════════════════ */}
-      {activeTab === "config" && <OperationalDayConfigTab branches={branches} />}
-
-      {/* ═══ SECTION 2: Bandeja Master ═══════════════════════════════════════ */}
-      <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Shield className="text-[var(--color-text-muted)]" style={{ width: "0.875rem", height: "0.875rem" }} />
-          <h2 className="text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
-            Bandeja Master — Pendientes de aprobación
-          </h2>
-          <span className="hm-chip hm-chip-warning text-xs">{pendingDays.length}</span>
-          <button type="button" onClick={loadPending} className="ml-auto text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-            <RefreshCw style={{ width: "0.75rem", height: "0.75rem" }} className={pendingRefreshing ? "animate-spin" : ""} />
-          </button>
-        </div>
-
-        <Card className="overflow-x-auto">
-          <table className="hm-table w-full text-left text-sm">
-            <thead className="text-xs uppercase text-[var(--color-text-muted)]">
-              <tr>
-                <th className="py-2">Sucursal</th>
-                <th>Fecha</th>
-                <th>Estado</th>
-                <th className="text-right">Ventas</th>
-                <th className="text-right">Gastos</th>
-                <th className="text-right">Efectivo esp.</th>
-                <th className="text-right">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pendingDays.map((day) => (
-                <tr key={day.id} className="border-t border-[var(--color-border)]">
-                  <td className="py-2.5 font-semibold text-[var(--color-info-700)]">
-                    {day.branch.code}
-                    <span className="ml-1.5 hidden text-xs font-normal text-[var(--color-text-muted)] xl:inline">{day.branch.name}</span>
-                  </td>
-                  <td className="text-[var(--color-text-secondary)]">
-                    {new Date(day.businessDate).toLocaleDateString("es-NI", { timeZone: "UTC" })}
-                  </td>
-                  <td>
-                    <Badge variant={STATUS_BADGE[day.status] ?? "neutral"}>
-                      {STATUS_LABEL[day.status] ?? day.status}
-                    </Badge>
-                  </td>
-                  <td className="text-right font-semibold">{money(day.summaryJson?.paidSalesTotal ?? day.salesTotal)}</td>
-                  <td className="text-right text-[var(--color-danger-700)]">
-                    {(day.summaryJson?.cashOutflowsTotal ?? 0) > 0 ? `- ${money(day.summaryJson?.cashOutflowsTotal)}` : money(0)}
-                  </td>
-                  <td className="text-right">{money(day.summaryJson?.expectedCashOnHand ?? 0)}</td>
-                  <td className="text-right">
-                    <div className="flex items-center justify-end gap-1.5">
-                      {day.status === "CLOSED" && !day.approvedAt && (
-                        <Button
-                          type="button" variant="primary" size="sm"
-                          loading={approvingId === day.id}
-                          onClick={() => approveDay(day.id, day.branch.code)}
-                          icon={<CheckCircle2 className="h-3 w-3" />}
-                          className="text-xs"
-                        >
-                          Aprobar
-                        </Button>
-                      )}
-                      {day.status === "CLOSED" && (
-                        <Button
-                          type="button" variant="ghost" size="sm"
-                          loading={reopeningId === day.id}
-                          onClick={() => { setReopenTarget({ dayId: day.id, branchCode: day.branch.code, wasApproved: !!day.approvedAt }); setReopenNote(""); }}
-                          className="text-xs text-[var(--color-warning-700)]"
-                        >
-                          Reabrir
-                        </Button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {pendingDays.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="py-8 text-center text-sm text-[var(--color-text-muted)]">
-                    <CheckCircle2 className="mx-auto mb-1.5 text-[var(--color-success-600)]" style={{ width: "1.25rem", height: "1.25rem" }} />
-                    Sin días pendientes de aprobación.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </Card>
-      </section>
-
-      {/* ═══ SECTION 3: Biblioteca / Historial ═══════════════════════════════ */}
-      <section className="space-y-3">
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 text-left"
-          onClick={() => setShowArchive((v) => !v)}
-        >
-          <Archive className="text-[var(--color-text-muted)]" style={{ width: "0.875rem", height: "0.875rem" }} />
-          <h2 className="text-[0.6875rem] font-bold uppercase tracking-[0.12em] text-[var(--color-text-muted)]">
-            Biblioteca — Días aprobados
-          </h2>
-          {showArchive
-            ? <ChevronDown style={{ width: "0.75rem", height: "0.75rem" }} className="ml-auto text-[var(--color-text-muted)]" />
-            : <ChevronRight style={{ width: "0.75rem", height: "0.75rem" }} className="ml-auto text-[var(--color-text-muted)]" />}
-        </button>
-
-        {showArchive && (
-          <>
-            {/* Filters */}
-            <Card className="p-3">
-              <div className="flex flex-wrap items-end gap-2">
-                <label className="grid gap-1">
-                  <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Desde</span>
-                  <input type="date" className="hm-input rounded-lg text-sm" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <section className="grid gap-4 lg:grid-cols-[280px_1fr]">
+            <div className="space-y-3">
+              <Card className="space-y-2 p-3">
+                <label className="grid gap-1 text-xs">
+                  <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Desde</span>
+                  <input type="date" className="hm-input text-sm" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
                 </label>
-                <label className="grid gap-1">
-                  <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Hasta</span>
-                  <input type="date" className="hm-input rounded-lg text-sm" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                <label className="grid gap-1 text-xs">
+                  <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Hasta</span>
+                  <input type="date" className="hm-input text-sm" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
                 </label>
-                <label className="grid gap-1">
-                  <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide flex items-center gap-1">
-                    <Building2 style={{ width: "0.75rem", height: "0.75rem" }} />
-                    Sucursal
-                  </span>
-                  <select className="hm-input rounded-lg text-sm" value={archiveBranch} onChange={(e) => setArchiveBranch(e.target.value)}>
+                <label className="grid gap-1 text-xs">
+                  <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Sucursal</span>
+                  <select className="hm-input text-sm" value={historyBranch} onChange={(e) => setHistoryBranch(e.target.value)}>
                     <option value="">Todas</option>
                     {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
                   </select>
                 </label>
-                <Button variant="secondary" size="sm" loading={archiveRefreshing} onClick={loadArchive} icon={<RefreshCw className="h-3.5 w-3.5" />}>
+                <Button variant="secondary" size="sm" loading={historyRefreshing} onClick={loadHistory} icon={<RefreshCw className="h-3.5 w-3.5" />}>
                   Buscar
                 </Button>
+              </Card>
+
+              <div className="flex flex-col gap-1">
+                {historyDays.map((d) => (
+                  <button
+                    key={d.id} type="button" onClick={() => selectHistoryDay(d.id)} className="rounded-lg px-3 py-2.5 text-left text-sm"
+                    style={selectedHistoryDayId === d.id
+                      ? { background: "var(--color-surface)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-card)" }
+                      : { border: "1px solid transparent" }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-[var(--color-text)]">{dayLabel(d.businessDate)} · {d.branch.code}</span>
+                      <span className="hm-num text-xs text-[var(--color-text-muted)]">{money(d.summaryJson?.paidSalesTotal ?? d.salesTotal)}</span>
+                    </div>
+                  </button>
+                ))}
+                {historyDays.length === 0 && (
+                  <p className="px-3 py-8 text-center text-sm text-[var(--color-text-muted)]">Sin días aprobados en este rango.</p>
+                )}
               </div>
-            </Card>
-
-            <Card className="overflow-x-auto">
-              <table className="hm-table w-full text-left text-sm">
-                <thead className="text-xs uppercase text-[var(--color-text-muted)]">
-                  <tr>
-                    <th className="py-2">Sucursal</th>
-                    <th>Fecha</th>
-                    <th>Estado</th>
-                    <th className="text-right">Ventas</th>
-                    <th className="text-right">Gastos</th>
-                    <th className="text-right">Efectivo esp.</th>
-                    <th className="text-right">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {archivedDays.map((day) => (
-                    <tr key={day.id} className="border-t border-[var(--color-border)]">
-                      <td className="py-2.5 font-semibold text-[var(--color-text)]">
-                        {day.branch.code}
-                        <span className="ml-1.5 hidden text-xs font-normal text-[var(--color-text-muted)] xl:inline">{day.branch.name}</span>
-                      </td>
-                      <td className="text-[var(--color-text-secondary)]">
-                        {new Date(day.businessDate).toLocaleDateString("es-NI", { timeZone: "UTC" })}
-                      </td>
-                      <td><Badge variant="success">Aprobado</Badge></td>
-                      <td className="text-right font-semibold">{money(day.summaryJson?.paidSalesTotal ?? day.salesTotal)}</td>
-                      <td className="text-right text-[var(--color-danger-700)]">
-                        {(day.summaryJson?.cashOutflowsTotal ?? 0) > 0 ? `- ${money(day.summaryJson?.cashOutflowsTotal)}` : money(0)}
-                      </td>
-                      <td className="text-right">{money(day.summaryJson?.expectedCashOnHand ?? 0)}</td>
-                      <td className="text-right">
-                        {day.status === "CLOSED" && (
-                          <Button
-                            type="button" variant="ghost" size="sm"
-                            loading={reopeningId === day.id}
-                            onClick={() => { setReopenTarget({ dayId: day.id, branchCode: day.branch.code, wasApproved: true }); setReopenNote(""); }}
-                            className="text-xs text-[var(--color-warning-700)]"
-                          >
-                            Reabrir
-                          </Button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {archivedDays.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="py-8 text-center text-sm text-[var(--color-text-muted)]">
-                        Sin días aprobados en este rango.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </Card>
-          </>
-        )}
-      </section>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════
-   Vista 1 · Diagrama de ciclo de vida (hammer-dia-operativo-mockup.html)
-   ═══════════════════════════════════════════════════════════════════════ */
-
-type LifecycleNode = { label: string; desc: string; dot: string; border: string; bg?: string };
-
-const NORMAL_PATH: LifecycleNode[] = [
-  { label: "Sin día", desc: "Nadie ha abierto caja. La primera caja del día lo auto-abre.", dot: "var(--color-text-soft)", border: "var(--color-border-strong)" },
-  { label: "Abierto", desc: "Ventas, pagos y cajas se asientan aquí. Ventana 06:00 – 06:00 Managua.", dot: "var(--color-success-500)", border: "var(--color-success-200)" },
-  { label: "Cerrado", desc: "Se congela un snapshot inmutable. Requiere checklist sin bloqueos.", dot: "var(--color-master-500)", border: "var(--color-master-200)" },
-  { label: "Aprobado", desc: "El Master valida el cierre. El día queda firme y archivado.", dot: "var(--color-info-500)", border: "var(--color-info-200)" },
-];
-
-const BRANCH_PATH: LifecycleNode[] = [
-  { label: "Abierto (ayer)", desc: "Pasó la medianoche operativa sin cerrarse.", dot: "var(--color-success-500)", border: "var(--color-success-200)" },
-  { label: "Pendiente de cierre", desc: "Sale de «abierto» — deja de bloquear. Sus cajas huérfanas pasan a revisión. Entra a la cola.", dot: "var(--color-warning-600)", border: "var(--color-warning-200)", bg: "var(--color-warning-50)" },
-  { label: "Cerrado (tardío)", desc: "El Master lo concilia cuando puede, con la fecha y ventana de ese día, no la de hoy.", dot: "var(--color-master-500)", border: "var(--color-master-200)" },
-];
-
-function LifecycleRow({ nodes }: { nodes: LifecycleNode[] }) {
-  return (
-    <div className="flex flex-wrap items-stretch gap-2">
-      {nodes.map((n, i) => (
-        <div key={n.label} className="flex flex-1 items-stretch gap-2" style={{ minWidth: 150 }}>
-          <div className="flex-1 rounded-xl border bg-[var(--color-surface)] p-3" style={{ borderColor: n.border, background: n.bg }}>
-            <div className="flex items-center gap-1.5 text-[12.5px] font-bold text-[var(--color-text)]">
-              <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: n.dot }} />
-              {n.label}
             </div>
-            <p className="mt-1 text-[11px] leading-snug text-[var(--color-text-muted)]">{n.desc}</p>
-          </div>
-          {i < nodes.length - 1 && (
-            <div className="hidden flex-shrink-0 items-center text-[var(--color-text-soft)] sm:flex">→</div>
-          )}
+
+            <div>
+              {historyReportLoading ? (
+                <p className="p-8 text-center text-sm text-[var(--color-text-muted)]">Cargando reporte…</p>
+              ) : historyReport && selectedHistoryDay ? (
+                <Card className="space-y-4 p-5">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div>
+                      <p className="text-[0.9375rem] font-bold text-[var(--color-text)]">
+                        {dayLabel(selectedHistoryDay.businessDate)} · {selectedHistoryDay.branch.code} {selectedHistoryDay.branch.name}
+                      </p>
+                      <p className="text-xs text-[var(--color-text-soft)]">
+                        {selectedHistoryDay.closedBy ? `Cerrado por ${selectedHistoryDay.closedBy.fullName ?? selectedHistoryDay.closedBy.username}` : "Cerrado"}
+                      </p>
+                    </div>
+                    <span className="ml-auto hm-chip hm-chip-info text-xs">📸 snapshot</span>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <p className="text-xs text-[var(--color-text-muted)]">Ventas pagadas</p>
+                      <p className="hm-num text-lg font-bold text-[var(--color-text)]">{money(historyReport.summary?.salesTotal)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-[var(--color-text-muted)]">Efectivo esperado</p>
+                      <p className="hm-num text-lg font-bold text-[var(--color-text)]">{money(historyReport.summary?.expectedCashTotal)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-[var(--color-text-muted)]">Diferencia de caja</p>
+                      <p className="hm-num text-lg font-bold" style={{ color: Number(historyReport.summary?.cashDifferenceTotal ?? 0) !== 0 ? "var(--color-warning-700)" : "var(--color-success-700)" }}>
+                        {money(historyReport.summary?.cashDifferenceTotal)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-[var(--color-text-muted)]">Órdenes pagadas</p>
+                      <p className="hm-num text-lg font-bold text-[var(--color-text)]">{historyReport.orders.length}</p>
+                    </div>
+                  </div>
+
+                  {(historyReport.lateActivity?.count ?? 0) > 0 && (
+                    <div className="hm-alert hm-alert-warning">
+                      <AlertTriangle style={{ width: "0.875rem", height: "0.875rem" }} />
+                      <div>{historyReport.lateActivity!.count} venta(s) offline sincronizó después del cierre — se muestra aparte, no altera el número firmado.</div>
+                    </div>
+                  )}
+                </Card>
+              ) : (
+                <EmptyState title="Selecciona un día" description="Elige un día aprobado de la lista para ver su reporte firmado." tone="info" />
+              )}
+            </div>
+          </section>
         </div>
-      ))}
+      )}
+
+      {/* ═══ AJUSTES ═════════════════════════════════════════════════════════ */}
+      {activeTab === "ajustes" && (
+        <div className="space-y-3">
+          <SectionHeading title="Ajustes" subtitle="Tolerancia de caja, política de cierre y herramientas de mantenimiento." />
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            <Card className="space-y-3 p-4">
+              <div className="hm-section-rule">Tolerancia de diferencia de caja</div>
+              {!tolerance ? (
+                <p className="text-sm text-[var(--color-text-muted)]">Cargando…</p>
+              ) : (
+                <>
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-medium text-[var(--color-text-secondary)]">Default global (C$)</span>
+                    <input
+                      type="number" min="0" step="0.01" value={tolerance.defaultToleranceAmount}
+                      onChange={(e) => setTolerance({ ...tolerance, defaultToleranceAmount: Number(e.target.value) || 0 })}
+                      className="hm-input w-40 font-mono"
+                    />
+                  </label>
+                  <div className="grid gap-2">
+                    {branches.map((b) => (
+                      <div key={b.id} className="grid grid-cols-[1fr_auto] items-center gap-3">
+                        <span className="text-sm font-semibold text-[var(--color-text)]">{b.code} — {b.name}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-xs text-[var(--color-text-soft)]">C$</span>
+                          <input
+                            type="number" min="0" step="0.01" value={tolerance.byBranch[b.id] ?? tolerance.defaultToleranceAmount}
+                            onChange={(e) => setTolerance({ ...tolerance, byBranch: { ...tolerance.byBranch, [b.id]: Number(e.target.value) || 0 } })}
+                            className="hm-input w-28 font-mono"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="hm-alert hm-alert-info">Dentro de la tolerancia → advertencia (no bloquea). Fuera → exige revisión/justificación.</div>
+                  <div className="flex justify-end">
+                    <Button size="sm" onClick={saveTolerance} loading={toleranceSaving}>Guardar tolerancia</Button>
+                  </div>
+                </>
+              )}
+            </Card>
+
+            <div className="space-y-3">
+              <Card className="space-y-2 border-[var(--color-warning-200)] p-4">
+                <div className="hm-section-rule">Días que no cierran en su fecha</div>
+                <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
+                  <b>Pendiente, nunca bloquea</b> <Badge variant="warning">recomendado, siempre activo</Badge> — el día viejo pasa a la lista de acción; hoy abre normal; el Master lo cierra cuando puede.
+                </p>
+                <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
+                  El toggle <b>&quot;Cierre automático del día&quot;</b> en{" "}
+                  <Link href="/app/master/settings/operational-automation" className="font-semibold text-[var(--color-master-600)] hover:underline">Automatización Operativa</Link>{" "}
+                  sigue disponible como alternativa opcional — pero nunca reemplaza la regla de fondo.
+                </p>
+                <div className="hm-alert hm-alert-warning">Nunca se force-cierra un día viejo con cajas abiertas en silencio: eso perdería el conteo físico.</div>
+              </Card>
+
+              <Card className="space-y-2 p-4">
+                <div className="hm-section-rule">Herramientas de fuerza</div>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">Escáner de días atascados y cierre forzado. Uso excepcional, auditado.</p>
+                  <Button variant="secondary" size="sm" onClick={() => setForceOpen((v) => !v)} icon={<Wrench className="h-3.5 w-3.5" />}>
+                    {forceOpen ? "Cerrar" : "Abrir"}
+                  </Button>
+                </div>
+                {forceOpen && (
+                  <div className="space-y-2 pt-2">
+                    <label className="grid gap-1 text-xs">
+                      <span className="flex items-center gap-1 font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                        <Building2 style={{ width: "0.75rem", height: "0.75rem" }} /> Sucursal a escanear
+                      </span>
+                      <select className="hm-input text-sm" value={forceBranchId} onChange={(e) => setForceBranchId(e.target.value)}>
+                        <option value="">Selecciona una sucursal…</option>
+                        {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
+                      </select>
+                    </label>
+                    {forceBranchId && forceBranch && (
+                      <OperationalDayScanner
+                        key={forceBranchId} branchId={forceBranchId} branchCode={forceBranch.code}
+                        onResolved={async () => { await Promise.all([loadLive(), loadPendingClose()]); }}
+                      />
+                    )}
+                  </div>
+                )}
+              </Card>
+
+              <Card className="space-y-1.5 p-4">
+                <div className="hm-section-rule">Integridad</div>
+                <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Aritmética de dinero</span><b>Decimal exacto</b></div>
+                <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Reporte de día cerrado</span><b>Snapshot inmutable</b></div>
+                <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Actividad tardía</span><b>Se muestra aparte</b></div>
+                <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Día sin cerrar</span><b>Lista de acción</b></div>
+              </Card>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function OperationalDayLifecycleDiagram() {
+// ── Requiere tu acción — fila ────────────────────────────────────────────────
+
+function ActionListRow({
+  row, approvingId, reopeningId, onReconcile, onApprove, onReopen,
+}: {
+  row: ActionRow; approvingId: string | null; reopeningId: string | null;
+  onReconcile: (id: string) => void; onApprove: (id: string, branchCode: string) => void; onReopen: (id: string, branchCode: string) => void;
+}) {
+  const isClose = row.kind === "CLOSE";
   return (
-    <Card className="space-y-4 p-4">
-      <p className="text-[12.5px] leading-relaxed text-[var(--color-text-muted)]">
-        <b className="text-[var(--color-text)]">Un día operativo tiene un solo camino, y se entiende de un vistazo.</b>{" "}
-        Lo clave: si un día no se cierra en su fecha, <b className="text-[var(--color-text)]">no queda bloqueando ni se pierde</b> — pasa a{" "}
-        <Badge variant="warning">Pendiente de cierre</Badge> y se va a una cola. Hoy abre siempre, normal. El día pendiente espera, intacto, a que el Master lo concilie con calma.
-      </p>
-
-      <div className="hm-section-rule">Camino normal</div>
-      <LifecycleRow nodes={NORMAL_PATH} />
-
-      <p className="text-[11px] text-[var(--color-text-soft)]">↓ ¿y si nadie lo cierra en su fecha?</p>
-
-      <div className="rounded-xl border border-dashed border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
-        <LifecycleRow nodes={BRANCH_PATH} />
+    <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      <div className="min-w-[5rem]">
+        <div className="text-sm font-bold capitalize text-[var(--color-text)]">{dayLabel(row.businessDate)}</div>
+        <div className="text-xs text-[var(--color-text-soft)]">{agoLabel(row.daysOverdue)}</div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-surface)] p-3">
-          <p className="mb-1 text-[12px] font-bold text-[var(--color-danger-700)]">Antes (el problema)</p>
-          <p className="text-[11.5px] leading-relaxed text-[var(--color-text-muted)]">
-            El día viejo quedaba <b className="text-[var(--color-text-secondary)]">Abierto</b> para siempre. El auto-cierre solo tocaba el día de hoy; al viejo lo registraba como error en cada corrida y lo dejaba ahí. Y{" "}
-            <b className="text-[var(--color-text-secondary)]">bloqueaba la sucursal</b>: no se podía abrir caja ni vender sin un override que mezclaba las ventas de hoy con el día de ayer.
-          </p>
-        </div>
-        <div className="rounded-xl border border-[var(--color-success-200)] bg-[var(--color-surface)] p-3">
-          <p className="mb-1 text-[12px] font-bold text-[var(--color-success-700)]">Ahora (la lógica)</p>
-          <p className="text-[11.5px] leading-relaxed text-[var(--color-text-muted)]">
-            El día viejo pasa a <b className="text-[var(--color-text-secondary)]">Pendiente de cierre</b> y sale del camino. Como la apertura busca días &quot;abiertos&quot;,{" "}
-            <b className="text-[var(--color-text-secondary)]">hoy abre solo</b>. El viejo espera en la cola, con toda su data. Nada se force-cierra en silencio; nada se pierde; la sucursal nunca se traba.
-          </p>
-        </div>
+      <div className="min-w-0 flex-1">
+        <span className="inline-flex items-center gap-1.5 text-xs font-semibold" style={{ color: isClose ? "var(--color-warning-700)" : "var(--color-master-700)" }}>
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: isClose ? "var(--color-warning-600)" : "var(--color-master-600)" }} />
+          {isClose ? "Pendiente de cierre" : "Espera tu aprobación"}
+        </span>
+        <p className="mt-0.5 truncate text-xs text-[var(--color-text-muted)]">
+          {row.branchCode} {row.branchName} · {isClose ? row.detail : `diferencia de caja ${money(row.cashDifferenceTotal)} · cerró ${row.closedByName ?? "—"}`}
+        </p>
       </div>
-    </Card>
-  );
-}
 
-/* ═══════════════════════════════════════════════════════════════════════
-   Vista 5 · Configuración (tolerancia por sucursal + política de pendientes)
-   ═══════════════════════════════════════════════════════════════════════ */
+      <div className="text-right">
+        <div className="hm-num text-sm font-bold text-[var(--color-text)]">{money(isClose ? row.expectedCashTotal : row.salesTotal)}</div>
+        <div className="text-[0.625rem] text-[var(--color-text-soft)]">{isClose ? "efectivo esperado" : "ventas del día"}</div>
+      </div>
 
-type CashToleranceConfig = { defaultToleranceAmount: number; byBranch: Record<string, number> };
-
-function OperationalDayConfigTab({ branches }: { branches: Branch[] }) {
-  const [tolerance, setTolerance] = useState<CashToleranceConfig | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch("/api/master/operations/cash-tolerance-config")
-      .then((r) => r.json())
-      .then((raw) => { if (!cancelled) setTolerance(unwrapApiData(raw) as CashToleranceConfig); })
-      .catch(() => showToast("error", "No se pudo cargar la tolerancia de caja."));
-    return () => { cancelled = true; };
-  }, []);
-
-  async function save() {
-    if (!tolerance) return;
-    setSaving(true);
-    try {
-      const resp = await apiFetch("/api/master/operations/cash-tolerance-config", { method: "PUT", body: JSON.stringify(tolerance) });
-      const raw = await resp.json();
-      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo guardar."); return; }
-      setTolerance(unwrapApiData(raw) as CashToleranceConfig);
-      showToast("success", "Tolerancia de caja guardada.");
-    } catch {
-      showToast("error", "Error de red al guardar.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <section className="grid gap-3 lg:grid-cols-2">
-      <Card className="space-y-3 p-4">
-        <div className="hm-section-rule">Tolerancia de diferencia de caja</div>
-        {!tolerance ? (
-          <p className="text-sm text-[var(--color-text-muted)]">Cargando…</p>
+      <div className="flex items-center gap-1.5">
+        {isClose ? (
+          <Button variant="primary" size="sm" onClick={() => onReconcile(row.id)}>Conciliar y cerrar</Button>
         ) : (
           <>
-            <label className="grid gap-1 text-sm">
-              <span className="font-medium text-[var(--color-text-secondary)]">Default global (C$)</span>
-              <input
-                type="number" min="0" step="0.01"
-                value={tolerance.defaultToleranceAmount}
-                onChange={(e) => setTolerance({ ...tolerance, defaultToleranceAmount: Number(e.target.value) || 0 })}
-                className="hm-input w-40 font-mono"
-              />
-            </label>
-            <div className="grid gap-2">
-              {branches.map((b) => (
-                <div key={b.id} className="grid grid-cols-[1fr_auto] items-center gap-3">
-                  <span className="text-sm font-semibold text-[var(--color-text)]">{b.code} — {b.name}</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-xs text-[var(--color-text-soft)]">C$</span>
-                    <input
-                      type="number" min="0" step="0.01"
-                      value={tolerance.byBranch[b.id] ?? tolerance.defaultToleranceAmount}
-                      onChange={(e) => setTolerance({ ...tolerance, byBranch: { ...tolerance.byBranch, [b.id]: Number(e.target.value) || 0 } })}
-                      className="hm-input w-28 font-mono"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="hm-alert hm-alert-info">
-              💡 Dentro de la tolerancia → advertencia (no bloquea). Fuera → exige revisión/justificación.
-            </div>
-            <div className="flex justify-end">
-              <Button size="sm" onClick={save} loading={saving}>Guardar tolerancia</Button>
-            </div>
+            <Button variant="primary" size="sm" loading={approvingId === row.id} onClick={() => onApprove(row.id, row.branchCode)}>Aprobar</Button>
+            <Button variant="ghost" size="sm" loading={reopeningId === row.id} onClick={() => onReopen(row.id, row.branchCode)} className="text-[var(--color-warning-700)]">
+              Reabrir
+            </Button>
           </>
         )}
-      </Card>
-
-      <div className="space-y-3">
-        <Card className="space-y-2 p-4">
-          <div className="hm-section-rule">Día de negocio</div>
-          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Zona horaria</span><b>America/Managua</b></div>
-          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Hora de corte</span><b>06:00 — venta a las 02:00 = día anterior</b></div>
-        </Card>
-
-        <Card className="space-y-2 border-[var(--color-warning-200)] p-4">
-          <div className="hm-section-rule">Días pendientes de cierre</div>
-          <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
-            <b>Pendiente, nunca bloquea</b> <Badge variant="warning">recomendado, siempre activo</Badge> — el día viejo pasa a la cola; hoy abre normal; el Master lo cierra cuando puede.
-          </p>
-          <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
-            El toggle <b>&quot;Cierre automático del día&quot;</b> en{" "}
-            <Link href="/app/master/settings/operational-automation" className="font-semibold text-[var(--color-master-600)] hover:underline">Automatización Operativa</Link>{" "}
-            sigue disponible como alternativa opcional (cierra hoy mismo al pasar la hora de corte, si no tiene cajas abiertas) — pero nunca reemplaza la regla de fondo.
-          </p>
-          <div className="hm-alert hm-alert-warning">
-            ⚠ Nunca se force-cierra un día viejo con cajas abiertas en silencio: eso perdería el conteo físico. Siempre pasa por la cola.
-          </div>
-        </Card>
-
-        <Card className="space-y-1.5 p-4">
-          <div className="hm-section-rule">Integridad</div>
-          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Aritmética de dinero</span><b>Decimal exacto</b></div>
-          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Reporte de día cerrado</span><b>Snapshot inmutable</b></div>
-          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Actividad tardía</span><b>Se muestra aparte</b></div>
-          <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Día sin cerrar</span><b>Cola de pendientes</b></div>
-        </Card>
       </div>
-    </section>
+    </div>
+  );
+}
+
+// ── Hoy — tarjeta compacta por sucursal abierta ─────────────────────────────
+
+function TodayCard({ data, onCloseDay }: { data: TodayCardData; onCloseDay: (dayId: string) => void }) {
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-bold text-[var(--color-text)]">
+          <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-[var(--color-success-600)] animate-pulse-soft" />
+          {data.branchCode} {data.branchName}
+        </div>
+        <span className="text-xs text-[var(--color-text-soft)]">desde {new Date(data.openedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit" })}</span>
+      </div>
+      <div className="space-y-1 text-sm">
+        <div className="flex justify-between"><span className="text-[var(--color-text-muted)]">Ventas pagadas</span><b className="hm-num">{money(data.paidOrdersTotal)}</b></div>
+        <div className="flex justify-between"><span className="text-[var(--color-text-muted)]">Efectivo en caja (esperado)</span><b className="hm-num">{money(data.expectedCashTotal)}</b></div>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3">
+        <span className="text-xs text-[var(--color-text-soft)]">{data.openCashSessionsCount} caja{data.openCashSessionsCount !== 1 ? "s" : ""} abierta{data.openCashSessionsCount !== 1 ? "s" : ""}</span>
+        <Button variant="secondary" size="sm" onClick={() => onCloseDay(data.dayId)}>Cerrar día</Button>
+      </div>
+    </Card>
   );
 }
