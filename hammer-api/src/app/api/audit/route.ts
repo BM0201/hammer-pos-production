@@ -28,6 +28,7 @@ export async function GET(request: Request) {
       entityType: searchParams.get("entityType") ?? undefined,
       entityId: searchParams.get("entityId") ?? undefined,
       result: searchParams.get("result") ?? undefined,
+      search: searchParams.get("search") ?? undefined,
       limit: searchParams.get("limit") ?? undefined,
       offset: searchParams.get("offset") ?? undefined,
     });
@@ -57,6 +58,7 @@ export async function GET(request: Request) {
       entityType: query.entityType,
       entityId: query.entityId,
       result: query.result,
+      search: query.search,
       limit: query.limit,
       offset: query.offset,
     });

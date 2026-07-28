@@ -59,6 +59,7 @@ export type AuditQueryInput = {
   entityType?: string;
   entityId?: string;
   result?: string;
+  search?: string;
   limit?: number;
   offset?: number;
 };
@@ -66,6 +67,31 @@ export type AuditQueryInput = {
 export async function listAuditLogs(input: AuditQueryInput) {
   const take = Math.min(Math.max(input.limit ?? 100, 1), 200);
   const skip = Math.max(input.offset ?? 0, 0);
+
+  // Filtros combinables por OR (result y search) se acumulan en AND para que
+  // ninguno pise al otro si algún consumidor futuro llega a mandar ambos.
+  const orClauses: Prisma.AuditLogWhereInput[] = [];
+  if (input.result) {
+    orClauses.push({
+      OR: [
+        { metadataJson: { path: ["reason"], string_contains: input.result } },
+        { metadataJson: { path: ["status"], string_contains: input.result } },
+        { metadataJson: { path: ["action"], string_contains: input.result } },
+      ],
+    });
+  }
+  if (input.search) {
+    orClauses.push({
+      OR: [
+        { actor: { username: { contains: input.search, mode: "insensitive" } } },
+        { actor: { fullName: { contains: input.search, mode: "insensitive" } } },
+        { branch: { name: { contains: input.search, mode: "insensitive" } } },
+        { branch: { code: { contains: input.search, mode: "insensitive" } } },
+        { metadataJson: { path: ["reason"], string_contains: input.search } },
+        { metadataJson: { path: ["status"], string_contains: input.search } },
+      ],
+    });
+  }
 
   const where: Prisma.AuditLogWhereInput = {
     ...(input.dateFrom || input.dateTo
@@ -89,15 +115,7 @@ export async function listAuditLogs(input: AuditQueryInput) {
     ...(input.actorUsername
       ? { actor: { username: { contains: input.actorUsername, mode: "insensitive" } } }
       : {}),
-    ...(input.result
-      ? {
-          OR: [
-            { metadataJson: { path: ["reason"], string_contains: input.result } },
-            { metadataJson: { path: ["status"], string_contains: input.result } },
-            { metadataJson: { path: ["action"], string_contains: input.result } },
-          ],
-        }
-      : {}),
+    ...(orClauses.length > 0 ? { AND: orClauses } : {}),
   };
 
   const [rows, total] = await Promise.all([
