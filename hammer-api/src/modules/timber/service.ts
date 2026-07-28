@@ -819,7 +819,21 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
     });
   });
 
-  return { trip, calculation: calc };
+  // BUG FIX (crash en produccion): getTimberTrip adjunta `reconciliation` al
+  // trip que devuelve, pero este endpoint (el que dispara el autoguardado
+  // con debounce del frontend) devolvia el trip crudo de Prisma sin ese
+  // campo. El frontend lee `trip.reconciliation.status` incondicionalmente
+  // (StepViajeYCubicacion/StepConfirmar) — apenas el autoguardado reemplazaba
+  // el trip en el estado, la siguiente renderizacion crasheaba con
+  // "Cannot read properties of undefined (reading 'status')". Mismo calculo
+  // que getTimberTrip, reutilizando el `pricing` ya cargado arriba.
+  const reconciliation = calculateReconciliation(
+    trip.totalFeet.toNumber(),
+    trip.invoicedFeet != null ? trip.invoicedFeet.toNumber() : null,
+    pricing.reconciliationTolerancePercent,
+  );
+
+  return { trip: { ...trip, reconciliation }, calculation: calc };
 }
 
 type ResolvedLineForInjection = {
@@ -1127,7 +1141,10 @@ const config = await getPricingConfig();
       },
     });
 
-    return updated;
+    // Mismo shape que getTimberTrip/updateTimberTrip (`reconciliation` ya
+    // calculado arriba en esta función) — evita que un futuro consumidor de
+    // este trip caiga en el mismo `trip.reconciliation.status` sobre undefined.
+    return { ...updated, reconciliation };
   });
 }
 
@@ -1139,11 +1156,20 @@ export async function cancelTimberTrip(id: string) {
     throw new Error("TRIP_CANNOT_BE_CANCELLED");
   }
 
-  return prisma.timberTrip.update({
+  const cancelled = await prisma.timberTrip.update({
     where: { id },
     data: { status: "CANCELLED" },
     include: { lines: true, destinationBranch: true },
   });
+
+  // Mismo shape que getTimberTrip/updateTimberTrip/confirmTimberTrip.
+  const config = await getPricingConfig();
+  const reconciliation = calculateReconciliation(
+    cancelled.totalFeet.toNumber(),
+    cancelled.invoicedFeet != null ? cancelled.invoicedFeet.toNumber() : null,
+    config.reconciliationTolerancePercent,
+  );
+  return { ...cancelled, reconciliation };
 }
 
 /** Get a single trip with lines */
