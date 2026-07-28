@@ -388,7 +388,6 @@ export default function MasterOperationsPage() {
       <PageHeader
         title="Día operativo"
         description="Control en tiempo real: qué requiere tu acción hoy, historial firmado y ajustes."
-        breadcrumbs={[{ label: "Master", href: "/app/master" }, { label: "Día operativo" }]}
       />
 
       {reopenTarget && (

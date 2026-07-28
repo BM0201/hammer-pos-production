@@ -197,7 +197,7 @@ export function Product360({ productId }: { productId: string }) {
 
   return (
     <section className="space-y-6 animate-fade-in-up">
-      {/* ── Breadcrumb + Header ── */}
+      {/* ── Volver + Header ── */}
       <div>
         <Link
           href={"/app/master/catalog-inventory" as Route}

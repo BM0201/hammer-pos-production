@@ -9,7 +9,6 @@ export default function MasterReportsPage() {
       <PageHeader
         title="Reportes & KPIs"
         description="Generación, vista previa y exportación de reportes operativos. Datos en tiempo real por sucursal."
-        breadcrumbs={[{ label: "Master", href: "/app/master" }, { label: "Reportes & KPIs" }]}
       />
       <ReportsHub masterMode />
     </div>

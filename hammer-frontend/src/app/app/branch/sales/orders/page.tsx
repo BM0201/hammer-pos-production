@@ -5,7 +5,7 @@ import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 
 // NOTE: This page only renders POS content. The unified app shell
-// (dark role-themed sidebar + header + breadcrumbs) is provided once by
+// (dark role-themed sidebar + header) is provided once by
 // <AppShellRouter> in app/layout.tsx for every route, including POS.
 export default function BranchSalesOrdersPage() {
   const sessionState = useSession();

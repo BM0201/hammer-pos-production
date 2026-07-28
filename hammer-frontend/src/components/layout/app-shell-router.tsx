@@ -7,7 +7,6 @@ import type { ReactNode } from "react";
 import type { SessionPayload } from "@/types/auth";
 import { AppSidebar } from "@/components/navigation/app-sidebar";
 import { RoleBadge } from "@/components/ui/role-badge";
-import { Breadcrumbs } from "@/components/layout/breadcrumbs";
 import { AppFooter } from "@/components/layout/app-footer";
 import { BranchSelector } from "@/components/branch-selector";
 import { ChevronLeft, LogOut } from "lucide-react";
@@ -257,7 +256,6 @@ export function AppShellRouter({
         </header>
 
         <main className="flex-1 p-5 lg:p-8 animate-fade-in-up">
-          <Breadcrumbs />
           {children}
         </main>
 

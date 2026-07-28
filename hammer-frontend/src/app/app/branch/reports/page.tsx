@@ -22,7 +22,6 @@ export default function BranchReportsPage() {
       <PageHeader
         title="Reportes"
         description="Vista previa y exportación de reportes operativos de tu sucursal."
-        breadcrumbs={[{ label: "Sucursal", href: "/app/branch" }, { label: "Reportes" }]}
       />
       <ReportsHub defaultBranchId={branchId} />
     </div>
