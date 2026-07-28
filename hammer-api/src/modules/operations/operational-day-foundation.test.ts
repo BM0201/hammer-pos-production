@@ -105,31 +105,43 @@ describe("O.10 estado del día operativo (lógica de decisión)", () => {
   });
 });
 
-// ─── O.1 / O.11 resolveOpenOperationalDayForOperation (auto-open + stale) ─────
+// ─── O.1 / O.11 resolveOpenOperationalDayForOperation (auto-open + barrido) ──
+//
+// Día Operativo v2 Fase 5: un día OPEN viejo (stale) YA NO bloquea. Antes
+// lanzaba STALE_OPERATIONAL_DAY_OPEN salvo un override Master explícito que
+// mezclaba las ventas de hoy con el día de ayer (corrompiendo ambos). Ahora
+// el día viejo se barre a PENDING_CLOSE (sale de "abierto", nunca se pierde)
+// y la operación se asienta en el día de HOY, recién auto-abierto — sin
+// necesidad de ningún override.
 
-describe("O.1/O.11 resolución de día para operación nueva", () => {
+describe("O.1/O.11 resolución de día para operación nueva (Fase 5: nunca bloquea)", () => {
   type OpenDay = { id: string; businessDate: number } | null;
 
-  // Espejo de resolveOpenOperationalDayForOperationTx (decisión: auto-open + warn)
-  function resolve(input: {
-    open: OpenDay;
-    today: number;
-    allowStaleOverride?: boolean;
-  }): { operationalDayId: string; autoOpened: boolean; warnings: string[] } {
+  // Espejo de resolveOpenOperationalDayForOperationTx post-Fase 5.
+  function resolve(input: { open: OpenDay; today: number }): {
+    operationalDayId: string;
+    autoOpened: boolean;
+    warnings: string[];
+    sweptStaleDayId: string | null;
+  } {
     if (input.open) {
       const isStale = input.open.businessDate !== input.today;
-      if (isStale && !input.allowStaleOverride) throw new Error("STALE_OPERATIONAL_DAY_OPEN");
-      return { operationalDayId: input.open.id, autoOpened: false, warnings: isStale ? ["STALE_OVERRIDE"] : [] };
+      if (!isStale) {
+        return { operationalDayId: input.open.id, autoOpened: false, warnings: [], sweptStaleDayId: null };
+      }
+      // Barre el viejo a PENDING_CLOSE, luego auto-abre hoy (nunca lanza, nunca bloquea).
+      return { operationalDayId: "auto-today", autoOpened: true, warnings: ["OPERATIONAL_DAY_AUTO_OPENED"], sweptStaleDayId: input.open.id };
     }
-    return { operationalDayId: "auto", autoOpened: true, warnings: ["OPERATIONAL_DAY_AUTO_OPENED"] };
+    return { operationalDayId: "auto-today", autoOpened: true, warnings: ["OPERATIONAL_DAY_AUTO_OPENED"], sweptStaleDayId: null };
   }
 
   const today = 2000;
 
-  it("día OPEN de hoy → lo usa, sin auto-open", () => {
+  it("día OPEN de hoy → lo usa, sin auto-open, sin barrido", () => {
     const r = resolve({ open: { id: "d1", businessDate: today }, today });
     assert.equal(r.operationalDayId, "d1");
     assert.equal(r.autoOpened, false);
+    assert.equal(r.sweptStaleDayId, null);
   });
 
   it("sin día OPEN → auto-apertura + warn (no bloquea el POS)", () => {
@@ -138,14 +150,12 @@ describe("O.1/O.11 resolución de día para operación nueva", () => {
     assert.ok(r.warnings.includes("OPERATIONAL_DAY_AUTO_OPENED"));
   });
 
-  it("día OPEN viejo (stale) sin override → bloquea", () => {
-    assert.throws(() => resolve({ open: { id: "old", businessDate: 1999 }, today }), /STALE_OPERATIONAL_DAY_OPEN/);
-  });
-
-  it("día OPEN viejo con override Master → lo usa con warn", () => {
-    const r = resolve({ open: { id: "old", businessDate: 1999 }, today, allowStaleOverride: true });
-    assert.equal(r.operationalDayId, "old");
-    assert.ok(r.warnings.includes("STALE_OVERRIDE"));
+  it("Test no-bloqueo: día OPEN viejo (stale) → NUNCA lanza, barre el viejo y abre hoy", () => {
+    assert.doesNotThrow(() => resolve({ open: { id: "old", businessDate: 1999 }, today }));
+    const r = resolve({ open: { id: "old", businessDate: 1999 }, today });
+    assert.equal(r.autoOpened, true, "hoy abre normal");
+    assert.equal(r.sweptStaleDayId, "old", "el día viejo se barrió a PENDING_CLOSE, no se ignoró ni se perdió");
+    assert.ok(r.warnings.includes("OPERATIONAL_DAY_AUTO_OPENED"));
   });
 });
 

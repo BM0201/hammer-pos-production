@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { OperationalDayPanel } from "@/components/operations/operational-day-panel";
 import { OperationalDayScanner } from "@/components/operations/operational-day-scanner";
+import { PendingCloseQueue } from "@/components/operations/pending-close-queue";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
@@ -133,6 +134,8 @@ export default function MasterOperationsPage() {
   const [pendingRefreshing, setPendingRefreshing] = useState(false);
   const [approvingId, setApprovingId]   = useState<string | null>(null);
   const [reopeningId, setReopeningId]   = useState<string | null>(null);
+  const [reopenTarget, setReopenTarget] = useState<{ dayId: string; branchCode: string; wasApproved: boolean } | null>(null);
+  const [reopenNote, setReopenNote]     = useState("");
 
   // Biblioteca
   const [archivedDays, setArchivedDays] = useState<MasterDay[]>([]);
@@ -225,12 +228,7 @@ export default function MasterOperationsPage() {
     finally { setApprovingId(null); }
   }
 
-  async function reopenDay(dayId: string, branchCode: string, wasApproved: boolean) {
-    const prompt = wasApproved
-      ? `Este día ya fue aprobado. Escribe una nota de justificación para reabrir el día de ${branchCode}:`
-      : `Escribe una nota para reabrir el día de ${branchCode} (requerido):`;
-    const note = window.prompt(prompt);
-    if (note === null) return;
+async function confirmReopenDay(dayId: string, branchCode: string, note: string, onDone: () => Promise<void>, setReopeningId: (id: string | null) => void) {
     if (!note.trim()) { showToast("warning", "La nota es requerida."); return; }
     setReopeningId(dayId);
     try {
@@ -241,7 +239,7 @@ export default function MasterOperationsPage() {
       const raw = await resp.json();
       if (!resp.ok) { showToast("error", `${branchCode}: ${raw?.error?.message ?? "No se pudo reabrir."}`); return; }
       showToast("success", `Día de ${branchCode} reabierto.`);
-      await loadPending();
+      await onDone();
     } catch { showToast("error", "Error de red al reabrir."); }
     finally { setReopeningId(null); }
   }
@@ -259,6 +257,41 @@ export default function MasterOperationsPage() {
         description="Control en tiempo real: estado de sucursales, días pendientes y biblioteca histórica."
         breadcrumbs={[{ label: "Master", href: "/app/master" }, { label: "Día Operativo 360" }]}
       />
+
+      {reopenTarget && (
+        <Card className="border-[var(--color-warning-200)] p-4">
+          <p className="text-sm font-bold text-[var(--color-text)]">
+            Reabrir día de {reopenTarget.branchCode}
+          </p>
+          <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+            {reopenTarget.wasApproved
+              ? "Este día ya fue aprobado. Escribe una nota de justificación."
+              : "Escribe una nota para reabrir el día (requerido)."}
+          </p>
+          <textarea
+            autoFocus
+            rows={2}
+            value={reopenNote}
+            onChange={(e) => setReopenNote(e.target.value)}
+            placeholder="Motivo de la reapertura…"
+            className="hm-input mt-2 w-full text-sm"
+          />
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setReopenTarget(null)}>Cancelar</Button>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={reopeningId === reopenTarget.dayId}
+              onClick={async () => {
+                await confirmReopenDay(reopenTarget.dayId, reopenTarget.branchCode, reopenNote, async () => { await loadPending(); await loadArchive(); }, setReopeningId);
+                setReopenTarget(null);
+              }}
+            >
+              Confirmar reapertura
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {/* ═══ SECTION 1: Estado Actual ═══════════════════════════════════════ */}
       <section className="space-y-3">
@@ -438,6 +471,9 @@ export default function MasterOperationsPage() {
         )}
       </section>
 
+      {/* ═══ SECTION 1.7: Cierres pendientes (Fase 5.5) ══════════════════════ */}
+      <PendingCloseQueue isMaster onResolved={async () => { await loadLive(); }} />
+
       {/* ═══ SECTION 2: Bandeja Master ═══════════════════════════════════════ */}
       <section className="space-y-3">
         <div className="flex items-center gap-2">
@@ -501,7 +537,7 @@ export default function MasterOperationsPage() {
                         <Button
                           type="button" variant="ghost" size="sm"
                           loading={reopeningId === day.id}
-                          onClick={() => reopenDay(day.id, day.branch.code, !!day.approvedAt)}
+                          onClick={() => { setReopenTarget({ dayId: day.id, branchCode: day.branch.code, wasApproved: !!day.approvedAt }); setReopenNote(""); }}
                           className="text-xs text-[var(--color-warning-700)]"
                         >
                           Reabrir
@@ -603,7 +639,7 @@ export default function MasterOperationsPage() {
                           <Button
                             type="button" variant="ghost" size="sm"
                             loading={reopeningId === day.id}
-                            onClick={() => reopenDay(day.id, day.branch.code, true)}
+                            onClick={() => { setReopenTarget({ dayId: day.id, branchCode: day.branch.code, wasApproved: true }); setReopenNote(""); }}
                             className="text-xs text-[var(--color-warning-700)]"
                           >
                             Reabrir

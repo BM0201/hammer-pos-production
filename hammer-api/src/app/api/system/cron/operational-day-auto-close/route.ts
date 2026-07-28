@@ -1,4 +1,5 @@
-import { autoCloseOperationalDays } from "@/modules/operations/auto-day-service";
+import { autoCloseTodaysOperationalDaysAtDeadline } from "@/modules/operations/auto-day-service";
+import { sweepStaleOperationalDaysToPendingClose } from "@/modules/operations/service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { fail } from "@/lib/api/response";
 import { NextResponse } from "next/server";
@@ -27,11 +28,14 @@ async function handle(request: Request) {
   try {
     const url = new URL(request.url);
     assertCronAuthorized(request);
-    const result = await autoCloseOperationalDays({
-      dryRun: url.searchParams.get("dryRun") === "1",
-      now: parseNowOverride(url),
-    });
-    return NextResponse.json({ ok: true, ...result });
+    const dryRun = url.searchParams.get("dryRun") === "1";
+    const now = parseNowOverride(url);
+    // Día Operativo v2 Fase 5: el barrido a PENDING_CLOSE (modelo pendiente
+    // puro, nunca finaliza un día) corre siempre; el auto-cierre de HOY
+    // sigue siendo opt-in (autoCloseEnabled) y es un paso aparte.
+    const pendingCloseSweep = await sweepStaleOperationalDaysToPendingClose({ dryRun, now });
+    const result = await autoCloseTodaysOperationalDaysAtDeadline({ dryRun, now });
+    return NextResponse.json({ ok: true, pendingCloseSweep, ...result });
   } catch (error) {
     if (error instanceof Error && error.message === "CRON_SECRET_MISSING")
       return fail("CONFIGURATION_ERROR", "CRON_SECRET no está configurado.", 500);

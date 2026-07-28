@@ -15,7 +15,14 @@ import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-pol
 import { isHardApproveBlocker } from "@/modules/operations/approve-policy";
 import { getSalesSummaryForOperationalDayTx } from "@/modules/sales/realtime-sales-summary";
 import { OPERATIONAL_DAY_AUTO_SETTING_KEY, normalizeOperationalDayAutoConfig } from "@/modules/operations/auto-day-config";
-import { cashTenderTotal, isCashOutflowType, tenderTotalsByMethod } from "@/modules/cash-session/expected-cash";
+import { getCashToleranceConfig, resolveCashToleranceForBranch } from "@/modules/operations/cash-tolerance-config";
+import {
+  cashMovementsNetTotalDecimal,
+  cashTenderTotalDecimal,
+  computeExpectedCashDecimal,
+  isCashOutflowType,
+  tenderTotalsByMethodDecimal,
+} from "@/modules/cash-session/expected-cash";
 import { refreshReplenishmentSignalSnapshot } from "@/modules/inventory/replenishment-service";
 
 export const OPERATIONAL_TIMEZONE = "America/Managua";
@@ -29,10 +36,15 @@ function n(value: Prisma.Decimal | number | string | null | undefined) {
   return Number(value ?? 0);
 }
 
-// Clasificación entrada/salida compartida con cash-session (CASH_OUTFLOW_TYPES
-// en expected-cash.ts) para que ambos módulos no vuelvan a divergir.
-function movementSignedAmount(type: CashMovementType, amount: number) {
-  return isCashOutflowType(type) ? -amount : amount;
+/**
+ * Día Operativo v2 Fase 1 — coerción a Decimal para MONTOS (nunca para
+ * conteos/enteros, que siguen usando `n()`). Todo subtotal de dinero en
+ * `calculateOperationalSummaryTx` debe acumularse con `.add()`/`.sub()` sobre
+ * este tipo, no con `+` sobre `number` — sumar en `number` arrastra drift de
+ * punto flotante que se congela en el snapshot del cierre (ver expected-cash.ts).
+ */
+function d(value: Prisma.Decimal | number | string | null | undefined): Prisma.Decimal {
+  return new Prisma.Decimal(value ?? 0);
 }
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue {
@@ -199,8 +211,17 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
       },
       orderBy: { openedAt: "asc" },
     }),
+    // Día Operativo v2 Fase 2 — este ya NO es "ventana = todo lo demás": es
+    // específicamente el resto AÚN NO MIGRADO (operationalDayId: null) dentro
+    // de la ventana. Sin ese filtro, en modo MIXED se descartaban en silencio
+    // los tenders sin id (useIdTenders prefería SOLO dayTendersById), y el
+    // total quedaba por debajo del real. Ahora es el complemento exacto y
+    // mutuamente excluyente de dayTendersById — la unión de ambos es completa
+    // y sin doble conteo por construcción (uno exige operationalDayId ===
+    // day.id, el otro exige operationalDayId === null).
     tx.paymentTender.findMany({
       where: {
+        operationalDayId: null,
         payment: {
           status: PaymentStatus.POSTED,
           paidAt: { gte: start, lt: end },
@@ -230,9 +251,13 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     tx.payment.count({ where: { status: PaymentStatus.POSTED, paidAt: { gte: start, lt: end }, saleOrder: { branchId: day.branchId } } }),
   ]);
 
-  // Si hay tenders atados al operationalDayId, esa es la fuente; si no, ventana legacy.
-  const useIdTenders = dayTendersById.length > 0;
-  const effectiveTenders = useIdTenders ? dayTendersById : dayTenders;
+  // Fase 2: el conjunto efectivo es SIEMPRE completo — todos los tenders con
+  // operationalDayId (la fuente confiable) MÁS los que aún no migraron (sin
+  // id, dentro de la ventana). Antes, en modo MIXED, se usaban SOLO los
+  // tenders con id y se descartaban en silencio los de ventana sin migrar —
+  // el total mostrado quedaba por debajo del real. sourceMode/warnings siguen
+  // existiendo para trazabilidad, pero el monto ya no depende de ellos.
+  const effectiveTenders = [...dayTendersById, ...dayTenders];
   const sourceMode: "OPERATIONAL_DAY_ID" | "MIXED" | "LEGACY_TIME_WINDOW" =
     paymentsIdCount > 0
       ? paymentsIdCount < paymentsWindowCount
@@ -257,45 +282,50 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
   // FIX doble resta del vuelto: `net` === `amount` (tender.amount ya es el
   // monto aplicado; el vuelto sale del excedente recibido). `changeAmount`
   // sigue expuesto como campo informativo separado. Ver expected-cash.ts.
-  const totalsByPaymentMethod = tenderTotalsByMethod(
-    effectiveTenders.map((tender) => ({
-      method: tender.method,
-      amount: n(tender.amount),
-      changeAmount: n(tender.changeAmount),
-    })),
+  // Fase 1 (Decimal): toda esta sección acumula en Prisma.Decimal — sumar en
+  // `number` arrastra drift de punto flotante que se congelaba en el snapshot
+  // del cierre (p.ej. 62,900.0000000113 en vez de 62,900.00).
+  const totalsByPaymentMethodDecimal = tenderTotalsByMethodDecimal(effectiveTenders);
+  const totalsByPaymentMethod = Object.fromEntries(
+    Object.entries(totalsByPaymentMethodDecimal).map(([method, totals]) => [
+      method,
+      { amount: totals.amount.toNumber(), changeAmount: totals.changeAmount.toNumber(), net: totals.net.toNumber() },
+    ]),
   );
 
-  const openingCashTotal = cashSessions.reduce((sum, session) => sum + n(session.openingAmount), 0);
+  const openingCashTotalDecimal = cashSessions.reduce((sum, session) => sum.add(session.openingAmount), d(0));
   // Σ amount de tenders CASH, SIN restar vuelto (misma regla que el esperado
   // por sesión). Se conserva el nombre por compatibilidad con closeSummaryJson.
-  const cashTenderNetTotal = cashTenderTotal(
-    effectiveTenders.map((tender) => ({ method: tender.method, amount: n(tender.amount) })),
-  );
-  const cardTenderTotal = effectiveTenders
+  const cashTenderNetTotalDecimal = cashTenderTotalDecimal(effectiveTenders);
+  const cardTenderTotalDecimal = effectiveTenders
     .filter((tender) => tender.method === PaymentMethod.CARD)
-    .reduce((sum, tender) => sum + n(tender.amount), 0);
-  const transferTenderTotal = effectiveTenders
+    .reduce((sum, tender) => sum.add(tender.amount), d(0));
+  const transferTenderTotalDecimal = effectiveTenders
     .filter((tender) => tender.method === PaymentMethod.TRANSFER)
-    .reduce((sum, tender) => sum + n(tender.amount), 0);
-  const otherTenderTotal = effectiveTenders
+    .reduce((sum, tender) => sum.add(tender.amount), d(0));
+  const otherTenderTotalDecimal = effectiveTenders
     .filter((tender) => tender.method !== PaymentMethod.CASH && tender.method !== PaymentMethod.CARD && tender.method !== PaymentMethod.TRANSFER)
-    .reduce((sum, tender) => sum + n(tender.amount), 0);
-  const cashMovementsNet = cashMovements.reduce((sum, movement) => sum + movementSignedAmount(movement.type, n(movement.amount)), 0);
+    .reduce((sum, tender) => sum.add(tender.amount), d(0));
+  const cashMovementsNetDecimal = cashMovementsNetTotalDecimal(cashMovements);
   // Break the net movements into gross inflows / outflows so the Master can see
   // exactly how much was spent or taken out of the box ("gasto de caja").
-  const cashExpensesTotal = cashMovements
+  const cashExpensesTotalDecimal = cashMovements
     .filter((movement) => movement.type === CashMovementType.EXPENSE_OUT)
-    .reduce((sum, movement) => sum + n(movement.amount), 0);
-  const cashOutflowsTotal = cashMovements
+    .reduce((sum, movement) => sum.add(movement.amount), d(0));
+  const cashOutflowsTotalDecimal = cashMovements
     .filter((movement) => isCashOutflowType(movement.type))
-    .reduce((sum, movement) => sum + n(movement.amount), 0);
-  const cashInflowsTotal = cashMovements
+    .reduce((sum, movement) => sum.add(movement.amount), d(0));
+  const cashInflowsTotalDecimal = cashMovements
     .filter((movement) => !isCashOutflowType(movement.type))
-    .reduce((sum, movement) => sum + n(movement.amount), 0);
-  const expectedCashOnHand = openingCashTotal + cashTenderNetTotal + cashMovementsNet;
+    .reduce((sum, movement) => sum.add(movement.amount), d(0));
+  const expectedCashOnHandDecimal = computeExpectedCashDecimal({
+    openingAmount: openingCashTotalDecimal,
+    postedCashPayments: cashTenderNetTotalDecimal,
+    cashMovementsNet: cashMovementsNetDecimal,
+  });
 
   // ── H: vuelto entregado, devoluciones, movimientos de caja y expected vs counted por caja ──
-  const changeAmountTotal = effectiveTenders.reduce((sum, tender) => sum + n(tender.changeAmount), 0);
+  const changeAmountTotalDecimal = effectiveTenders.reduce((sum, tender) => sum.add(tender.changeAmount ?? 0), d(0));
 
   // Devoluciones del día: por operationalDayId; fallback a las ligadas a una caja del día.
   const refunds = await tx.refund.findMany({
@@ -307,21 +337,21 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     },
     select: { method: true, amount: true, status: true },
   });
-  const refundsByMethod = refunds.reduce<Record<string, number>>((acc, r) => {
-    acc[r.method] = (acc[r.method] ?? 0) + n(r.amount);
+  const refundsByMethodDecimal = refunds.reduce<Record<string, Prisma.Decimal>>((acc, r) => {
+    acc[r.method] = (acc[r.method] ?? d(0)).add(r.amount);
     return acc;
   }, {});
   const refundsSummary = {
-    total: refunds.reduce((sum, r) => sum + n(r.amount), 0),
+    total: refunds.reduce((sum, r) => sum.add(r.amount), d(0)).toNumber(),
     count: refunds.length,
-    byMethod: refundsByMethod,
+    byMethod: Object.fromEntries(Object.entries(refundsByMethodDecimal).map(([method, total]) => [method, total.toNumber()])),
   };
 
   const cashMovementsSummary = {
-    net: cashMovementsNet,
-    inflows: cashInflowsTotal,
-    outflows: cashOutflowsTotal,
-    expenses: cashExpensesTotal,
+    net: cashMovementsNetDecimal.toNumber(),
+    inflows: cashInflowsTotalDecimal.toNumber(),
+    outflows: cashOutflowsTotalDecimal.toNumber(),
+    expenses: cashExpensesTotalDecimal.toNumber(),
   };
 
   // Ventas offline sincronizadas DESPUÉS del cierre del día = pendientes de revisión
@@ -350,7 +380,7 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     legacyFallbackCounts,
     warnings: summaryWarnings,
     totalsByPaymentMethod,
-    changeAmountTotal,
+    changeAmountTotal: changeAmountTotalDecimal.toNumber(),
     refunds: refundsSummary,
     cashMovements: cashMovementsSummary,
     expectedVsCountedByCashSession,
@@ -365,22 +395,22 @@ export async function calculateOperationalSummaryTx(tx: Prisma.TransactionClient
     cancelledSalesCount: salesSummary.cancelledSalesCount,
     postedPaymentsCount: salesSummary.postedPaymentsCount,
     voidedPaymentsCount: salesSummary.voidedPaymentsCount,
-    expectedCashTotal: n(expectedCashTotal._sum.expectedCashAmount),
+    expectedCashTotal: d(expectedCashTotal._sum.expectedCashAmount).toNumber(),
     // Esperado de sesiones AUTO_CLOSED_PENDING_REVIEW (fuera del comparativo).
-    expectedCashPendingReviewTotal: n(expectedCashPendingReviewTotal._sum.expectedCashAmount),
-    countedCashTotal: n(countedCashTotal._sum.countedCashAmount),
-    cashDifferenceTotal: n(cashDifferenceTotal._sum.differenceAmount),
-    openingCashTotal,
-    cashTenderNetTotal,
-    cashMovementsNet,
-    cashExpensesTotal,
-    cashOutflowsTotal,
-    cashInflowsTotal,
-    expectedCashOnHand,
-    cashNetWithoutOpening: expectedCashOnHand - openingCashTotal,
-    cardTenderTotal,
-    transferTenderTotal,
-    otherTenderTotal,
+    expectedCashPendingReviewTotal: d(expectedCashPendingReviewTotal._sum.expectedCashAmount).toNumber(),
+    countedCashTotal: d(countedCashTotal._sum.countedCashAmount).toNumber(),
+    cashDifferenceTotal: d(cashDifferenceTotal._sum.differenceAmount).toNumber(),
+    openingCashTotal: openingCashTotalDecimal.toNumber(),
+    cashTenderNetTotal: cashTenderNetTotalDecimal.toNumber(),
+    cashMovementsNet: cashMovementsNetDecimal.toNumber(),
+    cashExpensesTotal: cashExpensesTotalDecimal.toNumber(),
+    cashOutflowsTotal: cashOutflowsTotalDecimal.toNumber(),
+    cashInflowsTotal: cashInflowsTotalDecimal.toNumber(),
+    expectedCashOnHand: expectedCashOnHandDecimal.toNumber(),
+    cashNetWithoutOpening: expectedCashOnHandDecimal.sub(openingCashTotalDecimal).toNumber(),
+    cardTenderTotal: cardTenderTotalDecimal.toNumber(),
+    transferTenderTotal: transferTenderTotalDecimal.toNumber(),
+    otherTenderTotal: otherTenderTotalDecimal.toNumber(),
     openCashSessionsCount,
     autoClosedPendingReviewCount,
     pendingDispatchCount,
@@ -436,6 +466,141 @@ export async function getOpenOperationalDayForBranchTx(tx: Prisma.TransactionCli
   });
 }
 
+/**
+ * Día Operativo v2 Fase 5 — cierra las cajas huérfanas (OPEN/RECONCILING) de
+ * un día que se está barriendo a PENDING_CLOSE, reutilizando el MISMO cálculo
+ * de efectivo esperado que ya usa cash-session (Decimal, ver Fase 1) — nunca
+ * se pierde el conteo físico, solo queda pendiente de revisión
+ * (AUTO_CLOSED_PENDING_REVIEW, el estado que ya existe para esto).
+ */
+export async function closeOrphanedCashSessionsForDayTx(tx: Prisma.TransactionClient, dayId: string): Promise<number> {
+  const orphanSessions = await tx.cashSession.findMany({
+    where: { operationalDayId: dayId, status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] } },
+    select: { id: true, openingAmount: true, physicalCashBoxId: true },
+  });
+
+  for (const session of orphanSessions) {
+    const [cashTenders, cashMovements] = await Promise.all([
+      tx.paymentTender.findMany({
+        where: { method: PaymentMethod.CASH, payment: { cashSessionId: session.id, status: PaymentStatus.POSTED } },
+        select: { amount: true },
+      }),
+      tx.cashMovement.findMany({ where: { cashSessionId: session.id }, select: { type: true, amount: true } }),
+    ]);
+    const postedCashPayments = cashTenderTotalDecimal(cashTenders.map((t) => ({ method: PaymentMethod.CASH, amount: t.amount })));
+    const cashMovementsNet = cashMovementsNetTotalDecimal(cashMovements);
+    const expectedCash = computeExpectedCashDecimal({ openingAmount: session.openingAmount, postedCashPayments, cashMovementsNet });
+
+    await tx.cashSession.update({
+      where: { id: session.id },
+      data: {
+        status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW,
+        closedAt: new Date(),
+        autoClosedAt: new Date(),
+        autoClosedBySystem: true,
+        autoClosedReason: "Dia operativo paso a Pendiente de cierre — caja huerfana cerrada para revision.",
+        expectedCashAmount: expectedCash,
+        countedCashAmount: null,
+        differenceAmount: null,
+        closingAmount: null,
+        requiresReview: true,
+        activeSessionKey: null,
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        branchId: null,
+        module: "operations",
+        action: "OPERATIONAL_DAY_ORPHAN_CASH_SESSION_AUTO_CLOSED",
+        entityType: "CashSession",
+        entityId: session.id,
+        metadataJson: { operationalDayId: dayId, physicalCashBoxId: session.physicalCashBoxId, expectedCash: expectedCash.toNumber() },
+      },
+    });
+  }
+
+  return orphanSessions.length;
+}
+
+/**
+ * Día Operativo v2 Fase 5 (el corazón) — barre un día OPEN de fecha pasada a
+ * PENDING_CLOSE: SALE de "abierto" (deja de bloquear), cierra sus cajas
+ * huérfanas para revisión, conserva toda su data intacta. NUNCA lo finaliza
+ * (nunca CLOSED) — un humano lo concilia y cierra después, con la ventana de
+ * SU fecha (closeOperationalDay ya soporta esto, ver 5.4). Idempotente: si el
+ * día ya no está OPEN cuando se reclama, no hace nada.
+ */
+export async function sweepDayToPendingCloseTx(
+  tx: Prisma.TransactionClient,
+  day: { id: string; branchId: string; businessDate: Date },
+  actorUserId?: string,
+): Promise<void> {
+  const claimed = await tx.operationalDay.updateMany({
+    where: { id: day.id, status: OperationalDayStatus.OPEN },
+    data: { status: OperationalDayStatus.PENDING_CLOSE },
+  });
+  if (claimed.count !== 1) return;
+
+  const orphanCashSessionsClosed = await closeOrphanedCashSessionsForDayTx(tx, day.id);
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: actorUserId && actorUserId !== "SYSTEM" ? actorUserId : null,
+      branchId: day.branchId,
+      module: "operations",
+      action: "OPERATIONAL_DAY_SWEPT_TO_PENDING_CLOSE",
+      entityType: "OperationalDay",
+      entityId: day.id,
+      metadataJson: {
+        businessDate: day.businessDate,
+        orphanCashSessionsClosed,
+        reason: "Paso su fecha sin cerrarse — nunca se pierde ni bloquea, espera cierre humano en la cola de pendientes.",
+      },
+    },
+  });
+}
+
+/**
+ * Día Operativo v2 Fase 5.3 (vía proactiva) — barrido periódico (cron) de
+ * TODOS los días OPEN de fecha pasada, en cualquier sucursal, a
+ * PENDING_CLOSE. Reemplaza a la vieja `autoCloseOperationalDays`, que
+ * detectaba estos días stale y solo empujaba un error
+ * `STALE_OPEN_OPERATIONAL_DAY:...` en cada corrida, sin resolverlos nunca.
+ * Este barrido NUNCA finaliza (CLOSED) un día — solo lo saca de "abierto" y
+ * lo deja esperando en la cola; cerrarlo lo hace un humano
+ * (closeOperationalDay ya acepta PENDING_CLOSE).
+ */
+export async function sweepStaleOperationalDaysToPendingClose(
+  input: { now?: Date; dryRun?: boolean } = {},
+): Promise<{ scanned: number; sweptToPendingClose: number; errors: Array<{ branchId: string; message: string }> }> {
+  const today = businessDateFromNow(input.now);
+  const staleOpenDays = await prisma.operationalDay.findMany({
+    where: { status: OperationalDayStatus.OPEN, businessDate: { lt: today } },
+    select: { id: true, branchId: true, businessDate: true },
+    take: 200,
+  });
+
+  if (input.dryRun) {
+    return { scanned: staleOpenDays.length, sweptToPendingClose: 0, errors: [] };
+  }
+
+  let sweptToPendingClose = 0;
+  const errors: Array<{ branchId: string; message: string }> = [];
+  for (const day of staleOpenDays) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${day.id} FOR UPDATE`;
+        await sweepDayToPendingCloseTx(tx, day, "SYSTEM");
+      });
+      sweptToPendingClose += 1;
+    } catch (err) {
+      errors.push({ branchId: day.branchId, message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return { scanned: staleOpenDays.length, sweptToPendingClose, errors };
+}
+
 export async function ensureOpenOperationalDayTx(
   tx: Prisma.TransactionClient,
   branchId: string,
@@ -448,14 +613,15 @@ export async function ensureOpenOperationalDayTx(
 
   const day = await getOpenOperationalDayForBranchTx(tx, branchId);
   if (day) {
-    // Guard: reject if the open day belongs to a past businessDate.
-    // Tying new sessions to yesterday's (or older) operational day would make
-    // them invisible in the Command Center and corrupt the daily close flow.
+    // Fase 5: un día OPEN de fecha pasada (stale) YA NO bloquea — se barre a
+    // PENDING_CLOSE (sale de "abierto", conserva su data, espera cierre
+    // humano) y se sigue de largo para abrir/usar el día de HOY.
     const todayBusinessDate = businessDateFromNow();
     if (day.businessDate.getTime() !== todayBusinessDate.getTime()) {
-      throw new Error("STALE_OPERATIONAL_DAY_OPEN");
+      await sweepDayToPendingCloseTx(tx, day, openedByUserId);
+    } else {
+      return day;
     }
-    return day;
   }
 
   // Auto-open the operational day as a side-effect of the first cash session
@@ -599,9 +765,12 @@ export async function getCurrentOperationalDayState(branchId: string): Promise<{
 
 /**
  * Resuelve el día operativo OPEN al que debe asentarse una operación nueva
- * (venta/pago). Decisión de negocio: mantener auto-apertura + warn cuando no hay
- * día OPEN (no bloquea el POS). Un día OPEN viejo (stale) bloquea salvo override
- * Master explícito.
+ * (venta/pago). Decisión de negocio: mantener auto-apertura + warn cuando no
+ * hay día OPEN (no bloquea el POS). Fase 5: un día OPEN viejo (stale) YA NO
+ * bloquea — se barre a PENDING_CLOSE (sale de "abierto", nunca se pierde) y
+ * la operación se asienta en el día de HOY, recién auto-abierto. El único
+ * "escape" del modelo viejo (forzar hoy contra el día de ayer, corrompiendo
+ * ambos) deja de existir — no hace falta, hoy simplemente abre solo.
  *
  * Debe ejecutarse dentro de una transacción.
  */
@@ -609,27 +778,28 @@ export async function resolveOpenOperationalDayForOperationTx(
   tx: Prisma.TransactionClient,
   branchId: string,
   occurredAt: Date = new Date(),
-  options?: { openedByUserId?: string; allowStaleOverride?: boolean },
+  options?: { openedByUserId?: string },
 ): Promise<{ operationalDayId: string; autoOpened: boolean; warnings: string[] }> {
   const open = await getOpenOperationalDayForBranchTx(tx, branchId);
   const today = businessDateFromNow(occurredAt);
   if (open) {
     const isStale = open.businessDate.getTime() !== today.getTime();
-    if (isStale && !options?.allowStaleOverride) {
-      throw new Error("STALE_OPERATIONAL_DAY_OPEN");
+    if (!isStale) {
+      return { operationalDayId: open.id, autoOpened: false, warnings: [] };
     }
-    return {
-      operationalDayId: open.id,
-      autoOpened: false,
-      warnings: isStale ? ["STALE_OPERATIONAL_DAY_OVERRIDE"] : [],
-    };
+    await sweepDayToPendingCloseTx(tx, open, options?.openedByUserId);
   }
-  // Sin día OPEN → auto-apertura del día de hoy (Managua) + warn.
+  // Sin día OPEN (o el que había era stale y se acaba de barrer) →
+  // auto-apertura del día de hoy (Managua) + warn.
   const created = await ensureOpenOperationalDayTx(tx, branchId, options?.openedByUserId);
   return { operationalDayId: created.id, autoOpened: true, warnings: ["OPERATIONAL_DAY_AUTO_OPENED"] };
 }
 
-function buildChecklist(summary: Awaited<ReturnType<typeof calculateOperationalSummaryTx>>, dayStatus: OperationalDayStatus): OperationalDayClosePreview {
+function buildChecklist(
+  summary: Awaited<ReturnType<typeof calculateOperationalSummaryTx>>,
+  dayStatus: OperationalDayStatus,
+  cashDifferenceToleranceAmount: number,
+): OperationalDayClosePreview {
   const items: ChecklistItem[] = [
     {
       key: "day_status",
@@ -670,8 +840,8 @@ function buildChecklist(summary: Awaited<ReturnType<typeof calculateOperationalS
     {
       key: "cash_difference",
       label: "Diferencias de caja justificadas",
-      status: Math.abs(summary.cashDifferenceTotal) > 100 ? "WARNING" : "OK",
-      message: `Diferencia acumulada: C$ ${summary.cashDifferenceTotal.toFixed(2)}`,
+      status: Math.abs(summary.cashDifferenceTotal) > cashDifferenceToleranceAmount ? "WARNING" : "OK",
+      message: `Diferencia acumulada: C$ ${summary.cashDifferenceTotal.toFixed(2)} (tolerancia: C$ ${cashDifferenceToleranceAmount.toFixed(2)})`,
     },
   ];
   const blockers = items.filter((item) => item.status === "BLOCKING");
@@ -807,7 +977,8 @@ export async function closePreviewOperationalDay(id: string, actorUserId?: strin
   return prisma.$transaction(async (tx) => {
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id } });
     const summary = await calculateOperationalSummaryTx(tx, day);
-    const preview = buildChecklist(summary, day.status);
+    const toleranceConfig = await getCashToleranceConfig();
+    const preview = buildChecklist(summary, day.status, resolveCashToleranceForBranch(toleranceConfig, day.branchId));
     await tx.operationalDay.update({
       where: { id },
       data: {
@@ -831,24 +1002,29 @@ export async function closePreviewOperationalDay(id: string, actorUserId?: strin
 }
 
 /**
- * Revierte un día atascado en CLOSING de vuelta a OPEN (best-effort). Solo actúa si
- * el día sigue en CLOSING (condición en updateMany) para no pisar un estado válido.
+ * Revierte un día atascado en CLOSING de vuelta a su estado ANTERIOR
+ * (best-effort). Solo actúa si el día sigue en CLOSING (condición en
+ * updateMany) para no pisar un estado válido.
+ *
+ * Fase 5: ahora hay TRES orígenes posibles de CLOSING (OPEN de hoy,
+ * REOPENED_FOR_ADJUSTMENT tras un ajuste, o PENDING_CLOSE de la cola) — el
+ * heurístico viejo ("hoy → OPEN, si no → REOPENED_FOR_ADJUSTMENT") ya no
+ * alcanza: revertir un PENDING_CLOSE fallido a REOPENED_FOR_ADJUSTMENT lo
+ * sacaría de la cola de pendientes incorrectamente. Se revierte al
+ * `originalStatus` exacto que closeOperationalDay capturó antes de reclamar
+ * CLOSING — deshace la transición, no la adivina.
  */
 async function revertClosingToOpenTx(
   actorUserId: string,
   dayId: string,
+  originalStatus: OperationalDayStatus,
   reason: string,
 ) {
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${dayId} FOR UPDATE`;
-    const day = await tx.operationalDay.findUnique({ where: { id: dayId }, select: { branchId: true, businessDate: true, status: true } });
+    const day = await tx.operationalDay.findUnique({ where: { id: dayId }, select: { branchId: true, status: true } });
     if (!day || day.status !== OperationalDayStatus.CLOSING) return;
-    // Un día de HOY vuelve a OPEN (reanuda operación). Un día pasado que se estaba
-    // re-finalizando tras un ajuste vuelve a REOPENED_FOR_ADJUSTMENT (no a OPEN, que
-    // crearía un día viejo abierto / stale).
-    const isToday = day.businessDate.getTime() === businessDateFromNow().getTime();
-    const revertTo = isToday ? OperationalDayStatus.OPEN : OperationalDayStatus.REOPENED_FOR_ADJUSTMENT;
-    await tx.operationalDay.update({ where: { id: dayId }, data: { status: revertTo } });
+    await tx.operationalDay.update({ where: { id: dayId }, data: { status: originalStatus } });
     await tx.auditLog.create({
       data: {
         actorUserId,
@@ -857,7 +1033,7 @@ async function revertClosingToOpenTx(
         action: "OPERATIONAL_DAY_CLOSE_FAILED_REVERTED",
         entityType: "OperationalDay",
         entityId: dayId,
-        metadataJson: { reason, revertedFrom: "CLOSING", revertedTo: revertTo },
+        metadataJson: { reason, revertedFrom: "CLOSING", revertedTo: originalStatus },
       },
     });
   });
@@ -883,15 +1059,19 @@ export async function closeOperationalDay(input: {
   acknowledgedWarnings?: string[];
 }) {
   // ── Fase 1: reclamar CLOSING atómicamente ──────────────────────────────────
+  let originalStatus: OperationalDayStatus = OperationalDayStatus.OPEN;
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${input.id} FOR UPDATE`;
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
     if (day.status === OperationalDayStatus.CLOSED) throw new Error("OPERATIONAL_DAY_ALREADY_CLOSED");
     if (day.status === OperationalDayStatus.CANCELLED) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
     if (day.status === OperationalDayStatus.CLOSING) throw new Error("OPERATIONAL_DAY_CLOSING_IN_PROGRESS");
-    // Cerrable desde OPEN o desde REOPENED_FOR_ADJUSTMENT (re-finalizar tras un ajuste Master).
-    const closeableSources = [OperationalDayStatus.OPEN, OperationalDayStatus.REOPENED_FOR_ADJUSTMENT];
+    // Cerrable desde OPEN, REOPENED_FOR_ADJUSTMENT (re-finalizar tras un ajuste
+    // Master), o PENDING_CLOSE (Fase 5: cierre tardío de un día barrido — usa
+    // la ventana de SU businessDate, no la de hoy, sin cambios adicionales).
+    const closeableSources = [OperationalDayStatus.OPEN, OperationalDayStatus.REOPENED_FOR_ADJUSTMENT, OperationalDayStatus.PENDING_CLOSE];
     if (!closeableSources.includes(day.status)) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
+    originalStatus = day.status;
 
     const claimed = await tx.operationalDay.updateMany({
       where: { id: input.id, status: { in: closeableSources } },
@@ -920,7 +1100,9 @@ export async function closeOperationalDay(input: {
       if (day.status !== OperationalDayStatus.CLOSING) throw new Error("OPERATIONAL_DAY_NOT_CLOSING");
 
       const summary = await calculateOperationalSummaryTx(tx, day);
-      const preview = buildChecklist(summary, day.status);
+      const toleranceConfig = await getCashToleranceConfig();
+      const cashDifferenceToleranceAmount = resolveCashToleranceForBranch(toleranceConfig, day.branchId);
+      const preview = buildChecklist(summary, day.status, cashDifferenceToleranceAmount);
       const hasWarnings = preview.warnings.length > 0;
       const hardBlockers = preview.blockers.filter((item) => isHardOperationalDayCloseBlocker(item.key));
       if (hardBlockers.length > 0) {
@@ -984,7 +1166,7 @@ export async function closeOperationalDay(input: {
         },
       });
 
-      if (preview.warnings.length > 0 || Math.abs(summary.cashDifferenceTotal) > 100) {
+      if (preview.warnings.length > 0 || Math.abs(summary.cashDifferenceTotal) > cashDifferenceToleranceAmount) {
         const warningsFingerprint = `operations:closed-with-warnings:${day.id}`;
         // No se reabre si Master ya la descartó explícitamente (DISMISSED) — un
         // re-cierre (día reabierto para ajuste) SÍ reabre si estaba ya resuelta
@@ -1030,10 +1212,11 @@ export async function closeOperationalDay(input: {
 
     return closed;
   } catch (error) {
-    // El día quedó en CLOSING por un fallo/blocker → revertir a OPEN.
+    // El día quedó en CLOSING por un fallo/blocker → revertir a su estado anterior.
     await revertClosingToOpenTx(
       input.actorUserId,
       input.id,
+      originalStatus,
       error instanceof Error ? error.message : "UNKNOWN_CLOSE_ERROR",
     );
     throw error;
@@ -1668,6 +1851,63 @@ export async function listOperationalDays(filters: {
   });
 }
 
+export type PendingCloseDayRow = {
+  id: string;
+  branchId: string;
+  branchCode: string;
+  branchName: string;
+  businessDate: string;
+  daysOverdue: number;
+  salesTotal: number;
+  expectedCashTotal: number;
+  blockers: {
+    autoClosedPendingReviewCount: number;
+    openOrReconcilingCashSessionsCount: number;
+  };
+};
+
+/**
+ * Día Operativo v2 Fase 5.5 — la cola de días que pasaron su fecha sin
+ * cerrarse (PENDING_CLOSE), del más viejo al más nuevo. Ninguno bloquea la
+ * operación de hoy; ninguno caduca ni se borra — esperan a que un humano los
+ * concilie y cierre (closeOperationalDay ya acepta PENDING_CLOSE, ver 5.4).
+ */
+export async function listPendingCloseDays(): Promise<PendingCloseDayRow[]> {
+  const days = await prisma.operationalDay.findMany({
+    where: { status: OperationalDayStatus.PENDING_CLOSE },
+    include: { branch: { select: { id: true, code: true, name: true } } },
+    orderBy: { businessDate: "asc" },
+    take: 100,
+  });
+
+  const today = businessDateFromNow();
+  const rows: PendingCloseDayRow[] = [];
+  for (const day of days) {
+    const [summary, autoClosedPendingReviewCount, openOrReconcilingCashSessionsCount] = await Promise.all([
+      prisma.$transaction((tx) => calculateOperationalSummaryTx(tx, day)),
+      prisma.cashSession.count({
+        where: { operationalDayId: day.id, status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW, requiresReview: true },
+      }),
+      prisma.cashSession.count({
+        where: { operationalDayId: day.id, status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] } },
+      }),
+    ]);
+    const daysOverdue = Math.round((today.getTime() - day.businessDate.getTime()) / (24 * 60 * 60 * 1000));
+    rows.push({
+      id: day.id,
+      branchId: day.branchId,
+      branchCode: day.branch.code,
+      branchName: day.branch.name,
+      businessDate: day.businessDate.toISOString(),
+      daysOverdue,
+      salesTotal: summary.salesTotal,
+      expectedCashTotal: summary.expectedCashTotal,
+      blockers: { autoClosedPendingReviewCount, openOrReconcilingCashSessionsCount },
+    });
+  }
+  return rows;
+}
+
 export async function getDailyReport(id: string) {
   const day = await prisma.operationalDay.findUniqueOrThrow({
     where: { id },
@@ -1780,6 +2020,33 @@ export async function getDailyReport(id: string) {
     }),
   ]);
 
+  // Día Operativo v2 Fase 4 — el reporte de un día ya CLOSED es el que se
+  // firmó: lee el snapshot inmutable (closeSummaryJson), nunca recalcula. Un
+  // día todavía OPEN/PENDING_CLOSE/CLOSING/REOPENED_FOR_ADJUSTMENT no tiene
+  // (o ya no es) snapshot definitivo — se calcula en vivo, marcado como tal.
+  let summary: Record<string, unknown>;
+  let summarySource: "SNAPSHOT" | "LIVE";
+  if (day.status === OperationalDayStatus.CLOSED && day.closeSummaryJson) {
+    summary = day.closeSummaryJson as Record<string, unknown>;
+    summarySource = "SNAPSHOT";
+  } else {
+    summary = await prisma.$transaction((tx) => calculateOperationalSummaryTx(tx, day));
+    summarySource = "LIVE";
+  }
+
+  // La actividad que entró DESPUÉS del cierre (ventas offline sincronizadas
+  // tarde) se muestra aparte, con referencia — nunca se suma al número
+  // firmado. El sistema ya la CONTABA (lateOfflineSyncCount); acá se expone
+  // el detalle.
+  const lateActivityOrders = day.closedAt
+    ? await prisma.saleOrder.findMany({
+        where: { operationalDayId: day.id, offlineClientId: { not: null }, syncedAt: { gt: day.closedAt } },
+        select: { id: true, orderNumber: true, grandTotal: true, syncedAt: true, createdAt: true },
+        orderBy: { syncedAt: "asc" },
+        take: 100,
+      })
+    : [];
+
   return {
     day,
     // Vista primaria (back-compat): operaciones del día (híbrido id/legacy).
@@ -1789,6 +2056,10 @@ export async function getDailyReport(id: string) {
     brain,
     audit,
     window: { start, end, timezone: TIMEZONE },
+    // Fase 4: número firmado (snapshot) para un día CLOSED; en vivo si no.
+    summary,
+    summarySource,
+    lateActivity: { orders: lateActivityOrders, count: lateActivityOrders.length },
     // (1) Operaciones por operationalDayId — la fuente de verdad.
     operations: { orders, paymentsByMethod, dispatches, returns, cancellations, transports },
     // (2) Actividad cronológica por ventana Managua (para contraste temporal).
@@ -1812,7 +2083,8 @@ export type OperationalDayDerivedState =
   | "CLOSED_PENDING_MASTER"
   | "APPROVED_ARCHIVED"
   | "CANCELLED"
-  | "STALE_OPEN_DAY";
+  | "STALE_OPEN_DAY"
+  | "PENDING_CLOSE";
 
 export function deriveOperationalDayState(
   day: { status: string; businessDate: Date; approvedAt: Date | null } | null,
@@ -1820,8 +2092,12 @@ export function deriveOperationalDayState(
   if (!day) return "NOT_OPENED_TODAY";
   const today = businessDateFromNow();
   if (day.status === "OPEN") {
+    // Fase 5: en operación normal esto ya no debería pasar (un OPEN de fecha
+    // pasada se barre a PENDING_CLOSE) — se conserva como diagnóstico
+    // defensivo para la breve ventana antes de que corra el barrido.
     return day.businessDate.getTime() === today.getTime() ? "OPEN_TODAY" : "STALE_OPEN_DAY";
   }
+  if (day.status === "PENDING_CLOSE") return "PENDING_CLOSE";
   if (day.status === "CLOSING") return "CLOSING";
   if (day.status === "CLOSED") return day.approvedAt ? "APPROVED_ARCHIVED" : "CLOSED_PENDING_MASTER";
   if (day.status === "REOPENED_FOR_ADJUSTMENT") return "CLOSED_PENDING_MASTER";
@@ -1858,9 +2134,12 @@ export async function getLiveBlockers(): Promise<{
   total: number;
   branches: BranchLiveStatus[];
   computedAt: string;
+  /** Fase 5.5: cuántos días esperan en la cola de Pendientes de cierre — para el aviso persistente al Master. Nunca bloquea la operación de hoy. */
+  pendingCloseDaysCount: number;
 }> {
   const today = businessDateFromNow();
   const { start, end } = operationalWindow(today);
+  const pendingCloseDaysCount = await prisma.operationalDay.count({ where: { status: OperationalDayStatus.PENDING_CLOSE } });
 
   const branches = await prisma.branch.findMany({
     where: { isActive: true },
@@ -1984,6 +2263,7 @@ export async function getLiveBlockers(): Promise<{
     total: branchResults.reduce((sum, b) => sum + b.totalBlockers, 0),
     branches: branchResults,
     computedAt: new Date().toISOString(),
+    pendingCloseDaysCount,
   };
 }
 

@@ -123,11 +123,14 @@ function KpiTile({ label, value, icon: Icon, tone = "default", subtext }: KpiTil
   );
 }
 
-export function OperationalDaySummary({ day }: { day: OperationalDay }) {
+/** Día Operativo v2 Fase 3 — default local solo para cuando el padre aún no cargó la config; el valor real viene de /api/master/operations/cash-tolerance-config. */
+const FALLBACK_CASH_TOLERANCE = 100;
+
+export function OperationalDaySummary({ day, cashDifferenceTolerance = FALLBACK_CASH_TOLERANCE }: { day: OperationalDay; cashDifferenceTolerance?: number }) {
   const statusCfg = STATUS_CONFIG[day.status] ?? STATUS_CONFIG.OPEN;
   const lateOffline = Number(day.lateOfflineSyncCount ?? day.summaryJson?.lateOfflineSyncCount ?? 0);
   const diff = Number(day.cashDifferenceTotal ?? 0);
-  const cashDiffTone: KpiTileProps["tone"] = Math.abs(diff) > 100 ? "alert" : diff !== 0 ? "warn" : "ok";
+  const cashDiffTone: KpiTileProps["tone"] = Math.abs(diff) > cashDifferenceTolerance ? "alert" : diff !== 0 ? "warn" : "ok";
 
   return (
     <section className="space-y-4">
@@ -229,7 +232,7 @@ export function OperationalDaySummary({ day }: { day: OperationalDay }) {
               (requiresReview: false); las pendientes se informan arriba. */}
           <KpiTile label="Diferencia de caja"  value={money(day.cashDifferenceTotal)}     icon={XCircle}
             tone={cashDiffTone}
-            subtext={Math.abs(diff) > 100 ? "Diferencia alta — requiere nota" : diff !== 0 ? "Diferencia pequeña" : "Sin diferencia"}
+            subtext={Math.abs(diff) > cashDifferenceTolerance ? "Diferencia alta — requiere nota" : diff !== 0 ? "Diferencia pequeña" : "Sin diferencia"}
           />
           <KpiTile label="Gastos / egresos de caja" value={money(day.summaryJson?.cashOutflowsTotal)} icon={Wallet}
             tone="default"
@@ -297,7 +300,7 @@ export function OperationalDaySummary({ day }: { day: OperationalDay }) {
                         <td className="font-semibold">{s.physicalCashBoxCode ?? "—"}</td>
                         <td className="text-right">{money(s.expected)}</td>
                         <td className="text-right">{money(s.counted)}</td>
-                        <td className={`text-right font-semibold ${Math.abs(s.difference) > 0.009 ? (Math.abs(s.difference) > 100 ? "text-[var(--color-danger-700)]" : "text-[var(--color-warning-700)]") : ""}`}>
+                        <td className={`text-right font-semibold ${Math.abs(s.difference) > 0.009 ? (Math.abs(s.difference) > cashDifferenceTolerance ? "text-[var(--color-danger-700)]" : "text-[var(--color-warning-700)]") : ""}`}>
                           {money(s.difference)}
                         </td>
                         <td>

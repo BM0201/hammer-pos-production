@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { fail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { autoCloseExpiredCashSessions } from "@/modules/cash-session/auto-close-service";
-import { autoCloseOperationalDays, autoOpenOperationalDays } from "@/modules/operations/auto-day-service";
+import { autoCloseTodaysOperationalDaysAtDeadline, autoOpenOperationalDays } from "@/modules/operations/auto-day-service";
+import { sweepStaleOperationalDaysToPendingClose } from "@/modules/operations/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,13 +34,18 @@ async function handle(request: Request) {
 
     const operationalDayOpen = await autoOpenOperationalDays({ dryRun, now });
     const cashSessionClose = await autoCloseExpiredCashSessions({ dryRun, now, actor: "SYSTEM" });
-    const operationalDayClose = await autoCloseOperationalDays({ dryRun, now });
+    // Día Operativo v2 Fase 5: el barrido de días stale a PENDING_CLOSE corre
+    // siempre (modelo pendiente puro, nunca finaliza un día); el auto-cierre
+    // de HOY sigue siendo opt-in (autoCloseEnabled) y separado.
+    const operationalDayPendingCloseSweep = await sweepStaleOperationalDaysToPendingClose({ dryRun, now });
+    const operationalDayClose = await autoCloseTodaysOperationalDaysAtDeadline({ dryRun, now });
 
     return NextResponse.json({
       ok: true,
       steps: {
         operationalDayOpen,
         cashSessionClose,
+        operationalDayPendingCloseSweep,
         operationalDayClose,
       },
     });

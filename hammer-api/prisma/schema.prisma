@@ -36,6 +36,7 @@ enum OperationalDayStatus {
   CLOSED
   CANCELLED
   REOPENED_FOR_ADJUSTMENT
+  PENDING_CLOSE /// Día Operativo v2 Fase 5: pasó su fecha sin cerrarse — sale de "abierto", conserva su data, espera cierre humano. Nunca se auto-finaliza.
 }
 
 enum SaleOrderStatus {

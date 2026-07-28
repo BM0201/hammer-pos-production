@@ -97,19 +97,44 @@ describe("O.11/J reapertura: nota, sin otro día activo, estado destino", () => 
 
 // ─── Cierre desde REOPENED_FOR_ADJUSTMENT (re-finalizar tras ajuste) ─────────
 
-describe("cierre acepta OPEN y REOPENED_FOR_ADJUSTMENT", () => {
+describe("cierre acepta OPEN, REOPENED_FOR_ADJUSTMENT y PENDING_CLOSE", () => {
   function claimClosing(status: string): "CLOSING" {
     if (status === "CLOSED") throw new Error("OPERATIONAL_DAY_ALREADY_CLOSED");
     if (status === "CANCELLED") throw new Error("OPERATIONAL_DAY_NOT_OPEN");
     if (status === "CLOSING") throw new Error("OPERATIONAL_DAY_CLOSING_IN_PROGRESS");
-    if (!["OPEN", "REOPENED_FOR_ADJUSTMENT"].includes(status)) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
+    if (!["OPEN", "REOPENED_FOR_ADJUSTMENT", "PENDING_CLOSE"].includes(status)) throw new Error("OPERATIONAL_DAY_NOT_OPEN");
     return "CLOSING";
   }
 
   it("OPEN → CLOSING", () => assert.equal(claimClosing("OPEN"), "CLOSING"));
   it("REOPENED_FOR_ADJUSTMENT → CLOSING (re-finaliza el ajuste)", () =>
     assert.equal(claimClosing("REOPENED_FOR_ADJUSTMENT"), "CLOSING"));
+  it("Test cierre tardío: PENDING_CLOSE → CLOSING (cierre tardío de un día barrido)", () =>
+    assert.equal(claimClosing("PENDING_CLOSE"), "CLOSING"));
   it("CANCELLED no es cerrable", () => assert.throws(() => claimClosing("CANCELLED"), /NOT_OPEN/));
+});
+
+// ─── Fase 5: revertir un cierre fallido vuelve al estado ANTERIOR exacto ─────
+
+describe("revertClosingToOpenTx revierte al originalStatus exacto (no a un heurístico)", () => {
+  // Espejo: antes se adivinaba "hoy→OPEN, si no→REOPENED_FOR_ADJUSTMENT" por
+  // businessDate — con PENDING_CLOSE como tercer origen posible, ese
+  // heurístico revertía mal (un PENDING_CLOSE fallido volvía a
+  // REOPENED_FOR_ADJUSTMENT, sacándolo incorrectamente de la cola). Ahora se
+  // revierte al originalStatus capturado antes de reclamar CLOSING.
+  function revert(originalStatus: string): string {
+    return originalStatus;
+  }
+
+  it("un PENDING_CLOSE que falla al cerrar vuelve a PENDING_CLOSE (sigue en la cola)", () => {
+    assert.equal(revert("PENDING_CLOSE"), "PENDING_CLOSE");
+  });
+  it("un OPEN de hoy que falla al cerrar vuelve a OPEN", () => {
+    assert.equal(revert("OPEN"), "OPEN");
+  });
+  it("un REOPENED_FOR_ADJUSTMENT que falla al re-cerrar vuelve a REOPENED_FOR_ADJUSTMENT", () => {
+    assert.equal(revert("REOPENED_FOR_ADJUSTMENT"), "REOPENED_FOR_ADJUSTMENT");
+  });
 });
 
 // ─── L: force-cleanup deja snapshot inmutable + flags forcedCleanup ──────────

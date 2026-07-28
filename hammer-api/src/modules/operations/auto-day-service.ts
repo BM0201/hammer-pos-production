@@ -160,7 +160,18 @@ export async function autoOpenOperationalDays(input: { now?: Date; dryRun?: bool
   return result;
 }
 
-export async function autoCloseOperationalDays(input: { now?: Date; dryRun?: boolean } = {}): Promise<AutoDayResult> {
+/**
+ * Día Operativo v2 Fase 5.3 — auto-cierre de HOY al pasar la hora de corte
+ * configurada (`autoCloseEnabled`, opt-in — default false). Antes esta misma
+ * función también "manejaba" los días stale (fecha pasada) empujando un
+ * error `STALE_OPEN_OPERATIONAL_DAY:...` en cada corrida sin resolverlos
+ * nunca — eso ahora es responsabilidad exclusiva de
+ * `sweepStaleOperationalDaysToPendingClose` (operations/service.ts), que
+ * corre aparte y jamás finaliza un día, solo lo saca de "abierto". Esta
+ * función solo toca el día de HOY, y solo si `autoCloseEnabled` sigue
+ * habilitado — en el modelo pendiente puro (recomendado) queda desactivada.
+ */
+export async function autoCloseTodaysOperationalDaysAtDeadline(input: { now?: Date; dryRun?: boolean } = {}): Promise<AutoDayResult> {
   const now = input.now ?? new Date();
   const dryRun = Boolean(input.dryRun);
 
@@ -176,20 +187,8 @@ export async function autoCloseOperationalDays(input: { now?: Date; dryRun?: boo
     where: { status: OperationalDayStatus.OPEN, businessDate: todayBizDate },
     select: { id: true, branchId: true },
   });
-  const staleOpenDays = await prisma.operationalDay.findMany({
-    where: { status: OperationalDayStatus.OPEN, businessDate: { lt: todayBizDate } },
-    select: { id: true, branchId: true, businessDate: true },
-    take: 50,
-  });
 
-  result.scanned = openDays.length + staleOpenDays.length;
-  result.skipped += staleOpenDays.length;
-  for (const stale of staleOpenDays) {
-    result.errors.push({
-      branchId: stale.branchId,
-      message: `STALE_OPEN_OPERATIONAL_DAY:${stale.id}:${stale.businessDate.toISOString()}`,
-    });
-  }
+  result.scanned = openDays.length;
 
   for (const day of openDays) {
     try {

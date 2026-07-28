@@ -34,6 +34,19 @@ type DailyReport = {
     transports?: Array<{ id: string }>;
   };
   legacyFallback?: { ordersWithoutOperationalDay: number; paymentsWithoutOperationalDay: number };
+  // Día Operativo v2 Fase 4: número firmado (snapshot inmutable) para un día
+  // CLOSED — nunca se recalcula, así una venta offline tardía no lo cambia.
+  summary?: {
+    salesTotal?: number;
+    expectedCashTotal?: number;
+    cashDifferenceTotal?: number;
+    paidSalesCount?: number;
+  };
+  summarySource?: "SNAPSHOT" | "LIVE";
+  lateActivity?: {
+    count: number;
+    orders: Array<{ id: string; orderNumber: string; grandTotal: string | number; syncedAt: string | null }>;
+  };
 };
 
 type OperationalDayState = "NO_DAY" | "OPEN_TODAY" | "STALE_OPEN_DAY" | "CLOSED_TODAY" | "CLOSING" | "ERROR";
@@ -81,6 +94,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   const isMaster = sessionState.status === "authenticated" &&
     isMasterOrAbove(sessionState.session.roleCode as string, sessionState.session.globalRoles as unknown as string[]);
   const [day, setDay]         = useState<OperationalDay | null>(null);
+  const [cashDifferenceTolerance, setCashDifferenceTolerance] = useState(100);
   const [dayState, setDayState] = useState<OperationalDayState>("NO_DAY");
   const [staleDay, setStaleDay] = useState<StaleDayInfo>(null);
   const [preview, setPreview] = useState<ClosePreview | null>(null);
@@ -121,6 +135,22 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
     await load();
     setLoading(false);
   }, [load]);
+
+  // Día Operativo v2 Fase 3 — tolerancia configurable por sucursal (antes
+  // hardcodeada en 100 tanto en backend como aquí). Se carga una vez; el
+  // checklist real usa la del backend, esto es solo para colorear la UI.
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/api/master/operations/cash-tolerance-config")
+      .then((r) => r.json())
+      .then((raw) => {
+        if (cancelled) return;
+        const config = unwrapApiData(raw) as { defaultToleranceAmount: number; byBranch: Record<string, number> };
+        setCashDifferenceTolerance(config.byBranch?.[branchId] ?? config.defaultToleranceAmount ?? 100);
+      })
+      .catch(() => { /* keep fallback default */ });
+    return () => { cancelled = true; };
+  }, [branchId]);
 
   useEffect(() => {
     void loadInitial();
@@ -240,7 +270,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   if (loading) return <LoadingState message="Cargando día operativo..." />;
 
   const staleBanner = dayState === "STALE_OPEN_DAY" && staleDay ? (
-    <Card className="border-[var(--color-danger-300)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,white)] p-4">
+    <Card className="border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,white)] p-4">
       <div className="flex items-start gap-2.5">
         <AlertTriangle className="mt-0.5 flex-shrink-0 text-[var(--color-danger-600)]" style={{ width: "1rem", height: "1rem" }} />
         <div className="space-y-1">
@@ -286,7 +316,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   return (
     <div className="space-y-5">
       {staleBanner}
-      <OperationalDaySummary day={day} />
+      <OperationalDaySummary day={day} cashDifferenceTolerance={cashDifferenceTolerance} />
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2">
@@ -337,7 +367,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
 
       {/* Approval blockers / warnings */}
       {(approveBlockers.length > 0 || approveWarnings.length > 0) && (
-        <Card className="space-y-4 border-[var(--color-warning-300)] p-4">
+        <Card className="space-y-4 border-[var(--color-warning-200)] p-4">
           {approveBlockers.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
@@ -464,6 +494,8 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
             <div className="flex items-center gap-2">
               <BarChart3 className="text-[var(--color-text-muted)]" style={{ width: "1rem", height: "1rem" }} />
               <h2 className="text-sm font-bold text-[var(--color-text)]">Reporte diario</h2>
+              {report.summarySource === "SNAPSHOT" && <span className="hm-chip hm-chip-info text-xs">📸 Snapshot del cierre</span>}
+              {report.summarySource === "LIVE" && <span className="hm-chip text-xs">En vivo — día en curso</span>}
             </div>
             <div className="flex flex-wrap gap-3 text-xs text-[var(--color-text-muted)]">
               <span>{report.orders.length} órdenes</span>
@@ -474,10 +506,54 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
             </div>
           </div>
 
+          {/* Fase 4: número firmado (snapshot) — nunca cambia con actividad tardía */}
+          {report.summary && (
+            <div className="grid gap-3 border-b border-[var(--color-border)] p-4 sm:grid-cols-3">
+              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+                <p className="text-xs text-[var(--color-text-muted)]">Ventas pagadas{report.summarySource === "SNAPSHOT" ? " (firmado)" : ""}</p>
+                <p className="hm-num text-lg font-bold text-[var(--color-text)]">{money(report.summary.salesTotal)}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+                <p className="text-xs text-[var(--color-text-muted)]">Efectivo esperado</p>
+                <p className="hm-num text-lg font-bold text-[var(--color-text)]">{money(report.summary.expectedCashTotal)}</p>
+              </div>
+              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+                <p className="text-xs text-[var(--color-text-muted)]">Diferencia de caja</p>
+                <p className="hm-num text-lg font-bold" style={{ color: Number(report.summary.cashDifferenceTotal ?? 0) !== 0 ? "var(--color-warning-700)" : "var(--color-text)" }}>
+                  {money(report.summary.cashDifferenceTotal)}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Fase 4: actividad que entró DESPUÉS del cierre — nunca se suma al número firmado */}
+          {(report.lateActivity?.count ?? 0) > 0 && (
+            <div className="mx-4 mt-3 rounded-lg border border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)] p-3">
+              <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-[var(--color-warning-800)]">
+                <AlertTriangle style={{ width: "0.875rem", height: "0.875rem" }} />
+                Entró después del cierre (fuera del snapshot)
+              </div>
+              <div className="overflow-x-auto">
+                <table className="hm-table w-full text-left text-xs">
+                  <thead><tr><th>Referencia</th><th>Sincronizada</th><th className="text-right">Monto</th></tr></thead>
+                  <tbody>
+                    {report.lateActivity!.orders.map((order) => (
+                      <tr key={order.id}>
+                        <td className="font-mono">{order.orderNumber}</td>
+                        <td>{order.syncedAt ? new Date(order.syncedAt).toLocaleString("es-NI") : "—"} <span className="hm-chip hm-chip-warning ml-1">tardía</span></td>
+                        <td className="hm-num text-right font-semibold">{money(order.grandTotal)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Aviso de datos legacy sin operationalDayId (pendientes de backfill) */}
           {((report.legacyFallback?.ordersWithoutOperationalDay ?? 0) > 0 ||
             (report.legacyFallback?.paymentsWithoutOperationalDay ?? 0) > 0) && (
-            <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-[var(--color-warning-300)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)] px-3 py-2">
+            <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)] px-3 py-2">
               <Info className="mt-0.5 flex-shrink-0 text-[var(--color-warning-700)]" style={{ width: "0.875rem", height: "0.875rem" }} />
               <p className="text-xs text-[var(--color-warning-800)]">
                 Hay {report.legacyFallback?.ordersWithoutOperationalDay ?? 0} órdenes y {report.legacyFallback?.paymentsWithoutOperationalDay ?? 0} pagos

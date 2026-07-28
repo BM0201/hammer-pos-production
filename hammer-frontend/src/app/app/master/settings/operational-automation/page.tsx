@@ -1,12 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Save, Sunrise, ShieldCheck, Activity, Wallet, AlertTriangle } from "lucide-react";
+import { Save, Sunrise, ShieldCheck, Activity, Wallet, AlertTriangle, Scale, Clock3 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { showToast } from "@/components/ui/toast";
+
+type CashToleranceConfig = { defaultToleranceAmount: number; byBranch: Record<string, number> };
+type Branch = { id: string; code: string; name: string };
 
 type AutomationPayload = {
   config: {
@@ -110,6 +113,11 @@ export default function OperationalAutomationPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Día Operativo v2 Fase 3 — tolerancia de diferencia de caja configurable.
+  const [tolerance, setTolerance] = useState<CashToleranceConfig | null>(null);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [toleranceSaving, setToleranceSaving] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     apiFetch("/api/master/operational-automation-config")
@@ -128,6 +136,38 @@ export default function OperationalAutomationPage() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      apiFetch("/api/master/operations/cash-tolerance-config").then((r) => r.json()),
+      apiFetch("/api/branches").then((r) => r.json()),
+    ]).then(([toleranceRaw, branchesRaw]) => {
+      if (cancelled) return;
+      setTolerance(unwrapApiData(toleranceRaw) as CashToleranceConfig);
+      setBranches(unwrapApiData(branchesRaw) as Branch[]);
+    }).catch(() => { /* tolerance card just won't render */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveTolerance() {
+    if (!tolerance) return;
+    setToleranceSaving(true);
+    try {
+      const response = await apiFetch("/api/master/operations/cash-tolerance-config", {
+        method: "PUT",
+        body: JSON.stringify(tolerance),
+      });
+      const json = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(json?.error?.message ?? `HTTP ${response.status}`);
+      setTolerance(unwrapApiData(json) as CashToleranceConfig);
+      showToast("success", "Tolerancia de caja guardada.");
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "No se pudo guardar la tolerancia.");
+    } finally {
+      setToleranceSaving(false);
+    }
+  }
 
   function patchConfig(next: Partial<AutomationPayload["config"]>) {
     setPayload((prev) => prev ? { ...prev, config: { ...prev.config, ...next } } : prev);
@@ -237,6 +277,60 @@ export default function OperationalAutomationPage() {
         >
           {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
         </select>
+      </Card>
+
+      {tolerance && (
+        <Card className="space-y-4">
+          <div className="flex items-center gap-2.5">
+            <Scale className="h-4 w-4 text-[var(--color-master-600)]" />
+            <h2 className="text-sm font-semibold text-[var(--color-text)]">Tolerancia de diferencia de caja</h2>
+          </div>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium text-[var(--color-text-secondary)]">Default global (C$)</span>
+            <input
+              type="number" min="0" step="0.01"
+              value={tolerance.defaultToleranceAmount}
+              onChange={(e) => setTolerance({ ...tolerance, defaultToleranceAmount: Number(e.target.value) || 0 })}
+              className="hm-input w-40 font-mono"
+            />
+          </label>
+          <div className="grid gap-2.5">
+            {branches.map((b) => (
+              <div key={b.id} className="grid grid-cols-[1fr_auto] items-center gap-3">
+                <span className="text-sm font-semibold text-[var(--color-text)]">{b.code} — {b.name}</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono text-xs text-[var(--color-text-soft)]">C$</span>
+                  <input
+                    type="number" min="0" step="0.01"
+                    value={tolerance.byBranch[b.id] ?? tolerance.defaultToleranceAmount}
+                    onChange={(e) => setTolerance({ ...tolerance, byBranch: { ...tolerance.byBranch, [b.id]: Number(e.target.value) || 0 } })}
+                    className="hm-input w-28 font-mono"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hm-alert hm-alert-info">
+            💡 Dentro de la tolerancia → advertencia (no bloquea). Fuera → exige revisión/justificación. Reemplaza el <code className="font-mono text-xs">Math.abs(diferencia) &gt; 100</code> que antes estaba hardcodeado en el checklist de cierre.
+          </div>
+          <div className="flex justify-end">
+            <Button size="sm" onClick={saveTolerance} loading={toleranceSaving} icon={<Save className="h-3.5 w-3.5" />}>Guardar tolerancia</Button>
+          </div>
+        </Card>
+      )}
+
+      <Card className="space-y-3">
+        <div className="flex items-center gap-2.5">
+          <Clock3 className="h-4 w-4 text-[var(--color-master-600)]" />
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">Días pendientes de cierre</h2>
+        </div>
+        <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
+          <b>Modelo pendiente puro (siempre activo):</b> si un día no se cierra en su fecha, sale de &quot;abierto&quot; y pasa a la cola de{" "}
+          <Badge variant="info">Pendiente de cierre</Badge> — el día de hoy abre normal, sin bloqueos, y el día viejo espera intacto a que un Master lo concilie.
+        </p>
+        <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
+          El toggle <b>&quot;Cierre automático del día&quot;</b> de arriba sigue disponible como alternativa opcional (cierra HOY mismo al pasar la hora de corte, si no tiene cajas abiertas) — pero nunca reemplaza la regla de fondo: ningún día viejo con cajas abiertas se fuerza a cerrar en silencio.
+        </p>
       </Card>
 
       <Card className="space-y-3">

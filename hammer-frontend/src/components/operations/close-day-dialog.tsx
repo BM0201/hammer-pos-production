@@ -123,7 +123,7 @@ export function CloseDayDialog({ preview, disabled, disabledReason, isMaster = f
 
         {/* Force-close warning section */}
         {canForceClose && (
-          <div className="rounded-lg border border-[var(--color-warning-300)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,white)] p-3.5">
+          <div className="rounded-lg border border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_40%,white)] p-3.5">
             <div className="flex items-start gap-2.5">
               <AlertTriangle className="mt-0.5 flex-shrink-0 text-[var(--color-warning-600)]" style={{ width: "0.9375rem", height: "0.9375rem" }} />
               <div className="flex-1">
