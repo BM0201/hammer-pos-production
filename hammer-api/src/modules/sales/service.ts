@@ -7,7 +7,7 @@ import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
-import { refreshOperationalDaySummaryTx, businessDateFromNow } from "@/modules/operations/service";
+import { refreshOperationalDaySummaryTx, resolveOpenOperationalDayForOperationTx } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { computeDiscountAgainstCatalogPrice, getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
@@ -135,79 +135,83 @@ export async function createDraftSaleOrder(input: {
   notes?: string | null;
   actorUserId: string;
 }) {
-  const branch = await prisma.branch.findUniqueOrThrow({ where: { id: input.branchId } });
-  const operationalDay = await prisma.operationalDay.findFirst({
-    where: { branchId: input.branchId, status: "OPEN" },
-    orderBy: { openedAt: "desc" },
-  });
-  if (!operationalDay) {
-    await logAuditEvent({
-      actorUserId: input.actorUserId,
-      branchId: input.branchId,
-      module: "sales",
-      action: SALE_AUDIT_EVENTS.ORDER_CREATE_DENIED,
-      entityType: "SaleOrder",
-      entityId: "draft",
-      metadataJson: { reason: "OPERATIONAL_DAY_NOT_OPEN" },
-    });
-    throw new Error("OPERATIONAL_DAY_NOT_OPEN");
-  }
-  if (operationalDay.businessDate.getTime() !== businessDateFromNow().getTime()) {
-    await logAuditEvent({
-      actorUserId: input.actorUserId,
-      branchId: input.branchId,
-      module: "sales",
-      action: SALE_AUDIT_EVENTS.ORDER_CREATE_DENIED,
-      entityType: "SaleOrder",
-      entityId: "draft",
-      metadataJson: { reason: "OPERATIONAL_DAY_STALE", businessDate: operationalDay.businessDate },
-    });
-    throw new Error("OPERATIONAL_DAY_STALE");
-  }
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const branch = await tx.branch.findUniqueOrThrow({ where: { id: input.branchId } });
 
-  const nowInstant = new Date();
-  const order = await prisma.saleOrder.create({
-    data: {
-      orderNumber: makeOrderNumber(branch.code),
-      branchId: input.branchId,
-      // Fuente de verdad operacional: la venta se asienta al día OPEN resuelto,
-      // no a una ventana de fecha. saleOccurredAt/postedAt registran cuándo ocurrió
-      // y cuándo se asentó (clave para offline y cierre por operationalDayId).
-      operationalDayId: operationalDay.id,
-      saleOccurredAt: nowInstant,
-      postedAt: nowInstant,
-      customerId: input.customerId ?? null,
-      createdByUserId: input.actorUserId,
-      status: SaleOrderStatus.DRAFT,
-      subtotal: new Prisma.Decimal(0),
-      discountTotal: new Prisma.Decimal(0),
-      taxTotal: new Prisma.Decimal(0),
-      grandTotal: new Prisma.Decimal(0),
-      notes: input.notes,
-    },
-    include: {
-      lines: {
-        include: {
-          product: {
-            select: { id: true, name: true, sku: true },
-          },
+      // Fase 5 (Día Operativo v2): un día abierto de fecha anterior YA NO
+      // bloquea la creación de una venta — antes esta función hacía su propio
+      // findFirst+throw("OPERATIONAL_DAY_STALE") sin pasar por el barrido, así
+      // que un cajero podía quedar bloqueado creando una venta nueva aunque
+      // abrir caja (que sí usa este resolver) funcionara sin problema. Ahora
+      // usa el mismo camino: barre el día viejo a PENDING_CLOSE y abre/usa el
+      // día de hoy de forma transparente.
+      const { operationalDayId } = await resolveOpenOperationalDayForOperationTx(
+        tx, input.branchId, undefined, { openedByUserId: input.actorUserId },
+      );
+
+      const nowInstant = new Date();
+      const order = await tx.saleOrder.create({
+        data: {
+          orderNumber: makeOrderNumber(branch.code),
+          branchId: input.branchId,
+          // Fuente de verdad operacional: la venta se asienta al día OPEN resuelto,
+          // no a una ventana de fecha. saleOccurredAt/postedAt registran cuándo ocurrió
+          // y cuándo se asentó (clave para offline y cierre por operationalDayId).
+          operationalDayId,
+          saleOccurredAt: nowInstant,
+          postedAt: nowInstant,
+          customerId: input.customerId ?? null,
+          createdByUserId: input.actorUserId,
+          status: SaleOrderStatus.DRAFT,
+          subtotal: new Prisma.Decimal(0),
+          discountTotal: new Prisma.Decimal(0),
+          taxTotal: new Prisma.Decimal(0),
+          grandTotal: new Prisma.Decimal(0),
+          notes: input.notes,
         },
-      },
-      branch: true,
-      createdBy: true,
-    },
-  });
+        include: {
+          lines: {
+            include: {
+              product: {
+                select: { id: true, name: true, sku: true },
+              },
+            },
+          },
+          branch: true,
+          createdBy: true,
+        },
+      });
 
-  await logAuditEvent({
-    actorUserId: input.actorUserId,
-    branchId: input.branchId,
-    module: "sales",
-    action: SALE_AUDIT_EVENTS.ORDER_CREATED,
-    entityType: "SaleOrder",
-    entityId: order.id,
-  });
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          branchId: input.branchId,
+          module: "sales",
+          action: SALE_AUDIT_EVENTS.ORDER_CREATED,
+          entityType: "SaleOrder",
+          entityId: order.id,
+        },
+      });
 
-  return order;
+      return order;
+    });
+  } catch (error) {
+    // Único caso de denegación real que queda: no hay día operativo y el
+    // auto-open está deshabilitado por config (ensureOpenOperationalDayTx).
+    if (error instanceof Error && error.message === "OPERATIONAL_DAY_NOT_OPEN") {
+      await logAuditEvent({
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "sales",
+        action: SALE_AUDIT_EVENTS.ORDER_CREATE_DENIED,
+        entityType: "SaleOrder",
+        entityId: "draft",
+        metadataJson: { reason: "OPERATIONAL_DAY_NOT_OPEN" },
+      });
+    }
+    throw error;
+  }
 }
 
 async function recalcOrderTotalsTx(tx: Prisma.TransactionClient, saleOrderId: string) {

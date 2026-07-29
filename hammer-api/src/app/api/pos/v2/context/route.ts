@@ -25,7 +25,7 @@ export async function GET(request: Request) {
     const branchId = parsed.data.branchId;
     const todayBusinessDate = businessDateFromNow();
 
-    const [workflow, cashBoxes, assignedSessions, todayDay, staleOpenDayCount, branchBlockingSession] = await Promise.all([
+    const [workflow, cashBoxes, assignedSessions, todayDay, branchBlockingSession] = await Promise.all([
       getBranchWorkflowConfig(branchId),
       prisma.physicalCashBox.findMany({
         where: { branchId, isActive: true },
@@ -57,9 +57,6 @@ export async function GET(request: Request) {
         where: { branchId, businessDate: todayBusinessDate },
         select: { id: true, status: true },
       }),
-      prisma.operationalDay.count({
-        where: { branchId, status: "OPEN", businessDate: { lt: todayBusinessDate } },
-      }),
       prisma.cashSession.findFirst({
         where: {
           status: { in: ["RECONCILING", "AUTO_CLOSED_PENDING_REVIEW"] },
@@ -82,9 +79,12 @@ export async function GET(request: Request) {
 
     let cashSessionProblem: string | null = null;
     if (canCollectHere && !hasOpenCashSession) {
-      if (staleOpenDayCount > 0) {
-        cashSessionProblem = "STALE_OPERATIONAL_DAY_OPEN";
-      } else if (!todayDay) {
+      // Fase 5 (Día Operativo v2): un día abierto de fecha anterior ya NO es
+      // un "problema" que impida cobrar — la próxima apertura de caja lo
+      // barre a Pendiente de cierre y abre hoy de forma transparente. Antes
+      // esto reportaba "STALE_OPERATIONAL_DAY_OPEN" como si hiciera falta que
+      // Master interviniera; ya no hace falta, así que se quitó esa señal.
+      if (!todayDay) {
         cashSessionProblem = "NO_OPERATIONAL_DAY";
       } else if (todayDay && todayDay.status !== "OPEN") {
         cashSessionProblem = "OPERATIONAL_DAY_CLOSED";

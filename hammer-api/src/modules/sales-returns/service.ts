@@ -22,7 +22,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
-import { refreshOperationalDaySummaryTx, businessDateFromNow } from "@/modules/operations/service";
+import { refreshOperationalDaySummaryTx, businessDateFromNow, sweepDayToPendingCloseTx } from "@/modules/operations/service";
 import { cancelSaleOrderTx } from "@/modules/sales/service";
 import type { CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
 
@@ -199,11 +199,19 @@ async function findOpenOperationalDayId(tx: Prisma.TransactionClient, branchId: 
   const day = await tx.operationalDay.findFirst({
     where: { branchId, status: OperationalDayStatus.OPEN },
     orderBy: { openedAt: "desc" },
-    select: { id: true, businessDate: true },
+    select: { id: true, branchId: true, businessDate: true },
   });
   if (!day) return null;
   if (day.businessDate.getTime() !== businessDateFromNow().getTime()) {
-    throw new Error("OPERATIONAL_DAY_STALE");
+    // Fase 5 (Día Operativo v2): un día abierto de fecha anterior ya no
+    // bloquea — antes esto lanzaba OPERATIONAL_DAY_STALE y dejaba la
+    // devolución sin poder ejecutarse. Se barre a PENDING_CLOSE (mismo camino
+    // que ventas/apertura de caja) y la devolución se procesa como si no
+    // hubiera día abierto todavía (sin auto-abrir "hoy" como efecto
+    // secundario de una devolución — eso lo hace la próxima venta o apertura
+    // de caja, igual que siempre).
+    await sweepDayToPendingCloseTx(tx, day, undefined);
+    return null;
   }
   return day.id;
 }

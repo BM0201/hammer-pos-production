@@ -269,18 +269,23 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
 
   if (loading) return <LoadingState message="Cargando día operativo..." />;
 
+  // Día Operativo v2 Fase 5 — un día abierto de fecha anterior YA NO bloquea
+  // nada: en cuanto se registre una venta o se abra una caja hoy, se barre
+  // solo a Pendiente de cierre y hoy se abre transparentemente. Este aviso es
+  // solo informativo (por eso tono neutral/warning, no danger) — nunca dice
+  // "no se puede continuar", porque sí se puede.
   const staleBanner = dayState === "STALE_OPEN_DAY" && staleDay ? (
-    <Card className="border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,white)] p-4">
+    <Card className="border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_35%,white)] p-4">
       <div className="flex items-start gap-2.5">
-        <AlertTriangle className="mt-0.5 flex-shrink-0 text-[var(--color-danger-600)]" style={{ width: "1rem", height: "1rem" }} />
+        <AlertTriangle className="mt-0.5 flex-shrink-0 text-[var(--color-warning-600)]" style={{ width: "1rem", height: "1rem" }} />
         <div className="space-y-1">
-          <p className="text-sm font-bold text-[var(--color-danger-800)]">Día operativo anterior sin cerrar</p>
-          <p className="text-xs text-[var(--color-danger-700)] leading-relaxed">
-            Hay un día operativo de una fecha anterior ({new Date(staleDay.businessDate).toLocaleDateString("es-NI", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })})
-            que sigue <strong>abierto</strong>. No se puede abrir el día de hoy hasta resolverlo.
+          <p className="text-sm font-bold text-[var(--color-warning-800)]">Día anterior pendiente de cierre</p>
+          <p className="text-xs text-[var(--color-warning-700)] leading-relaxed">
+            El día del {new Date(staleDay.businessDate).toLocaleDateString("es-NI", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })} sigue abierto,
+            pero <strong>esto no bloquea nada</strong>: en cuanto se registre una venta o se abra una caja hoy, pasa solo a <strong>Pendiente de cierre</strong> y el día de hoy se abre normal.
             {isMaster
-              ? " Usa el escáner / limpieza operativa (Master) para cerrarlo o reabrirlo."
-              : " Un administrador Master debe ejecutar la limpieza operativa antes de continuar."}
+              ? " Podés conciliarlo cuando tengas tiempo desde Operación → Requiere tu acción."
+              : " Un Master lo conciliará cuando tenga tiempo — no necesitás hacer nada."}
           </p>
         </div>
       </div>
