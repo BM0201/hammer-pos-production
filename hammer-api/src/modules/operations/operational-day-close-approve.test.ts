@@ -11,9 +11,22 @@
 import assert from "node:assert/strict";
 import { describe, it, test } from "node:test";
 import type { Prisma } from "@prisma/client";
-import { computeApprovalBlockers } from "@/modules/operations/service";
+import { OperationalDayStatus } from "@prisma/client";
+import { computeApprovalBlockers, buildChecklist } from "@/modules/operations/service";
 import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-policy";
 import { isHardApproveBlocker } from "@/modules/operations/approve-policy";
+
+function fakeSummary(overrides: Partial<Record<string, number>> = {}) {
+  return {
+    openCashSessionsCount: 0,
+    autoClosedPendingReviewCount: 0,
+    pendingPaymentTotal: 0,
+    pendingDispatchCount: 0,
+    criticalBrainDecisionCount: 0,
+    cashDifferenceTotal: 0,
+    ...overrides,
+  } as unknown as Parameters<typeof buildChecklist>[0];
+}
 
 // ─── O.5 Cierre falla si hay caja OPEN (hard blocker) ────────────────────────
 
@@ -209,4 +222,56 @@ test("O.19 computeApprovalBlockers reporta count real (25) con sample de 20 y ha
   assert.equal(ret!.references.length, 20, "sample limitado a 20");
   assert.equal(ret!.sampleLimit, 20);
   assert.equal(ret!.hasMore, true);
+});
+
+// ─── Regresión 2026-07-29: buildChecklist bloqueaba falsamente un día ────────
+// PENDING_CLOSE (o REOPENED_FOR_ADJUSTMENT) al conciliar — el preview de
+// "Conciliar y cerrar" mostraba "Día operativo abierto" como Bloqueante con
+// "Estado actual: PENDING_CLOSE", aunque closeOperationalDay SÍ aceptaba ese
+// estado como cerrable. El día quedaba visualmente "atascado" en el checklist
+// aunque el modelo pendiente-puro decía que no bloquea nada.
+
+describe("buildChecklist — day_status acepta todos los estados cerrables", () => {
+  it("OPEN, CLOSING, PENDING_CLOSE y REOPENED_FOR_ADJUSTMENT son OK (no bloquean)", () => {
+    for (const status of [
+      OperationalDayStatus.OPEN,
+      OperationalDayStatus.CLOSING,
+      OperationalDayStatus.PENDING_CLOSE,
+      OperationalDayStatus.REOPENED_FOR_ADJUSTMENT,
+    ]) {
+      const preview = buildChecklist(fakeSummary(), status, 100);
+      const dayStatusItem = preview.ok.find((i) => i.key === "day_status") ?? preview.blockers.find((i) => i.key === "day_status");
+      assert.equal(dayStatusItem?.status, "OK", `${status} no debe bloquear el cierre`);
+    }
+  });
+
+  it("CLOSED y CANCELLED sí bloquean (defensivo — no debería llegar aquí en la práctica)", () => {
+    for (const status of [OperationalDayStatus.CLOSED, OperationalDayStatus.CANCELLED]) {
+      const preview = buildChecklist(fakeSummary(), status, 100);
+      const dayStatusItem = preview.blockers.find((i) => i.key === "day_status");
+      assert.equal(dayStatusItem?.status, "BLOCKING");
+      assert.match(dayStatusItem!.message ?? "", new RegExp(status));
+    }
+  });
+
+  it("cajas abiertas y auto-cerradas pendientes siguen bloqueando, ahora con mensaje accionable", () => {
+    const preview = buildChecklist(
+      fakeSummary({ openCashSessionsCount: 2, autoClosedPendingReviewCount: 1 }),
+      OperationalDayStatus.PENDING_CLOSE,
+      100,
+    );
+    assert.equal(preview.canClose, false);
+    const openItem = preview.blockers.find((i) => i.key === "open_cash_sessions");
+    const autoItem = preview.blockers.find((i) => i.key === "auto_closed_pending_review");
+    assert.equal(openItem?.status, "BLOCKING");
+    assert.ok(openItem?.message, "debe traer instrucción de cómo resolverlo");
+    assert.equal(autoItem?.status, "BLOCKING");
+    assert.ok(autoItem?.message, "debe traer instrucción de cómo resolverlo");
+  });
+
+  it("un día PENDING_CLOSE sin cajas pendientes puede cerrar limpio (canClose true)", () => {
+    const preview = buildChecklist(fakeSummary(), OperationalDayStatus.PENDING_CLOSE, 100);
+    assert.equal(preview.canClose, true);
+    assert.equal(preview.blockers.length, 0);
+  });
 });

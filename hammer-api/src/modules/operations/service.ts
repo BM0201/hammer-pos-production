@@ -795,29 +795,48 @@ export async function resolveOpenOperationalDayForOperationTx(
   return { operationalDayId: created.id, autoOpened: true, warnings: ["OPERATIONAL_DAY_AUTO_OPENED"] };
 }
 
-function buildChecklist(
+export function buildChecklist(
   summary: Awaited<ReturnType<typeof calculateOperationalSummaryTx>>,
   dayStatus: OperationalDayStatus,
   cashDifferenceToleranceAmount: number,
 ): OperationalDayClosePreview {
+  // Estados desde los que SÍ se puede cerrar (ver closeableSources en
+  // closeOperationalDay): OPEN/REOPENED_FOR_ADJUSTMENT/PENDING_CLOSE son todos
+  // válidos para conciliar, no solo OPEN — un día PENDING_CLOSE es precisamente
+  // el que está esperando a que Master tenga tiempo de revisarlo, no un error.
+  // Bug corregido 2026-07-29: este check solo aceptaba OPEN/CLOSING, así que
+  // el preview de "Conciliar y cerrar" mostraba un falso bloqueante ("Día
+  // operativo abierto" / "Estado actual: PENDING_CLOSE") en TODO día pendiente,
+  // aunque el cierre real sí funcionaba (closeOperationalDay ya lo aceptaba).
+  const dayStatusOk =
+    dayStatus === OperationalDayStatus.OPEN ||
+    dayStatus === OperationalDayStatus.CLOSING ||
+    dayStatus === OperationalDayStatus.PENDING_CLOSE ||
+    dayStatus === OperationalDayStatus.REOPENED_FOR_ADJUSTMENT;
   const items: ChecklistItem[] = [
     {
       key: "day_status",
-      label: "Dia operativo abierto",
-      status: dayStatus === OperationalDayStatus.OPEN || dayStatus === OperationalDayStatus.CLOSING ? "OK" : "BLOCKING",
-      message: dayStatus === OperationalDayStatus.OPEN ? undefined : `Estado actual: ${dayStatus}`,
+      label: "Dia operativo en estado cerrable",
+      status: dayStatusOk ? "OK" : "BLOCKING",
+      message: dayStatusOk ? undefined : `Estado actual: ${dayStatus}`,
     },
     {
       key: "open_cash_sessions",
       label: "No hay cajas abiertas o en conciliacion",
       status: summary.openCashSessionsCount > 0 ? "BLOCKING" : "OK",
       count: summary.openCashSessionsCount,
+      message: summary.openCashSessionsCount > 0
+        ? "El cajero debe cerrar la sesión desde su caja, o Master desde /app/branch/cash."
+        : undefined,
     },
     {
       key: "auto_closed_pending_review",
       label: "No hay cierres automaticos pendientes",
       status: summary.autoClosedPendingReviewCount > 0 ? "BLOCKING" : "OK",
       count: summary.autoClosedPendingReviewCount,
+      message: summary.autoClosedPendingReviewCount > 0
+        ? "Requiere revisión manual del efectivo contado en /app/branch/cash (o el escáner en Ajustes → Herramientas de fuerza)."
+        : undefined,
     },
     {
       key: "pending_payments",
