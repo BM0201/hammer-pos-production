@@ -29,6 +29,11 @@ type CategoryRow = {
   category_name: string;
   total_sold: number;
   orders_count: number;
+  // CAMBIO 2/3 (prompt-reportes-v2): costo y margen leídos de los snapshots de
+  // línea (costSnapshot/marginSnapshot), NUNCA recalculados con el WAC actual
+  // — mismo principio que getSalesReportRows en reports/service.ts.
+  total_cost: number;
+  total_margin: number;
 };
 type DistinctRow = { count: number };
 
@@ -172,13 +177,18 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
     ORDER BY total_sold DESC
   `;
 
-  // By category (product subtotals, excludes transport)
+  // By category (product subtotals, excludes transport) — costo/margen desde
+  // los snapshots de línea, COALESCE a 0 cuando una línea no tenía costo
+  // capturado (no distorsiona el ingreso, solo deja esa línea sin aporte de
+  // costo/margen en vez de romper el agregado).
   const byCategory = await prisma.$queryRaw<CategoryRow[]>`
     SELECT
       COALESCE(cat.id, '')                              AS category_id,
       COALESCE(cat.name, 'Sin categoría')               AS category_name,
       SUM(l."lineSubtotal")::float8                     AS total_sold,
-      COUNT(DISTINCT o.id)::int                         AS orders_count
+      COUNT(DISTINCT o.id)::int                         AS orders_count,
+      SUM(COALESCE(l."costSnapshot", 0) * l.quantity)::float8 AS total_cost,
+      SUM(COALESCE(l."marginSnapshot", 0))::float8      AS total_margin
     FROM "SaleOrderLine" l
     INNER JOIN "SaleOrder" o ON o.id = l."saleOrderId"
     INNER JOIN "Payment" p ON p."saleOrderId" = o.id
@@ -193,6 +203,13 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
     ORDER BY total_sold DESC
   `;
 
+  // Costo/margen globales del período: se derivan sumando byCategory (que ya
+  // cubre TODAS las líneas del rango) en vez de lanzar otra query — evita
+  // duplicar la agregación.
+  const totalCost = byCategory.reduce((sum, row) => sum + row.total_cost, 0);
+  const totalMargin = byCategory.reduce((sum, row) => sum + row.total_margin, 0);
+  const marginPercent = totalSold > 0 ? (totalMargin / totalSold) * 100 : 0;
+
   return {
     kpis: {
       totalSold,
@@ -200,6 +217,9 @@ export async function getSalesSummaryAggregated(filters: SalesFilters) {
       unitsSold,
       avgTicket,
       distinctProducts: distinctRow?.count ?? 0,
+      totalCost,
+      totalMargin,
+      marginPercent,
     },
     byDay,
     topProducts,

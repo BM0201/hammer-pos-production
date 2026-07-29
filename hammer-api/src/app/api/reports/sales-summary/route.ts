@@ -1,24 +1,25 @@
 import { resolveReportRequest, reportResponse } from "@/modules/reports/http";
 import { toCsv } from "@/modules/reports/serializers";
-import { getPaymentsReportRows } from "@/modules/reports/service";
+import { getSalesSummaryByOrderRows } from "@/modules/reports/service";
 import { toHttpErrorResponse } from "@/lib/http";
 
-const COLUMNS = ["fecha_pago", "sucursal_codigo", "sucursal_nombre", "orden", "metodo", "tenders", "estado", "cajero", "monto", "efectivo", "cambio", "referencia"];
+// Vista "resumen por orden" conservada del reporte "sales" original —
+// prompt-reportes-v2 CAMBIO 1.
+const COLUMNS = ["fecha", "sucursal_codigo", "sucursal_nombre", "orden", "estado", "vendedor", "total"];
 
 export async function GET(request: Request) {
   try {
     const resolved = await resolveReportRequest(request);
     if ("error" in resolved) return resolved.error;
 
-    const { rows, totalCount } = await getPaymentsReportRows({
+    const rows = await getSalesSummaryByOrderRows({
       branchIds: resolved.branchIds,
       dateFrom: resolved.query.dateFrom,
       dateTo: resolved.query.dateTo,
       status: resolved.query.status,
-      actorUsername: resolved.query.actorUsername,
     });
 
-    return reportResponse(resolved, "reporte-cobros.csv", toCsv(COLUMNS, rows), rows, "payments", totalCount);
+    return reportResponse(resolved, "reporte-ventas-resumen.csv", toCsv(COLUMNS, rows), rows, "sales-summary");
   } catch (error) {
     return toHttpErrorResponse(error);
   }

@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import {
   TrendingUp, ShoppingCart, Package, Calculator, BarChart3,
-  RefreshCw, Download, ChevronDown, ChevronUp, X,
+  RefreshCw, Download, ChevronDown, ChevronUp, X, Wallet, PiggyBank,
 } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,12 @@ type Kpis = {
   unitsSold: number;
   avgTicket: number;
   distinctProducts: number;
+  // CAMBIO 3 (prompt-reportes-v2): costo/margen leídos de los snapshots de
+  // línea (ver sales-analytics.ts::getSalesSummaryAggregated) — el dashboard
+  // ya decía cuánto se vendió pero no cuánto costó ni cuánto se ganó.
+  totalCost: number;
+  totalMargin: number;
+  marginPercent: number;
 };
 
 type DayRow = {
@@ -437,12 +443,30 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
       {!loading && data && (
         <>
           {/* ── KPIs ── */}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="hm-kpi-grid">
             <KpiCard
               label="Total vendido"
               value={NIO.format(data.kpis.totalSold)}
               sub={`incluye transporte`}
               icon={TrendingUp}
+              color="bg-gradient-to-r from-[var(--color-success-400)] to-[var(--color-success-600)]"
+            />
+            {/* CAMBIO 3 (prompt-reportes-v2): costo y margen — el dashboard ya
+                decía cuánto se vendió pero no cuánto costó ni cuánto se ganó.
+                Leídos de los snapshots de línea (sales-analytics.ts), nunca
+                recalculados con el WAC actual. */}
+            <KpiCard
+              label="Costo de lo vendido"
+              value={NIO.format(data.kpis.totalCost)}
+              sub="al costo al momento de la venta"
+              icon={Wallet}
+              color="bg-gradient-to-r from-[var(--color-warning-400)] to-[var(--color-warning-600)]"
+            />
+            <KpiCard
+              label="Margen bruto"
+              value={`${data.kpis.marginPercent.toFixed(1)}%`}
+              sub={`${NIO.format(data.kpis.totalMargin)} de utilidad`}
+              icon={PiggyBank}
               color="bg-gradient-to-r from-[var(--color-success-400)] to-[var(--color-success-600)]"
             />
             <KpiCard

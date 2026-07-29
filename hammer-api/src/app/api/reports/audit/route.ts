@@ -10,7 +10,7 @@ export async function GET(request: Request) {
     const resolved = await resolveReportRequest(request);
     if ("error" in resolved) return resolved.error;
 
-    const rows = await getAuditReportRows({
+    const { rows, totalCount } = await getAuditReportRows({
       branchIds: resolved.branchIds,
       dateFrom: resolved.query.dateFrom,
       dateTo: resolved.query.dateTo,
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
       actorUsername: resolved.query.actorUsername,
     });
 
-    return reportResponse(resolved, "reporte-bitacora.csv", toCsv(COLUMNS, rows), rows, "audit");
+    return reportResponse(resolved, "reporte-bitacora.csv", toCsv(COLUMNS, rows), rows, "audit", totalCount);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

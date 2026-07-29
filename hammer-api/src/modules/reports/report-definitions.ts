@@ -1,4 +1,14 @@
-import { formatCurrency, formatNumber, formatStatus, safeText, toNumber } from "@/modules/reports/report-formatters";
+import { formatCurrency, formatNumber, formatPercent, formatStatus, safeText, toNumber } from "@/modules/reports/report-formatters";
+
+// CAMBIO 5 (prompt-reportes-v2): antes cada reporte tenía su propio take:2000
+// (o 3000 para auditoría) hardcodeado — un rango de varios meses truncaba en
+// silencio. Un rango real de 6 meses (ver mockup: ~8,900 líneas de venta,
+// ~1,240 movimientos) queda comodísimo bajo este tope único; si algún día se
+// supera, el aviso ahora es honesto ("mostrando N de M", con M real via
+// count()), nunca un truncado silencioso. Cursor/streaming completo (sin
+// ningún tope) queda fuera de alcance de este cambio — ver nota en el reporte
+// final de la tarea.
+export const REPORT_ROW_CAP = 20_000;
 
 export type ReportType = "financial" | "operational" | "inventory" | "audit" | "payroll" | "generic";
 export type ReportOrientation = "portrait" | "landscape";
@@ -78,14 +88,71 @@ const baseBranchColumns: ReportColumnDefinition[] = [
 ];
 
 export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
+  // CAMBIO 1 (prompt-reportes-v2): "sales" pasa a ser el detalle por línea —
+  // antes mostraba fecha/orden/vendedor/total sin decir QUÉ se vendió. El
+  // costo/margen viene de los snapshots de la línea (costSnapshot/
+  // marginSnapshot), nunca recalculado con el WAC actual.
   sales: {
     reportKey: "sales",
-    title: "Reporte de Ventas",
-    subtitle: "Ventas cobradas y trazabilidad comercial",
-    description: "Reporte financiero basado en cobros registrados.",
+    title: "Reporte de Ventas — Detalle por Línea",
+    subtitle: "Qué se vendió, a qué categoría, con costo y margen histórico",
+    description: "Una fila por línea de venta cobrada, con costo y margen al momento de la venta.",
     orientation: "landscape",
     type: "financial",
-    detailLabel: "Detalle financiero",
+    detailLabel: "Detalle por línea",
+    columns: [
+      { key: "fecha", label: "Fecha", width: 11, type: "date" },
+      { key: "sucursal_codigo", label: "Suc.", width: 6, type: "text" },
+      { key: "orden", label: "Orden", width: 9, type: "text", maxLength: 16 },
+      { key: "producto_sku", label: "SKU", width: 9, type: "text", maxLength: 14 },
+      { key: "producto_nombre", label: "Producto", width: 16, type: "text", maxLength: 26 },
+      { key: "categoria", label: "Categoría", width: 11, type: "text", maxLength: 18 },
+      { key: "cantidad", label: "Cant.", width: 6, type: "number", align: "right" },
+      { key: "precio_unitario", label: "P.unit", width: 9, type: "currency", align: "right" },
+      { key: "costo_unitario", label: "Costo", width: 9, type: "currency", align: "right" },
+      { key: "subtotal", label: "Subtotal", width: 10, type: "currency", align: "right", required: true },
+      { key: "margen_porcentaje", label: "Margen", width: 8, type: "percent", align: "right" },
+      { key: "costo_fuente", label: "Fuente costo", width: 9, type: "text", maxLength: 14, hideWhenEmpty: true },
+    ],
+    totals: [
+      { key: "subtotal", label: "Ingreso total", type: "currency" },
+      { key: "costo_total", label: "Costo total", type: "currency" },
+      { key: "margen_monto", label: "Margen bruto", type: "currency" },
+    ],
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
+    summaryCards: (rows) => {
+      const ingreso = sum(rows, "subtotal");
+      const costo = sum(rows, "costo_total");
+      const margen = sum(rows, "margen_monto");
+      const ordenes = new Set(rows.map((row) => safeText(row.orden, ""))).size;
+      return [
+        { label: "Ingreso total", value: formatCurrency(ingreso) },
+        { label: "Costo de lo vendido", value: formatCurrency(costo) },
+        { label: "Margen bruto", value: `${formatCurrency(margen)} (${ingreso > 0 ? formatPercent((margen / ingreso) * 100) : "0%"})` },
+        { label: "Órdenes", value: formatNumber(ordenes) },
+      ];
+    },
+    warnings: (rows) => {
+      const warnings: string[] = [];
+      if (rows.length > 0 && rows.every((row) => row.costo_unitario === "" || row.costo_unitario === undefined)) {
+        warnings.push("Ninguna línea tiene costo capturado — el margen no se puede calcular para este rango.");
+      }
+      if (rows.some((row) => safeText(row.costo_fuente, "") !== "")) {
+        warnings.push("Algunas líneas usan una fuente de costo distinta a la estándar (ver columna Fuente costo).");
+      }
+      return warnings;
+    },
+  },
+  // Vista "resumen por orden" — el reporte "sales" original, conservado tal
+  // cual (prompt-reportes-v2 CAMBIO 1: "conservar... como opción").
+  "sales-summary": {
+    reportKey: "sales-summary",
+    title: "Reporte de Ventas — Resumen por Orden",
+    subtitle: "Ventas cobradas y trazabilidad comercial",
+    description: "Reporte financiero basado en cobros registrados, una fila por orden.",
+    orientation: "landscape",
+    type: "financial",
+    detailLabel: "Resumen por orden",
     columns: [
       { key: "fecha", label: "Fecha", width: 12, type: "date" },
       ...baseBranchColumns,
@@ -95,7 +162,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "total", label: "Total", width: 12, type: "currency", align: "right", required: true },
     ],
     totals: [{ key: "total", label: "Total vendido", type: "currency" }],
-    rowLimitPolicy: { serviceMaxRows: 2000, warningThreshold: 2000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => {
       const total = sum(rows, "total");
       return [
@@ -114,6 +181,41 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
         warnings.push("Este reporte contiene ordenes despachadas; valide que tambien esten cobradas.");
       }
       return warnings;
+    },
+  },
+  // CAMBIO 2 (prompt-reportes-v2): reusa getSalesSummaryAggregated — ver
+  // reports/service.ts::getSalesByCategoryReportRows.
+  "sales-by-category": {
+    reportKey: "sales-by-category",
+    title: "Reporte de Ventas por Categoría",
+    subtitle: "Ingreso, costo y margen agrupados por categoría de producto",
+    description: "Agregado por categoría — misma fuente que el dashboard de ventas.",
+    orientation: "portrait",
+    type: "financial",
+    detailLabel: "Por categoría",
+    columns: [
+      { key: "categoria", label: "Categoría", width: 20, type: "text", maxLength: 28 },
+      { key: "ingreso", label: "Ingreso", width: 14, type: "currency", align: "right", required: true },
+      { key: "costo", label: "Costo", width: 14, type: "currency", align: "right" },
+      { key: "margen_porcentaje", label: "Margen", width: 10, type: "percent", align: "right" },
+      { key: "porcentaje_total", label: "% total", width: 10, type: "percent", align: "right" },
+      { key: "ordenes", label: "Órdenes", width: 10, type: "number", align: "right" },
+    ],
+    totals: [
+      { key: "ingreso", label: "Ingreso total", type: "currency" },
+      { key: "costo", label: "Costo total", type: "currency" },
+    ],
+    rowLimitPolicy: { serviceMaxRows: 200, warningThreshold: 200 },
+    summaryCards: (rows) => {
+      const ingreso = sum(rows, "ingreso");
+      const costo = sum(rows, "costo");
+      const margen = ingreso > 0 ? ((ingreso - costo) / ingreso) * 100 : 0;
+      return [
+        { label: "Ingreso total", value: formatCurrency(ingreso) },
+        { label: "Costo total", value: formatCurrency(costo) },
+        { label: "Margen bruto", value: formatPercent(margen) },
+        { label: "Categorías", value: formatNumber(rows.length) },
+      ];
     },
   },
   payments: {
@@ -139,7 +241,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "efectivo", label: "Efectivo", type: "currency" },
       { key: "cambio", label: "Cambio", type: "currency" },
     ],
-    rowLimitPolicy: { serviceMaxRows: 2000, warningThreshold: 2000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => [
       { label: "Total cobrado", value: formatCurrency(sum(rows, "monto")) },
       { label: "Pagos", value: formatNumber(rows.length) },
@@ -171,7 +273,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "descuento_monto", label: "Total descuentos", type: "currency" },
       { key: "subtotal_final", label: "Total neto", type: "currency" },
     ],
-    rowLimitPolicy: { serviceMaxRows: 2000, warningThreshold: 2000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => [
       { label: "Descuento total", value: formatCurrency(sum(rows, "descuento_monto")) },
       { label: "Lineas", value: formatNumber(rows.length) },
@@ -195,7 +297,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "fecha_despacho", label: "Fecha despacho", width: 12, type: "date" },
       { key: "notas", label: "Notas/Zona", width: 16, type: "text", maxLength: 24 },
     ],
-    rowLimitPolicy: { serviceMaxRows: 2000, warningThreshold: 2000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => [
       { label: "Tickets", value: formatNumber(rows.length) },
       { label: "Despachados", value: formatNumber(countBy(rows, "estado", "DISPATCHED")) },
@@ -221,7 +323,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "resuelto_por", label: "Resuelto por", width: 15, type: "text", maxLength: 22 },
       { key: "motivo", label: "Motivo", width: 16, type: "text", maxLength: 24 },
     ],
-    rowLimitPolicy: { serviceMaxRows: 2000, warningThreshold: 2000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => [
       { label: "Solicitudes", value: formatNumber(rows.length) },
       { label: "Pendientes", value: formatNumber(countBy(rows, "estado", "PENDING")) },
@@ -246,7 +348,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "entidad", label: "Entidad", width: 13, type: "text", maxLength: 18 },
       { key: "entidad_id", label: "ID", width: 12, type: "text", maxLength: 18 },
     ],
-    rowLimitPolicy: { serviceMaxRows: 3000, warningThreshold: 3000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => [
       { label: "Eventos", value: formatNumber(rows.length) },
       { label: "Modulo principal", value: topValue(rows, "modulo") },
@@ -270,12 +372,45 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "valor_inventario", label: "Valor", width: 13, type: "currency", align: "right" },
     ],
     totals: [{ key: "valor_inventario", label: "Valor inventario", type: "currency" }],
-    rowLimitPolicy: { serviceMaxRows: 2000, warningThreshold: 2000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => [
       { label: "Total alertas", value: formatNumber(rows.length) },
       { label: "Agotados", value: formatNumber(rows.filter((row) => toNumber(row.existencia) <= 0).length) },
       { label: "Criticos", value: formatNumber(rows.filter((row) => toNumber(row.existencia) > 0 && toNumber(row.existencia) <= 5).length) },
       { label: "Valor", value: formatCurrency(sum(rows, "valor_inventario")) },
+    ],
+  },
+  // CAMBIO 4 (prompt-reportes-v2): nunca existió reporte de InventoryMovement.
+  // Grupo (envíos/ingresos/conteos/ventas) viene de movement-groups.ts.
+  "inventory-movements": {
+    reportKey: "inventory-movements",
+    title: "Reporte de Movimientos de Materiales",
+    subtitle: "Cada movimiento de inventario, agrupado por tipo",
+    description: "Envíos, ingresos, conteos/ajustes y ventas de materiales — nunca tuvo reporte propio.",
+    orientation: "landscape",
+    type: "inventory",
+    detailLabel: "Movimientos de materiales",
+    columns: [
+      { key: "fecha", label: "Fecha", width: 11, type: "date" },
+      { key: "sucursal_codigo", label: "Suc.", width: 6, type: "text" },
+      { key: "grupo", label: "Grupo", width: 10, type: "text", maxLength: 16 },
+      { key: "tipo", label: "Tipo", width: 12, type: "status" },
+      { key: "producto_nombre", label: "Producto", width: 17, type: "text", maxLength: 26 },
+      { key: "categoria", label: "Categoría", width: 11, type: "text", maxLength: 18 },
+      { key: "cantidad", label: "Cant.", width: 7, type: "number", align: "right" },
+      { key: "costo_unitario", label: "Costo", width: 9, type: "currency", align: "right" },
+      { key: "valor", label: "Valor", width: 10, type: "currency", align: "right", required: true },
+      { key: "origen_destino", label: "Origen → Destino", width: 12, type: "text", maxLength: 18, hideWhenEmpty: true },
+      { key: "referencia", label: "Ref.", width: 9, type: "text", maxLength: 16 },
+      { key: "motivo", label: "Motivo", width: 12, type: "text", maxLength: 18, hideWhenEmpty: true },
+    ],
+    totals: [{ key: "valor", label: "Valor neto", type: "currency" }],
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
+    summaryCards: (rows) => [
+      { label: "Envíos", value: formatCurrency(sum(rows.filter((row) => safeText(row.grupo, "") === "Envíos"), "valor")) },
+      { label: "Ingresos", value: formatCurrency(sum(rows.filter((row) => safeText(row.grupo, "") === "Ingresos"), "valor")) },
+      { label: "Conteos y ajustes", value: formatCurrency(sum(rows.filter((row) => safeText(row.grupo, "") === "Conteos y ajustes"), "valor")) },
+      { label: "Ventas de materiales", value: formatCurrency(sum(rows.filter((row) => safeText(row.grupo, "") === "Ventas de materiales"), "valor")) },
     ],
   },
   payroll: {
@@ -305,7 +440,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "neto_a_pagar", label: "Neto", type: "currency" },
       { key: "costo_empresa", label: "Costo empresa", type: "currency" },
     ],
-    rowLimitPolicy: { serviceMaxRows: 2000, warningThreshold: 2000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => [
       { label: "Neto a pagar", value: formatCurrency(sum(rows, "neto_a_pagar")) },
       { label: "Empleados", value: formatNumber(rows.length) },
@@ -335,7 +470,7 @@ export const REPORT_DEFINITIONS: Record<string, ReportDefinition> = {
       { key: "monto_original", label: "Monto original", type: "currency" },
       { key: "saldo_pendiente", label: "Saldo pendiente", type: "currency" },
     ],
-    rowLimitPolicy: { serviceMaxRows: 2000, warningThreshold: 2000 },
+    rowLimitPolicy: { serviceMaxRows: REPORT_ROW_CAP, warningThreshold: REPORT_ROW_CAP },
     summaryCards: (rows) => [
       { label: "Saldo pendiente", value: formatCurrency(sum(rows, "saldo_pendiente")) },
       { label: "Prestamos", value: formatNumber(rows.length) },

@@ -267,7 +267,11 @@ function collectWarnings(input: BuildReportPdfInput) {
   const policy = input.reportDefinition.rowLimitPolicy;
   const totalRowCount = input.totalRowCount ?? input.rows.length;
   if (policy?.warningThreshold && totalRowCount >= policy.warningThreshold) {
-    warnings.add(`Mostrando ${input.rows.length} filas por limite operativo. Use CSV y filtros mas especificos para auditoria completa.`);
+    // CAMBIO 5 (prompt-reportes-v2): "N de M filas", nunca un truncado
+    // silencioso — M es el total real (via count()) cuando el caller lo pasa;
+    // si coincide con N (caller no calculó count real), sigue siendo honesto:
+    // dice exactamente cuántas hay, no una M inventada.
+    warnings.add(`Mostrando ${input.rows.length} de ${totalRowCount} filas. Reduzca el rango para ver todas.`);
   }
   return [...warnings];
 }
@@ -290,8 +294,12 @@ function buildPageObjects(pages: PdfPage[]) {
   return objects;
 }
 
-export function buildReportPdf(input: BuildReportPdfInput) {
-  const generatedAt = input.generatedAt ?? new Date();
+// Extraído de buildReportPdf (CAMBIO 5, prompt-reportes-v2) para que el
+// documento de auditoría multi-mes pueda reusar EXACTAMENTE el mismo render
+// de sección (header/resumen/filtros/advertencias/tabla/totales) para cada
+// una de sus secciones, empujando páginas al arreglo COMPARTIDO del
+// documento completo — "mismo pipeline de PDF, no un generador paralelo".
+function renderReportSectionPages(pages: PdfPage[], input: BuildReportPdfInput) {
   const definition = input.reportDefinition;
   const size = PAGE_SIZES[definition.orientation];
   const tableWidth = size.width - MARGIN * 2;
@@ -305,7 +313,6 @@ export function buildReportPdf(input: BuildReportPdfInput) {
     { label: "Filas", value: String(input.totalRowCount ?? input.rows.length) },
   ];
 
-  const pages: PdfPage[] = [];
   let page = new PdfPage(size);
   pages.push(page);
   renderHeader(page, input);
@@ -339,11 +346,11 @@ export function buildReportPdf(input: BuildReportPdfInput) {
       y -= TABLE_ROW_HEIGHT;
     });
     ensurePage(TABLE_HEADER_HEIGHT + TABLE_ROW_HEIGHT);
-    y = renderTotals(page, input, columns, widths, MARGIN, y);
+    renderTotals(page, input, columns, widths, MARGIN, y);
   }
+}
 
-  pages.forEach((item, index) => renderFooter(item, index + 1, pages.length, generatedAt));
-
+function serializePdfPages(pages: PdfPage[]): Buffer {
   const objects = buildPageObjects(pages);
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
@@ -358,4 +365,99 @@ export function buildReportPdf(input: BuildReportPdfInput) {
   }
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
   return Buffer.from(pdf, "utf8");
+}
+
+export function buildReportPdf(input: BuildReportPdfInput) {
+  const generatedAt = input.generatedAt ?? new Date();
+  const pages: PdfPage[] = [];
+  renderReportSectionPages(pages, input);
+  pages.forEach((item, index) => renderFooter(item, index + 1, pages.length, generatedAt));
+  return serializePdfPages(pages);
+}
+
+// ── CAMBIO 5 (prompt-reportes-v2): documento de auditoría multi-mes ──────────
+// Un solo documento con portada + N secciones, cada una reusando su propio
+// reporte ya existente (rows/reportDefinition) vía renderReportSectionPages —
+// nunca un generador paralelo. Sin el tope de 2000: cada sección ya trae su
+// propio totalRowCount real (ver reports/service.ts) y su propia advertencia
+// honesta si lo excede.
+
+export type AuditDocumentSection = {
+  label: string;
+  reportDefinition: ReportDefinition;
+  rows: ReportRow[];
+  totalRowCount?: number;
+};
+
+export type BuildAuditDocumentInput = {
+  businessName?: string;
+  rangeLabel: string;
+  branchLabel: string;
+  generatedBy?: string;
+  generatedAt?: Date;
+  sections: AuditDocumentSection[];
+};
+
+function renderCoverPage(input: BuildAuditDocumentInput, generatedAt: Date): PdfPage {
+  const size = PAGE_SIZES.portrait;
+  const page = new PdfPage(size);
+  const centerX = size.width / 2;
+  let y = size.height - 140;
+
+  const title = "Documento de Auditoría";
+  page.text(title, centerX - title.length * 5, y, 20, "F2", 0.1);
+  y -= 24;
+  const subtitle = `${safeText(input.businessName, "Hammer POS")} - ${input.rangeLabel} - ${input.branchLabel}`;
+  page.text(subtitle, centerX - subtitle.length * 2.6, y, 10, "F1", 0.32);
+  y -= 16;
+  const meta = `Generado ${formatDateLocal(generatedAt)} - ${safeText(input.generatedBy, "N/D")}`;
+  page.text(meta, centerX - meta.length * 2.2, y, 8, "F1", 0.42);
+  y -= 20;
+  page.line(MARGIN, y, size.width - MARGIN, y, 0.75);
+  y -= 26;
+
+  page.text("Contenido", MARGIN, y, 11, "F2", 0.18);
+  y -= 20;
+
+  let totalIngreso = 0;
+  let totalCosto = 0;
+  input.sections.forEach((section, index) => {
+    const count = section.totalRowCount ?? section.rows.length;
+    page.text(`${index + 1} - ${section.label}`, MARGIN, y, 9, "F1", 0.25);
+    page.rightText(`${formatNumber(count)} fila${count === 1 ? "" : "s"}`, size.width - MARGIN, y, 9, "F2", 0.2);
+    y -= 15;
+    const ingresoKey = section.reportDefinition.totals?.find((t) => /ingreso/i.test(t.label ?? t.key))?.key;
+    const costoKey = section.reportDefinition.totals?.find((t) => /costo/i.test(t.label ?? t.key))?.key;
+    if (ingresoKey) totalIngreso += toNumber(section.rows.reduce((sum, row) => sum + toNumber(row[ingresoKey]), 0));
+    if (costoKey) totalCosto += toNumber(section.rows.reduce((sum, row) => sum + toNumber(row[costoKey]), 0));
+  });
+
+  y -= 10;
+  page.line(MARGIN, y, size.width - MARGIN, y, 0.85);
+  y -= 20;
+  page.text("Ingreso del período", MARGIN, y, 10, "F2", 0.15);
+  page.rightText(formatCurrency(totalIngreso), size.width - MARGIN, y, 11, "F2", 0.1);
+  y -= 16;
+  const margin = totalIngreso > 0 ? ((totalIngreso - totalCosto) / totalIngreso) * 100 : 0;
+  page.text("Margen bruto del período", MARGIN, y, 10, "F2", 0.15);
+  page.rightText(formatPercent(margin), size.width - MARGIN, y, 11, "F2", 0.1);
+
+  return page;
+}
+
+export function buildAuditDocumentPdf(input: BuildAuditDocumentInput) {
+  const generatedAt = input.generatedAt ?? new Date();
+  const pages: PdfPage[] = [renderCoverPage(input, generatedAt)];
+  input.sections.forEach((section) => {
+    renderReportSectionPages(pages, {
+      title: section.label,
+      rows: section.rows,
+      reportDefinition: section.reportDefinition,
+      generatedBy: input.generatedBy,
+      generatedAt,
+      totalRowCount: section.totalRowCount,
+    });
+  });
+  pages.forEach((item, index) => renderFooter(item, index + 1, pages.length, generatedAt));
+  return serializePdfPages(pages);
 }

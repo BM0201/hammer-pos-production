@@ -31,6 +31,10 @@ type FilterState = {
   branchId: string;
   status: string;
   actorUsername: string;
+  // CAMBIO 4 (prompt-reportes-v2): sub-filtro de grupo para Movimientos de
+  // materiales (Todos/Envíos/Ingresos/Conteos/Ventas) — un parámetro propio,
+  // no reusa "status" para no mezclar conceptos.
+  group: string;
 };
 
 type PreviewData = { rows: Record<string, unknown>[]; count: number; generatedAt: string };
@@ -42,6 +46,20 @@ type FilterConfig = {
   statusOptions?: { value: string; label: string }[];
   actor: boolean;
   actorLabel?: string;
+};
+
+// CAMBIO 1 (prompt-reportes-v2): "Ventas" pasa a tener 3 vistas (detalle por
+// línea / resumen por orden / por categoría) en vez de un solo reporte fijo —
+// mismo patrón de filtros, endpoint/columnas distintos por vista.
+type ReportView = {
+  key: string;
+  label: string;
+  endpoint: string;
+  csvFilename: string;
+  columns: ColumnDef[];
+  // Si se omite, hereda el maxRows del ReportDef base (mismo tope real que el
+  // backend en report-definitions.ts). Solo "categoria" difiere (200).
+  maxRows?: number;
 };
 
 type ReportDef = {
@@ -57,6 +75,13 @@ type ReportDef = {
   maxRows: number;
   columns: ColumnDef[];
   filters: FilterConfig;
+  // Vistas alternativas además de la default (endpoint/csvFilename/columns de
+  // arriba). Solo "sales" las usa hoy.
+  views?: ReportView[];
+  // Etiqueta del botón de la vista default cuando `views` está presente.
+  defaultViewLabel?: string;
+  // CAMBIO 4: sub-tabs de grupo — solo "inventory-movements" las usa hoy.
+  groupOptions?: { value: string; label: string }[];
 };
 
 // ─── Catalog ─────────────────────────────────────────────────────────────────
@@ -78,6 +103,22 @@ const C: Record<string, ColumnDef> = {
   producto:       { key: "producto_nombre",label: "Producto",         type: "text"     },
   cantidad:       { key: "cantidad",       label: "Cant.",            type: "number",  align: "right" },
   precio_unit:    { key: "precio_unitario",label: "P. Unitario",      type: "currency",align: "right" },
+  // CAMBIO 1/2/4 (prompt-reportes-v2): ventas a línea, por categoría y
+  // movimientos de materiales.
+  categoria:      { key: "categoria",      label: "Categoría",        type: "text"     },
+  costo_unit:     { key: "costo_unitario", label: "Costo",            type: "currency",align: "right" },
+  costo_total:    { key: "costo_total",    label: "Costo total",      type: "currency",align: "right" },
+  subtotal:       { key: "subtotal",       label: "Subtotal",         type: "currency",align: "right" },
+  margen_monto:   { key: "margen_monto",   label: "Margen",           type: "currency",align: "right" },
+  margen_pct:     { key: "margen_porcentaje", label: "Margen %",      type: "percent", align: "right" },
+  costo_fuente:   { key: "costo_fuente",   label: "Fuente costo",     type: "text"     },
+  ingreso:        { key: "ingreso",        label: "Ingreso",          type: "currency",align: "right" },
+  costo:          { key: "costo",          label: "Costo",            type: "currency",align: "right" },
+  pct_total:      { key: "porcentaje_total", label: "% del total",    type: "percent", align: "right" },
+  ordenes:        { key: "ordenes",        label: "Órdenes",          type: "number",  align: "right" },
+  grupo:          { key: "grupo",          label: "Grupo",            type: "text"     },
+  valor:          { key: "valor",          label: "Valor",            type: "currency",align: "right" },
+  origen_destino: { key: "origen_destino", label: "Origen → Destino", type: "text"     },
   desc_monto:     { key: "descuento_monto",label: "Desc.",            type: "currency",align: "right" },
   desc_pct:       { key: "descuento_porcentaje_efectivo", label: "% Desc.", type: "percent", align: "right" },
   subtotal_final: { key: "subtotal_final", label: "Neto",             type: "currency",align: "right" },
@@ -115,6 +156,22 @@ const C: Record<string, ColumnDef> = {
   cuota:          { key: "cuota",          label: "Cuota",            type: "currency",align: "right" },
 };
 
+// Mismo tope que hammer-api/src/modules/reports/report-definitions.ts
+// (REPORT_ROW_CAP) — un rango de varios meses ya no trunca en silencio.
+const REPORT_ROW_CAP = 20_000;
+
+// CAMBIO 5 (prompt-reportes-v2): documento de auditoría multi-mes — mismas
+// SECTION_KEYS que hammer-api/src/app/api/reports/audit-document/route.ts.
+// "Cobros" arranca sin marcar por defecto (mockup); el resto sí.
+const AUDIT_DOCUMENT_SECTIONS: { key: string; label: string; defaultChecked: boolean }[] = [
+  { key: "sales-detail",       label: "Ventas con detalle",       defaultChecked: true  },
+  { key: "sales-category",     label: "Ventas por categoría",     defaultChecked: true  },
+  { key: "inventory-ingresos", label: "Ingresos de materiales",   defaultChecked: true  },
+  { key: "inventory-envios",   label: "Envíos / traslados",       defaultChecked: true  },
+  { key: "inventory-conteos",  label: "Conteos y ajustes",        defaultChecked: true  },
+  { key: "payments",           label: "Cobros y métodos de pago", defaultChecked: false },
+];
+
 const SALE_STATUS_OPTIONS = [
   { value: "PENDING_PAYMENT", label: "Pend. pago" },
   { value: "PAID",            label: "Pagada" },
@@ -150,18 +207,37 @@ const LOAN_STATUS_OPTIONS = [
 
 const REPORTS: ReportDef[] = [
   {
+    // CAMBIO 1 (prompt-reportes-v2): "sales" ahora es detalle por línea —
+    // qué se vendió, a qué categoría, con costo y margen histórico (nunca
+    // recalculado con el WAC actual). Resumen por orden y por categoría
+    // quedan como vistas alternativas, no reportes aparte.
     key: "sales", label: "Ventas", category: "ventas",
-    description: "Órdenes con cobros registrados: estado, vendedor y monto. Base para comisiones y cierre comercial.",
+    description: "Qué se vendió, a qué categoría, con costo y margen al momento de la venta.",
     icon: ShoppingCart, iconColor: "text-[var(--color-warning-600)]", iconBg: "bg-[var(--color-warning-50)] border-[var(--color-warning-100)]",
-    endpoint: "/api/reports/sales", csvFilename: "reporte-ventas.csv", maxRows: 2000,
-    columns: [C.fecha, C.suc, C.suc_nombre, C.orden, C.estado, C.vendedor, C.total],
+    endpoint: "/api/reports/sales", csvFilename: "reporte-ventas.csv", maxRows: REPORT_ROW_CAP,
+    columns: [C.fecha, C.suc, C.orden, C.sku, C.producto, C.categoria, C.cantidad, C.precio_unit, C.costo_unit, C.subtotal, C.margen_pct, C.costo_fuente],
     filters: { dateRange: true, status: true, statusLabel: "Estado de orden", statusOptions: SALE_STATUS_OPTIONS, actor: false },
+    defaultViewLabel: "Detalle por línea",
+    views: [
+      {
+        key: "resumen", label: "Resumen por orden",
+        endpoint: "/api/reports/sales-summary", csvFilename: "reporte-ventas-resumen.csv",
+        columns: [C.fecha, C.suc, C.suc_nombre, C.orden, C.estado, C.vendedor, C.total],
+      },
+      {
+        key: "categoria", label: "Por categoría",
+        endpoint: "/api/reports/sales-by-category", csvFilename: "reporte-ventas-por-categoria.csv",
+        columns: [C.categoria, C.ingreso, C.costo, C.margen_pct, C.pct_total, C.ordenes],
+        // CAMBIO 2: agregado, no detalle — mismo tope que el backend (200).
+        maxRows: 200,
+      },
+    ],
   },
   {
     key: "discounts", label: "Descuentos", category: "ventas",
     description: "Líneas con descuento aplicado: monto, porcentaje efectivo y vendedor. Auditoría de política comercial.",
     icon: Tag, iconColor: "text-[var(--color-danger-600)]", iconBg: "bg-[var(--color-danger-50)] border-[var(--color-danger-100)]",
-    endpoint: "/api/reports/discounts", csvFilename: "reporte-descuentos.csv", maxRows: 2000,
+    endpoint: "/api/reports/discounts", csvFilename: "reporte-descuentos.csv", maxRows: REPORT_ROW_CAP,
     columns: [C.fecha, C.suc, C.orden, C.sku, C.producto, C.cantidad, C.precio_unit, C.desc_monto, C.desc_pct, C.subtotal_final, C.vendedor],
     filters: { dateRange: true, status: false, actor: true, actorLabel: "Vendedor (usuario)" },
   },
@@ -169,7 +245,7 @@ const REPORTS: ReportDef[] = [
     key: "payments", label: "Cobros", category: "ventas",
     description: "Pagos registrados con método, cajero y desglose de efectivo. Conciliación de caja y trazabilidad.",
     icon: Wallet, iconColor: "text-[var(--color-success-700)]", iconBg: "bg-[var(--color-success-50)] border-[var(--color-success-100)]",
-    endpoint: "/api/reports/payments", csvFilename: "reporte-cobros.csv", maxRows: 2000,
+    endpoint: "/api/reports/payments", csvFilename: "reporte-cobros.csv", maxRows: REPORT_ROW_CAP,
     columns: [C.fecha_pago, C.suc, C.orden, C.metodo, C.estado, C.cajero, C.monto, C.efectivo, C.cambio, C.referencia],
     filters: { dateRange: true, status: true, statusLabel: "Estado de pago", statusOptions: PAYMENT_STATUS_OPTIONS, actor: true, actorLabel: "Cajero (usuario)" },
   },
@@ -177,7 +253,7 @@ const REPORTS: ReportDef[] = [
     key: "dispatch", label: "Despachos", category: "logistica",
     description: "Tickets de despacho con estado, despachador y fecha. Seguimiento de cumplimiento de entregas.",
     icon: Truck, iconColor: "text-[var(--color-info-600)]", iconBg: "bg-[var(--color-info-50)] border-[var(--color-info-100)]",
-    endpoint: "/api/reports/dispatch", csvFilename: "reporte-despachos.csv", maxRows: 2000,
+    endpoint: "/api/reports/dispatch", csvFilename: "reporte-despachos.csv", maxRows: REPORT_ROW_CAP,
     columns: [C.fecha, C.suc, C.suc_nombre, C.orden, C.estado, C.despachador, C.fecha_despacho, C.notas],
     filters: { dateRange: true, status: true, statusLabel: "Estado de despacho", statusOptions: DISPATCH_STATUS_OPTIONS, actor: false },
   },
@@ -185,7 +261,7 @@ const REPORTS: ReportDef[] = [
     key: "approvals", label: "Aprobaciones", category: "auditoria",
     description: "Solicitudes de aprobación por tipo, estado y resolución. Control de excepciones y decisiones gerenciales.",
     icon: ClipboardCheck, iconColor: "text-[var(--color-info-700)]", iconBg: "bg-[var(--color-info-50)] border-[var(--color-info-100)]",
-    endpoint: "/api/reports/approvals", csvFilename: "reporte-aprobaciones.csv", maxRows: 2000,
+    endpoint: "/api/reports/approvals", csvFilename: "reporte-aprobaciones.csv", maxRows: REPORT_ROW_CAP,
     columns: [C.fecha_solicitud, C.suc, C.tipo, C.estado, C.solicitado_por, C.resuelto_por, C.motivo],
     filters: { dateRange: true, status: true, statusLabel: "Estado de solicitud", statusOptions: APPROVAL_STATUS_OPTIONS, actor: true, actorLabel: "Solicitado por (usuario)" },
   },
@@ -193,7 +269,7 @@ const REPORTS: ReportDef[] = [
     key: "audit", label: "Bitácora", category: "auditoria",
     description: "Registro de todas las acciones del sistema: módulo, acción, usuario y entidad. Trazabilidad completa.",
     icon: BookOpen, iconColor: "text-[var(--color-text-secondary)]", iconBg: "bg-[var(--color-surface-alt)] border-[var(--color-border)]",
-    endpoint: "/api/reports/audit", csvFilename: "reporte-bitacora.csv", maxRows: 3000,
+    endpoint: "/api/reports/audit", csvFilename: "reporte-bitacora.csv", maxRows: REPORT_ROW_CAP,
     columns: [C.fecha, C.suc, C.modulo, C.accion, C.usuario, C.entidad, C.entidad_id],
     filters: { dateRange: true, status: true, statusLabel: "Buscar acción (texto)", actor: true, actorLabel: "Usuario (nombre de usuario)" },
   },
@@ -201,15 +277,34 @@ const REPORTS: ReportDef[] = [
     key: "inventory-critical", label: "Inventario crítico", category: "inventario",
     description: "Productos con existencia ≤ 5 unidades por sucursal. Identifica necesidades de reorden urgente.",
     icon: Package, iconColor: "text-[var(--color-danger-600)]", iconBg: "bg-[var(--color-danger-50)] border-[var(--color-danger-100)]",
-    endpoint: "/api/reports/inventory-critical", csvFilename: "reporte-inventario-critico.csv", maxRows: 2000,
+    endpoint: "/api/reports/inventory-critical", csvFilename: "reporte-inventario-critico.csv", maxRows: REPORT_ROW_CAP,
     columns: [C.suc, C.suc_nombre, C.sku, C.producto, C.existencia, C.costo_prom, C.valor_inv],
     filters: { dateRange: false, status: false, actor: false },
+  },
+  {
+    // CAMBIO 4 (prompt-reportes-v2): nunca existió reporte de InventoryMovement
+    // — envíos, ingresos, conteos/ajustes y ventas de materiales, clasificados
+    // por el mapa único movement-groups.ts (backend). El sub-filtro de grupo
+    // usa groupOptions, no el FilterConfig estándar (concepto propio).
+    key: "inventory-movements", label: "Movimientos de materiales", category: "inventario",
+    description: "Cada movimiento de inventario — envíos, ingresos, conteos/ajustes y ventas de materiales.",
+    icon: Layers, iconColor: "text-[var(--color-info-600)]", iconBg: "bg-[var(--color-info-50)] border-[var(--color-info-100)]",
+    endpoint: "/api/reports/inventory-movements", csvFilename: "reporte-movimientos.csv", maxRows: REPORT_ROW_CAP,
+    columns: [C.fecha, C.suc, C.grupo, C.tipo, C.producto, C.categoria, C.cantidad, C.costo_unit, C.valor, C.origen_destino, C.referencia, C.motivo],
+    filters: { dateRange: true, status: false, actor: false },
+    groupOptions: [
+      { value: "",         label: "Todos" },
+      { value: "envios",   label: "Envíos" },
+      { value: "ingresos", label: "Ingresos" },
+      { value: "conteos",  label: "Conteos y ajustes" },
+      { value: "ventas",   label: "Ventas de materiales" },
+    ],
   },
   {
     key: "payroll", label: "Nómina", category: "rrhh",
     description: "Líneas de nómina por empleado y período: bruto, deducciones, neto y costo empresa.",
     icon: Users, iconColor: "text-[var(--color-master-600)]", iconBg: "bg-[var(--color-master-50)] border-[var(--color-master-100)]",
-    endpoint: "/api/reports/payroll", csvFilename: "reporte-nomina.csv", maxRows: 2000,
+    endpoint: "/api/reports/payroll", csvFilename: "reporte-nomina.csv", maxRows: REPORT_ROW_CAP,
     columns: [C.ano, C.mes, C.sucursal_txt, C.empleado, C.puesto, C.salario_bruto, C.desc_prestamos, C.otras_desc, C.neto, C.costo_empresa, C.estado_run],
     filters: { dateRange: true, status: false, actor: false },
   },
@@ -217,7 +312,7 @@ const REPORTS: ReportDef[] = [
     key: "employee-loans", label: "Préstamos empleados", category: "rrhh",
     description: "Estado de préstamos por empleado: monto original, saldo pendiente, cuota mensual y estado actual.",
     icon: Banknote, iconColor: "text-[var(--color-branch-admin-600)]", iconBg: "bg-[var(--color-branch-admin-50)] border-[var(--color-branch-admin-100)]",
-    endpoint: "/api/reports/employee-loans", csvFilename: "reporte-prestamos.csv", maxRows: 2000,
+    endpoint: "/api/reports/employee-loans", csvFilename: "reporte-prestamos.csv", maxRows: REPORT_ROW_CAP,
     columns: [C.fecha, C.sucursal_txt, C.empleado, C.monto_original, C.saldo_pendiente, C.cuota, C.estado, C.notas],
     filters: { dateRange: true, status: true, statusLabel: "Estado del préstamo", statusOptions: LOAN_STATUS_OPTIONS, actor: false },
   },
@@ -252,6 +347,7 @@ function buildQuery(filters: FilterState, format: "json" | "csv" | "pdf") {
   if (filters.branchId)      p.set("branchId",      filters.branchId);
   if (filters.status)        p.set("status",        filters.status);
   if (filters.actorUsername) p.set("actorUsername", filters.actorUsername);
+  if (filters.group)         p.set("group",         filters.group);
   p.set("format", format);
   return p.toString() ? `?${p.toString()}` : "";
 }
@@ -297,9 +393,10 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
   const [branches, setBranches]       = useState<Branch[]>([]);
   const [category, setCategory]       = useState("dashboard");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [activeViewKey, setActiveViewKey] = useState("default");
   const [filters, setFilters]         = useState<FilterState>({
     dateFrom: defFrom, dateTo: defTo,
-    branchId: defaultBranchId, status: "", actorUsername: "",
+    branchId: defaultBranchId, status: "", actorUsername: "", group: "",
   });
   const [preview, setPreview]         = useState<PreviewData | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -307,6 +404,43 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
 
   const selectedReport = REPORTS.find((r) => r.key === selectedKey) ?? null;
   const visibleReports = category === "todos" ? REPORTS : REPORTS.filter((r) => r.category === category);
+
+  // Vista activa: la default del ReportDef, o una de sus `views` (solo
+  // "sales" las tiene hoy). Todo lo demás (filtros, maxRows por defecto,
+  // groupOptions) sigue viviendo en el ReportDef compartido.
+  const activeView: ReportView & { maxRows: number } = selectedReport ? (
+    activeViewKey === "default" || !selectedReport.views
+      ? { key: "default", label: selectedReport.label, endpoint: selectedReport.endpoint, csvFilename: selectedReport.csvFilename, columns: selectedReport.columns, maxRows: selectedReport.maxRows }
+      : (() => {
+          const view = selectedReport.views.find((v) => v.key === activeViewKey);
+          if (!view) return { key: "default", label: selectedReport.label, endpoint: selectedReport.endpoint, csvFilename: selectedReport.csvFilename, columns: selectedReport.columns, maxRows: selectedReport.maxRows };
+          return { ...view, maxRows: view.maxRows ?? selectedReport.maxRows };
+        })()
+  ) : { key: "default", label: "", endpoint: "", csvFilename: "", columns: [], maxRows: 0 };
+
+  // Documento de Auditoría: constructor multi-mes, independiente de la
+  // selección de reporte tabular (no es un ReportDef — arma un PDF con
+  // varias secciones, no una tabla de una sola fuente).
+  const [auditDateFrom, setAuditDateFrom] = useState(defFrom);
+  const [auditDateTo, setAuditDateTo]     = useState(defTo);
+  const [auditBranchId, setAuditBranchId] = useState(defaultBranchId);
+  const [auditSections, setAuditSections] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(AUDIT_DOCUMENT_SECTIONS.map((s) => [s.key, s.defaultChecked])),
+  );
+
+  function openAuditDocument() {
+    const selected = AUDIT_DOCUMENT_SECTIONS.filter((s) => auditSections[s.key]).map((s) => s.key);
+    if (selected.length === 0) {
+      showToast("error", "Selecciona al menos una sección para el documento.");
+      return;
+    }
+    const p = new URLSearchParams();
+    if (auditDateFrom) p.set("dateFrom", auditDateFrom);
+    if (auditDateTo)   p.set("dateTo",   auditDateTo);
+    if (auditBranchId) p.set("branchId", auditBranchId);
+    p.set("sections", selected.join(","));
+    window.open(`/api/reports/audit-document?${p.toString()}`, "_blank");
+  }
 
   const loadKpi = useCallback(async () => {
     setKpiLoading(true);
@@ -334,8 +468,15 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
       if (prev === key) return null;
       return key;
     });
+    setActiveViewKey("default");
+    setFilters((f) => ({ ...f, group: "" }));
     setPreview(null);
     setTimeout(() => panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+  }
+
+  function selectView(key: string) {
+    setActiveViewKey(key);
+    setPreview(null);
   }
 
   async function loadPreview() {
@@ -343,7 +484,7 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
     setLoadingPreview(true);
     setPreview(null);
     try {
-      const url = `${selectedReport.endpoint}${buildQuery(filters, "json")}`;
+      const url = `${activeView.endpoint}${buildQuery(filters, "json")}`;
       const res = await apiFetch(url);
       const raw = await res.json();
       if (!res.ok) {
@@ -491,6 +632,67 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
       </div>
       )}
 
+      {/* ── Documento de Auditoría (constructor multi-mes) ── */}
+      {category === "auditoria" && (
+        <div className="hm-module-card">
+          <div className="hm-module-card-header">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="hm-icon-wrap hm-icon-wrap-md border flex-shrink-0 bg-[var(--color-surface-alt)] border-[var(--color-border)]">
+                <BookOpen className="text-[var(--color-text-secondary)]" style={{ width: "1rem", height: "1rem" }} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="font-bold text-[var(--color-text)]">Documento de Auditoría</h2>
+                <p className="text-xs text-[var(--color-text-muted)] truncate">Portada + secciones elegidas para un rango de varios meses, en un solo PDF.</p>
+              </div>
+            </div>
+          </div>
+          <div className="p-4 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="grid gap-1">
+                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Desde</span>
+                <input className="hm-input rounded-lg text-sm" type="date" value={auditDateFrom} onChange={(e) => setAuditDateFrom(e.target.value)} />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Hasta</span>
+                <input className="hm-input rounded-lg text-sm" type="date" value={auditDateTo} onChange={(e) => setAuditDateTo(e.target.value)} />
+              </label>
+              {masterMode && (
+                <label className="grid gap-1">
+                  <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Sucursal</span>
+                  <select className="hm-input rounded-lg text-sm" value={auditBranchId} onChange={(e) => setAuditBranchId(e.target.value)}>
+                    <option value="">Todas</option>
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-2">Secciones a incluir</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {AUDIT_DOCUMENT_SECTIONS.map((s) => (
+                  <label key={s.key} className="flex items-center gap-2 text-sm text-[var(--color-text)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-[var(--color-border)]"
+                      checked={auditSections[s.key] ?? false}
+                      onChange={(e) => setAuditSections((prev) => ({ ...prev, [s.key]: e.target.checked }))}
+                    />
+                    {s.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button size="sm" icon={<ChevronRight className="h-3.5 w-3.5" />} onClick={openAuditDocument}>
+                Generar documento
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Active report panel ── */}
       {category !== "dashboard" && selectedReport && (
         <div ref={panelRef} className="space-y-4 scroll-mt-20">
@@ -511,6 +713,37 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
                 <X style={{ width: "0.875rem", height: "0.875rem" }} />
               </button>
             </div>
+
+            {/* Vista (solo reportes con `views`, ej. Ventas: detalle/resumen/categoría) */}
+            {selectedReport.views && (
+              <div className="px-4 pt-3 flex items-center gap-2">
+                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Vista</span>
+                <div className="erp-tabs-pill">
+                  <button type="button" className={activeViewKey === "default" ? "active" : ""} onClick={() => selectView("default")}>
+                    {selectedReport.defaultViewLabel ?? "Predeterminada"}
+                  </button>
+                  {selectedReport.views.map((view) => (
+                    <button key={view.key} type="button" className={activeViewKey === view.key ? "active" : ""} onClick={() => selectView(view.key)}>
+                      {view.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Grupo (solo Movimientos de materiales) */}
+            {selectedReport.groupOptions && (
+              <div className="px-4 pt-3 flex items-center gap-2">
+                <span className="text-[0.6875rem] font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">Grupo</span>
+                <div className="erp-tabs-pill flex-wrap">
+                  {selectedReport.groupOptions.map((opt) => (
+                    <button key={opt.value || "todos"} type="button" className={filters.group === opt.value ? "active" : ""} onClick={() => setFilter("group", opt.value)}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Filter panel */}
             <div className="p-4">
@@ -572,16 +805,16 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
               {/* Action bar */}
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-[var(--color-text-muted)]">
-                  Máx. {selectedReport.maxRows.toLocaleString("es-NI")} filas · CSV / PDF disponibles después de previsualizar
+                  Máx. {activeView.maxRows.toLocaleString("es-NI")} filas · CSV / PDF disponibles después de previsualizar
                 </p>
                 <div className="flex gap-2">
                   <Button variant="secondary" size="sm" loading={loadingPreview} icon={<Eye className="h-3.5 w-3.5" />} onClick={loadPreview}>
                     Previsualizar
                   </Button>
-                  <Button variant="ghost" size="sm" icon={<Download className="h-3.5 w-3.5" />} onClick={() => { window.location.href = `${selectedReport.endpoint}${buildQuery(filters, "csv")}`; }}>
+                  <Button variant="ghost" size="sm" icon={<Download className="h-3.5 w-3.5" />} onClick={() => { window.location.href = `${activeView.endpoint}${buildQuery(filters, "csv")}`; }}>
                     CSV
                   </Button>
-                  <Button size="sm" icon={<ChevronRight className="h-3.5 w-3.5" />} onClick={() => { window.open(`${selectedReport.endpoint}${buildQuery(filters, "pdf")}`, "_blank"); }}>
+                  <Button size="sm" icon={<ChevronRight className="h-3.5 w-3.5" />} onClick={() => { window.open(`${activeView.endpoint}${buildQuery(filters, "pdf")}`, "_blank"); }}>
                     PDF
                   </Button>
                 </div>
@@ -595,12 +828,12 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
             <ReportPreviewTable
               rows={preview.rows}
               count={preview.count}
-              maxRows={selectedReport.maxRows}
-              columns={selectedReport.columns}
+              maxRows={activeView.maxRows}
+              columns={activeView.columns}
               generatedAt={preview.generatedAt}
-              exportCsvUrl={`${selectedReport.endpoint}${buildQuery(filters, "csv")}`}
-              exportPdfUrl={`${selectedReport.endpoint}${buildQuery(filters, "pdf")}`}
-              reportLabel={selectedReport.label}
+              exportCsvUrl={`${activeView.endpoint}${buildQuery(filters, "csv")}`}
+              exportPdfUrl={`${activeView.endpoint}${buildQuery(filters, "pdf")}`}
+              reportLabel={activeViewKey === "default" ? selectedReport.label : `${selectedReport.label} — ${activeView.label}`}
             />
           )}
         </div>

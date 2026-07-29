@@ -100,11 +100,17 @@ export function reportResponse(
   csv: string,
   rows: Array<Record<string, unknown>>,
   reportKey?: string,
+  // CAMBIO 5 (prompt-reportes-v2): total REAL (via count()) cuando el
+  // servicio lo calcula — antes esto siempre era rows.length, así que el
+  // aviso de "límite operativo" nunca decía la verdad (N de N, nunca N de M).
+  // Si el caller no lo pasa, se preserva el comportamiento anterior.
+  totalRowCount?: number,
 ) {
   const generatedAt = new Date();
+  const realTotal = totalRowCount ?? rows.length;
   if (request.format === "json") {
     return NextResponse.json(
-      { rows, count: rows.length, generatedAt: generatedAt.toISOString() },
+      { rows, count: realTotal, generatedAt: generatedAt.toISOString() },
       { status: 200, headers: { "cache-control": "no-store" } },
     );
   }
@@ -124,10 +130,12 @@ export function reportResponse(
       filters,
       generatedBy: request.generatedBy,
       generatedAt,
-      totalRowCount: rows.length,
+      totalRowCount: realTotal,
       options: { filename },
     });
-    return new NextResponse(pdf, {
+    // Buffer<ArrayBufferLike> no matchea estructuralmente BodyInit en esta
+    // versión de @types/node — Uint8Array sí (Buffer es un subtipo real).
+    return new NextResponse(new Uint8Array(pdf), {
       status: 200,
       headers: {
         "content-type": "application/pdf",
