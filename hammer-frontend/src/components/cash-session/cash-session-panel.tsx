@@ -94,6 +94,12 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
   // CORRECCIÓN 2 (UX): el formulario de revisión de cierre automático se muestra
   // colapsado por defecto para que el botón "Abrir sesión" quede siempre visible.
   const [showReviewForm, setShowReviewForm] = useState(false);
+  // Bug reportado: "Solicitar cierre de sesión" disparaba la llamada real al
+  // primer click, sin confirmación — fácil de tocar sin querer, y sin forma
+  // de deshacerlo después (no existe un "cancelar conciliación"). Ahora el
+  // primer click solo muestra la advertencia; el cierre real recién ocurre
+  // en el segundo click explícito.
+  const [confirmingClose, setConfirmingClose] = useState(false);
   const isReconciling = Boolean(reconcilingSessionId);
 
   const canOpen = useMemo(
@@ -292,6 +298,7 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
       setMessage("Sesión en conciliación. Ingresa monto final para cerrar.");
       setReconcilingSessionId(activeSession.id);
       setActiveSession(null);
+      setConfirmingClose(false);
       publishStatus({
         hasOpenSession: false,
         cashSessionId: activeSession.id,
@@ -531,14 +538,39 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
               Termina el turno del cajero. Deberás contar el efectivo físico para cerrar. El día operativo puede seguir abierto con otra sesión.
             </p>
           </div>
-          <button
-            className="w-full rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] hover:bg-[var(--color-warning-100)] px-5 py-3 sm:py-2.5 text-sm font-medium text-[var(--color-warning-700)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={requestCloseSession}
-            disabled={!canRequestClose || Boolean(busyAction)}
-            data-testid="cash-session-request-close"
-          >
-            {busyAction === "requestClose" ? "Procesando..." : "Solicitar cierre de sesión"}
-          </button>
+          {confirmingClose ? (
+            <div className="rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 space-y-2.5">
+              <p className="text-sm font-medium text-[var(--color-warning-700)]">
+                Vas a iniciar el cierre de tu caja — no vas a poder seguir cobrando hasta contar el efectivo y confirmar el monto. ¿Continuar?
+              </p>
+              <div className="flex gap-2">
+                <button
+                  className="flex-1 rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-100)] hover:bg-[var(--color-warning-200)] px-4 py-2.5 text-sm font-semibold text-[var(--color-warning-700)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={requestCloseSession}
+                  disabled={!canRequestClose || Boolean(busyAction)}
+                  data-testid="cash-session-request-close-confirm"
+                >
+                  {busyAction === "requestClose" ? "Procesando..." : "Sí, iniciar cierre"}
+                </button>
+                <button
+                  className="flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-alt)] px-4 py-2.5 text-sm font-medium text-[var(--color-text)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => setConfirmingClose(false)}
+                  disabled={Boolean(busyAction)}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="w-full rounded-xl border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] hover:bg-[var(--color-warning-100)] px-5 py-3 sm:py-2.5 text-sm font-medium text-[var(--color-warning-700)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => setConfirmingClose(true)}
+              disabled={!canRequestClose || Boolean(busyAction)}
+              data-testid="cash-session-request-close"
+            >
+              Solicitar cierre de sesión
+            </button>
+          )}
         </div>
       )}
 

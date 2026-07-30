@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   DEFAULT_CASH_AUTO_CLOSE_CONFIG,
   normalizeCashAutoCloseConfig,
+  omitUndefinedFields,
 } from "@/modules/cash-session/auto-close-config";
 import { getCashAutoCloseDeadline } from "@/modules/cash-session/auto-close-service";
 
@@ -40,4 +41,29 @@ test("auto-close deadline: disabled config never expires", () => {
   const result = getCashAutoCloseDeadline({ id: "b" }, new Date("2026-06-09T23:45:00Z"), cfg);
   assert.equal(result.enabled, false);
   assert.equal(result.expired, false);
+});
+
+/**
+ * Mismo bug que operations/auto-day-config.test.ts: un llamador que arma el
+ * objeto de actualización listando todos los campos (algunos en undefined,
+ * sin tocar) pisaba en silencio `enabled`/horarios ya guardados con el
+ * default hardcodeado.
+ */
+test("omitUndefinedFields: elimina las claves en undefined, conserva false/null (valores reales)", () => {
+  const result = omitUndefinedFields({ enabled: undefined, weekdayCloseTime: null, saturdayCloseTime: "16:00" });
+  assert.ok(!("enabled" in result));
+  assert.equal(result.weekdayCloseTime, null);
+  assert.equal(result.saturdayCloseTime, "16:00");
+});
+
+test("bug reproducido y corregido: actualizar solo el horario ya no resetea 'enabled' al default", () => {
+  const current = normalizeCashAutoCloseConfig({ enabled: true, weekdayCloseTime: "17:30" });
+  const partialUpdateAsObjectLiteral = { enabled: undefined, weekdayCloseTime: "18:00" };
+
+  const buggyMerge = normalizeCashAutoCloseConfig({ ...current, ...partialUpdateAsObjectLiteral });
+  assert.equal(buggyMerge.enabled, true, "coincidencia: el default de 'enabled' ya es true, así que este caso no lo expone");
+
+  const fixedMerge = normalizeCashAutoCloseConfig({ ...current, ...omitUndefinedFields(partialUpdateAsObjectLiteral) });
+  assert.equal(fixedMerge.enabled, true, "con el fix: se conserva explícitamente, no por coincidencia del default");
+  assert.equal(fixedMerge.weekdayCloseTime, "18:00");
 });

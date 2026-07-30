@@ -85,12 +85,27 @@ export async function getOperationalDayAutoConfig(): Promise<OperationalDayAutoC
   return { ...config };
 }
 
+/**
+ * Bug reportado: un llamador que arma el objeto de actualización listando
+ * TODOS los campos (aunque no cambien, con valor `undefined` para los que no
+ * toca) pisaba en silencio el valor ya guardado con el default hardcodeado —
+ * `{...current, ...input}` sobreescribe con `undefined` explícito, y
+ * normalizeOperationalDayAutoConfig cae al default porque no puede
+ * distinguir "no vino" de "vino en undefined". Se filtran los `undefined`
+ * de `input` ANTES del merge para que solo los campos realmente enviados
+ * puedan cambiar algo. Pura — sin I/O, testeable directo.
+ */
+export function omitUndefinedFields<T extends Record<string, unknown>>(input: T): Partial<T> {
+  return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
 export async function updateOperationalDayAutoConfig(
   input: Partial<OperationalDayAutoConfig>,
   userId?: string,
 ): Promise<OperationalDayAutoConfig> {
   const current = await getOperationalDayAutoConfig();
-  const merged = normalizeOperationalDayAutoConfig({ ...current, ...input });
+  const cleanInput = omitUndefinedFields(input);
+  const merged = normalizeOperationalDayAutoConfig({ ...current, ...cleanInput });
   const value = JSON.stringify(merged);
 
   await prisma.systemSetting.upsert({

@@ -91,13 +91,25 @@ export async function getCashAutoCloseConfig(): Promise<CashAutoCloseConfig> {
   return { ...config };
 }
 
+/**
+ * Same guard as operations/auto-day-config.ts::omitUndefinedFields: un
+ * llamador que arma el objeto de actualización con un campo en `undefined`
+ * (no lo toca, pero lo incluye igual) no debe poder resetear ese campo al
+ * default hardcodeado — se filtran los `undefined` antes de mezclar con el
+ * valor actual. Pura — sin I/O, testeable directo.
+ */
+export function omitUndefinedFields<T extends Record<string, unknown>>(input: T): Partial<T> {
+  return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
+
 /** Persist a new auto-close config (merged over the current one) and return the result. */
 export async function updateCashAutoCloseConfig(
   input: Partial<CashAutoCloseConfig>,
   userId?: string,
 ): Promise<CashAutoCloseConfig> {
   const current = await getCashAutoCloseConfig();
-  const merged = normalizeCashAutoCloseConfig({ ...current, ...input });
+  const cleanInput = omitUndefinedFields(input);
+  const merged = normalizeCashAutoCloseConfig({ ...current, ...cleanInput });
   const value = JSON.stringify(merged);
 
   await prisma.systemSetting.upsert({

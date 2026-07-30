@@ -30,6 +30,11 @@ export function usePosCashContext(branchId: string) {
       try {
         const query = new URLSearchParams({ branchId });
         const res = await fetch(`/api/pos/v2/context?${query.toString()}`);
+        // Bug: una respuesta no-ok (401 por sesión vencida, 500, etc.) se
+        // parseaba igual y `data` quedaba undefined -> se interpretaba
+        // silenciosamente como "sin sesión" -> pill "Caja cerrada", en vez de
+        // caer al fallback de caché de abajo (ya diseñado para esto).
+        if (!res.ok) throw new Error(`POS_CONTEXT_${res.status}`);
         const json = await res.json();
         const data = json?.data ?? json;
         setPosContext(data);

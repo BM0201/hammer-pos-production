@@ -105,7 +105,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
 
   const branchId = getActiveBranchId(session.branchIds, session.primaryBranchId) ?? "";
   const { realtimeSummary, summaryUpdatedAt } = usePosRealtimeSummary(branchId);
-  const { activeCashSessionId } = usePosCashContext(branchId);
+  const { activeCashSessionId, cashSessionProblem } = usePosCashContext(branchId);
 
   /* ── Sidebar state ── */
   const [collapsed, setCollapsed] = useState(true);
@@ -479,6 +479,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
               realtimeSummary={realtimeSummary}
               summaryUpdatedAt={summaryUpdatedAt}
               activeCashSessionId={activeCashSessionId}
+              cashSessionProblem={cashSessionProblem}
             />
           </div>
         </header>
