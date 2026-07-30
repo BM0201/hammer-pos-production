@@ -10,7 +10,8 @@ import { getRoleColor } from "@/lib/role-colors";
 import { getEffectiveCapabilitySet, hasEffectiveCapability } from "@/lib/navigation/visible-modules";
 import type { SessionPayload } from "@/types/auth";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { apiFetch } from "@/lib/client/api";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import {
   LayoutDashboard,
   Users,
@@ -317,6 +318,22 @@ export function AppSidebar({
   const roleCfg = getRoleColor(roleCode);
   const homeHref = resolveRoleHome(roleCode as string, globalRoles as unknown as string[]);
 
+  // Aviso persistente de días operativos esperando cierre (PENDING_CLOSE):
+  // antes esta señal (getLiveBlockers, ya existía en el backend) nunca se
+  // consumía desde ningún lado del frontend — el dueño solo se enteraba de
+  // que un día seguía sin cerrar si entraba a Operaciones a propósito. Se
+  // muestra como badge en "Día Operativo 360" para que sea visible desde
+  // cualquier pantalla, no solo el Centro de Comando.
+  const [pendingCloseDaysCount, setPendingCloseDaysCount] = useState(0);
+  const fetchPendingCloseDays = useCallback(async () => {
+    const res = await apiFetch("/api/master/operations/live-blockers");
+    if (!res.ok) return;
+    const raw = await res.json();
+    const data = unwrapApiData(raw) as { pendingCloseDaysCount: number };
+    setPendingCloseDaysCount(data.pendingCloseDaysCount ?? 0);
+  }, []);
+  useOperationalPolling({ enabled: isMaster, intervalMs: 60_000, task: fetchPendingCloseDays });
+
   /* ── Rail behavior: always starts collapsed, user expands temporarily ── */
   const [collapsed, setCollapsed] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -463,6 +480,7 @@ export function AppSidebar({
               {section.items.map((item) => {
                 const active = item.href === activeHref;
                 const Icon = item.icon;
+                const pendingBadge = item.href === "/app/master/operations" ? pendingCloseDaysCount : 0;
                 return (
                   <div key={item.href} className="relative sidebar-nav-item">
                     <Link
@@ -473,20 +491,40 @@ export function AppSidebar({
                         background: active ? "var(--color-sidebar-active)" : "transparent",
                         color: active ? "var(--color-sidebar-text-active)" : "var(--color-sidebar-text)",
                       }}
-                      title={isCollapsed ? item.label : undefined}
+                      title={isCollapsed ? (pendingBadge > 0 ? `${item.label} (${pendingBadge} día(s) esperando cierre)` : item.label) : undefined}
                     >
-                      <Icon
-                        className="h-4 w-4 flex-shrink-0 transition-colors duration-[140ms]"
-                        style={{
-                          color: active ? "var(--sidebar-item-icon-hover)" : "var(--sidebar-item-icon)",
-                        }}
-                      />
+                      <span className="relative flex-shrink-0">
+                        <Icon
+                          className="h-4 w-4 transition-colors duration-[140ms]"
+                          style={{
+                            color: active ? "var(--sidebar-item-icon-hover)" : "var(--sidebar-item-icon)",
+                          }}
+                        />
+                        {isCollapsed && pendingBadge > 0 && (
+                          <span
+                            className="absolute -top-1 -right-1 h-2 w-2 rounded-full"
+                            style={{ background: "var(--color-danger-500)" }}
+                            aria-hidden="true"
+                          />
+                        )}
+                      </span>
                       {!isCollapsed && (
-                        <span className="sidebar-label truncate">{item.label}</span>
+                        <span className="sidebar-label truncate flex-1">{item.label}</span>
+                      )}
+                      {!isCollapsed && pendingBadge > 0 && (
+                        <span
+                          className="flex-shrink-0 rounded-full px-1.5 py-0.5 text-[0.625rem] font-bold leading-none text-white"
+                          style={{ background: "var(--color-danger-500)" }}
+                          title={`${pendingBadge} día(s) operativo(s) esperando cierre`}
+                        >
+                          {pendingBadge}
+                        </span>
                       )}
                     </Link>
                     {isCollapsed && (
-                      <span className="sidebar-tooltip">{item.label}</span>
+                      <span className="sidebar-tooltip">
+                        {pendingBadge > 0 ? `${item.label} (${pendingBadge})` : item.label}
+                      </span>
                     )}
                   </div>
                 );

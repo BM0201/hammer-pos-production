@@ -228,6 +228,7 @@ export async function getCommandCenterSnapshot() {
     openSecurityAlerts,
     daysPendingApproval,
     staleOpenDays,
+    pendingCloseDays,
     productsMissingPrice,
   ] = await Promise.all([
     prisma.approvalRequest.count({ where: { status: { in: ["REQUESTED", "UNDER_REVIEW"] } } }),
@@ -235,6 +236,12 @@ export async function getCommandCenterSnapshot() {
     prisma.securityAlert.count({ where: { status: "OPEN" } }),
     prisma.operationalDay.count({ where: { status: "CLOSED", approvedAt: null } }),
     prisma.operationalDay.count({ where: { status: "OPEN", businessDate: { lt: todayBusinessDate } } }),
+    // Bug reportado: un día pasa de OPEN a PENDING_CLOSE en minutos (el barrido
+    // automático corre cada 10 min), así que `staleOpenDays` (arriba) queda en
+    // 0 casi todo el tiempo aunque el día siga sin cerrarse — este aviso
+    // seguía existiendo en el backend (getLiveBlockers) pero nunca se
+    // consumía desde ningún lado del frontend. Ahora se expone acá también.
+    prisma.operationalDay.count({ where: { status: "PENDING_CLOSE" } }),
     prisma.product.count({
       where: { isActive: true, branchProductSettings: { none: { branchPrice: { gt: 0 } } } },
     }),
@@ -408,6 +415,7 @@ export async function getCommandCenterSnapshot() {
       openSecurityAlerts,
       daysPendingApproval,
       staleOpenDays,
+      pendingCloseDays,
       productsMissingPrice,
       pendingDispatchTotal: byBranch.reduce((acc, b) => acc + (b.operationalDay?.pendingDispatchCount ?? 0), 0),
     },

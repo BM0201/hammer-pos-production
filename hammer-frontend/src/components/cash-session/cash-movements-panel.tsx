@@ -324,7 +324,7 @@ export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId:
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="truncate text-sm font-medium text-[var(--color-text)]">{m.reason}</span>
+                  <span className="truncate text-sm font-medium text-[var(--color-text)]" title={m.reason}>{m.reason}</span>
                   <span className="shrink-0 text-sm font-bold text-[var(--color-text)]">
                     C$ {Number(m.amount).toFixed(2)}
                   </span>

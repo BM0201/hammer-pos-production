@@ -147,6 +147,7 @@ type CommandCenter = {
     openSecurityAlerts: number;
     daysPendingApproval: number;
     staleOpenDays: number;
+    pendingCloseDays: number;
     productsMissingPrice: number;
     pendingDispatchTotal: number;
   };
@@ -1251,6 +1252,7 @@ export default function MasterCommandCenterPage() {
   // Señales accionables — orden por severidad (bloqueantes primero).
   const attentionItems: AttentionItem[] = [
     { key: "stale", count: attention?.staleOpenDays ?? 0, label: "día(s) anterior(es) aún abiertos", href: "/app/master/operations", tone: "danger" },
+    { key: "pendingClose", count: attention?.pendingCloseDays ?? 0, label: "día(s) esperando cierre (pendientes de cierre)", href: "/app/master/operations", tone: "danger" },
     { key: "security", count: attention?.openSecurityAlerts ?? 0, label: "alerta(s) de seguridad abiertas", href: "/app/master/security", tone: "danger" },
     { key: "brain", count: attention?.criticalBrainDecisions ?? 0, label: "decisión(es) críticas en Brain", href: "/app/master/brain", tone: "danger" },
     { key: "days", count: attention?.daysPendingApproval ?? 0, label: "día(s) cerrados por aprobar", href: "/app/master/operations", tone: "warning" },

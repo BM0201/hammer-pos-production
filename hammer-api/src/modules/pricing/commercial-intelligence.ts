@@ -2,10 +2,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEffectiveProductPricing, getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct, resolvePolicyForProductBatch, type CategoryPricingPolicyDto } from "@/modules/pricing/category-policy-service";
+import { resolveAbcXyzClassification, type AbcClass, type XyzClass, type CombinedAbcXyzClass } from "@/modules/analytics/abc-xyz-classification";
 
-export type AbcClass = "A" | "B" | "C";
-export type XyzClass = "X" | "Y" | "Z";
-export type CombinedAbcXyzClass = `${AbcClass}${XyzClass}`;
+export type { AbcClass, XyzClass, CombinedAbcXyzClass };
 export type CommercialRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 export type CommercialStockPolicy = "HIGH_STOCK" | "NORMAL" | "LOW_STOCK" | "ON_DEMAND";
 
@@ -76,9 +75,6 @@ const DEFAULT_POLICY = {
   roundingRule: "NEAREST_1",
 };
 
-const VALID_ABC = new Set(["A", "B", "C"]);
-const VALID_XYZ = new Set(["X", "Y", "Z"]);
-
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -103,44 +99,24 @@ function normalizePolicy(input: CommercialIntelligenceInput["categoryPolicy"]) {
   };
 }
 
+// prompt-precios-fase0: la decisión de clase ya no vive acá — delega en
+// resolveAbcXyzClassification (analytics/abc-xyz-classification.ts), la
+// misma función que usa el job batch de analytics. `storedAbcClass`/
+// `storedXyzClass` siguen siendo la autoridad cuando existen (ver regla de
+// precedencia documentada en el módulo canónico); el cálculo en vivo de acá
+// (contribución individual / CV / unidades vendidas) es el fallback.
 export function classifyProductAbcXyz(input: CommercialIntelligenceInput) {
-  const warnings: string[] = [];
-  let abcClass: AbcClass;
-  let xyzClass: XyzClass;
+  const individualContributionPercent = finite(input.revenueContributionPercent) || finite(input.grossProfitContributionPercent)
+    ? Math.max(input.revenueContributionPercent ?? 0, input.grossProfitContributionPercent ?? 0)
+    : undefined;
 
-  if (input.storedAbcClass && VALID_ABC.has(input.storedAbcClass)) {
-    abcClass = input.storedAbcClass as AbcClass;
-  } else if (finite(input.revenueContributionPercent) || finite(input.grossProfitContributionPercent)) {
-    const contribution = Math.max(input.revenueContributionPercent ?? 0, input.grossProfitContributionPercent ?? 0);
-    if (contribution >= 5) abcClass = "A";
-    else if (contribution >= 1) abcClass = "B";
-    else abcClass = "C";
-  } else {
-    abcClass = "C";
-    warnings.push("Sin datos suficientes de ventas para clasificacion ABC; se uso C como fallback.");
-  }
-
-  if (input.storedXyzClass && VALID_XYZ.has(input.storedXyzClass)) {
-    xyzClass = input.storedXyzClass as XyzClass;
-  } else if (finite(input.salesVariabilityCoefficient)) {
-    if (input.salesVariabilityCoefficient <= 0.5) xyzClass = "X";
-    else if (input.salesVariabilityCoefficient <= 1) xyzClass = "Y";
-    else xyzClass = "Z";
-  } else if (finite(input.unitsSoldLast90Days)) {
-    if (input.unitsSoldLast90Days >= 90) xyzClass = "X";
-    else if (input.unitsSoldLast90Days >= 15) xyzClass = "Y";
-    else xyzClass = "Z";
-  } else {
-    xyzClass = "Z";
-    warnings.push("Sin datos suficientes de demanda para clasificacion XYZ; se uso Z como fallback.");
-  }
-
-  return {
-    abcClass,
-    xyzClass,
-    combinedClass: `${abcClass}${xyzClass}` as CombinedAbcXyzClass,
-    warnings,
-  };
+  return resolveAbcXyzClassification({
+    storedAbcClass: input.storedAbcClass,
+    storedXyzClass: input.storedXyzClass,
+    individualContributionPercent,
+    coefficientOfVariation: input.salesVariabilityCoefficient,
+    unitsSoldLast90Days: input.unitsSoldLast90Days,
+  });
 }
 
 export function buildCommercialWarnings(input: CommercialIntelligenceInput, combinedClass: CombinedAbcXyzClass) {

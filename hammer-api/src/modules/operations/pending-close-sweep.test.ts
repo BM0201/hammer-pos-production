@@ -21,7 +21,7 @@ function createFakeTx(input: {
   dayStatus: string;
   cashSessions: Array<{ id: string; openingAmount: number; status: string; cashTenders: number[]; movements: Array<{ type: string; amount: number }> }>;
 }) {
-  const dayState = { status: input.dayStatus };
+  const dayState = { status: input.dayStatus, businessDate: new Date("2026-07-22"), closedAt: null as Date | null };
   const sessions = input.cashSessions.map((s) => ({ ...s }));
   const auditLogs: Array<Record<string, unknown>> = [];
 
@@ -32,31 +32,68 @@ function createFakeTx(input: {
         dayState.status = args.data.status;
         return { count: 1 };
       },
+      // sweepDayToPendingCloseTx ahora llama a refreshOperationalDaySummaryTx
+      // antes de congelar el día — findUnique/findUniqueOrThrow/update son su
+      // cadena de dependencias (calculateOperationalSummaryTx +
+      // getSalesSummaryForOperationalDayTx). Estos tests no verifican los
+      // totales del snapshot (solo la transición de estado y las cajas
+      // huérfanas), así que basta con datos neutros/vacíos coherentes.
+      findUnique: async () => ({ id: DAY_ID, branchId: BRANCH_ID, businessDate: dayState.businessDate, closedAt: dayState.closedAt }),
+      findUniqueOrThrow: async () => ({ businessDate: dayState.businessDate, branch: { id: BRANCH_ID, code: "MSY", name: "Sucursal Test" } }),
+      update: async (args: { data: Record<string, unknown> }) => args.data,
     },
     cashSession: {
-      findMany: async (args: { where: { operationalDayId: string; status: { in: string[] } } }) => {
-        return sessions
-          .filter((s) => args.where.status.in.includes(s.status))
-          .map((s) => ({ id: s.id, openingAmount: new Prisma.Decimal(s.openingAmount), physicalCashBoxId: `box-${s.id}` }));
+      // Dos formas: closeOrphanedCashSessionsForDayTx filtra por
+      // `status: { in: [...] }` (solo las huérfanas a cerrar);
+      // calculateOperationalSummaryTx pide TODAS las del día (sin filtro de
+      // status, con include) para armar expectedVsCountedByCashSession.
+      findMany: async (args: { where: { operationalDayId: string; status?: { in: string[] } } }) => {
+        const filtered = args.where.status ? sessions.filter((s) => args.where.status!.in.includes(s.status)) : sessions;
+        return filtered.map((s) => ({ ...s, openingAmount: new Prisma.Decimal(s.openingAmount), physicalCashBoxId: `box-${s.id}` }));
       },
       update: async (args: { where: { id: string }; data: Record<string, unknown> }) => {
         const session = sessions.find((s) => s.id === args.where.id)!;
         Object.assign(session, args.data);
         return session;
       },
+      count: async () => 0,
+      aggregate: async () => ({ _sum: { expectedCashAmount: null, countedCashAmount: null, differenceAmount: null } }),
     },
     paymentTender: {
-      findMany: async (args: { where: { payment: { cashSessionId: string } } }) => {
-        const session = sessions.find((s) => s.id === args.where.payment.cashSessionId)!;
+      // Dos formas distintas llaman a esto: closeOrphanedCashSessionsForDayTx
+      // (una sesión a la vez, `where.payment.cashSessionId`) y
+      // calculateOperationalSummaryTx (todo el día, `where.operationalDayId`
+      // o `where.payment.status/paidAt/saleOrder`) — se distingue por forma.
+      findMany: async (args: { where: { payment?: { cashSessionId?: string } } }) => {
+        const cashSessionId = args.where.payment?.cashSessionId;
+        if (!cashSessionId) return [];
+        const session = sessions.find((s) => s.id === cashSessionId)!;
         return session.cashTenders.map((amount) => ({ amount: new Prisma.Decimal(amount) }));
       },
+      groupBy: async () => [],
     },
     cashMovement: {
-      findMany: async (args: { where: { cashSessionId: string } }) => {
+      // Igual que paymentTender: closeOrphanedCashSessionsForDayTx pide por
+      // `where.cashSessionId` (una sesión); calculateOperationalSummaryTx pide
+      // por `where.cashSession.operationalDayId` (todo el día).
+      findMany: async (args: { where: { cashSessionId?: string } }) => {
+        if (!args.where.cashSessionId) return [];
         const session = sessions.find((s) => s.id === args.where.cashSessionId)!;
         return session.movements.map((m) => ({ type: m.type, amount: new Prisma.Decimal(m.amount) }));
       },
     },
+    dispatchTicket: { count: async () => 0 },
+    brainDecision: { count: async () => 0 },
+    saleOrder: {
+      count: async () => 0,
+      aggregate: async () => ({ _sum: { grandTotal: null }, _count: { _all: 0 } }),
+    },
+    payment: {
+      count: async () => 0,
+      aggregate: async () => ({ _sum: { amount: null }, _count: { _all: 0 } }),
+      findFirst: async () => null,
+    },
+    refund: { findMany: async () => [] },
     auditLog: {
       create: async (args: { data: Record<string, unknown> }) => {
         auditLogs.push(args.data);

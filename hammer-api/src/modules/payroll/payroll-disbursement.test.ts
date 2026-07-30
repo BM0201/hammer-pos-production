@@ -8,6 +8,7 @@
  * Run: node --import tsx --test src/modules/payroll/payroll-disbursement.test.ts
  */
 import assert from "node:assert/strict";
+import { scheduledFirstHalf, scheduledSecondHalf } from "./payroll-disbursement-service";
 import { describe, it } from "node:test";
 import { splitNetPayBiweekly } from "./biweekly-split";
 
@@ -53,5 +54,104 @@ describe("splitNetPayBiweekly (deducciones mensuales en la 2ª quincena)", () =>
     const r = splitNetPayBiweekly(0, 0);
     assert.equal(r.firstHalf, 0);
     assert.equal(r.secondHalf, 0);
+  });
+});
+
+/**
+ * scheduledFirstHalf/scheduledSecondHalf (generateDisbursementsForRun).
+ *
+ * Caso reportado: hoy es 30 de julio y la nómina de julio se paga tarde (no
+ * se pagó el 15 como correspondía). El pedido explícito: si en agosto TAMBIÉN
+ * se paga tarde (el 16, no el 15), la 1ra quincena de agosto debe caer en
+ * 15 de agosto — nunca en 15 de julio (el mes de la corrida anterior). Estas
+ * funciones son puras en (year, month) — no dependen de "hoy" en absoluto,
+ * así que no hay forma de que el mes de una corrida se filtre a otra. Estos
+ * tests fijan esa garantía explícitamente.
+ */
+describe("scheduledFirstHalf / scheduledSecondHalf (fecha programada por corrida, nunca por 'hoy')", () => {
+  it("julio 2026 → 1ra = 15/jul, 2da = 31/jul", () => {
+    const first = scheduledFirstHalf(2026, 7);
+    const second = scheduledSecondHalf(2026, 7);
+    assert.equal(first.getFullYear(), 2026);
+    assert.equal(first.getMonth(), 6); // 0-indexed: julio
+    assert.equal(first.getDate(), 15);
+    assert.equal(second.getMonth(), 6);
+    assert.equal(second.getDate(), 31);
+  });
+
+  it("agosto 2026 → 1ra = 15/ago, 2da = 31/ago — nunca 15/jul aunque se calcule justo despues de procesar julio tarde", () => {
+    const first = scheduledFirstHalf(2026, 8);
+    const second = scheduledSecondHalf(2026, 8);
+    assert.equal(first.getMonth(), 7); // 0-indexed: agosto
+    assert.equal(first.getDate(), 15);
+    assert.equal(second.getMonth(), 7);
+    assert.equal(second.getDate(), 31);
+    assert.notEqual(first.getTime(), scheduledFirstHalf(2026, 7).getTime(), "agosto y julio nunca comparten scheduledDate");
+  });
+
+  it("el resultado es puro: mismo (year, month) siempre da la misma fecha, sin importar cuándo se llama", () => {
+    // No hay parámetro "now" — no hay forma de que el momento de la llamada
+    // (pagar julio tarde el 30, pagar agosto tarde el 16) altere el resultado.
+    const a = scheduledFirstHalf(2026, 8);
+    const b = scheduledFirstHalf(2026, 8);
+    assert.equal(a.getTime(), b.getTime());
+  });
+
+  it("febrero respeta el último día real del mes (28 o 29), no un '30' fijo", () => {
+    assert.equal(scheduledSecondHalf(2025, 2).getDate(), 28); // 2025 no es bisiesto
+    assert.equal(scheduledSecondHalf(2024, 2).getDate(), 29); // 2024 sí es bisiesto
+  });
+
+  it("es genérico para CUALQUIER par de meses, no solo julio/agosto (el ejemplo del reporte era ilustrativo)", () => {
+    // Marzo/abril, año calendario normal.
+    assert.equal(scheduledFirstHalf(2026, 3).getMonth(), 2);
+    assert.equal(scheduledFirstHalf(2026, 4).getMonth(), 3);
+    // Cruce de AÑO: diciembre 2026 y enero 2027 — el caso más propenso a bugs
+    // de fecha (mes que "da la vuelta"). PayrollRun es único por
+    // (branchId, year, month), así que diciembre 2026 y enero 2027 son
+    // corridas distintas sin ambigüedad, igual que julio/agosto.
+    const decFirst = scheduledFirstHalf(2026, 12);
+    const decSecond = scheduledSecondHalf(2026, 12);
+    const janFirst = scheduledFirstHalf(2027, 1);
+    assert.equal(decFirst.getFullYear(), 2026);
+    assert.equal(decFirst.getMonth(), 11);
+    assert.equal(decFirst.getDate(), 15);
+    assert.equal(decSecond.getFullYear(), 2026);
+    assert.equal(decSecond.getMonth(), 11);
+    assert.equal(decSecond.getDate(), 31, "el 'día 0 del mes siguiente' no debe desbordar a otro año");
+    assert.equal(janFirst.getFullYear(), 2027);
+    assert.equal(janFirst.getMonth(), 0);
+    assert.notEqual(decFirst.getTime(), janFirst.getTime());
+  });
+});
+
+/**
+ * Escenario completo del reporte: julio se paga tarde (30/jul) Y agosto
+ * también se paga tarde (16/ago) — simulando el agrupamiento real de
+ * applyPendingPayrollCashOuts (agrupa por payrollRunId+period, cada grupo
+ * con SU PROPIO scheduledDate). Verifica que, aunque ambos catch-ups
+ * ocurrieran el mismo día, cada uno mantiene la fecha de SU mes.
+ */
+describe("no contaminación entre corridas de distintos meses (bug prevenido)", () => {
+  it("dos corridas (julio y agosto), ambas pagadas tarde, mantienen cada una su propia scheduledDate al agruparse", () => {
+    type Disbursement = { payrollRunId: string; period: "FIRST_HALF"; amount: number; scheduledDate: Date };
+
+    const julyRun: Disbursement = { payrollRunId: "run-2026-07", period: "FIRST_HALF", amount: 18_000, scheduledDate: scheduledFirstHalf(2026, 7) };
+    const augustRun: Disbursement = { payrollRunId: "run-2026-08", period: "FIRST_HALF", amount: 19_000, scheduledDate: scheduledFirstHalf(2026, 8) };
+
+    // Agrupamiento real de applyPendingPayrollCashOuts: por payrollRunId+period.
+    const groups = new Map<string, Disbursement[]>();
+    for (const d of [julyRun, augustRun]) {
+      const key = `${d.payrollRunId}:${d.period}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(d);
+    }
+
+    assert.equal(groups.size, 2, "julio y agosto NUNCA se agrupan juntos, aunque se apliquen el mismo día");
+    const julyGroup = groups.get("run-2026-07:FIRST_HALF")!;
+    const augustGroup = groups.get("run-2026-08:FIRST_HALF")!;
+    assert.equal(julyGroup[0].scheduledDate.getMonth(), 6, "julio conserva su propio mes");
+    assert.equal(augustGroup[0].scheduledDate.getMonth(), 7, "agosto conserva su propio mes, no hereda julio");
+    assert.notEqual(julyGroup[0].scheduledDate.getTime(), augustGroup[0].scheduledDate.getTime());
   });
 });

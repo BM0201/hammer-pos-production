@@ -6,6 +6,8 @@ import {
   businessDateFromNow,
   computeApprovalBlockers,
   calculateOperationalSummaryTx,
+  buildChecklist,
+  flagOperationalDayAutoCloseSkippedTx,
 } from "@/modules/operations/service";
 import {
   getOperationalDayAutoConfig,
@@ -13,6 +15,8 @@ import {
   DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG,
 } from "@/modules/operations/auto-day-config";
 import { getApprovalPolicy } from "@/modules/operations/approve-policy-config";
+import { getCashToleranceConfig, resolveCashToleranceForBranch } from "@/modules/operations/cash-tolerance-config";
+import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-policy";
 
 function n(value: Prisma.Decimal | number | string | null | undefined): number {
   return Number(value ?? 0);
@@ -37,7 +41,18 @@ function localParts(now: Date, timezone = DEFAULT_TIMEZONE): LocalParts {
   const parts = formatter.formatToParts(now);
   const byType = new Map(parts.map((p) => [p.type, p.value]));
   return {
-    weekday: byType.get("weekday") ?? "Sunday",
+    // Bug corregido (2026-07-30): Intl.DateTimeFormat con "en-US" devuelve el
+    // weekday CAPITALIZADO ("Saturday"/"Sunday"), pero todas las comparaciones
+    // de este archivo (resolveTimeForDay, getOperationalDayOpenDeadline,
+    // getOperationalDayCloseDeadline) comparaban contra "saturday"/"sunday" en
+    // minúscula — NUNCA coincidían. En la práctica esto significaba que los
+    // horarios de sábado/domingo (incluyendo "sundayCloseTime: null" para
+    // desactivar el domingo) jamás se aplicaban: el sistema siempre usaba el
+    // horario de lunes-a-viernes, los 7 días de la semana. Se normaliza acá,
+    // en el origen, para que ningún comparador futuro repita el mismo error
+    // (auto-close-service.ts ya lo hacía bien, pero con un .toLowerCase() en
+    // cada call site en vez de en la fuente — más frágil).
+    weekday: (byType.get("weekday") ?? "Sunday").toLowerCase(),
     hour: Number(byType.get("hour") ?? 0),
     minute: Number(byType.get("minute") ?? 0),
   };
@@ -170,6 +185,19 @@ export async function autoOpenOperationalDays(input: { now?: Date; dryRun?: bool
  * corre aparte y jamás finaliza un día, solo lo saca de "abierto". Esta
  * función solo toca el día de HOY, y solo si `autoCloseEnabled` sigue
  * habilitado — en el modelo pendiente puro (recomendado) queda desactivada.
+ *
+ * Bug corregido (2026-07-30): antes, si el día tenía un bloqueante duro
+ * (típicamente una caja `AUTO_CLOSED_PENDING_REVIEW` — el propio auto-cierre
+ * de cajas, `cashAutoClose`, corre ANTES en el mismo cron y genera
+ * justamente ese bloqueante), el catch de `OPERATIONAL_DAY_HAS_HARD_BLOCKERS`
+ * solo incrementaba `result.skipped` — sin auditoría, sin alerta, sin badge.
+ * En la práctica esto significa que activar `autoCloseEnabled` fallaba en
+ * silencio TODOS los días, indefinidamente, sin que nadie se enterara nunca.
+ * Ahora se revisa el checklist ANTES de intentar cerrar (para saber
+ * exactamente cuál bloqueante es) y, si hay alguno duro, se deja un rastro
+ * persistente vía `flagOperationalDayAutoCloseSkippedTx` (decisión de Brain +
+ * auditoría) — visible en el Brain, en `criticalBrainDecisions` del Centro de
+ * Comando, y resuelto solo cuando el día efectivamente cierra.
  */
 export async function autoCloseTodaysOperationalDaysAtDeadline(input: { now?: Date; dryRun?: boolean } = {}): Promise<AutoDayResult> {
   const now = input.now ?? new Date();
@@ -192,6 +220,23 @@ export async function autoCloseTodaysOperationalDaysAtDeadline(input: { now?: Da
 
   for (const day of openDays) {
     try {
+      const hardBlockers = await prisma.$transaction(async (tx) => {
+        const fullDay = await tx.operationalDay.findUniqueOrThrow({ where: { id: day.id } });
+        const summary = await calculateOperationalSummaryTx(tx, fullDay);
+        const toleranceConfig = await getCashToleranceConfig();
+        const cashDifferenceToleranceAmount = resolveCashToleranceForBranch(toleranceConfig, fullDay.branchId);
+        const preview = buildChecklist(summary, fullDay.status, cashDifferenceToleranceAmount);
+        return preview.blockers.filter((item) => isHardOperationalDayCloseBlocker(item.key));
+      });
+
+      if (hardBlockers.length > 0) {
+        if (!dryRun) {
+          await prisma.$transaction((tx) => flagOperationalDayAutoCloseSkippedTx(tx, day, hardBlockers));
+        }
+        result.skipped++;
+        continue;
+      }
+
       if (!dryRun) {
         await closeOperationalDay({
           id: day.id,
@@ -205,6 +250,10 @@ export async function autoCloseTodaysOperationalDaysAtDeadline(input: { now?: Da
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === "OPERATIONAL_DAY_HAS_HARD_BLOCKERS") {
+        // Carrera rarísima: pasó de "sin bloqueantes" a "con bloqueantes" entre
+        // el pre-check y el intento de cierre (ej. se abrió una caja justo en
+        // el medio). Se cuenta como skip, igual que antes — el próximo tick
+        // del cron lo va a detectar y registrar correctamente.
         result.skipped++;
       } else {
         result.errors.push({ branchId: day.branchId, message: msg });

@@ -12,13 +12,24 @@ function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }
 
-/** Día 15 del mes dado. */
-function scheduledFirstHalf(year: number, month: number): Date {
+/**
+ * Día 15 del mes dado.
+ *
+ * Depende ÚNICAMENTE de (year, month) — nunca de "hoy" ni de cuándo se marca
+ * el desembolso como pagado. Esto es a propósito: si la nómina de julio se
+ * paga tarde (el 30, en vez del 15), su scheduledDate sigue siendo 15 de
+ * julio; si la de agosto TAMBIÉN se paga tarde (el 16, en vez del 15), su
+ * scheduledDate es 15 de agosto — nunca se contamina con el mes de la
+ * corrida anterior, porque cada PayrollRun trae su propio (year, month)
+ * explícito (elegido por el usuario al calcular la nómina, ver
+ * calculatePayrollRun), no derivado de la fecha del sistema.
+ */
+export function scheduledFirstHalf(year: number, month: number): Date {
   return new Date(year, month - 1, 15);
 }
 
-/** Último día del mes dado. */
-function scheduledSecondHalf(year: number, month: number): Date {
+/** Último día del mes dado. Misma garantía que scheduledFirstHalf: puro en (year, month). */
+export function scheduledSecondHalf(year: number, month: number): Date {
   return new Date(year, month, 0); // day 0 of next month = last day of this month
 }
 

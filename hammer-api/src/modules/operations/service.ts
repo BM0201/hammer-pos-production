@@ -87,6 +87,90 @@ async function resolveClosedWithWarningsDecisionTx(
   }
 }
 
+/**
+ * Cierre automático (auto-day-service.ts::autoCloseTodaysOperationalDaysAtDeadline)
+ * — antes, cuando el cierre automático de HOY se topaba con un bloqueante
+ * duro (caja abierta, cierre automático pendiente de revisión, pago
+ * pendiente), simplemente incrementaba un contador `skipped` en la respuesta
+ * del cron y no dejaba NINGÚN rastro visible para el Master: ni auditoría, ni
+ * decisión de Brain, ni badge. El dueño solo se enteraba al día siguiente,
+ * cuando el día ya llevaba horas sin cerrar. Esta función deja un rastro
+ * persistente (Brain + auditoría) cada vez que eso pasa, y se resuelve sola
+ * (ver resolveAutoCloseSkippedDecisionTx) en cuanto el día efectivamente
+ * cierra — por cualquier vía, automática o manual.
+ */
+export async function flagOperationalDayAutoCloseSkippedTx(
+  tx: Prisma.TransactionClient,
+  day: { id: string; branchId: string },
+  hardBlockers: ChecklistItem[],
+) {
+  const fingerprint = `operations:auto-close-skipped:${day.id}`;
+  const blockersLabel = hardBlockers.map((b) => b.label).join("; ");
+  const description = `El cierre automático por horario no pudo completarse — bloqueante(s): ${blockersLabel}.`;
+  const evidence = toJsonValue({ operationalDayId: day.id, hardBlockers });
+
+  await tx.brainDecision.upsert({
+    where: { fingerprint },
+    create: {
+      category: BrainDecisionCategory.SYSTEM,
+      severity: BrainDecisionSeverity.HIGH,
+      status: "OPEN",
+      title: "Cierre automático del día operativo no se pudo completar",
+      description,
+      recommendation: "Resolver los bloqueantes (caja abierta/pendiente de revisión, pago pendiente) y cerrar el día desde Día Operativo 360.",
+      branchId: day.branchId,
+      confidenceScore: decimal(100),
+      riskScore: decimal(70),
+      priorityScore: decimal(70),
+      proposedActionType: "REVIEW_OPERATIONAL_DAY",
+      evidenceJson: evidence,
+      fingerprint,
+      idempotencyKey: `brain:${fingerprint}`,
+    },
+    update: {
+      description,
+      evidenceJson: evidence,
+      status: "OPEN",
+      resolvedAt: null,
+      resolvedByUserId: null,
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: null,
+      branchId: day.branchId,
+      module: "operations",
+      action: "OPERATIONAL_DAY_AUTO_CLOSE_SKIPPED",
+      entityType: "OperationalDay",
+      entityId: day.id,
+      metadataJson: toJsonValue({ hardBlockers, reason: "Bloqueantes duros impiden el cierre automático." }),
+    },
+  });
+}
+
+/** Resuelve (si existe) la decisión "auto-close-skipped" de un día al cerrarlo — por cualquier vía. */
+async function resolveAutoCloseSkippedDecisionTx(tx: Prisma.TransactionClient, dayId: string, actorUserId: string) {
+  const fingerprint = `operations:auto-close-skipped:${dayId}`;
+  const { count } = await tx.brainDecision.updateMany({
+    where: { fingerprint, status: { notIn: ["EXECUTED", "DISMISSED"] } },
+    data: { status: "EXECUTED", resolvedAt: new Date(), resolvedByUserId: actorUserId === "SYSTEM" ? null : actorUserId },
+  });
+  if (count > 0) {
+    const decision = await tx.brainDecision.findUnique({ where: { fingerprint }, select: { id: true } });
+    if (decision) {
+      await tx.brainDecisionActionLog.create({
+        data: {
+          decisionId: decision.id,
+          actorUserId: actorUserId === "SYSTEM" ? null : actorUserId,
+          action: "EXECUTED",
+          note: "Resuelto automáticamente: el día operativo cerró.",
+        },
+      });
+    }
+  }
+}
+
 /** Hora (0–23) a la que termina el día de negocio. 0 = medianoche (comportamiento por defecto). */
 export const DEFAULT_BUSINESS_DAY_ENDS_AT_HOURS = 0;
 
@@ -543,6 +627,14 @@ export async function sweepDayToPendingCloseTx(
   if (claimed.count !== 1) return;
 
   const orphanCashSessionsClosed = await closeOrphanedCashSessionsForDayTx(tx, day.id);
+
+  // Bug reportado: "ayer" aparecía en C$0 en el historial pese a ventas
+  // reales, porque el snapshot (salesTotal/etc.) quedaba congelado en el
+  // valor de la última escritura antes de barrer el día — y nada volvía a
+  // recalcularlo hasta el cierre. Se recalcula una última vez ANTES de
+  // congelar el día en PENDING_CLOSE, para que el historial ya muestre el
+  // total real sin esperar a que alguien cierre (normal o forzado).
+  await refreshOperationalDaySummaryTx(tx, day.id);
 
   await tx.auditLog.create({
     data: {
@@ -1184,6 +1276,11 @@ export async function closeOperationalDay(input: {
           }),
         },
       });
+
+      // El día cerró (por cualquier vía) — si el auto-cierre había quedado
+      // registrado como "no se pudo completar" en algún tick anterior del
+      // cron, ya no aplica.
+      await resolveAutoCloseSkippedDecisionTx(tx, day.id, input.actorUserId);
 
       if (preview.warnings.length > 0 || Math.abs(summary.cashDifferenceTotal) > cashDifferenceToleranceAmount) {
         const warningsFingerprint = `operations:closed-with-warnings:${day.id}`;

@@ -7,9 +7,16 @@
  * BUG FIX: Rotation index — division by zero when avgInventory is 0.
  * BUG FIX: Days in stock — handle products that have never been purchased.
  * BUG FIX: Suggested margin — prevent negative margins after days-in-stock discount.
+ *
+ * prompt-precios-fase0: la DECISIÓN de clase (dado el % acumulado / CV) ya no
+ * vive acá — vive en `analytics/abc-xyz-classification.ts` (fuente de verdad
+ * única, también usada por `pricing/commercial-intelligence.ts`). Este
+ * archivo sigue siendo responsable de leer datos de la BD, calcular los
+ * insumos (valor acumulado, CV) y escribir el resultado.
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { resolveAbcXyzClassification } from "@/modules/analytics/abc-xyz-classification";
 
 // ── ABC Classification ──
 
@@ -62,18 +69,12 @@ export async function calculateABCClassification(year: number, month: number) {
     cumulative += p.totalValue;
     const pct = (cumulative / totalValue) * 100;
 
-    let abcClass: string;
     // BUG FIX: The first product should always be classified as A regardless of its individual contribution
     // This handles the case where a single product accounts for > 80% of sales
-    if (classified.length === 0) {
-      abcClass = "A";
-    } else if (pct <= 80) {
-      abcClass = "A";
-    } else if (pct <= 95) {
-      abcClass = "B";
-    } else {
-      abcClass = "C";
-    }
+    const { abcClass } = resolveAbcXyzClassification({
+      isFirstInRanking: classified.length === 0,
+      cumulativeValuePercent: pct,
+    });
     classified.push({ ...p, abcClass });
   }
 
@@ -99,9 +100,14 @@ export async function calculateABCClassification(year: number, month: number) {
 
 /**
  * Classify products by XYZ method based on demand variability.
- * X: CV < 0.5 (stable demand)
- * Y: 0.5 <= CV < 1.0 (variable demand)
- * Z: CV >= 1.0 (irregular demand)
+ * X: CV <= 0.5 (stable demand)
+ * Y: 0.5 < CV <= 1.0 (variable demand)
+ * Z: CV > 1.0 (irregular demand)
+ *
+ * prompt-precios-fase0: bordes inclusive (<=) — antes este archivo usaba `<`
+ * estricto (cv=0.5/1.0 exacto caían en la clase superior); se adoptó el
+ * operador inclusive de commercial-intelligence.ts como único canónico. Ver
+ * abc-xyz-classification.ts para el detalle de por qué.
  */
 export async function calculateXYZClassification(year: number, month: number) {
   // BUG FIX: Validate inputs
@@ -136,10 +142,12 @@ export async function calculateXYZClassification(year: number, month: number) {
 
   for (const [productId, dailyMap] of productDailySales) {
     const values = Array.from(dailyMap.values());
+
     if (values.length < 3) {
-      // Too few data points — classify as Z
-      await prisma.product.update({ where: { id: productId }, data: { xyzClassification: "Z" } });
-      distribution.Z++;
+      // Too few data points — classify as Z (ver xyzMinDataPoints en el canónico)
+      const { xyzClass } = resolveAbcXyzClassification({ xyzDataPoints: values.length });
+      await prisma.product.update({ where: { id: productId }, data: { xyzClassification: xyzClass } });
+      distribution[xyzClass as keyof typeof distribution]++;
       classified++;
       continue;
     }
@@ -150,10 +158,7 @@ export async function calculateXYZClassification(year: number, month: number) {
     // BUG FIX: Handle mean === 0 (all values are 0 — unlikely with SALE_OUT, but defensive)
     const cv = mean > 0 ? stddev / mean : 999;
 
-    let xyzClass: string;
-    if (cv < 0.5) xyzClass = "X";
-    else if (cv < 1.0) xyzClass = "Y";
-    else xyzClass = "Z";
+    const { xyzClass } = resolveAbcXyzClassification({ coefficientOfVariation: cv });
 
     await prisma.product.update({
       where: { id: productId },
