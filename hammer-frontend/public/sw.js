@@ -1,8 +1,20 @@
 // Hammer POS — Service Worker (app shell cache)
 // Caches the POS page and its static assets so the app loads without network.
 // API calls are intentionally NOT intercepted — the React layer handles offline data.
-
-const CACHE = "hammer-pos-v1";
+//
+// Bug reportado: un despliegue nuevo en el servidor no se veía reflejado en
+// el navegador. Causa real: CACHE era un string fijo que nunca cambiaba
+// entre despliegues — el `activate` de abajo solo borra los buckets de
+// caché que NO se llamen como `CACHE`, así que si el nombre nunca cambia,
+// nunca se purga nada y un cliente que ya tenía la app abierta puede seguir
+// sirviendo el HTML/JS viejo desde su caché local indefinidamente.
+//
+// IMPORTANTE: subir este número EN CADA despliegue que necesite forzar a los
+// navegadores ya abiertos a refrescar. layout.tsx registra este archivo con
+// `updateViaCache: "none"` para que el navegador siempre revise bytes
+// frescos de ESTE archivo (nunca desde su propio caché HTTP) — así el
+// cambio de versión se detecta de forma confiable.
+const CACHE = "hammer-pos-v2";
 const PRECACHE = ["/"];
 
 self.addEventListener("install", (event) => {

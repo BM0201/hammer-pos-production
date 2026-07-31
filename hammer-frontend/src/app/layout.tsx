@@ -37,11 +37,16 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             __html: `(function(){try{var t=localStorage.getItem('hammer-theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();`,
           }}
         />
-        {/* Register service worker for offline POS support */}
+        {/* Register service worker for offline POS support.
+            updateViaCache:"none" — el navegador NUNCA debe servir sw.js desde
+            su propio caché HTTP al chequear si hay una versión nueva; sin
+            esto, un despliegue nuevo podía tardar mucho (o nunca, en una
+            sesión larga) en detectarse, dejando clientes viendo la app vieja
+            aunque el servidor ya tuviera el código nuevo. */}
         <script
           nonce={nonce}
           dangerouslySetInnerHTML={{
-            __html: `if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}`,
+            __html: `if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'}).then(function(reg){reg.update();}).catch(function(){});}`,
           }}
         />
         {children}
