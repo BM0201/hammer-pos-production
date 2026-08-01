@@ -1037,16 +1037,32 @@ export async function openOperationalDay(input: { branchId: string; businessDate
 
     // Guard 1 — Stale OPEN day from a *previous* businessDate.
     // getOpenOperationalDayForBranchTx matches any OPEN day regardless of date,
-    // so a leftover day from yesterday silently blocked opening today's day with
-    // a misleading "ya existe un dia abierto". Distinguish the two cases:
+    // so a leftover day from yesterday used to silently block opening today's
+    // day with a misleading "ya existe un dia abierto" — or, after a partial
+    // Fase 5, a hard STALE_OPERATIONAL_DAY_OPEN wall that forced a Master
+    // through the force-cleanup tool just to start a normal morning. Fase 5
+    // already made every OTHER entry point (ensureOpenOperationalDayTx /
+    // resolveOpenOperationalDayForOperationTx, used by cash-session-open and
+    // sales) sweep a stale day to PENDING_CLOSE transparently and keep going —
+    // this direct/manual path (the Master "Abrir dia operativo" button, and
+    // the auto-open cron) never got the same treatment. Bring it in line:
     //  - same businessDate that is OPEN → genuinely already open today.
-    //  - different (older) businessDate that is OPEN → stale; needs Master cleanup.
+    //  - a PAST businessDate that is OPEN (< real today) → genuinely stale;
+    //    sweep it out of the way (nothing is lost, it waits in Pendiente de
+    //    cierre) and continue opening the requested date.
+    //  - anything else (today's or a future live day, different from the
+    //    date being requested) → never auto-sweep an active day; keep the
+    //    hard block so a Master override can't silently corrupt live data.
     const openDay = await getOpenOperationalDayForBranchTx(tx, input.branchId);
     if (openDay) {
       if (openDay.businessDate.getTime() === businessDate.getTime()) {
         throw new Error("OPERATIONAL_DAY_ALREADY_OPEN");
       }
-      throw new Error("STALE_OPERATIONAL_DAY_OPEN");
+      if (openDay.businessDate.getTime() < today.getTime()) {
+        await sweepDayToPendingCloseTx(tx, openDay, input.actorUserId);
+      } else {
+        throw new Error("STALE_OPERATIONAL_DAY_OPEN");
+      }
     }
 
     // Guard 2 — A day already exists for this businessDate but is NOT open

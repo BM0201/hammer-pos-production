@@ -153,16 +153,12 @@ export async function autoOpenOperationalDays(input: { now?: Date; dryRun?: bool
         continue;
       }
 
-      const openDay = await prisma.operationalDay.findFirst({
-        where: { branchId: branch.id, status: OperationalDayStatus.OPEN },
-        select: { id: true, businessDate: true },
-      });
-
-      if (openDay) {
-        result.skipped++;
-        continue;
-      }
-
+      // No pre-check for a stale OPEN day from a previous businessDate here:
+      // openOperationalDay() (Fase 5) already sweeps it to PENDING_CLOSE and
+      // keeps going. Skipping here used to silently defer opening today's day
+      // to the next cron tick (up to 10 min later, or indefinitely if a human
+      // opens manually first and hits the same stale day) for no reason — the
+      // sweep is safe and instantaneous.
       if (!dryRun) {
         await openOperationalDay({ branchId: branch.id, actorUserId: "SYSTEM", notes: "Apertura automática por horario." });
       }

@@ -47,6 +47,55 @@ describe("O.9/I apertura: rol y fecha (Managua)", () => {
   });
 });
 
+// ─── Guard 1 / openOperationalDay: día OPEN viejo NUNCA bloquea la apertura ──
+//
+// Bug reportado: abrir el día siguiente (botón "Abrir día operativo" del
+// Master, o el cron de auto-apertura) exigía en la práctica resolver el día
+// de ayer primero — resolveOpenOperationalDayForOperationTx (usado por venta
+// y apertura de caja) ya barría un día OPEN viejo a PENDING_CLOSE sin
+// bloquear nada (Fase 5), pero este mismo camino directo se había quedado
+// con el comportamiento viejo: lanzaba STALE_OPERATIONAL_DAY_OPEN y exigía
+// pasar por el force-cleanup (Master, nota obligatoria) para algo que debería
+// ser rutina de cada mañana. Corregido para barrer el día viejo igual que
+// todos los demás caminos — solo se mantiene el bloqueo si el día OPEN
+// existente es de HOY o de una fecha futura (una apertura en curso real, que
+// jamás debe barrerse por accidente).
+
+describe("Guard 1 openOperationalDay: día OPEN viejo se barre, nunca bloquea", () => {
+  type GuardAction = "NONE" | "ALREADY_OPEN" | "SWEEP_AND_CONTINUE" | "STALE_BLOCK";
+
+  // Espejo de Guard 1 en openOperationalDay (post-fix).
+  function guard1(input: { openDayBusinessDate: number | null; targetBusinessDate: number; today: number }): GuardAction {
+    if (input.openDayBusinessDate === null) return "NONE";
+    if (input.openDayBusinessDate === input.targetBusinessDate) return "ALREADY_OPEN";
+    if (input.openDayBusinessDate < input.today) return "SWEEP_AND_CONTINUE";
+    return "STALE_BLOCK";
+  }
+
+  const today = 2000;
+
+  it("sin día OPEN previo → sigue de largo", () => {
+    assert.equal(guard1({ openDayBusinessDate: null, targetBusinessDate: today, today }), "NONE");
+  });
+
+  it("día OPEN de la misma fecha solicitada → ya está abierto (conflicto real)", () => {
+    assert.equal(guard1({ openDayBusinessDate: today, targetBusinessDate: today, today }), "ALREADY_OPEN");
+  });
+
+  it("día OPEN de ayer (o antes), abriendo hoy → se barre a PENDING_CLOSE y continúa, nunca bloquea", () => {
+    assert.equal(guard1({ openDayBusinessDate: today - 1, targetBusinessDate: today, today }), "SWEEP_AND_CONTINUE");
+    assert.equal(guard1({ openDayBusinessDate: today - 30, targetBusinessDate: today, today }), "SWEEP_AND_CONTINUE");
+  });
+
+  it("día OPEN de HOY, pero el Master pide abrir OTRA fecha (override) → bloquea (no barre una apertura en curso)", () => {
+    assert.equal(guard1({ openDayBusinessDate: today, targetBusinessDate: today + 5, today }), "STALE_BLOCK");
+  });
+
+  it("día OPEN futuro, pidiendo abrir hoy → bloquea (no barre una apertura futura en curso)", () => {
+    assert.equal(guard1({ openDayBusinessDate: today + 1, targetBusinessDate: today, today }), "STALE_BLOCK");
+  });
+});
+
 // ─── O.11 / J: reapertura segura ─────────────────────────────────────────────
 
 describe("O.11/J reapertura: nota, sin otro día activo, estado destino", () => {
