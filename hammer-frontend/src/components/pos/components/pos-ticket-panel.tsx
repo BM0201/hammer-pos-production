@@ -59,6 +59,9 @@ export function PosTicketPanel({
   orderStatusLabel,
   hasTicketLines,
   ticketLines,
+  lineDraftQuantities,
+  lineQuantityErrors,
+  setLineDraftQuantities,
   lineUpdatingId,
   isSubmittingPayment,
   isBusy,
@@ -123,70 +126,108 @@ export function PosTicketPanel({
                 const qty = Number(line.quantity);
                 const busy = lineUpdatingId === line.id || isSubmittingPayment;
 
+                const draftValue = lineDraftQuantities[line.id] ?? (qty % 1 === 0 ? String(qty) : qty.toFixed(2));
+                const lineError = lineQuantityErrors[line.id];
+
+                function commitDraft() {
+                  const parsed = Number(draftValue);
+                  // Evita un PATCH innecesario cuando el valor no cambió (ej. blur sin editar).
+                  if (Number.isFinite(parsed) && parsed === qty) return;
+                  commitLineQuantity(line);
+                }
+
                 return (
-                  <div
-                    key={line.id}
-                    className="flex items-center gap-2 border-b border-[var(--color-border)] py-2.5"
-                  >
-                    {/* Product info */}
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13.5px] font-medium leading-tight text-[var(--color-text)]">
-                        {line.product?.name ?? line.productId}
+                  <div key={line.id} className="border-b border-[var(--color-border)] py-2.5">
+                    <div className="flex items-center gap-2">
+                      {/* Product info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13.5px] font-medium leading-tight text-[var(--color-text)]">
+                          {line.product?.name ?? line.productId}
+                        </div>
+                        <div className="text-[11px] text-[var(--color-text-muted)]">
+                          C$ {Number(line.unitPrice).toFixed(2)} c/u
+                          {Number(line.discountAmount) > 0
+                            ? ` · -C$ ${Number(line.discountAmount).toFixed(2)}`
+                            : ""}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-[var(--color-text-muted)]">
-                        C$ {Number(line.unitPrice).toFixed(2)} c/u
-                        {Number(line.discountAmount) > 0
-                          ? ` · -C$ ${Number(line.discountAmount).toFixed(2)}`
-                          : ""}
-                      </div>
-                    </div>
 
-                    {/* Stepper */}
-                    <div className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-1">
-                      <button
-                        type="button"
-                        aria-label="Reducir cantidad"
-                        className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
-                        disabled={busy}
-                        onClick={() => {
-                          if (qty <= 1) removeLine(line.id);
-                          else commitLineQuantity(line, qty - 1, true);
-                        }}
-                        data-testid={`pos-line-dec-${line.id}`}
-                      >
-                        −
-                      </button>
-                      <span className="min-w-[20px] text-center text-[13.5px] font-medium tabular-nums text-[var(--color-text)]">
-                        {qty % 1 === 0 ? qty : qty.toFixed(2)}
+                      {/* Stepper + entrada directa de cantidad */}
+                      <div className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-1">
+                        <button
+                          type="button"
+                          aria-label="Reducir cantidad"
+                          className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                          disabled={busy}
+                          onClick={() => {
+                            if (qty <= 1) removeLine(line.id);
+                            else commitLineQuantity(line, qty - 1, true);
+                          }}
+                          data-testid={`pos-line-dec-${line.id}`}
+                        >
+                          −
+                        </button>
+                        {/* Tocar y escribir directo evita tener que tocar la flecha
+                            muchas veces para cantidades grandes (ej. 20). */}
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          aria-label="Cantidad"
+                          className="w-9 border-0 bg-transparent p-0 text-center text-[13.5px] font-medium tabular-nums text-[var(--color-text)] outline-none disabled:opacity-60"
+                          value={draftValue}
+                          disabled={busy}
+                          onFocus={(event) => event.target.select()}
+                          onChange={(event) => {
+                            const raw = event.target.value;
+                            if (/^\d*\.?\d*$/.test(raw)) {
+                              setLineDraftQuantities((prev) => ({ ...prev, [line.id]: raw }));
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              commitDraft();
+                              event.currentTarget.blur();
+                            }
+                          }}
+                          onBlur={commitDraft}
+                          data-testid={`pos-line-qty-${line.id}`}
+                        />
+                        <button
+                          type="button"
+                          aria-label="Aumentar cantidad"
+                          className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                          disabled={busy}
+                          onClick={() => commitLineQuantity(line, qty + 1, true)}
+                          data-testid={`pos-line-inc-${line.id}`}
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      {/* Line total */}
+                      <span className="min-w-[64px] text-right text-[13px] font-semibold tabular-nums text-[var(--color-text)]">
+                        C$ {Number(line.lineSubtotal).toFixed(2)}
                       </span>
+
+                      {/* Remove */}
                       <button
                         type="button"
-                        aria-label="Aumentar cantidad"
-                        className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                        aria-label="Eliminar línea"
+                        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-[var(--color-text-soft)] transition-colors hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)] disabled:opacity-40"
                         disabled={busy}
-                        onClick={() => commitLineQuantity(line, qty + 1, true)}
-                        data-testid={`pos-line-inc-${line.id}`}
+                        onClick={() => removeLine(line.id)}
+                        data-testid={`pos-line-remove-${line.id}`}
                       >
-                        +
+                        <X className="h-3.5 w-3.5" />
                       </button>
                     </div>
 
-                    {/* Line total */}
-                    <span className="min-w-[64px] text-right text-[13px] font-semibold tabular-nums text-[var(--color-text)]">
-                      C$ {Number(line.lineSubtotal).toFixed(2)}
-                    </span>
-
-                    {/* Remove */}
-                    <button
-                      type="button"
-                      aria-label="Eliminar línea"
-                      className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-[var(--color-text-soft)] transition-colors hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)] disabled:opacity-40"
-                      disabled={busy}
-                      onClick={() => removeLine(line.id)}
-                      data-testid={`pos-line-remove-${line.id}`}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
+                    {lineError ? (
+                      <p className="mt-1 text-right text-[11px] font-medium text-[var(--color-danger-600)]">
+                        {lineError}
+                      </p>
+                    ) : null}
                   </div>
                 );
               })}
