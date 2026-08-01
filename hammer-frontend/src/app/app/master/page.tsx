@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
 import toast from "react-hot-toast";
 import {
-  Building2,
   Users,
   Wallet,
   CircleDot,
@@ -30,6 +29,7 @@ import {
   Receipt,
   Printer,
   ShoppingCart,
+  ChevronDown,
   type LucideIcon,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
@@ -333,6 +333,112 @@ function SectionHeader({
   );
 }
 
+/**
+ * Título de sección quieto: texto normal (no eyebrow uppercase), conteo
+ * opcional al lado, sin la línea horizontal de ancho completo. Reemplaza a
+ * SectionHeader en las secciones que no son un panel con tabla (Sucursales,
+ * Gestión rápida) — ver PanelHeader para los paneles con tabla.
+ */
+function SectionTitle({
+  title,
+  count,
+  action,
+}: {
+  title: string;
+  count?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex items-baseline gap-2 mb-2.5">
+      <h2 className="text-[13.5px] font-bold text-[var(--color-text)]">{title}</h2>
+      {count && <span className="font-mono text-[11px] text-[var(--color-text-soft)]">{count}</span>}
+      <div className="flex-1" />
+      {action}
+    </div>
+  );
+}
+
+/**
+ * Header de panel unificado (Cierres de Caja, Usuarios conectados, Gestión
+ * de Facturas): icono + título + subtítulo opcional a la izquierda,
+ * controles (tabs, filtros, acciones) a la derecha en una sola fila que
+ * envuelve en pantallas chicas.
+ */
+function PanelHeader({
+  icon: Icon,
+  title,
+  subtitle,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  subtitle?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--color-border)] flex-wrap">
+      <div className="flex items-center gap-2">
+        <Icon className="h-4 w-4 text-[var(--color-text-muted)] flex-shrink-0" />
+        <div>
+          <span className="text-[12.5px] font-bold text-[var(--color-text)]">{title}</span>
+          {subtitle && <p className="text-[10px] text-[var(--color-text-muted)]">{subtitle}</p>}
+        </div>
+      </div>
+      {children && <div className="flex items-center gap-2 flex-wrap">{children}</div>}
+    </div>
+  );
+}
+
+/**
+ * Tabs segmentados reutilizables (píldora con fondo alterno, activo =
+ * superficie + sombra) — mismo lenguaje visual en Cierres de Caja y
+ * Gestión de Facturas en vez de que cada panel invente su propio estilo.
+ */
+function SegmentedTabs<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { key: T; label: string; count?: number }[];
+  value: T;
+  onChange: (key: T) => void;
+}) {
+  return (
+    <div
+      className="inline-flex items-center gap-0.5 rounded-lg border border-[var(--color-border)] p-0.5"
+      style={{ background: "var(--color-surface-alt)" }}
+    >
+      {options.map((opt) => {
+        const active = opt.key === value;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            onClick={() => onChange(opt.key)}
+            className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors"
+            style={active
+              ? { background: "var(--color-surface)", color: "var(--color-text)", boxShadow: "var(--shadow-card)" }
+              : { color: "var(--color-text-muted)" }}
+          >
+            {opt.label}
+            {opt.count !== undefined && (
+              <span
+                className="rounded-full px-1.5 font-mono text-[9.5px]"
+                style={{
+                  background: active ? "var(--color-surface-alt)" : "var(--color-border)",
+                  color: active ? "var(--color-text)" : "var(--color-text-muted)",
+                }}
+              >
+                {opt.count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function KpiV7({
   label,
   value,
@@ -490,34 +596,54 @@ function AttentionStrip({ items }: { items: AttentionItem[] }) {
 /* ── Desglose global de cobros del día por método ── */
 
 function PaymentMethodsStrip({ totals }: { totals: CommandCenter["totals"] }) {
-  const entries: Array<{ label: string; value: number; highlight?: boolean }> = [
-    { label: "Efectivo neto", value: totals.cashTenderNetTotal },
-    { label: "Tarjeta", value: totals.cardTenderTotal },
-    { label: "Transferencia", value: totals.transferTenderTotal },
-    { label: "Otros", value: totals.otherTenderTotal },
-    { label: "Pago pendiente", value: totals.pendingPaymentTotal, highlight: totals.pendingPaymentTotal > 0 },
+  const segments: Array<{ label: string; value: number; color: string; warn?: boolean }> = [
+    { label: "Efectivo neto", value: totals.cashTenderNetTotal, color: "var(--color-success-600)" },
+    { label: "Tarjeta", value: totals.cardTenderTotal, color: "var(--color-master-600)" },
+    { label: "Transferencia", value: totals.transferTenderTotal, color: "var(--color-info-600)" },
+    { label: "Otros", value: totals.otherTenderTotal, color: "var(--color-text-soft)" },
+    { label: "Pendiente", value: totals.pendingPaymentTotal, color: "var(--color-warning-600)", warn: true },
   ];
+  const collectedTotal = totals.cashTenderNetTotal + totals.cardTenderTotal + totals.transferTenderTotal + totals.otherTenderTotal;
+  const barTotal = collectedTotal + totals.pendingPaymentTotal;
+
   return (
     <div
       className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-4 py-3"
       style={{ boxShadow: "var(--shadow-card)" }}
     >
-      <div className="flex items-center gap-2 mb-2">
+      <div className="flex items-center gap-2 mb-2.5">
         <CreditCard className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
-        <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-secondary)]">
-          Cobros del día por método
-        </span>
+        <span className="text-[11.5px] font-semibold text-[var(--color-text)]">Cobros del día</span>
+        <span className="font-mono text-[11px] text-[var(--color-text-soft)]">· {money(collectedTotal)}</span>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-x-4 gap-y-2">
-        {entries.map((entry) => (
-          <div key={entry.label}>
-            <p className="text-[10px] font-medium text-[var(--color-text-muted)]">{entry.label}</p>
-            <p
-              className="font-mono text-[14px] font-bold"
-              style={{ color: entry.highlight ? "var(--color-warning-700)" : "var(--color-text)" }}
+
+      {/* Barra de composición — la proporción es el dato, la dice mejor que una lista de números */}
+      <div className="h-[9px] rounded-full overflow-hidden flex mb-2.5" style={{ background: "var(--color-surface-alt)" }}>
+        {barTotal > 0 ? (
+          segments
+            .filter((s) => s.value > 0)
+            .map((s) => (
+              <div
+                key={s.label}
+                title={`${s.label}: ${money(s.value)}`}
+                style={{ width: `${(s.value / barTotal) * 100}%`, background: s.color }}
+              />
+            ))
+        ) : null}
+      </div>
+
+      {/* Leyenda compacta */}
+      <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+        {segments.map((s) => (
+          <div key={s.label} className="flex items-center gap-1.5">
+            <span className="h-2 w-2 flex-shrink-0 rounded-[2px]" style={{ background: s.color }} />
+            <span className="text-[11px] text-[var(--color-text-muted)]">{s.label}</span>
+            <span
+              className="font-mono text-[11.5px] font-bold"
+              style={{ color: s.warn && s.value > 0 ? "var(--color-warning-700)" : "var(--color-text)" }}
             >
-              {money(entry.value)}
-            </p>
+              {money(s.value)}
+            </span>
           </div>
         ))}
       </div>
@@ -814,83 +940,64 @@ function InvoicesManagementCard({
       className="rounded-lg border border-[var(--color-border-strong)] overflow-hidden bg-[var(--color-surface)]"
       style={{ boxShadow: "var(--shadow-card)" }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-wrap gap-3">
-        <div className="flex items-center gap-2">
-          <FileText className="h-4 w-4 text-[var(--color-text-muted)]" />
-          <div>
-            <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--color-text)]">
-              Gestión de Facturas
-            </span>
-            <p className="text-[10px] text-[var(--color-text-muted)]">
-              {activeOrders.length} activas
-              {branchId ? ` · ${branches.find((b) => b.branchId === branchId)?.branchCode ?? ""}` : ""}
-              {" "}· total {money(totalActive)}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <select
-            value={branchId}
-            onChange={(e) => setBranchId(e.target.value)}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-text)]"
-            style={{ borderRadius: 4 }}
-          >
-            <option value="">Todas las sucursales</option>
-            {branches.map((b) => (
-              <option key={b.branchId} value={b.branchId}>{b.branchCode} — {b.branchName}</option>
-            ))}
-          </select>
-          <div className="inline-flex items-center overflow-hidden rounded border border-[var(--color-border)]">
-            {([
-              { key: "ALL", label: "Todas" },
-              { key: "INVOICES", label: "Facturas" },
-              { key: "SALES", label: "Ventas" },
-            ] as { key: DocTypeFilter; label: string }[]).map(({ key, label }, i) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setDocType(key)}
-                className="px-2.5 py-1 text-xs transition-colors"
-                style={{
-                  borderLeft: i > 0 ? "1px solid var(--color-border)" : undefined,
-                  background: docType === key ? "var(--color-surface-alt)" : "transparent",
-                  color: docType === key ? "var(--color-text)" : "var(--color-text-secondary)",
-                  fontWeight: docType === key ? 600 : 400,
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <input
-            type="date" value={date} max={todayManaguaYmd()}
-            onChange={(e) => setDate(e.target.value)}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-text)]"
-            style={{ borderRadius: 4 }}
-          />
-          <button
-            onClick={() => setShowCancelled((v) => !v)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs border transition-colors"
-            style={{
-              borderRadius: 4,
-              borderColor: showCancelled ? "var(--color-border-mid)" : "var(--color-border)",
-              background: showCancelled ? "var(--color-surface)" : "transparent",
-              color: "var(--color-text-secondary)",
-            }}
-          >
-            {showCancelled ? "Ocultar anuladas" : `Mostrar anuladas (${cancelledCount})`}
-          </button>
-          <button
-            onClick={() => loadOrders()}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs border border-[var(--color-border)] hover:bg-[var(--color-surface)] transition-colors text-[var(--color-text-secondary)]"
-            style={{ borderRadius: 4 }}
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            Actualizar
-          </button>
-        </div>
-      </div>
+      <PanelHeader
+        icon={FileText}
+        title="Gestión de Facturas"
+        subtitle={
+          <>
+            {activeOrders.length} activas
+            {branchId ? ` · ${branches.find((b) => b.branchId === branchId)?.branchCode ?? ""}` : ""}
+            {" "}· total {money(totalActive)}
+          </>
+        }
+      >
+        <select
+          value={branchId}
+          onChange={(e) => setBranchId(e.target.value)}
+          className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-text)]"
+          style={{ borderRadius: 4 }}
+        >
+          <option value="">Todas las sucursales</option>
+          {branches.map((b) => (
+            <option key={b.branchId} value={b.branchId}>{b.branchCode} — {b.branchName}</option>
+          ))}
+        </select>
+        <SegmentedTabs
+          options={[
+            { key: "ALL" as DocTypeFilter, label: "Todas" },
+            { key: "INVOICES" as DocTypeFilter, label: "Facturas" },
+            { key: "SALES" as DocTypeFilter, label: "Ventas" },
+          ]}
+          value={docType}
+          onChange={setDocType}
+        />
+        <input
+          type="date" value={date} max={todayManaguaYmd()}
+          onChange={(e) => setDate(e.target.value)}
+          className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-text)]"
+          style={{ borderRadius: 4 }}
+        />
+        <button
+          onClick={() => setShowCancelled((v) => !v)}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs border transition-colors"
+          style={{
+            borderRadius: 4,
+            borderColor: showCancelled ? "var(--color-border-mid)" : "var(--color-border)",
+            background: showCancelled ? "var(--color-surface)" : "transparent",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {showCancelled ? "Ocultar anuladas" : `Mostrar anuladas (${cancelledCount})`}
+        </button>
+        <button
+          onClick={() => loadOrders()}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs border border-[var(--color-border)] hover:bg-[var(--color-surface)] transition-colors text-[var(--color-text-secondary)]"
+          style={{ borderRadius: 4 }}
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          Actualizar
+        </button>
+      </PanelHeader>
 
       {error ? (
         <div className="px-5 py-8 text-center text-sm text-[var(--color-danger-600)]">{error}</div>
@@ -1217,6 +1324,150 @@ function InvoicesManagementCard({
   );
 }
 
+/* ── Branch card (fila horizontal, jerarquía real: Ventas hoy es la métrica
+ * hero, el resto es soporte compacto; Caja del día es un detalle plegable
+ * sin borde propio en vez de una tarjeta anidada) ── */
+
+function BranchCard({ branch: b, pct }: { branch: BranchBlock; pct: number }) {
+  const [cajaOpen, setCajaOpen] = useState(b.activeCashSessionIds.length > 0);
+  const dayOpen = b.operationalDay?.status === "OPEN";
+  const hasDiff = b.operationalDay?.cashDifferenceTotal !== null && b.operationalDay?.cashDifferenceTotal !== undefined;
+
+  return (
+    <div
+      className="flex-none w-[280px] rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-3.5"
+      style={{ boxShadow: "var(--shadow-card)" }}
+    >
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-2.5">
+        <span
+          className="text-[10px] font-bold tracking-[0.12em] px-1.5 py-0.5 border"
+          style={{
+            fontFamily: "'DM Mono', monospace",
+            borderRadius: 3,
+            color: "var(--color-text)",
+            background: "var(--color-surface)",
+            borderColor: "var(--color-border-mid)",
+          }}
+        >
+          {b.branchCode}
+        </span>
+        {b.pendingReviewSessions > 0 ? (
+          <Badge
+            variant="danger"
+            title="Cajas auto-cerradas por horario que esperan que Master revise/confirme el efectivo."
+          >
+            {b.pendingReviewSessions} por revisar
+          </Badge>
+        ) : b.reconcilingSessions > 0 ? (
+          <Badge
+            variant="warning"
+            title="Cierre a medias: el cajero presionó “Solicitar cierre” y está contando el efectivo, pero falta confirmar el monto final. Bloquea el cierre del día hasta completarlo."
+          >
+            {b.reconcilingSessions} en conciliación
+          </Badge>
+        ) : dayOpen ? (
+          <Badge variant="success">Activa</Badge>
+        ) : (
+          <Badge variant="neutral">Inactiva</Badge>
+        )}
+      </div>
+
+      <div className="text-[15px] font-bold text-[var(--color-text)] mb-0.5">{b.branchName}</div>
+      <div className="text-[11px] text-[var(--color-text-muted)] mb-3">
+        {b.boxesTotal} {b.boxesTotal === 1 ? "caja" : "cajas"} ·{" "}
+        {b.operationalDay
+          ? `Día ${DAY_STATUS_LABELS[b.operationalDay.status] ?? b.operationalDay.status}`
+          : "Sin día operativo"}
+      </div>
+
+      {/* Hero metric — Ventas hoy */}
+      <div className="mb-2">
+        <p className="text-[10px] font-semibold text-[var(--color-text-muted)]">Ventas hoy</p>
+        <p
+          className="text-[22px] font-bold leading-tight text-[var(--color-text)]"
+          style={{ fontFamily: "'DM Mono', monospace", letterSpacing: "-0.01em" }}
+        >
+          {money(b.salesToday)}
+        </p>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-[3px] rounded-sm overflow-hidden mb-2.5" style={{ background: "var(--color-border)" }}>
+        <div
+          className="h-full transition-all duration-500"
+          style={{
+            width: `${pct}%`,
+            background: b.salesToday > 0 ? "linear-gradient(90deg, color-mix(in srgb, var(--color-master-600) 65%, transparent), var(--color-master-500))" : "transparent",
+            borderRadius: 2,
+          }}
+        />
+      </div>
+
+      {/* Support rows — soporte compacto, menos peso que el hero */}
+      <div className="space-y-1.5 mb-1">
+        {([
+          ["Cajas abiertas", `${b.openSessions} / ${b.boxesTotal}`],
+          ["Efectivo esperado", money(b.expectedCashOnHand)],
+          ["Utilidad est.", b.estimatedGrossProfit === null ? "N/D" : money(b.estimatedGrossProfit)],
+        ] as [string, string][]).map(([label, value]) => (
+          <div key={label} className="flex items-center justify-between">
+            <span className="text-[11px] text-[var(--color-text-soft)]">{label}</span>
+            <span
+              className="text-[11.5px] font-semibold text-[var(--color-text-secondary)]"
+              style={{ fontFamily: "'DM Mono', monospace" }}
+            >
+              {value}
+            </span>
+          </div>
+        ))}
+        {hasDiff && (
+          <div className="flex items-center justify-between pt-1.5 mt-1 border-t border-[var(--color-border)]">
+            <span className="text-[11px] font-medium text-[var(--color-text-muted)]">Diferencia de caja</span>
+            <span
+              className="text-[12px] font-semibold"
+              style={{
+                fontFamily: "'DM Mono', monospace",
+                color: Math.abs(b.operationalDay!.cashDifferenceTotal!) < 0.01 ? "var(--color-success-700)" : "var(--color-danger-600)",
+              }}
+            >
+              {money(b.operationalDay!.cashDifferenceTotal!)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Caja del día — detalle plegable, sin borde propio (de-anidado) */}
+      <button
+        type="button"
+        onClick={() => setCajaOpen((v) => !v)}
+        className="w-full flex items-center justify-between border-t border-[var(--color-border)] pt-2 mt-1.5 text-[11px] font-semibold text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-secondary)]"
+        aria-expanded={cajaOpen}
+      >
+        <span>Caja del día · {b.activeCashSessionIds.length} activa(s)</span>
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${cajaOpen ? "rotate-180" : ""}`} />
+      </button>
+      {cajaOpen && (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2">
+          {([
+            ["Apertura", money(b.openingCashTotal)],
+            ["Efectivo neto", money(b.cashTenderNetTotal)],
+            ["Movimientos", money(b.cashMovementsNet)],
+            ["Egresos", b.cashOutflowsTotal > 0 ? `- ${money(b.cashOutflowsTotal)}` : money(0)],
+            ["Tarjeta", money(b.cardTenderTotal)],
+            ["Transferencia", money(b.transferTenderTotal)],
+          ] as [string, string][]).map(([label, value]) => (
+            <div key={label} className="flex items-center justify-between gap-1">
+              <span className="text-[10px] text-[var(--color-text-soft)] truncate">{label}</span>
+              <span className="text-[10px] text-[var(--color-text-secondary)] flex-shrink-0 font-mono">{value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Page ── */
 
 type ClosureTab = "pending" | "completedToday" | "history";
@@ -1329,41 +1580,19 @@ export default function MasterCommandCenterPage() {
   return (
     <section className="space-y-6 animate-fade-in-up">
 
-      {/* ── Page header ── */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3">
-          <span className="relative flex h-2 w-2 flex-shrink-0 mt-1">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: "var(--v7-success)" }} />
-            <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: "var(--v7-success)" }} />
+      {/* ── Indicador en vivo — compacto, no título (el título vive en el chrome "Centro Master") ── */}
+      <div className="flex items-center gap-3">
+        <span className="relative flex h-[7px] w-[7px] flex-shrink-0">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: "var(--color-success-600)" }} />
+          <span className="relative inline-flex rounded-full h-[7px] w-[7px]" style={{ background: "var(--color-success-600)" }} />
+        </span>
+        <span className="text-[11.5px] font-bold" style={{ color: "var(--color-success-700)" }}>En vivo</span>
+        {data.generatedAt && (
+          <span className="font-mono text-[11px] text-[var(--color-text-soft)]">
+            · actualizado {localDateTime(data.generatedAt)}
           </span>
-          <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text)]">
-                Centro de Comando
-              </h1>
-              <span
-                className="text-[9px] font-bold uppercase tracking-[0.1em] px-1.5 py-0.5 border"
-                style={{
-                  fontFamily: "'DM Mono', monospace",
-                  borderRadius: 3,
-                  color: "var(--v7-success)",
-                  background: "rgba(45,125,70,0.08)",
-                  borderColor: "rgba(45,125,70,0.2)",
-                }}
-              >
-                En vivo
-              </span>
-            </div>
-            <p className="text-sm text-[var(--color-text-muted)] mt-0.5">
-              Visibilidad global de operaciones, cajas y personal activo
-            </p>
-            {data.generatedAt && (
-              <p className="font-mono text-[10px] text-[var(--color-text-muted)] mt-1">
-                Actualizado: {localDateTime(data.generatedAt)}
-              </p>
-            )}
-          </div>
-        </div>
+        )}
+        <div className="flex-1" />
         <button
           onClick={() => load(true)}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] transition-colors"
@@ -1419,162 +1648,44 @@ export default function MasterCommandCenterPage() {
       {/* ── Cobros del día por método (datos globales ya calculados) ── */}
       <PaymentMethodsStrip totals={totals} />
 
-      {/* ── Gestión rápida ── */}
+      {/* ── Gestión rápida — fila de accesos compactos, no tarjetas idénticas ── */}
       <div>
-        <SectionHeader icon={Settings} title="Gestión rápida" aside="acceso directo" />
-        <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+        <SectionTitle title="Gestión rápida" />
+        <div className="flex flex-wrap gap-2">
           {MANAGEMENT_LINKS.map((item) => {
             const Icon = item.icon;
             return (
               <Link
                 key={item.href}
                 href={item.href as Route}
-                className="group flex flex-col gap-2 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-3.5 transition-all hover:bg-[var(--color-surface-alt)] hover:shadow-[var(--shadow-card-hover)]"
+                title={item.description}
+                className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 py-2 text-[12.5px] font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)]"
               >
-                <Icon className="h-[18px] w-[18px] text-[var(--color-text-secondary)]" />
-                <div className="text-[13px] font-semibold text-[var(--color-text)]">{item.label}</div>
-                <div className="text-[11px] text-[var(--color-text-muted)] leading-snug">{item.description}</div>
+                <Icon className="h-[14px] w-[14px] text-[var(--color-text-muted)]" />
+                {item.label}
               </Link>
             );
           })}
         </div>
       </div>
 
-      {/* ── Branch grid ── */}
+      {/* ── Sucursales — fila horizontal con scroll, escala a N sin romper el layout ── */}
       <div>
-        <SectionHeader icon={Building2} title="Sucursales" aside={`${byBranch.length} registradas`} />
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {byBranch.map((b) => {
-            const pct = Math.round((b.salesToday / maxSales) * 100);
-            const dayOpen = b.operationalDay?.status === "OPEN";
-            return (
-              <div
-                key={b.branchId}
-                className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-3.5"
-                style={{ boxShadow: "var(--shadow-card)" }}
-              >
-                {/* Header row */}
-                <div className="flex items-center justify-between mb-2.5">
-                  <span
-                    className="text-[10px] font-bold tracking-[0.12em] px-1.5 py-0.5 border"
-                    style={{
-                      fontFamily: "'DM Mono', monospace",
-                      borderRadius: 3,
-                      color: "var(--color-text)",
-                      background: "var(--color-surface)",
-                      borderColor: "var(--color-border-mid)",
-                    }}
-                  >
-                    {b.branchCode}
-                  </span>
-                  {b.pendingReviewSessions > 0 ? (
-                    <Badge
-                      variant="danger"
-                      title="Cajas auto-cerradas por horario que esperan que Master revise/confirme el efectivo."
-                    >
-                      {b.pendingReviewSessions} por revisar
-                    </Badge>
-                  ) : b.reconcilingSessions > 0 ? (
-                    <Badge
-                      variant="warning"
-                      title="Cierre a medias: el cajero presionó “Solicitar cierre” y está contando el efectivo, pero falta confirmar el monto final. Bloquea el cierre del día hasta completarlo."
-                    >
-                      {b.reconcilingSessions} en conciliación
-                    </Badge>
-                  ) : dayOpen ? (
-                    <Badge variant="success">Activa</Badge>
-                  ) : (
-                    <Badge variant="neutral">Inactiva</Badge>
-                  )}
-                </div>
-
-                <div className="text-[15px] font-bold text-[var(--color-text)] mb-0.5">{b.branchName}</div>
-                <div className="text-[11px] text-[var(--color-text-muted)] mb-3">
-                  {b.boxesTotal} {b.boxesTotal === 1 ? "caja" : "cajas"} ·{" "}
-                  {b.operationalDay
-                    ? `Día ${DAY_STATUS_LABELS[b.operationalDay.status] ?? b.operationalDay.status}`
-                    : "Sin día operativo"}
-                </div>
-
-                {/* Progress bar */}
-                <div className="h-[3px] rounded-sm overflow-hidden mb-3" style={{ background: "var(--color-border)" }}>
-                  <div
-                    className="h-full transition-all duration-500"
-                    style={{
-                      width: `${pct}%`,
-                      background: b.salesToday > 0 ? "linear-gradient(90deg, color-mix(in srgb, var(--color-master-600) 65%, transparent), var(--color-master-500))" : "transparent",
-                      borderRadius: 2,
-                    }}
-                  />
-                </div>
-
-                {/* Key data rows */}
-                <div className="space-y-1.5 mb-3">
-                  {[
-                    ["Ventas hoy", money(b.salesToday)],
-                    ["Cajas abiertas", `${b.openSessions} / ${b.boxesTotal}`],
-                    ["Efectivo esperado", money(b.expectedCashOnHand)],
-                    ["Utilidad est.", b.estimatedGrossProfit === null ? "N/D" : money(b.estimatedGrossProfit)],
-                  ].map(([label, value], i) => (
-                    <div key={label}>
-                      {i === 1 && <div className="h-px mb-1.5" style={{ background: "var(--color-border)" }} />}
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-medium text-[var(--color-text-muted)]">{label}</span>
-                        <span
-                          className="text-[12px] font-semibold text-[var(--color-text)]"
-                          style={{ fontFamily: "'DM Mono', monospace" }}
-                        >
-                          {value}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  {b.operationalDay?.cashDifferenceTotal !== null && b.operationalDay?.cashDifferenceTotal !== undefined && (
-                    <div className="flex items-center justify-between pt-1.5 border-t border-[var(--color-border)]">
-                      <span className="text-[11px] font-medium text-[var(--color-text-muted)]">Diferencia de caja</span>
-                      <span
-                        className="text-[12px] font-semibold"
-                        style={{
-                          fontFamily: "'DM Mono', monospace",
-                          color: Math.abs(b.operationalDay.cashDifferenceTotal) < 0.01 ? "var(--v7-success)" : "var(--v7-accent)",
-                        }}
-                      >
-                        {money(b.operationalDay.cashDifferenceTotal)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Cash breakdown */}
-                <div
-                  className="rounded-md border border-[var(--color-border)] p-2.5"
-                  style={{ background: "rgba(46,45,42,0.02)" }}
-                >
-                  <p
-                    className="text-[9px] font-bold uppercase tracking-[0.1em] text-[var(--color-text-muted)] mb-2"
-                    style={{ fontFamily: "'DM Mono', monospace" }}
-                  >
-                    Caja del día · {b.activeCashSessionIds.length} activa(s)
-                  </p>
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                    {([
-                      ["Apertura", money(b.openingCashTotal)],
-                      ["Efectivo neto", money(b.cashTenderNetTotal)],
-                      ["Movimientos", money(b.cashMovementsNet)],
-                      ["Egresos", b.cashOutflowsTotal > 0 ? `- ${money(b.cashOutflowsTotal)}` : money(0)],
-                      ["Tarjeta", money(b.cardTenderTotal)],
-                      ["Transferencia", money(b.transferTenderTotal)],
-                    ] as [string, string][]).map(([label, value]) => (
-                      <div key={label} className="flex items-center justify-between gap-1">
-                        <span className="text-[10px] text-[var(--color-text-muted)] truncate">{label}</span>
-                        <span className="text-[10px] text-[var(--color-text-secondary)] flex-shrink-0 font-mono">{value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        <SectionTitle title="Sucursales" count={`${byBranch.length} registradas`} />
+        <div className="flex gap-3 overflow-x-auto pb-1 stagger-children">
+          {byBranch.map((b) => (
+            <BranchCard key={b.branchId} branch={b} pct={Math.round((b.salesToday / maxSales) * 100)} />
+          ))}
+          <Link
+            href={"/app/master/branches" as Route}
+            className="flex-none w-[160px] flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border-strong)] px-3 py-3.5 text-center text-[11px] text-[var(--color-text-soft)] transition-colors hover:border-[var(--color-master-500)] hover:text-[var(--color-text-secondary)]"
+          >
+            <span className="text-[16px] leading-none">+</span>
+            <span>
+              Conectá más sucursales desde{" "}
+              <span className="font-semibold text-[var(--color-master-700)]">Sucursales →</span>
+            </span>
+          </Link>
         </div>
       </div>
 
@@ -1586,45 +1697,9 @@ export default function MasterCommandCenterPage() {
           className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] overflow-hidden"
           style={{ boxShadow: "var(--shadow-card)" }}
         >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-[var(--color-text-muted)]" />
-              <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--color-text)]">
-                Cierres de Caja
-              </span>
-            </div>
-            <div className="flex border border-[var(--color-border)] overflow-hidden" style={{ borderRadius: 4 }}>
-              {CLOSURE_TABS.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setTab(t.key)}
-                  className="flex items-center gap-1 px-2.5 py-1 transition-colors"
-                  style={{
-                    fontFamily: "'DM Mono', monospace",
-                    fontSize: 10,
-                    fontWeight: 700,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    background: tab === t.key ? "var(--color-ink, #2E2D2A)" : "transparent",
-                    color: tab === t.key ? "#F5F4F2" : "var(--color-text-muted)",
-                    borderRight: "1px solid var(--color-border)",
-                  }}
-                >
-                  {t.label}
-                  <span
-                    className="ml-1 px-1 rounded-full"
-                    style={{
-                      fontSize: 9,
-                      background: tab === t.key ? "rgba(255,255,255,0.2)" : "var(--color-border)",
-                      color: tab === t.key ? "#fff" : "var(--color-text-muted)",
-                    }}
-                  >
-                    {t.count}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <PanelHeader icon={Wallet} title="Cierres de Caja">
+            <SegmentedTabs options={CLOSURE_TABS} value={tab} onChange={setTab} />
+          </PanelHeader>
           <ClosuresTable
             rows={closureRows}
             showDifference={tab !== "pending"}
@@ -1639,19 +1714,11 @@ export default function MasterCommandCenterPage() {
           className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] overflow-hidden"
           style={{ boxShadow: "var(--shadow-card)" }}
         >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-[var(--color-text-muted)]" />
-              <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--color-text)]">
-                Usuarios conectados
-              </span>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <Badge variant="success">{users.summary.online} en línea</Badge>
-              <Badge variant="warning">{users.summary.idle} inactivos</Badge>
-              <Badge variant="neutral">{users.summary.offline} desconectados</Badge>
-            </div>
-          </div>
+          <PanelHeader icon={Users} title="Usuarios conectados">
+            <Badge variant="success">{users.summary.online} en línea</Badge>
+            <Badge variant="warning">{users.summary.idle} inactivos</Badge>
+            <Badge variant="neutral">{users.summary.offline} desconectados</Badge>
+          </PanelHeader>
           <Table>
             <THead>
               <TR>
