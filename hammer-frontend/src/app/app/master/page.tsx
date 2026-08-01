@@ -675,11 +675,18 @@ function printOrderDetail(d: OrderDetail) {
 
 /* ── Invoices management ── */
 
-function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => void; refreshKey?: string }) {
+type InvoiceBranchOption = { branchId: string; branchCode: string; branchName: string };
+type DocTypeFilter = "ALL" | "INVOICES" | "SALES";
+
+function InvoicesManagementCard({
+  onChanged, refreshKey, branches,
+}: { onChanged: () => void; refreshKey?: string; branches: InvoiceBranchOption[] }) {
   const [orders, setOrders] = useState<ManagedOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [date, setDate] = useState<string>(() => todayManaguaYmd());
+  const [branchId, setBranchId] = useState<string>("");
+  const [docType, setDocType] = useState<DocTypeFilter>("ALL");
   const [showCancelled, setShowCancelled] = useState(false);
   const [target, setTarget] = useState<ManagedOrder | null>(null);
   const [reason, setReason] = useState("");
@@ -699,7 +706,9 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
     const currentRequest = ++requestId.current;
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/master/sales-orders?date=${encodeURIComponent(date)}`);
+      const query = new URLSearchParams({ date });
+      if (branchId) query.set("branchId", branchId);
+      const res = await apiFetch(`/api/master/sales-orders?${query.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const data = unwrapApiData(json) as { orders: ManagedOrder[] };
@@ -712,7 +721,7 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
     } finally {
       if (mounted.current && currentRequest === requestId.current) setLoading(false);
     }
-  }, [date]);
+  }, [date, branchId]);
 
   useEffect(() => {
     mounted.current = true;
@@ -790,9 +799,14 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
     closeDetail(); setTarget(managed); setReason("");
   };
 
-  const visibleOrders = showCancelled ? orders : orders.filter((o) => o.status !== "CANCELLED");
-  const activeOrders = orders.filter((o) => o.status !== "CANCELLED");
-  const cancelledCount = orders.length - activeOrders.length;
+  const docFilteredOrders = orders.filter((o) => {
+    if (docType === "INVOICES") return o.requiresManualInvoice;
+    if (docType === "SALES") return !o.requiresManualInvoice;
+    return true;
+  });
+  const visibleOrders = showCancelled ? docFilteredOrders : docFilteredOrders.filter((o) => o.status !== "CANCELLED");
+  const activeOrders = docFilteredOrders.filter((o) => o.status !== "CANCELLED");
+  const cancelledCount = docFilteredOrders.length - activeOrders.length;
   const totalActive = activeOrders.reduce((acc, o) => acc + o.grandTotal, 0);
 
   return (
@@ -809,11 +823,46 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
               Gestión de Facturas
             </span>
             <p className="text-[10px] text-[var(--color-text-muted)]">
-              {activeOrders.length} activas · total {money(totalActive)}
+              {activeOrders.length} activas
+              {branchId ? ` · ${branches.find((b) => b.branchId === branchId)?.branchCode ?? ""}` : ""}
+              {" "}· total {money(totalActive)}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={branchId}
+            onChange={(e) => setBranchId(e.target.value)}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-[var(--color-text)]"
+            style={{ borderRadius: 4 }}
+          >
+            <option value="">Todas las sucursales</option>
+            {branches.map((b) => (
+              <option key={b.branchId} value={b.branchId}>{b.branchCode} — {b.branchName}</option>
+            ))}
+          </select>
+          <div className="inline-flex items-center overflow-hidden rounded border border-[var(--color-border)]">
+            {([
+              { key: "ALL", label: "Todas" },
+              { key: "INVOICES", label: "Facturas" },
+              { key: "SALES", label: "Ventas" },
+            ] as { key: DocTypeFilter; label: string }[]).map(({ key, label }, i) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setDocType(key)}
+                className="px-2.5 py-1 text-xs transition-colors"
+                style={{
+                  borderLeft: i > 0 ? "1px solid var(--color-border)" : undefined,
+                  background: docType === key ? "var(--color-surface-alt)" : "transparent",
+                  color: docType === key ? "var(--color-text)" : "var(--color-text-secondary)",
+                  fontWeight: docType === key ? 600 : 400,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <input
             type="date" value={date} max={todayManaguaYmd()}
             onChange={(e) => setDate(e.target.value)}
@@ -848,7 +897,11 @@ function InvoicesManagementCard({ onChanged, refreshKey }: { onChanged: () => vo
       ) : loading ? (
         <div className="px-5 py-8 text-center font-mono text-xs text-[var(--color-text-muted)] animate-pulse">Cargando facturas…</div>
       ) : visibleOrders.length === 0 ? (
-        <div className="py-8 text-center font-mono text-xs text-[var(--color-text-muted)]">Sin facturas para la fecha seleccionada.</div>
+        <div className="py-8 text-center font-mono text-xs text-[var(--color-text-muted)]">
+          {orders.length === 0
+            ? "Sin facturas para la fecha seleccionada."
+            : "Sin resultados con los filtros seleccionados."}
+        </div>
       ) : (
         <Table>
           <THead>
@@ -1640,7 +1693,11 @@ export default function MasterCommandCenterPage() {
       </div>
 
       {/* ── Gestión de facturas ── */}
-      <InvoicesManagementCard onChanged={() => load(true)} refreshKey={data.generatedAt} />
+      <InvoicesManagementCard
+        onChanged={() => load(true)}
+        refreshKey={data.generatedAt}
+        branches={data.byBranch.map((b) => ({ branchId: b.branchId, branchCode: b.branchCode, branchName: b.branchName }))}
+      />
 
       {/* ── Difference modal ── */}
       {differenceTarget && (
