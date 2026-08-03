@@ -33,7 +33,7 @@
   "dependencies": {
     "@neondatabase/serverless": "0.10.4",
     "@node-rs/argon2": "2.0.2",
-    "@prisma/adapter-neon": "6.19.3",
+    "@prisma/adapter-neon": "7.9.1",
     "@prisma/client": "6.19.3",
     "@upstash/ratelimit": "2.0.8",
     "@upstash/redis": "1.38.0",
