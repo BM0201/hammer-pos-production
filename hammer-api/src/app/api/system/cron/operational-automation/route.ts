@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 import { fail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
+import { timingSafeEqualStrings } from "@/lib/timing-safe-compare";
 import { autoCloseExpiredCashSessions } from "@/modules/cash-session/auto-close-service";
-import { autoCloseTodaysOperationalDaysAtDeadline, autoOpenOperationalDays } from "@/modules/operations/auto-day-service";
+import {
+  autoClosePendingOperationalDaysBacklog,
+  autoCloseTodaysOperationalDaysAtDeadline,
+  autoOpenOperationalDays,
+} from "@/modules/operations/auto-day-service";
 import { sweepStaleOperationalDaysToPendingClose } from "@/modules/operations/service";
 
 export const runtime = "nodejs";
@@ -12,7 +17,7 @@ function assertCronAuthorized(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret) throw new Error("CRON_SECRET_MISSING");
   const authorization = request.headers.get("authorization");
-  if (authorization === `Bearer ${secret}`) return;
+  if (authorization && timingSafeEqualStrings(authorization, `Bearer ${secret}`)) return;
   throw new Error("CRON_UNAUTHORIZED");
 }
 
@@ -38,6 +43,11 @@ async function handle(request: Request) {
     // siempre (modelo pendiente puro, nunca finaliza un día); el auto-cierre
     // de HOY sigue siendo opt-in (autoCloseEnabled) y separado.
     const operationalDayPendingCloseSweep = await sweepStaleOperationalDaysToPendingClose({ dryRun, now });
+    // Reintenta TODO el backlog de PENDING_CLOSE (de cualquier fecha) antes de
+    // mirar el día de hoy — sin esto, un día que cae a PENDING_CLOSE queda
+    // huérfano para siempre: nada vuelve a chequear si su bloqueante (ej. una
+    // venta pendiente de cobro) ya se resolvió, ni avisa mientras sigue vivo.
+    const operationalDayPendingCloseBacklog = await autoClosePendingOperationalDaysBacklog({ dryRun });
     const operationalDayClose = await autoCloseTodaysOperationalDaysAtDeadline({ dryRun, now });
 
     return NextResponse.json({
@@ -46,6 +56,7 @@ async function handle(request: Request) {
         operationalDayOpen,
         cashSessionClose,
         operationalDayPendingCloseSweep,
+        operationalDayPendingCloseBacklog,
         operationalDayClose,
       },
     });

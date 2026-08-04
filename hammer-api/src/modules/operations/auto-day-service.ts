@@ -195,6 +195,20 @@ export async function autoOpenOperationalDays(input: { now?: Date; dryRun?: bool
  * auditoría) — visible en el Brain, en `criticalBrainDecisions` del Centro de
  * Comando, y resuelto solo cuando el día efectivamente cierra.
  */
+/** Mismo checklist que usa el preview de "Conciliar y cerrar" — compartido
+ * entre el cierre de HOY y el retry del backlog de PENDING_CLOSE, para no
+ * duplicar el cálculo. */
+async function computeHardBlockersForDay(dayId: string) {
+  return prisma.$transaction(async (tx) => {
+    const fullDay = await tx.operationalDay.findUniqueOrThrow({ where: { id: dayId } });
+    const summary = await calculateOperationalSummaryTx(tx, fullDay);
+    const toleranceConfig = await getCashToleranceConfig();
+    const cashDifferenceToleranceAmount = resolveCashToleranceForBranch(toleranceConfig, fullDay.branchId);
+    const preview = buildChecklist(summary, fullDay.status, cashDifferenceToleranceAmount);
+    return preview.blockers.filter((item) => isHardOperationalDayCloseBlocker(item.key));
+  });
+}
+
 export async function autoCloseTodaysOperationalDaysAtDeadline(input: { now?: Date; dryRun?: boolean } = {}): Promise<AutoDayResult> {
   const now = input.now ?? new Date();
   const dryRun = Boolean(input.dryRun);
@@ -216,14 +230,7 @@ export async function autoCloseTodaysOperationalDaysAtDeadline(input: { now?: Da
 
   for (const day of openDays) {
     try {
-      const hardBlockers = await prisma.$transaction(async (tx) => {
-        const fullDay = await tx.operationalDay.findUniqueOrThrow({ where: { id: day.id } });
-        const summary = await calculateOperationalSummaryTx(tx, fullDay);
-        const toleranceConfig = await getCashToleranceConfig();
-        const cashDifferenceToleranceAmount = resolveCashToleranceForBranch(toleranceConfig, fullDay.branchId);
-        const preview = buildChecklist(summary, fullDay.status, cashDifferenceToleranceAmount);
-        return preview.blockers.filter((item) => isHardOperationalDayCloseBlocker(item.key));
-      });
+      const hardBlockers = await computeHardBlockersForDay(day.id);
 
       if (hardBlockers.length > 0) {
         if (!dryRun) {
@@ -250,6 +257,76 @@ export async function autoCloseTodaysOperationalDaysAtDeadline(input: { now?: Da
         // el pre-check y el intento de cierre (ej. se abrió una caja justo en
         // el medio). Se cuenta como skip, igual que antes — el próximo tick
         // del cron lo va a detectar y registrar correctamente.
+        result.skipped++;
+      } else {
+        result.errors.push({ branchId: day.branchId, message: msg });
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Bug reportado: un día que cae a PENDING_CLOSE (sweepStaleOperationalDaysToPendingClose,
+ * que corre SIEMPRE, sin importar autoCloseEnabled) quedaba huérfano para
+ * siempre — autoCloseTodaysOperationalDaysAtDeadline de arriba SOLO mira el
+ * día de HOY en estado OPEN, nunca vuelve a mirar un PENDING_CLOSE de ayer o
+ * de hace una semana. En la práctica: el cierre automático "se atascaba"
+ * (el día nunca terminaba de cerrar solo) y, peor, flagOperationalDayAutoCloseSkippedTx
+ * — que sí deja un rastro visible en Brain ("Cierre automático no se pudo
+ * completar", con el bloqueante exacto) — nunca se disparaba para él tampoco,
+ * así que una venta vieja sin cobrar quedaba bloqueando el cierre SIN avisar
+ * a nadie ("no marca pendiente de venta").
+ *
+ * Esta función reintenta el backlog COMPLETO de PENDING_CLOSE en cada tick
+ * del cron (cualquier fecha, no solo hoy): si el bloqueante ya se resolvió
+ * (ej. se cobró la venta pendiente), cierra solo; si sigue bloqueado,
+ * refresca la alerta de Brain (upsert por fingerprint = día, así que no
+ * duplica). Gateada por el mismo autoCloseEnabled que ya activaste — si
+ * estuviera apagado, el modelo pendiente puro sigue aplicando (cierre manual).
+ */
+export async function autoClosePendingOperationalDaysBacklog(input: { dryRun?: boolean } = {}): Promise<AutoDayResult> {
+  const dryRun = Boolean(input.dryRun);
+  const result: AutoDayResult = { scanned: 0, opened: 0, closed: 0, skipped: 0, errors: [] };
+
+  const config = await getOperationalDayAutoConfig();
+  if (!config.autoCloseEnabled) return result;
+
+  const pendingDays = await prisma.operationalDay.findMany({
+    where: { status: OperationalDayStatus.PENDING_CLOSE },
+    select: { id: true, branchId: true },
+    orderBy: { businessDate: "asc" },
+    take: 200,
+  });
+
+  result.scanned = pendingDays.length;
+
+  for (const day of pendingDays) {
+    try {
+      const hardBlockers = await computeHardBlockersForDay(day.id);
+
+      if (hardBlockers.length > 0) {
+        if (!dryRun) {
+          await prisma.$transaction((tx) => flagOperationalDayAutoCloseSkippedTx(tx, day, hardBlockers));
+        }
+        result.skipped++;
+        continue;
+      }
+
+      if (!dryRun) {
+        await closeOperationalDay({
+          id: day.id,
+          actorUserId: "SYSTEM",
+          note: "Cierre automático de backlog — el bloqueante pendiente ya se resolvió.",
+          forceClose: true,
+          isMaster: true,
+        });
+      }
+      result.closed++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg === "OPERATIONAL_DAY_HAS_HARD_BLOCKERS") {
         result.skipped++;
       } else {
         result.errors.push({ branchId: day.branchId, message: msg });
