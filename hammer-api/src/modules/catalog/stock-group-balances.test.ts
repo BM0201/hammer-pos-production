@@ -41,6 +41,9 @@ function calcTracksPackagesConsolidation(input: {
   packageBalance: BalanceSnapshot | null | undefined;
   canonicalBalance: BalanceSnapshot | null | undefined;
   factor: number;
+  // Fusión triple (Caja/Kilo + Unidad + Libra): presentaciones sueltas
+  // alternativas además del empaque — ver stock-group-crud.ts.
+  looseAlternateMembers?: Array<{ conversionFactor: number; balance: BalanceSnapshot | null | undefined }>;
 }): {
   finalClosed: number;
   finalLoose: number;
@@ -48,7 +51,7 @@ function calcTracksPackagesConsolidation(input: {
   newWac: number;
   warnings: string[];
 } {
-  const { packageBalance, canonicalBalance, factor } = input;
+  const { packageBalance, canonicalBalance, factor, looseAlternateMembers = [] } = input;
   const warnings: string[] = [];
 
   const closedFromPackage = packageBalance
@@ -74,8 +77,19 @@ function calcTracksPackagesConsolidation(input: {
     looseFromCanonical = 0;
   }
 
+  let strayAlternateBaseQty = 0;
+  let strayAlternateWacNumerator = 0;
+  for (const alt of looseAlternateMembers) {
+    if (!alt.balance || alt.balance.quantityOnHand <= 0) continue;
+    const altBaseQty = alt.balance.quantityOnHand * alt.conversionFactor;
+    const altWacPerBase = alt.balance.weightedAverageCost > 0 ? alt.balance.weightedAverageCost / alt.conversionFactor : 0;
+    strayAlternateBaseQty += altBaseQty;
+    strayAlternateWacNumerator += altBaseQty * altWacPerBase;
+    warnings.push("stray balance folded from loose-alternate member into canonical");
+  }
+
   const finalClosed = closedFromPackage + closedFromCanonical;
-  const finalLoose = looseFromCanonical;
+  const finalLoose = looseFromCanonical + strayAlternateBaseQty;
   const totalBaseQty = finalClosed * factor + finalLoose;
 
   let newWac = 0;
@@ -85,9 +99,9 @@ function calcTracksPackagesConsolidation(input: {
       pkgBaseQty > 0 && packageBalance && packageBalance.weightedAverageCost > 0
         ? packageBalance.weightedAverageCost / factor
         : 0;
-    const canonBaseQty = closedFromCanonical * factor + finalLoose;
+    const canonBaseQty = closedFromCanonical * factor + looseFromCanonical;
     const canonWacPerBase = canonicalBalance?.weightedAverageCost ?? 0;
-    const wacNumerator = pkgBaseQty * pkgWacPerBase + canonBaseQty * canonWacPerBase;
+    const wacNumerator = pkgBaseQty * pkgWacPerBase + canonBaseQty * canonWacPerBase + strayAlternateWacNumerator;
     newWac = wacNumerator / totalBaseQty;
   }
 
@@ -329,5 +343,97 @@ describe("H.9 conversión de cantidad al desfusionar", () => {
 
   it("stock cero se reasigna sin error (caso simple, antes bloqueado)", () => {
     assert.equal(targetQtyFromBase(0, 216), 0);
+  });
+});
+
+// ─── H.10 Fusión triple — Caja(Kilo)/Unidad/Libra, clavo de acero ────────────
+// Antes de este cambio, con 3+ miembros el saldo de la presentación suelta
+// alternativa que NO fuera "la primera agregada" se perdía en silencio al
+// zonar los no-canónicos en rebuildStockGroupBalancesTx (nunca se plegaba a
+// canónico). Estas pruebas cubren calcTracksPackagesConsolidation con
+// looseAlternateMembers — el fix real.
+
+describe("H.10 calcTracksPackagesConsolidation — fusión triple Caja(Kilo)/Unidad/Libra", () => {
+  // Canónico: KILO (factor=1). Empaque: CAJA, 1 caja = 25 kg. Suelto
+  // alternativo: LIBRA, 1 libra ≈ 0.453592 kg.
+  const CAJA_FACTOR = 25;
+  const LIBRA_FACTOR = 0.453592;
+
+  it("sin saldo varado en Libra: se comporta igual que el caso dual (looseAlternateMembers vacío u omitido)", () => {
+    const packageBalance: BalanceSnapshot = { quantityOnHand: 4, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 500 };
+    const canonicalBalance: BalanceSnapshot = { quantityOnHand: 10, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 20 };
+    const withoutParam = calcTracksPackagesConsolidation({ packageBalance, canonicalBalance, factor: CAJA_FACTOR });
+    const withEmptyArray = calcTracksPackagesConsolidation({
+      packageBalance, canonicalBalance, factor: CAJA_FACTOR,
+      looseAlternateMembers: [{ conversionFactor: LIBRA_FACTOR, balance: null }],
+    });
+    assert.deepEqual(withEmptyArray, withoutParam);
+    assert.equal(withoutParam.finalClosed, 4);
+    assert.equal(withoutParam.finalLoose, 10);
+  });
+
+  it("saldo varado en Libra (recepción hecha por error contra ella) se pliega a finalLoose, NO se pierde", () => {
+    const packageBalance: BalanceSnapshot = { quantityOnHand: 4, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 500 };
+    const canonicalBalance: BalanceSnapshot = { quantityOnHand: 10, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 20 };
+    // 6 libras varadas con costo 15/libra.
+    const libraBalance: BalanceSnapshot = { quantityOnHand: 6, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 15 };
+
+    const result = calcTracksPackagesConsolidation({
+      packageBalance,
+      canonicalBalance,
+      factor: CAJA_FACTOR,
+      looseAlternateMembers: [{ conversionFactor: LIBRA_FACTOR, balance: libraBalance }],
+    });
+
+    const libraAsKilos = 6 * LIBRA_FACTOR;
+    assert.equal(result.finalClosed, 4, "el empaque no se toca por el saldo de Libra");
+    assert.ok(Math.abs(result.finalLoose - (10 + libraAsKilos)) < 1e-9, "Libra se suma al canónico, no se descarta");
+    assert.ok(Math.abs(result.totalBaseQty - (4 * CAJA_FACTOR + 10 + libraAsKilos)) < 1e-9);
+    assert.ok(result.warnings.some((w) => w.includes("stray balance")), "debe advertir que hubo saldo varado plegado");
+  });
+
+  it("saldo varado en DOS presentaciones sueltas alternativas (Libra y Unidad) se suman ambas", () => {
+    const canonicalBalance: BalanceSnapshot = { quantityOnHand: 0, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 0 };
+    const libraBalance: BalanceSnapshot = { quantityOnHand: 6, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 15 };
+    // Unidad: factor = peso promedio del clavo en kg (ej. 200 unidades por kilo -> factor=0.005).
+    const UNIDAD_FACTOR = 0.005;
+    const unidadBalance: BalanceSnapshot = { quantityOnHand: 100, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 0.3 };
+
+    const result = calcTracksPackagesConsolidation({
+      packageBalance: null,
+      canonicalBalance,
+      factor: CAJA_FACTOR,
+      looseAlternateMembers: [
+        { conversionFactor: LIBRA_FACTOR, balance: libraBalance },
+        { conversionFactor: UNIDAD_FACTOR, balance: unidadBalance },
+      ],
+    });
+
+    const expectedLoose = 6 * LIBRA_FACTOR + 100 * UNIDAD_FACTOR;
+    assert.ok(Math.abs(result.finalLoose - expectedLoose) < 1e-9);
+    assert.equal(result.finalClosed, 0);
+  });
+
+  it("el WAC pondera correctamente el saldo varado junto con empaque y canónico", () => {
+    // OJO con las unidades: weightedAverageCost de packageBalance/looseAlternateMembers
+    // es costo en la unidad PROPIA de cada presentación (por CAJA, por LIBRA)
+    // — la función lo divide por su propio factor para llevarlo a costo por
+    // kilo (base). Para que ambas presentaciones representen ~C$500/kg:
+    // caja = C$500/kg × 25 kg/caja = C$12500/caja; libra = C$500/kg × 0.453592 kg/libra ≈ C$226.80/libra.
+    const packageBalance: BalanceSnapshot = { quantityOnHand: 2, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 12500 }; // 2 cajas a C$12500/caja = C$500/kg
+    const canonicalBalance: BalanceSnapshot = { quantityOnHand: 0, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 0 };
+    const libraBalance: BalanceSnapshot = { quantityOnHand: 10, closedPackageQuantity: 0, looseUnitQuantity: 0, weightedAverageCost: 226.8 }; // C$226.80/libra ≈ C$500/kg
+
+    const result = calcTracksPackagesConsolidation({
+      packageBalance,
+      canonicalBalance,
+      factor: CAJA_FACTOR,
+      looseAlternateMembers: [{ conversionFactor: LIBRA_FACTOR, balance: libraBalance }],
+    });
+
+    // Todo el stock (caja + libra) tiene ~el mismo costo por kilo (~500) —
+    // el WAC combinado debe seguir rondando ese valor, no diluirse a 0 ni
+    // duplicarse por ignorar el aporte de Libra.
+    assert.ok(result.newWac > 400 && result.newWac < 600, `WAC combinado fuera de rango esperado: ${result.newWac}`);
   });
 });

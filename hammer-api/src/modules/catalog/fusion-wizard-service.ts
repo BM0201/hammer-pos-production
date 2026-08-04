@@ -137,6 +137,18 @@ export type FusionCreationBranchResult = {
   warning: string | null;
 };
 
+/** Promedio ponderado de costo entre N partes {qty, wac} — 0 si no hay qty. */
+function weightedWac(parts: Array<{ qty: Prisma.Decimal; wac: Prisma.Decimal }>): Prisma.Decimal {
+  let totalQty = new Prisma.Decimal(0);
+  let numerator = new Prisma.Decimal(0);
+  for (const p of parts) {
+    if (p.qty.lte(0)) continue;
+    totalQty = totalQty.add(p.qty);
+    numerator = numerator.add(p.qty.mul(p.wac));
+  }
+  return totalQty.gt(0) ? numerator.div(totalQty) : new Prisma.Decimal(0);
+}
+
 /**
  * Crea el grupo + miembros y, en la MISMA transacción, resuelve la
  * composición inicial por sucursal según la resolución elegida en el paso 3
@@ -153,10 +165,13 @@ export async function createFusionGroupTx(
   const derivedMembers = input.members.filter((m) => !m.isCanonical);
   const derivedIds = derivedMembers.map((m) => m.productId);
   const allProductIds = input.members.map((m) => m.productId);
-  // El asistente solo crea grupos de 2 productos (1 base + 1 empaque); para
-  // grupos con más miembros derivados, el reparto cerrado/suelto usa el
-  // primer miembro derivado como "la presentación empacada".
-  const packageMember = derivedMembers[0] ?? null;
+  // Fusión triple: el empaque es el ÚNICO miembro marcado isPackagePresentation
+  // (createStockGroupRowsTx → validatePackageSettings ya exige exactamente
+  // uno cuando tracksPackages=true). Los demás derivados son presentaciones
+  // sueltas alternativas (ej. Libra, cuando Caja es el empaque) — se pliegan
+  // al lado SUELTO junto con el canónico, no al lado empaque.
+  const packageMember = tracksPackages ? derivedMembers.find((m) => m.isPackagePresentation) ?? null : null;
+  const looseAlternateMembers = tracksPackages ? derivedMembers.filter((m) => m !== packageMember) : [];
 
   const branches = await tx.branch.findMany({
     where: { isActive: true },
@@ -218,12 +233,33 @@ export async function createFusionGroupTx(
       const packageBalance = packageMember ? byProduct.get(packageMember.productId) : undefined;
       const packageQty = packageBalance?.quantityOnHand ?? new Prisma.Decimal(0);
       const packageFactor = packageMember ? new Prisma.Decimal(packageMember.conversionFactor) : new Prisma.Decimal(1);
+      const packageBaseQty = packageQty.mul(packageFactor);
+      const packageWacPerBase =
+        packageBaseQty.gt(0) && packageBalance && packageBalance.weightedAverageCost.gt(0)
+          ? packageBalance.weightedAverageCost.div(packageFactor)
+          : new Prisma.Decimal(0);
+
+      // Sueltos alternativos (Libra, Unidad...): normalmente sin saldo propio
+      // al crear el grupo (son SKUs nuevos), pero si ya tenían stock (ej. se
+      // fusiona un producto ya existente) se pliega acá, no se descarta.
+      const looseAlternatesWithBalance = looseAlternateMembers.map((m) => {
+        const b = byProduct.get(m.productId);
+        return {
+          qoh: b?.quantityOnHand ?? new Prisma.Decimal(0),
+          factor: new Prisma.Decimal(m.conversionFactor),
+          wac: b?.weightedAverageCost ?? new Prisma.Decimal(0),
+        };
+      });
+      const looseAlternates = derivedBaseWac(looseAlternatesWithBalance);
 
       switch (resolution) {
         case "USE_DERIVED_ONLY":
           newClosed = packageQty;
-          newLoose = new Prisma.Decimal(0);
-          newWac = derived.baseWac;
+          newLoose = looseAlternates.baseQty;
+          newWac = weightedWac([
+            { qty: packageBaseQty, wac: packageWacPerBase },
+            { qty: looseAlternates.baseQty, wac: looseAlternates.baseWac },
+          ]);
           break;
         case "USE_CANONICAL_ONLY":
           newClosed = new Prisma.Decimal(0);
@@ -232,11 +268,12 @@ export async function createFusionGroupTx(
           break;
         case "SUM_BOTH": {
           newClosed = packageQty;
-          newLoose = canonicalQty;
-          const total = canonicalQty.add(derived.baseQty);
-          newWac = total.gt(0)
-            ? canonicalQty.mul(canonicalWac).add(derived.baseQty.mul(derived.baseWac)).div(total)
-            : new Prisma.Decimal(0);
+          newLoose = canonicalQty.add(looseAlternates.baseQty);
+          newWac = weightedWac([
+            { qty: canonicalQty, wac: canonicalWac },
+            { qty: packageBaseQty, wac: packageWacPerBase },
+            { qty: looseAlternates.baseQty, wac: looseAlternates.baseWac },
+          ]);
           break;
         }
         case "MANUAL_BASE_QTY": {

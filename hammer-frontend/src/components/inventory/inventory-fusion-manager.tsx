@@ -398,6 +398,11 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
       return;
     }
     const isFirst = members.length === 0;
+    // Solo el 2do producto agregado se asume "el empaque" por defecto — es el
+    // caso más común (1 base + 1 caja). Del 3ro en adelante son presentaciones
+    // sueltas alternativas (fusión triple: ej. Caja + Unidad + Libra) — el
+    // usuario elige cuál es el empaque con el botón de cada fila si hace falta.
+    const isSecond = members.length === 1;
     setMembers((prev) => [
       ...prev,
       {
@@ -407,7 +412,7 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
         saleUnit: product.unit,
         conversionFactor: isFirst ? 1 : Number(factor || 1),
         isCanonical: isFirst,
-        isPackagePresentation: !isFirst,
+        isPackagePresentation: isSecond,
       },
     ]);
     setSearch("");
@@ -423,14 +428,39 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
   }
 
   function markAsBase(productId: string) {
-    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, isCanonical: true, conversionFactor: 1 } : { ...m, isCanonical: false, conversionFactor: Number(factor || m.conversionFactor || 1) })));
+    // Al cambiar cuál producto es la base, los factores de los DEMÁS
+    // miembros quedan como estaban — recalcularlos automáticamente no es
+    // posible sin más info (dependen de la relación con el canónico
+    // anterior), así que se deja al usuario ajustarlos si hace falta, en vez
+    // de pisarlos en silencio con un valor compartido.
+    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, isCanonical: true, conversionFactor: 1 } : { ...m, isCanonical: false })));
   }
+
+  function updateMemberFactor(productId: string, value: number) {
+    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, conversionFactor: value } : m)));
+  }
+
+  // Solo puede haber UN empaque cerrado a la vez — marcar uno desmarca
+  // cualquier otro (las demás presentaciones no-canónicas quedan como
+  // "sueltas alternativas").
+  function setPackageMember(productId: string) {
+    setMembers((prev) => prev.map((m) => (m.isCanonical ? m : { ...m, isPackagePresentation: m.productId === productId })));
+  }
+
+  const packageMember = members.find((m) => !m.isCanonical && m.isPackagePresentation) ?? null;
 
   function goToStep3() {
     if (!name.trim()) { showToast("error", "Ingresá un nombre para la fusión."); return; }
     if (members.length < 2) { showToast("error", "Agregá al menos 2 productos."); return; }
     if (!canonical) { showToast("error", "Marcá cuál producto es la unidad suelta (base)."); return; }
-    if (tracksPackages && (!packageUnit.trim() || !(Number(factor) > 0))) { showToast("error", "Indicá la unidad de empaque y un factor mayor que 0."); return; }
+    if (members.some((m) => !m.isCanonical && !(m.conversionFactor > 0))) {
+      showToast("error", "Cada presentación necesita un factor de conversión mayor que 0.");
+      return;
+    }
+    if (tracksPackages && (!packageUnit.trim() || !packageMember)) {
+      showToast("error", "Marcá cuál presentación es el empaque cerrado e indicá su unidad.");
+      return;
+    }
     setStep(3);
     void loadPreview();
   }
@@ -483,8 +513,8 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
         body: JSON.stringify({
           name: name.trim(),
           baseUnit: canonical?.saleUnit,
-          packageUnit: tracksPackages ? packageUnit.trim() : null,
-          conversionFactorToBase: tracksPackages ? Number(factor) : null,
+          packageUnit: tracksPackages ? (packageUnit.trim() || packageMember?.saleUnit || null) : null,
+          conversionFactorToBase: tracksPackages ? (packageMember?.conversionFactor ?? null) : null,
           tracksPackages,
           approximateFactor: tracksPackages ? approximateFactor : false,
           autoOpenForUnitSale: tracksPackages ? autoOpenForUnitSale : false,
@@ -544,14 +574,41 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
 
           <div className="space-y-2">
             {members.map((m) => (
-              <div key={m.productId} className="flex items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2">
+              <div key={m.productId} className="flex flex-wrap items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2">
                 <b className="flex-1 text-[12.5px]">{m.sku} — {m.name}</b>
                 {m.isCanonical ? (
                   <Badge variant="info">unidad suelta (base)</Badge>
                 ) : (
-                  <button type="button" onClick={() => markAsBase(m.productId)} className="text-[11px] font-semibold text-[var(--color-master-700)] hover:underline">
-                    marcar como base
-                  </button>
+                  <>
+                    <span className="flex items-center gap-1 text-[11.5px] text-[var(--color-text-muted)]">
+                      1 {m.saleUnit || "und"} =
+                      <input
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={m.conversionFactor}
+                        onChange={(e) => updateMemberFactor(m.productId, Number(e.target.value) || 0)}
+                        className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-0.5 text-right font-mono"
+                      />
+                      {canonical?.saleUnit ?? "base"}
+                    </span>
+                    {/* Fusión triple: con 3+ productos, cuál es "el empaque"
+                        (Caja) ya no se puede inferir del orden en que se
+                        agregaron — el usuario lo elige acá. Las demás
+                        presentaciones no-canónicas quedan como sueltas
+                        alternativas (ej. Libra, Unidad). */}
+                    <button
+                      type="button"
+                      onClick={() => setPackageMember(m.productId)}
+                      className={`rounded-full border px-2 py-0.5 text-[10.5px] font-semibold ${m.isPackagePresentation ? "border-[var(--color-master-500)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] text-[var(--color-text-soft)]"}`}
+                      title="Marcar esta presentación como el empaque cerrado (caja) — solo puede haber una"
+                    >
+                      {m.isPackagePresentation ? "✓ empaque cerrado" : "marcar como empaque"}
+                    </button>
+                    <button type="button" onClick={() => markAsBase(m.productId)} className="text-[11px] font-semibold text-[var(--color-master-700)] hover:underline">
+                      marcar como base
+                    </button>
+                  </>
                 )}
                 <button type="button" onClick={() => removeMember(m.productId)} className="rounded p-1 text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)]">
                   <X className="h-3.5 w-3.5" />
@@ -585,17 +642,16 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
 
       {step === 2 && canonical && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <b>1</b>
-            <span className="rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-xs font-semibold">{members.find((m) => !m.isCanonical)?.saleUnit ?? (packageUnit || "PAQUETE")}</span>
-            <span>contiene</span>
-            <input
-              type="number"
-              value={factor}
-              onChange={(e) => setFactor(e.target.value === "" ? "" : Number(e.target.value))}
-              className="w-24 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-right font-mono"
-            />
-            <span className="rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-xs font-semibold">{canonical.saleUnit}</span>
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3 text-[12.5px]">
+            <p className="mb-1.5 font-semibold text-[var(--color-text-secondary)]">Equivalencias (definidas en el paso anterior):</p>
+            <ul className="space-y-0.5 text-[var(--color-text-muted)]">
+              {members.filter((m) => !m.isCanonical).map((m) => (
+                <li key={m.productId}>
+                  1 {m.saleUnit || "und"} = <b className="font-mono text-[var(--color-text)]">{m.conversionFactor}</b> {canonical.saleUnit}
+                  {m.isPackagePresentation && <span className="ml-1 text-[var(--color-master-700)]">(empaque cerrado)</span>}
+                </li>
+              ))}
+            </ul>
           </div>
 
           <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
@@ -605,10 +661,20 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
 
           {tracksPackages && (
             <>
-              <Input label="Unidad de empaque" value={packageUnit} onChange={(e) => setPackageUnit(e.target.value)} placeholder="Ej: KILO, CAJA" />
+              <Input
+                label="Unidad de empaque (nombre a mostrar, ej. KILO, CAJA)"
+                value={packageUnit || packageMember?.saleUnit || ""}
+                onChange={(e) => setPackageUnit(e.target.value)}
+                placeholder="Ej: KILO, CAJA"
+              />
+              {!packageMember && (
+                <p className="text-[11.5px] text-[var(--color-warning-700)]">
+                  ⚠ Volvé al paso anterior y marcá cuál presentación es el empaque cerrado.
+                </p>
+              )}
               <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
                 <input type="checkbox" checked={approximateFactor} onChange={(e) => setApproximateFactor(e.target.checked)} />
-                El contenido varía (factor aproximado) — al abrir cada empaque se registran las unidades reales
+                Algún factor es aproximado (ej. peso promedio por unidad) — al abrir cada empaque se registran las unidades reales
               </label>
               <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
                 <input type="checkbox" checked={autoOpenForUnitSale} onChange={(e) => setAutoOpenForUnitSale(e.target.checked)} />
@@ -635,7 +701,7 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
                   <thead>
                     <tr>
                       <th>Sucursal</th>
-                      <th className="r">{members.find((m) => !m.isCanonical)?.saleUnit} tiene</th>
+                      <th className="r">Otras presentaciones tienen (en {canonical?.saleUnit})</th>
                       <th className="r">{canonical?.saleUnit} tiene</th>
                       <th>Situación</th>
                     </tr>
@@ -644,7 +710,7 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
                     {preview.branches.map((b) => (
                       <tr key={b.branchId}>
                         <td><b>{b.branchCode}</b></td>
-                        <td className="hm-num">{fmt(b.derivedAsBaseQty / (Number(factor) || 1))}</td>
+                        <td className="hm-num">{fmt(b.derivedAsBaseQty)}</td>
                         <td className="hm-num">{fmt(b.canonicalQty)}</td>
                         <td>
                           {b.hasConflict ? <Badge variant="warning">⚠ Ambas tienen stock — decidí abajo</Badge> : <Badge variant="success">Sin conflicto</Badge>}
@@ -711,7 +777,10 @@ function OpenPackageModal({ group, onClose, onDone }: { group: FusionGroup; onCl
   const [reason, setReason] = useState("Apertura para venta unitaria");
   const [saving, setSaving] = useState(false);
 
-  const packageMember = group.members.find((m) => m.isPackagePresentation) ?? group.members.find((m) => !m.isCanonical);
+  // Sin fallback al primer no-canónico: con fusión triple (3+ miembros) eso
+  // podría agarrar una presentación suelta alternativa (ej. Libra) en vez del
+  // empaque real. El backend ya garantiza exactamente un isPackagePresentation.
+  const packageMember = group.members.find((m) => m.isPackagePresentation);
 
   async function confirm() {
     if (!branchId || !(Number(actualUnits) > 0)) { showToast("error", "Seleccioná sucursal y unidades reales mayores que 0."); return; }

@@ -256,3 +256,64 @@ test("Dos fusiones con el mismo nombre (mismo preset, variantes distintas como S
   assert.notEqual(first.groupCode, second.groupCode, "el segundo debe recibir un codigo distinto, no fallar");
   assert.equal(second.groupCode, `${first.groupCode}_2`);
 });
+
+// ─── Fusión triple — clavo de acero: CAJA(empaque)/UNIDAD(canónico)/LIBRA(suelto alternativo) ───
+// Antes de este cambio, packageMember se resolvía como `derivedMembers[0]` —
+// el primer producto agregado, sin importar cuál tuviera isPackagePresentation.
+// Si LIBRA se agregaba antes que CAJA, LIBRA quedaba tratada como "el
+// empaque" y el saldo real de CAJA (o el de LIBRA, según el orden) se perdía
+// al consolidar. Este test agrega los miembros en un orden donde el bug
+// viejo fallaría (LIBRA en el medio, CAJA al final) para probar que ahora
+// se resuelve por la bandera isPackagePresentation, no por posición.
+test("Fusión triple (Caja/Unidad/Libra) — el empaque se resuelve por bandera, no por orden de alta; Libra no se pierde", async () => {
+  const UNIDAD_ID = "prod-clavo-unidad";
+  const LIBRA_ID = "prod-clavo-libra";
+  const CAJA_ID = "prod-clavo-caja";
+  const CAJA_FACTOR = 25; // 1 caja = 25 kg (canónico = kilo, aquí modelado vía UNIDAD por simplicidad del factor)
+  const LIBRA_FACTOR = 0.453592;
+
+  const { tx, getBalance } = createWizardFakeTx([
+    { branchId: "branch-mga", productId: CAJA_ID, quantityOnHand: 3, weightedAverageCost: 500 },
+    { branchId: "branch-mga", productId: LIBRA_ID, quantityOnHand: 8, weightedAverageCost: 220 },
+  ]);
+
+  // Orden deliberado: canónico, LIBRA (suelto alternativo), CAJA (empaque) —
+  // con el bug viejo (derivedMembers[0]) LIBRA habría sido tratada como
+  // empaque en vez de CAJA.
+  const members = [
+    { productId: UNIDAD_ID, saleUnit: "UNIDAD", conversionFactor: 1, isCanonical: true, isPackagePresentation: false },
+    { productId: LIBRA_ID, saleUnit: "LIBRA", conversionFactor: LIBRA_FACTOR, isCanonical: false, isPackagePresentation: false },
+    { productId: CAJA_ID, saleUnit: "CAJA", conversionFactor: CAJA_FACTOR, isCanonical: false, isPackagePresentation: true },
+  ];
+
+  const result = await createFusionGroupTx(tx, {
+    name: "Clavo de acero 2\"",
+    tracksPackages: true,
+    packageUnit: "CAJA",
+    conversionFactorToBase: CAJA_FACTOR,
+    members,
+    actorUserId: "user-1",
+    branchResolutions: { "branch-mga": { resolution: "SUM_BOTH" } },
+  });
+
+  const mga = result.branches.find((b) => b.branchCode === "MGA")!;
+  // El empaque (CAJA) debe quedar en closed=3 — NUNCA en loose ni perdido.
+  assert.equal(mga.newCanonicalClosed, "3", "las 3 cajas deben quedar como empaque cerrado, no como sueltas");
+  // Libra (suelto alternativo) se pliega al lado loose, convertida a base —
+  // NO se pierde ni se cuenta como empaque. Comparación con tolerancia:
+  // Decimal.js (produccion) y la aritmetica de punto flotante de este test
+  // pueden diferir en los ultimos digitos de 8 * 0.453592.
+  const libraAsBase = 8 * LIBRA_FACTOR;
+  assert.ok(
+    Math.abs(Number(mga.newCanonicalLoose) - libraAsBase) < 1e-6,
+    `el saldo de Libra debe plegarse al lado suelto: esperado ≈${libraAsBase}, obtenido ${mga.newCanonicalLoose}`,
+  );
+
+  // Los 3 productos SKU quedan en la fusión (0 físico salvo el canónico).
+  const canonicalBalance = getBalance("branch-mga", UNIDAD_ID)!;
+  assert.equal(canonicalBalance.closedPackageQuantity.toString(), "3");
+  const cajaBalanceAfter = getBalance("branch-mga", CAJA_ID)!;
+  assert.equal(cajaBalanceAfter.quantityOnHand.toString(), "0", "CAJA queda en cero fisico tras la fusion");
+  const libraBalanceAfter = getBalance("branch-mga", LIBRA_ID)!;
+  assert.equal(libraBalanceAfter.quantityOnHand.toString(), "0", "LIBRA queda en cero fisico tras la fusion (su valor ya vive en el canonico)");
+});

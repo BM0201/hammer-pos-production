@@ -897,9 +897,13 @@ export async function openStockPackage(input: OpenPackageInput) {
 
     const canonical = group.products.find((member) => member.isCanonical)
       ?? group.products.find((member) => new Prisma.Decimal(member.conversionFactor).eq(1));
+    // Fusión triple: sin fallback a "el primer no-canónico" — con 3+ miembros
+    // eso agarraría una presentación suelta alternativa (ej. Libra) como si
+    // fuera el empaque. La validación de escritura garantiza exactamente un
+    // isPackagePresentation por grupo.
     const packageMember = input.packageProductId
       ? group.products.find((member) => member.productId === input.packageProductId)
-      : group.products.find((member) => member.isPackagePresentation) ?? group.products.find((member) => !member.isCanonical);
+      : group.products.find((member) => member.isPackagePresentation);
     if (!canonical || !packageMember) {
       throw new Error("VALIDATION_ERROR: El grupo requiere producto base y presentacion cerrada.");
     }

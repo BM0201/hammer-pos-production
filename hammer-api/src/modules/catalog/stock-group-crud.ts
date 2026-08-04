@@ -102,12 +102,21 @@ export function calcBaseConsolidation(
  *   looseUnitQuantity: from canonical.looseUnitQuantity, else canonical.qoh (repair path for
  *     old unstructured data when there is no package-side stock at all).
  *
+ * `looseAlternateMembers` — Fusión triple (Caja/Kilo + Unidad + Libra): miembros
+ * no-canónicos que NO son el empaque (ej. Libra, cuando Caja es el empaque).
+ * En el flujo normal nunca deberían acumular saldo propio — venta/compra/ajuste
+ * ya resuelven todo contra el canónico (unit-conversion.ts) — pero si alguien
+ * recibió/ajustó por error directamente contra uno de ellos, ese saldo se
+ * convierte a unidades base con su propio conversionFactor y se suma al lado
+ * suelto en vez de perderse en silencio al zonarlos más abajo.
+ *
  * Exported for unit tests — no DB dependency.
  */
 export function calcTracksPackagesConsolidation(input: {
   packageBalance: BalanceSnapshot | null | undefined;
   canonicalBalance: BalanceSnapshot | null | undefined;
   factor: Prisma.Decimal;
+  looseAlternateMembers?: Array<{ conversionFactor: Prisma.Decimal; balance: BalanceSnapshot | null | undefined }>;
 }): {
   finalClosed: Prisma.Decimal;
   finalLoose: Prisma.Decimal;
@@ -115,7 +124,7 @@ export function calcTracksPackagesConsolidation(input: {
   newWac: Prisma.Decimal;
   warnings: string[];
 } {
-  const { packageBalance, canonicalBalance, factor } = input;
+  const { packageBalance, canonicalBalance, factor, looseAlternateMembers = [] } = input;
   const warnings: string[] = [];
 
   // Closed packages from the package-presentation member (pre-consolidation source)
@@ -153,11 +162,30 @@ export function calcTracksPackagesConsolidation(input: {
     looseFromCanonical = new Prisma.Decimal(0);
   }
 
+  // Saldo suelto varado en presentaciones alternativas (Libra, Unidad, etc.)
+  // — mismo cálculo escalar que calcBaseConsolidation, convertido a base con
+  // el conversionFactor propio de cada miembro (dimensión-agnóstico: da igual
+  // si es peso↔peso o peso↔conteo, es solo multiplicar).
+  let strayAlternateBaseQty = new Prisma.Decimal(0);
+  let strayAlternateWacNumerator = new Prisma.Decimal(0);
+  for (const alt of looseAlternateMembers) {
+    if (!alt.balance || alt.balance.quantityOnHand.lte(0)) continue;
+    const altFactor = new Prisma.Decimal(alt.conversionFactor);
+    const altBaseQty = alt.balance.quantityOnHand.mul(altFactor);
+    const altWacPerBase = alt.balance.weightedAverageCost.gt(0)
+      ? alt.balance.weightedAverageCost.div(altFactor)
+      : new Prisma.Decimal(0);
+    strayAlternateBaseQty = strayAlternateBaseQty.add(altBaseQty);
+    strayAlternateWacNumerator = strayAlternateWacNumerator.add(altBaseQty.mul(altWacPerBase));
+    warnings.push(`stray balance folded from loose-alternate member into canonical: +${altBaseQty.toString()} base units`);
+  }
+
   const finalClosed = closedFromPackage.add(closedFromCanonical);
-  const finalLoose = looseFromCanonical;
+  const finalLoose = looseFromCanonical.add(strayAlternateBaseQty);
   const totalBaseQty = finalClosed.mul(factor).add(finalLoose);
 
-  // WAC: weighted average of package-side cost and canonical-side cost, both in base units
+  // WAC: weighted average of package-side cost, canonical-side cost, and any
+  // stray loose-alternate cost, all in base units.
   let newWac = new Prisma.Decimal(0);
   if (totalBaseQty.gt(0)) {
     const pkgBaseQty = closedFromPackage.mul(factor);
@@ -167,11 +195,13 @@ export function calcTracksPackagesConsolidation(input: {
         ? packageBalance.weightedAverageCost.div(factor)
         : new Prisma.Decimal(0);
 
-    const canonBaseQty = closedFromCanonical.mul(factor).add(finalLoose);
+    const canonBaseQty = closedFromCanonical.mul(factor).add(looseFromCanonical);
     // canonicalBalance.weightedAverageCost is already per BASE unit (e.g., per UNIDAD)
     const canonWacPerBase = canonicalBalance?.weightedAverageCost ?? new Prisma.Decimal(0);
 
-    const wacNumerator = pkgBaseQty.mul(pkgWacPerBase).add(canonBaseQty.mul(canonWacPerBase));
+    const wacNumerator = pkgBaseQty.mul(pkgWacPerBase)
+      .add(canonBaseQty.mul(canonWacPerBase))
+      .add(strayAlternateWacNumerator);
     newWac = wacNumerator.div(totalBaseQty);
   }
 
@@ -217,11 +247,21 @@ export async function rebuildStockGroupBalancesTx(
   const nonCanonicalIds = nonCanonicalMembers.map((m) => m.productId);
   const allProductIds = group.products.map((m) => m.productId);
 
-  // Package member for tracksPackages=true
+  // Package member para tracksPackages=true — validatePackageSettings ya
+  // garantiza (al crear/editar) que hay EXACTAMENTE uno marcado
+  // isPackagePresentation. Sin fallback a "el primer no-canónico": con 3+
+  // miembros (fusión triple) eso agarraría cualquier suelto alternativo
+  // (Libra, Unidad) como si fuera la caja.
   const packageMember = group.tracksPackages
-    ? group.products.find((m) => m.isPackagePresentation && !m.isCanonical) ??
-      group.products.find((m) => !m.isCanonical)
+    ? group.products.find((m) => m.isPackagePresentation && !m.isCanonical) ?? null
     : null;
+
+  // Fusión triple: los demás no-canónicos (ni empaque) son presentaciones
+  // sueltas alternativas — su saldo (si por error tienen alguno) se pliega
+  // al lado suelto del canónico en vez de perderse al zonarlos.
+  const looseAlternateMembers = group.tracksPackages
+    ? nonCanonicalMembers.filter((m) => m.productId !== packageMember?.productId)
+    : [];
 
   const factor: Prisma.Decimal | null = group.tracksPackages
     ? new Prisma.Decimal(
@@ -293,6 +333,10 @@ export async function rebuildStockGroupBalancesTx(
         packageBalance,
         canonicalBalance,
         factor: factor!,
+        looseAlternateMembers: looseAlternateMembers.map((m) => ({
+          conversionFactor: new Prisma.Decimal(m.conversionFactor),
+          balance: balanceByProduct.get(m.productId) ?? null,
+        })),
       });
       newQty = calc.totalBaseQty;
       newClosed = calc.finalClosed;
@@ -428,9 +472,15 @@ export async function previewStockGroupRepairTx(
     throw new Error(`VALIDATION_ERROR: La fusión ${group.code} no tiene producto principal (canónico) activo.`);
   }
   const allProductIds = group.products.map((m) => m.productId);
+  // Ver comentario equivalente en rebuildStockGroupBalancesTx: sin fallback a
+  // "el primer no-canónico", la validación ya garantiza exactamente un
+  // empaque marcado.
   const packageMember = group.tracksPackages
-    ? group.products.find((m) => m.isPackagePresentation && !m.isCanonical) ?? group.products.find((m) => !m.isCanonical)
+    ? group.products.find((m) => m.isPackagePresentation && !m.isCanonical) ?? null
     : null;
+  const looseAlternateMembers = group.tracksPackages
+    ? group.products.filter((m) => !m.isCanonical && m.productId !== packageMember?.productId)
+    : [];
   const factor: Prisma.Decimal | null = group.tracksPackages
     ? new Prisma.Decimal(group.conversionFactorToBase ?? packageMember?.conversionFactor ?? 1)
     : null;
@@ -473,7 +523,15 @@ export async function previewStockGroupRepairTx(
       newWac = calc.newWac;
     } else {
       const packageBalance = packageMember ? balanceByProduct.get(packageMember.productId) ?? null : null;
-      const calc = calcTracksPackagesConsolidation({ packageBalance, canonicalBalance, factor: factor! });
+      const calc = calcTracksPackagesConsolidation({
+        packageBalance,
+        canonicalBalance,
+        factor: factor!,
+        looseAlternateMembers: looseAlternateMembers.map((m) => ({
+          conversionFactor: new Prisma.Decimal(m.conversionFactor),
+          balance: balanceByProduct.get(m.productId) ?? null,
+        })),
+      });
       newQty = calc.totalBaseQty;
       newClosed = calc.finalClosed;
       newLoose = calc.finalLoose;
@@ -660,9 +718,19 @@ export function validatePackageSettings(input: {
   ) {
     throw new Error("VALIDATION_ERROR: La reserva minima de empaques cerrados no puede ser negativa.");
   }
-  const packageMembers = input.members.filter((member) => member.isPackagePresentation || !member.isCanonical);
-  if (packageMembers.length < 1) {
-    throw new Error("VALIDATION_ERROR: Debe marcar una presentacion cerrada para manejar stock cerrado/suelto.");
+  // Fusión triple: con 3+ miembros puede haber varias presentaciones sueltas
+  // alternativas (Libra, Unidad) además del canónico — pero el empaque
+  // cerrado (Caja) tiene que ser exactamente UNO, marcado explícitamente.
+  // Sin este tope, un segundo miembro con isPackagePresentation:true rompe
+  // la resolución determinística de "cuál caja es la caja" en todo el resto
+  // del módulo (rebuild, health check, apertura automática).
+  const packageMembers = input.members.filter((member) => member.isPackagePresentation);
+  if (packageMembers.length !== 1) {
+    throw new Error(
+      packageMembers.length === 0
+        ? "VALIDATION_ERROR: Debe marcar una presentacion cerrada (empaque) para manejar stock cerrado/suelto."
+        : "VALIDATION_ERROR: Solo puede haber una presentacion marcada como empaque cerrado — las demás deben ser presentaciones sueltas alternativas.",
+    );
   }
 }
 
@@ -919,9 +987,12 @@ export async function createStockGroupRowsTx(
         saleUnit: member.saleUnit.trim(),
         conversionFactor: new Prisma.Decimal(member.conversionFactor),
         isCanonical: member.isCanonical,
-        isPackagePresentation: Boolean(
-          member.isPackagePresentation || (!member.isCanonical && input.tracksPackages),
-        ),
+        // Fusión triple: ya NO se fuerza a todo no-canónico a ser "el
+        // empaque" — con 3+ miembros eso marcaría dos cajas a la vez. Se
+        // respeta exactamente lo que decidió el llamador (validado arriba:
+        // con tracksPackages=true, validatePackageSettings ya exige que haya
+        // exactamente uno marcado true).
+        isPackagePresentation: Boolean(member.isPackagePresentation),
       },
     });
   }
@@ -984,19 +1055,15 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
             saleUnit: member.saleUnit.trim(),
             conversionFactor: new Prisma.Decimal(member.conversionFactor),
             isCanonical: member.isCanonical,
-            isPackagePresentation: Boolean(
-              member.isPackagePresentation ||
-                (!member.isCanonical && (input.tracksPackages ?? current.tracksPackages)),
-            ),
+            // Fusión triple: idem createStockGroupRowsTx — se respeta la
+            // bandera explícita, no se fuerza a todo no-canónico.
+            isPackagePresentation: Boolean(member.isPackagePresentation),
           },
           update: {
             saleUnit: member.saleUnit.trim(),
             conversionFactor: new Prisma.Decimal(member.conversionFactor),
             isCanonical: member.isCanonical,
-            isPackagePresentation: Boolean(
-              member.isPackagePresentation ||
-                (!member.isCanonical && (input.tracksPackages ?? current.tracksPackages)),
-            ),
+            isPackagePresentation: Boolean(member.isPackagePresentation),
             isActive: true,
           },
         });

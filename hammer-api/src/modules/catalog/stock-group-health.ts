@@ -55,8 +55,11 @@ export async function checkStockGroupHealth(
   const derived = group.products.filter((m) => !m.isCanonical);
   const allProductIds = group.products.map((m) => m.productId);
 
+  // Sin fallback a derived[0]: con fusión triple (3+ miembros) eso agarraría
+  // cualquier suelto alternativo como si fuera el empaque. La validación de
+  // escritura ya garantiza exactamente un isPackagePresentation.
   const packageMember = group.tracksPackages
-    ? group.products.find((m) => m.isPackagePresentation && !m.isCanonical) ?? derived[0]
+    ? group.products.find((m) => m.isPackagePresentation && !m.isCanonical) ?? null
     : null;
   const factor = group.tracksPackages
     ? new Prisma.Decimal(group.conversionFactorToBase ?? packageMember?.conversionFactor ?? 1)
