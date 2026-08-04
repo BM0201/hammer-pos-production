@@ -368,7 +368,7 @@ export function branchProductScopeFilter(branchId: string): Prisma.ProductWhereI
   };
 }
 
-export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string; limit?: number }) {
+export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string; limit?: number; inStockOnly?: boolean }) {
   const andClauses: Prisma.ProductWhereInput[] = [];
 
   if (params.branchId) andClauses.push(branchProductScopeFilter(params.branchId));
@@ -390,6 +390,13 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
     ...(andClauses.length > 0 ? { AND: andClauses } : {}),
   };
 
+  const limit = params.limit ?? 1000;
+  // El stock (fusión de paquetes/sueltas) se calcula DESPUÉS de traer los
+  // productos — no es expresable en el WHERE de Prisma — así que cuando se
+  // pide inStockOnly hay que sobre-pedir candidatos para no truncar de menos
+  // si varios de los primeros N no tienen stock disponible.
+  const fetchTake = params.inStockOnly && params.branchId ? Math.min(Math.max(limit * 5, 50), 500) : limit;
+
   const products = await prisma.product.findMany({
     where,
     include: {
@@ -408,12 +415,17 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
         : {}),
     },
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
-    take: params.limit ?? 1000,
+    take: fetchTake,
   });
 
   if (!params.branchId) return products;
 
-  return batchMapProductsWithBranchInventory(products, params.branchId);
+  const mapped = await batchMapProductsWithBranchInventory(products, params.branchId);
+  if (!params.inStockOnly) return mapped;
+
+  // Oculta del POS lo que no se puede vender hoy (sin stock) — el producto
+  // sigue existiendo en el catálogo, solo no aparece en la búsqueda del POS.
+  return mapped.filter((p) => (p.availableSaleStock ?? 0) > 0).slice(0, limit);
 }
 
 /**
@@ -760,8 +772,11 @@ export async function deleteOrDeactivateCategory(categoryId: string, actorUserId
   };
 }
 
-export async function getTopSellingProducts(params: { limit?: number; isActive?: boolean; branchId?: string }) {
+export async function getTopSellingProducts(params: { limit?: number; isActive?: boolean; branchId?: string; inStockOnly?: boolean }) {
   const limit = params.limit ?? 5;
+  // Ver comentario en listProducts: se sobre-pide para no truncar de menos
+  // cuando varios de los top-sellers no tienen stock en esta sucursal.
+  const fetchTake = params.inStockOnly && params.branchId ? Math.min(Math.max(limit * 5, 50), 500) : limit;
   const include = {
     category: true,
     ...(params.branchId
@@ -783,7 +798,7 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
     by: ["productId"],
     _sum: { quantity: true },
     orderBy: { _sum: { quantity: "desc" } },
-    take: limit,
+    take: fetchTake,
   });
 
   if (topLines.length === 0) {
@@ -792,9 +807,13 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
       where: { isActive: params.isActive },
       include,
       orderBy: { name: "asc" },
-      take: limit,
+      take: fetchTake,
     });
-    return params.branchId ? batchMapProductsWithBranchInventory(fallbackProducts, params.branchId) : fallbackProducts;
+    if (!params.branchId) return fallbackProducts;
+    const mappedFallback = await batchMapProductsWithBranchInventory(fallbackProducts, params.branchId);
+    return params.inStockOnly
+      ? mappedFallback.filter((p) => (p.availableSaleStock ?? 0) > 0).slice(0, limit)
+      : mappedFallback;
   }
 
   const productIds = topLines.map((line) => line.productId);
@@ -810,5 +829,9 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
   const idOrder = new Map(productIds.map((id, idx) => [id, idx]));
   products.sort((a, b) => (idOrder.get(a.id) ?? 99) - (idOrder.get(b.id) ?? 99));
 
-  return params.branchId ? batchMapProductsWithBranchInventory(products, params.branchId) : products;
+  if (!params.branchId) return products;
+  const mapped = await batchMapProductsWithBranchInventory(products, params.branchId);
+  return params.inStockOnly
+    ? mapped.filter((p) => (p.availableSaleStock ?? 0) > 0).slice(0, limit)
+    : mapped;
 }

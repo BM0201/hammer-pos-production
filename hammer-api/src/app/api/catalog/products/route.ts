@@ -1,10 +1,39 @@
+import type { SessionPayload } from "@/types/auth";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { hasBranchAccess } from "@/modules/rbac/guards";
+import { canInBranch, canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { createProduct, listProducts, getTopSellingProducts, checkSkuAvailable, previewAutoSku } from "@/modules/catalog/service";
 import { createProductSchema } from "@/modules/catalog/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, okCached, created, fail } from "@/lib/api/response";
+
+// Auditoría 2026-08-03: globalCost/averageCost/lastPurchaseCost/branchCost/
+// weightedAverageCost/effectiveCost/costSource viajaban siempre en la
+// respuesta de este endpoint — cualquier CASHIER/SALES autenticado podía
+// volcar el costo y margen real de todo el catálogo (el "costo del
+// navegador" que el resto del sistema evita deliberadamente). Se ocultan
+// salvo que el usuario tenga capacidad de ver precios/costos internos.
+const COST_FIELDS = [
+  "globalCost", "averageCost", "lastPurchaseCost",
+  "branchCost", "weightedAverageCost", "effectiveCost", "costSource",
+] as const;
+
+function canViewProductCosts(session: SessionPayload, branchId?: string): boolean {
+  const capabilities = [CAPABILITIES.FINANCE_VIEW_PRICING, CAPABILITIES.INVENTORY_VIEW, CAPABILITIES.BRANCH_INVENTORY_VIEW];
+  return branchId
+    ? capabilities.some((cap) => canInBranch(session, branchId, cap))
+    : capabilities.some((cap) => canInAnyAssignedBranch(session, cap));
+}
+
+function redactCostFields(rows: unknown[]): Record<string, unknown>[] {
+  return rows.map((row) => {
+    const clone = { ...(row as Record<string, unknown>) };
+    for (const field of COST_FIELDS) delete clone[field];
+    return clone;
+  });
+}
 
 export async function GET(request: Request) {
   try {
@@ -35,15 +64,27 @@ export async function GET(request: Request) {
     const limitParam = searchParams.get("limit");
     const limit = limitParam ? parseInt(limitParam, 10) : undefined;
     const branchId = searchParams.get("branchId") ?? undefined;
+    // Opt-in: solo el POS lo activa. El resto de las pantallas (catálogo,
+    // reposición, órdenes de compra, recetas, etc.) siguen viendo todo,
+    // incluidos los productos sin stock — los necesitan para gestionarlos.
+    const inStockOnly = searchParams.get("inStockOnly") === "true";
+
+    // Auditoría 2026-08-03: no se verificaba pertenencia a la sucursal
+    // pedida — cualquier usuario autenticado podía consultar el catálogo
+    // de una sucursal ajena con solo cambiar branchId.
+    if (branchId && !hasBranchAccess(session, branchId)) {
+      return fail("FORBIDDEN", "No tienes acceso a esta sucursal.", 403);
+    }
+    const canSeeCosts = canViewProductCosts(session, branchId);
 
     if (topSelling) {
-      const products = await getTopSellingProducts({ limit: limit ?? 5, isActive, branchId });
-      return okCached(products, 30);
+      const products = await getTopSellingProducts({ limit: limit ?? 5, isActive, branchId, inStockOnly });
+      return okCached(canSeeCosts ? products : redactCostFields(products), 30);
     }
 
-    const products = await listProducts({ q, isActive, branchId, limit });
+    const products = await listProducts({ q, isActive, branchId, limit, inStockOnly });
     // Search results: short TTL so new products appear within 30s
-    return okCached(products, 30);
+    return okCached(canSeeCosts ? products : redactCostFields(products), 30);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

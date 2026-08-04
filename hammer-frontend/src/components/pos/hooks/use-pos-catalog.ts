@@ -104,7 +104,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     }
 
     try {
-      const params = new URLSearchParams({ isActive: "true", topSelling: "true", limit: "5", branchId });
+      const params = new URLSearchParams({ isActive: "true", topSelling: "true", limit: "5", branchId, inStockOnly: "true" });
       const response = await fetch(`/api/catalog/products?${params.toString()}`);
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
@@ -223,7 +223,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     setLoadingProducts(true);
 
     try {
-      const params = new URLSearchParams({ q: query, isActive: "true", branchId, limit: "20" });
+      const params = new URLSearchParams({ q: query, isActive: "true", branchId, limit: "20", inStockOnly: "true" });
       const response = await fetch(`/api/catalog/products?${params.toString()}`, { signal: controller.signal });
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
