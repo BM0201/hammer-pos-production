@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { Boxes, PackageOpen, Plus, Search, Split, Wrench, X } from "lucide-react";
+import { Boxes, PackageCheck, PackageOpen, Plus, Search, Split, Wrench, X } from "lucide-react";
 
 /* ─────────────────────────── Tipos ─────────────────────────── */
 
@@ -125,6 +125,7 @@ export function InventoryFusionManager() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [openingGroup, setOpeningGroup] = useState<FusionGroup | null>(null);
+  const [closingGroup, setClosingGroup] = useState<FusionGroup | null>(null);
   const [unmergingGroup, setUnmergingGroup] = useState<FusionGroup | null>(null);
   const [repairingGroup, setRepairingGroup] = useState<FusionGroup | null>(null);
 
@@ -249,6 +250,11 @@ export function InventoryFusionManager() {
                             Abrir caja
                           </Button>
                         )}
+                        {group.tracksPackages && (
+                          <Button variant="ghost" size="sm" icon={<PackageCheck className="h-3.5 w-3.5" />} onClick={() => setClosingGroup(group)}>
+                            Empacar
+                          </Button>
+                        )}
                         {!group.health.healthy && (
                           <Button variant="ghost" size="sm" icon={<Wrench className="h-3.5 w-3.5" />} onClick={() => setRepairingGroup(group)}>
                             Reparar
@@ -286,6 +292,16 @@ export function InventoryFusionManager() {
           onClose={() => setOpeningGroup(null)}
           onDone={async () => {
             setOpeningGroup(null);
+            await loadGroups();
+          }}
+        />
+      )}
+      {closingGroup && (
+        <ClosePackageModal
+          group={closingGroup}
+          onClose={() => setClosingGroup(null)}
+          onDone={async () => {
+            setClosingGroup(null);
             await loadGroups();
           }}
         />
@@ -819,6 +835,92 @@ function OpenPackageModal({ group, onClose, onDone }: { group: FusionGroup; onCl
         </label>
         <Input label="Motivo" value={reason} onChange={(e) => setReason(e.target.value)} />
         <Button variant="primary" className="w-full" loading={saving} onClick={confirm}>Abrir y registrar</Button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ─────────────────────────── Empacar (reverso de abrir caja) ─────────────────────────── */
+
+function ClosePackageModal({ group, onClose, onDone }: { group: FusionGroup; onClose: () => void; onDone: () => void }) {
+  const factor = group.displayConversionFactor ?? group.conversionFactorToBase ?? 1;
+  const branchesWithLoose = group.branchStocks.filter((b) => b.looseUnitQuantity >= factor);
+  const [branchId, setBranchId] = useState(branchesWithLoose[0]?.branch.id ?? group.branchStocks[0]?.branch.id ?? "");
+  const [packagesToClose, setPackagesToClose] = useState<number | "">(1);
+  // Sueltas realmente consumidas — precargado con el estimado (factor ×
+  // cajas), editable para factores aproximados (ej. peso real al pesar).
+  const [actualUnitsConsumed, setActualUnitsConsumed] = useState<number | "">(factor);
+  const [reason, setReason] = useState("Reempaque de sueltas a empaque cerrado");
+  const [saving, setSaving] = useState(false);
+
+  const packageMember = group.members.find((m) => m.isPackagePresentation);
+  const selectedBranch = group.branchStocks.find((b) => b.branch.id === branchId);
+
+  function onPackagesChange(value: string) {
+    const parsed = value === "" ? "" : Number(value);
+    setPackagesToClose(parsed);
+    // Sincroniza el estimado de sueltas consumidas salvo que el usuario ya
+    // lo haya editado a mano para reflejar un peso real distinto.
+    setActualUnitsConsumed(parsed === "" ? "" : Number(parsed) * factor);
+  }
+
+  async function confirm() {
+    if (!branchId || !(Number(packagesToClose) > 0) || !Number.isInteger(Number(packagesToClose))) {
+      showToast("error", "Seleccioná sucursal y una cantidad entera de empaques mayor que 0.");
+      return;
+    }
+    if (!(Number(actualUnitsConsumed) > 0)) {
+      showToast("error", "Las unidades sueltas consumidas deben ser mayores que 0.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await apiFetch(`/api/inventory/stock-groups/${group.id}/close-package`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          branchId,
+          packageProductId: packageMember?.productId ?? null,
+          packagesToClose: Number(packagesToClose),
+          actualUnitsConsumed: Number(actualUnitsConsumed),
+          reason: reason.trim() || undefined,
+        }),
+      });
+      const raw = await readJson(res);
+      if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo reempacar."); return; }
+      showToast("success", "Sueltas reempacadas a empaque cerrado.");
+      onDone();
+    } catch {
+      showToast("error", "Error de red al reempacar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalShell title={`Empacar a ${group.packageUnit?.toLowerCase() ?? "empaque"} — ${group.name}`} onClose={onClose}>
+      <div className="space-y-3">
+        <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
+          Sucursal
+          <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
+            {group.branchStocks.map((b) => (
+              <option key={b.branch.id} value={b.branch.id}>{b.branch.code} — {b.branch.name} ({fmt(b.looseUnitQuantity)} sueltos)</option>
+            ))}
+          </select>
+        </label>
+        {selectedBranch && (
+          <p className="text-[11px] text-[var(--color-text-soft)]">Sueltos disponibles: {fmt(selectedBranch.looseUnitQuantity)} {group.baseUnit.toLowerCase()}</p>
+        )}
+        <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
+          Empaques a armar
+          <input type="number" min={1} step={1} value={packagesToClose} onChange={(e) => onPackagesChange(e.target.value)} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-right font-mono text-sm" />
+        </label>
+        <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
+          Sueltas realmente consumidas <span className="font-normal text-[var(--color-text-soft)]">(factor {factor} de referencia)</span>
+          <input type="number" value={actualUnitsConsumed} onChange={(e) => setActualUnitsConsumed(e.target.value === "" ? "" : Number(e.target.value))} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-right font-mono text-sm" />
+        </label>
+        <Input label="Motivo" value={reason} onChange={(e) => setReason(e.target.value)} />
+        <Button variant="primary" className="w-full" loading={saving} onClick={confirm}>Empacar y registrar</Button>
       </div>
     </ModalShell>
   );

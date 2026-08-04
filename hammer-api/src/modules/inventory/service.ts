@@ -350,20 +350,30 @@ export async function getSaleStockAvailabilityTx(
     };
   }
 
+  // Fusión triple: bug real — requestedQty viene en la unidad de venta del
+  // producto pedido (ej. LIBRA, factor≈0.4536), pero loose/openableUnits/
+  // equivalent están en unidades BASE (ej. KILO). En el modelo dual viejo
+  // esto nunca se notaba porque el único no-empaque posible era el
+  // canónico (factor=1, base=venta son la misma cosa) — con una
+  // presentación suelta alternativa de factor≠1 (Libra, Unidad) comparar
+  // sin convertir rechazaba ventas con stock de sobra, o aceptaba ventas
+  // sin stock suficiente, según los números. Se compara todo en base.
+  const requestedBaseQuantity = convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor });
   const openablePackages = Prisma.Decimal.max(0, closed.sub(reserve));
   const openableUnits = conversion.autoOpenForUnitSale ? openablePackages.mul(factor) : new Prisma.Decimal(0);
-  const availableLooseForSale = loose.add(openableUnits);
+  const availableLooseForSaleBase = loose.add(openableUnits);
+  const availableLooseForSale = convertBaseQtyToSaleQty({ baseQuantity: availableLooseForSaleBase, conversionFactor: conversion.conversionFactor });
   return {
-    ok: availableLooseForSale.gte(requestedQty),
+    ok: availableLooseForSaleBase.gte(requestedBaseQuantity),
     branchId: input.branchId,
     productId: input.productId,
     inventoryProductId: shared.inventoryProductId,
     requestedQuantity: requestedQty,
-    requestedBaseQuantity: requestedQty,
+    requestedBaseQuantity,
     availableBaseQuantity: equivalent,
     availableSaleQuantity: availableLooseForSale,
     stockMode: "LOOSE_WITH_AUTO_OPEN",
-    reason: availableLooseForSale.gte(requestedQty) ? undefined : "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK",
+    reason: availableLooseForSaleBase.gte(requestedBaseQuantity) ? undefined : "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK",
     details: {
       closedPackageQuantity: closed,
       looseUnitQuantity: loose,
@@ -383,6 +393,20 @@ type OpenPackageInput = {
   stockGroupId: string;
   packageProductId?: string | null;
   actualUnits?: number | null;
+  reason?: string | null;
+};
+
+type ClosePackageInput = {
+  actorUserId: string;
+  branchId: string;
+  stockGroupId: string;
+  packageProductId?: string | null;
+  /** Cuántos empaques (cajas) se arman — entero, ya que un empaque es una unidad física discreta. */
+  packagesToClose: number;
+  /** Sueltas realmente consumidas para armarlos, si difiere del estimado
+   * (factor aproximado — ej. el peso real varía un poco al pesar). Default:
+   * packagesToClose × conversionFactorToBase. */
+  actualUnitsConsumed?: number | null;
   reason?: string | null;
 };
 
@@ -1050,6 +1074,202 @@ export async function openStockPackage(input: OpenPackageInput) {
       baseUnit: group.baseUnit,
       estimatedUnits: Number(estimatedUnits),
       actualUnits: Number(actualUnits),
+      closedPackageQuantity: Number(updatedBalance.closedPackageQuantity),
+      looseUnitQuantity: Number(updatedBalance.looseUnitQuantity),
+      equivalentBaseQuantity: Number(updatedBalance.quantityOnHand),
+    };
+  });
+}
+
+/**
+ * Reverso de openStockPackage — reempaca sueltas de vuelta a empaque cerrado
+ * (ej. juntar libras/kilos sueltos y volver a formar cajas vendibles). Mismo
+ * patrón: transacción propia, lock del canónico, movimiento manual propio
+ * (no pasa por createInventoryMovementTx), auditoría, y health-check al
+ * final que nunca tumba la operación.
+ *
+ * El WAC (costo por unidad base) NO cambia — reempacar es solo reordenar la
+ * MISMA existencia física entre "cerrado" y "suelto", no una compra/venta.
+ * Si actualUnitsConsumed difiere del estimado (factor aproximado), el
+ * equivalente base sí varía un poco — igual que openStockPackage con
+ * actualUnits.
+ */
+export async function closeStockPackage(input: ClosePackageInput) {
+  return prisma.$transaction(async (tx) => {
+    const group = await tx.productStockGroup.findUnique({
+      where: { id: input.stockGroupId },
+      include: {
+        products: {
+          where: { isActive: true },
+          include: { product: { select: { id: true, sku: true, name: true } } },
+          orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
+        },
+      },
+    });
+    if (!group || !group.isActive) throw new Error("NOT_FOUND: Grupo de stock no encontrado.");
+    if (!group.tracksPackages || !group.packageUnit || !group.conversionFactorToBase) {
+      throw new Error("VALIDATION_ERROR: Este grupo no maneja stock cerrado/suelto.");
+    }
+
+    const canonical = group.products.find((member) => member.isCanonical)
+      ?? group.products.find((member) => new Prisma.Decimal(member.conversionFactor).eq(1));
+    const packageMember = input.packageProductId
+      ? group.products.find((member) => member.productId === input.packageProductId)
+      : group.products.find((member) => member.isPackagePresentation);
+    if (!canonical || !packageMember) {
+      throw new Error("VALIDATION_ERROR: El grupo requiere producto base y presentacion cerrada.");
+    }
+
+    const packagesToClose = new Prisma.Decimal(input.packagesToClose ?? 0);
+    if (!packagesToClose.isInteger() || packagesToClose.lte(0)) {
+      throw new Error("VALIDATION_ERROR: La cantidad de empaques a cerrar debe ser un entero mayor que 0.");
+    }
+
+    const estimatedFactor = group.conversionFactorToBase;
+    const estimatedUnitsConsumed = packagesToClose.mul(estimatedFactor);
+    const actualUnitsConsumed = input.actualUnitsConsumed != null
+      ? new Prisma.Decimal(input.actualUnitsConsumed)
+      : estimatedUnitsConsumed;
+    if (actualUnitsConsumed.lte(0)) {
+      throw new Error("VALIDATION_ERROR: Las unidades sueltas consumidas deben ser mayores que 0.");
+    }
+
+    await tx.inventoryBalance.upsert({
+      where: { branchId_productId: { branchId: input.branchId, productId: canonical.productId } },
+      create: {
+        branchId: input.branchId,
+        productId: canonical.productId,
+        quantityOnHand: 0,
+        closedPackageQuantity: 0,
+        looseUnitQuantity: 0,
+        weightedAverageCost: 0,
+        inventoryValue: 0,
+      },
+      update: {},
+    });
+    await tx.$queryRaw`
+      SELECT id
+      FROM "InventoryBalance"
+      WHERE "branchId" = ${input.branchId}
+        AND "productId" = ${canonical.productId}
+      FOR UPDATE
+    `;
+
+    const balance = await tx.inventoryBalance.findUnique({
+      where: { branchId_productId: { branchId: input.branchId, productId: canonical.productId } },
+    });
+    if (!balance) throw new Error("INVENTORY_BALANCE_NOT_FOUND");
+    if (balance.looseUnitQuantity.lt(actualUnitsConsumed)) {
+      throw new Error("INSUFFICIENT_LOOSE_STOCK_TO_CLOSE_PACKAGE");
+    }
+
+    const closedPackageBefore = balance.closedPackageQuantity;
+    const looseUnitBefore = balance.looseUnitQuantity;
+    const equivalentBaseBefore = balance.quantityOnHand;
+    const closedPackageAfter = closedPackageBefore.add(packagesToClose);
+    const looseUnitAfter = looseUnitBefore.sub(actualUnitsConsumed);
+    const equivalentBaseAfter = closedPackageAfter.mul(estimatedFactor).add(looseUnitAfter);
+    const reason = input.reason?.trim() || "Reempaque de sueltas a empaque cerrado";
+
+    const movement = await tx.inventoryMovement.create({
+      data: {
+        branchId: input.branchId,
+        productId: canonical.productId,
+        movementType: "PACKAGE_CLOSED",
+        quantity: packagesToClose,
+        unitCost: balance.weightedAverageCost,
+        referenceType: "PACKAGE_CLOSING",
+        referenceId: `CLOSE-PACKAGE-${Date.now()}`,
+        notes: reason,
+        inputProductId: packageMember.productId,
+        inputQuantity: packagesToClose,
+        inputUnit: group.packageUnit,
+        packageUnit: group.packageUnit,
+        baseUnit: group.baseUnit,
+        conversionFactorSnapshot: estimatedFactor,
+        estimatedUnits: estimatedUnitsConsumed,
+        actualUnits: actualUnitsConsumed,
+        closedPackageBefore,
+        closedPackageAfter,
+        looseUnitBefore,
+        looseUnitAfter,
+        equivalentBaseBefore,
+        equivalentBaseAfter,
+        reason,
+        userId: input.actorUserId,
+      },
+    });
+
+    const updatedBalance = await tx.inventoryBalance.update({
+      where: { id: balance.id },
+      data: {
+        closedPackageQuantity: closedPackageAfter,
+        looseUnitQuantity: looseUnitAfter,
+        quantityOnHand: equivalentBaseAfter,
+        inventoryValue: equivalentBaseAfter.mul(balance.weightedAverageCost),
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "inventory",
+        action: "PACKAGE_CLOSED",
+        entityType: "ProductStockGroup",
+        entityId: group.id,
+        metadataJson: {
+          stockGroupId: group.id,
+          packageProductId: packageMember.productId,
+          canonicalProductId: canonical.productId,
+          packageUnit: group.packageUnit,
+          baseUnit: group.baseUnit,
+          packagesToClose: packagesToClose.toString(),
+          estimatedUnitsConsumed: estimatedUnitsConsumed.toString(),
+          actualUnitsConsumed: actualUnitsConsumed.toString(),
+          closedPackageBefore: closedPackageBefore.toString(),
+          closedPackageAfter: closedPackageAfter.toString(),
+          looseUnitBefore: looseUnitBefore.toString(),
+          looseUnitAfter: looseUnitAfter.toString(),
+          equivalentBaseBefore: equivalentBaseBefore.toString(),
+          equivalentBaseAfter: equivalentBaseAfter.toString(),
+          reason,
+        },
+      },
+    });
+
+    // Ver comentario equivalente en openStockPackage: el health-check nunca tumba la operación real.
+    try {
+      const health = await checkStockGroupHealth(tx, { stockGroupId: group.id, branchId: input.branchId });
+      if (!health.healthy) {
+        await tx.auditLog.create({
+          data: {
+            actorUserId: input.actorUserId,
+            branchId: input.branchId,
+            module: "inventory",
+            action: "STOCK_GROUP_HEALTH_CHECK_FAILED",
+            entityType: "ProductStockGroup",
+            entityId: group.id,
+            metadataJson: { triggeredByMovementId: movement.id, issues: health.issues },
+          },
+        });
+      }
+    } catch {
+      // El verificador de salud nunca debe tumbar la operación real.
+    }
+
+    return {
+      ok: true,
+      movementId: movement.id,
+      branchId: input.branchId,
+      stockGroupId: group.id,
+      packageProductId: packageMember.productId,
+      baseProductId: canonical.productId,
+      packageUnit: group.packageUnit,
+      baseUnit: group.baseUnit,
+      packagesToClose: Number(packagesToClose),
+      estimatedUnitsConsumed: Number(estimatedUnitsConsumed),
+      actualUnitsConsumed: Number(actualUnitsConsumed),
       closedPackageQuantity: Number(updatedBalance.closedPackageQuantity),
       looseUnitQuantity: Number(updatedBalance.looseUnitQuantity),
       equivalentBaseQuantity: Number(updatedBalance.quantityOnHand),

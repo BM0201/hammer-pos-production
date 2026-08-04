@@ -396,6 +396,12 @@ const DESCRIPTORS: Record<string, Descriptor> = {
     label: "abrió un paquete cerrado",
     headline: () => [seg("abrió un paquete cerrado para vender por unidad")],
   },
+  PACKAGE_CLOSED: {
+    sensitive: false,
+    role: "info",
+    label: "reempacó sueltas a empaque cerrado",
+    headline: () => [seg("reempacó unidades sueltas de vuelta a empaque cerrado")],
+  },
   MASS_DELETE_ALL_PRODUCTS: {
     sensitive: true,
     role: "danger",

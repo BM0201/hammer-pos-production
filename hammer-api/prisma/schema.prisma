@@ -144,6 +144,7 @@ enum InventoryMovementType {
   PACKAGE_SALE_OUT
   PACKAGE_OPENED
   PACKAGE_AUTO_OPENED
+  PACKAGE_CLOSED /// Fusión triple: reempaca sueltas de vuelta a empaque cerrado (reverso de PACKAGE_OPENED)
   LOOSE_UNIT_SALE_OUT
   LOOSE_UNIT_RETURN_IN
   LOOSE_ADJUSTMENT

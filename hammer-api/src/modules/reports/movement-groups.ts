@@ -14,8 +14,9 @@ import { InventoryMovementType } from "@prisma/client";
  *   bodega de dañados — sigue siendo un ingreso físico → Ingresos.
  * - LOOSE_UNIT_RETURN_IN: inventory/service.ts, variante "suelta" de
  *   RETURN_IN → Ingresos.
- * - PACKAGE_OPENED / PACKAGE_AUTO_OPENED: conversión interna de paquete
- *   cerrado a unidades sueltas (mismo valor, cambia la forma) → Conteos/ajustes.
+ * - PACKAGE_OPENED / PACKAGE_AUTO_OPENED / PACKAGE_CLOSED: conversión interna
+ *   entre paquete cerrado y unidades sueltas en cualquier sentido (mismo
+ *   valor, cambia la forma) → Conteos/ajustes.
  * - PRODUCTION_CONSUME / PRODUCTION_WASTE: consumo y merma de un lote de
  *   producción — PRODUCTION_WASTE es literalmente la merma que el prompt pide
  *   distinguir dentro de "Conteos" vía `reason` → Conteos/ajustes.
@@ -54,6 +55,7 @@ export const MOVEMENT_TYPE_GROUP: Record<InventoryMovementType, MovementGroup> =
   PACKAGE_ADJUSTMENT: "conteos",
   PACKAGE_OPENED: "conteos",
   PACKAGE_AUTO_OPENED: "conteos",
+  PACKAGE_CLOSED: "conteos",
   PRODUCTION_CONSUME: "conteos",
   PRODUCTION_WASTE: "conteos",
   PRODUCTION_REVERSAL_IN: "conteos",
