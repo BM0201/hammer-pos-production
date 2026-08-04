@@ -6,6 +6,7 @@ import { createPurchaseOrder } from "@/modules/purchase-orders/service";
 import { createTransfer } from "@/modules/transfers/service";
 import { logAuditEvent } from "@/modules/audit/service";
 import { resolveReplenishmentParamsBatch, getInboundQuantities, type ReplenishmentMode, type InboundDocument } from "@/modules/inventory/replenishment-params-service";
+import { branchProductScopeFilter } from "@/modules/catalog/service";
 
 export type ReplenishmentCriticality =
   | "CRITICAL"
@@ -187,6 +188,74 @@ async function getSalesMaps(branchId: string, productIds: string[]) {
     last90: new Map(last90.map((row) => [row.productId, finiteNumber(row._sum.quantity)])),
     lastSoldAt: new Map(lastSales.map((row) => [row.productId, row.saleOrder.createdAt.toISOString()])),
   };
+}
+
+const NETWORK_DEMAND_WINDOW_DAYS = 180;
+
+/**
+ * Demanda diaria promedio EN TODA LA RED (sin filtrar por sucursal), ultimos
+ * 6 meses. Respaldo para cuando esta sucursal no tiene historial propio de
+ * ventas de un producto — evita depender de Product.averageDailySales, que
+ * solo se actualiza cuando alguien corre la clasificacion ABC-XYZ manual
+ * (sin cron), y por eso puede quedar vacio o desactualizado indefinidamente.
+ */
+async function getNetworkAverageDailyDemandMap(productIds: string[]): Promise<Map<string, number>> {
+  if (productIds.length === 0) return new Map();
+  const statuses = ["PAID", "DISPATCH_PENDING", "DISPATCHED"] as const;
+  const rows = await prisma.saleOrderLine.groupBy({
+    by: ["productId"],
+    where: { productId: { in: productIds }, saleOrder: { status: { in: statuses as any }, createdAt: { gte: daysAgo(NETWORK_DEMAND_WINDOW_DAYS) } } },
+    _sum: { quantity: true },
+  });
+  return new Map(rows.map((row) => [row.productId, finiteNumber(row._sum.quantity) / NETWORK_DEMAND_WINDOW_DAYS]));
+}
+
+type GroupExpansion = Map<string, Array<{ productId: string; conversionFactor: number }>>;
+
+/**
+ * Fusión de Inventario: un producto puede venderse bajo varias presentaciones
+ * (ej. hierro por Quintal o por Varilla) que son PRODUCTOS DISTINTOS en el
+ * catálogo, cada uno con su propio SaleOrderLine.productId — pero comparten
+ * un solo InventoryBalance bajo el producto canónico. Sumar ventas filtrando
+ * solo por el productId canónico ignora por completo lo vendido bajo las
+ * presentaciones hermanas: la demanda calculada "se desconecta" de la
+ * demanda real, y la reposición llega tarde aunque el stock total (que sí
+ * esta bien consolidado) se vea "alto" en unidades base.
+ *
+ * Devuelve, por cada producto canónico candidato, la lista de TODOS los
+ * miembros de su grupo (incluido el mismo) con su factor de conversión a
+ * unidad base — para sumar ventas de todas las presentaciones convertidas a
+ * una escala comun antes de compararlas contra el stock (que ya esta en
+ * unidad base).
+ */
+async function getGroupExpansionForCanonicalIds(canonicalIds: string[]): Promise<GroupExpansion> {
+  const expansion: GroupExpansion = new Map();
+  if (canonicalIds.length === 0) return expansion;
+
+  const rows = await prisma.productStockGroupMember.findMany({
+    where: { productId: { in: canonicalIds }, isCanonical: true, isActive: true, stockGroup: { isActive: true } },
+    select: {
+      productId: true,
+      stockGroup: {
+        select: {
+          products: { where: { isActive: true }, select: { productId: true, conversionFactor: true } },
+        },
+      },
+    },
+  });
+  for (const row of rows) {
+    expansion.set(row.productId, row.stockGroup.products.map((p) => ({ productId: p.productId, conversionFactor: finiteNumber(p.conversionFactor, 1) })));
+  }
+  return expansion;
+}
+
+/** Suma ventas de todas las presentaciones de un grupo, convertidas a unidad base. Sin grupo, se comporta igual que antes (solo su propio productId, factor 1). */
+function sumGroupBaseUnits(rawMap: Map<string, number>, canonicalId: string, expansion: GroupExpansion): number {
+  const members = expansion.get(canonicalId);
+  if (!members) return rawMap.get(canonicalId) ?? 0;
+  let total = 0;
+  for (const member of members) total += (rawMap.get(member.productId) ?? 0) * member.conversionFactor;
+  return total;
 }
 
 function determineCriticality(params: {
@@ -543,21 +612,67 @@ export type ReplenishmentSignal = {
 };
 
 export async function getReplenishmentSignals(branchId: string) {
-  const balances = await prisma.inventoryBalance.findMany({
-    where: { branchId, product: { isActive: true, isTimber: false } },
-    include: {
-      product: {
-        select: { id: true, sku: true, name: true, categoryId: true, averageDailySales: true },
+  const [balances, nonCanonicalMemberRows] = await Promise.all([
+    prisma.inventoryBalance.findMany({
+      where: { branchId, product: { isActive: true, isTimber: false } },
+      include: {
+        product: {
+          select: { id: true, sku: true, name: true, categoryId: true },
+        },
       },
-    },
-    orderBy: { inventoryValue: "desc" },
-  });
+      orderBy: { inventoryValue: "desc" },
+    }),
+    // Presentaciones no-canonicas (ej. "Quintal" cuando "Varilla" es la
+    // base) nunca tienen su propia fila de InventoryBalance — su stock vive
+    // enteramente en el balance del canonico. Se excluyen de los candidatos
+    // "fantasma" de abajo para no crear una fila separada con "stock 0"
+    // enganosa junto a la del canonico real.
+    prisma.productStockGroupMember.findMany({
+      where: { isCanonical: false, isActive: true, stockGroup: { isActive: true } },
+      select: { productId: true },
+    }),
+  ]);
+  const nonCanonicalMemberIds = new Set(nonCanonicalMemberRows.map((r) => r.productId));
 
-  const productIds = balances.map((b) => b.productId);
+  // Bug: un producto sin NINGUN movimiento en esta sucursal (nunca llego,
+  // nunca se vendio ahi) no tiene fila de InventoryBalance — y por lo tanto
+  // era invisible para el motor, sin importar cuanto venda en el resto de
+  // la red. Se agregan como candidatos "fantasma" (stock 0) los productos
+  // que ya estan "en el radar" de esta sucursal: historial de venta ahi,
+  // marcados disponibles manualmente, o con un traslado entrante — el mismo
+  // criterio que ya usa el POS/Catalogo (branchProductScopeFilter) para
+  // decidir que le pertenece a cada sucursal.
+  const existingProductIds = new Set(balances.map((b) => b.productId));
+  const phantomProducts = await prisma.product.findMany({
+    where: {
+      isActive: true,
+      isTimber: false,
+      id: { notIn: [...existingProductIds, ...nonCanonicalMemberIds] },
+      ...branchProductScopeFilter(branchId),
+    },
+    select: { id: true, sku: true, name: true, categoryId: true },
+  });
+  const phantomBalances = phantomProducts.map((product) => ({
+    productId: product.id,
+    quantityOnHand: 0,
+    product,
+  }));
+
+  const candidates = [...balances, ...phantomBalances];
+  const productIds = candidates.map((c) => c.productId);
   const pairs = productIds.map((productId) => ({ branchId, productId }));
 
-  const [sales, recipesSet, pricingByKey, commercialByKey, policyByKey, branchSettingRows, paramsByProductId, inboundByProductId] = await Promise.all([
-    getSalesMaps(branchId, productIds),
+  // Fusion de Inventario: expandir cada candidato canonico a todos los
+  // productId de sus presentaciones hermanas (ej. Quintal + Varilla) para
+  // sumar ventas de TODAS al calcular demanda — ver sumGroupBaseUnits.
+  const groupExpansion = await getGroupExpansionForCanonicalIds(productIds);
+  const salesProductIds = [...new Set(
+    productIds.flatMap((id) => (groupExpansion.get(id) ?? [{ productId: id, conversionFactor: 1 }]).map((m) => m.productId)),
+  )];
+
+  const [sales, networkDemand, recipesSet, pricingByKey, commercialByKey, policyByKey, branchSettingRows, paramsByProductId, inboundByProductId] = await Promise.all([
+    getSalesMaps(branchId, salesProductIds),
+    getNetworkAverageDailyDemandMap(salesProductIds),
     prisma.productionRecipe.findMany({ where: { finishedProductId: { in: productIds }, isActive: true }, select: { finishedProductId: true } })
       .then((rows) => new Set(rows.map((r) => r.finishedProductId))),
     getEffectiveProductPricingBatch(prisma, pairs),
@@ -576,7 +691,7 @@ export async function getReplenishmentSignals(branchId: string) {
 
   const signals: ReplenishmentSignal[] = [];
 
-  for (const balance of balances) {
+  for (const balance of candidates) {
     const params = paramsByProductId.get(balance.productId);
     if (params?.mode === "EXCLUDED") continue;
 
@@ -588,10 +703,22 @@ export async function getReplenishmentSignals(branchId: string) {
     const branchSetting = branchSettingByProductId.get(balance.productId) ?? null;
 
     const warnings: string[] = [];
-    const unitsSoldLast30Days = sales.last30.get(balance.productId) ?? 0;
-    const unitsSoldLast90Days = sales.last90.get(balance.productId) ?? 0;
+    // Suma ventas de TODAS las presentaciones del grupo (ej. Quintal +
+    // Varilla), convertidas a unidad base — no solo las del producto
+    // canonico. Sin esto la demanda de un producto fusionado se desconecta
+    // de sus ventas reales cuando la mayoria se vende bajo una presentacion
+    // hermana, y la reposicion llega tarde.
+    const unitsSoldLast30Days = sumGroupBaseUnits(sales.last30, balance.productId, groupExpansion);
+    const unitsSoldLast90Days = sumGroupBaseUnits(sales.last90, balance.productId, groupExpansion);
     let averageDailyDemand = unitsSoldLast30Days > 0 ? unitsSoldLast30Days / 30 : unitsSoldLast90Days > 0 ? unitsSoldLast90Days / 90 : 0;
-    if (averageDailyDemand <= 0 && balance.product.averageDailySales) averageDailyDemand = finiteNumber(balance.product.averageDailySales);
+    // Sin historial propio en esta sucursal: usar demanda de red (ultimos 6
+    // meses, calculada en vivo, tambien agregada por grupo) en vez de
+    // Product.averageDailySales, que depende de que alguien haya corrido la
+    // clasificacion ABC-XYZ manual.
+    if (averageDailyDemand <= 0) {
+      const fromNetwork = sumGroupBaseUnits(networkDemand, balance.productId, groupExpansion);
+      if (fromNetwork > 0) averageDailyDemand = fromNetwork;
+    }
 
     const stockOnHand = finiteNumber(balance.quantityOnHand);
     const safetyDays = xyzSafetyDays(commercial.xyzClass) + abcSafetyDays(commercial.abcClass);
