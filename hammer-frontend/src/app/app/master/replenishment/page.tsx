@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import Link from "next/link";
 import toast from "react-hot-toast";
 import {
   Plus, CheckCircle, Loader2, X, Search, Send, Ban, Package,
@@ -13,7 +14,7 @@ import { money, qty, fmtDate, fmtDateTime } from "@/lib/format";
  * Tipos
  * ══════════════════════════════════════════════════════════════ */
 
-type Product = { id: string; sku: string; name: string; unit: string };
+type Product = { id: string; sku: string; name: string; unit: string; isTimber?: boolean };
 type Branch = { id: string; code: string; name: string; isDefaultSupplier?: boolean };
 type Supplier = { id: string; name: string; ruc?: string | null; paymentTerms?: string | null };
 
@@ -1098,6 +1099,100 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
 }
 
 /* ══════════════════════════════════════════════════════════════
+ * TAB — MADERA (aparte del motor general: pedido especial por viaje/trip,
+ * no por punto de reposición automático)
+ * ══════════════════════════════════════════════════════════════ */
+
+type TimberReplenishmentItem = {
+  productId: string;
+  sku: string;
+  name: string;
+  stockOnHand: number;
+  unitsSoldLast30Days: number;
+  unitsSoldLast90Days: number;
+  lastSoldAt: string | null;
+};
+
+function TimberTab({ branchId }: { branchId: string }) {
+  const [items, setItems] = useState<TimberReplenishmentItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchItems = useCallback(async () => {
+    if (!branchId) return;
+    try {
+      setLoading(true);
+      const res = await apiFetch(`/api/inventory/replenishment/timber-signals?branchId=${branchId}`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al cargar madera");
+      const data = unwrapApiData(raw);
+      setItems(Array.isArray(data?.items) ? data.items : []);
+    } catch (error) {
+      toast.error(getErr(error, "Error al cargar madera"));
+    } finally {
+      setLoading(false);
+    }
+  }, [branchId]);
+
+  useEffect(() => { fetchItems(); }, [fetchItems]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="hm-kpi-filter" data-active={false}><b>{items.length}</b> dimensión{items.length === 1 ? "" : "es"} en cero</span>
+          <button onClick={fetchItems} className="hm-icon-btn" title="Actualizar"><RefreshCw className="h-4 w-4" /></button>
+        </div>
+        <Link
+          href="/app/master/timber/new"
+          className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[var(--color-master-700)]"
+        >
+          <Plus className="h-3.5 w-3.5" /> Planificar viaje de madera
+        </Link>
+      </div>
+      <p className="text-[0.78rem] text-[var(--color-text-muted)]">
+        La madera se compra por viaje con dimensiones específicas, no por punto de reposición automático — por eso está aparte del resto del motor.
+      </p>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-[var(--color-master-500)]" /></div>
+      ) : items.length === 0 ? (
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-center text-sm text-[var(--color-text-muted)]">
+          Ninguna dimensión de madera está en cero en esta sucursal.
+        </div>
+      ) : (
+        <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
+          <table className="hm-sheet-table">
+            <thead>
+              <tr>
+                <th>Dimensión</th>
+                <th className="hm-num">Stock</th>
+                <th className="hm-num">Vendido 30d</th>
+                <th className="hm-num">Vendido 90d</th>
+                <th>Última venta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr key={item.productId}>
+                  <td>
+                    <span className="font-medium text-[var(--color-text)]">{item.name}</span>
+                    <span className="ml-1.5 font-mono text-[0.68rem] text-[var(--color-text-muted)]">{item.sku}</span>
+                  </td>
+                  <td className="hm-num font-semibold text-[var(--color-danger-700)]">{qty(item.stockOnHand)}</td>
+                  <td className="hm-num">{qty(item.unitsSoldLast30Days)}</td>
+                  <td className="hm-num">{qty(item.unitsSoldLast90Days)}</td>
+                  <td className="text-[0.75rem] text-[var(--color-text-muted)]">{item.lastSoldAt ? fmtDate(item.lastSoldAt) : "Sin ventas registradas"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════
  * TAB 4 — EN CAMINO
  * ══════════════════════════════════════════════════════════════ */
 
@@ -1356,7 +1451,7 @@ function ParamsTab({ branchId, suppliers }: { branchId: string; suppliers: Suppl
  * PÁGINA PRINCIPAL — REPOSICIÓN INTELIGENTE
  * ══════════════════════════════════════════════════════════════ */
 
-type MainTab = "signals" | "plan" | "transit" | "inbound" | "params";
+type MainTab = "signals" | "plan" | "transit" | "inbound" | "params" | "timber";
 
 const MAIN_TABS: Array<{ key: MainTab; label: string }> = [
   { key: "signals", label: "Señales" },
@@ -1364,6 +1459,7 @@ const MAIN_TABS: Array<{ key: MainTab; label: string }> = [
   { key: "transit", label: "Traslados" },
   { key: "inbound", label: "En camino" },
   { key: "params", label: "Parámetros" },
+  { key: "timber", label: "Madera" },
 ];
 
 export default function ReplenishmentPage() {
@@ -1386,7 +1482,11 @@ export default function ReplenishmentPage() {
       const sData = unwrapApiData(await sRes.json());
       const branchList = Array.isArray(bData) ? bData : [];
       setBranches(branchList);
-      setProducts(Array.isArray(pData) ? pData : []);
+      // La madera se compra por pedido especial (viaje/trip con dimensiones
+      // especificas, ver pestana Madera) — no debe aparecer en los
+      // buscadores manuales de Plan/Traslados como si fuera un producto de
+      // compra rutinaria.
+      setProducts(Array.isArray(pData) ? (pData as Product[]).filter((p) => !p.isTimber) : []);
       setSuppliers(Array.isArray(sData) ? sData : []);
       const firstNonCentral = branchList.find((b: Branch) => !b.isDefaultSupplier) ?? branchList[0];
       if (firstNonCentral) setBranchId(firstNonCentral.id);
@@ -1424,6 +1524,7 @@ export default function ReplenishmentPage() {
           {activeTab === "transit" && <TransitTab branchId={branchId} branches={branches} products={products} />}
           {activeTab === "inbound" && <InboundTab branchId={branchId} />}
           {activeTab === "params" && <ParamsTab branchId={branchId} suppliers={suppliers} />}
+          {activeTab === "timber" && <TimberTab branchId={branchId} />}
         </>
       )}
     </section>

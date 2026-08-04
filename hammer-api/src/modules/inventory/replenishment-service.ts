@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEffectiveProductPricing, getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { buildCommercialIntelligenceBatch, type CommercialRiskLevel } from "@/modules/pricing/commercial-intelligence";
@@ -97,6 +98,21 @@ type RecommendationParams = {
 };
 
 const DEFAULT_LEAD_TIME_DAYS = 7;
+
+// isTimber es un flag independiente de la categoria — se marca en el alta
+// general de producto, no se deriva de categoryId. Un producto categoria
+// "Madera" creado sin pasar por el flujo dedicado de viajes (timber/service.ts)
+// puede quedar con isTimber=false y colarse en el motor general. Se excluye
+// por AMBOS criterios — mismo heuristico que ya usa el detector de Brain
+// (inventory-detector.ts) para esta misma discrepancia — para que "categoria
+// madera" nunca aparezca ahi, sin importar si el flag esta bien puesto.
+const WOOD_PRODUCT_FILTER: Prisma.ProductWhereInput = {
+  OR: [
+    { isTimber: true },
+    { category: { code: { startsWith: "MAD", mode: "insensitive" } } },
+    { category: { name: { contains: "MADERA", mode: "insensitive" } } },
+  ],
+};
 
 function daysAgo(days: number) {
   const date = new Date();
@@ -340,7 +356,7 @@ export async function getReplenishmentRecommendations(params: RecommendationPara
           sku: true,
           name: true,
           categoryId: true,
-          category: { select: { name: true } },
+          category: { select: { name: true, code: true } },
           averageDailySales: true,
           daysInStock: true,
           isTimber: true,
@@ -350,9 +366,16 @@ export async function getReplenishmentRecommendations(params: RecommendationPara
     orderBy: { inventoryValue: "desc" },
   });
 
-  // Separate timber products — they have their own procurement flow (TimberTrip)
-  const timberBalances = balances.filter((b) => b.product.isTimber);
-  const regularBalances = balances.filter((b) => !b.product.isTimber);
+  // Separate timber products — they have their own procurement flow
+  // (TimberTrip). isTimber es independiente de la categoria (se marca en el
+  // alta general de producto) — un producto categoria "Madera" creado sin
+  // pasar por el flujo dedicado puede quedar con isTimber=false, por eso se
+  // revisa tambien codigo/nombre de categoria (mismo heuristico del
+  // detector de Brain para esta discrepancia).
+  const isWoodProduct = (product: { isTimber: boolean; category: { name: string; code: string } | null }) =>
+    product.isTimber || product.category?.code?.toUpperCase().startsWith("MAD") || Boolean(product.category?.name?.toUpperCase().includes("MADERA"));
+  const timberBalances = balances.filter((b) => isWoodProduct(b.product));
+  const regularBalances = balances.filter((b) => !isWoodProduct(b.product));
 
   const productIds = regularBalances.map((balance) => balance.productId);
   const pairs = productIds.map((productId) => ({ branchId: params.branchId, productId }));
@@ -614,7 +637,7 @@ export type ReplenishmentSignal = {
 export async function getReplenishmentSignals(branchId: string) {
   const [balances, nonCanonicalMemberRows] = await Promise.all([
     prisma.inventoryBalance.findMany({
-      where: { branchId, product: { isActive: true, isTimber: false } },
+      where: { branchId, product: { isActive: true, NOT: WOOD_PRODUCT_FILTER } },
       include: {
         product: {
           select: { id: true, sku: true, name: true, categoryId: true },
@@ -646,7 +669,7 @@ export async function getReplenishmentSignals(branchId: string) {
   const phantomProducts = await prisma.product.findMany({
     where: {
       isActive: true,
-      isTimber: false,
+      NOT: WOOD_PRODUCT_FILTER,
       id: { notIn: [...existingProductIds, ...nonCanonicalMemberIds] },
       ...branchProductScopeFilter(branchId),
     },
@@ -829,6 +852,55 @@ export async function getReplenishmentSignals(branchId: string) {
   };
 
   return { branchId, generatedAt: new Date().toISOString(), signals, summary };
+}
+
+export type TimberReplenishmentItem = {
+  productId: string;
+  sku: string;
+  name: string;
+  branchId: string;
+  stockOnHand: number;
+  unitsSoldLast30Days: number;
+  unitsSoldLast90Days: number;
+  lastSoldAt: string | null;
+};
+
+/**
+ * Reposición de Madera — deliberadamente APARTE del motor general
+ * (getReplenishmentSignals la excluye por completo via WOOD_PRODUCT_FILTER).
+ * La madera se compra por pedido especial (viaje/trip con dimensiones
+ * específicas), no por punto de reposición automático como el resto del
+ * catálogo — mezclarla ahí llevaba a que apareciera en los buscadores
+ * manuales de Plan/Traslados como si fuera un producto de compra rutinaria.
+ * Esta señal es intencionalmente simple: solo productos de madera con stock
+ * en cero en la sucursal, con su contexto de venta reciente para dimensionar
+ * el viaje — sin ABC/XYZ ni punto de reposición, no aplican al patrón de
+ * compra de madera.
+ */
+export async function getTimberReplenishmentSignals(branchId: string) {
+  const balances = await prisma.inventoryBalance.findMany({
+    where: { branchId, product: { isActive: true, ...WOOD_PRODUCT_FILTER } },
+    include: { product: { select: { id: true, sku: true, name: true } } },
+    orderBy: { quantityOnHand: "asc" },
+  });
+
+  const productIds = balances.map((b) => b.productId);
+  const sales = await getSalesMaps(branchId, productIds);
+
+  const items: TimberReplenishmentItem[] = balances
+    .map((b) => ({
+      productId: b.productId,
+      sku: b.product.sku,
+      name: b.product.name,
+      branchId,
+      stockOnHand: finiteNumber(b.quantityOnHand),
+      unitsSoldLast30Days: sales.last30.get(b.productId) ?? 0,
+      unitsSoldLast90Days: sales.last90.get(b.productId) ?? 0,
+      lastSoldAt: sales.lastSoldAt.get(b.productId) ?? null,
+    }))
+    .filter((item) => item.stockOnHand <= 0);
+
+  return { branchId, generatedAt: new Date().toISOString(), items };
 }
 
 /**
