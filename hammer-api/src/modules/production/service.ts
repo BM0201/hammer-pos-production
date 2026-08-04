@@ -9,6 +9,7 @@ import {
   getProductStockConversion,
   getSharedInventoryBalance,
 } from "@/modules/inventory/unit-conversion";
+import { buildProductSearchWhere } from "@/modules/catalog/product-search";
 import { calculateBatchCosts, calculateTargetMarginPrice, computeBatchCostSummary } from "./calculations";
 import { reserveBatchInputsTx, releaseBatchInputsTx, getProductionReservedBaseQtyTx, type ReservationResult } from "./reservations";
 import type {
@@ -91,10 +92,7 @@ export async function getRecipes(params: { isActive?: boolean; q?: string; recip
   if (params.recipeType) where.recipeType = params.recipeType;
   if (params.recipeFamily) where.recipeFamily = params.recipeFamily;
   if (params.q) {
-    where.OR = [
-      { name: { contains: params.q, mode: "insensitive" } },
-      { code: { contains: params.q, mode: "insensitive" } },
-    ];
+    Object.assign(where, buildProductSearchWhere<Prisma.ProductionRecipeWhereInput>(params.q, ["name", "code"]));
   }
 
   return prisma.productionRecipe.findMany({

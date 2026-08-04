@@ -6,6 +6,7 @@ import { mapProductWithEffectivePricing, resolveEffectivePricingFromParts } from
 import { formatDualStock } from "@/modules/inventory/unit-conversion";
 import type { ProductStockConversion } from "@/modules/inventory/unit-conversion";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
 
 type CatalogProductWithBranchPricing = {
   id: string;
@@ -368,21 +369,15 @@ export function branchProductScopeFilter(branchId: string): Prisma.ProductWhereI
   };
 }
 
-export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string; limit?: number; inStockOnly?: boolean }) {
+export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string; limit?: number; inStockOnly?: boolean; group?: boolean }) {
   const andClauses: Prisma.ProductWhereInput[] = [];
 
   if (params.branchId) andClauses.push(branchProductScopeFilter(params.branchId));
 
   if (params.q) {
-    andClauses.push({
-      OR: [
-        { sku: { contains: params.q, mode: "insensitive" } },
-        { name: { contains: params.q, mode: "insensitive" } },
-        { barcode: { contains: params.q, mode: "insensitive" } },
-        { category: { name: { contains: params.q, mode: "insensitive" } } },
-        { category: { code: { contains: params.q, mode: "insensitive" } } },
-      ],
-    });
+    andClauses.push(
+      buildProductSearchWhere<Prisma.ProductWhereInput>(params.q, ["sku", "name", "barcode", "category.name", "category.code"]),
+    );
   }
 
   const where: Prisma.ProductWhereInput = {
@@ -418,14 +413,24 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
     take: fetchTake,
   });
 
-  if (!params.branchId) return products;
+  // Ranking en memoria (solo tiene sentido con búsqueda activa) + agrupación
+  // por familia opcional (la pide el POS via ?group=true).
+  function finalize<T extends { name: string; sku: string; category?: { name: string } | null }>(
+    rows: T[],
+  ): T[] | FamilyGroup<T>[] {
+    const ranked = params.q ? rankProductMatches(rows, params.q) : rows;
+    return params.group ? groupProductsByFamily(ranked) : ranked;
+  }
+
+  if (!params.branchId) return finalize(products);
 
   const mapped = await batchMapProductsWithBranchInventory(products, params.branchId);
-  if (!params.inStockOnly) return mapped;
+  if (!params.inStockOnly) return finalize(mapped);
 
   // Oculta del POS lo que no se puede vender hoy (sin stock) — el producto
   // sigue existiendo en el catálogo, solo no aparece en la búsqueda del POS.
-  return mapped.filter((p) => (p.availableSaleStock ?? 0) > 0).slice(0, limit);
+  const inStock = mapped.filter((p) => (p.availableSaleStock ?? 0) > 0).slice(0, limit);
+  return finalize(inStock);
 }
 
 /**

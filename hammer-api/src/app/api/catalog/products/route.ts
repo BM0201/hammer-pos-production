@@ -35,6 +35,20 @@ function redactCostFields(rows: unknown[]): Record<string, unknown>[] {
   });
 }
 
+function isFamilyGroupShape(rows: unknown[]): rows is Array<{ family: string; categoryName: string | null; items: unknown[] }> {
+  const first = rows[0];
+  return rows.length > 0 && typeof first === "object" && first !== null && "items" in first && "family" in first;
+}
+
+// group=true hace que listProducts() devuelva FamilyGroup[] en vez de la
+// lista plana — la redacción de costos tiene que bajar un nivel a `items`.
+function redactCostFieldsDeep(rows: unknown[]): unknown[] {
+  if (isFamilyGroupShape(rows)) {
+    return rows.map((group) => ({ ...group, items: redactCostFields(group.items) }));
+  }
+  return redactCostFields(rows);
+}
+
 export async function GET(request: Request) {
   try {
     const session = await getCurrentSession();
@@ -68,6 +82,9 @@ export async function GET(request: Request) {
     // reposición, órdenes de compra, recetas, etc.) siguen viendo todo,
     // incluidos los productos sin stock — los necesitan para gestionarlos.
     const inStockOnly = searchParams.get("inStockOnly") === "true";
+    // Agrupación por familia (ej. "Lija · 3 productos") — la pide el POS
+    // para mostrar los resultados de búsqueda agrupados en vez de una lista plana.
+    const group = searchParams.get("group") === "true";
 
     // Auditoría 2026-08-03: no se verificaba pertenencia a la sucursal
     // pedida — cualquier usuario autenticado podía consultar el catálogo
@@ -82,9 +99,9 @@ export async function GET(request: Request) {
       return okCached(canSeeCosts ? products : redactCostFields(products), 30);
     }
 
-    const products = await listProducts({ q, isActive, branchId, limit, inStockOnly });
+    const products = await listProducts({ q, isActive, branchId, limit, inStockOnly, group });
     // Search results: short TTL so new products appear within 30s
-    return okCached(canSeeCosts ? products : redactCostFields(products), 30);
+    return okCached(canSeeCosts ? products : redactCostFieldsDeep(products as unknown[]), 30);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

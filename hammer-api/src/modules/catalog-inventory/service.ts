@@ -4,6 +4,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { formatDualStock } from "@/modules/inventory/unit-conversion";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { buildProductSearchWhere, rankProductMatches } from "@/modules/catalog/product-search";
 import type { CatalogInventoryQuery, UpdateBranchProductSettingInput, MassDeleteProductsInput } from "./validators";
 
 const CRITICAL_STOCK_FALLBACK = 1;
@@ -35,14 +36,7 @@ function productWhere(params: Partial<CatalogInventoryQuery>): Prisma.ProductWhe
   return {
     ...(params.categoryId ? { categoryId: params.categoryId } : {}),
     ...(params.q
-      ? {
-          OR: [
-            { sku: { contains: params.q, mode: "insensitive" } },
-            { name: { contains: params.q, mode: "insensitive" } },
-            { barcode: { contains: params.q, mode: "insensitive" } },
-            { category: { name: { contains: params.q, mode: "insensitive" } } },
-          ],
-        }
+      ? buildProductSearchWhere<Prisma.ProductWhereInput>(params.q, ["sku", "name", "barcode", "category.name"])
       : {}),
   };
 }
@@ -379,11 +373,15 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
 
   const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
 
+  // Mismo criterio de relevancia que POS/catálogo — no se rediseña la tabla,
+  // solo se ordena mejor dentro de la página actual.
+  const rankedProducts = params.q ? rankProductMatches(filteredProducts, params.q) : filteredProducts;
+
   return {
     branches,
     categories,
     kpis,
-    products: filteredProducts,
+    products: rankedProducts,
     balances,
     movements,
     pagination: {
