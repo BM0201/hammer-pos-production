@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Copy, PackageSearch, Plus, Save, Trash2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { tokenize } from "@/lib/product-search";
 
 type Product = {
   id: string;
@@ -47,9 +48,10 @@ function ProductPicker({
   const selected = products.find((product) => product.id === value);
   const visible = products
     .filter((product) => {
-      const q = query.trim().toLowerCase();
-      if (!q) return true;
-      return `${product.sku} ${product.name} ${product.category?.name ?? ""}`.toLowerCase().includes(q);
+      const tokens = tokenize(query);
+      if (tokens.length === 0) return true;
+      const text = `${product.sku} ${product.name} ${product.category?.name ?? ""}`.toUpperCase();
+      return tokens.every((token) => text.includes(token));
     })
     .slice(0, 10);
 

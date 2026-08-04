@@ -3,12 +3,14 @@
 import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 import { Search, ScanLine } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import type { FamilyGroup } from "@/lib/product-search";
 import type { ProductRow } from "../types";
 
 type PosCatalogPanelProps = {
   search: string;
   setSearch: (value: string) => void;
   products: ProductRow[];
+  productGroups: FamilyGroup<ProductRow>[];
   loadingProducts: boolean;
   showingTopSelling: boolean;
   stockByProductId: Record<string, number>;
@@ -24,10 +26,28 @@ type PosCatalogPanelProps = {
   onClearSearch: () => void;
 };
 
+const OTHER_MATCHES_FAMILY = "Otras coincidencias";
+
+// Familia coincidente resaltada, resto del nombre atenuado — ej. "Lija" en
+// "Lija 3M #150 Metal" cuando el grupo es "Lija". "Otras coincidencias" no
+// resalta nada porque el nombre no necesariamente empieza con esa etiqueta.
+function ProductNameHighlight({ name, family }: { name: string; family?: string }) {
+  if (!family || family === OTHER_MATCHES_FAMILY || !name.toUpperCase().startsWith(family.toUpperCase())) {
+    return <>{name}</>;
+  }
+  return (
+    <>
+      <span className="text-[var(--color-text)]">{name.slice(0, family.length)}</span>
+      <span className="text-[var(--color-text-soft)]">{name.slice(family.length)}</span>
+    </>
+  );
+}
+
 export function PosCatalogPanel({
   search,
   setSearch,
   products,
+  productGroups,
   loadingProducts,
   showingTopSelling,
   stockByProductId,
@@ -68,6 +88,69 @@ export function PosCatalogPanel({
       onClearSearch();
     }
   }
+
+  function renderProductCard(product: ProductRow, index: number, familyForHighlight?: string) {
+    const selected = index === activeProductIndex;
+    const displayPrice = product.effectivePrice ?? null;
+    const hasNoPrice = displayPrice === null;
+    const availableStock =
+      product.availableSaleStock ??
+      product.sharedStock?.saleQuantity ??
+      product.availableStock ??
+      stockByProductId[product.id] ??
+      0;
+    const hasNoStock = availableStock <= 0;
+    const isLowStock = !hasNoStock && availableStock < 5;
+
+    return (
+      <button
+        key={product.id}
+        className={[
+          "flex min-h-[92px] flex-col gap-1 rounded-[14px] border p-3 text-left",
+          "transition-[border-color,background-color,transform] active:scale-[0.97]",
+          selected
+            ? "border-[var(--color-pay)] bg-[color-mix(in_srgb,var(--color-pay)_8%,transparent)]"
+            : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-strong)]",
+          hasNoStock || hasNoPrice ? "opacity-60" : "",
+        ].join(" ")}
+        onClick={() => {
+          setActiveProductIndex(index);
+          onAddProduct(product);
+        }}
+        disabled={isBusy || hasNoStock || hasNoPrice}
+        data-testid={`pos-product-${product.id}`}
+      >
+        <div className="line-clamp-2 text-[13px] font-medium leading-snug text-[var(--color-text)]">
+          <ProductNameHighlight name={product.name} family={familyForHighlight} />
+        </div>
+        <div className="mt-auto text-[17px] font-semibold tabular-nums text-[var(--color-text)]">
+          {hasNoPrice ? "Sin precio" : `C$ ${Number(displayPrice).toFixed(2)}`}
+        </div>
+        <div
+          className={[
+            "text-[11px]",
+            hasNoPrice || isLowStock
+              ? "text-[var(--color-warning-700)]"
+              : hasNoStock
+                ? "text-[var(--color-danger-600)]"
+                : "text-[var(--color-text-soft)]",
+          ].join(" ")}
+        >
+          {hasNoPrice
+            ? "Sin precio asignado"
+            : hasNoStock
+            ? "Sin stock"
+            : `Stock ${availableStock % 1 === 0 ? availableStock : availableStock.toFixed(2)}`}
+          {product.saleUnit ? ` ${product.saleUnit}` : ""}
+        </div>
+      </button>
+    );
+  }
+
+  // Agrupado por familia solo cuando hay una búsqueda activa con grupos
+  // (el POS lo pide con ?group=true) — el grid de "Top vendidos" se queda
+  // plano, sin encabezados, porque no es un resultado de búsqueda.
+  const useGrouped = productGroups.length > 0 && !showingTopSelling;
 
   return (
     <Card
@@ -125,68 +208,44 @@ export function PosCatalogPanel({
           </p>
         ) : null}
 
-        <div
-          className="grid gap-2.5"
-          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))" }}
-        >
-          {products.map((product, index) => {
-            const selected = index === activeProductIndex;
-            const displayPrice = product.effectivePrice ?? null;
-            const hasNoPrice = displayPrice === null;
-            const availableStock =
-              product.availableSaleStock ??
-              product.sharedStock?.saleQuantity ??
-              product.availableStock ??
-              stockByProductId[product.id] ??
-              0;
-            const hasNoStock = availableStock <= 0;
-            const isLowStock = !hasNoStock && availableStock < 5;
-
-            return (
-              <button
-                key={product.id}
-                className={[
-                  "flex min-h-[92px] flex-col gap-1 rounded-[14px] border p-3 text-left",
-                  "transition-[border-color,background-color,transform] active:scale-[0.97]",
-                  selected
-                    ? "border-[var(--color-pay)] bg-[color-mix(in_srgb,var(--color-pay)_8%,transparent)]"
-                    : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-strong)]",
-                  hasNoStock || hasNoPrice ? "opacity-60" : "",
-                ].join(" ")}
-                onClick={() => {
-                  setActiveProductIndex(index);
-                  onAddProduct(product);
-                }}
-                disabled={isBusy || hasNoStock || hasNoPrice}
-                data-testid={`pos-product-${product.id}`}
-              >
-                <div className="line-clamp-2 text-[13px] font-medium leading-snug text-[var(--color-text)]">
-                  {product.name}
-                </div>
-                <div className="mt-auto text-[17px] font-semibold tabular-nums text-[var(--color-text)]">
-                  {hasNoPrice ? "Sin precio" : `C$ ${Number(displayPrice).toFixed(2)}`}
-                </div>
-                <div
-                  className={[
-                    "text-[11px]",
-                    hasNoPrice || isLowStock
-                      ? "text-[var(--color-warning-700)]"
-                      : hasNoStock
-                        ? "text-[var(--color-danger-600)]"
-                        : "text-[var(--color-text-soft)]",
-                  ].join(" ")}
-                >
-                  {hasNoPrice
-                    ? "Sin precio asignado"
-                    : hasNoStock
-                    ? "Sin stock"
-                    : `Stock ${availableStock % 1 === 0 ? availableStock : availableStock.toFixed(2)}`}
-                  {product.saleUnit ? ` ${product.saleUnit}` : ""}
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        {useGrouped ? (
+          <div className="flex flex-col gap-4">
+            {(() => {
+              let runningIndex = 0;
+              return productGroups.map((group) => {
+                const startIndex = runningIndex;
+                runningIndex += group.items.length;
+                return (
+                  <div key={group.family} className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2 px-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-soft)]">
+                        {group.family} · {group.items.length} producto{group.items.length === 1 ? "" : "s"}
+                      </span>
+                      {group.categoryName ? (
+                        <span className="rounded-full bg-[var(--color-surface-muted)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text-secondary)]">
+                          {group.categoryName}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div
+                      className="grid gap-2.5"
+                      style={{ gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))" }}
+                    >
+                      {group.items.map((product, i) => renderProductCard(product, startIndex + i, group.family))}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        ) : (
+          <div
+            className="grid gap-2.5"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))" }}
+          >
+            {products.map((product, index) => renderProductCard(product, index))}
+          </div>
+        )}
       </div>
     </Card>
   );

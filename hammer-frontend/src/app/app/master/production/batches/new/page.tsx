@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { tokenize } from "@/lib/product-search";
 
 /**
  * Producción v2 Fase 6 — "Planificar lote" (mockup vista 2). Planificar
@@ -97,8 +98,14 @@ function NewBatchContent() {
   }, [recipeId]);
 
   const filteredRecipes = useMemo(() => {
-    const qText = recipeQuery.trim().toLowerCase();
-    return recipes.filter((recipe) => !qText || `${recipe.code} ${recipe.name} ${recipe.finishedProduct?.name ?? ""}`.toLowerCase().includes(qText)).slice(0, 12);
+    const tokens = tokenize(recipeQuery);
+    return recipes
+      .filter((recipe) => {
+        if (tokens.length === 0) return true;
+        const text = `${recipe.code} ${recipe.name} ${recipe.finishedProduct?.name ?? ""}`.toUpperCase();
+        return tokens.every((token) => text.includes(token));
+      })
+      .slice(0, 12);
   }, [recipes, recipeQuery]);
 
   useEffect(() => {

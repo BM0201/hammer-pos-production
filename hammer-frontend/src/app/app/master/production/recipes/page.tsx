@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Edit3, Factory, Plus, Search, ToggleLeft } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { tokenize } from "@/lib/product-search";
 
 type RecipeInput = {
   id: string;
@@ -71,12 +72,15 @@ export default function RecipesPage() {
   }, []);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    // Tokenizado: cada palabra debe aparecer en algún lugar del texto, en
+    // vez de exigir la frase completa pegada (mismo criterio que POS/catálogo).
+    const tokens = tokenize(query);
     return recipes.filter((recipe) => {
       const statusOk = status === "all" || (status === "active" ? recipe.isActive : !recipe.isActive);
       const familyOk = family === "all" || recipe.recipeFamily === family;
-      const text = `${recipe.name} ${recipe.code} ${recipe.finishedProduct?.name ?? ""} ${recipe.finishedProduct?.sku ?? ""}`.toLowerCase();
-      return statusOk && familyOk && (!q || text.includes(q));
+      const text = `${recipe.name} ${recipe.code} ${recipe.finishedProduct?.name ?? ""} ${recipe.finishedProduct?.sku ?? ""}`.toUpperCase();
+      const queryOk = tokens.every((token) => text.includes(token));
+      return statusOk && familyOk && queryOk;
     });
   }, [recipes, query, status, family]);
 

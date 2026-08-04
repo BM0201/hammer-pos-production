@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
 import { getCatalog, saveCatalog } from "@/lib/offline-db";
 import type { CachedProduct } from "@/lib/offline-db";
+import { tokenize, matchesAllTokens, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/lib/product-search";
 import type { InventoryBalanceRow, ProductRow } from "../types";
 
 function toCachedProduct(row: ProductRow): CachedProduct {
@@ -23,6 +24,7 @@ function toCachedProduct(row: ProductRow): CachedProduct {
 export function usePosCatalog(branchId: string, onNotice: (msg: string) => void, isOffline = false) {
   const [search, setSearch] = useState("");
   const [products, setProducts] = useState<ProductRow[]>([]);
+  const [productGroups, setProductGroups] = useState<FamilyGroup<ProductRow>[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [showingTopSelling, setShowingTopSelling] = useState(true);
   const [stockByProductId, setStockByProductId] = useState<Record<string, number>>({});
@@ -33,7 +35,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
   const searchRef = useRef("");
   const topProductsRef = useRef<ProductRow[]>([]);
   const searchAbortRef = useRef<AbortController | null>(null);
-  const searchCacheRef = useRef<Map<string, ProductRow[]>>(new Map());
+  const searchCacheRef = useRef<Map<string, { products: ProductRow[]; groups: FamilyGroup<ProductRow>[] }>>(new Map());
   const catalogViewportRef = useRef<HTMLDivElement | null>(null);
   // Mirror of stockByProductId state used by fetchStockForProduct so the
   // callback can remain stable (dep: branchId only) while still reading fresh values.
@@ -68,8 +70,9 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     }
   }, []);
 
-  const applySearchRows = useCallback((rows: ProductRow[]) => {
+  const applySearchRows = useCallback((rows: ProductRow[], groups: FamilyGroup<ProductRow>[] = []) => {
     setProducts(rows);
+    setProductGroups(groups);
     setActiveProductIndex(0);
     setCatalogScrollTop(0);
     if (catalogViewportRef.current) catalogViewportRef.current.scrollTop = 0;
@@ -97,6 +100,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
         topProductsRef.current = rows;
         if (!searchRef.current.trim()) {
           setProducts(rows);
+          setProductGroups([]);
           setShowingTopSelling(true);
         }
       }
@@ -118,6 +122,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       topProductsRef.current = rows;
       if (!searchRef.current.trim()) {
         setProducts(rows);
+        setProductGroups([]);
         setShowingTopSelling(true);
       }
       // Persist to IndexedDB for offline use
@@ -142,6 +147,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
         topProductsRef.current = rows;
         if (!searchRef.current.trim()) {
           setProducts(rows);
+          setProductGroups([]);
           setShowingTopSelling(true);
         }
         return;
@@ -166,41 +172,28 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       return;
     }
 
-    // Offline: search client-side through the IndexedDB catalog
+    // Offline: search client-side through the IndexedDB catalog — mismo
+    // criterio de tokenización + ranking + agrupación que el camino online,
+    // en vez del substring de frase completa que había antes.
     if (isOffline) {
       const cached = await getCatalog(branchId).catch(() => [] as CachedProduct[]);
-      const q = query.toLowerCase();
-      const matches = cached
-        .filter(p =>
-          p.name.toLowerCase().includes(q) ||
-          p.sku.toLowerCase().includes(q) ||
-          (p.barcode ?? "").toLowerCase().includes(q) ||
-          (p.categoryName ?? "").toLowerCase().includes(q),
-        )
-        .sort((a, b) => {
-          const rank = (p: CachedProduct) => {
-            if (p.name.toLowerCase().startsWith(q)) return 0;
-            if (p.sku.toLowerCase().startsWith(q)) return 1;
-            if (p.name.toLowerCase().includes(q)) return 2;
-            return 3;
-          };
-          return rank(a) - rank(b) || a.name.localeCompare(b.name);
-        })
-        .slice(0, 20)
-        .map(p => ({
-          ...p,
-          standardSalePrice: p.effectivePrice,
-          branchPrice: p.effectivePrice,
-          effectivePrice: p.effectivePrice,
-          priceSource: "CACHE" as const,
-          stockOnHand: p.availableSaleStock ?? 0,
-          availableStock: p.availableSaleStock ?? 0,
-          isActive: true,
-          stockConversion: null,
-          sharedStock: null,
-        } as unknown as ProductRow));
+      const tokens = tokenize(query);
+      const matched = cached.filter((p) => matchesAllTokens(p, tokens));
+      const ranked = rankProductMatches(matched, query).slice(0, 30);
+      const matches = ranked.map(p => ({
+        ...p,
+        standardSalePrice: p.effectivePrice,
+        branchPrice: p.effectivePrice,
+        effectivePrice: p.effectivePrice,
+        priceSource: "CACHE" as const,
+        stockOnHand: p.availableSaleStock ?? 0,
+        availableStock: p.availableSaleStock ?? 0,
+        isActive: true,
+        stockConversion: null,
+        sharedStock: null,
+      } as unknown as ProductRow));
       setShowingTopSelling(false);
-      applySearchRows(matches);
+      applySearchRows(matches, groupProductsByFamily(matches));
       return;
     }
 
@@ -211,7 +204,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     const cached = searchCacheRef.current.get(cacheKey);
     if (cached) {
       setLoadingProducts(false);
-      applySearchRows(cached);
+      applySearchRows(cached.products, cached.groups);
       return;
     }
 
@@ -223,37 +216,24 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     setLoadingProducts(true);
 
     try {
-      const params = new URLSearchParams({ q: query, isActive: "true", branchId, limit: "20", inStockOnly: "true" });
+      const params = new URLSearchParams({ q: query, isActive: "true", branchId, limit: "20", inStockOnly: "true", group: "true" });
       const response = await fetch(`/api/catalog/products?${params.toString()}`, { signal: controller.signal });
-      const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
+      // group=true → data viene agrupada por familia (ranking ya aplicado
+      // en el servidor vía rankProductMatches/groupProductsByFamily).
+      const json = (await response.json()) as { data?: FamilyGroup<ProductRow>[]; message?: string; reason?: string };
 
       if (!response.ok) {
         onNotice(resolveError({ payload: json, status: response.status, fallback: "No se pudo cargar el catálogo." }));
         return;
       }
 
-      const rows = json.data ?? [];
+      const groups = json.data ?? [];
+      const rows = groups.flatMap((g) => g.items);
       seedSharedStock(rows);
-      const q = cacheKey;
-      const rank = (item: ProductRow) => {
-        if (!q) return 99;
-        if (item.name.toLowerCase().startsWith(q)) return 0;
-        if (item.sku.toLowerCase().startsWith(q)) return 1;
-        if ((item.barcode ?? "").toLowerCase().startsWith(q)) return 2;
-        if (item.name.toLowerCase().includes(q)) return 3;
-        if ((item.categoryName ?? "").toLowerCase().includes(q)) return 4;
-        return 9;
-      };
-
-      rows.sort((a, b) => {
-        const byRank = rank(a) - rank(b);
-        if (byRank !== 0) return byRank;
-        return a.name.localeCompare(b.name);
-      });
 
       // Store in memory cache and update IndexedDB offline catalog
       if (searchCacheRef.current.size > 100) searchCacheRef.current.clear();
-      searchCacheRef.current.set(cacheKey, rows);
+      searchCacheRef.current.set(cacheKey, { products: rows, groups });
       saveCatalog(branchId, [...topProductsRef.current, ...rows].map(toCachedProduct)).catch(() => {});
 
       // Ignore results from a search that the user has already moved past.
@@ -261,7 +241,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
         return;
       }
 
-      applySearchRows(rows);
+      applySearchRows(rows, groups);
     } catch (error) {
       // A cancelled request is expected — never surface it as an error.
       if (controller.signal.aborted || (error as { name?: string })?.name === "AbortError") {
@@ -322,6 +302,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     search,
     setSearch,
     products,
+    productGroups,
     loadingProducts,
     showingTopSelling,
     stockByProductId,

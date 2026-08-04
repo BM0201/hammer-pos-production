@@ -17,6 +17,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty } from "@/lib/format";
+import { tokenize } from "@/lib/product-search";
 
 /* ───────────────────────── Types ───────────────────────── */
 type Branch = { id: string; code: string; name: string };
@@ -844,11 +845,12 @@ export function CatalogInventoryAdmin() {
 
   const matrix = useMemo(() => {
     const branches = data?.branches ?? [];
-    const needle = stockSearch.trim().toLowerCase();
-    const products = needle
-      ? (data?.products ?? []).filter((p) =>
-          p.name.toLowerCase().includes(needle) || p.sku.toLowerCase().includes(needle)
-        )
+    const tokens = tokenize(stockSearch);
+    const products = tokens.length > 0
+      ? (data?.products ?? []).filter((p) => {
+          const text = `${p.name} ${p.sku}`.toUpperCase();
+          return tokens.every((token) => text.includes(token));
+        })
       : (data?.products ?? []);
     return products.map((product) => {
       const byBranch = new Map(product.inventoryBalances.map((balance) => [balance.branchId, Number(balance.quantityOnHand)]));
@@ -3216,11 +3218,10 @@ function PricingPanel({
   }, [selectedBranchId, branches, onSelectBranch]);
   const filteredProducts = useMemo(() => products.filter((product) => {
     if (focusedProductId && product.id !== focusedProductId) return false;
-    const term = productFilter.trim().toLowerCase();
-    if (!term) return true;
-    return product.name.toLowerCase().includes(term)
-      || product.sku.toLowerCase().includes(term)
-      || (product.category?.name ?? "").toLowerCase().includes(term);
+    const tokens = tokenize(productFilter);
+    if (tokens.length === 0) return true;
+    const text = `${product.name} ${product.sku} ${product.category?.name ?? ""}`.toUpperCase();
+    return tokens.every((token) => text.includes(token));
   }), [focusedProductId, productFilter, products]);
 
   // Re-sync draft when products reference changes (after external load)

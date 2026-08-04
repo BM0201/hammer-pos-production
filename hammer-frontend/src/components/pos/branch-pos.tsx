@@ -83,7 +83,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     usePosPrint(branchId, onNoticeError);
 
   const {
-    search, setSearch, products, loadingProducts, showingTopSelling,
+    search, setSearch, products, productGroups, loadingProducts, showingTopSelling,
     stockByProductId, activeProductIndex, setActiveProductIndex,
     catalogScrollTop, setCatalogScrollTop, catalogViewportRef, fetchStockForProduct,
   } = usePosCatalog(branchId, onNoticeError, isOffline);
@@ -330,6 +330,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
             search={search}
             setSearch={setSearch}
             products={products}
+            productGroups={productGroups}
             loadingProducts={loadingProducts}
             showingTopSelling={showingTopSelling}
             stockByProductId={stockByProductId}

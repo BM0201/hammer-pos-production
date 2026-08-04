@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { tokenize } from "@/lib/product-search";
 
 /**
  * Producción v2 Fase 6 — "Lotes y variancia" (mockup vista 4). Como el
@@ -82,9 +83,10 @@ function BatchesContent() {
 
   const filtered = useMemo(() => batches.filter((b) => {
     if (statusFilter && b.status !== statusFilter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      if (!b.batchNumber.toLowerCase().includes(q) && !b.recipe.name.toLowerCase().includes(q) && !b.recipe.code.toLowerCase().includes(q)) return false;
+    const tokens = tokenize(search);
+    if (tokens.length > 0) {
+      const text = `${b.batchNumber} ${b.recipe.name} ${b.recipe.code}`.toUpperCase();
+      if (!tokens.every((token) => text.includes(token))) return false;
     }
     return true;
   }), [batches, search, statusFilter]);
