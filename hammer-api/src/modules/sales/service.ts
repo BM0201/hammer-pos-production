@@ -30,13 +30,35 @@ function makeOrderNumber(branchCode: string) {
   return `SO-${branchCode}-${ts}-${rand}`;
 }
 
-export async function listSaleOrders(params: { branchId: string; includeAllBranches: boolean }) {
-  return prisma.saleOrder.findMany({
-    where: params.includeAllBranches ? {} : { branchId: params.branchId },
-    include: { lines: { include: { product: { select: { id: true, name: true, sku: true } } } }, branch: true, createdBy: true },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
+// Bug 3 (auditoría ventas/pagos/POS): las listas de gestión truncaban en
+// silencio (take fijo, sin forma de pedir la página siguiente). clampListPage
+// mantiene el mismo take de "primera página" que ya existía — solo agrega
+// una página siguiente real, siguiendo el patrón ya establecido en
+// inventory/service.ts (clampInventoryMovementPagination: page/limit -> skip).
+export function clampListPage(page?: number) {
+  const n = Math.trunc(page ?? 1);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+const LIST_SALE_ORDERS_PAGE_SIZE = 100;
+
+export async function listSaleOrders(params: { branchId: string; includeAllBranches: boolean; page?: number }) {
+  const where: Prisma.SaleOrderWhereInput = params.includeAllBranches ? {} : { branchId: params.branchId };
+  const page = clampListPage(params.page);
+  const skip = (page - 1) * LIST_SALE_ORDERS_PAGE_SIZE;
+
+  const [orders, total] = await Promise.all([
+    prisma.saleOrder.findMany({
+      where,
+      include: { lines: { include: { product: { select: { id: true, name: true, sku: true } } } }, branch: true, createdBy: true },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: LIST_SALE_ORDERS_PAGE_SIZE,
+    }),
+    prisma.saleOrder.count({ where }),
+  ]);
+
+  return { orders, hasMore: skip + orders.length < total, total, page };
 }
 
 // Borradores vacíos abandonados por más de este tiempo se eliminan para que no
@@ -1074,12 +1096,15 @@ function managuaDayRangeUtc(ymd?: string): { start: Date; end: Date } {
  * Por defecto devuelve las del día (Managua). Permite filtrar por sucursal y
  * por fecha (YYYY-MM-DD). Marca cuáles pueden anularse.
  */
+const LIST_SALE_ORDERS_FOR_MANAGEMENT_PAGE_SIZE = 300;
+
 export async function listSaleOrdersForManagement(params: {
   branchId?: string | null;
   date?: string | null;
   includeAllBranches: boolean;
   status?: string | null;
   search?: string | null;
+  page?: number;
 }) {
   const { start, end } = managuaDayRangeUtc(params.date ?? undefined);
   const where: Prisma.SaleOrderWhereInput = {
@@ -1112,44 +1137,51 @@ export async function listSaleOrdersForManagement(params: {
     ];
   }
 
-  const orders = await prisma.saleOrder.findMany({
-    where,
-    select: {
-      id: true,
-      orderNumber: true,
-      status: true,
-      grandTotal: true,
-      createdAt: true,
-      updatedAt: true,
-      notes: true,
-      requiresTransport: true,
-      transportAmount: true,
-      deliveryOrderNumber: true,
-      deliveryOrderIssuedAt: true,
-      documentMode: true,
-      requiresManualInvoice: true,
-      manualInvoiceSeries: true,
-      manualInvoiceNumber: true,
-      manualInvoiceStatus: true,
-      manualInvoiceRegisteredAt: true,
-      manualInvoiceCustomerName: true,
-      manualInvoiceCustomerRuc: true,
-      branch: { select: { id: true, code: true, name: true } },
-      customer: { select: { displayName: true, legalName: true } },
-      createdBy: { select: { id: true, username: true, fullName: true } },
-      payments: {
-        where: { status: PaymentStatus.POSTED },
-        select: { paidAt: true, status: true, method: true },
-        orderBy: { paidAt: "desc" },
-        take: 1,
-      },
-      _count: { select: { lines: true } },
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 300,
-  });
+  const page = clampListPage(params.page);
+  const skip = (page - 1) * LIST_SALE_ORDERS_FOR_MANAGEMENT_PAGE_SIZE;
 
-  return orders
+  const [orders, total] = await Promise.all([
+    prisma.saleOrder.findMany({
+      where,
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        grandTotal: true,
+        createdAt: true,
+        updatedAt: true,
+        notes: true,
+        requiresTransport: true,
+        transportAmount: true,
+        deliveryOrderNumber: true,
+        deliveryOrderIssuedAt: true,
+        documentMode: true,
+        requiresManualInvoice: true,
+        manualInvoiceSeries: true,
+        manualInvoiceNumber: true,
+        manualInvoiceStatus: true,
+        manualInvoiceRegisteredAt: true,
+        manualInvoiceCustomerName: true,
+        manualInvoiceCustomerRuc: true,
+        branch: { select: { id: true, code: true, name: true } },
+        customer: { select: { displayName: true, legalName: true } },
+        createdBy: { select: { id: true, username: true, fullName: true } },
+        payments: {
+          where: { status: PaymentStatus.POSTED },
+          select: { paidAt: true, status: true, method: true },
+          orderBy: { paidAt: "desc" },
+          take: 1,
+        },
+        _count: { select: { lines: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+      skip,
+      take: LIST_SALE_ORDERS_FOR_MANAGEMENT_PAGE_SIZE,
+    }),
+    prisma.saleOrder.count({ where }),
+  ]);
+
+  const mapped = orders
     .map((o) => {
       const latestPayment = o.payments[0] ?? null;
       const commercialDate =
@@ -1188,6 +1220,8 @@ export async function listSaleOrdersForManagement(params: {
       };
     })
     .sort((a, b) => new Date(b.commercialDate).getTime() - new Date(a.commercialDate).getTime());
+
+  return { orders: mapped, hasMore: skip + orders.length < total, total, page };
 }
 
 /**

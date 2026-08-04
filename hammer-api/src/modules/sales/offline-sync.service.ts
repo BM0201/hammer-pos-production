@@ -7,6 +7,12 @@ import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing"
 import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
+import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
+
+// Tolerancia de redondeo del lado del cliente (display) al validar el
+// grandTotal que manda el dispositivo offline contra el recalculado en el
+// servidor — un centavo, no más.
+const OFFLINE_SYNC_TOTAL_TOLERANCE = new Prisma.Decimal("0.01");
 
 export type OfflineSyncLine = {
   productId: string;
@@ -133,6 +139,41 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
     }
   }
 
+  // ── 3c. Recalcular totales con Decimal (misma función que el flujo online,
+  // totals.ts) y validar el grandTotal del cliente contra el recalculado —
+  // nunca se confía en el total que manda el dispositivo offline. ────────────
+  const linesWithTotals = input.lines.map((line) => {
+    const quantity = new Prisma.Decimal(line.quantity);
+    const unitPrice = new Prisma.Decimal(line.unitPrice);
+    const discountAmount = new Prisma.Decimal(line.discountAmount);
+    const lineSubtotal = calculateLineSubtotal(quantity, unitPrice, discountAmount);
+    return { ...line, quantity, unitPrice, discountAmount, lineSubtotal };
+  });
+
+  // El offline sync no maneja transporte por ahora.
+  const totals = aggregateOrderTotals(
+    linesWithTotals.map((l) => ({ lineSubtotal: l.lineSubtotal, discountAmount: l.discountAmount })),
+    new Prisma.Decimal(0),
+  );
+
+  const clientGrandTotal = new Prisma.Decimal(input.grandTotal);
+  if (clientGrandTotal.minus(totals.grandTotal).abs().gt(OFFLINE_SYNC_TOTAL_TOLERANCE)) {
+    await logAuditEvent({
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "sales",
+      action: "OFFLINE_SYNC_TOTAL_MISMATCH",
+      entityType: "SaleOrder",
+      entityId: input.offlineId,
+      metadataJson: {
+        offlineId: input.offlineId,
+        clientGrandTotal: clientGrandTotal.toString(),
+        serverGrandTotal: totals.grandTotal.toString(),
+      },
+    });
+    throw new Error("OFFLINE_SYNC_TOTAL_MISMATCH");
+  }
+
   // ── 4. Fetch branch code for order number ──────────────────────────────────
   const branch = await prisma.branch.findUniqueOrThrow({
     where: { id: input.branchId },
@@ -145,9 +186,6 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
   let result: { orderId: string; orderNumber: string };
   try {
     result = await prisma.$transaction(async (tx) => {
-    const subtotal = input.lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0);
-    const discountTotal = input.lines.reduce((s, l) => s + l.discountAmount, 0);
-
     const order = await tx.saleOrder.create({
       data: {
         orderNumber: makeOrderNumber(branch.code),
@@ -160,10 +198,11 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
         postedAt: now,
         createdByUserId: input.actorUserId,
         status: SaleOrderStatus.DISPATCHED,
-        subtotal: new Prisma.Decimal(subtotal),
-        discountTotal: new Prisma.Decimal(discountTotal),
-        taxTotal: new Prisma.Decimal(0),
-        grandTotal: new Prisma.Decimal(input.grandTotal),
+        subtotal: totals.subtotal,
+        discountTotal: totals.discountTotal,
+        taxTotal: totals.taxTotal,
+        grandTotal: totals.grandTotal,
+        transportAmount: totals.transportAmount,
         notes: input.notes
           ? `[OFFLINE:${input.offlineId}] ${input.notes}`
           : `[OFFLINE:${input.offlineId}]`,
@@ -171,16 +210,15 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
       },
     });
 
-    for (const line of input.lines) {
-      const lineSubtotal = line.quantity * line.unitPrice - line.discountAmount;
+    for (const line of linesWithTotals) {
       await tx.saleOrderLine.create({
         data: {
           saleOrderId: order.id,
           productId: line.productId,
-          quantity: new Prisma.Decimal(line.quantity),
-          unitPrice: new Prisma.Decimal(line.unitPrice),
-          discountAmount: new Prisma.Decimal(line.discountAmount),
-          lineSubtotal: new Prisma.Decimal(lineSubtotal),
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          discountAmount: line.discountAmount,
+          lineSubtotal: line.lineSubtotal,
         },
       });
 
@@ -206,7 +244,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
             action: "OFFLINE_SYNC_STOCK_WARNING",
             entityType: "SaleOrderLine",
             entityId: order.id,
-            metadataJson: { offlineId: input.offlineId, productId: line.productId, quantity: line.quantity },
+            metadataJson: { offlineId: input.offlineId, productId: line.productId, quantity: line.quantity.toString() },
           },
         });
       }
@@ -219,7 +257,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
         operationalDayId,
         receivedByUserId: input.actorUserId,
         method: "CASH",
-        amount: new Prisma.Decimal(input.grandTotal),
+        amount: totals.grandTotal,
         status: "POSTED",
         // paidAt = cuándo ocurrió realmente la venta offline; syncedAt = ahora.
         paidAt: saleTime,
@@ -232,7 +270,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
         paymentId: payment.id,
         operationalDayId,
         method: "CASH",
-        amount: new Prisma.Decimal(input.grandTotal),
+        amount: totals.grandTotal,
       },
     });
 
@@ -287,7 +325,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
       cashSessionId: input.cashSessionId,
       operationalDayId,
       lateSyncIntoClosedDay,
-      grandTotal: input.grandTotal,
+      grandTotal: totals.grandTotal.toString(),
       lineCount: input.lines.length,
     },
   });

@@ -809,7 +809,11 @@ function InvoicesManagementCard({
 }: { onChanged: () => void; refreshKey?: string; branches: InvoiceBranchOption[] }) {
   const [orders, setOrders] = useState<ManagedOrder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalOnServer, setTotalOnServer] = useState(0);
   const [date, setDate] = useState<string>(() => todayManaguaYmd());
   const [branchId, setBranchId] = useState<string>("");
   const [docType, setDocType] = useState<DocTypeFilter>("ALL");
@@ -828,32 +832,38 @@ function InvoicesManagementCard({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (targetPage: number, append: boolean) => {
     const currentRequest = ++requestId.current;
-    setLoading(true);
+    if (append) setLoadingMore(true); else setLoading(true);
     try {
-      const query = new URLSearchParams({ date });
+      const query = new URLSearchParams({ date, page: String(targetPage) });
       if (branchId) query.set("branchId", branchId);
       const res = await apiFetch(`/api/master/sales-orders?${query.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      const data = unwrapApiData(json) as { orders: ManagedOrder[] };
+      const data = unwrapApiData(json) as { orders: ManagedOrder[]; hasMore?: boolean; total?: number };
       if (mounted.current && currentRequest === requestId.current) {
-        setOrders(data.orders ?? []); setError(null);
+        setOrders((prev) => (append ? [...prev, ...(data.orders ?? [])] : (data.orders ?? [])));
+        setHasMore(Boolean(data.hasMore));
+        setTotalOnServer(data.total ?? 0);
+        setPage(targetPage);
+        setError(null);
       }
     } catch (e) {
       if (mounted.current && currentRequest === requestId.current)
         setError(e instanceof Error ? e.message : "Error al cargar facturas");
     } finally {
-      if (mounted.current && currentRequest === requestId.current) setLoading(false);
+      if (mounted.current && currentRequest === requestId.current) { setLoading(false); setLoadingMore(false); }
     }
   }, [date, branchId]);
 
   useEffect(() => {
     mounted.current = true;
-    loadOrders();
+    loadOrders(1, false);
     return () => { mounted.current = false; };
   }, [loadOrders, refreshKey]);
+
+  const loadMore = () => { if (!loadingMore && hasMore) loadOrders(page + 1, true); };
 
   const openCancelModal = (order: ManagedOrder) => { setTarget(order); setReason(""); setCashRefundHandling("REFUNDED_FROM_DRAWER"); };
   const closeModal = () => { if (submitting) return; setTarget(null); setReason(""); };
@@ -876,7 +886,7 @@ function InvoicesManagementCard({
         (result.inventoryReversalsCount ? ` Inventario revertido: ${result.inventoryReversalsCount} producto(s).` : "") +
         (result.voidedPaymentsCount ? ` Pagos anulados: ${result.voidedPaymentsCount}.` : "")
       );
-      setTarget(null); setReason(""); await loadOrders(); onChanged();
+      setTarget(null); setReason(""); await loadOrders(1, false); onChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "No se pudo anular la factura");
     } finally {
@@ -990,7 +1000,7 @@ function InvoicesManagementCard({
           {showCancelled ? "Ocultar anuladas" : `Mostrar anuladas (${cancelledCount})`}
         </button>
         <button
-          onClick={() => loadOrders()}
+          onClick={() => loadOrders(1, false)}
           className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs border border-[var(--color-border)] hover:bg-[var(--color-surface)] transition-colors text-[var(--color-text-secondary)]"
           style={{ borderRadius: 4 }}
         >
@@ -1062,6 +1072,20 @@ function InvoicesManagementCard({
           </TBody>
         </Table>
       )}
+
+      {!error && !loading && hasMore ? (
+        <div className="flex items-center justify-center border-t border-[var(--color-border)] py-3">
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-60"
+            style={{ borderRadius: 4 }}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loadingMore ? "animate-spin" : ""}`} />
+            {loadingMore ? "Cargando…" : `Cargar más (${orders.length} de ${totalOnServer})`}
+          </button>
+        </div>
+      ) : null}
 
       {/* Detail modal */}
       {detailId && (
@@ -1610,7 +1634,7 @@ export default function MasterCommandCenterPage() {
       <PayrollPaydayReminder />
 
       {/* ── KPI grid ── */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <KpiV7
           label="Ventas globales (hoy)"
           value={money(totals.salesToday)}
@@ -1690,7 +1714,7 @@ export default function MasterCommandCenterPage() {
       </div>
 
       {/* ── Cierres + Usuarios (2-col) ── */}
-      <div className="grid gap-3 xl:grid-cols-2">
+      <div className="grid gap-3 lg:grid-cols-2">
 
         {/* Cierres de caja */}
         <div

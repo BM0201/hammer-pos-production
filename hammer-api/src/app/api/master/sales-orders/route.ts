@@ -8,11 +8,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/master/sales-orders?branchId=&date=YYYY-MM-DD
+ * GET /api/master/sales-orders?branchId=&date=YYYY-MM-DD&page=1
  *
  * Lista las facturas/órdenes para gestión desde el Centro de Comando.
  * Reservado al rol master/admin. Sin filtros, devuelve las del día (Managua)
  * de todas las sucursales. Cada fila indica si puede anularse.
+ * Paginado (300/página): la respuesta incluye hasMore/total para pedir la
+ * página siguiente.
  */
 export async function GET(request: Request) {
   try {
@@ -25,15 +27,17 @@ export async function GET(request: Request) {
     const date = searchParams.get("date");
     const status = searchParams.get("status");
     const search = searchParams.get("search");
+    const page = Number(searchParams.get("page") ?? 1);
 
-    const orders = await listSaleOrdersForManagement({
+    const result = await listSaleOrdersForManagement({
       branchId,
       date,
       includeAllBranches: !branchId,
       status,
       search,
+      page,
     });
-    return ok({ orders });
+    return ok(result);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

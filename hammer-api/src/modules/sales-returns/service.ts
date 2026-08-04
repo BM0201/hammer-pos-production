@@ -1001,16 +1001,38 @@ export async function recalculateCustomerCreditScore(customerId: string) {
   return prisma.$transaction((tx) => recalculateCustomerCreditScoreTx(tx, customerId));
 }
 
-export async function listSaleReturns(params: { branchIds?: string[]; status?: SaleReturnStatus }) {
-  return prisma.saleReturn.findMany({
-    where: {
-      ...(params.branchIds?.length ? { branchId: { in: params.branchIds } } : {}),
-      ...(params.status ? { status: params.status } : {}),
-    },
-    include: { items: true, branch: true, customer: true, saleOrder: { select: { id: true, orderNumber: true, grandTotal: true } } },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
+// Bug 3 (auditoría ventas/pagos/POS): take fijo sin forma de pedir la página
+// siguiente. Mismo patrón que clampInventoryMovementPagination en
+// inventory/service.ts (page -> skip), manteniendo el take de 100 que ya
+// existía como tamaño de página.
+export function clampListPage(page?: number) {
+  const n = Math.trunc(page ?? 1);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+const LIST_SALE_RETURNS_PAGE_SIZE = 100;
+const LIST_SALE_CANCELLATIONS_PAGE_SIZE = 100;
+
+export async function listSaleReturns(params: { branchIds?: string[]; status?: SaleReturnStatus; page?: number }) {
+  const where: Prisma.SaleReturnWhereInput = {
+    ...(params.branchIds?.length ? { branchId: { in: params.branchIds } } : {}),
+    ...(params.status ? { status: params.status } : {}),
+  };
+  const page = clampListPage(params.page);
+  const skip = (page - 1) * LIST_SALE_RETURNS_PAGE_SIZE;
+
+  const [returns, total] = await Promise.all([
+    prisma.saleReturn.findMany({
+      where,
+      include: { items: true, branch: true, customer: true, saleOrder: { select: { id: true, orderNumber: true, grandTotal: true } } },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: LIST_SALE_RETURNS_PAGE_SIZE,
+    }),
+    prisma.saleReturn.count({ where }),
+  ]);
+
+  return { returns, hasMore: skip + returns.length < total, total, page };
 }
 
 export async function getSaleReturn(returnId: string) {
@@ -1020,16 +1042,26 @@ export async function getSaleReturn(returnId: string) {
   });
 }
 
-export async function listSaleCancellations(params: { branchIds?: string[]; status?: SaleCancellationStatus }) {
-  return prisma.saleCancellation.findMany({
-    where: {
-      ...(params.branchIds?.length ? { branchId: { in: params.branchIds } } : {}),
-      ...(params.status ? { status: params.status } : {}),
-    },
-    include: { branch: true, saleOrder: { select: { id: true, orderNumber: true, grandTotal: true, status: true } } },
-    orderBy: { createdAt: "desc" },
-    take: 100,
-  });
+export async function listSaleCancellations(params: { branchIds?: string[]; status?: SaleCancellationStatus; page?: number }) {
+  const where: Prisma.SaleCancellationWhereInput = {
+    ...(params.branchIds?.length ? { branchId: { in: params.branchIds } } : {}),
+    ...(params.status ? { status: params.status } : {}),
+  };
+  const page = clampListPage(params.page);
+  const skip = (page - 1) * LIST_SALE_CANCELLATIONS_PAGE_SIZE;
+
+  const [cancellations, total] = await Promise.all([
+    prisma.saleCancellation.findMany({
+      where,
+      include: { branch: true, saleOrder: { select: { id: true, orderNumber: true, grandTotal: true, status: true } } },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: LIST_SALE_CANCELLATIONS_PAGE_SIZE,
+    }),
+    prisma.saleCancellation.count({ where }),
+  ]);
+
+  return { cancellations, hasMore: skip + cancellations.length < total, total, page };
 }
 
 export async function getSaleCancellation(cancellationId: string) {

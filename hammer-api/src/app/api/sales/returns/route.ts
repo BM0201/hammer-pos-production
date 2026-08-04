@@ -16,8 +16,9 @@ export async function GET(request: Request) {
     assertAuthenticated(session);
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status") as SaleReturnStatus | null;
+    const page = Number(searchParams.get("page") ?? 1);
     const branchIds = isMaster(session) ? undefined : getBranchIdsWithCapability(session, CAPABILITIES.SALE_RETURN_REQUEST);
-    return ok(await listSaleReturns({ branchIds, status: status ?? undefined }));
+    return ok(await listSaleReturns({ branchIds, status: status ?? undefined, page }));
   } catch (error) {
     return toApiErrorResponse(error);
   }
