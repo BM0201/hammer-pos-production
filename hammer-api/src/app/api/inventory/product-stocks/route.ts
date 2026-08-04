@@ -1,5 +1,7 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
+import { requireAnyBranchCapability } from "@/modules/rbac/guards";
+import { CAPABILITIES } from "@/modules/rbac/policies";
 import { ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
@@ -19,6 +21,13 @@ export async function GET(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+
+    // Auditoría 2026-08-03: solo exigía sesión. Este endpoint agrega stock
+    // de TODAS las sucursales (no recibe branchId) — sin capability alguna,
+    // cualquier usuario autenticado podía consultar el inventario global de
+    // la compañía por producto. No expone costos, pero es un bypass total
+    // del scope de sucursal que el resto del módulo de inventario respeta.
+    requireAnyBranchCapability(session, [CAPABILITIES.BRANCH_INVENTORY_VIEW]);
 
     const { searchParams } = new URL(request.url);
     const ids = (searchParams.get("productIds") ?? "")

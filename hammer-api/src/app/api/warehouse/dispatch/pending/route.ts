@@ -1,6 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import { isMaster, requireAnyBranchCapability } from "@/modules/rbac/guards";
+import { isMaster, requireAnyBranchCapability, requireBranchCapability } from "@/modules/rbac/guards";
 import { dispatchListSchema } from "@/modules/dispatch/validators";
 import { listDispatchPendingOrders } from "@/modules/dispatch/service";
 import { ok, validationFail } from "@/lib/api/response";
@@ -21,6 +21,11 @@ export async function GET(request: Request) {
     const branchId = parsed.data.branchId ?? "";
 
     requireAnyBranchCapability(session, [CAPABILITIES.DISPATCH_VIEW]);
+    // Auditoría 2026-08-03: ver historia/route.ts — requireAnyBranchCapability
+    // no ata el chequeo al branchId pedido por query param.
+    if (branchId && !isMaster(session)) {
+      requireBranchCapability(session, branchId, CAPABILITIES.DISPATCH_VIEW);
+    }
 
     const data = await listDispatchPendingOrders({
       branchId,

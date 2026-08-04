@@ -17,6 +17,11 @@ export async function GET(req: NextRequest) {
     const session = await getCurrentSession();
     if (!session) return fail("ERROR", "No autenticado", 401);
 
+    // Auditoría 2026-08-03: solo exigía sesión, mientras POST en este mismo
+    // archivo ya exige MASTER — TimberTrip trae costo, flete, gastos y
+    // margen de ganancia real de cada viaje de importación de madera.
+    assertMaster(session);
+
     const url = new URL(req.url);
     const status = url.searchParams.get("status") || undefined;
     const destinationBranchId = url.searchParams.get("destinationBranchId") || undefined;

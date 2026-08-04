@@ -26,6 +26,11 @@ export async function GET(
     const session = await getCurrentSession();
     if (!session) return fail("ERROR", "No autenticado", 401);
 
+    // Auditoría 2026-08-03: solo exigía sesión, mientras PUT/PATCH en este
+    // mismo archivo ya exigen MASTER — expone costo, flete, gastos y margen
+    // de ganancia real del viaje.
+    assertMaster(session);
+
     const { id } = await params;
     const trip = await getTimberTrip(id);
     if (!trip) return fail("ERROR", "Viaje no encontrado", 404);

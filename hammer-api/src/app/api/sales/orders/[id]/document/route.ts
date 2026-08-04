@@ -7,6 +7,8 @@
  */
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertBranchAccess } from "@/modules/auth/access";
+import { requireBranchCapability } from "@/modules/rbac/guards";
+import { CAPABILITIES } from "@/modules/rbac/policies";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, validationFail } from "@/lib/api/response";
@@ -76,6 +78,12 @@ export async function POST(request: Request, { params }: RouteParams) {
     });
 
     assertBranchAccess(session!, order.branchId);
+    // Auditoría 2026-08-03: CAPABILITIES.POS_PRINT_DELIVERY_ORDER existe y
+    // está asignada solo a BRANCH_ADMIN, pero nunca se exigía acá — este
+    // POST asigna un número de documento oficial secuencial (mutación real,
+    // no solo lectura). assertBranchAccess por sí solo dejaba que
+    // CASHIER/SALES/WAREHOUSE emitieran órdenes de entrega.
+    requireBranchCapability(session!, order.branchId, CAPABILITIES.POS_PRINT_DELIVERY_ORDER);
 
     // Emitir número de orden de entrega
     const deliveryOrderNumber = await issueDeliveryOrder(id);

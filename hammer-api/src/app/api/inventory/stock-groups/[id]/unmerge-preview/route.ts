@@ -1,5 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { requireCsrf } from "@/modules/security/csrf";
 import { ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { previewUnmergeStockGroup } from "@/modules/catalog/stock-group-crud";
@@ -13,6 +14,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const session = await getCurrentSession();
     assertAuthenticated(session);
     assertMaster(session);
+    // Auditoría 2026-08-03: sin requireCsrf, el middleware global solo
+    // verifica que el header exista (no su validez) — cualquier valor
+    // arbitrario pasaba.
+    await requireCsrf(request, session);
 
     const { id } = await context.params;
     const body = (await request.json().catch(() => ({}))) as { targetProductId?: string };

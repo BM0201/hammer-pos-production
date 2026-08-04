@@ -14,6 +14,14 @@ export async function GET(request: Request) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
 
+    // Auditoría 2026-08-03: solo exigía sesión, mientras POST en este mismo
+    // archivo ya exige MASTER — la lista expone globalCost/averageCost/
+    // lastPurchaseCost y el balance de inventario (weightedAverageCost) de
+    // cada producto de madera a cualquier usuario autenticado.
+    if (!isMaster(session)) {
+      return fail("FORBIDDEN", "Solo el rol MASTER puede ver productos de madera", 403);
+    }
+
     const url = new URL(request.url);
     const timberType = url.searchParams.get("timberType") ?? undefined;
     const search = url.searchParams.get("search") ?? undefined;

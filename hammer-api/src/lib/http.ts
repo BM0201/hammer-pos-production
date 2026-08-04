@@ -54,6 +54,17 @@ export function toHttpErrorResponse(error: unknown) {
       return errJson("FORBIDDEN", "Acceso denegado", 403);
     }
 
+    // Auditoría 2026-08-03: requireSaleOrderPrintAccess/requireTransferPrintAccess/
+    // requirePurchaseOrderPrintAccess (modules/printing/printing-access.ts) lanzan
+    // "FORBIDDEN: <detalle>" — sin este caso genérico, ese mensaje no matcheaba
+    // ninguna de las constantes exactas de arriba y caía al 500 genérico del
+    // final, aunque el acceso SÍ se estaba denegando correctamente (bug de
+    // status code, no de autorización — pero le devolvía al cliente "error
+    // interno" en vez de "acceso denegado").
+    if (error.message.startsWith("FORBIDDEN:")) {
+      return errJson("FORBIDDEN", error.message.replace(/^FORBIDDEN:\s?/, ""), 403);
+    }
+
     // Legacy CSRF check
     if (error.message === "INVALID_CSRF_TOKEN") {
       return errJson("INVALID_CSRF_TOKEN", "CSRF invalido. Vuelve a intentar la accion.", 403);

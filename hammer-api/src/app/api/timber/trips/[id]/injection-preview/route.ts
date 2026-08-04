@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
+import { assertMaster } from "@/modules/security/rbac-helpers";
 import { getTimberTripInjectionPreview } from "@/modules/timber/service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { ok, fail } from "@/lib/api/response";
@@ -15,6 +16,12 @@ export async function GET(
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+
+    // Auditoría 2026-08-03: solo exigía sesión. La acción que este preview
+    // antecede (PATCH .../trips/{id} action:"confirm") ya exige MASTER, y
+    // el preview expone el mismo detalle de costo/margen que se va a
+    // inyectar — no tiene sentido dejarlo abierto a cualquier rol.
+    assertMaster(session);
 
     const { id } = await params;
     const preview = await getTimberTripInjectionPreview(id);

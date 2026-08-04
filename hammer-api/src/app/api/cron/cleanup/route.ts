@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/api/response";
+import { timingSafeEqualStrings } from "@/lib/timing-safe-compare";
 import { runRetentionSweep } from "@/modules/retention/service";
 import { LOGIN_ATTEMPT_RETENTION_DAYS, retentionCutoff } from "@/modules/retention/policy";
 import { expireStaleBrainDecisions } from "@/modules/brain/service";
@@ -38,7 +39,7 @@ export async function GET(request: Request) {
     return fail("INTERNAL_ERROR", "CRON_SECRET not configured on server", 500);
   }
 
-  if (authHeader !== `Bearer ${expected}`) {
+  if (!authHeader || !timingSafeEqualStrings(authHeader, `Bearer ${expected}`)) {
     return fail("UNAUTHENTICATED", "Unauthorized", 401);
   }
 

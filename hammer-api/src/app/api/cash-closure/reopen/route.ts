@@ -20,19 +20,25 @@ export async function POST(request: Request) {
     assertAuthenticated(session);
     await requireCsrf(request, session);
 
-    const isMasterRole = checkIsMaster(session);
-    const isBranchAdmin = session.branchMemberships.some(
-      (m) => m.roleCode === "BRANCH_ADMIN"
-    );
-
-    if (!isMasterRole && !isBranchAdmin) {
-      return fail("FORBIDDEN", "Solo MASTER o BRANCH_ADMIN pueden reabrir la caja", 403);
-    }
-
     const body = await request.json();
     const parsed = reopenSchema.safeParse(body);
     if (!parsed.success) {
       return fail("VALIDATION_ERROR", "Datos inválidos", 400);
+    }
+
+    // Auditoría 2026-08-03: isBranchAdmin comprobaba el rol BRANCH_ADMIN en
+    // CUALQUIER sucursal del usuario, no en la sucursal que se quiere
+    // reabrir — un usuario que es BRANCH_ADMIN en la Sucursal X pero solo
+    // CASHIER/SALES/WAREHOUSE en la Sucursal Y podía reabrir el cierre
+    // (acción financiera sensible) de la Sucursal Y. Ahora exige el rol
+    // BRANCH_ADMIN específicamente en parsed.data.branchId.
+    const isMasterRole = checkIsMaster(session);
+    const isBranchAdminHere = session.branchMemberships.some(
+      (m) => m.branchId === parsed.data.branchId && m.roleCode === "BRANCH_ADMIN"
+    );
+
+    if (!isMasterRole && !isBranchAdminHere) {
+      return fail("FORBIDDEN", "Solo MASTER o BRANCH_ADMIN pueden reabrir la caja", 403);
     }
 
     // Validate branch access using centralized helper

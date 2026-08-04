@@ -37,6 +37,13 @@ export async function GET(request: Request) {
     if (!hasBranchAccess(session, branchId)) {
       return fail("FORBIDDEN", "Forbidden", 403);
     }
+    // Auditoría 2026-08-03: hasBranchAccess solo confirma membresía, no
+    // capability — mismo patrón que el bug ya corregido en
+    // inventory/balances. Cualquier CASHIER/SALES de la sucursal podía ver
+    // el historial completo de movimientos y sus costos unitarios.
+    if (!canInBranch(session, branchId, CAPABILITIES.BRANCH_INVENTORY_VIEW)) {
+      return fail("FORBIDDEN", "Forbidden", 403);
+    }
 
     const data = await listInventoryMovementsPaginated({
       branchId,

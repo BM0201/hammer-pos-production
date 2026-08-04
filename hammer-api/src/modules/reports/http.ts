@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
+import { isFinanceUser } from "@/modules/rbac/guards";
 import { canExportReports, resolveReportBranchScope } from "@/modules/reports/access";
 import { buildReportPdf } from "@/modules/reports/pdf";
 import { getReportDefinition } from "@/modules/reports/report-definitions";
@@ -9,10 +10,19 @@ import { formatStatus, safeText } from "@/modules/reports/report-formatters";
 import { reportQuerySchema } from "@/modules/reports/validators";
 import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 
-export async function resolveReportRequest(request: Request) {
+export async function resolveReportRequest(request: Request, options?: { requireFinance?: boolean }) {
   const session = await getCurrentSession();
   assertAuthenticated(session);
   if (!canExportReports(session)) {
+    throw new Error("FORBIDDEN_REPORTS");
+  }
+  // Auditoría 2026-08-03: REPORTS_EXPORT por sí solo lo tiene BRANCH_ADMIN,
+  // pero el resto del sistema trata nómina/salarios como exclusivo de
+  // Finanzas (Master/Owner/SystemAdmin/Contador) — ver branch/expenses,
+  // donde la categoría PAYROLL se oculta explícitamente a BRANCH_ADMIN, y
+  // payroll/loans, que exige assertFinanceAccess. Los reportes de
+  // nómina/préstamos de empleados deben exigir lo mismo.
+  if (options?.requireFinance && !isFinanceUser(session)) {
     throw new Error("FORBIDDEN_REPORTS");
   }
 

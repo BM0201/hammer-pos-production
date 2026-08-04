@@ -8,6 +8,8 @@
 import { z } from "zod";
 import { getCurrentSession } from "@/modules/auth/service";
 import { ok, fail, unauthorized } from "@/lib/api/response";
+import { requireCsrf } from "@/modules/security/csrf";
+import { toHttpErrorResponse } from "@/lib/http";
 import {
   initMfaSetup,
   confirmMfaSetup,
@@ -50,6 +52,15 @@ export async function POST(req: Request) {
   const session = await getCurrentSession();
   if (!session) return unauthorized();
 
+  // Auditoría 2026-08-03: ninguno de los 3 handlers mutantes de este
+  // archivo exigía CSRF. POST (inicio de setup) es disparable "a ciegas"
+  // vía CSRF y regenera/descarta el secreto MFA pendiente del usuario.
+  try {
+    await requireCsrf(req, session);
+  } catch (err) {
+    return toHttpErrorResponse(err);
+  }
+
   const ctx = getAuditContext(req);
   const result = await initMfaSetup(session.userId, session.username, ctx);
   return ok(result, 201);
@@ -60,6 +71,12 @@ const confirmSchema = z.object({ code: z.string().length(6) });
 export async function PUT(req: Request) {
   const session = await getCurrentSession();
   if (!session) return unauthorized();
+
+  try {
+    await requireCsrf(req, session);
+  } catch (err) {
+    return toHttpErrorResponse(err);
+  }
 
   let body: unknown;
   try {
@@ -98,6 +115,12 @@ const disableSchema = z.object({ code: z.string().min(6) });
 export async function DELETE(req: Request) {
   const session = await getCurrentSession();
   if (!session) return unauthorized();
+
+  try {
+    await requireCsrf(req, session);
+  } catch (err) {
+    return toHttpErrorResponse(err);
+  }
 
   let body: unknown;
   try {

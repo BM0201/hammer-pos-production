@@ -15,6 +15,14 @@ export async function GET(_request: Request, { params }: Params) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+
+    // Auditoría 2026-08-03: solo exigía sesión, mientras PUT/DELETE en este
+    // mismo archivo ya exigen MASTER — expone los mismos campos de costo
+    // del producto de madera embebido.
+    if (!isMaster(session)) {
+      return fail("FORBIDDEN", "Solo el rol MASTER puede ver productos de madera", 403);
+    }
+
     const { id } = await params;
 
     const result = await getTimberProduct(id);

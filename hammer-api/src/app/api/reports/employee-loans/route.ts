@@ -16,7 +16,7 @@ const COLUMNS = [
 
 export async function GET(request: Request) {
   try {
-    const resolved = await resolveReportRequest(request);
+    const resolved = await resolveReportRequest(request, { requireFinance: true });
     if ("error" in resolved) return resolved.error;
 
     const rows = await getEmployeeLoansReportRows({

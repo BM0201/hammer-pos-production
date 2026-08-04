@@ -25,6 +25,16 @@ export async function PATCH(
 
     const transport = await getTransportServiceById(id);
 
+    // Auditoría 2026-08-03: la autorización se validaba DESPUÉS de leer el
+    // registro y de comparar la transición de estado — un usuario sin
+    // DISPATCH_MARK en ninguna sucursal podía enviar un id de transporte
+    // ajeno y, si la transición era inválida (el caso más probable), el
+    // mensaje de error revelaba el status real del servicio de transporte
+    // de otra sucursal antes de que se aplicara ningún chequeo de permiso.
+    // Ahora la autorización va primero.
+    requireAnyBranchCapability(session, [CAPABILITIES.DISPATCH_MARK]);
+    requireBranchCapability(session, transport.branchId, CAPABILITIES.DISPATCH_MARK);
+
     // Validate state transition
     if (!validateTransportTransition(transport.status, parsed.data.status)) {
       return fail(
@@ -33,9 +43,6 @@ export async function PATCH(
         409,
       );
     }
-
-    requireAnyBranchCapability(session, [CAPABILITIES.DISPATCH_MARK]);
-    requireBranchCapability(session, transport.branchId, CAPABILITIES.DISPATCH_MARK);
 
     const updated = await updateTransportStatus({
       transportId: id,

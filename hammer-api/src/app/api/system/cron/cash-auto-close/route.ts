@@ -1,6 +1,7 @@
 import { autoCloseExpiredCashSessions } from "@/modules/cash-session/auto-close-service";
 import { toHttpErrorResponse } from "@/lib/http";
 import { fail } from "@/lib/api/response";
+import { timingSafeEqualStrings } from "@/lib/timing-safe-compare";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -13,7 +14,7 @@ function assertCronAuthorized(request: Request) {
   }
 
   const authorization = request.headers.get("authorization");
-  if (authorization === `Bearer ${secret}`) return;
+  if (authorization && timingSafeEqualStrings(authorization, `Bearer ${secret}`)) return;
   throw new Error("CRON_UNAUTHORIZED");
 }
 

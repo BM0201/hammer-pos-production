@@ -7,6 +7,8 @@ import { z } from "zod";
 import { getCurrentSession } from "@/modules/auth/service";
 import { unauthorized, forbidden, ok, fail } from "@/lib/api/response";
 import { isMaster } from "@/modules/rbac/guards";
+import { requireCsrf } from "@/modules/security/csrf";
+import { toHttpErrorResponse } from "@/lib/http";
 import { listSecurityAlerts, updateAlertStatus } from "@/modules/security/alerts-service";
 import type { AlertSeverity, AlertStatus } from "@prisma/client";
 
@@ -43,6 +45,15 @@ export async function PATCH(req: Request) {
   const session = await getCurrentSession();
   if (!session) return unauthorized();
   if (!isMaster(session)) return forbidden();
+
+  // Auditoría 2026-08-03: único handler mutante del lote sin requireCsrf —
+  // un PATCH cross-site podía inducir a un Master autenticado a
+  // reconocer/resolver/descartar una alerta de seguridad sin su intención.
+  try {
+    await requireCsrf(req, session);
+  } catch (err) {
+    return toHttpErrorResponse(err);
+  }
 
   let body: unknown;
   try {

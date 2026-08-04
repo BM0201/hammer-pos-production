@@ -1,6 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
-import { isMaster, requireAnyBranchCapability } from "@/modules/rbac/guards";
+import { isMaster, requireAnyBranchCapability, requireBranchCapability } from "@/modules/rbac/guards";
 import { dispatchListSchema } from "@/modules/dispatch/validators";
 import { listDispatchHistory } from "@/modules/dispatch/service";
 import { ok, validationFail } from "@/lib/api/response";
@@ -21,6 +21,15 @@ export async function GET(request: Request) {
     const branchId = parsed.data.branchId ?? "";
 
     requireAnyBranchCapability(session, [CAPABILITIES.DISPATCH_VIEW]);
+    // Auditoría 2026-08-03: requireAnyBranchCapability solo confirma que el
+    // usuario tenga DISPATCH_VIEW en ALGUNA sucursal — no que sea la pedida
+    // por query param. Sin este chequeo, un WAREHOUSE/SALES con el permiso
+    // solo en su propia sucursal podía pedir ?branchId=<otra> y ver el
+    // historial de despacho de una sucursal ajena (mismo patrón que
+    // inventory/balances). Master queda exento (isMaster ya bypassa scope).
+    if (branchId && !isMaster(session)) {
+      requireBranchCapability(session, branchId, CAPABILITIES.DISPATCH_VIEW);
+    }
 
     const data = await listDispatchHistory({
       branchId,

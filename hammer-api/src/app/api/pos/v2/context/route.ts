@@ -5,7 +5,7 @@ import { ok, validationFail } from "@/lib/api/response";
 import { toApiErrorResponse } from "@/lib/api/errors";
 import { getBranchWorkflowConfig } from "@/modules/workflow/branch-workflow";
 import { CAPABILITIES } from "@/modules/rbac/policies";
-import { canInBranch } from "@/modules/rbac/guards";
+import { canInBranch, requireBranchCapability } from "@/modules/rbac/guards";
 import { businessDateFromNow } from "@/modules/operations/service";
 import { z } from "zod";
 
@@ -23,6 +23,16 @@ export async function GET(request: Request) {
     if (!parsed.success) return validationFail(parsed.error.flatten());
 
     const branchId = parsed.data.branchId;
+
+    // Auditoría 2026-08-03: solo se exigía sesión — branchId nunca se
+    // validaba contra el usuario. CAPABILITIES.SALES_VIEW es la misma
+    // capability que ya decide si el link "Punto de Venta" aparece en el
+    // sidebar (app-sidebar.tsx) — sin este chequeo, cualquier usuario
+    // autenticado (de cualquier rol/sucursal) podía pedir ?branchId=<otra>
+    // y ver las cajas físicas abiertas, sus operadores (nombre/usuario) y
+    // el estado operativo de una sucursal ajena.
+    requireBranchCapability(session, branchId, CAPABILITIES.SALES_VIEW);
+
     const todayBusinessDate = businessDateFromNow();
 
     const [workflow, cashBoxes, assignedSessions, todayDay, branchBlockingSession] = await Promise.all([

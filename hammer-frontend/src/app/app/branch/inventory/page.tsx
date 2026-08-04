@@ -84,6 +84,14 @@ export default function BranchInventoryPage() {
     return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
   }
 
+  // El sidebar ya oculta este link a roles bajos (SALES/CASHIER), pero la
+  // página no lo exigía — entrando directo por la URL igual se veía el
+  // inventario completo, incluido stock cero. Mismo permiso que decide si
+  // el link aparece en el menú.
+  if (!canInBranch(session, branch.id, CAPABILITIES.BRANCH_INVENTORY_VIEW)) {
+    return <p className="text-[var(--color-danger-600)]">No tienes permiso para ver el inventario de esta sucursal.</p>;
+  }
+
   const canPostManualMovements = canInBranch(session, branch.id, CAPABILITIES.INVENTORY_MOVEMENT_POST);
 
   return (

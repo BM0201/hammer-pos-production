@@ -1,7 +1,8 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { hasBranchAccess } from "@/modules/rbac/guards";
 import { requireCsrf } from "@/modules/security/csrf";
-import { ok, validationFail } from "@/lib/api/response";
+import { ok, fail, validationFail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getPrintSettings } from "@/modules/printing/printing-service";
 import { upsertPrintSettings } from "@/modules/print/service";
@@ -15,6 +16,13 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const branchId = url.searchParams.get("branchId");
     if (!branchId) return validationFail({ branchId: "branchId es obligatorio" });
+
+    // Auditoría 2026-08-03: solo exigía sesión — cualquier usuario
+    // autenticado podía leer la config de impresión de otra sucursal
+    // cambiando branchId. El PUT de este mismo archivo ya exige Master.
+    if (!hasBranchAccess(session, branchId)) {
+      return fail("FORBIDDEN", "No tienes acceso a esta sucursal.", 403);
+    }
 
     const settings = await getPrintSettings({ branchId, cashRegisterId: url.searchParams.get("cashRegisterId") });
     return ok(settings);

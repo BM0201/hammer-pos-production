@@ -1,5 +1,6 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
+import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { previewFusionCreation, type WizardMember } from "@/modules/catalog/fusion-wizard-service";
@@ -12,6 +13,9 @@ export async function POST(request: Request) {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     assertMaster(session);
+    // Auditoría 2026-08-03: sin requireCsrf, el middleware global solo
+    // verifica que el header exista (no su validez).
+    await requireCsrf(request, session);
 
     const body = (await request.json().catch(() => ({}))) as { members?: WizardMember[] };
     if (!Array.isArray(body.members) || body.members.length < 2) {

@@ -17,6 +17,13 @@ export async function GET() {
     const session = await getCurrentSession();
     if (!session) return fail("ERROR", "No autenticado", 401);
 
+    // Auditoría 2026-08-03: solo exigía sesión, mientras PUT en este mismo
+    // archivo ya exige acceso de Finanzas. Impacto limitado (el mismo
+    // objeto pricing ya viaja en la respuesta de POST /api/timber/calculate,
+    // abierto a cualquier autenticado porque el POS lo necesita para
+    // cotizar) — se corrige igual por consistencia con PUT.
+    assertFinanceAccess(session);
+
     const config = await getPricingConfig();
     return ok(config);
   } catch (err: unknown) {

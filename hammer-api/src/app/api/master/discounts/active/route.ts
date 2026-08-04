@@ -1,5 +1,5 @@
 import { getCurrentSession } from "@/modules/auth/service";
-import { assertAuthenticated, assertBranchAccess } from "@/modules/auth/access";
+import { assertAuthenticated, assertBranchAccess, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getActiveDiscountsForBranch } from "@/modules/discounts/service";
 import { ok, fail } from "@/lib/api/response";
@@ -8,13 +8,19 @@ export async function GET(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    // Auditoría 2026-08-03: era la única ruta de master/discounts/** sin
+    // assertMaster — rompía el patrón por defecto de la carpeta. Sin
+    // consumidor de frontend hoy (el cálculo de descuentos en venta usa
+    // getActiveDiscountsForBranch directo, server-side); se alinea con el
+    // resto del módulo.
+    assertMaster(session);
     const url = new URL(request.url);
     const branchId = url.searchParams.get("branchId");
     if (!branchId) {
       return fail("VALIDATION_ERROR", "branchId is required", 400);
     }
     // Verify the user has access to the requested branch
-    assertBranchAccess(session, branchId);
+    assertBranchAccess(session!, branchId);
     const data = await getActiveDiscountsForBranch(branchId);
     return ok(data);
   } catch (err) {
