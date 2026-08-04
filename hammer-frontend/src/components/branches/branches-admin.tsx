@@ -225,7 +225,11 @@ export function BranchesAdmin() {
         <Card className="p-8 text-center text-sm text-[var(--color-text-muted)]">No hay sucursales registradas.</Card>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      {/* Tarjetas de sucursal, cantidad variable — auto-fit en vez de un
+          breakpoint fijo: escala igual con 3 que con 15 sucursales, y cada
+          tarjeta (stats + flujo operativo + cajas físicas) necesita ~400px
+          para no verse apretada. */}
+      <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))" }}>
         {branches.map((branch) => {
           const moduleConfig = branch.moduleConfig ?? { enableCashier: true, enableDispatch: true };
           const usersByRole = branch.userBranchRoles.reduce<Record<RoleCode, typeof branch.userBranchRoles>>((acc, item) => {

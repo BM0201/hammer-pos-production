@@ -229,7 +229,7 @@ export default function ProductionDashboardPage() {
 
       {error && <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3 text-sm text-[var(--color-danger-700)]">{error}</div>}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {([
           { label: "Recetas activas", value: activeRecipes.length, Icon: ClipboardList },
           { label: "Lotes en proceso", value: inProcess.length, Icon: Factory },
@@ -270,7 +270,7 @@ export default function ProductionDashboardPage() {
             <EmptyState title="Sin recomendaciones por ahora" body="Cuando falte un producto y exista una receta viable con insumos disponibles, aparecera aqui." />
           </div>
         ) : (
-          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
             {recommendations.slice(0, 6).map((recommendation) => {
               const input = recommendation.inputSummary[0];
               const canCreate = recommendation.suggestedBatches > 0
@@ -316,7 +316,7 @@ export default function ProductionDashboardPage() {
         )}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.35fr]">
+      <div className="grid gap-6 lg:grid-cols-[0.95fr_1.35fr]">
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-sm">
           <h2 className="text-base font-semibold text-[var(--color-text)]">Prioridades de produccion</h2>
           <div className="mt-4 space-y-3">
@@ -382,7 +382,7 @@ export default function ProductionDashboardPage() {
         {costByRecipe.length === 0 ? (
           <div className="mt-4"><EmptyState title="Sin costos historicos" body="Los costos aparecen cuando se completan lotes con insumos consumidos y producto terminado recibido." /></div>
         ) : (
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             {costByRecipe.map((row) => (
               <div key={row.name} className="rounded-lg border border-[var(--color-border)] p-3">
                 <p className="truncate text-sm font-semibold text-[var(--color-text)]">{row.name}</p>

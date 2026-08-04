@@ -111,8 +111,11 @@ export function DecisionDetailDrawer({
         </div>
 
         <div className="space-y-5 p-5">
-          {/* Info tiles grid */}
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {/* Info tiles grid — este drawer tiene max-w-3xl (768px) fijo
+              independientemente del viewport, así que un breakpoint de
+              página (sm/md/lg/xl) no describe bien su ancho real; auto-fit
+              reacciona al ancho real del drawer en vez del viewport. */}
+          <section className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
             <InfoTile icon={AlertTriangle} label="Impacto"        value={money(decision.estimatedImpactAmount ?? decision.impactAmount)} />
             <InfoTile icon={CalendarClock} label="Fecha"          value={formatDate(decision.lastDetectedAt ?? decision.createdAt)} />
             <InfoTile icon={Store}         label="Sucursal"       value={decision.branch ? `${decision.branch.code} - ${decision.branch.name}` : "General"} />

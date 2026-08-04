@@ -143,7 +143,7 @@ export function DecisionCard({ decision, busy, onAction }: DecisionCardProps) {
     <article className="group relative overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)] transition hover:border-[var(--color-master-200)] hover:shadow-[var(--shadow-card-hover)]">
       <div className={`absolute inset-y-0 left-0 w-1.5 ${style.rail}`} />
       <div className="p-4 pl-5 lg:p-5 lg:pl-6">
-        <div className="grid gap-5 xl:grid-cols-[1fr_260px]">
+        <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
           <div className="min-w-0 space-y-4">
             <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
               <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 ${style.badge}`}>
@@ -191,7 +191,11 @@ export function DecisionCard({ decision, busy, onAction }: DecisionCardProps) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-1">
+            {/* Acoplado al breakpoint del grid padre de arriba: hasta lg
+                este bloque ocupa el ancho completo de la tarjeta (4 en
+                fila), desde lg pasa a ser la columna angosta de 260px y
+                necesita apilarse en 1 columna. */}
+          <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4 lg:grid-cols-1">
             <Metric icon={Target}        label="Impacto"   value={formatMoney(decision.estimatedImpactAmount ?? decision.impactAmount)} />
             <Metric icon={BadgeCheck}    label="Confianza" value={`${scorePercent(decision.confidenceScore)}%`} />
             <Metric icon={Gauge}         label="Urgencia"  value={Math.round(asNumber(decision.urgencyScore ?? decision.riskScore))} />

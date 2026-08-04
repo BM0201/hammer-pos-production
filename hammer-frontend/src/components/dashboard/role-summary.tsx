@@ -53,7 +53,7 @@ export function RoleSummary({
       </div>
 
       {/* KPI Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 stagger-children">{kpis}</div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 stagger-children">{kpis}</div>
 
       {/* CTA Button */}
       {ctaButton && (

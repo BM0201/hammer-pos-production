@@ -93,7 +93,7 @@ export default function UserActivityPage() {
       </div>
 
       {snapshot && (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
             <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]"><Activity className="h-4 w-4" /> En linea</div>
             <p className="mt-2 text-2xl font-semibold text-[var(--color-text)]">{snapshot.summary.online}</p>

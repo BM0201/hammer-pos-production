@@ -249,7 +249,7 @@ export function Product360({ productId }: { productId: string }) {
       {/* ═══ GENERAL TAB ═══ */}
       {tab === "general" && (
         <div className="space-y-5">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             <KpiMini icon={Warehouse} label="Stock Total" value={qty(totalStock)} accent="emerald" />
             <KpiMini icon={DollarSign} label="Precio Base" value={money(product.standardSalePrice)} accent="blue" />
             <KpiMini icon={Building2} label="Sucursales con stock" value={String(product.inventoryBalances.length)} accent="indigo" />

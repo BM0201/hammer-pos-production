@@ -237,7 +237,10 @@ export default function NewRecipePage() {
       {error && <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3 text-sm text-[var(--color-danger-700)]">{error}</div>}
       {loadingProducts && <p className="text-sm text-[var(--color-text-muted)]">Cargando catalogo...</p>}
 
-      <form onSubmit={handleSubmit} className="grid gap-6 xl:grid-cols-[1fr_360px]">
+      {/* El resumen lateral tiene etiquetas largas ("Precio sugerido estimado")
+          — a 1024px se achica a 300px en vez de los 360px de xl+ para no
+          robarle demasiado ancho al formulario principal. */}
+      <form onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-[1fr_300px] xl:grid-cols-[1fr_360px]">
         <div className="space-y-6">
           <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-sm">
             <h2 className="text-base font-semibold text-[var(--color-text)]">Identidad</h2>

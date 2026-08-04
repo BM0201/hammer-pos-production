@@ -173,7 +173,7 @@ function NewBatchContent() {
 
       {loading ? <p className="text-sm text-[var(--color-text-muted)]">Cargando datos…</p> : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
         <div className="space-y-4">
           <Card>
             <div className="hm-section-rule">Receta y cantidad</div>

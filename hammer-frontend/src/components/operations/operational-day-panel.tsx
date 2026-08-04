@@ -437,7 +437,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
       )}
 
       {/* Cash sessions + payments */}
-      <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+      <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <CashSessionStatusList sessions={day.cashSessions ?? []} branchId={branchId} dayStatus={day.status} />
 
         <Card className="p-4">

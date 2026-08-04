@@ -2,6 +2,39 @@
 @import "../styles/responsive.css";
 
 /* ═══════════════════════════════════════════════════════════════
+   MAPA DE PUNTOS DE QUIEBRE — referencia única del sistema
+   ═══════════════════════════════════════════════════════════════
+   Breakpoints por defecto de Tailwind 4 (no requieren config extra).
+   No se "detecta" el dispositivo con JS — el navegador ya sabe el
+   ancho de pantalla y CSS reacciona solo, sin parpadeo.
+
+     sm    640px   — celular en horizontal / ventana angosta
+     md    768px   — tablet vertical
+     lg    1024px  — tablet horizontal · laptop chica
+     xl    1280px  — laptop grande
+     2xl   1536px  — monitor ancho
+
+   Regla de oro: ningún componente salta de sm/md directo a xl sin
+   pasar por lg. El rango 1024-1279px (tablets horizontales, laptops
+   de 13" a resolución normal, ventanas en modo dividido) es el más
+   común en el uso real del POS/back-office en mostrador y oficina —
+   saltárselo deja ese rango completo con el diseño apilado/apretado
+   pensado para celular.
+
+   Para listas de tarjetas de tamaño similar y cantidad variable
+   (tarjetas de producto, de sucursal, de filtro), preferir
+   `grid-template-columns: repeat(auto-fit, minmax(Npx, 1fr))` por
+   sobre agregar más puntos de quiebre fijos — se ajusta a cualquier
+   ancho sin necesitar mantenimiento. Ver pos-catalog-panel.tsx,
+   branches-admin.tsx o decision-detail-drawer.tsx como referencia.
+
+   Nota: src/styles/responsive.css (importado arriba) es un sistema
+   previo con su propia escala (360/768/1024/1440) para utilidades de
+   sidebar/touch-targets — no se tocó al escribir esto. Para grillas
+   de layout nuevas, usar el mapa de Tailwind de arriba, no esa escala.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════
    H.A.M.M.E.R. — Design System v4 (Fase 3)
    WCAG AA compliant color system with 5-role differentiation.
    Contrast ratios verified: ≥ 4.5:1 for normal text, ≥ 3:1 for large/UI.

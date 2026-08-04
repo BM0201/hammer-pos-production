@@ -1410,7 +1410,7 @@ function InventorySummary({ kpis, onNavigate }: InventorySummaryProps) {
   return (
     <div className="space-y-4">
       {/* ── Fila superior: 4 métricas clave ── */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {/* Total activos */}
         <button
           type="button"
@@ -2933,7 +2933,10 @@ function MovementsPanel({
         </div>
       </div>
       <div className="p-4 space-y-4">
-        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-7">
+        {/* 7 controles de filtro de ancho similar y cantidad fija — auto-fit
+            se acomoda solo a cualquier ancho en vez de necesitar más
+            breakpoints (mismo patrón que pos-catalog-panel.tsx). */}
+        <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
           <select className="hm-input" value={activeBranchId} onChange={(e) => { onSelectBranch(e.target.value); resetMovementPage(); }}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
           <select className="hm-input" value={productId} onChange={(e) => { setProductId(e.target.value); resetMovementPage(); }}><option value="">Todos los productos</option>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
           <select className="hm-input" value={movementType} onChange={(e) => { setMovementType(e.target.value); resetMovementPage(); }}><option value="">Todos los tipos</option><option value="PURCHASE_IN">Compra / entrada</option><option value="SALE_OUT">Venta / salida</option><option value="ADJUSTMENT_IN">Ajuste entrada / carga inicial</option><option value="ADJUSTMENT_OUT">Ajuste salida</option><option value="RETURN_IN">Devolucion entrada</option><option value="RETURN_OUT">Devolucion salida</option><option value="TRANSFER_IN">Traslado entrada</option><option value="TRANSFER_OUT">Traslado salida</option></select>

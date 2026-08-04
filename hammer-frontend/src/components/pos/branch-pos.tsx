@@ -325,7 +325,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
       />
 
       <section className="min-h-0 flex-1 overflow-hidden">
-        <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(12rem,0.75fr)_minmax(0,1.25fr)] gap-4 xl:grid-cols-[0.9fr_1.1fr] xl:grid-rows-1">
+        <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(12rem,0.75fr)_minmax(0,1.25fr)] gap-4 lg:grid-cols-[0.9fr_1.1fr] lg:grid-rows-1">
           <PosCatalogPanel
             search={search}
             setSearch={setSearch}

@@ -106,8 +106,12 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
         </button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-12">
-        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] md:col-span-3 xl:col-span-4">
+      {/* Grid de 12 columnas con spans deliberados (búsqueda más ancha que
+          los selects) — no es apto para auto-fit (perdería esa proporción).
+          Se baja el mismo sistema de columnas de xl a lg: a 1024px ya sobra
+          espacio de sobra para 12 columnas angostas (~80px c/u). */}
+      <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-12">
+        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] md:col-span-3 lg:col-span-4">
           Busqueda
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-soft)]" />
@@ -120,29 +124,29 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
           </div>
         </label>
 
-        <Select label="Sucursal" value={filters.branchId} onChange={(value) => setValue("branchId", value)} span="xl:col-span-2">
+        <Select label="Sucursal" value={filters.branchId} onChange={(value) => setValue("branchId", value)} span="lg:col-span-2">
           <option value="">Todas</option>
           {branches.map((branch) => (
             <option key={branch.id} value={branch.id}>{branch.code} - {branch.name}</option>
           ))}
         </Select>
 
-        <Select label="Categoria" value={filters.category} onChange={(value) => setValue("category", value)} span="xl:col-span-2">
+        <Select label="Categoria" value={filters.category} onChange={(value) => setValue("category", value)} span="lg:col-span-2">
           <option value="">Todas</option>
           {categories.map((category) => <option key={category} value={category}>{category}</option>)}
         </Select>
 
-        <Select label="Severidad" value={filters.severity} onChange={(value) => setValue("severity", value)} span="xl:col-span-2">
+        <Select label="Severidad" value={filters.severity} onChange={(value) => setValue("severity", value)} span="lg:col-span-2">
           <option value="">Todas</option>
           {severities.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
         </Select>
 
-        <Select label="Estado" value={filters.status} onChange={(value) => setValue("status", value)} span="xl:col-span-2">
+        <Select label="Estado" value={filters.status} onChange={(value) => setValue("status", value)} span="lg:col-span-2">
           <option value="">Todos</option>
           {statuses.map((status) => <option key={status} value={status}>{statusLabels[status] ?? status}</option>)}
         </Select>
 
-        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] xl:col-span-2">
+        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] lg:col-span-2">
           Tipo de decision
           <input
             className="hm-input text-sm"
@@ -152,7 +156,7 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
           />
         </label>
 
-        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] xl:col-span-2">
+        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] lg:col-span-2">
           Producto/SKU
           <input
             className="hm-input text-sm"
@@ -162,7 +166,7 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
           />
         </label>
 
-        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] xl:col-span-2">
+        <label className="space-y-1 text-xs font-bold text-[var(--color-text-muted)] lg:col-span-2">
           Usuario
           <input
             className="hm-input text-sm"
@@ -172,14 +176,14 @@ export function BrainFilters({ filters, branches, onChange, onReset }: BrainFilt
           />
         </label>
 
-        <Select label="Periodo" value={filters.days} onChange={(value) => setValue("days", value)} span="xl:col-span-2">
+        <Select label="Periodo" value={filters.days} onChange={(value) => setValue("days", value)} span="lg:col-span-2">
           <option value="7">7 dias</option>
           <option value="30">30 dias</option>
           <option value="60">60 dias</option>
           <option value="90">90 dias</option>
         </Select>
 
-        <Select label="Orden" value={filters.sort} onChange={(value) => setValue("sort", value)} span="xl:col-span-2">
+        <Select label="Orden" value={filters.sort} onChange={(value) => setValue("sort", value)} span="lg:col-span-2">
           <option value="priority">Prioridad</option>
           <option value="severity">Severidad</option>
           <option value="impact">Impacto economico</option>
