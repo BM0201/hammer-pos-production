@@ -414,11 +414,12 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
       return;
     }
     const isFirst = members.length === 0;
-    // Solo el 2do producto agregado se asume "el empaque" por defecto — es el
-    // caso más común (1 base + 1 caja). Del 3ro en adelante son presentaciones
-    // sueltas alternativas (fusión triple: ej. Caja + Unidad + Libra) — el
-    // usuario elige cuál es el empaque con el botón de cada fila si hace falta.
-    const isSecond = members.length === 1;
+    // No todas las fusiones tienen un empaque cerrado real (ej. Arena
+    // vendida por Lata y por Metro — son solo dos unidades de venta, no hay
+    // "caja" que abrir). Antes se asumía automáticamente que el 2do producto
+    // agregado era el empaque, sin poder desmarcarlo — el usuario decide
+    // explícitamente con el botón de cada fila, y solo importa si más
+    // adelante activa "maneja empaques cerrados/sueltos" en el paso 2.
     setMembers((prev) => [
       ...prev,
       {
@@ -428,7 +429,7 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
         saleUnit: product.unit,
         conversionFactor: isFirst ? 1 : Number(factor || 1),
         isCanonical: isFirst,
-        isPackagePresentation: isSecond,
+        isPackagePresentation: false,
       },
     ]);
     setSearch("");
@@ -458,9 +459,15 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
 
   // Solo puede haber UN empaque cerrado a la vez — marcar uno desmarca
   // cualquier otro (las demás presentaciones no-canónicas quedan como
-  // "sueltas alternativas").
+  // "sueltas alternativas"). Volver a hacer click sobre el que ya está
+  // marcado lo desmarca por completo — no todas las fusiones tienen un
+  // empaque real (ver comentario en addProduct), tiene que poder quedar
+  // ninguno marcado.
   function setPackageMember(productId: string) {
-    setMembers((prev) => prev.map((m) => (m.isCanonical ? m : { ...m, isPackagePresentation: m.productId === productId })));
+    setMembers((prev) => {
+      const alreadyMarked = prev.find((m) => m.productId === productId)?.isPackagePresentation;
+      return prev.map((m) => (m.isCanonical ? m : { ...m, isPackagePresentation: !alreadyMarked && m.productId === productId }));
+    });
   }
 
   const packageMember = members.find((m) => !m.isCanonical && m.isPackagePresentation) ?? null;
@@ -540,7 +547,10 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
             saleUnit: m.saleUnit,
             conversionFactor: m.conversionFactor,
             isCanonical: m.isCanonical,
-            isPackagePresentation: m.isPackagePresentation,
+            // Sin "maneja empaques cerrados/sueltos" activo, la marca de
+            // empaque no significa nada — se fuerza a false aunque haya
+            // quedado marcada de un paso anterior.
+            isPackagePresentation: tracksPackages && m.isPackagePresentation,
           })),
           branchResolutions,
         }),
