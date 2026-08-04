@@ -17,6 +17,15 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { resolveAbcXyzClassification } from "@/modules/analytics/abc-xyz-classification";
+import { getProductStockConversionsBatch } from "@/modules/inventory/unit-conversion";
+
+// Fusión de Inventario: createInventoryMovementTx nunca graba una venta de
+// producto con empaque/sueltas como "SALE_OUT" literal — graba
+// PACKAGE_SALE_OUT o LOOSE_UNIT_SALE_OUT (quantity siempre en unidad base,
+// productId siempre el canónico). Filtrar solo por "SALE_OUT" exacto deja a
+// estos productos con CERO datos de venta en XYZ/rotación/analítica —
+// mismo bug ya corregido en finance/service.ts y reports/movement-groups.ts.
+const SALE_OUT_TYPES = ["SALE_OUT", "PACKAGE_SALE_OUT", "LOOSE_UNIT_SALE_OUT"] as const;
 
 // ── ABC Classification ──
 
@@ -49,13 +58,27 @@ export async function calculateABCClassification(year: number, month: number) {
 
   if (salesData.length === 0) return { classified: 0, distribution: { A: 0, B: 0, C: 0 } };
 
+  // Fusión de Inventario: presentaciones hermanas (ej. Quintal y Varilla)
+  // son productId distintos que reparten las ventas de UN SOLO producto
+  // fisico — sin consolidar, cada presentacion rankea por separado con una
+  // fraccion del valor real y puede terminar mal clasificada (C en vez de
+  // A) aunque el grupo completo venda mucho. Se redirige el valor de cada
+  // presentacion hacia el productId canonico de su grupo antes de rankear.
+  const conversionByProductId = await getProductStockConversionsBatch(prisma, salesData.map((s) => s.productId));
+  const valueByCanonicalId = new Map<string, { totalValue: number; unitsSold: number }>();
+  for (const s of salesData) {
+    const conversion = conversionByProductId.get(s.productId);
+    const canonicalId = conversion?.canonicalProductId ?? s.productId;
+    const factor = conversion ? Number(conversion.conversionFactor) : 1;
+    const entry = valueByCanonicalId.get(canonicalId) ?? { totalValue: 0, unitsSold: 0 };
+    entry.totalValue += Number(s._sum.lineSubtotal ?? 0);
+    entry.unitsSold += Number(s._sum.quantity ?? 0) * factor; // a unidad base — Quintal y Varilla no se pueden sumar tal cual
+    valueByCanonicalId.set(canonicalId, entry);
+  }
+
   // Calculate total value and sort descending
-  const products = salesData
-    .map((s) => ({
-      productId: s.productId,
-      totalValue: Number(s._sum.lineSubtotal ?? 0),
-      unitsSold: Number(s._sum.quantity ?? 0),
-    }))
+  const products = Array.from(valueByCanonicalId.entries())
+    .map(([productId, v]) => ({ productId, totalValue: v.totalValue, unitsSold: v.unitsSold }))
     .sort((a, b) => b.totalValue - a.totalValue);
 
   const totalValue = products.reduce((sum, p) => sum + p.totalValue, 0);
@@ -122,7 +145,7 @@ export async function calculateXYZClassification(year: number, month: number) {
   // Get daily sales per product over last 90 days
   const movements = await prisma.inventoryMovement.findMany({
     where: {
-      movementType: "SALE_OUT",
+      movementType: { in: [...SALE_OUT_TYPES] },
       createdAt: { gte: startDate, lte: endDate },
     },
     select: { productId: true, quantity: true, createdAt: true },
@@ -198,7 +221,7 @@ export async function calculateRotationIndices(year: number, month: number) {
     by: ["productId"],
     _sum: { quantity: true },
     where: {
-      movementType: "SALE_OUT",
+      movementType: { in: [...SALE_OUT_TYPES] },
       createdAt: { gte: monthStart, lte: monthEnd },
     },
   });
@@ -375,7 +398,7 @@ export async function generateProductAnalytics(year: number, month: number) {
 
     // Coefficient of variation from daily sales
     const movements = await prisma.inventoryMovement.findMany({
-      where: { productId: sale.productId, movementType: "SALE_OUT", createdAt: { gte: monthStart, lte: monthEnd } },
+      where: { productId: sale.productId, movementType: { in: [...SALE_OUT_TYPES] }, createdAt: { gte: monthStart, lte: monthEnd } },
       select: { quantity: true, createdAt: true },
     });
     const dailyMap = new Map<string, number>();
