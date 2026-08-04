@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { mapProductWithEffectivePricing, resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
-import { formatDualStock } from "@/modules/inventory/unit-conversion";
+import { formatDualStock, convertBaseQtyToSaleQty } from "@/modules/inventory/unit-conversion";
 import type { ProductStockConversion } from "@/modules/inventory/unit-conversion";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
@@ -152,7 +152,7 @@ async function batchMapProductsWithBranchInventory<TProduct extends CatalogProdu
   });
 }
 
-function mapSingleProductWithBranchInventory<TProduct extends CatalogProductWithBranchPricing>(
+export function mapSingleProductWithBranchInventory<TProduct extends CatalogProductWithBranchPricing>(
   product: TProduct,
   branchId: string,
   conversion: ProductStockConversion | null,
@@ -195,19 +195,27 @@ function mapSingleProductWithBranchInventory<TProduct extends CatalogProductWith
   const fallbackBalance = product.inventoryBalances?.find((item) => item.branchId === branchId);
   const fallbackQty = fallbackBalance?.quantityOnHand?.toNumber() ?? 0;
 
+  // Bug: para cualquier miembro suelto que NO sea el canónico (ej. "Libra"
+  // en una fusión Caja/Unidad/Libra) esto devolvía looseUnitQuantity crudo,
+  // en unidad BASE (Unidad) — nunca dividido por el conversionFactor propio
+  // de esa presentación. El canónico "funcionaba" de pura coincidencia
+  // (su factor es 1), pero cualquier otra presentación suelta mostraba el
+  // mismo número que el canónico en vez del suyo propio — "todo sale en
+  // bulto", la Libra se veía con la misma cantidad que la Unidad.
   const packageAvailableSaleStock = conversion?.tracksPackages && balance
     ? conversion.isPackagePresentation
       ? balance.closedPackageQuantity.toNumber()
-      : balance.looseUnitQuantity
-          .add(
+      : convertBaseQtyToSaleQty({
+          baseQuantity: balance.looseUnitQuantity.add(
             conversion.autoOpenForUnitSale
               ? Prisma.Decimal.max(
                   0,
                   balance.closedPackageQuantity.sub(conversion.minimumClosedPackageReserve),
                 ).mul(conversion.conversionFactorToBase ?? conversion.conversionFactor)
               : 0,
-          )
-          .toNumber()
+          ),
+          conversionFactor: conversion.conversionFactor,
+        }).toNumber()
     : null;
 
   const displaySaleStock = packageAvailableSaleStock
