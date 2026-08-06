@@ -1,4 +1,3 @@
-import { OperationalDayStatus } from "@prisma/client";
 import { z } from "zod";
 
 export const currentOperationalDaySchema = z.object({
@@ -11,15 +10,20 @@ export const openOperationalDaySchema = z.object({
   notes: z.string().trim().max(1000).optional().nullable(),
 });
 
-export const closeOperationalDaySchema = z.object({
+export const endShiftOperationalDaySchema = z.object({
   note: z.string().trim().max(1500).optional().nullable(),
-  forceClose: z.boolean().optional().default(false),
-  acknowledgedWarnings: z.array(z.string()).optional().default([]),
 });
 
-export const approveOperationalDaySchema = z.object({
-  forceApprove: z.boolean().optional().default(false),
+export const confirmOperationalDaySchema = z.object({
   note: z.string().trim().max(1500).optional().nullable(),
+});
+
+export const revertConfirmationOperationalDaySchema = z.object({
+  note: z.string().trim().min(5).max(1500),
+});
+
+export const reopenOperationalDaySchema = z.object({
+  note: z.string().trim().min(5).max(1500),
 });
 
 export const cancelOperationalDaySchema = z.object({
@@ -32,7 +36,7 @@ export const masterOperationalDaysSchema = z.object({
   dateFrom: z.string().date().optional(),
   dateTo: z.string().date().optional(),
   branchId: z.string().cuid().optional(),
-  status: z.nativeEnum(OperationalDayStatus).optional(),
+  lifecycle: z.enum(["ACTIVE", "AWAITING_REVIEW", "CANCELLED"]).optional(),
+  reviewStatus: z.enum(["PENDING", "CONFIRMED"]).optional(),
   hasIssues: z.coerce.boolean().optional(),
-  reviewState: z.enum(["pending", "approved", "all"]).optional(),
 });

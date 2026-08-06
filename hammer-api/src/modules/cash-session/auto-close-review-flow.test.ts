@@ -3,15 +3,10 @@ import test from "node:test";
 import { CashSessionStatus } from "@prisma/client";
 import { resolveAutoCloseReview } from "@/modules/cash-session/review-policy";
 import { isCommandCenterCompletedStatus, isCommandCenterPendingStatus } from "@/modules/dashboard/command-center-policy";
-import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-policy";
 
 test("auto-close creates a pending review status", () => {
   assert.equal(isCommandCenterPendingStatus(CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW), true);
   assert.equal(isCommandCenterCompletedStatus(CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW), false);
-});
-
-test("operational day cannot force-close with pending auto-close review", () => {
-  assert.equal(isHardOperationalDayCloseBlocker("auto_closed_pending_review"), true);
 });
 
 test("master confirm OK uses expected cash and leaves session AUTO_CLOSED", () => {
@@ -40,7 +35,6 @@ test("command center no longer shows reviewed auto-close as pending", () => {
 });
 
 test("operational day close can proceed after pending auto-close review is resolved", () => {
-  assert.equal(isHardOperationalDayCloseBlocker("auto_closed_pending_review"), true);
   assert.equal(isCommandCenterPendingStatus(CashSessionStatus.AUTO_CLOSED), false);
   assert.equal(isCommandCenterCompletedStatus(CashSessionStatus.AUTO_CLOSED), true);
 });

@@ -2,9 +2,13 @@ import { prisma } from "@/lib/prisma";
 
 export const OPERATIONAL_DAY_AUTO_SETTING_KEY = "operational_day_auto_config";
 
+/**
+ * Horario de referencia — Día Operativo 360. Puramente informativo: no abre
+ * ni cierra nada por sí solo (el día se crea con la primera operación, y
+ * confirmarlo es siempre un acto humano). Solo alimenta lo que la UI muestra
+ * en Ajustes ("normalmente abrís a las 07:00, cerrás a las 17:30").
+ */
 export interface OperationalDayAutoConfig {
-  autoOpenEnabled: boolean;
-  autoCloseEnabled: boolean;
   timezone: string;
   weekdayOpenTime: string | null;
   saturdayOpenTime: string | null;
@@ -15,8 +19,6 @@ export interface OperationalDayAutoConfig {
 }
 
 export const DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG: OperationalDayAutoConfig = {
-  autoOpenEnabled: false,
-  autoCloseEnabled: false,
   timezone: "America/Managua",
   weekdayOpenTime: "07:00",
   saturdayOpenTime: "07:00",
@@ -45,8 +47,6 @@ export function normalizeOperationalDayAutoConfig(
   };
 
   return {
-    autoOpenEnabled: typeof raw.autoOpenEnabled === "boolean" ? raw.autoOpenEnabled : d.autoOpenEnabled,
-    autoCloseEnabled: typeof raw.autoCloseEnabled === "boolean" ? raw.autoCloseEnabled : d.autoCloseEnabled,
     timezone: typeof raw.timezone === "string" && raw.timezone.trim() ? raw.timezone : d.timezone,
     weekdayOpenTime: resolveTime(raw.weekdayOpenTime, d.weekdayOpenTime),
     saturdayOpenTime: resolveTime(raw.saturdayOpenTime, d.saturdayOpenTime),
@@ -57,11 +57,6 @@ export function normalizeOperationalDayAutoConfig(
   };
 }
 
-// TTL cache: this config is read on every cron tick (every 10 min, plus twice
-// per operational-automation run) but changes only via rare admin actions.
-// 60s TTL on warm serverless instances avoids re-hitting Neon per call; the
-// update function below invalidates the local cache immediately. Cross-instance
-// staleness is bounded to 60s, which is harmless for open/close schedules.
 const CONFIG_CACHE_TTL_MS = 60_000;
 let configCache: { value: OperationalDayAutoConfig; expiresAt: number } | null = null;
 
@@ -85,16 +80,6 @@ export async function getOperationalDayAutoConfig(): Promise<OperationalDayAutoC
   return { ...config };
 }
 
-/**
- * Bug reportado: un llamador que arma el objeto de actualización listando
- * TODOS los campos (aunque no cambien, con valor `undefined` para los que no
- * toca) pisaba en silencio el valor ya guardado con el default hardcodeado —
- * `{...current, ...input}` sobreescribe con `undefined` explícito, y
- * normalizeOperationalDayAutoConfig cae al default porque no puede
- * distinguir "no vino" de "vino en undefined". Se filtran los `undefined`
- * de `input` ANTES del merge para que solo los campos realmente enviados
- * puedan cambiar algo. Pura — sin I/O, testeable directo.
- */
 export function omitUndefinedFields<T extends Record<string, unknown>>(input: T): Partial<T> {
   return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
@@ -119,7 +104,7 @@ export async function updateOperationalDayAutoConfig(
     data: {
       actorUserId: userId ?? null,
       module: "operations",
-      action: "OPERATIONAL_DAY_AUTO_CONFIG_UPDATED",
+      action: "OPERATIONAL_DAY_SCHEDULE_REFERENCE_UPDATED",
       entityType: "SystemSetting",
       entityId: OPERATIONAL_DAY_AUTO_SETTING_KEY,
       metadataJson: merged as unknown as import("@prisma/client").Prisma.InputJsonValue,

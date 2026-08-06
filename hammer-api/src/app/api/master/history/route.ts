@@ -197,13 +197,13 @@ export async function GET(request: Request) {
     // ─── Operational Days ────────────────────────────────
     if (!typeFilter || typeFilter === "operational_day") {
       const dayWhere: Prisma.OperationalDayWhereInput = {
-        status: { in: ["CLOSED", "CANCELLED"] },
+        lifecycle: { in: ["AWAITING_REVIEW", "CANCELLED"] },
       };
       if (branchId) dayWhere.branchId = branchId;
       if (startDate || endDate) {
-        dayWhere.closedAt = {};
-        if (startDate) (dayWhere.closedAt as Prisma.DateTimeFilter).gte = new Date(startDate);
-        if (endDate)   (dayWhere.closedAt as Prisma.DateTimeFilter).lte = new Date(endDate);
+        dayWhere.sweptAt = {};
+        if (startDate) (dayWhere.sweptAt as Prisma.DateTimeFilter).gte = new Date(startDate);
+        if (endDate)   (dayWhere.sweptAt as Prisma.DateTimeFilter).lte = new Date(endDate);
       }
       if (search) {
         dayWhere.OR = [
@@ -216,26 +216,26 @@ export async function GET(request: Request) {
         where: dayWhere,
         include: {
           branch: { select: { name: true, code: true } },
-          closedBy: { select: { fullName: true, username: true } },
-          approvedBy: { select: { fullName: true, username: true } },
+          sweptBy: { select: { fullName: true, username: true } },
+          reviewedBy: { select: { fullName: true, username: true } },
         },
         orderBy: { businessDate: "desc" },
         take: fetchDepth,
       });
 
       for (const d of days) {
-        const approved = !!d.approvedAt;
+        const confirmed = d.reviewStatus === "CONFIRMED";
         entries.push({
           id: d.id,
           type: "operational_day",
-          date: (d.closedAt ?? d.businessDate).toISOString(),
+          date: (d.sweptAt ?? d.businessDate).toISOString(),
           reference: d.businessDate.toISOString().split("T")[0]!,
           branchName: d.branch.name,
           branchCode: d.branch.code,
-          description: `Día operativo ${d.branch.code} — ${approved ? "Aprobado" : d.status}`,
+          description: `Día operativo ${d.branch.code} — ${confirmed ? "Confirmado" : d.lifecycle}`,
           amount: Number(d.salesTotal ?? 0),
-          status: approved ? "APPROVED" : d.status,
-          user: approved ? formatActor(d.approvedBy) : formatActor(d.closedBy),
+          status: confirmed ? "CONFIRMED" : d.lifecycle,
+          user: confirmed ? formatActor(d.reviewedBy) : formatActor(d.sweptBy),
         });
       }
     }

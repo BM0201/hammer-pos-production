@@ -2,18 +2,19 @@ import { ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { getCurrentSession } from "@/modules/auth/service";
-import { listPendingCloseDays } from "@/modules/operations/service";
+import { listPendingReviewDays } from "@/modules/operations/service";
 
 /**
- * Día Operativo v2 Fase 5.5 — cola de días PENDING_CLOSE (más viejo primero).
- * Ninguno bloquea la operación de hoy; ninguno caduca ni se borra.
+ * Día Operativo 360 — la cola única: días AWAITING_REVIEW con reviewStatus
+ * PENDING, del más viejo primero. Ninguno bloquea la operación de hoy;
+ * ninguno caduca ni se borra — esperan la firma de Master indefinidamente.
  */
 export async function GET() {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
     assertMaster(session);
-    return ok(await listPendingCloseDays());
+    return ok(await listPendingReviewDays());
   } catch (error) {
     return toHttpErrorResponse(error);
   }

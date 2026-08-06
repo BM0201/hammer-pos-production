@@ -7,7 +7,7 @@ import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
-import { refreshOperationalDaySummaryTx, resolveOpenOperationalDayForOperationTx } from "@/modules/operations/service";
+import { refreshOperationalDaySummaryTx, resolveOperationalDayForOperationTx } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { computeDiscountAgainstCatalogPrice, getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules/sales/discount-policy";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
@@ -157,19 +157,14 @@ export async function createDraftSaleOrder(input: {
   notes?: string | null;
   actorUserId: string;
 }) {
-  try {
-    return await prisma.$transaction(async (tx) => {
-      const branch = await tx.branch.findUniqueOrThrow({ where: { id: input.branchId } });
+  return prisma.$transaction(async (tx) => {
+    const branch = await tx.branch.findUniqueOrThrow({ where: { id: input.branchId } });
 
-      // Fase 5 (Día Operativo v2): un día abierto de fecha anterior YA NO
-      // bloquea la creación de una venta — antes esta función hacía su propio
-      // findFirst+throw("OPERATIONAL_DAY_STALE") sin pasar por el barrido, así
-      // que un cajero podía quedar bloqueado creando una venta nueva aunque
-      // abrir caja (que sí usa este resolver) funcionara sin problema. Ahora
-      // usa el mismo camino: barre el día viejo a PENDING_CLOSE y abre/usa el
-      // día de hoy de forma transparente.
-      const { operationalDayId } = await resolveOpenOperationalDayForOperationTx(
-        tx, input.branchId, undefined, { openedByUserId: input.actorUserId },
+      // Día Operativo 360: el resolver nunca lanza por causa del día operativo
+      // — si no hay día ACTIVE para hoy, lo crea; si el que había es de una
+      // fecha anterior, lo barre a AWAITING_REVIEW y sigue de largo.
+      const { dayId: operationalDayId } = await resolveOperationalDayForOperationTx(
+        tx, input.branchId, input.actorUserId,
       );
 
       const nowInstant = new Date();
@@ -216,24 +211,8 @@ export async function createDraftSaleOrder(input: {
         },
       });
 
-      return order;
-    });
-  } catch (error) {
-    // Único caso de denegación real que queda: no hay día operativo y el
-    // auto-open está deshabilitado por config (ensureOpenOperationalDayTx).
-    if (error instanceof Error && error.message === "OPERATIONAL_DAY_NOT_OPEN") {
-      await logAuditEvent({
-        actorUserId: input.actorUserId,
-        branchId: input.branchId,
-        module: "sales",
-        action: SALE_AUDIT_EVENTS.ORDER_CREATE_DENIED,
-        entityType: "SaleOrder",
-        entityId: "draft",
-        metadataJson: { reason: "OPERATIONAL_DAY_NOT_OPEN" },
-      });
-    }
-    throw error;
-  }
+    return order;
+  });
 }
 
 async function recalcOrderTotalsTx(tx: Prisma.TransactionClient, saleOrderId: string) {
@@ -899,19 +878,23 @@ export async function submitDirectSale(input: {
       });
       throw new Error("CASH_SESSION_NOT_OPEN");
     }
-    if (!session.operationalDay || session.operationalDay.status !== "OPEN") {
+    // Defensivo, no una compuerta del día operativo: si la sesión sigue OPEN
+    // (ya verificado arriba), su día por construcción debería seguir ACTIVE —
+    // sweepDayToAwaitingReviewTx siempre cierra las cajas OPEN de un día antes
+    // de barrerlo. Esto solo atrapa una corrupción de datos real.
+    if (!session.operationalDay || session.operationalDay.lifecycle !== "ACTIVE") {
       await tx.auditLog.create({
         data: {
           actorUserId: input.actorUserId,
           branchId: order.branchId,
           module: "sales",
-          action: "PAYMENT_BLOCKED_OPERATIONAL_DAY_CLOSED",
+          action: "PAYMENT_BLOCKED_OPERATIONAL_DAY_NOT_ACTIVE",
           entityType: "OperationalDay",
           entityId: session.operationalDayId ?? order.branchId,
-          metadataJson: { saleOrderId: order.id, operationalDayId: session.operationalDayId, status: session.operationalDay?.status ?? null },
+          metadataJson: { saleOrderId: order.id, operationalDayId: session.operationalDayId, lifecycle: session.operationalDay?.lifecycle ?? null },
         },
       });
-      throw new Error("OPERATIONAL_DAY_NOT_OPEN");
+      throw new Error("OPERATIONAL_DAY_NOT_ACTIVE");
     }
     if (!session.physicalCashBox?.isActive) throw new Error("CASH_BOX_INACTIVE");
     if (session.physicalCashBox.branchId !== order.branchId) throw new Error("CASH_BOX_BRANCH_MISMATCH");

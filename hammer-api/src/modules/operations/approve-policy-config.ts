@@ -10,9 +10,6 @@ export interface OperationalDayApprovalPolicy {
   maxCashDifferenceForDelegate: number; // C$, default 100
   blockDelegateOnForcedClose: boolean; // default true
   maxSalesTotalForDelegate: number | null; // null = sin tope
-  autoApproveEnabled: boolean; // default false
-  autoApproveAfterHours: number; // default 12
-  autoApproveMaxCashDifference: number; // C$, default 100
 }
 
 export const DEFAULT_APPROVAL_POLICY: OperationalDayApprovalPolicy = {
@@ -20,9 +17,6 @@ export const DEFAULT_APPROVAL_POLICY: OperationalDayApprovalPolicy = {
   maxCashDifferenceForDelegate: 100,
   blockDelegateOnForcedClose: true,
   maxSalesTotalForDelegate: null,
-  autoApproveEnabled: false,
-  autoApproveAfterHours: 12,
-  autoApproveMaxCashDifference: 100,
 };
 
 function bool(value: unknown, fallback: boolean): boolean {
@@ -48,9 +42,6 @@ export function normalizeApprovalPolicy(
     maxCashDifferenceForDelegate: Math.max(0, num(raw.maxCashDifferenceForDelegate, d.maxCashDifferenceForDelegate)),
     blockDelegateOnForcedClose: bool(raw.blockDelegateOnForcedClose, d.blockDelegateOnForcedClose),
     maxSalesTotalForDelegate: nullableNum(raw.maxSalesTotalForDelegate, d.maxSalesTotalForDelegate),
-    autoApproveEnabled: bool(raw.autoApproveEnabled, d.autoApproveEnabled),
-    autoApproveAfterHours: Math.max(1, num(raw.autoApproveAfterHours, d.autoApproveAfterHours)),
-    autoApproveMaxCashDifference: Math.max(0, num(raw.autoApproveMaxCashDifference, d.autoApproveMaxCashDifference)),
   };
 }
 
@@ -121,7 +112,7 @@ export function assertCanApproveOperationalDay(
     branchId: string;
     cashDifferenceTotal: Prisma.Decimal | number | null;
     salesTotal?: Prisma.Decimal | number | null;
-    closeChecklistJson?: Prisma.JsonValue;
+    checklistJson?: Prisma.JsonValue;
   },
   policy: OperationalDayApprovalPolicy,
 ): void {
@@ -137,7 +128,7 @@ export function assertCanApproveOperationalDay(
       throw new Error("OPERATIONAL_DAY_APPROVAL_REQUIRES_MASTER");
     }
 
-    if (policy.blockDelegateOnForcedClose && wasForceClose(day.closeChecklistJson)) {
+    if (policy.blockDelegateOnForcedClose && hadAttentionItems(day.checklistJson)) {
       throw new Error("OPERATIONAL_DAY_APPROVAL_REQUIRES_MASTER");
     }
 
@@ -152,19 +143,15 @@ export function assertCanApproveOperationalDay(
 }
 
 /**
- * Detects whether a day was force-closed by inspecting the persisted close
- * checklist snapshot. `closeOperationalDay` stores the checklist preview in
- * `closeChecklistJson`; a force close happens when soft (non-hard) blockers were
- * present at close time — i.e. the checklist contained BLOCKING items but the
- * day was still CLOSED. We treat any persisted BLOCKING item as a forced close
- * signal, since a clean close has `canClose: true` and no blockers.
+ * Detecta si el checklist informativo (day-summary.ts::buildChecklist) tenía
+ * algún ítem en ATTENTION al momento de confirmar — un delegado (BRANCH_ADMIN)
+ * no debería poder confirmar un día que necesitaba justificación de Master.
  */
-function wasForceClose(closeChecklistJson?: Prisma.JsonValue): boolean {
-  if (!closeChecklistJson || typeof closeChecklistJson !== "object" || Array.isArray(closeChecklistJson)) {
+function hadAttentionItems(checklistJson?: Prisma.JsonValue): boolean {
+  if (!checklistJson || typeof checklistJson !== "object" || Array.isArray(checklistJson)) {
     return false;
   }
-  const checklist = closeChecklistJson as Record<string, unknown>;
-  if (checklist.canClose === false) return true;
-  const blockers = checklist.blockers;
-  return Array.isArray(blockers) && blockers.length > 0;
+  const checklist = checklistJson as Record<string, unknown>;
+  const attention = checklist.attention;
+  return Array.isArray(attention) && attention.length > 0;
 }

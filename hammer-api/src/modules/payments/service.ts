@@ -163,7 +163,9 @@ async function validateCashSessionForOrderTx(tx: Prisma.TransactionClient, param
     throw new Error("CASH_SESSION_NOT_OPEN");
   }
 
-  if (!session.operationalDay || session.operationalDay.status !== "OPEN") {
+  // Defensivo, no una compuerta del día operativo: si la sesión sigue OPEN
+  // (ya verificado arriba), su día por construcción debería seguir ACTIVE.
+  if (!session.operationalDay || session.operationalDay.lifecycle !== "ACTIVE") {
     await tx.auditLog.create({
       data: {
         actorUserId: params.actorUserId,
@@ -173,14 +175,14 @@ async function validateCashSessionForOrderTx(tx: Prisma.TransactionClient, param
         entityType: "SaleOrder",
         entityId: params.saleOrderId,
         metadataJson: {
-          reason: "OPERATIONAL_DAY_NOT_OPEN",
+          reason: "OPERATIONAL_DAY_NOT_ACTIVE",
           cashSessionId: session.id,
           operationalDayId: session.operationalDayId,
-          operationalDayStatus: session.operationalDay?.status ?? null,
+          operationalDayLifecycle: session.operationalDay?.lifecycle ?? null,
         },
       },
     });
-    throw new Error("OPERATIONAL_DAY_NOT_OPEN");
+    throw new Error("OPERATIONAL_DAY_NOT_ACTIVE");
   }
 
   if (!session.physicalCashBox?.isActive) {

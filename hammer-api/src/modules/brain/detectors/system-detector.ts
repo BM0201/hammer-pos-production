@@ -166,39 +166,9 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
     });
   }
 
-  const staleOperationalDays = await prisma.operationalDay.findMany({
-    where: {
-      status: "OPEN",
-      ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
-      businessDate: { lt: new Date(Date.UTC(ctx.now.getUTCFullYear(), ctx.now.getUTCMonth(), ctx.now.getUTCDate())) },
-    },
-    include: { branch: true },
-    take: 50,
-  });
-
-  for (const day of staleOperationalDays) {
-    const severity = day.openCashSessionsCount > 0 || day.autoClosedPendingReviewCount > 0 ? "HIGH" : "MEDIUM";
-    decisions.push({
-      category: "SYSTEM",
-      severity,
-      title: `Dia operativo sin cerrar: ${day.branch.code}`,
-      description: `${day.branch.name} mantiene abierto un dia operativo anterior.`,
-      recommendation: "Revisar cajas, pagos, despacho y cerrar el dia operativo con checklist.",
-      branchId: day.branchId,
-      confidenceScore: 95,
-      riskScore: riskScoreFor(severity, 95),
-      proposedActionType: "REVIEW_OPERATIONAL_DAY",
-      evidenceJson: {
-        operationalDayId: day.id,
-        businessDate: day.businessDate,
-        openCashSessionsCount: day.openCashSessionsCount,
-        autoClosedPendingReviewCount: day.autoClosedPendingReviewCount,
-        pendingDispatchCount: day.pendingDispatchCount,
-      },
-      sourceJson: { detector: "system-detector" },
-      fingerprintParts: ["system", "operational-day-not-closed", day.branchId, day.businessDate.toISOString()],
-    });
-  }
+  // Día Operativo 360: un día ACTIVE de fecha pasada ya no es una condición
+  // de alarma — el resolver lo barre solo en la próxima operación de la
+  // sucursal (o el cron periódico, en minutos). No genera decisión de Brain.
 
   const ironProducts = await prisma.product.findMany({
     where: { isActive: true, name: { contains: "HIERRO" } },

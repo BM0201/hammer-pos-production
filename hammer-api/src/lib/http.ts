@@ -123,45 +123,51 @@ export function toHttpErrorResponse(error: unknown) {
       return errJson("PRODUCT_HAS_NO_BRANCH_PRICE", "Este producto no tiene precio de venta asignado en esta sucursal. Asígnalo en Catálogo → Precios y costos antes de venderlo.", 422);
     }
 
-    // Operational day errors
-    if (error.message === "OPERATIONAL_DAY_NOT_CLOSED") {
-      return errJson("CONFLICT", "El dia operativo no está cerrado. Debe cerrar el día antes de aprobarlo.", 409);
+    // Operational day errors — Día Operativo 360 (bitácora, no compuerta):
+    // el día operativo nunca bloquea abrir caja ni vender. Estos códigos son
+    // todos de la firma de Master (confirmar/reabrir/revertir/cancelar) o de
+    // integridad de datos, no de flujo operativo normal.
+    if (error.message === "BRANCH_NOT_ACTIVE") {
+      return errJson("CONFLICT", "La sucursal no está activa.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_NOT_ACTIVE") {
+      return errJson("CONFLICT", "El día operativo de esta sesión ya no está activo.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_CANCELLED") {
+      return errJson("CONFLICT", "El día operativo fue anulado.", 409);
+    }
+    if (error.message === "OPERATIONAL_DAY_CONFIRM_REQUIRES_HUMAN") {
+      return errJson("FORBIDDEN", "Confirmar un día operativo requiere la firma de un usuario Master real.", 403);
+    }
+    if (error.message === "OPERATIONAL_DAY_CONFIRM_NOTE_REQUIRED") {
+      return errJson("VALIDATION_ERROR", "Se requiere una nota para confirmar un día con pendientes o diferencia de caja.", 400);
+    }
+    if (error.message === "OPERATIONAL_DAY_NOT_AWAITING_REVIEW") {
+      return errJson("CONFLICT", "El día operativo no está en espera de revisión.", 409);
     }
     if (error.message === "OPERATIONAL_DAY_REOPEN_NOTE_REQUIRED") {
-      return errJson("VALIDATION_ERROR", "Se requiere una nota de justificacion para reabrir un dia ya aprobado.", 400);
+      return errJson("VALIDATION_ERROR", "Se requiere una nota de justificación para reabrir el día.", 400);
+    }
+    if (error.message === "OPERATIONAL_DAY_REOPEN_PAST_DATE") {
+      return errJson("CONFLICT", "Solo se puede reabrir el día operativo de hoy.", 409);
     }
     if (error.message === "FORCE_CLEANUP_NOTE_REQUIRED") {
       return errJson("VALIDATION_ERROR", "Se requiere una nota de justificacion para ejecutar force-cleanup.", 400);
     }
-    if (error.message === "OPERATIONAL_DAY_ALREADY_APPROVED") {
-      return errJson("CONFLICT", "El dia operativo ya fue aprobado anteriormente.", 409);
+    if (error.message === "OPERATIONAL_DAY_ALREADY_CONFIRMED") {
+      return errJson("CONFLICT", "El día operativo ya fue confirmado por Master.", 409);
     }
-    if (error.message === "OPERATIONAL_DAY_HAS_BLOCKERS" || error.message === "OPERATIONAL_DAY_HAS_HARD_BLOCKERS") {
-      return errJson("CONFLICT", "El dia operativo tiene pendientes que impiden el cierre.", 409);
+    if (error.message === "OPERATIONAL_DAY_NOT_CONFIRMED") {
+      return errJson("CONFLICT", "El día operativo todavía no fue confirmado.", 409);
     }
-    if (error.message === "OPERATIONAL_DAY_CLOSE_NOTE_REQUIRED") {
-      return errJson("VALIDATION_ERROR", "Se requiere una nota para cerrar con advertencias o forzar el cierre.", 400);
+    if (error.message === "OPERATIONAL_DAY_REVERT_NOTE_REQUIRED") {
+      return errJson("VALIDATION_ERROR", "Se requiere una nota para revertir la confirmación.", 400);
     }
     if (error.message === "OPERATIONAL_DAY_HAS_REAL_PAYMENTS" || error.message === "OPERATIONAL_DAY_HAS_REAL_ACTIVITY") {
       return errJson("CONFLICT", "El dia operativo tiene actividad real (pagos, devoluciones o movimientos de caja) y no puede cancelarse sin override.", 409);
     }
     if (error.message === "OPERATIONAL_DAY_ALREADY_CANCELLED") {
       return errJson("CONFLICT", "El dia operativo ya fue cancelado.", 409);
-    }
-    if (error.message === "OPERATIONAL_DAY_CLOSING_IN_PROGRESS") {
-      return errJson("CONFLICT", "El dia operativo ya esta en proceso de cierre. Espera a que termine.", 409);
-    }
-    if (error.message === "OPERATIONAL_DAY_NOT_CLOSING") {
-      return errJson("CONFLICT", "El dia operativo no esta en proceso de cierre.", 409);
-    }
-    if (error.message === "OPERATIONAL_DAY_APPROVE_REQUIRES_RECONCILIATION") {
-      return errJson("OPERATIONAL_DAY_APPROVE_REQUIRES_RECONCILIATION", "El resumen recalculado difiere del cierre y la fuente es mixta. Requiere revision Master con nota (override).", 409);
-    }
-    if (error.message === "OPERATIONAL_DAY_APPROVE_LATE_OFFLINE_PENDING") {
-      return errJson("OPERATIONAL_DAY_APPROVE_LATE_OFFLINE_PENDING", "Hay ventas offline sincronizadas despues del cierre, pendientes de revision. Requiere override Master con nota.", 409);
-    }
-    if (error.message === "OPERATIONAL_DAY_APPROVE_NOTE_REQUIRED") {
-      return errJson("VALIDATION_ERROR", "Se requiere una nota para aprobar con excepciones.", 400);
     }
     if (error.message === "OPERATIONAL_DAY_ALREADY_OPEN") {
       return errJson("CONFLICT", "Ya existe un día operativo abierto para esta sucursal.", 409);
@@ -182,15 +188,6 @@ export function toHttpErrorResponse(error: unknown) {
     // Cash session errors
     if (error.message === "CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW") {
       return errJson("CONFLICT", "La caja fue cerrada automaticamente por horario y requiere revision. Abra una nueva caja para continuar.", 409);
-    }
-    if (error.message === "OPERATIONAL_DAY_NOT_OPEN") {
-      return errJson("CONFLICT", "El dia operativo no esta abierto. Abra el dia operativo antes de cobrar.", 409);
-    }
-    if (error.message === "OPERATIONAL_DAY_ALREADY_CLOSED") {
-      return errJson("CONFLICT", "El dia operativo ya fue cerrado.", 409);
-    }
-    if (error.message === "STALE_OPERATIONAL_DAY_OPEN" || error.message === "OPERATIONAL_DAY_STALE") {
-      return errJson("STALE_OPERATIONAL_DAY_OPEN", "Existe un dia operativo anterior abierto. Un administrador Master debe ejecutar limpieza operativa antes de continuar.", 409);
     }
     if (error.message === "CASH_SESSION_NOT_OPEN" || error.message === "CASH_SESSION_ALREADY_OPEN" || error.message === "CASH_SESSION_CASH_BOX_INVALID") {
       return errJson("CONFLICT", error.message, 409);

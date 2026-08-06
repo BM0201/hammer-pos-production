@@ -19,10 +19,6 @@ const CONFLICT_REASONS = new Set([
   "CASH_SESSION_CASH_BOX_INVALID",
   "CASH_BOX_INACTIVE",
   "CASH_BOX_BRANCH_MISMATCH",
-  "OPERATIONAL_DAY_NOT_OPEN",
-  "OPERATIONAL_DAY_ALREADY_CLOSED",
-  "STALE_OPERATIONAL_DAY_OPEN",
-  "OPERATIONAL_DAY_STALE",
   "CASH_SESSION_AFTER_CLOSING_TIME",
 ]);
 
@@ -32,9 +28,6 @@ const REASON_MESSAGES: Record<string, string> = {
   CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW: "Caja pendiente de revision por Master.",
   STALE_CASH_SESSION_RECONCILING: "Existe una caja en conciliacion de una fecha anterior. Master debe resolverla antes de continuar.",
   STALE_CASH_SESSION_PENDING_REVIEW: "Existe una caja pendiente de revision de una fecha anterior. Master debe resolverla antes de continuar.",
-  OPERATIONAL_DAY_NOT_OPEN: "No hay dia operativo abierto para esta sucursal. Master debe abrirlo o activar apertura automatica.",
-  OPERATIONAL_DAY_ALREADY_CLOSED: "El dia operativo de hoy ya fue cerrado. Master debe reabrirlo para continuar.",
-  STALE_OPERATIONAL_DAY_OPEN: "Hay un dia operativo anterior abierto. Master debe cerrarlo antes de continuar.",
 };
 
 export async function POST(request: Request) {

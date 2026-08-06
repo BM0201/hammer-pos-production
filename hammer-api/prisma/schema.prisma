@@ -30,13 +30,23 @@ enum CashSessionStatus {
   PERMANENTLY_CLOSED
 }
 
-enum OperationalDayStatus {
-  OPEN
-  CLOSING
-  CLOSED
+/// Día Operativo 360 — eje del SISTEMA (automático). ACTIVE = el día de su
+/// fecha, acepta operaciones. AWAITING_REVIEW = pasó su fecha, dejó de
+/// aceptar operaciones nuevas, espera revisión humana indefinidamente.
+/// CANCELLED = anulación explícita de Master. Ningún proceso automático
+/// mueve un día a CANCELLED ni lo saca de ahí.
+enum OperationalDayLifecycle {
+  ACTIVE
+  AWAITING_REVIEW
   CANCELLED
-  REOPENED_FOR_ADJUSTMENT
-  PENDING_CLOSE /// Día Operativo v2 Fase 5: pasó su fecha sin cerrarse — sale de "abierto", conserva su data, espera cierre humano. Nunca se auto-finaliza.
+}
+
+/// Día Operativo 360 — eje de MASTER (manual), ortogonal a lifecycle. PENDING
+/// es el default y no caduca: un día puede esperar confirmación indefinidamente
+/// sin que ningún cron lo toque. CONFIRMED solo lo escribe un humano real.
+enum OperationalDayReviewStatus {
+  PENDING
+  CONFIRMED
 }
 
 enum SaleOrderStatus {
@@ -406,8 +416,8 @@ model User {
   createdCashMovements        CashMovement[]           @relation("CashMovementCreatedBy")
   approvedCashMovements       CashMovement[]           @relation("CashMovementApprovedBy")
   openedOperationalDays       OperationalDay[]         @relation("OperationalDayOpenedBy")
-  closedOperationalDays       OperationalDay[]         @relation("OperationalDayClosedBy")
-  approvedOperationalDays     OperationalDay[]         @relation("OperationalDayApprovedBy")
+  sweptOperationalDays        OperationalDay[]         @relation("OperationalDaySweptBy")
+  reviewedOperationalDays     OperationalDay[]         @relation("OperationalDayReviewedBy")
   createdOrders               SaleOrder[]              @relation("SaleOrderCreatedBy")
   requestedSaleCancellations  SaleCancellation[]       @relation("SaleCancellationRequestedBy")
   approvedSaleCancellations   SaleCancellation[]       @relation("SaleCancellationApprovedBy")
@@ -592,38 +602,48 @@ model CashMovement {
 }
 
 model OperationalDay {
-  id                           String               @id @default(cuid())
-  branchId                     String
-  businessDate                 DateTime
-  status                       OperationalDayStatus @default(OPEN)
-  openedByUserId               String
-  closedByUserId               String?
-  approvedByMasterId           String?
-  openedAt                     DateTime             @default(now())
-  closedAt                     DateTime?
-  approvedAt                   DateTime?
-  salesTotal                   Decimal              @default(0)
-  paidOrdersTotal              Decimal              @default(0)
-  pendingPaymentTotal          Decimal              @default(0)
+  id           String   @id @default(cuid())
+  branchId     String
+  businessDate DateTime
+
+  lifecycle    OperationalDayLifecycle    @default(ACTIVE)
+  reviewStatus OperationalDayReviewStatus @default(PENDING)
+
+  openedByUserId String
+  openedAt       DateTime @default(now())
+
+  /// Momento en que el día salió de ACTIVE. No implica revisión.
+  sweptAt       DateTime?
+  sweptBySystem Boolean   @default(false)
+  sweptByUserId String?
+
+  /// Firma humana. NUNCA la escribe un proceso automático.
+  reviewedByUserId String?
+  reviewedAt        DateTime?
+  reviewNote         String?
+
+  salesTotal                   Decimal  @default(0)
+  paidOrdersTotal              Decimal  @default(0)
+  pendingPaymentTotal          Decimal  @default(0)
   expectedCashTotal            Decimal?
   countedCashTotal             Decimal?
   cashDifferenceTotal          Decimal?
-  openCashSessionsCount        Int                  @default(0)
-  autoClosedPendingReviewCount Int                  @default(0)
-  pendingDispatchCount         Int                  @default(0)
-  criticalBrainDecisionCount   Int                  @default(0)
+  openCashSessionsCount        Int      @default(0)
+  autoClosedPendingReviewCount Int      @default(0)
+  pendingDispatchCount         Int      @default(0)
+  criticalBrainDecisionCount   Int      @default(0)
   notes                        String?
-  closeChecklistJson           Json?
+  checklistJson                Json?
   summaryJson                  Json?
-  closeSummaryJson             Json?
-  approvalSummaryJson          Json?
-  createdAt                    DateTime             @default(now())
-  updatedAt                    DateTime             @updatedAt
+  reviewSummaryJson            Json?
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
 
-  branch            Branch             @relation(fields: [branchId], references: [id])
-  openedBy          User               @relation("OperationalDayOpenedBy", fields: [openedByUserId], references: [id])
-  closedBy          User?              @relation("OperationalDayClosedBy", fields: [closedByUserId], references: [id])
-  approvedBy        User?              @relation("OperationalDayApprovedBy", fields: [approvedByMasterId], references: [id])
+  branch     Branch @relation(fields: [branchId], references: [id])
+  openedBy   User   @relation("OperationalDayOpenedBy", fields: [openedByUserId], references: [id])
+  sweptBy    User?  @relation("OperationalDaySweptBy", fields: [sweptByUserId], references: [id])
+  reviewedBy User?  @relation("OperationalDayReviewedBy", fields: [reviewedByUserId], references: [id])
+
   cashSessions      CashSession[]
   saleOrders        SaleOrder[]
   payments          Payment[]
@@ -635,10 +655,9 @@ model OperationalDay {
   saleReturns       SaleReturn[]
 
   @@unique([branchId, businessDate])
-  @@index([branchId, status])
+  @@index([branchId, lifecycle])
+  @@index([reviewStatus, businessDate])
   @@index([businessDate])
-  @@index([status])
-  @@index([approvedByMasterId])
 }
 
 model Customer {

@@ -19,7 +19,6 @@ import test from "node:test";
 import { CashSessionStatus } from "@prisma/client";
 import { resolveAutoCloseReview } from "@/modules/cash-session/review-policy";
 import { isCommandCenterPendingStatus, isCommandCenterCompletedStatus } from "@/modules/dashboard/command-center-policy";
-import { isHardOperationalDayCloseBlocker } from "@/modules/operations/close-policy";
 
 // ── Warning-code computation ─────────────────────────────────────────────────
 
@@ -79,25 +78,6 @@ test("auto-close review with counted amount records difference (unchanged)", () 
   assert.equal(review.difference, -20);
 });
 
-// ── Operational day close blockers ───────────────────────────────────────────
-
-test("AUTO_CLOSED_PENDING_REVIEW is a hard blocker for operational day close", () => {
-  assert.equal(isHardOperationalDayCloseBlocker("auto_closed_pending_review"), true);
-});
-
-test("open_cash_sessions is a hard blocker for operational day close", () => {
-  assert.equal(isHardOperationalDayCloseBlocker("open_cash_sessions"), true);
-});
-
-test("pending_payments is a hard blocker for operational day close", () => {
-  assert.equal(isHardOperationalDayCloseBlocker("pending_payments"), true);
-});
-
-test("sale returns and cancellations are soft blockers (not hard)", () => {
-  assert.equal(isHardOperationalDayCloseBlocker("pending_sale_return"), false);
-  assert.equal(isHardOperationalDayCloseBlocker("pending_sale_cancellation"), false);
-});
-
 // ── CLOSED session is no longer pending in command center ────────────────────
 
 test("CLOSED session is completed in command center (not pending)", () => {
@@ -108,5 +88,4 @@ test("CLOSED session is completed in command center (not pending)", () => {
 test("after manual close with diff, session is CLOSED — not RECONCILING or pending", () => {
   // Verify that once a session is CLOSED it is not treated as a blocker
   assert.equal(isCommandCenterPendingStatus(CashSessionStatus.CLOSED), false);
-  assert.equal(isHardOperationalDayCloseBlocker("closed"), false);
 });

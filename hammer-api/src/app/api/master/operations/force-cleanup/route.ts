@@ -13,7 +13,6 @@ const forceCleanupSchema = z.object({
   actions: z.object({
     closeStaleOpenCashSessions: z.boolean().optional(),
     resolveAutoClosedPendingReview: z.boolean().optional(),
-    closeStaleOperationalDay: z.boolean().optional(),
     refreshOperationalDaySummaries: z.boolean().optional(),
   }),
 });

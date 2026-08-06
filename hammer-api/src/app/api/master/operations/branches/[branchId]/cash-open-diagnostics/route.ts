@@ -35,11 +35,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ bra
       }),
       prisma.operationalDay.findFirst({
         where: { branchId, businessDate: todayBusinessDate },
-        select: { id: true, status: true, businessDate: true, closedAt: true, approvedAt: true },
+        select: { id: true, lifecycle: true, reviewStatus: true, businessDate: true, sweptAt: true, reviewedAt: true },
       }),
       prisma.operationalDay.findMany({
-        where: { branchId, status: "OPEN", businessDate: { lt: todayBusinessDate } },
-        select: { id: true, status: true, businessDate: true },
+        where: { branchId, lifecycle: "ACTIVE", businessDate: { lt: todayBusinessDate } },
+        select: { id: true, lifecycle: true, businessDate: true },
         orderBy: { businessDate: "asc" },
       }),
     ]);
@@ -51,11 +51,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ bra
     const blockers: string[] = [];
 
     if (staleOpenDays.length > 0) {
-      blockers.push(`STALE_OPERATIONAL_DAY_OPEN: ${staleOpenDays.length} día(s) anterior(es) sin cerrar.`);
-    }
-
-    if (todayDay && todayDay.status !== "OPEN") {
-      blockers.push(`OPERATIONAL_DAY_CLOSED: El día operativo de hoy tiene estado ${todayDay.status}.`);
+      // Informativo — el resolver lo barre solo en la próxima operación; no bloquea nada.
+      blockers.push(`INFO_STALE_ACTIVE_DAY: ${staleOpenDays.length} día(s) anterior(es) todavía ACTIVE (se barren solos con la próxima operación).`);
     }
 
     const activeBoxes = cashBoxes.filter(box => box.isActive);
@@ -90,9 +87,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ bra
           : null,
       })),
       todayOperationalDay: todayDay
-        ? { id: todayDay.id, status: todayDay.status, businessDate: todayDay.businessDate, closedAt: todayDay.closedAt, approvedAt: todayDay.approvedAt }
+        ? { id: todayDay.id, lifecycle: todayDay.lifecycle, reviewStatus: todayDay.reviewStatus, businessDate: todayDay.businessDate, sweptAt: todayDay.sweptAt, reviewedAt: todayDay.reviewedAt }
         : null,
-      staleOperationalDays: staleOpenDays.map(d => ({ id: d.id, status: d.status, businessDate: d.businessDate })),
+      staleOperationalDays: staleOpenDays.map(d => ({ id: d.id, lifecycle: d.lifecycle, businessDate: d.businessDate })),
     });
   } catch (error) {
     return toApiErrorResponse(error);

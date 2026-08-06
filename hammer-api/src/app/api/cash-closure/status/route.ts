@@ -29,10 +29,11 @@ export async function GET(request: NextRequest) {
       source,
       operationalDay: operationalDay ? {
         id: operationalDay.id,
-        status: operationalDay.status,
+        lifecycle: operationalDay.lifecycle,
+        reviewStatus: operationalDay.reviewStatus,
         businessDate: operationalDay.businessDate.toISOString(),
         openedAt: operationalDay.openedAt.toISOString(),
-        closedAt: operationalDay.closedAt?.toISOString() ?? null,
+        sweptAt: operationalDay.sweptAt?.toISOString() ?? null,
       } : null,
       openCashSessionCount,
       autoClosedPendingReviewCount,

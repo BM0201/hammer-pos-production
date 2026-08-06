@@ -46,9 +46,9 @@ export async function GET(_request: Request) {
         orderBy: { code: "asc" },
       }),
 
-      // 2. All OPEN operational days
+      // 2. All ACTIVE operational days
       prisma.operationalDay.findMany({
-        where: { status: "OPEN" },
+        where: { lifecycle: "ACTIVE" },
         select: {
           id: true,
           branchId: true,
@@ -80,7 +80,7 @@ export async function GET(_request: Request) {
               branch: { select: { code: true } },
             },
           },
-          operationalDay: { select: { businessDate: true, status: true } },
+          operationalDay: { select: { businessDate: true, lifecycle: true } },
         },
         orderBy: [{ physicalCashBox: { branchId: "asc" } }, { openedAt: "desc" }],
       }),
@@ -175,7 +175,7 @@ export async function GET(_request: Request) {
         boxIsActive: s.physicalCashBox.isActive,
         activeSessionKey: s.activeSessionKey,
         operationalDayBusinessDate: s.operationalDay?.businessDate?.toISOString() ?? null,
-        operationalDayStatus: s.operationalDay?.status ?? null,
+        operationalDayLifecycle: s.operationalDay?.lifecycle ?? null,
         openedAt: s.openedAt.toISOString(),
         autoClosedAt: s.autoClosedAt?.toISOString() ?? null,
         requiresReview: s.requiresReview,

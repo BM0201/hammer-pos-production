@@ -65,7 +65,7 @@ export async function GET(request: Request) {
       }),
       prisma.operationalDay.findFirst({
         where: { branchId, businessDate: todayBusinessDate },
-        select: { id: true, status: true },
+        select: { id: true, lifecycle: true },
       }),
       prisma.cashSession.findFirst({
         where: {
@@ -96,7 +96,7 @@ export async function GET(request: Request) {
       // Master interviniera; ya no hace falta, así que se quitó esa señal.
       if (!todayDay) {
         cashSessionProblem = "NO_OPERATIONAL_DAY";
-      } else if (todayDay && todayDay.status !== "OPEN") {
+      } else if (todayDay && todayDay.lifecycle !== "ACTIVE") {
         cashSessionProblem = "OPERATIONAL_DAY_CLOSED";
       } else if (branchBlockingSession?.status === "RECONCILING") {
         cashSessionProblem = "CASH_SESSION_RECONCILING";

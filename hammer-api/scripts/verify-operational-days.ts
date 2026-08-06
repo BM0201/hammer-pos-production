@@ -1,8 +1,8 @@
 /**
- * Re-verificación (DRY-RUN, siempre) de días operativos CERRADOS.
+ * Re-verificación (DRY-RUN, siempre) de días operativos CONFIRMADOS.
  *
- * Recorre los OperationalDay CLOSED de los últimos N días (default 30) y
- * recalcula, con la lógica CORREGIDA:
+ * Recorre los OperationalDay con reviewStatus CONFIRMED de los últimos N días
+ * (default 30) y recalcula, con la lógica CORREGIDA:
  *  - salesTotal con la ventana correcta del businessDate (businessDateToYmdUTC;
  *    el bug la corría un día hacia atrás),
  *  - expectedCash por sesión SIN la doble resta del vuelto
@@ -12,13 +12,12 @@
  *
  * Imprime una tabla por día comparando lo GUARDADO al cierre vs lo RECALCULADO
  * y al final el total de días con discrepancia. NO modifica ningún dato:
- * closeSummaryJson y las columnas del día son snapshots inmutables del cierre
- * histórico y se respetan (ver README-verify-operational-days.md).
+ * reviewSummaryJson y las columnas del día son la firma inmutable de Master
+ * y se respetan (ver README-verify-operational-days.md).
  *
  * Uso: npx tsx scripts/verify-operational-days.ts [dias]
  *   ej. npx tsx scripts/verify-operational-days.ts 60
  */
-import { OperationalDayStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { buildBranchRealtimeSalesSummary, businessDateToYmdUTC } from "@/modules/sales/realtime-sales-summary";
 import { calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
@@ -36,7 +35,7 @@ async function main() {
   since.setUTCHours(0, 0, 0, 0);
 
   const closedDays = await prisma.operationalDay.findMany({
-    where: { status: OperationalDayStatus.CLOSED, businessDate: { gte: since } },
+    where: { reviewStatus: "CONFIRMED", businessDate: { gte: since } },
     include: {
       branch: { select: { id: true, code: true, name: true } },
       cashSessions: {
@@ -46,8 +45,8 @@ async function main() {
     orderBy: [{ businessDate: "asc" }, { branchId: "asc" }],
   });
 
-  console.log(`Re-verificación DRY-RUN de ${closedDays.length} día(s) CLOSED desde ${since.toISOString().slice(0, 10)} (últimos ${days} días).`);
-  console.log("Nada se modifica: los snapshots del cierre son inmutables.\n");
+  console.log(`Re-verificación DRY-RUN de ${closedDays.length} día(s) CONFIRMADOS desde ${since.toISOString().slice(0, 10)} (últimos ${days} días).`);
+  console.log("Nada se modifica: la firma de Master es inmutable.\n");
   console.log("businessDate | suc | salesTotal guardado → recalc | expectedCash guardado → recalc | difCaja guardada → recalc | Δ");
   console.log("-".repeat(120));
 

@@ -17,13 +17,14 @@ export async function GET(request: Request) {
     if (!isMaster(session) && !canInBranch(session, parsed.data.branchId, CAPABILITIES.OPERATIONS_VIEW)) {
       return fail("FORBIDDEN", "No tienes permiso para ver la operacion de esta sucursal.", 403);
     }
-    // Envelope: el día de HOY + el ESTADO operacional (incluye STALE_OPEN_DAY con el
-    // día viejo, para que el frontend lo muestre claramente en vez de "sin día").
+    // Envelope: el día de HOY + su estado (ACTIVE_TODAY / AWAITING_REVIEW /
+    // CONFIRMED / NO_DAY). Día Operativo 360: nunca hay un "día viejo" que
+    // bloquee — un ACTIVE de fecha pasada se barre solo en la próxima operación.
     const [day, stateInfo] = await Promise.all([
       getCurrentOperationalDay(parsed.data.branchId),
       getCurrentOperationalDayState(parsed.data.branchId),
     ]);
-    return ok({ day, state: stateInfo.state, staleDay: stateInfo.staleDay });
+    return ok({ day, state: stateInfo.state });
   } catch (error) {
     return toHttpErrorResponse(error);
   }

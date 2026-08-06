@@ -3,12 +3,7 @@ import { fail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { timingSafeEqualStrings } from "@/lib/timing-safe-compare";
 import { autoCloseExpiredCashSessions } from "@/modules/cash-session/auto-close-service";
-import {
-  autoClosePendingOperationalDaysBacklog,
-  autoCloseTodaysOperationalDaysAtDeadline,
-  autoOpenOperationalDays,
-} from "@/modules/operations/auto-day-service";
-import { sweepStaleOperationalDaysToPendingClose } from "@/modules/operations/service";
+import { sweepStaleOperationalDaysToAwaitingReview } from "@/modules/operations/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +25,17 @@ function parseNowOverride(url: URL) {
   return parsed;
 }
 
+/**
+ * Cron cada 10 min (vercel.json). Día Operativo 360: solo quedan dos pasos.
+ *  1. cashSessionClose — cierre automático de CAJA por horario (B4, reloj
+ *     independiente del día operativo — se mantiene intacto, es la barrera
+ *     real contra vender de noche).
+ *  2. operationalDaySweep — barrido ACTIVE → AWAITING_REVIEW de días de
+ *     fecha pasada. Nunca finaliza ni confirma nada.
+ * autoOpenOperationalDays, autoClosePendingOperationalDaysBacklog y
+ * autoCloseTodaysOperationalDaysAtDeadline desaparecieron: el día se crea
+ * solo con la primera operación, y confirmar es siempre un acto humano.
+ */
 async function handle(request: Request) {
   try {
     const url = new URL(request.url);
@@ -37,28 +43,12 @@ async function handle(request: Request) {
     const dryRun = url.searchParams.get("dryRun") === "1";
     const now = parseNowOverride(url);
 
-    const operationalDayOpen = await autoOpenOperationalDays({ dryRun, now });
     const cashSessionClose = await autoCloseExpiredCashSessions({ dryRun, now, actor: "SYSTEM" });
-    // Día Operativo v2 Fase 5: el barrido de días stale a PENDING_CLOSE corre
-    // siempre (modelo pendiente puro, nunca finaliza un día); el auto-cierre
-    // de HOY sigue siendo opt-in (autoCloseEnabled) y separado.
-    const operationalDayPendingCloseSweep = await sweepStaleOperationalDaysToPendingClose({ dryRun, now });
-    // Reintenta TODO el backlog de PENDING_CLOSE (de cualquier fecha) antes de
-    // mirar el día de hoy — sin esto, un día que cae a PENDING_CLOSE queda
-    // huérfano para siempre: nada vuelve a chequear si su bloqueante (ej. una
-    // venta pendiente de cobro) ya se resolvió, ni avisa mientras sigue vivo.
-    const operationalDayPendingCloseBacklog = await autoClosePendingOperationalDaysBacklog({ dryRun });
-    const operationalDayClose = await autoCloseTodaysOperationalDaysAtDeadline({ dryRun, now });
+    const operationalDaySweep = await sweepStaleOperationalDaysToAwaitingReview({ dryRun, now });
 
     return NextResponse.json({
       ok: true,
-      steps: {
-        operationalDayOpen,
-        cashSessionClose,
-        operationalDayPendingCloseSweep,
-        operationalDayPendingCloseBacklog,
-        operationalDayClose,
-      },
+      steps: { cashSessionClose, operationalDaySweep },
     });
   } catch (error) {
     if (error instanceof Error && error.message === "CRON_SECRET_MISSING")

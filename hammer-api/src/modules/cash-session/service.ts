@@ -2,7 +2,7 @@ import { CashMovementType, CashSessionOperatorRole, CashSessionStatus, PaymentMe
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
-import { ensureOpenOperationalDayTx, refreshOperationalDaySummaryTx, getOperationalWindowForNow, businessDateFromNow } from "@/modules/operations/service";
+import { resolveOperationalDayForOperationTx, refreshOperationalDaySummaryTx, getOperationalWindowForNow, businessDateFromNow } from "@/modules/operations/service";
 import { resolveAutoCloseReview } from "@/modules/cash-session/review-policy";
 import { cashMovementsNetTotal, computeExpectedCash } from "@/modules/cash-session/expected-cash";
 
@@ -166,14 +166,14 @@ export async function openCashSession(input: {
         throw err;
       }
 
-      const operationalDay = await ensureOpenOperationalDayTx(tx, input.branchId, input.actorUserId);
+      const { dayId: operationalDayId } = await resolveOperationalDayForOperationTx(tx, input.branchId, input.actorUserId);
 
       // Rely on the unique constraint on activeSessionKey for OPEN sessions.
       // P2002 is caught below and re-thrown as CASH_SESSION_ALREADY_OPEN.
       const session = await tx.cashSession.create({
         data: {
           physicalCashBoxId: input.physicalCashBoxId,
-          operationalDayId: operationalDay.id,
+          operationalDayId,
           openedByUserId: input.actorUserId,
           status: CashSessionStatus.OPEN,
           openedAt: new Date(),
@@ -203,12 +203,12 @@ export async function openCashSession(input: {
           entityId: session.id,
           metadataJson: {
             physicalCashBoxId: session.physicalCashBoxId,
-            operationalDayId: operationalDay.id,
+            operationalDayId,
             openingAmount: input.openingAmount,
           },
         },
       });
-      await refreshOperationalDaySummaryTx(tx, operationalDay.id);
+      await refreshOperationalDaySummaryTx(tx, operationalDayId);
 
       // Auto-apply any payroll disbursements that were paid while the cash box was closed
       const { applyPendingPayrollCashOuts } = await import("@/modules/payroll/payroll-cash-sync");

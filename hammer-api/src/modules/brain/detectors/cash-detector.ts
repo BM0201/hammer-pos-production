@@ -154,7 +154,7 @@ export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<Br
         postedCashPayments: snapshot.postedCashPayments,
         cashMovementsNet: snapshot.cashMovementsNet,
         cashChange: snapshot.cashChange,
-        blocksOperationalDayClose: true,
+        affectsOperationalDayChecklist: true,
         actionPlan: "RECALCULATE_CASH_SESSION",
       },
       sourceJson: { detector: "cash-detector", mode: ctx.mode, scope: ctx.scope, problemCode: "CASH_SESSION_EXPECTED_MISMATCH" },

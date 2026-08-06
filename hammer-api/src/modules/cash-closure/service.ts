@@ -39,7 +39,7 @@ export async function getTodayClosure(branchId: string): Promise<{
   const [closure, operationalDay, openCashSessionCount, autoClosedPendingReviewCount] = await Promise.all([
     prisma.cashClosure.findFirst({ where: { branchId, closureDate: today } }),
     prisma.operationalDay.findFirst({
-      where: { branchId, status: "OPEN" },
+      where: { branchId, lifecycle: "ACTIVE" },
       orderBy: { openedAt: "desc" },
     }),
     prisma.cashSession.count({
@@ -47,7 +47,7 @@ export async function getTodayClosure(branchId: string): Promise<{
         status: CashSessionStatus.OPEN,
         activeSessionKey: { not: null },
         physicalCashBox: { branchId },
-        operationalDay: { status: "OPEN" },
+        operationalDay: { lifecycle: "ACTIVE" },
       },
     }),
     prisma.cashSession.count({
@@ -81,8 +81,8 @@ export async function getTodayClosure(branchId: string): Promise<{
 
   return {
     closure,
-    isClosed: effectiveOperationalDay?.status !== "OPEN",
-    canSell: effectiveOperationalDay?.status === "OPEN" && openCashSessionCount > 0,
+    isClosed: effectiveOperationalDay?.lifecycle !== "ACTIVE",
+    canSell: effectiveOperationalDay?.lifecycle === "ACTIVE" && openCashSessionCount > 0,
     legacy: true,
     source: "OperationalDay",
     operationalDay: effectiveOperationalDay,

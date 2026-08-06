@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import { OperationalDayStatus, Prisma, SaleOrderStatus } from "@prisma/client";
+import { Prisma, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { consumeSharedStockForSaleTx } from "@/modules/inventory/service";
 import { logAuditEvent } from "@/modules/audit/service";
@@ -46,7 +46,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
     where: { id: input.cashSessionId },
     include: {
       physicalCashBox: { select: { branchId: true, isActive: true } },
-      operationalDay: { select: { id: true, status: true, approvedAt: true } },
+      operationalDay: { select: { id: true, lifecycle: true, reviewStatus: true } },
     },
   });
   if (!session) throw new Error("INVALID_CASH_SESSION");
@@ -59,14 +59,14 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
 
   // ── 1b. Día operativo original (fuente de verdad, NO el día de hoy) ─────────
   // Regla ERP: una venta offline se asienta al día operativo de SU sesión, no al
-  // día actual solo porque se sincronizó hoy. Y nunca se altera un día aprobado.
+  // día actual solo porque se sincronizó hoy. Y nunca se altera un día confirmado.
   const operationalDay = session.operationalDay;
-  if (operationalDay?.approvedAt) {
-    // Día ya aprobado/archivado: no mutar el snapshot cerrado. Requiere ajuste Master.
+  if (operationalDay?.reviewStatus === "CONFIRMED") {
+    // Día ya confirmado/archivado: no mutar el snapshot firmado. Requiere ajuste Master.
     throw new Error("OFFLINE_SALE_DAY_APPROVED");
   }
   const operationalDayId = operationalDay?.id ?? null;
-  const lateSyncIntoClosedDay = operationalDay?.status === OperationalDayStatus.CLOSED;
+  const lateSyncIntoClosedDay = operationalDay?.lifecycle === "AWAITING_REVIEW";
 
   // ── 2. Validate products ────────────────────────────────────────────────────
   const productIds = [...new Set(input.lines.map(l => l.productId))];

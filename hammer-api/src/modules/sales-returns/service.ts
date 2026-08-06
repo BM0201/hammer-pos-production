@@ -7,7 +7,6 @@ import {
   CustomerRiskLevel,
   InventoryCondition,
   InventoryMovementType,
-  OperationalDayStatus,
   PaymentStatus,
   Prisma,
   RefundMethod,
@@ -22,7 +21,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
-import { refreshOperationalDaySummaryTx, businessDateFromNow, sweepDayToPendingCloseTx } from "@/modules/operations/service";
+import { refreshOperationalDaySummaryTx, businessDateFromNow, sweepDayToAwaitingReviewTx } from "@/modules/operations/service";
 import { cancelSaleOrderTx } from "@/modules/sales/service";
 import type { CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
 
@@ -197,20 +196,18 @@ function effectiveReturnCost(input: {
 
 async function findOpenOperationalDayId(tx: Prisma.TransactionClient, branchId: string) {
   const day = await tx.operationalDay.findFirst({
-    where: { branchId, status: OperationalDayStatus.OPEN },
+    where: { branchId, lifecycle: "ACTIVE" },
     orderBy: { openedAt: "desc" },
     select: { id: true, branchId: true, businessDate: true },
   });
   if (!day) return null;
   if (day.businessDate.getTime() !== businessDateFromNow().getTime()) {
-    // Fase 5 (Día Operativo v2): un día abierto de fecha anterior ya no
-    // bloquea — antes esto lanzaba OPERATIONAL_DAY_STALE y dejaba la
-    // devolución sin poder ejecutarse. Se barre a PENDING_CLOSE (mismo camino
-    // que ventas/apertura de caja) y la devolución se procesa como si no
-    // hubiera día abierto todavía (sin auto-abrir "hoy" como efecto
-    // secundario de una devolución — eso lo hace la próxima venta o apertura
-    // de caja, igual que siempre).
-    await sweepDayToPendingCloseTx(tx, day, undefined);
+    // Día Operativo 360: un día ACTIVE de fecha anterior ya no bloquea — se
+    // barre a AWAITING_REVIEW (mismo camino que ventas/apertura de caja) y la
+    // devolución se procesa como si no hubiera día abierto todavía (sin
+    // auto-abrir "hoy" como efecto secundario de una devolución — eso lo hace
+    // la próxima venta o apertura de caja, igual que siempre).
+    await sweepDayToAwaitingReviewTx(tx, day, { bySystem: true });
     return null;
   }
   return day.id;
@@ -738,7 +735,7 @@ export async function executeSaleReturn(returnId: string, input: ExecuteSaleRetu
     // migración futura para trazabilidad cross-day completa.
     if (saleReturn.operationalDayId) {
       const day = await tx.operationalDay.findUnique({ where: { id: saleReturn.operationalDayId } });
-      if (day?.approvedAt == null) await refreshOperationalDaySummaryTx(tx, saleReturn.operationalDayId);
+      if (day?.reviewStatus !== "CONFIRMED") await refreshOperationalDaySummaryTx(tx, saleReturn.operationalDayId);
     }
 
     await tx.auditLog.create({
@@ -884,7 +881,7 @@ export async function executeSaleCancellation(
     const day = cancellation.operationalDayId
       ? await tx.operationalDay.findUnique({ where: { id: cancellation.operationalDayId } })
       : null;
-    if (day?.approvedAt) throw new Error("OPERATIONAL_DAY_ALREADY_APPROVED");
+    if (day?.reviewStatus === "CONFIRMED") throw new Error("OPERATIONAL_DAY_ALREADY_CONFIRMED");
 
     // Cancelar la orden (inventario + pagos + status=CANCELLED) dentro de la misma tx.
     const cancelResult = await cancelSaleOrderTx(tx, {

@@ -1,19 +1,22 @@
 /**
- * Force Cleanup — Master-only emergency resolution of stuck operational states.
+ * Force Cleanup — Master-only emergency resolution of stuck cash-session states.
  *
- * Invariants that must hold after execution:
- *  - No sales, payments or audit logs are deleted.
- *  - Every action is recorded in AuditLog.
- *  - DRY_RUN returns an identical diagnosis object but performs no writes.
- *  - EXECUTE requires a non-empty note; every write carries that note.
+ * Día Operativo 360: la acción vieja "closeStaleOperationalDay" desapareció —
+ * un día ACTIVE de fecha pasada ya no es un estado atascado que requiera
+ * limpieza manual (resolveOperationalDayForOperationTx lo barre solo, en la
+ * siguiente operación de la sucursal, o el cron periódico lo hace en minutos).
+ * Lo único que sigue requiriendo intervención Master son cajas abandonadas.
+ *
+ * Invariantes que deben cumplirse tras ejecutar:
+ *  - No se borran ventas, pagos ni logs de auditoría.
+ *  - Cada acción queda registrada en AuditLog.
+ *  - DRY_RUN devuelve el mismo diagnóstico pero no escribe nada.
+ *  - EXECUTE exige una nota no vacía; toda escritura lleva esa nota.
  */
-import { CashSessionStatus, OperationalDayStatus, Prisma } from "@prisma/client";
+import { CashSessionStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import {
-  businessDateFromNow,
-  calculateOperationalSummaryTx,
-  refreshOperationalDaySummaryTx,
-} from "@/modules/operations/service";
+import { businessDateFromNow } from "@/modules/operations/business-date";
+import { refreshOperationalDaySummaryTx } from "@/modules/operations/day-summary";
 import { calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
 
 function decimal(value: number | null | undefined): Prisma.Decimal {
@@ -27,7 +30,6 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue {
 export type ForceCleanupActions = {
   closeStaleOpenCashSessions?: boolean;
   resolveAutoClosedPendingReview?: boolean;
-  closeStaleOperationalDay?: boolean;
   refreshOperationalDaySummaries?: boolean;
 };
 
@@ -52,7 +54,6 @@ export type ForceCleanupDiagnosis = {
     physicalCashBoxCode: string;
     expectedCashAmount: number | null;
   }>;
-  staleOpenOperationalDays: Array<{ id: string; businessDate: string; status: string }>;
   todayDayId: string | null;
 };
 
@@ -70,8 +71,7 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
 
   if (!isDryRun && !input.note?.trim()) throw new Error("FORCE_CLEANUP_NOTE_REQUIRED");
 
-  // ── Gather full diagnosis (always, even for EXECUTE) ─────────────────────
-  const [staleOpenSessions, autoClosedPendingSessions, staleOpenDays, todayDay] = await Promise.all([
+  const [staleOpenSessions, autoClosedPendingSessions, todayDay] = await Promise.all([
     prisma.cashSession.findMany({
       where: {
         physicalCashBox: { branchId: input.branchId },
@@ -87,23 +87,12 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
     prisma.cashSession.findMany({
       where: {
         physicalCashBox: { branchId: input.branchId },
-        // Match every session still flagged as pending review by STATUS, regardless
-        // of the requiresReview flag. This also catches "half-resolved" sessions
-        // left in a broken state by the previous bug (requiresReview=false but
-        // status never advanced past AUTO_CLOSED_PENDING_REVIEW), so a single
-        // force-cleanup run can finalize them.
+        // Cualquier sesión todavía marcada AUTO_CLOSED_PENDING_REVIEW por STATUS,
+        // sin importar requiresReview — también atrapa sesiones "medio resueltas".
         status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW,
       },
       include: { physicalCashBox: { select: { code: true } } },
       orderBy: { openedAt: "asc" },
-    }),
-    prisma.operationalDay.findMany({
-      where: {
-        branchId: input.branchId,
-        status: OperationalDayStatus.OPEN,
-        businessDate: { not: today },
-      },
-      orderBy: { businessDate: "desc" },
     }),
     prisma.operationalDay.findUnique({
       where: { branchId_businessDate: { branchId: input.branchId, businessDate: today } },
@@ -123,11 +112,6 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
       autoClosedAt: s.autoClosedAt?.toISOString() ?? null,
       physicalCashBoxCode: s.physicalCashBox.code,
       expectedCashAmount: s.expectedCashAmount ? Number(s.expectedCashAmount) : null,
-    })),
-    staleOpenOperationalDays: staleOpenDays.map((d) => ({
-      id: d.id,
-      businessDate: d.businessDate.toISOString(),
-      status: d.status,
     })),
     todayDayId: todayDay?.id ?? null,
   };
@@ -206,17 +190,10 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
           });
           if (locked.status !== CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW) return;
 
-          // Accept expected cash as the official count. Master takes responsibility via note + audit log.
           const counted = locked.expectedCashAmount ?? decimal(0);
           await tx.cashSession.update({
             where: { id: locked.id },
             data: {
-              // CRITICAL: advance the status to AUTO_CLOSED. Previously only
-              // requiresReview/counted/difference were updated, which left the
-              // session stuck at AUTO_CLOSED_PENDING_REVIEW forever — the command
-              // center classifies by status, so it kept showing as "Pendiente de
-              // revisión" and the OK action (which requires requiresReview=true)
-              // could no longer clear it.
               status: CashSessionStatus.AUTO_CLOSED,
               requiresReview: false,
               countedCashAmount: counted,
@@ -255,90 +232,7 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
     }
   }
 
-  // ── Action 3: Close stale OPEN operational days ───────────────────────────
-  if (input.actions.closeStaleOperationalDay) {
-    for (const day of staleOpenDays) {
-      try {
-        const blockingSessions = await prisma.cashSession.count({
-          where: {
-            operationalDayId: day.id,
-            status: { in: [CashSessionStatus.OPEN, CashSessionStatus.RECONCILING] },
-          },
-        });
-        if (blockingSessions > 0) {
-          errors.push(
-            `Día ${day.businessDate.toISOString().split("T")[0]}: ${blockingSessions} caja(s) abiertas o en conciliación. Ciérralas primero con 'closeStaleOpenCashSessions'.`,
-          );
-          continue;
-        }
-
-        await prisma.$transaction(async (tx) => {
-          await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${day.id} FOR UPDATE`;
-          const locked = await tx.operationalDay.findUniqueOrThrow({ where: { id: day.id } });
-          if (locked.status !== OperationalDayStatus.OPEN) return;
-
-          const summary = await calculateOperationalSummaryTx(tx, locked);
-          const previousState = locked.status;
-          // L: checklist de cierre forzado con marcadores requeridos.
-          const closeChecklist = {
-            forcedCleanup: true,
-            reason: input.note,
-            previousState,
-            sourceMode: summary.sourceMode,
-            forcedAt: now.toISOString(),
-            forcedByUserId: input.actorUserId,
-          };
-
-          await tx.operationalDay.update({
-            where: { id: locked.id },
-            data: {
-              status: OperationalDayStatus.CLOSED,
-              closedAt: now,
-              closedByUserId: input.actorUserId,
-              notes: input.note,
-              summaryJson: toJsonValue(summary),
-              // Snapshot inmutable del cierre (igual que el cierre normal).
-              closeSummaryJson: toJsonValue(summary),
-              closeChecklistJson: toJsonValue(closeChecklist),
-              salesTotal: decimal(summary.salesTotal),
-              paidOrdersTotal: decimal(summary.paidOrdersTotal),
-              pendingPaymentTotal: decimal(summary.pendingPaymentTotal),
-              expectedCashTotal: decimal(summary.expectedCashTotal),
-              countedCashTotal: decimal(summary.countedCashTotal),
-              cashDifferenceTotal: decimal(summary.cashDifferenceTotal),
-              openCashSessionsCount: summary.openCashSessionsCount,
-              autoClosedPendingReviewCount: summary.autoClosedPendingReviewCount,
-              pendingDispatchCount: summary.pendingDispatchCount,
-              criticalBrainDecisionCount: summary.criticalBrainDecisionCount,
-            },
-          });
-
-          await tx.auditLog.create({
-            data: {
-              actorUserId: input.actorUserId,
-              branchId: locked.branchId,
-              module: "operations",
-              action: "FORCE_CLEANUP_STALE_DAY_CLOSED",
-              entityType: "OperationalDay",
-              entityId: locked.id,
-              metadataJson: toJsonValue({
-                note: input.note,
-                businessDate: locked.businessDate,
-                forcedCleanup: true,
-                previousState,
-                sourceMode: summary.sourceMode,
-              }),
-            },
-          });
-        });
-        actionsTaken.push(`Día ${day.businessDate.toISOString().split("T")[0]} cerrado → CLOSED (pendiente aprobación MASTER).`);
-      } catch (err) {
-        errors.push(`Error al cerrar día ${day.businessDate.toISOString().split("T")[0]}: ${err instanceof Error ? err.message : "UNKNOWN"}`);
-      }
-    }
-  }
-
-  // ── Action 4: Refresh today's operational day summary ────────────────────
+  // ── Action 3: Refresh today's operational day summary ────────────────────
   if (input.actions.refreshOperationalDaySummaries && todayDay) {
     try {
       await prisma.$transaction((tx) => refreshOperationalDaySummaryTx(tx, todayDay.id));
@@ -348,7 +242,6 @@ export async function forceCleanupBranch(input: ForceCleanupInput): Promise<Forc
     }
   }
 
-  // ── Global audit entry ────────────────────────────────────────────────────
   if (actionsTaken.length > 0 || errors.length > 0) {
     await prisma.auditLog.create({
       data: {
