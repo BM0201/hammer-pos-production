@@ -84,7 +84,8 @@ type BranchBlock = {
   activeCashSessionIds: string[];
   lastSale: { orderNumber: string; amount: number; paidAt: string; method: string } | null;
   operationalDay: {
-    status: string;
+    lifecycle: string;
+    reviewStatus: string;
     salesTotal: number;
     expectedCashTotal: number | null;
     countedCashTotal: number | null;
@@ -145,9 +146,8 @@ type CommandCenter = {
     pendingApprovals: number;
     criticalBrainDecisions: number;
     openSecurityAlerts: number;
-    daysPendingApproval: number;
-    staleOpenDays: number;
-    pendingCloseDays: number;
+    pendingReviewDays: number;
+    staleActiveDays: number;
     productsMissingPrice: number;
     pendingDispatchTotal: number;
   };
@@ -289,8 +289,8 @@ const STATUS_LABELS: Record<string, string> = {
   AUTO_CLOSED: "Cerrada (auto)", CLOSED: "Cerrada", PERMANENTLY_CLOSED: "Cerrada definitiva",
 };
 
-const DAY_STATUS_LABELS: Record<string, string> = {
-  OPEN: "Abierto", CLOSING: "Cerrando", CLOSED: "Cerrado", CANCELLED: "Cancelado",
+const DAY_LIFECYCLE_LABELS: Record<string, string> = {
+  ACTIVE: "En curso", AWAITING_REVIEW: "Esperando confirmación", CANCELLED: "Anulado",
 };
 
 function statusBadge(status: string) {
@@ -1354,7 +1354,7 @@ function InvoicesManagementCard({
 
 function BranchCard({ branch: b, pct }: { branch: BranchBlock; pct: number }) {
   const [cajaOpen, setCajaOpen] = useState(b.activeCashSessionIds.length > 0);
-  const dayOpen = b.operationalDay?.status === "OPEN";
+  const dayOpen = b.operationalDay?.lifecycle === "ACTIVE";
   const hasDiff = b.operationalDay?.cashDifferenceTotal !== null && b.operationalDay?.cashDifferenceTotal !== undefined;
 
   return (
@@ -1401,7 +1401,7 @@ function BranchCard({ branch: b, pct }: { branch: BranchBlock; pct: number }) {
       <div className="text-[11px] text-[var(--color-text-muted)] mb-3">
         {b.boxesTotal} {b.boxesTotal === 1 ? "caja" : "cajas"} ·{" "}
         {b.operationalDay
-          ? `Día ${DAY_STATUS_LABELS[b.operationalDay.status] ?? b.operationalDay.status}`
+          ? `Día ${DAY_LIFECYCLE_LABELS[b.operationalDay.lifecycle] ?? b.operationalDay.lifecycle}`
           : "Sin día operativo"}
       </div>
 
@@ -1577,13 +1577,16 @@ export default function MasterCommandCenterPage() {
 
   const { totals, users, byBranch, cashClosures, attention } = data;
 
-  // Señales accionables — orden por severidad (bloqueantes primero).
+  // Señales accionables — orden por severidad (bloqueantes primero). La cola
+  // de confirmación pendiente (pendingReviewDays) NO es una alarma — un día
+  // puede esperar ahí indefinidamente sin que nadie tenga que actuar; solo
+  // los días ACTIVE realmente atascados de fecha pasada (staleActiveDays,
+  // transitorio — el barrido los saca en minutos) son un genuino bloqueante.
   const attentionItems: AttentionItem[] = [
-    { key: "stale", count: attention?.staleOpenDays ?? 0, label: "día(s) anterior(es) aún abiertos", href: "/app/master/operations", tone: "danger" },
-    { key: "pendingClose", count: attention?.pendingCloseDays ?? 0, label: "día(s) esperando cierre (pendientes de cierre)", href: "/app/master/operations", tone: "danger" },
+    { key: "stale", count: attention?.staleActiveDays ?? 0, label: "día(s) anterior(es) aún en curso (atascados)", href: "/app/master/operations", tone: "danger" },
     { key: "security", count: attention?.openSecurityAlerts ?? 0, label: "alerta(s) de seguridad abiertas", href: "/app/master/security", tone: "danger" },
     { key: "brain", count: attention?.criticalBrainDecisions ?? 0, label: "decisión(es) críticas en Brain", href: "/app/master/brain", tone: "danger" },
-    { key: "days", count: attention?.daysPendingApproval ?? 0, label: "día(s) cerrados por aprobar", href: "/app/master/operations", tone: "warning" },
+    { key: "days", count: attention?.pendingReviewDays ?? 0, label: "día(s) esperando tu confirmación", href: "/app/master/operations", tone: "warning" },
     { key: "approvals", count: attention?.pendingApprovals ?? 0, label: "aprobación(es) pendientes", href: "/app/master/approvals", tone: "warning" },
     { key: "pendingPay", count: totals.pendingPaymentCount, label: `cobro(s) pendientes · ${money(totals.pendingPaymentTotal)}`, href: "/app/master/sales/orders", tone: "warning" },
     { key: "noPrice", count: attention?.productsMissingPrice ?? 0, label: "producto(s) sin precio de venta", href: "/app/master/catalog-inventory?tab=pricing", tone: "warning" },

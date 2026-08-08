@@ -15,7 +15,6 @@ import { Badge } from "@/components/ui/badge";
 type ForceCleanupDiagnosis = {
   staleOpenCashSessions: Array<{ id: string; openedAt: string; physicalCashBoxCode: string; businessDate: string | null }>;
   autoClosedPendingReviewSessions: Array<{ id: string; autoClosedAt: string | null; physicalCashBoxCode: string; expectedCashAmount: number | null }>;
-  staleOpenOperationalDays: Array<{ id: string; businessDate: string; status: string }>;
   todayDayId: string | null;
 };
 
@@ -30,7 +29,6 @@ type ForceCleanupResult = {
 type ActionKey =
   | "closeStaleOpenCashSessions"
   | "resolveAutoClosedPendingReview"
-  | "closeStaleOperationalDay"
   | "refreshOperationalDaySummaries";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -87,22 +85,6 @@ function buildFindings(d: ForceCleanupDiagnosis): Finding[] {
     });
   }
 
-  if (d.staleOpenOperationalDays.length > 0) {
-    findings.push({
-      key: "closeStaleOperationalDay",
-      count: d.staleOpenOperationalDays.length,
-      severity: "danger",
-      title: "Días operativos anteriores sin cerrar",
-      explanation:
-        "Existen días operativos de fechas anteriores que siguen en estado OPEN. Deben cerrarse para liberar la operación.",
-      recommendation:
-        "Forzar el cierre del día anterior. Requiere que sus cajas ya estén cerradas o en revisión.",
-      details: d.staleOpenOperationalDays.map(
-        (day) => `Día ${new Date(day.businessDate).toLocaleDateString("es-NI", { timeZone: "UTC" })} · estado ${day.status}`,
-      ),
-    });
-  }
-
   return findings;
 }
 
@@ -131,7 +113,6 @@ export function OperationalDayScanner({
   const [actions, setActions] = useState<Record<ActionKey, boolean>>({
     closeStaleOpenCashSessions: true,
     resolveAutoClosedPendingReview: true,
-    closeStaleOperationalDay: true,
     refreshOperationalDaySummaries: true,
   });
 
@@ -207,7 +188,6 @@ export function OperationalDayScanner({
   const actionLabels: Record<ActionKey, string> = {
     closeStaleOpenCashSessions: "Cerrar cajas abiertas (días anteriores)",
     resolveAutoClosedPendingReview: "Resolver cierres pendientes de revisión",
-    closeStaleOperationalDay: "Cerrar días operativos anteriores OPEN",
     refreshOperationalDaySummaries: "Refrescar resumen del día actual",
   };
 

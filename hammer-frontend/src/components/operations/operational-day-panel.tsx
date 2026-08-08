@@ -1,9 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import type { Route } from "next";
-import { CheckCircle2, RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet, AlertTriangle, Info, ArrowRight, Activity } from "lucide-react";
+import { RefreshCw, BarChart3, Banknote, CreditCard, Smartphone, Wallet, AlertTriangle, Info, Activity, LogOut } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { showToast } from "@/components/ui/toast";
@@ -17,8 +15,8 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { EmptyState } from "@/components/ui/empty-state";
 import { OperationalDaySummary, type OperationalDay } from "@/components/operations/operational-day-summary";
 import { CashSessionStatusList } from "@/components/operations/cash-session-status-list";
-import { OperationalDayChecklist, type ClosePreview } from "@/components/operations/operational-day-checklist";
-import { CloseDayDialog } from "@/components/operations/close-day-dialog";
+import { OperationalDayChecklist, type DayChecklist } from "@/components/operations/operational-day-checklist";
+import { ConfirmDayDialog } from "@/components/operations/confirm-day-dialog";
 import { OperationalDayScanner } from "@/components/operations/operational-day-scanner";
 
 type PaymentRow = { method: string; _sum: { amount: string | number | null }; _count: { _all: number } };
@@ -34,8 +32,8 @@ type DailyReport = {
     transports?: Array<{ id: string }>;
   };
   legacyFallback?: { ordersWithoutOperationalDay: number; paymentsWithoutOperationalDay: number };
-  // Día Operativo v2 Fase 4: número firmado (snapshot inmutable) para un día
-  // CLOSED — nunca se recalcula, así una venta offline tardía no lo cambia.
+  // Día Operativo 360: número firmado (snapshot inmutable) para un día
+  // CONFIRMED — nunca se recalcula, así una venta offline tardía no lo cambia.
   summary?: {
     salesTotal?: number;
     expectedCashTotal?: number;
@@ -49,24 +47,8 @@ type DailyReport = {
   };
 };
 
-type OperationalDayState = "NO_DAY" | "OPEN_TODAY" | "STALE_OPEN_DAY" | "CLOSED_TODAY" | "CLOSING" | "ERROR";
-type StaleDayInfo = { id: string; status: string; businessDate: string } | null;
-type CurrentEnvelope = { day: OperationalDay | null; state: OperationalDayState; staleDay: StaleDayInfo };
-
-type BlockerReference = {
-  id: string;
-  ref?: string;
-  status?: string;
-  date?: string;
-  resolve?: { kind: string; href: string; entityId: string };
-};
-
-type Blocker = {
-  code: string;
-  label: string;
-  count: number;
-  references: BlockerReference[];
-};
+type OperationalDayState = "NO_DAY" | "ACTIVE_TODAY" | "AWAITING_REVIEW" | "CONFIRMED";
+type CurrentEnvelope = { day: OperationalDay | null; state: OperationalDayState };
 
 const METHOD_ICON: Record<string, React.ElementType> = {
   CASH: Wallet,
@@ -96,14 +78,12 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
   const [day, setDay]         = useState<OperationalDay | null>(null);
   const [cashDifferenceTolerance, setCashDifferenceTolerance] = useState(100);
   const [dayState, setDayState] = useState<OperationalDayState>("NO_DAY");
-  const [staleDay, setStaleDay] = useState<StaleDayInfo>(null);
-  const [preview, setPreview] = useState<ClosePreview | null>(null);
+  const [checklist, setChecklist] = useState<DayChecklist | null>(null);
+  const [previewSummary, setPreviewSummary] = useState<Record<string, unknown> | null>(null);
   const [report, setReport]   = useState<DailyReport | null>(null);
   const [loading, setLoading] = useState(true);
-  const [approving, setApproving] = useState(false);
+  const [endingShift, setEndingShift] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
-  const [approveBlockers, setApproveBlockers] = useState<Blocker[]>([]);
-  const [approveWarnings, setApproveWarnings] = useState<Blocker[]>([]);
   const [showScanner, setShowScanner] = useState(false);
 
   const load = useCallback(async () => {
@@ -114,17 +94,9 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
         showToast("error", raw?.error?.message ?? "No se pudo cargar la operación.");
         return;
       }
-      const envelope = unwrapApiData(raw) as CurrentEnvelope | OperationalDay | null;
-      // Back-compat: si llega el día directo (forma antigua) lo tratamos como tal.
-      if (envelope && typeof envelope === "object" && "state" in envelope) {
-        setDay(envelope.day);
-        setDayState(envelope.state);
-        setStaleDay(envelope.staleDay);
-      } else {
-        setDay((envelope as OperationalDay | null) ?? null);
-        setDayState(envelope ? "OPEN_TODAY" : "NO_DAY");
-        setStaleDay(null);
-      }
+      const envelope = unwrapApiData(raw) as CurrentEnvelope;
+      setDay(envelope.day);
+      setDayState(envelope.state);
     } catch {
       showToast("error", "Error de red al cargar el día operativo.");
     }
@@ -136,9 +108,8 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
     setLoading(false);
   }, [load]);
 
-  // Día Operativo v2 Fase 3 — tolerancia configurable por sucursal (antes
-  // hardcodeada en 100 tanto en backend como aquí). Se carga una vez; el
-  // checklist real usa la del backend, esto es solo para colorear la UI.
+  // Tolerancia configurable por sucursal — se carga una vez; el checklist
+  // real usa la del backend, esto es solo para colorear la UI.
   useEffect(() => {
     let cancelled = false;
     apiFetch("/api/master/operations/cash-tolerance-config")
@@ -156,11 +127,11 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
     void loadInitial();
   }, [loadInitial]);
 
-  // Clear approval blockers/warnings when day changes (after reload/status change)
+  // Limpia el checklist calculado cuando el día cambia de identidad/lifecycle.
   useEffect(() => {
-    setApproveBlockers([]);
-    setApproveWarnings([]);
-  }, [day?.id, day?.status]);
+    setChecklist(null);
+    setPreviewSummary(null);
+  }, [day?.id, day?.lifecycle]);
 
   // Auto-refresh every 30s in branch mode (pauses on hidden tab, backoff on errors).
   // In masterMode, the parent page (master/operations) manages its own polling
@@ -192,60 +163,61 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
     }
   }
 
-  async function closePreview() {
+  async function previewChecklist() {
     if (!day) return;
     try {
-      const response = await apiFetch(`/api/branch/operations/${day.id}/close-preview`, { method: "POST" });
+      const response = await apiFetch(`/api/branch/operations/${day.id}/close-preview`);
       const raw = await response.json();
-      if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo previsualizar cierre.");
-      setPreview(unwrapApiData(raw) as ClosePreview);
+      if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo calcular el checklist.");
+      const data = unwrapApiData(raw) as { summary: Record<string, unknown>; checklist: DayChecklist };
+      setPreviewSummary(data.summary);
+      setChecklist(data.checklist);
     } catch (error) {
-      showToast("error", error instanceof Error ? error.message : "Error al previsualizar cierre.");
+      showToast("error", error instanceof Error ? error.message : "Error al calcular el checklist.");
     }
   }
 
-  async function closeDay(note: string, forceClose: boolean) {
+  async function endShift() {
     if (!day) return;
-    const response = await apiFetch(`/api/branch/operations/${day.id}/close`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note, forceClose }),
-    });
-    const raw = await response.json();
-    if (!response.ok) {
-      showToast("error", raw?.error?.message ?? "No se pudo cerrar el día.");
-      return;
-    }
-    showToast("success", "Día operativo cerrado y enviado a revisión MASTER.");
-    setPreview(null);
-    await load();
-  }
-
-  const approveDay = useCallback(async () => {
-    if (!day) return;
-    setApproving(true);
+    setEndingShift(true);
     try {
-      const response = await apiFetch(`/api/master/operations/${day.id}/approve`, { method: "POST" });
+      const response = await apiFetch(`/api/branch/operations/${day.id}/end-shift`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
       const raw = await response.json();
-      if (response.status === 409 && raw?.error?.code === "OPERATIONAL_DAY_REVIEW_HAS_BLOCKERS") {
-        const detail = (raw?.data ?? {}) as { blockers?: Blocker[]; warnings?: Blocker[] };
-        setApproveBlockers(detail.blockers ?? []);
-        setApproveWarnings(detail.warnings ?? []);
-        showToast("warning", "No se puede aprobar: hay pendientes que resolver.");
-        return;
-      }
       if (!response.ok) {
-        showToast("error", raw?.error?.message ?? "No se pudo aprobar el día.");
+        showToast("error", raw?.error?.message ?? "No se pudo cerrar la jornada.");
         return;
       }
-      setApproveBlockers([]);
-      setApproveWarnings([]);
-      showToast("success", "Día operativo aprobado.");
+      showToast("success", "Jornada cerrada — el día pasa a espera de confirmación de Master.");
       await load();
     } catch {
-      showToast("error", "Error de red al aprobar el día.");
+      showToast("error", "Error de red al cerrar la jornada.");
     } finally {
-      setApproving(false);
+      setEndingShift(false);
+    }
+  }
+
+  const confirmDay = useCallback(async (note: string) => {
+    if (!day) return;
+    try {
+      const response = await apiFetch(`/api/master/operations/${day.id}/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ note: note || null }),
+      });
+      const raw = await response.json();
+      if (!response.ok) {
+        showToast("error", raw?.error?.message ?? "No se pudo confirmar el día.");
+        return;
+      }
+      showToast("success", "Día operativo confirmado.");
+      setChecklist(null);
+      setPreviewSummary(null);
+      await load();
+    } catch {
+      showToast("error", "Error de red al confirmar el día.");
     }
   }, [day, load]);
 
@@ -269,58 +241,29 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
 
   if (loading) return <LoadingState message="Cargando día operativo..." />;
 
-  // Día Operativo v2 Fase 5 — un día abierto de fecha anterior YA NO bloquea
-  // nada: en cuanto se registre una venta o se abra una caja hoy, se barre
-  // solo a Pendiente de cierre y hoy se abre transparentemente. Este aviso es
-  // solo informativo (por eso tono neutral/warning, no danger) — nunca dice
-  // "no se puede continuar", porque sí se puede.
-  const staleBanner = dayState === "STALE_OPEN_DAY" && staleDay ? (
-    <Card className="border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_35%,white)] p-4">
-      <div className="flex items-start gap-2.5">
-        <AlertTriangle className="mt-0.5 flex-shrink-0 text-[var(--color-warning-600)]" style={{ width: "1rem", height: "1rem" }} />
-        <div className="space-y-1">
-          <p className="text-sm font-bold text-[var(--color-warning-800)]">Día anterior pendiente de cierre</p>
-          <p className="text-xs text-[var(--color-warning-700)] leading-relaxed">
-            El día del {new Date(staleDay.businessDate).toLocaleDateString("es-NI", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })} sigue abierto,
-            pero <strong>esto no bloquea nada</strong>: en cuanto se registre una venta o se abra una caja hoy, pasa solo a <strong>Pendiente de cierre</strong> y el día de hoy se abre normal.
-            {isMaster
-              ? " Podés conciliarlo cuando tengas tiempo desde Operación → Requiere tu acción."
-              : " Un Master lo conciliará cuando tenga tiempo — no necesitás hacer nada."}
-          </p>
-        </div>
-      </div>
-    </Card>
-  ) : null;
-
   if (!day) {
     return (
-      <div className="space-y-4">
-        {staleBanner}
-        {!staleBanner && (
-          <div className="hm-module-card p-6">
-            <EmptyState
-              icon={<Wallet className="h-full w-full" />}
-              title="Sin día operativo activo"
-              description={
-                canOpenDay
-                  ? "Abre el día antes de registrar ventas, abrir caja o despachar pedidos."
-                  : "No hay un día operativo abierto. Un administrador debe abrirlo antes de que puedas abrir caja."
-              }
-              tone="info"
-              action={canOpenDay ? <Button variant="primary" onClick={openDay}>Abrir día operativo</Button> : undefined}
-            />
-          </div>
-        )}
+      <div className="hm-module-card p-6">
+        <EmptyState
+          icon={<Wallet className="h-full w-full" />}
+          title="Sin día operativo activo"
+          description={
+            canOpenDay
+              ? "Se abre solo con la primera venta o apertura de caja. También podés abrirlo manualmente."
+              : "Se abrirá solo en cuanto se registre una venta o se abra una caja."
+          }
+          tone="info"
+          action={canOpenDay ? <Button variant="primary" onClick={openDay}>Abrir día operativo</Button> : undefined}
+        />
       </div>
     );
   }
 
-  const showCloseSection = day.status === "OPEN" || day.status === "CLOSING" || day.status === "REOPENED_FOR_ADJUSTMENT";
-  const showApproveBtn   = masterMode && day.status === "CLOSED" && !day.approvedAt;
+  const showEndShiftSection = day.lifecycle === "ACTIVE";
+  const showConfirmSection = isMaster && day.reviewStatus === "PENDING";
 
   return (
     <div className="space-y-5">
-      {staleBanner}
       <OperationalDaySummary day={day} cashDifferenceTolerance={cashDifferenceTolerance} />
 
       {/* Toolbar */}
@@ -331,6 +274,11 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
         <Button variant="secondary" size="sm" onClick={loadReport} loading={reportLoading} icon={<BarChart3 className="h-3.5 w-3.5" />}>
           Ver reporte del día
         </Button>
+        {showEndShiftSection && canOpenDay && (
+          <Button variant="secondary" size="sm" onClick={endShift} loading={endingShift} icon={<LogOut className="h-3.5 w-3.5" />}>
+            Cerrar jornada
+          </Button>
+        )}
         {masterMode && (
           <Button
             variant={showScanner ? "primary" : "secondary"}
@@ -338,30 +286,18 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
             onClick={() => setShowScanner((v) => !v)}
             icon={<Activity className="h-3.5 w-3.5" />}
           >
-            {showScanner ? "Ocultar escáner" : "Escanear y forzar cierre"}
+            {showScanner ? "Ocultar escáner" : "Escanear cajas atascadas"}
           </Button>
         )}
-        {showApproveBtn && (
-          <Button
-            variant="primary"
-            size="sm"
-            loading={approving}
-            onClick={approveDay}
-            icon={<CheckCircle2 className="h-3.5 w-3.5" />}
-          >
-            Aprobar día operativo
-          </Button>
+        {dayState === "AWAITING_REVIEW" && !isMaster && (
+          <span className="hm-chip hm-chip-warning text-xs">Esperando confirmación de Master — no bloquea nada</span>
         )}
-        {day.status === "CLOSED" && !masterMode && (
-          <span className="hm-chip hm-chip-success text-xs">Día cerrado — pendiente de aprobación MASTER</span>
-        )}
-        {day.status === "CANCELLED" && (
-          <span className="hm-chip text-xs">Día cancelado</span>
+        {day.lifecycle === "CANCELLED" && (
+          <span className="hm-chip text-xs">Día anulado</span>
         )}
       </div>
 
-      {/* Operational day scanner (master-only): diagnoses stuck cash sessions /
-          stale days and lets the master force-resolve + refresh the close. */}
+      {/* Operational day scanner (master-only): diagnoses stuck cash sessions. */}
       {masterMode && showScanner && (
         <OperationalDayScanner
           branchId={branchId}
@@ -370,75 +306,9 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
         />
       )}
 
-      {/* Approval blockers / warnings */}
-      {(approveBlockers.length > 0 || approveWarnings.length > 0) && (
-        <Card className="space-y-4 border-[var(--color-warning-200)] p-4">
-          {approveBlockers.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-[var(--color-warning-700)]" />
-                <h3 className="text-sm font-bold text-[var(--color-text)]">Pendientes que impiden aprobar</h3>
-              </div>
-              <ul className="space-y-2">
-                {approveBlockers.map((blocker) => {
-                  const resolveHref = blocker.references[0]?.resolve?.href;
-                  return (
-                    <li
-                      key={blocker.code}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2"
-                    >
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle className="h-3.5 w-3.5 text-[var(--color-warning-700)]" />
-                        <span className="text-xs font-semibold text-[var(--color-text-secondary)]">{blocker.label}</span>
-                        <Badge variant="warning">{blocker.count}</Badge>
-                      </div>
-                      {resolveHref && (
-                        <Link
-                          href={resolveHref as Route}
-                          className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-primary-700)] hover:underline"
-                        >
-                          Ir a resolver <ArrowRight className="h-3 w-3" />
-                        </Link>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-              <Button
-                variant="primary"
-                size="sm"
-                loading={approving}
-                onClick={approveDay}
-                icon={<RefreshCw className="h-3.5 w-3.5" />}
-              >
-                Reintentar aprobación
-              </Button>
-            </div>
-          )}
-
-          {approveWarnings.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Info className="h-4 w-4 text-[var(--color-text-muted)]" />
-                <h3 className="text-sm font-bold text-[var(--color-text)]">Notas informativas</h3>
-              </div>
-              <ul className="space-y-1">
-                {approveWarnings.map((warning) => (
-                  <li key={warning.code} className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-                    <Info className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
-                    <span>{warning.label}</span>
-                    <Badge variant="neutral">{warning.count}</Badge>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </Card>
-      )}
-
       {/* Cash sessions + payments */}
       <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-        <CashSessionStatusList sessions={day.cashSessions ?? []} branchId={branchId} dayStatus={day.status} />
+        <CashSessionStatusList sessions={day.cashSessions ?? []} branchId={branchId} dayLifecycle={day.lifecycle} />
 
         <Card className="p-4">
           <h2 className="mb-3 text-sm font-bold text-[var(--color-text)]">Ventas y pagos</h2>
@@ -477,17 +347,16 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
         </Card>
       </div>
 
-      {/* Checklist + close dialog */}
-      {showCloseSection && (
+      {/* Checklist + firma (solo Master, mientras siga PENDING) */}
+      {showConfirmSection && (
         <>
-          <OperationalDayChecklist preview={preview} onPreview={closePreview} />
-          <CloseDayDialog
-            preview={preview}
-            isMaster={isMaster}
-            disabled={day.status !== "OPEN" && day.status !== "REOPENED_FOR_ADJUSTMENT"}
-            disabledReason={day.status === "CLOSING" ? "El día ya está en proceso de cierre." : undefined}
-            onPreview={closePreview}
-            onCloseDay={closeDay}
+          <OperationalDayChecklist checklist={checklist} onPreview={previewChecklist} />
+          <ConfirmDayDialog
+            summary={previewSummary as never}
+            checklist={checklist}
+            cashDifferenceTolerance={cashDifferenceTolerance}
+            onPreview={previewChecklist}
+            onConfirm={confirmDay}
           />
         </>
       )}
@@ -499,7 +368,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
             <div className="flex items-center gap-2">
               <BarChart3 className="text-[var(--color-text-muted)]" style={{ width: "1rem", height: "1rem" }} />
               <h2 className="text-sm font-bold text-[var(--color-text)]">Reporte diario</h2>
-              {report.summarySource === "SNAPSHOT" && <span className="hm-chip hm-chip-info text-xs">📸 Snapshot del cierre</span>}
+              {report.summarySource === "SNAPSHOT" && <span className="hm-chip hm-chip-info text-xs">📸 Snapshot firmado</span>}
               {report.summarySource === "LIVE" && <span className="hm-chip text-xs">En vivo — día en curso</span>}
             </div>
             <div className="flex flex-wrap gap-3 text-xs text-[var(--color-text-muted)]">
@@ -511,7 +380,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
             </div>
           </div>
 
-          {/* Fase 4: número firmado (snapshot) — nunca cambia con actividad tardía */}
+          {/* Número firmado (snapshot) — nunca cambia con actividad tardía */}
           {report.summary && (
             <div className="grid gap-3 border-b border-[var(--color-border)] p-4 sm:grid-cols-3">
               <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
@@ -531,12 +400,12 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
             </div>
           )}
 
-          {/* Fase 4: actividad que entró DESPUÉS del cierre — nunca se suma al número firmado */}
+          {/* Actividad que entró DESPUÉS de que el día dejó de estar en curso */}
           {(report.lateActivity?.count ?? 0) > 0 && (
             <div className="mx-4 mt-3 rounded-lg border border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)] p-3">
               <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-[var(--color-warning-800)]">
                 <AlertTriangle style={{ width: "0.875rem", height: "0.875rem" }} />
-                Entró después del cierre (fuera del snapshot)
+                Entró después (fuera del snapshot)
               </div>
               <div className="overflow-x-auto">
                 <table className="hm-table w-full text-left text-xs">

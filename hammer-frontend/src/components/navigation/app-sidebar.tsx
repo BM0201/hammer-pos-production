@@ -318,21 +318,19 @@ export function AppSidebar({
   const roleCfg = getRoleColor(roleCode);
   const homeHref = resolveRoleHome(roleCode as string, globalRoles as unknown as string[]);
 
-  // Aviso persistente de días operativos esperando cierre (PENDING_CLOSE):
-  // antes esta señal (getLiveBlockers, ya existía en el backend) nunca se
-  // consumía desde ningún lado del frontend — el dueño solo se enteraba de
-  // que un día seguía sin cerrar si entraba a Operaciones a propósito. Se
-  // muestra como badge en "Día Operativo 360" para que sea visible desde
-  // cualquier pantalla, no solo el Centro de Comando.
-  const [pendingCloseDaysCount, setPendingCloseDaysCount] = useState(0);
-  const fetchPendingCloseDays = useCallback(async () => {
+  // Aviso persistente de días operativos esperando confirmación
+  // (reviewStatus PENDING): se muestra como badge en "Día Operativo 360"
+  // para que sea visible desde cualquier pantalla, no solo el Centro de
+  // Comando. No es una alarma — solo informa que hay días esperando firma.
+  const [pendingReviewDaysCount, setPendingReviewDaysCount] = useState(0);
+  const fetchPendingReviewDays = useCallback(async () => {
     const res = await apiFetch("/api/master/operations/live-blockers");
     if (!res.ok) return;
     const raw = await res.json();
-    const data = unwrapApiData(raw) as { pendingCloseDaysCount: number };
-    setPendingCloseDaysCount(data.pendingCloseDaysCount ?? 0);
+    const data = unwrapApiData(raw) as { pendingReviewDaysCount: number };
+    setPendingReviewDaysCount(data.pendingReviewDaysCount ?? 0);
   }, []);
-  useOperationalPolling({ enabled: isMaster, intervalMs: 60_000, task: fetchPendingCloseDays });
+  useOperationalPolling({ enabled: isMaster, intervalMs: 60_000, task: fetchPendingReviewDays });
 
   /* ── Rail behavior: always starts collapsed, user expands temporarily ── */
   const [collapsed, setCollapsed] = useState(true);
@@ -480,7 +478,7 @@ export function AppSidebar({
               {section.items.map((item) => {
                 const active = item.href === activeHref;
                 const Icon = item.icon;
-                const pendingBadge = item.href === "/app/master/operations" ? pendingCloseDaysCount : 0;
+                const pendingBadge = item.href === "/app/master/operations" ? pendingReviewDaysCount : 0;
                 return (
                   <div key={item.href} className="relative sidebar-nav-item">
                     <Link

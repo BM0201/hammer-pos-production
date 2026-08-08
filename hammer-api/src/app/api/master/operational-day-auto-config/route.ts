@@ -18,8 +18,6 @@ const timeField = z
   .nullable();
 
 const updateSchema = z.object({
-  autoOpenEnabled: z.boolean().optional(),
-  autoCloseEnabled: z.boolean().optional(),
   timezone: z.string().min(1).max(64).optional(),
   weekdayOpenTime: timeField.optional(),
   saturdayOpenTime: timeField.optional(),

@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
-  AlertTriangle, Building2, CheckCircle2, RefreshCw, Wrench,
+  AlertTriangle, Building2, CheckCircle2, RefreshCw, Wrench, Clock3,
 } from "lucide-react";
 import { OperationalDayScanner } from "@/components/operations/operational-day-scanner";
-import { OperationalDayChecklist, type ClosePreview } from "@/components/operations/operational-day-checklist";
-import { CloseDayDialog } from "@/components/operations/close-day-dialog";
+import { OperationalDayChecklist, type DayChecklist } from "@/components/operations/operational-day-checklist";
+import { ConfirmDayDialog } from "@/components/operations/confirm-day-dialog";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { showToast } from "@/components/ui/toast";
@@ -18,53 +17,57 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 
 /**
- * Día operativo — Master. Reorganizado (2026-07-28) para seguir
- * hammer-dia-operativo-mockup.html: tres accesos por palabra (Operación ·
- * Historial · Ajustes), sin pestañas numeradas. El corazón es una sola lista
- * de acción que une los días pendientes de cierre y los pendientes de
- * aprobación — antes eran dos bandejas flotantes separadas.
+ * Día Operativo 360 — Master. Tres accesos por palabra (Operación · Historial
+ * · Ajustes). El día deja de ser una compuerta y pasa a ser una bitácora: la
+ * cola de "En espera de tu confirmación" es única (ya no hay dos bandejas
+ * separadas de "pendiente de cierre" y "pendiente de aprobación" — en el
+ * modelo nuevo son el mismo estado) y nunca es una alarma: un día puede
+ * esperar ahí indefinidamente sin que nadie tenga que actuar con urgencia.
  */
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 type Branch = { id: string; code: string; name: string };
 
+type DerivedState = "ACTIVE_TODAY" | "AWAITING_REVIEW" | "CONFIRMED" | "NO_ACTIVITY";
+
 type BranchLiveStatus = {
   branchId: string;
   branchCode: string;
   branchName: string;
-  derivedState:
-    | "NOT_OPENED_TODAY" | "OPEN_TODAY" | "CLOSING" | "PENDING_CLOSE"
-    | "CLOSED_PENDING_MASTER" | "APPROVED_ARCHIVED" | "CANCELLED" | "STALE_OPEN_DAY";
+  derivedState: DerivedState;
+  blockers: {
+    openCashSessions: number;
+    reconcilingCashSessions: number;
+    autoClosedPendingReview: number;
+    staleActiveOperationalDays: number;
+    staleCashSessions: number;
+  };
   totalBlockers: number;
 };
 
-type LiveBlockersResponse = { total: number; branches: BranchLiveStatus[] };
+type LiveBlockersResponse = { total: number; branches: BranchLiveStatus[]; pendingReviewDaysCount: number };
 
 type MasterDay = {
   id: string;
   businessDate: string;
   salesTotal: string | number;
   cashDifferenceTotal?: string | number | null;
-  closedBy?: { username: string; fullName?: string | null } | null;
+  reviewedBy?: { username: string; fullName?: string | null } | null;
   summaryJson?: { paidSalesTotal?: number } | null;
   branch: Branch;
 };
 
-type PendingCloseDayRow = {
+type PendingReviewDayRow = {
   id: string; branchId: string; branchCode: string; branchName: string;
-  businessDate: string; daysOverdue: number; salesTotal: number; expectedCashTotal: number;
-  blockers: { autoClosedPendingReviewCount: number; openOrReconcilingCashSessionsCount: number };
+  businessDate: string; daysWaiting: number; salesTotal: number; expectedCashTotal: number;
+  attention: { autoClosedPendingReviewCount: number; openOrReconcilingCashSessionsCount: number };
 };
 
 type TodayCardData = {
   branchId: string; branchCode: string; branchName: string; dayId: string; openedAt: string;
   paidOrdersTotal: number; expectedCashTotal: number; openCashSessionsCount: number;
 };
-
-type ActionRow =
-  | { kind: "CLOSE"; id: string; businessDate: string; daysOverdue: number; branchCode: string; branchName: string; expectedCashTotal: number; detail: string }
-  | { kind: "APPROVE"; id: string; businessDate: string; daysOverdue: number; branchCode: string; branchName: string; salesTotal: number; cashDifferenceTotal: number; closedByName: string | null };
 
 type DailyReport = {
   orders: Array<{ id: string }>;
@@ -73,6 +76,11 @@ type DailyReport = {
 };
 
 type CashToleranceConfig = { defaultToleranceAmount: number; byBranch: Record<string, number> };
+type ScheduleReference = {
+  timezone: string;
+  weekdayOpenTime: string | null; saturdayOpenTime: string | null; sundayOpenTime: string | null;
+  weekdayCloseTime: string | null; saturdayCloseTime: string | null; sundayCloseTime: string | null;
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -88,14 +96,11 @@ function timeAgo(date: Date | null) {
   return `hace ${Math.floor(minutes / 60)} h`;
 }
 
-const daysOverdueFrom = (businessDate: string) =>
-  Math.max(0, Math.floor((Date.now() - new Date(businessDate).getTime()) / 86_400_000));
-
 const dayLabel = (businessDate: string) =>
   new Date(businessDate).toLocaleDateString("es-NI", { timeZone: "UTC", day: "numeric", month: "short" });
 
-const agoLabel = (daysOverdue: number) =>
-  daysOverdue === 0 ? "hoy" : daysOverdue === 1 ? "hace 1 día" : `hace ${daysOverdue} días`;
+const waitingLabel = (daysWaiting: number) =>
+  daysWaiting <= 0 ? "hoy" : daysWaiting === 1 ? "hace 1 día" : `hace ${daysWaiting} días`;
 
 function SectionHeading({ title, subtitle }: { title: string; subtitle: string }) {
   return (
@@ -121,17 +126,16 @@ export default function MasterOperationsPage() {
   const [todayCards, setTodayCards] = useState<TodayCardData[]>([]);
   const [showLifecycleInfo, setShowLifecycleInfo] = useState(false);
 
-  // Pendientes de cierre + pendientes de aprobación (fusionados en una sola lista)
-  const [pendingCloseRows, setPendingCloseRows] = useState<PendingCloseDayRow[]>([]);
-  const [pendingApprovalDays, setPendingApprovalDays] = useState<MasterDay[]>([]);
-  const [approvingId, setApprovingId] = useState<string | null>(null);
+  // Cola única de confirmación pendiente
+  const [pendingRows, setPendingRows] = useState<PendingReviewDayRow[]>([]);
   const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [reopenTarget, setReopenTarget] = useState<{ dayId: string; branchCode: string } | null>(null);
   const [reopenNote, setReopenNote] = useState("");
 
-  // Conciliación de cierre — compartida entre "Conciliar y cerrar" y "Cerrar día" (Hoy)
-  const [reconcileDayId, setReconcileDayId] = useState<string | null>(null);
-  const [reconcilePreview, setReconcilePreview] = useState<ClosePreview | null>(null);
+  // Confirmación — compartida entre la cola y "Cerrar jornada" de Hoy
+  const [confirmDayId, setConfirmDayId] = useState<string | null>(null);
+  const [confirmSummary, setConfirmSummary] = useState<Record<string, unknown> | null>(null);
+  const [confirmChecklist, setConfirmChecklist] = useState<DayChecklist | null>(null);
 
   // Historial
   const today = new Date().toISOString().split("T")[0];
@@ -144,10 +148,15 @@ export default function MasterOperationsPage() {
   const [selectedHistoryDayId, setSelectedHistoryDayId] = useState<string | null>(null);
   const [historyReport, setHistoryReport] = useState<DailyReport | null>(null);
   const [historyReportLoading, setHistoryReportLoading] = useState(false);
+  const [revertTarget, setRevertTarget] = useState<{ dayId: string; label: string } | null>(null);
+  const [revertNote, setRevertNote] = useState("");
+  const [reverting, setReverting] = useState(false);
 
-  // Ajustes — tolerancia de caja + herramientas de fuerza
+  // Ajustes — tolerancia de caja + horario de referencia + herramientas de fuerza
   const [tolerance, setTolerance] = useState<CashToleranceConfig | null>(null);
   const [toleranceSaving, setToleranceSaving] = useState(false);
+  const [schedule, setSchedule] = useState<ScheduleReference | null>(null);
+  const [scheduleSaving, setScheduleSaving] = useState(false);
   const [forceOpen, setForceOpen] = useState(false);
   const [forceBranchId, setForceBranchId] = useState("");
 
@@ -159,9 +168,9 @@ export default function MasterOperationsPage() {
       .catch(() => showToast("error", "No se pudieron cargar sucursales."));
   }, []);
 
-  // ── Load "Hoy" cards (uno por sucursal abierta hoy) ──
-  const loadTodayCards = useCallback(async (openBranches: BranchLiveStatus[]) => {
-    const results = await Promise.all(openBranches.map(async (b): Promise<TodayCardData | null> => {
+  // ── Load "Hoy" cards (uno por sucursal activa hoy) ──
+  const loadTodayCards = useCallback(async (activeBranches: BranchLiveStatus[]) => {
+    const results = await Promise.all(activeBranches.map(async (b): Promise<TodayCardData | null> => {
       try {
         const resp = await apiFetch(`/api/branch/operations/current?branchId=${b.branchId}`);
         const raw = await resp.json();
@@ -189,37 +198,28 @@ export default function MasterOperationsPage() {
         const data = unwrapApiData(raw) as LiveBlockersResponse;
         setLiveData(data);
         setLiveUpdatedAt(new Date());
-        void loadTodayCards(data.branches.filter((b) => b.derivedState === "OPEN_TODAY"));
+        void loadTodayCards(data.branches.filter((b) => b.derivedState === "ACTIVE_TODAY"));
       }
     } catch { /* silent refresh */ }
   }, [loadTodayCards]);
 
   useOperationalPolling({ task: loadLive, intervalMs: 30_000, deps: [loadLive] });
 
-  // ── Load pendientes de cierre / aprobación ──
-  const loadPendingClose = useCallback(async () => {
+  // ── Load cola de confirmación pendiente ──
+  const loadPending = useCallback(async () => {
     try {
-      const resp = await apiFetch("/api/master/operations/pending-close");
+      const resp = await apiFetch("/api/master/operations/pending-review");
       const raw = await resp.json();
-      if (resp.ok) setPendingCloseRows(unwrapApiData(raw) as PendingCloseDayRow[]);
+      if (resp.ok) setPendingRows(unwrapApiData(raw) as PendingReviewDayRow[]);
     } catch { /* silent refresh */ }
   }, []);
-  useOperationalPolling({ task: loadPendingClose, intervalMs: 30_000, deps: [loadPendingClose] });
+  useOperationalPolling({ task: loadPending, intervalMs: 30_000, deps: [loadPending] });
 
-  const loadPendingApproval = useCallback(async () => {
-    try {
-      const resp = await apiFetch("/api/master/operations?reviewState=pending");
-      const raw = await resp.json();
-      if (resp.ok) setPendingApprovalDays(unwrapApiData(raw) as MasterDay[]);
-    } catch { /* silent refresh */ }
-  }, []);
-  useOperationalPolling({ task: loadPendingApproval, intervalMs: 30_000, deps: [loadPendingApproval] });
-
-  // ── Load historial (días aprobados) ──
+  // ── Load historial (días confirmados) ──
   const loadHistory = useCallback(async () => {
     setHistoryRefreshing(true);
     try {
-      const params = new URLSearchParams({ reviewState: "approved" });
+      const params = new URLSearchParams({ reviewStatus: "CONFIRMED" });
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
       if (historyBranch) params.set("branchId", historyBranch);
@@ -255,6 +255,23 @@ export default function MasterOperationsPage() {
     if (!historyDays.some((d) => d.id === selectedHistoryDayId)) void selectHistoryDay(historyDays[0].id);
   }, [activeTab, historyDays, selectedHistoryDayId, selectHistoryDay]);
 
+  async function confirmRevert() {
+    if (!revertTarget) return;
+    if (!revertNote.trim()) { showToast("warning", "La nota es requerida."); return; }
+    setReverting(true);
+    try {
+      const resp = await apiFetch(`/api/master/operations/${revertTarget.dayId}/revert`, {
+        method: "POST", body: JSON.stringify({ note: revertNote.trim() }),
+      });
+      const raw = await resp.json();
+      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo revertir la confirmación."); return; }
+      showToast("success", "Confirmación revertida — el día vuelve a la cola de pendientes.");
+      setRevertTarget(null);
+      await Promise.all([loadHistory(), loadPending(), loadLive()]);
+    } catch { showToast("error", "Error de red al revertir."); }
+    finally { setReverting(false); }
+  }
+
   // ── Ajustes: tolerancia de caja ──
   useEffect(() => {
     let cancelled = false;
@@ -281,25 +298,33 @@ export default function MasterOperationsPage() {
     }
   }
 
-  // ── Acciones: aprobar / reabrir ──
-  async function approveDay(dayId: string, branchCode: string) {
-    setApprovingId(dayId);
+  // ── Ajustes: horario de referencia (puramente informativo) ──
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/api/master/operational-day-auto-config")
+      .then((r) => r.json())
+      .then((raw) => { if (!cancelled) setSchedule(unwrapApiData(raw) as ScheduleReference); })
+      .catch(() => { /* opcional, no crítico */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveSchedule() {
+    if (!schedule) return;
+    setScheduleSaving(true);
     try {
-      const resp = await apiFetch(`/api/master/operations/${dayId}/approve`, { method: "POST" });
+      const resp = await apiFetch("/api/master/operational-day-auto-config", { method: "PUT", body: JSON.stringify(schedule) });
       const raw = await resp.json();
-      if (resp.status === 409) {
-        const blockerList = (raw?.data ?? []) as Array<{ label: string; count: number }>;
-        const detail = blockerList.map((b) => `${b.label} (${b.count})`).join(" · ");
-        showToast("warning", `${branchCode}: No se puede aprobar — ${detail || (raw?.error?.message ?? "hay bloqueantes.")}`);
-        return;
-      }
-      if (!resp.ok) { showToast("error", `${branchCode}: ${raw?.error?.message ?? "No se pudo aprobar."}`); return; }
-      showToast("success", `Día de ${branchCode} aprobado.`);
-      await Promise.all([loadPendingApproval(), loadLive()]);
-    } catch { showToast("error", "Error de red al aprobar."); }
-    finally { setApprovingId(null); }
+      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo guardar."); return; }
+      setSchedule(unwrapApiData(raw) as ScheduleReference);
+      showToast("success", "Horario de referencia guardado.");
+    } catch {
+      showToast("error", "Error de red al guardar.");
+    } finally {
+      setScheduleSaving(false);
+    }
   }
 
+  // ── Acción: reabrir (solo el día de HOY, AWAITING_REVIEW → ACTIVE) ──
   async function confirmReopenDay() {
     if (!reopenTarget) return;
     if (!reopenNote.trim()) { showToast("warning", "La nota es requerida."); return; }
@@ -312,88 +337,72 @@ export default function MasterOperationsPage() {
       if (!resp.ok) { showToast("error", `${reopenTarget.branchCode}: ${raw?.error?.message ?? "No se pudo reabrir."}`); return; }
       showToast("success", `Día de ${reopenTarget.branchCode} reabierto.`);
       setReopenTarget(null);
-      await Promise.all([loadPendingApproval(), loadHistory(), loadLive()]);
+      await Promise.all([loadPending(), loadHistory(), loadLive()]);
     } catch { showToast("error", "Error de red al reabrir."); }
     finally { setReopeningId(null); }
   }
 
-  // ── Conciliación de cierre (pendientes de cierre + "Cerrar día" de Hoy) ──
-  function openReconcile(dayId: string) {
-    setReconcileDayId(dayId);
-    setReconcilePreview(null);
+  // ── Confirmación (cola de pendientes o "Cerrar jornada" de Hoy) ──
+  function openConfirm(dayId: string) {
+    setConfirmDayId(dayId);
+    setConfirmSummary(null);
+    setConfirmChecklist(null);
   }
 
-  async function previewReconcile() {
-    if (!reconcileDayId) return;
+  async function previewConfirm() {
+    if (!confirmDayId) return;
     try {
-      const resp = await apiFetch(`/api/branch/operations/${reconcileDayId}/close-preview`, { method: "POST" });
+      const resp = await apiFetch(`/api/branch/operations/${confirmDayId}/close-preview`);
       const raw = await resp.json();
-      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo previsualizar el cierre."); return; }
-      setReconcilePreview(unwrapApiData(raw) as ClosePreview);
-    } catch { showToast("error", "Error de red al previsualizar."); }
+      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo calcular el checklist."); return; }
+      const data = unwrapApiData(raw) as { summary: Record<string, unknown>; checklist: DayChecklist };
+      setConfirmSummary(data.summary);
+      setConfirmChecklist(data.checklist);
+    } catch { showToast("error", "Error de red al calcular el checklist."); }
   }
 
-  async function closeReconcile(note: string, forceClose: boolean) {
-    if (!reconcileDayId) return;
+  async function confirmNow(note: string) {
+    if (!confirmDayId) return;
     try {
-      const resp = await apiFetch(`/api/branch/operations/${reconcileDayId}/close`, {
-        method: "POST", body: JSON.stringify({ note, forceClose }),
+      const resp = await apiFetch(`/api/master/operations/${confirmDayId}/confirm`, {
+        method: "POST", body: JSON.stringify({ note: note || null }),
       });
       const raw = await resp.json();
-      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo cerrar el día."); return; }
-      showToast("success", "Día cerrado — enviado a revisión MASTER.");
-      setReconcileDayId(null);
-      setReconcilePreview(null);
-      await Promise.all([loadLive(), loadPendingClose(), loadPendingApproval()]);
-    } catch { showToast("error", "Error de red al cerrar."); }
+      if (!resp.ok) { showToast("error", raw?.error?.message ?? "No se pudo confirmar el día."); return; }
+      showToast("success", "Día confirmado.");
+      setConfirmDayId(null);
+      setConfirmSummary(null);
+      setConfirmChecklist(null);
+      await Promise.all([loadLive(), loadPending()]);
+    } catch { showToast("error", "Error de red al confirmar."); }
   }
 
-  // ── Lista de acción unificada ──
-  const actionRows: ActionRow[] = useMemo(() => {
-    const closeRows: ActionRow[] = pendingCloseRows.map((r) => ({
-      kind: "CLOSE", id: r.id, businessDate: r.businessDate, daysOverdue: r.daysOverdue,
-      branchCode: r.branchCode, branchName: r.branchName, expectedCashTotal: r.expectedCashTotal,
-      detail: r.blockers.openOrReconcilingCashSessionsCount > 0
-        ? `${r.blockers.openOrReconcilingCashSessionsCount} caja(s) abierta(s)`
-        : r.blockers.autoClosedPendingReviewCount > 0
-          ? `${r.blockers.autoClosedPendingReviewCount} caja(s) sin revisar`
-          : "Solo falta firmar",
-    }));
-    const approveRows: ActionRow[] = pendingApprovalDays.map((d) => ({
-      kind: "APPROVE", id: d.id, businessDate: d.businessDate, daysOverdue: daysOverdueFrom(d.businessDate),
-      branchCode: d.branch.code, branchName: d.branch.name,
-      salesTotal: Number(d.summaryJson?.paidSalesTotal ?? d.salesTotal),
-      cashDifferenceTotal: Number(d.cashDifferenceTotal ?? 0),
-      closedByName: d.closedBy?.fullName ?? d.closedBy?.username ?? null,
-    }));
-    return [...closeRows, ...approveRows].sort((a, b) => b.daysOverdue - a.daysOverdue);
-  }, [pendingCloseRows, pendingApprovalDays]);
-
-  const reconcileLabel = useMemo(() => {
-    if (!reconcileDayId) return null;
-    const fromAction = actionRows.find((r) => r.id === reconcileDayId);
-    if (fromAction) return `${fromAction.branchCode} — ${dayLabel(fromAction.businessDate)}`;
-    const fromToday = todayCards.find((t) => t.dayId === reconcileDayId);
+  const confirmLabel = useMemo(() => {
+    if (!confirmDayId) return null;
+    const fromQueue = pendingRows.find((r) => r.id === confirmDayId);
+    if (fromQueue) return `${fromQueue.branchCode} — ${dayLabel(fromQueue.businessDate)}`;
+    const fromToday = todayCards.find((t) => t.dayId === confirmDayId);
     return fromToday ? `${fromToday.branchCode} — hoy` : null;
-  }, [reconcileDayId, actionRows, todayCards]);
+  }, [confirmDayId, pendingRows, todayCards]);
 
   const selectedHistoryDay = historyDays.find((d) => d.id === selectedHistoryDayId) ?? null;
   const forceBranch = branches.find((b) => b.id === forceBranchId) ?? null;
-  const openTodayCount = liveData?.branches.filter((b) => b.derivedState === "OPEN_TODAY").length ?? 0;
+  const activeTodayCount = liveData?.branches.filter((b) => b.derivedState === "ACTIVE_TODAY").length ?? 0;
   const totalBlockers = liveData?.total ?? 0;
+  const pendingReviewCount = liveData?.pendingReviewDaysCount ?? pendingRows.length;
 
   // ── Render ──
   return (
     <div className="space-y-5">
       <PageHeader
         title="Día operativo"
-        description="Control en tiempo real: qué requiere tu acción hoy, historial firmado y ajustes."
+        description="Bitácora, no compuerta: qué espera tu firma, historial confirmado y ajustes."
       />
 
       {reopenTarget && (
         <Card className="border-[var(--color-warning-200)] p-4">
           <p className="text-sm font-bold text-[var(--color-text)]">Reabrir día de {reopenTarget.branchCode}</p>
-          <p className="mt-1 text-xs text-[var(--color-text-muted)]">Escribe una nota de justificación (requerida).</p>
+          <p className="mt-1 text-xs text-[var(--color-text-muted)]">Escribe una nota de justificación (requerida). Solo funciona para el día de hoy.</p>
           <textarea
             autoFocus rows={2} value={reopenNote} onChange={(e) => setReopenNote(e.target.value)}
             placeholder="Motivo de la reapertura…" className="hm-input mt-2 w-full text-sm"
@@ -403,6 +412,21 @@ export default function MasterOperationsPage() {
             <Button variant="primary" size="sm" loading={reopeningId === reopenTarget.dayId} onClick={confirmReopenDay}>
               Confirmar reapertura
             </Button>
+          </div>
+        </Card>
+      )}
+
+      {revertTarget && (
+        <Card className="border-[var(--color-warning-200)] p-4">
+          <p className="text-sm font-bold text-[var(--color-text)]">Revertir confirmación — {revertTarget.label}</p>
+          <p className="mt-1 text-xs text-[var(--color-text-muted)]">El día vuelve a la cola de pendientes (PENDING). Nota requerida, queda auditado.</p>
+          <textarea
+            autoFocus rows={2} value={revertNote} onChange={(e) => setRevertNote(e.target.value)}
+            placeholder="Motivo de la reversión…" className="hm-input mt-2 w-full text-sm"
+          />
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setRevertTarget(null)}>Cancelar</Button>
+            <Button variant="primary" size="sm" loading={reverting} onClick={confirmRevert}>Confirmar reversión</Button>
           </div>
         </Card>
       )}
@@ -425,15 +449,15 @@ export default function MasterOperationsPage() {
       {activeTab === "operacion" && (
         <div className="space-y-8">
           <div className="flex flex-wrap items-baseline gap-5 border-b border-[var(--color-border)] pb-4 text-sm text-[var(--color-text-secondary)]">
-            <span className="flex items-baseline gap-1.5"><b className="hm-num text-lg font-bold text-[var(--color-text)]">{openTodayCount}</b> sucursales abiertas</span>
-            <span className="flex items-baseline gap-1.5"><b className={`hm-num text-lg font-bold ${totalBlockers > 0 ? "text-[var(--color-danger-700)]" : "text-[var(--color-text)]"}`}>{totalBlockers}</b> bloqueos</span>
-            <span className="flex items-baseline gap-1.5"><b className={`hm-num text-lg font-bold ${actionRows.length > 0 ? "text-[var(--color-warning-700)]" : "text-[var(--color-text)]"}`}>{actionRows.length}</b> esperan tu acción</span>
+            <span className="flex items-baseline gap-1.5"><b className="hm-num text-lg font-bold text-[var(--color-text)]">{activeTodayCount}</b> sucursales en curso</span>
+            <span className="flex items-baseline gap-1.5"><b className={`hm-num text-lg font-bold ${totalBlockers > 0 ? "text-[var(--color-danger-700)]" : "text-[var(--color-text)]"}`}>{totalBlockers}</b> atascos genuinos</span>
+            <span className="flex items-baseline gap-1.5"><b className="hm-num text-lg font-bold text-[var(--color-text)]">{pendingReviewCount}</b> esperando confirmación</span>
             <button type="button" onClick={() => setShowLifecycleInfo((v) => !v)} className="text-xs font-semibold text-[var(--color-master-600)] hover:underline">
               ¿Cómo funciona?
             </button>
             <button
               type="button"
-              onClick={() => { void loadLive(); void loadPendingClose(); void loadPendingApproval(); }}
+              onClick={() => { void loadLive(); void loadPending(); }}
               className="ml-auto flex items-center gap-1.5 text-xs text-[var(--color-text-soft)] hover:text-[var(--color-text)]"
             >
               <RefreshCw style={{ width: "0.75rem", height: "0.75rem" }} />
@@ -444,27 +468,27 @@ export default function MasterOperationsPage() {
           {showLifecycleInfo && (
             <Card className="space-y-2 p-4 text-sm leading-relaxed text-[var(--color-text-secondary)]">
               <p>
-                Un día que no cierra en su fecha <b className="text-[var(--color-text)]">nunca bloquea hoy ni se pierde</b> — pasa a{" "}
-                <Badge variant="warning">Pendiente de cierre</Badge> y espera en la lista de acción hasta que el Master lo concilie con calma.
+                Un día que no se confirma <b className="text-[var(--color-text)]">nunca bloquea hoy ni se pierde</b> — cuando pasa su fecha sale de curso
+                y espera en la cola <Badge variant="warning">Esperando confirmación</Badge> hasta que Master lo firme, con calma, sin caducidad.
               </p>
-              <p>Sus cajas huérfanas pasan a revisión; nada se force-cierra en silencio.</p>
+              <p>Sus cajas huérfanas pasan a revisión; nada se fuerza en silencio. Un ítem "en atención" no bloquea confirmar — solo pide una nota.</p>
             </Card>
           )}
 
           <div className="space-y-3">
-            <SectionHeading title="Requiere tu acción" subtitle="Ordenado por urgencia. Un día que no cerró en su fecha nunca bloquea hoy — espera aquí." />
-            {actionRows.length === 0 ? (
+            <SectionHeading title="En espera de tu confirmación" subtitle="Ordenado del más viejo al más nuevo. Esto no es una alarma — puede esperar el tiempo que haga falta." />
+            {pendingRows.length === 0 ? (
               <Card className="border-dashed p-8 text-center">
                 <CheckCircle2 className="mx-auto mb-2 text-[var(--color-success-600)]" style={{ width: "1.5rem", height: "1.5rem" }} />
-                <p className="text-sm text-[var(--color-text-muted)]">Sin días esperando acción.</p>
+                <p className="text-sm text-[var(--color-text-muted)]">Sin días esperando confirmación.</p>
               </Card>
             ) : (
               <div className="stagger-children space-y-2">
-                {actionRows.map((row) => (
-                  <ActionListRow
-                    key={`${row.kind}-${row.id}`} row={row} approvingId={approvingId} reopeningId={reopeningId}
-                    onReconcile={openReconcile} onApprove={approveDay}
-                    onReopen={(dayId, branchCode) => { setReopenTarget({ dayId, branchCode }); setReopenNote(""); }}
+                {pendingRows.map((row) => (
+                  <PendingRow
+                    key={row.id} row={row}
+                    onConfirm={openConfirm}
+                    onReopen={row.daysWaiting <= 0 ? (dayId, branchCode) => { setReopenTarget({ dayId, branchCode }); setReopenNote(""); } : undefined}
                   />
                 ))}
               </div>
@@ -472,24 +496,30 @@ export default function MasterOperationsPage() {
           </div>
 
           <div className="space-y-3">
-            <SectionHeading title="Hoy" subtitle="Días abiertos · ventana 06:00 – 06:00" />
+            <SectionHeading title="Hoy" subtitle="Días en curso · ventana 06:00 – 06:00" />
             {todayCards.length === 0 ? (
-              <Card className="border-dashed p-6 text-center text-sm text-[var(--color-text-muted)]">Sin sucursales abiertas hoy.</Card>
+              <Card className="border-dashed p-6 text-center text-sm text-[var(--color-text-muted)]">Sin sucursales en curso hoy.</Card>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">
-                {todayCards.map((data) => <TodayCard key={data.branchId} data={data} onCloseDay={openReconcile} />)}
+                {todayCards.map((data) => <TodayCard key={data.branchId} data={data} onCloseDay={openConfirm} />)}
               </div>
             )}
           </div>
 
-          {reconcileDayId && (
+          {confirmDayId && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-bold text-[var(--color-text)]">Conciliar y cerrar{reconcileLabel ? ` — ${reconcileLabel}` : ""}</h2>
-                <Button variant="ghost" size="sm" onClick={() => { setReconcileDayId(null); setReconcilePreview(null); }}>Cancelar</Button>
+                <h2 className="text-sm font-bold text-[var(--color-text)]">Revisar y confirmar{confirmLabel ? ` — ${confirmLabel}` : ""}</h2>
+                <Button variant="ghost" size="sm" onClick={() => { setConfirmDayId(null); setConfirmSummary(null); setConfirmChecklist(null); }}>Cancelar</Button>
               </div>
-              <OperationalDayChecklist preview={reconcilePreview} onPreview={previewReconcile} />
-              <CloseDayDialog preview={reconcilePreview} isMaster onPreview={previewReconcile} onCloseDay={closeReconcile} />
+              <OperationalDayChecklist checklist={confirmChecklist} onPreview={previewConfirm} />
+              <ConfirmDayDialog
+                summary={confirmSummary as never}
+                checklist={confirmChecklist}
+                cashDifferenceTolerance={tolerance?.defaultToleranceAmount ?? 100}
+                onPreview={previewConfirm}
+                onConfirm={confirmNow}
+              />
             </div>
           )}
         </div>
@@ -498,7 +528,7 @@ export default function MasterOperationsPage() {
       {/* ═══ HISTORIAL ═══════════════════════════════════════════════════════ */}
       {activeTab === "historial" && (
         <div className="space-y-3">
-          <SectionHeading title="Historial" subtitle="Días aprobados. Cada uno abre su reporte — el snapshot inmutable con que se firmó." />
+          <SectionHeading title="Historial" subtitle="Días confirmados. Cada uno abre su reporte — el snapshot inmutable con que se firmó." />
 
           <section className="grid gap-4 lg:grid-cols-[280px_1fr]">
             <div className="space-y-3">
@@ -538,7 +568,7 @@ export default function MasterOperationsPage() {
                   </button>
                 ))}
                 {historyDays.length === 0 && (
-                  <p className="px-3 py-8 text-center text-sm text-[var(--color-text-muted)]">Sin días aprobados en este rango.</p>
+                  <p className="px-3 py-8 text-center text-sm text-[var(--color-text-muted)]">Sin días confirmados en este rango.</p>
                 )}
               </div>
             </div>
@@ -554,10 +584,16 @@ export default function MasterOperationsPage() {
                         {dayLabel(selectedHistoryDay.businessDate)} · {selectedHistoryDay.branch.code} {selectedHistoryDay.branch.name}
                       </p>
                       <p className="text-xs text-[var(--color-text-soft)]">
-                        {selectedHistoryDay.closedBy ? `Cerrado por ${selectedHistoryDay.closedBy.fullName ?? selectedHistoryDay.closedBy.username}` : "Cerrado"}
+                        {selectedHistoryDay.reviewedBy ? `Confirmado por ${selectedHistoryDay.reviewedBy.fullName ?? selectedHistoryDay.reviewedBy.username}` : "Confirmado"}
                       </p>
                     </div>
-                    <span className="ml-auto hm-chip hm-chip-info text-xs">📸 snapshot</span>
+                    <span className="hm-chip hm-chip-info text-xs">📸 snapshot</span>
+                    <Button
+                      variant="ghost" size="sm" className="ml-auto text-[var(--color-warning-700)]"
+                      onClick={() => { setRevertTarget({ dayId: selectedHistoryDay.id, label: `${selectedHistoryDay.branch.code} — ${dayLabel(selectedHistoryDay.businessDate)}` }); setRevertNote(""); }}
+                    >
+                      Revertir confirmación
+                    </Button>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -584,12 +620,12 @@ export default function MasterOperationsPage() {
                   {(historyReport.lateActivity?.count ?? 0) > 0 && (
                     <div className="hm-alert hm-alert-warning">
                       <AlertTriangle style={{ width: "0.875rem", height: "0.875rem" }} />
-                      <div>{historyReport.lateActivity!.count} venta(s) offline sincronizó después del cierre — se muestra aparte, no altera el número firmado.</div>
+                      <div>{historyReport.lateActivity!.count} venta(s) offline sincronizó después de confirmar — se muestra aparte, no altera el número firmado.</div>
                     </div>
                   )}
                 </Card>
               ) : (
-                <EmptyState title="Selecciona un día" description="Elige un día aprobado de la lista para ver su reporte firmado." tone="info" />
+                <EmptyState title="Selecciona un día" description="Elige un día confirmado de la lista para ver su reporte firmado." tone="info" />
               )}
             </div>
           </section>
@@ -599,64 +635,107 @@ export default function MasterOperationsPage() {
       {/* ═══ AJUSTES ═════════════════════════════════════════════════════════ */}
       {activeTab === "ajustes" && (
         <div className="space-y-3">
-          <SectionHeading title="Ajustes" subtitle="Tolerancia de caja, política de cierre y herramientas de mantenimiento." />
+          <SectionHeading title="Ajustes" subtitle="Tolerancia de caja, horario de referencia y herramientas de mantenimiento." />
 
           <div className="grid gap-3 lg:grid-cols-2">
-            <Card className="space-y-3 p-4">
-              <div className="hm-section-rule">Tolerancia de diferencia de caja</div>
-              {!tolerance ? (
-                <p className="text-sm text-[var(--color-text-muted)]">Cargando…</p>
-              ) : (
-                <>
-                  <label className="grid gap-1 text-sm">
-                    <span className="font-medium text-[var(--color-text-secondary)]">Default global (C$)</span>
-                    <input
-                      type="number" min="0" step="0.01" value={tolerance.defaultToleranceAmount}
-                      onChange={(e) => setTolerance({ ...tolerance, defaultToleranceAmount: Number(e.target.value) || 0 })}
-                      className="hm-input w-40 font-mono"
-                    />
-                  </label>
-                  <div className="grid gap-2">
-                    {branches.map((b) => (
-                      <div key={b.id} className="grid grid-cols-[1fr_auto] items-center gap-3">
-                        <span className="text-sm font-semibold text-[var(--color-text)]">{b.code} — {b.name}</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs text-[var(--color-text-soft)]">C$</span>
-                          <input
-                            type="number" min="0" step="0.01" value={tolerance.byBranch[b.id] ?? tolerance.defaultToleranceAmount}
-                            onChange={(e) => setTolerance({ ...tolerance, byBranch: { ...tolerance.byBranch, [b.id]: Number(e.target.value) || 0 } })}
-                            className="hm-input w-28 font-mono"
-                          />
+            <div className="space-y-3">
+              <Card className="space-y-3 p-4">
+                <div className="hm-section-rule">Tolerancia de diferencia de caja</div>
+                {!tolerance ? (
+                  <p className="text-sm text-[var(--color-text-muted)]">Cargando…</p>
+                ) : (
+                  <>
+                    <label className="grid gap-1 text-sm">
+                      <span className="font-medium text-[var(--color-text-secondary)]">Default global (C$)</span>
+                      <input
+                        type="number" min="0" step="0.01" value={tolerance.defaultToleranceAmount}
+                        onChange={(e) => setTolerance({ ...tolerance, defaultToleranceAmount: Number(e.target.value) || 0 })}
+                        className="hm-input w-40 font-mono"
+                      />
+                    </label>
+                    <div className="grid gap-2">
+                      {branches.map((b) => (
+                        <div key={b.id} className="grid grid-cols-[1fr_auto] items-center gap-3">
+                          <span className="text-sm font-semibold text-[var(--color-text)]">{b.code} — {b.name}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-xs text-[var(--color-text-soft)]">C$</span>
+                            <input
+                              type="number" min="0" step="0.01" value={tolerance.byBranch[b.id] ?? tolerance.defaultToleranceAmount}
+                              onChange={(e) => setTolerance({ ...tolerance, byBranch: { ...tolerance.byBranch, [b.id]: Number(e.target.value) || 0 } })}
+                              className="hm-input w-28 font-mono"
+                            />
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="hm-alert hm-alert-info">Dentro de la tolerancia → advertencia (no bloquea). Fuera → exige revisión/justificación.</div>
-                  <div className="flex justify-end">
-                    <Button size="sm" onClick={saveTolerance} loading={toleranceSaving}>Guardar tolerancia</Button>
-                  </div>
-                </>
-              )}
-            </Card>
+                      ))}
+                    </div>
+                    <div className="hm-alert hm-alert-info">Dentro de la tolerancia → OK. Fuera → el checklist lo marca en atención y pide nota al confirmar. Nunca bloquea.</div>
+                    <div className="flex justify-end">
+                      <Button size="sm" onClick={saveTolerance} loading={toleranceSaving}>Guardar tolerancia</Button>
+                    </div>
+                  </>
+                )}
+              </Card>
+
+              <Card className="space-y-3 p-4">
+                <div className="hm-section-rule flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" /> Horario de referencia</div>
+                <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                  Puramente informativo — ningún horario abre ni cierra el día. Solo alimenta lo que ven cajeros y Master como referencia habitual.
+                </p>
+                {!schedule ? (
+                  <p className="text-sm text-[var(--color-text-muted)]">Cargando…</p>
+                ) : (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Apertura lun–vie</span>
+                        <input type="time" className="hm-input text-sm" value={schedule.weekdayOpenTime ?? ""} onChange={(e) => setSchedule({ ...schedule, weekdayOpenTime: e.target.value || null })} />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Apertura sábado</span>
+                        <input type="time" className="hm-input text-sm" value={schedule.saturdayOpenTime ?? ""} onChange={(e) => setSchedule({ ...schedule, saturdayOpenTime: e.target.value || null })} />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Apertura domingo</span>
+                        <input type="time" className="hm-input text-sm" value={schedule.sundayOpenTime ?? ""} onChange={(e) => setSchedule({ ...schedule, sundayOpenTime: e.target.value || null })} />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Cierre lun–vie</span>
+                        <input type="time" className="hm-input text-sm" value={schedule.weekdayCloseTime ?? ""} onChange={(e) => setSchedule({ ...schedule, weekdayCloseTime: e.target.value || null })} />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Cierre sábado</span>
+                        <input type="time" className="hm-input text-sm" value={schedule.saturdayCloseTime ?? ""} onChange={(e) => setSchedule({ ...schedule, saturdayCloseTime: e.target.value || null })} />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Cierre domingo</span>
+                        <input type="time" className="hm-input text-sm" value={schedule.sundayCloseTime ?? ""} onChange={(e) => setSchedule({ ...schedule, sundayCloseTime: e.target.value || null })} />
+                      </label>
+                    </div>
+                    <div className="flex justify-end">
+                      <Button size="sm" onClick={saveSchedule} loading={scheduleSaving}>Guardar horario de referencia</Button>
+                    </div>
+                  </>
+                )}
+                <div className="hm-alert hm-alert-info">
+                  La hora de corte de caja (bloqueo real de venta nocturna) se administra aparte, en{" "}
+                  <a href="/app/master/settings/cash-auto-close" className="font-semibold text-[var(--color-master-600)] hover:underline">Cierre automático de cajas</a>.
+                </div>
+              </Card>
+            </div>
 
             <div className="space-y-3">
-              <Card className="space-y-2 border-[var(--color-warning-200)] p-4">
-                <div className="hm-section-rule">Días que no cierran en su fecha</div>
+              <Card className="space-y-2 p-4">
+                <div className="hm-section-rule">Días que no se confirman en su fecha</div>
                 <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
-                  <b>Pendiente, nunca bloquea</b> <Badge variant="warning">recomendado, siempre activo</Badge> — el día viejo pasa a la lista de acción; hoy abre normal; el Master lo cierra cuando puede.
+                  <b>Pendiente, nunca bloquea</b> <Badge variant="success">siempre activo</Badge> — el día viejo pasa a la cola de confirmación; hoy abre normal; Master lo firma cuando puede, sin caducidad.
                 </p>
-                <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
-                  El toggle <b>&quot;Cierre automático del día&quot;</b> en{" "}
-                  <Link href="/app/master/settings/operational-automation" className="font-semibold text-[var(--color-master-600)] hover:underline">Automatización Operativa</Link>{" "}
-                  sigue disponible como alternativa opcional — pero nunca reemplaza la regla de fondo.
-                </p>
-                <div className="hm-alert hm-alert-warning">Nunca se force-cierra un día viejo con cajas abiertas en silencio: eso perdería el conteo físico.</div>
+                <div className="hm-alert hm-alert-info">Ningún proceso automático confirma un día ni vacía la cola — solo un Master real, con firma.</div>
               </Card>
 
               <Card className="space-y-2 p-4">
                 <div className="hm-section-rule">Herramientas de fuerza</div>
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">Escáner de días atascados y cierre forzado. Uso excepcional, auditado.</p>
+                  <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">Escáner de cajas atascadas. Uso excepcional, auditado.</p>
                   <Button variant="secondary" size="sm" onClick={() => setForceOpen((v) => !v)} icon={<Wrench className="h-3.5 w-3.5" />}>
                     {forceOpen ? "Cerrar" : "Abrir"}
                   </Button>
@@ -675,7 +754,7 @@ export default function MasterOperationsPage() {
                     {forceBranchId && forceBranch && (
                       <OperationalDayScanner
                         key={forceBranchId} branchId={forceBranchId} branchCode={forceBranch.code}
-                        onResolved={async () => { await Promise.all([loadLive(), loadPendingClose()]); }}
+                        onResolved={async () => { await Promise.all([loadLive(), loadPending()]); }}
                       />
                     )}
                   </div>
@@ -685,9 +764,9 @@ export default function MasterOperationsPage() {
               <Card className="space-y-1.5 p-4">
                 <div className="hm-section-rule">Integridad</div>
                 <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Aritmética de dinero</span><b>Decimal exacto</b></div>
-                <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Reporte de día cerrado</span><b>Snapshot inmutable</b></div>
+                <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Reporte confirmado</span><b>Snapshot inmutable</b></div>
                 <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Actividad tardía</span><b>Se muestra aparte</b></div>
-                <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Día sin cerrar</span><b>Lista de acción</b></div>
+                <div className="flex justify-between text-sm"><span className="text-[var(--color-text-muted)]">Día sin confirmar</span><b>Cola sin caducidad</b></div>
               </Card>
             </div>
           </div>
@@ -697,54 +776,56 @@ export default function MasterOperationsPage() {
   );
 }
 
-// ── Requiere tu acción — fila ────────────────────────────────────────────────
+// ── Cola de confirmación pendiente — fila ───────────────────────────────────
 
-function ActionListRow({
-  row, approvingId, reopeningId, onReconcile, onApprove, onReopen,
+function PendingRow({
+  row, onConfirm, onReopen,
 }: {
-  row: ActionRow; approvingId: string | null; reopeningId: string | null;
-  onReconcile: (id: string) => void; onApprove: (id: string, branchCode: string) => void; onReopen: (id: string, branchCode: string) => void;
+  row: PendingReviewDayRow;
+  onConfirm: (id: string) => void;
+  onReopen?: (id: string, branchCode: string) => void;
 }) {
-  const isClose = row.kind === "CLOSE";
+  const detail = row.attention.openOrReconcilingCashSessionsCount > 0
+    ? `${row.attention.openOrReconcilingCashSessionsCount} caja(s) abierta(s)`
+    : row.attention.autoClosedPendingReviewCount > 0
+      ? `${row.attention.autoClosedPendingReviewCount} caja(s) sin revisar`
+      : "Sin pendientes — solo falta tu firma";
+
   return (
     <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
       <div className="min-w-[5rem]">
         <div className="text-sm font-bold capitalize text-[var(--color-text)]">{dayLabel(row.businessDate)}</div>
-        <div className="text-xs text-[var(--color-text-soft)]">{agoLabel(row.daysOverdue)}</div>
+        <div className="text-xs text-[var(--color-text-soft)]">{waitingLabel(row.daysWaiting)}</div>
       </div>
 
       <div className="min-w-0 flex-1">
-        <span className="inline-flex items-center gap-1.5 text-xs font-semibold" style={{ color: isClose ? "var(--color-warning-700)" : "var(--color-master-700)" }}>
-          <span className="h-1.5 w-1.5 rounded-full" style={{ background: isClose ? "var(--color-warning-600)" : "var(--color-master-600)" }} />
-          {isClose ? "Pendiente de cierre" : "Espera tu aprobación"}
+        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--color-warning-700)]">
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-warning-600)]" />
+          Esperando confirmación
         </span>
         <p className="mt-0.5 truncate text-xs text-[var(--color-text-muted)]">
-          {row.branchCode} {row.branchName} · {isClose ? row.detail : `diferencia de caja ${money(row.cashDifferenceTotal)} · cerró ${row.closedByName ?? "—"}`}
+          {row.branchCode} {row.branchName} · {detail}
         </p>
       </div>
 
       <div className="text-right">
-        <div className="hm-num text-sm font-bold text-[var(--color-text)]">{money(isClose ? row.expectedCashTotal : row.salesTotal)}</div>
-        <div className="text-[0.625rem] text-[var(--color-text-soft)]">{isClose ? "efectivo esperado" : "ventas del día"}</div>
+        <div className="hm-num text-sm font-bold text-[var(--color-text)]">{money(row.expectedCashTotal)}</div>
+        <div className="text-[0.625rem] text-[var(--color-text-soft)]">efectivo esperado</div>
       </div>
 
       <div className="flex items-center gap-1.5">
-        {isClose ? (
-          <Button variant="primary" size="sm" onClick={() => onReconcile(row.id)}>Conciliar y cerrar</Button>
-        ) : (
-          <>
-            <Button variant="primary" size="sm" loading={approvingId === row.id} onClick={() => onApprove(row.id, row.branchCode)}>Aprobar</Button>
-            <Button variant="ghost" size="sm" loading={reopeningId === row.id} onClick={() => onReopen(row.id, row.branchCode)} className="text-[var(--color-warning-700)]">
-              Reabrir
-            </Button>
-          </>
+        <Button variant="primary" size="sm" onClick={() => onConfirm(row.id)}>Revisar y confirmar</Button>
+        {onReopen && (
+          <Button variant="ghost" size="sm" onClick={() => onReopen(row.id, row.branchCode)} className="text-[var(--color-warning-700)]">
+            Reabrir
+          </Button>
         )}
       </div>
     </div>
   );
 }
 
-// ── Hoy — tarjeta compacta por sucursal abierta ─────────────────────────────
+// ── Hoy — tarjeta compacta por sucursal en curso ────────────────────────────
 
 function TodayCard({ data, onCloseDay }: { data: TodayCardData; onCloseDay: (dayId: string) => void }) {
   return (
@@ -762,7 +843,7 @@ function TodayCard({ data, onCloseDay }: { data: TodayCardData; onCloseDay: (day
       </div>
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3">
         <span className="text-xs text-[var(--color-text-soft)]">{data.openCashSessionsCount} caja{data.openCashSessionsCount !== 1 ? "s" : ""} abierta{data.openCashSessionsCount !== 1 ? "s" : ""}</span>
-        <Button variant="secondary" size="sm" onClick={() => onCloseDay(data.dayId)}>Cerrar día</Button>
+        <Button variant="secondary" size="sm" onClick={() => onCloseDay(data.dayId)}>Confirmar día</Button>
       </div>
     </Card>
   );

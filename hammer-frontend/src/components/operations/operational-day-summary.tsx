@@ -7,10 +7,13 @@ export type OperationalDay = {
   id: string;
   branchId: string;
   businessDate: string;
-  status: "OPEN" | "CLOSING" | "CLOSED" | "CANCELLED" | "REOPENED_FOR_ADJUSTMENT";
+  /** Eje del sistema: ACTIVE (día en curso) | AWAITING_REVIEW (esperando confirmación) | CANCELLED. */
+  lifecycle: "ACTIVE" | "AWAITING_REVIEW" | "CANCELLED";
+  /** Eje de Master: PENDING (default, sin caducidad) | CONFIRMED (firmado por un humano). */
+  reviewStatus: "PENDING" | "CONFIRMED";
   openedAt: string;
-  closedAt?: string | null;
-  approvedAt?: string | null;
+  sweptAt?: string | null;
+  reviewedAt?: string | null;
   salesTotal: string | number;
   paidOrdersTotal: string | number;
   pendingPaymentTotal: string | number;
@@ -21,11 +24,11 @@ export type OperationalDay = {
   autoClosedPendingReviewCount: number;
   pendingDispatchCount: number;
   criticalBrainDecisionCount: number;
-  /** Transitorio (no persistido): ventas offline sincronizadas tras el cierre, pendientes de revisión. */
+  /** Transitorio (no persistido): ventas offline sincronizadas tras salir de ACTIVE, pendientes de revisión. */
   lateOfflineSyncCount?: number;
   branch?: { id: string; code: string; name: string };
   openedBy?: { username: string; fullName?: string | null };
-  approvedBy?: { username: string; fullName?: string | null };
+  reviewedBy?: { username: string; fullName?: string | null } | null;
   cashSessions?: CashSessionRow[];
   summaryJson?: {
     paymentsByMethod?: Array<{ method: string; amount: number; count: number }>;
@@ -82,12 +85,10 @@ function timeAgo(iso: string) {
   return `hace ${Math.floor(minutes / 60)} h`;
 }
 
-const STATUS_CONFIG: Record<string, { label: string; badge: "success" | "warning" | "neutral" | "danger"; barColor: string }> = {
-  OPEN:      { label: "Abierto",   badge: "success", barColor: "var(--color-success-500)" },
-  CLOSING:   { label: "En cierre", badge: "warning", barColor: "var(--color-warning-500)" },
-  CLOSED:    { label: "Cerrado",   badge: "neutral",  barColor: "var(--color-text-soft)" },
-  CANCELLED: { label: "Cancelado", badge: "danger",   barColor: "var(--color-danger-500)" },
-  REOPENED_FOR_ADJUSTMENT: { label: "Reabierto (ajuste)", badge: "warning", barColor: "var(--color-warning-500)" },
+const LIFECYCLE_CONFIG: Record<string, { label: string; badge: "success" | "warning" | "neutral" | "danger"; barColor: string }> = {
+  ACTIVE:          { label: "En curso",              badge: "success", barColor: "var(--color-success-500)" },
+  AWAITING_REVIEW: { label: "Esperando confirmación", badge: "warning", barColor: "var(--color-warning-500)" },
+  CANCELLED:       { label: "Anulado",                badge: "danger",  barColor: "var(--color-danger-500)" },
 };
 
 type KpiTileProps = {
@@ -127,7 +128,7 @@ function KpiTile({ label, value, icon: Icon, tone = "default", subtext }: KpiTil
 const FALLBACK_CASH_TOLERANCE = 100;
 
 export function OperationalDaySummary({ day, cashDifferenceTolerance = FALLBACK_CASH_TOLERANCE }: { day: OperationalDay; cashDifferenceTolerance?: number }) {
-  const statusCfg = STATUS_CONFIG[day.status] ?? STATUS_CONFIG.OPEN;
+  const lifecycleCfg = LIFECYCLE_CONFIG[day.lifecycle] ?? LIFECYCLE_CONFIG.ACTIVE;
   const lateOffline = Number(day.lateOfflineSyncCount ?? day.summaryJson?.lateOfflineSyncCount ?? 0);
   const diff = Number(day.cashDifferenceTotal ?? 0);
   const cashDiffTone: KpiTileProps["tone"] = Math.abs(diff) > cashDifferenceTolerance ? "alert" : diff !== 0 ? "warn" : "ok";
@@ -137,7 +138,7 @@ export function OperationalDaySummary({ day, cashDifferenceTolerance = FALLBACK_
       {/* ── Header card ── */}
       <div className="hm-module-card overflow-hidden">
         {/* Role accent bar */}
-        <div className="h-1" style={{ background: `linear-gradient(90deg, ${statusCfg.barColor}, transparent)` }} />
+        <div className="h-1" style={{ background: `linear-gradient(90deg, ${lifecycleCfg.barColor}, transparent)` }} />
         <div className="hm-module-card-header">
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <div className="hm-icon-wrap hm-icon-wrap-md bg-[var(--color-info-50)] border border-[var(--color-info-100)] flex-shrink-0">
@@ -152,11 +153,11 @@ export function OperationalDaySummary({ day, cashDifferenceTolerance = FALLBACK_
           </div>
           <div className="flex flex-shrink-0 items-center gap-2">
             {lateOffline > 0 && (
-              <Badge variant="warning" title="Ventas offline sincronizadas después del cierre — requieren revisión Master.">
+              <Badge variant="warning" title="Ventas offline sincronizadas tras dejar de estar en curso — requieren revisión Master.">
                 {lateOffline} venta{lateOffline !== 1 ? "s" : ""} offline pendiente{lateOffline !== 1 ? "s" : ""} de revisión
               </Badge>
             )}
-            <Badge variant={statusCfg.badge}>{statusCfg.label}</Badge>
+            {day.reviewStatus === "CONFIRMED" ? <Badge variant="success">Confirmado</Badge> : <Badge variant={lifecycleCfg.badge}>{lifecycleCfg.label}</Badge>}
           </div>
         </div>
 
@@ -169,10 +170,10 @@ export function OperationalDaySummary({ day, cashDifferenceTolerance = FALLBACK_
             <Clock style={{ width: "0.875rem", height: "0.875rem" }} />
             Abierto por <strong className="text-[var(--color-text-secondary)]">{day.openedBy?.fullName ?? day.openedBy?.username ?? "usuario"}</strong> · {timeAgo(day.openedAt)}
           </span>
-          {day.approvedBy && (
+          {day.reviewedBy && (
             <span className="flex items-center gap-1.5 text-[var(--color-success-700)]">
               <CheckCircle2 style={{ width: "0.875rem", height: "0.875rem" }} />
-              Aprobado por <strong>{day.approvedBy.fullName ?? day.approvedBy.username}</strong>
+              Confirmado por <strong>{day.reviewedBy.fullName ?? day.reviewedBy.username}</strong>
             </span>
           )}
         </div>
@@ -206,15 +207,15 @@ export function OperationalDaySummary({ day, cashDifferenceTolerance = FALLBACK_
             tone={
               day.openCashSessionsCount === 0
                 ? "ok"
-                : day.status === "CLOSING" || day.status === "CLOSED"
+                : day.lifecycle !== "ACTIVE"
                   ? "alert"
                   : "default"
             }
             subtext={
               day.openCashSessionsCount === 0
                 ? "Sin cajas abiertas"
-                : day.status === "CLOSING" || day.status === "CLOSED"
-                  ? "Bloquea el cierre"
+                : day.lifecycle !== "ACTIVE"
+                  ? "Requiere atención — el día ya no está en curso"
                   : "En uso — operación normal"
             }
           />

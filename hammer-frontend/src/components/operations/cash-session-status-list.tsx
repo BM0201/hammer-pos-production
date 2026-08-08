@@ -24,19 +24,20 @@ function diffColor(diff: number) {
   return "text-[var(--color-warning-700)] font-bold";
 }
 
-// Mientras el día operativo está ABIERTO, tener una caja abierta es normal (operación en curso),
-// no es un bloqueo ni un error. Solo cuando el día entra en cierre (CLOSING/CLOSED) una caja
-// que sigue abierta se vuelve realmente urgente porque impide cerrar el día.
-function dayIsClosing(dayStatus?: string) {
-  return dayStatus === "CLOSING" || dayStatus === "CLOSED";
+// Mientras el día operativo está ACTIVE, tener una caja abierta es normal (operación en curso),
+// no es un bloqueo ni un error — no existe el concepto de "bloquea el cierre". Solo cuando el
+// día ya salió de ACTIVE (AWAITING_REVIEW/CANCELLED) una caja que sigue abierta es realmente
+// urgente, porque no debería haber quedado ahí (el barrido normalmente ya la cierra sola).
+function dayNotActive(dayLifecycle?: string) {
+  return dayLifecycle !== undefined && dayLifecycle !== "ACTIVE";
 }
 
-function sessionUrgency(session: CashSessionRow, dayStatus?: string): "hard" | "soft" | "ok" {
-  if (session.status === "OPEN") return dayIsClosing(dayStatus) ? "hard" : "soft";
+function sessionUrgency(session: CashSessionRow, dayLifecycle?: string): "hard" | "soft" | "ok" {
+  if (session.status === "OPEN") return dayNotActive(dayLifecycle) ? "hard" : "soft";
   // Una caja en conciliación es un cierre a medias: el cajero ya pidió cerrar pero
-  // no ha confirmado el conteo. Bloquea el cierre del día, así que siempre requiere
-  // atención (urgente cuando el día está en cierre).
-  if (session.status === "RECONCILING") return dayIsClosing(dayStatus) ? "hard" : "soft";
+  // no ha confirmado el conteo. Siempre requiere atención (más urgente si el día ya
+  // no está en curso).
+  if (session.status === "RECONCILING") return dayNotActive(dayLifecycle) ? "hard" : "soft";
   if (session.status === "AUTO_CLOSED_PENDING_REVIEW") return "soft";
   return "ok";
 }
@@ -76,17 +77,17 @@ const URGENCY_BORDER: Record<"hard" | "soft" | "ok", string> = {
 type Props = {
   sessions: CashSessionRow[];
   branchId?: string;
-  /** Estado del día operativo. Determina si una caja abierta es normal (día OPEN) o urgente (día en cierre). */
-  dayStatus?: string;
+  /** lifecycle del día operativo. Determina si una caja abierta es normal (día ACTIVE) o urgente (día ya no está en curso). */
+  dayLifecycle?: string;
 };
 
-export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) {
-  const closing = dayIsClosing(dayStatus);
-  // Una caja abierta solo "requiere atención" cuando el día está en cierre.
-  // Mientras el día está abierto, una caja abierta es operación normal en curso.
+export function CashSessionStatusList({ sessions, branchId, dayLifecycle }: Props) {
+  const notActive = dayNotActive(dayLifecycle);
+  // Una caja abierta solo "requiere atención" cuando el día ya no está en curso.
+  // Mientras el día está ACTIVE, una caja abierta es operación normal.
   const urgentCount = sessions.filter(
     (s) =>
-      (s.status === "OPEN" && closing) ||
+      (s.status === "OPEN" && notActive) ||
       s.status === "RECONCILING" ||
       s.status === "AUTO_CLOSED_PENDING_REVIEW",
   ).length;
@@ -116,7 +117,7 @@ export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) 
         ) : (
           <div className="space-y-3">
             {sessions.map((session) => {
-              const urgency = sessionUrgency(session, dayStatus);
+              const urgency = sessionUrgency(session, dayLifecycle);
               const diff = Number(session.differenceAmount ?? 0);
               const Icon = urgency === "hard" ? AlertTriangle : urgency === "soft" ? Clock : CheckCircle2;
               const iconColor = urgency === "hard" ? "text-[var(--color-danger-600)]" : urgency === "soft" ? "text-[var(--color-warning-600)]" : "text-[var(--color-success-600)]";
@@ -139,13 +140,13 @@ export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) 
                     </div>
                     <Badge
                       variant={
-                        session.status === "OPEN" && !closing
+                        session.status === "OPEN" && !notActive
                           ? "neutral"
                           : STATUS_BADGE[session.status] ?? "neutral"
                       }
                       title={STATUS_HELP[session.status]}
                     >
-                      {session.status === "OPEN" && !closing
+                      {session.status === "OPEN" && !notActive
                         ? "Abierta · en uso"
                         : STATUS_LABEL[session.status] ?? session.status}
                     </Badge>
@@ -225,9 +226,9 @@ export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) 
                       )}
                     </div>
                   )}
-                  {session.status === "OPEN" && closing && (
+                  {session.status === "OPEN" && notActive && (
                     <div className="flex flex-col gap-2 border-t border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_30%,white)] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-                      <span className="text-xs text-[var(--color-danger-800)] font-medium">Caja activa — debe cerrarse antes de cerrar el día.</span>
+                      <span className="text-xs text-[var(--color-danger-800)] font-medium">Caja activa — el día ya no está en curso, revisar.</span>
                       {branchId && (
                         <Link
                           href="/app/branch/cash"
@@ -238,7 +239,7 @@ export function CashSessionStatusList({ sessions, branchId, dayStatus }: Props) 
                       )}
                     </div>
                   )}
-                  {session.status === "OPEN" && !closing && (
+                  {session.status === "OPEN" && !notActive && (
                     <div className="flex flex-col gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
                       <span className="text-xs text-[var(--color-text-muted)] font-medium">Caja en uso — operación normal del día.</span>
                       {branchId && (
