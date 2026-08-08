@@ -115,13 +115,13 @@ test("cross-midnight Managua: 01:00 UTC Jun17 = 19:00 Jun16 Managua → business
   assert.ok(now >= start && now < end, "01:00 UTC Jun17 debe estar dentro de la ventana del Jun16");
 });
 
-test("stale day detection: businessDate distinto al de hoy debe rechazarse", () => {
+test("stale day detection: businessDate distinto al de hoy identifica un día ACTIVE trasnochado", () => {
   const today = businessDateFromNow(new Date("2026-06-16T12:00:00.000Z"));
   const yesterday = new Date(Date.UTC(2026, 5, 15, 0, 0, 0, 0)); // 2026-06-15
 
   assert.notEqual(
     yesterday.getTime(),
     today.getTime(),
-    "Un día OPEN de fecha anterior no debe coincidir con hoy → ensureOpenOperationalDayTx debe lanzar OPERATIONAL_DAY_STALE",
+    "Un día ACTIVE de fecha anterior no coincide con hoy → resolveOperationalDayForOperationTx lo barre a AWAITING_REVIEW y sigue de largo (nunca lanza)",
   );
 });

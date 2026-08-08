@@ -150,41 +150,42 @@ describe("O.18 daily report separa por operationalDayId, ventana y legacy", () =
 
 // ─── H/G: conteo de ventas offline pendientes de revisión (sync tras el cierre) ──
 
-describe("lateOfflineSyncCount: offline sincronizado después del cierre", () => {
+describe("lateOfflineSyncCount: offline sincronizado después de que el día dejó de estar ACTIVE", () => {
   type OfflineOrder = { offlineClientId: string | null; syncedAt: Date | null };
 
-  // Espejo de la lógica de calculateOperationalSummaryTx / getCurrentOperationalDay.
-  function lateOfflineCount(closedAt: Date | null, orders: OfflineOrder[]): number {
-    if (!closedAt) return 0;
-    return orders.filter((o) => o.offlineClientId !== null && o.syncedAt !== null && o.syncedAt.getTime() > closedAt.getTime()).length;
+  // Espejo de la lógica de calculateOperationalSummaryTx (day-summary.ts) — el
+  // disparador es sweptAt (cuándo el día salió de ACTIVE), no un "cierre".
+  function lateOfflineCount(sweptAt: Date | null, orders: OfflineOrder[]): number {
+    if (!sweptAt) return 0;
+    return orders.filter((o) => o.offlineClientId !== null && o.syncedAt !== null && o.syncedAt.getTime() > sweptAt.getTime()).length;
   }
 
-  const closedAt = new Date("2026-06-15T22:00:00Z");
+  const sweptAt = new Date("2026-06-15T22:00:00Z");
 
-  it("día OPEN (sin closedAt) → 0 aunque haya offline sincronizado", () => {
+  it("día ACTIVE (sin sweptAt) → 0 aunque haya offline sincronizado", () => {
     assert.equal(
       lateOfflineCount(null, [{ offlineClientId: "OFF-1", syncedAt: new Date("2026-06-15T12:00:00Z") }]),
       0,
     );
   });
 
-  it("offline sincronizado DESPUÉS del cierre → cuenta como pendiente", () => {
+  it("offline sincronizado DESPUÉS de salir de ACTIVE → cuenta como pendiente", () => {
     assert.equal(
-      lateOfflineCount(closedAt, [{ offlineClientId: "OFF-1", syncedAt: new Date("2026-06-15T23:30:00Z") }]),
+      lateOfflineCount(sweptAt, [{ offlineClientId: "OFF-1", syncedAt: new Date("2026-06-15T23:30:00Z") }]),
       1,
     );
   });
 
-  it("offline sincronizado ANTES del cierre → no cuenta", () => {
+  it("offline sincronizado ANTES de salir de ACTIVE → no cuenta", () => {
     assert.equal(
-      lateOfflineCount(closedAt, [{ offlineClientId: "OFF-1", syncedAt: new Date("2026-06-15T20:00:00Z") }]),
+      lateOfflineCount(sweptAt, [{ offlineClientId: "OFF-1", syncedAt: new Date("2026-06-15T20:00:00Z") }]),
       0,
     );
   });
 
   it("orden normal (sin offlineClientId) → no cuenta aunque tenga syncedAt posterior", () => {
     assert.equal(
-      lateOfflineCount(closedAt, [{ offlineClientId: null, syncedAt: new Date("2026-06-15T23:30:00Z") }]),
+      lateOfflineCount(sweptAt, [{ offlineClientId: null, syncedAt: new Date("2026-06-15T23:30:00Z") }]),
       0,
     );
   });
