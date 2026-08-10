@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
+import { canonicalizePresentationUnit, findUnitCollisions } from "@/modules/catalog/presentation-units";
 
 export type StockGroupMemberInput = {
   productId: string;
@@ -679,19 +680,33 @@ export function validateMembers(members: StockGroupMemberInput[]) {
     throw new Error("VALIDATION_ERROR: El producto principal debe tener factor de conversión = 1.");
   }
 
-  const seen = new Set<string>();
+  const seenProducts = new Set<string>();
   for (const member of members) {
     if (!member.productId) throw new Error("VALIDATION_ERROR: Falta un producto en la fusión.");
-    if (seen.has(member.productId)) {
+    if (seenProducts.has(member.productId)) {
       throw new Error("VALIDATION_ERROR: Un producto no puede aparecer dos veces en la misma fusión.");
     }
-    seen.add(member.productId);
-    if (!member.saleUnit || !member.saleUnit.trim()) {
-      throw new Error("VALIDATION_ERROR: Cada producto debe tener una unidad de venta.");
+    seenProducts.add(member.productId);
+    if (!member.saleUnit?.trim()) {
+      throw new Error("VALIDATION_ERROR: Cada presentación debe tener una unidad de venta.");
     }
     if (!Number.isFinite(Number(member.conversionFactor)) || Number(member.conversionFactor) <= 0) {
       throw new Error("VALIDATION_ERROR: El factor de conversión debe ser mayor que 0.");
     }
+  }
+
+  // Unidades de venta distintas entre presentaciones. Sin esto, una fusión
+  // puede guardarse con los N miembros en la misma unidad: el asistente
+  // rotula todas las filas "1 UNIDAD = __ UNIDAD", el usuario no puede saber
+  // cuál está editando, y el catálogo no puede decir de qué presentación
+  // habla cada cifra. Es la causa raíz del bug de piedrín.
+  const collisions = findUnitCollisions(members);
+  if (collisions.length > 0) {
+    const detail = collisions.map((c) => c.unit).join(", ");
+    throw new Error(
+      `VALIDATION_ERROR: Cada presentación necesita una unidad de venta distinta. Repetida: ${detail}. ` +
+      "Ej: la base en LATA, y las otras en PALADA, METRO, CAMION.",
+    );
   }
 
   return canonical;
@@ -944,7 +959,7 @@ export async function createStockGroupRowsTx(
     minimumClosedPackageReserve: input.minimumClosedPackageReserve,
     members: input.members,
   });
-  const baseUnit = (input.baseUnit ?? canonical.saleUnit).trim();
+  const baseUnit = canonicalizePresentationUnit(input.baseUnit ?? canonical.saleUnit);
   const packageUnit = input.packageUnit?.trim().toUpperCase() || null;
   const conversionFactorToBase =
     input.conversionFactorToBase ?? input.members.find((member) => !member.isCanonical)?.conversionFactor ?? null;
@@ -984,7 +999,7 @@ export async function createStockGroupRowsTx(
       data: {
         stockGroupId: createdGroup.id,
         productId: member.productId,
-        saleUnit: member.saleUnit.trim(),
+        saleUnit: canonicalizePresentationUnit(member.saleUnit),
         conversionFactor: new Prisma.Decimal(member.conversionFactor),
         isCanonical: member.isCanonical,
         // Fusión triple: ya NO se fuerza a todo no-canónico a ser "el
@@ -1037,7 +1052,7 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
           input.minimumClosedPackageReserve ?? Number(current.minimumClosedPackageReserve),
         members: input.members,
       });
-      data.baseUnit = canonical.saleUnit.trim();
+      data.baseUnit = canonicalizePresentationUnit(canonical.saleUnit);
       await assertProductsAvailable(tx, input.members, id);
 
       const keepProductIds = new Set(input.members.map((m) => m.productId));
@@ -1052,7 +1067,7 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
           create: {
             stockGroupId: id,
             productId: member.productId,
-            saleUnit: member.saleUnit.trim(),
+            saleUnit: canonicalizePresentationUnit(member.saleUnit),
             conversionFactor: new Prisma.Decimal(member.conversionFactor),
             isCanonical: member.isCanonical,
             // Fusión triple: idem createStockGroupRowsTx — se respeta la
@@ -1060,7 +1075,7 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
             isPackagePresentation: Boolean(member.isPackagePresentation),
           },
           update: {
-            saleUnit: member.saleUnit.trim(),
+            saleUnit: canonicalizePresentationUnit(member.saleUnit),
             conversionFactor: new Prisma.Decimal(member.conversionFactor),
             isCanonical: member.isCanonical,
             isPackagePresentation: Boolean(member.isPackagePresentation),

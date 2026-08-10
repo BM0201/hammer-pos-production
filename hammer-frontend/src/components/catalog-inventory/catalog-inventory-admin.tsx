@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty } from "@/lib/format";
 import { tokenize } from "@/lib/product-search";
+import { formatSharedStock } from "@/lib/inventory/shared-stock-format";
 
 /* ───────────────────────── Types ───────────────────────── */
 type Branch = { id: string; code: string; name: string };
@@ -288,40 +289,6 @@ function statusFor(total: number) {
   if (total === 0) return { label: "Cero", variant: "warning" as const };
   if (total <= 1) return { label: "Critico", variant: "warning" as const };
   return { label: "OK", variant: "success" as const };
-}
-
-function ironQuintalFactor(product: ProductRow) {
-  const code = product.stockConversion?.stockGroupCode ?? "";
-  if (code.includes("1_2")) return 8;
-  if (code.includes("3_8")) return 14;
-  if (code.includes("1_4")) return 30;
-  return Number(product.stockConversion?.conversionFactor ?? 0) > 1 ? Number(product.stockConversion?.conversionFactor) : null;
-}
-
-function renderSharedStock(product: ProductRow) {
-  const shared = product.sharedStock;
-  const conversion = product.stockConversion;
-  if (!shared || !conversion) return null;
-  if (conversion.tracksPackages && shared.packageStock) {
-    if (!conversion.isPackagePresentation) {
-      return {
-        primary: `${qty(shared.packageStock.looseUnitQuantity)} ${shared.packageStock.baseUnit.toLowerCase()} sueltos fisicos`,
-        secondary: `abrible ${qty(shared.packageStock.autoOpenableUnitsTotal ?? 0)} ${shared.packageStock.baseUnit.toLowerCase()} | cerrados ${qty(shared.packageStock.closedPackageQuantity)} ${(conversion.packageUnit ?? "KILO").toLowerCase()} | total ${qty(shared.packageStock.equivalentBaseQuantity)} ${shared.packageStock.baseUnit.toLowerCase()}`,
-        chip: `1 ${conversion.packageUnit ?? shared.packageStock.packageUnit} = ${qty(shared.packageStock.conversionFactor)} ${shared.packageStock.baseUnit} aprox.`,
-      };
-    }
-    return {
-      primary: `${qty(shared.packageStock.closedPackageQuantity)} ${(conversion.packageUnit ?? "KILO").toLowerCase()} cerrados`,
-      secondary: `${qty(shared.packageStock.looseUnitQuantity)} ${shared.packageStock.baseUnit.toLowerCase()} sueltos fisicos | abrible ${qty(shared.packageStock.autoOpenableUnitsTotal ?? 0)} | total ${qty(shared.packageStock.equivalentBaseQuantity)} ${shared.packageStock.baseUnit.toLowerCase()}`,
-      chip: `1 ${conversion.packageUnit ?? shared.saleUnit} = ${qty(shared.packageStock.conversionFactor)} ${shared.packageStock.baseUnit} aprox.`,
-    };
-  }
-  const factor = ironQuintalFactor(product);
-  const primary = `${qty(shared.saleQuantity)} ${shared.saleUnit.toLowerCase()}`;
-  const secondary = conversion.saleUnit === shared.baseUnit && factor
-    ? `${qty(shared.baseQuantity / factor)} quintales`
-    : `${qty(shared.baseQuantity)} ${shared.baseUnit.toLowerCase()}`;
-  return { primary, secondary, chip: factor ? `1 quintal = ${factor} varillas` : "Stock compartido" };
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -1168,7 +1135,7 @@ export function CatalogInventoryAdmin() {
               <tbody>
                 {data.products.map((product) => {
                   const isEditing = editingProductId === product.id;
-                  const sharedStock = renderSharedStock(product);
+                  const sharedStock = formatSharedStock(product);
                   const categoryChanged = isEditing && editDraft.categoryId !== (product.category?.id ?? "");
                   return (
                   <tr key={product.id}>
@@ -1249,8 +1216,10 @@ export function CatalogInventoryAdmin() {
                       <div>{sharedStock?.primary ?? qty(product.totalStock)}</div>
                       {sharedStock ? (
                         <div className="mt-1 space-y-1 text-[0.65rem] text-[var(--color-text-muted)]">
-                          <div>Equivale a {sharedStock.secondary}</div>
-                          <div className="inline-flex rounded border border-[var(--color-border)] px-1.5 py-0.5 font-medium">Stock compartido - {sharedStock.chip}</div>
+                          <div>{sharedStock.secondary}</div>
+                          <div className="inline-flex rounded border border-[var(--color-border)] px-1.5 py-0.5 font-medium">
+                            {sharedStock.chip}
+                          </div>
                         </div>
                       ) : null}
                     </td>
@@ -2862,7 +2831,13 @@ function MovementsPanel({
     return numberOrNull(product.inventoryBalances.find((item) => item.branchId === activeBranchId)?.quantityOnHand) ?? 0;
   }
   const adjustmentQty = Number(adjustment.quantity);
-  const adjustmentFactor = adjustmentProduct ? ironQuintalFactor(adjustmentProduct) : null;
+  // Factor de conversión entre saleUnit y baseUnit del propio grupo — nunca
+  // hardcodeado por código de grupo (ver shared-stock-format.ts). null cuando
+  // no hay fusión o el factor es 1 (mostrar ambas unidades sería redundante).
+  const adjustmentConversionFactor = (() => {
+    const raw = Number(adjustmentProduct?.stockConversion?.conversionFactor ?? 0);
+    return raw > 0 && raw !== 1 ? raw : null;
+  })();
   const isBaseUnit = !!adjustmentProduct?.stockConversion && adjustment.unit === adjustmentProduct.stockConversion.baseUnit;
   const currentBaseStock = currentBaseStockForProduct(adjustmentProduct);
   const changeBaseQty = Number.isFinite(adjustmentQty)
@@ -3118,7 +3093,8 @@ function MovementsPanel({
                 )}
                 {adjustmentProduct?.stockConversion && !isDualPhysicalCount ? (
                   <div className="mt-2 text-xs text-[var(--color-text-muted)]">
-                    Stock final convertible: {qty(previewFinalBase)} varillas{adjustmentFactor ? ` / ${qty(previewFinalBase / adjustmentFactor)} quintales` : ""}
+                    Stock final convertible: {qty(previewFinalBase)} {adjustmentProduct.stockConversion.baseUnit.toLowerCase()}
+                    {adjustmentConversionFactor ? ` / ${qty(previewFinalBase / adjustmentConversionFactor)} ${adjustmentProduct.stockConversion.saleUnit.toLowerCase()}` : ""}
                   </div>
                 ) : null}
               </div>

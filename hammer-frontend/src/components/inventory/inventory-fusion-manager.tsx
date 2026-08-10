@@ -8,13 +8,14 @@ import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { Boxes, PackageCheck, PackageOpen, Plus, Search, Split, Wrench, X } from "lucide-react";
+import { Boxes, PackageCheck, PackageOpen, Pencil, Plus, Search, Split, Wrench, X } from "lucide-react";
+import { COMMON_PRESENTATION_UNITS, findDuplicateFactors, findUnitCollisions } from "@/lib/inventory/presentation-units";
 
 /* ─────────────────────────── Tipos ─────────────────────────── */
 
 type ProductLite = { id: string; sku: string; name: string; unit: string };
 
-type HealthIssue = { branchId: string; kind: "DERIVED_NONZERO" | "INVARIANT"; detail: string; expected: string; actual: string; diff: string };
+type HealthIssue = { branchId: string | null; kind: "DERIVED_NONZERO" | "INVARIANT" | "UNIT_COLLISION" | "DUPLICATE_FACTOR"; detail: string; expected: string; actual: string; diff: string };
 type GroupHealth = { stockGroupId: string; stockGroupCode: string; healthy: boolean; issues: HealthIssue[] };
 
 type BranchStockRow = {
@@ -116,6 +117,88 @@ async function readJson(res: Response) {
   return res.json().catch(() => ({}));
 }
 
+/* ─────────────────────────── Fila de presentación (unidad + factor) ─────────────────────────── */
+//
+// Reutilizada por el asistente de creación (paso 1) y por el modal de
+// edición de fusión (Fase 3) — es el mismo campo, "unidad de venta + factor
+// contra la base", en los dos lugares donde se carga.
+
+type FusionMemberRowProps = {
+  sku: string;
+  name: string;
+  saleUnit: string;
+  conversionFactor: number;
+  isCanonical: boolean;
+  isPackagePresentation: boolean;
+  canonicalSaleUnit: string;
+  onUnitChange: (value: string) => void;
+  onFactorChange: (value: number) => void;
+  onMarkBase: () => void;
+  onTogglePackage: () => void;
+  onRemove?: () => void;
+};
+
+function FusionMemberRow({
+  sku, name, saleUnit, conversionFactor, isCanonical, isPackagePresentation, canonicalSaleUnit,
+  onUnitChange, onFactorChange, onMarkBase, onTogglePackage, onRemove,
+}: FusionMemberRowProps) {
+  return (
+    <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2">
+      <b className="flex-1 text-[12.5px]">{sku} — {name}</b>
+
+      <label className="flex items-center gap-1 text-[11.5px] text-[var(--color-text-muted)]">
+        Se vende por
+        <input
+          list="presentation-units"
+          value={saleUnit}
+          onChange={(e) => onUnitChange(e.target.value)}
+          placeholder="Ej: LATA"
+          className="w-32 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-0.5 uppercase"
+        />
+      </label>
+
+      {isCanonical ? (
+        <Badge variant="info">unidad base — el stock se guarda acá</Badge>
+      ) : (
+        <>
+          <span className="flex items-center gap-1 text-[11.5px] text-[var(--color-text-muted)]">
+            1 {saleUnit.trim().toUpperCase() || "…"} =
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={conversionFactor || ""}
+              onChange={(e) => onFactorChange(Number(e.target.value) || 0)}
+              className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-0.5 text-right font-mono"
+            />
+            {canonicalSaleUnit.trim().toUpperCase() || "…"}
+          </span>
+          {/* Fusión triple: con 3+ productos, cuál es "el empaque" (Caja) ya
+              no se puede inferir del orden en que se agregaron — el usuario
+              lo elige acá. Las demás presentaciones no-canónicas quedan como
+              sueltas alternativas (ej. Libra, Unidad). */}
+          <button
+            type="button"
+            onClick={onTogglePackage}
+            className={`rounded-full border px-2 py-0.5 text-[10.5px] font-semibold ${isPackagePresentation ? "border-[var(--color-master-500)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] text-[var(--color-text-soft)]"}`}
+            title="Marcar esta presentación como el empaque cerrado (caja) — solo puede haber una"
+          >
+            {isPackagePresentation ? "✓ empaque cerrado" : "marcar como empaque"}
+          </button>
+          <button type="button" onClick={onMarkBase} className="text-[11px] font-semibold text-[var(--color-master-700)] hover:underline">
+            marcar como base
+          </button>
+        </>
+      )}
+      {onRemove && (
+        <button type="button" onClick={onRemove} className="rounded p-1 text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)]">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 /* ─────────────────────────── Componente principal ─────────────────────────── */
 
 export function InventoryFusionManager() {
@@ -128,6 +211,7 @@ export function InventoryFusionManager() {
   const [closingGroup, setClosingGroup] = useState<FusionGroup | null>(null);
   const [unmergingGroup, setUnmergingGroup] = useState<FusionGroup | null>(null);
   const [repairingGroup, setRepairingGroup] = useState<FusionGroup | null>(null);
+  const [editingMembersGroup, setEditingMembersGroup] = useState<FusionGroup | null>(null);
 
   const loadGroups = useCallback(async () => {
     try {
@@ -237,6 +321,10 @@ export function InventoryFusionManager() {
                     <td>
                       {group.health.healthy ? (
                         <Badge variant="success">✓ Consistente</Badge>
+                      ) : group.health.issues.some((i) => i.kind === "UNIT_COLLISION" || i.kind === "DUPLICATE_FACTOR") ? (
+                        <button type="button" onClick={() => setEditingMembersGroup(group)} className="cursor-pointer" title="Unidades o factores mal definidos — click para editar">
+                          <Badge variant="warning">⚠ Unidades a corregir</Badge>
+                        </button>
                       ) : (
                         <Badge variant="warning" title={group.health.issues.map((i) => i.detail).join("; ")}>
                           ⚠ Descuadre
@@ -245,6 +333,9 @@ export function InventoryFusionManager() {
                     </td>
                     <td style={{ textAlign: "center" }}>
                       <div className="flex flex-wrap items-center justify-center gap-1.5">
+                        <Button variant="ghost" size="sm" icon={<Pencil className="h-3.5 w-3.5" />} onClick={() => setEditingMembersGroup(group)}>
+                          Editar
+                        </Button>
                         {group.tracksPackages && (
                           <Button variant="ghost" size="sm" icon={<PackageOpen className="h-3.5 w-3.5" />} onClick={() => setOpeningGroup(group)}>
                             Abrir caja
@@ -282,6 +373,16 @@ export function InventoryFusionManager() {
           onClose={() => setWizardOpen(false)}
           onCreated={async () => {
             setWizardOpen(false);
+            await loadGroups();
+          }}
+        />
+      )}
+      {editingMembersGroup && (
+        <EditMembersModal
+          group={editingMembersGroup}
+          onClose={() => setEditingMembersGroup(null)}
+          onSaved={async () => {
+            setEditingMembersGroup(null);
             await loadGroups();
           }}
         />
@@ -364,7 +465,6 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
 
   const [tracksPackages, setTracksPackages] = useState(false);
   const [packageUnit, setPackageUnit] = useState("");
-  const [factor, setFactor] = useState<number | "">("");
   const [approximateFactor, setApproximateFactor] = useState(false);
   const [autoOpenForUnitSale, setAutoOpenForUnitSale] = useState(true);
 
@@ -404,7 +504,6 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
     if (!name.trim()) setName(preset.label);
     setTracksPackages(preset.packageUnit === "KILO" || preset.approximateFactor);
     setPackageUnit(preset.packageUnit);
-    setFactor(preset.factor);
     setApproximateFactor(preset.approximateFactor);
   }
 
@@ -420,14 +519,26 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
     // agregado era el empaque, sin poder desmarcarlo — el usuario decide
     // explícitamente con el botón de cada fila, y solo importa si más
     // adelante activa "maneja empaques cerrados/sueltos" en el paso 2.
+    //
+    // `product.unit` es solo el valor INICIAL sugerido. La unidad de venta de
+    // una presentación es propia de la fusión, no del producto: si los
+    // productos de una familia comparten `unit` (caso real: cuatro productos
+    // de piedrín todos con unit="UNIDAD"), la fusión entera queda ciega si no
+    // se edita. El usuario la corrige en la fila de abajo.
+    //
+    // conversionFactor arranca en 0, no en un estado compartido: antes un
+    // solo `factor` de pantalla completa le daba el mismo número a cualquier
+    // producto agregado después, y arrancar en 1 dejaba pasar una
+    // equivalencia falsa en silencio. En 0, la validación de "Continuar"
+    // obliga a cargar cada factor a mano.
     setMembers((prev) => [
       ...prev,
       {
         productId: product.id,
         sku: product.sku,
         name: product.name,
-        saleUnit: product.unit,
-        conversionFactor: isFirst ? 1 : Number(factor || 1),
+        saleUnit: product.unit ?? "",
+        conversionFactor: isFirst ? 1 : 0,
         isCanonical: isFirst,
         isPackagePresentation: false,
       },
@@ -445,16 +556,24 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
   }
 
   function markAsBase(productId: string) {
-    // Al cambiar cuál producto es la base, los factores de los DEMÁS
-    // miembros quedan como estaban — recalcularlos automáticamente no es
-    // posible sin más info (dependen de la relación con el canónico
-    // anterior), así que se deja al usuario ajustarlos si hace falta, en vez
-    // de pisarlos en silencio con un valor compartido.
-    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, isCanonical: true, conversionFactor: 1 } : { ...m, isCanonical: false })));
+    // Cambiar cuál presentación es la base invalida TODOS los factores:
+    // estaban expresados contra la base anterior. Recalcularlos
+    // automáticamente no es posible sin más información, y arrastrarlos tal
+    // cual produce equivalencias falsas que nadie revisa. Se ponen en 0 y la
+    // validación los vuelve a pedir.
+    setMembers((prev) => prev.map((m) => (
+      m.productId === productId
+        ? { ...m, isCanonical: true, conversionFactor: 1 }
+        : { ...m, isCanonical: false, conversionFactor: 0 }
+    )));
   }
 
   function updateMemberFactor(productId: string, value: number) {
     setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, conversionFactor: value } : m)));
+  }
+
+  function updateMemberUnit(productId: string, value: string) {
+    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, saleUnit: value } : m)));
   }
 
   // Solo puede haber UN empaque cerrado a la vez — marcar uno desmarca
@@ -476,6 +595,15 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
     if (!name.trim()) { showToast("error", "Ingresá un nombre para la fusión."); return; }
     if (members.length < 2) { showToast("error", "Agregá al menos 2 productos."); return; }
     if (!canonical) { showToast("error", "Marcá cuál producto es la unidad suelta (base)."); return; }
+    if (members.some((m) => !m.saleUnit.trim())) {
+      showToast("error", "Cada presentación necesita su unidad de venta.");
+      return;
+    }
+    const collisions = findUnitCollisions(members);
+    if (collisions.length > 0) {
+      showToast("error", `Dos presentaciones no pueden venderse por la misma unidad (${collisions[0].unit}). Cambiá una.`);
+      return;
+    }
     if (members.some((m) => !m.isCanonical && !(m.conversionFactor > 0))) {
       showToast("error", "Cada presentación necesita un factor de conversión mayor que 0.");
       return;
@@ -600,47 +728,25 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
 
           <div className="space-y-2">
             {members.map((m) => (
-              <div key={m.productId} className="flex flex-wrap items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2">
-                <b className="flex-1 text-[12.5px]">{m.sku} — {m.name}</b>
-                {m.isCanonical ? (
-                  <Badge variant="info">unidad suelta (base)</Badge>
-                ) : (
-                  <>
-                    <span className="flex items-center gap-1 text-[11.5px] text-[var(--color-text-muted)]">
-                      1 {m.saleUnit || "und"} =
-                      <input
-                        type="number"
-                        min={0}
-                        step="any"
-                        value={m.conversionFactor}
-                        onChange={(e) => updateMemberFactor(m.productId, Number(e.target.value) || 0)}
-                        className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-0.5 text-right font-mono"
-                      />
-                      {canonical?.saleUnit ?? "base"}
-                    </span>
-                    {/* Fusión triple: con 3+ productos, cuál es "el empaque"
-                        (Caja) ya no se puede inferir del orden en que se
-                        agregaron — el usuario lo elige acá. Las demás
-                        presentaciones no-canónicas quedan como sueltas
-                        alternativas (ej. Libra, Unidad). */}
-                    <button
-                      type="button"
-                      onClick={() => setPackageMember(m.productId)}
-                      className={`rounded-full border px-2 py-0.5 text-[10.5px] font-semibold ${m.isPackagePresentation ? "border-[var(--color-master-500)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] text-[var(--color-text-soft)]"}`}
-                      title="Marcar esta presentación como el empaque cerrado (caja) — solo puede haber una"
-                    >
-                      {m.isPackagePresentation ? "✓ empaque cerrado" : "marcar como empaque"}
-                    </button>
-                    <button type="button" onClick={() => markAsBase(m.productId)} className="text-[11px] font-semibold text-[var(--color-master-700)] hover:underline">
-                      marcar como base
-                    </button>
-                  </>
-                )}
-                <button type="button" onClick={() => removeMember(m.productId)} className="rounded p-1 text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)]">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
+              <FusionMemberRow
+                key={m.productId}
+                sku={m.sku}
+                name={m.name}
+                saleUnit={m.saleUnit}
+                conversionFactor={m.conversionFactor}
+                isCanonical={m.isCanonical}
+                isPackagePresentation={m.isPackagePresentation}
+                canonicalSaleUnit={canonical?.saleUnit ?? ""}
+                onUnitChange={(value) => updateMemberUnit(m.productId, value)}
+                onFactorChange={(value) => updateMemberFactor(m.productId, value)}
+                onMarkBase={() => markAsBase(m.productId)}
+                onTogglePackage={() => setPackageMember(m.productId)}
+                onRemove={() => removeMember(m.productId)}
+              />
             ))}
+            <datalist id="presentation-units">
+              {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
+            </datalist>
             <div className="relative">
               <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-soft)]">
                 <Search className="h-4 w-4" />
@@ -678,6 +784,11 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
                 </li>
               ))}
             </ul>
+            {findDuplicateFactors(members).map((dup) => (
+              <p key={dup.factor} className="mt-1.5 text-[11.5px] text-[var(--color-warning-700)]">
+                ⚠ Hay {dup.productIds.length} presentaciones con el mismo factor ({dup.factor}). Revisá que sea correcto antes de confirmar.
+              </p>
+            ))}
           </div>
 
           <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-text-secondary)]">
@@ -790,6 +901,139 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
           )}
         </div>
       )}
+    </ModalShell>
+  );
+}
+
+/* ─────────────────────────── Editar presentaciones (Fase 3 — recarga) ─────────────────────────── */
+//
+// Reutiliza FusionMemberRow, el mismo campo "unidad + factor" del paso 1 del
+// asistente, con la misma validación (validateMembers ya la exige en el
+// backend; acá se repite para no dejar pasar el POST y volver con un error
+// genérico). No agrega ni quita miembros — para eso ya existen Desfusionar y
+// el asistente de creación; esto es específicamente para corregir la unidad
+// y el factor de una fusión que ya existe pero quedó mal cargada (el bug de
+// piedrín: cuatro productos con unit="UNIDAD").
+
+type EditMemberDraft = { productId: string; sku: string; name: string; saleUnit: string; conversionFactor: number; isCanonical: boolean; isPackagePresentation: boolean };
+
+function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onClose: () => void; onSaved: () => void }) {
+  const [members, setMembers] = useState<EditMemberDraft[]>(() =>
+    group.members.map((m) => ({
+      productId: m.productId,
+      sku: m.sku,
+      name: m.productName,
+      saleUnit: m.saleUnit,
+      conversionFactor: Number(m.conversionFactor),
+      isCanonical: m.isCanonical,
+      isPackagePresentation: Boolean(m.isPackagePresentation),
+    })),
+  );
+  const [saving, setSaving] = useState(false);
+
+  const canonical = members.find((m) => m.isCanonical) ?? null;
+
+  function updateUnit(productId: string, value: string) {
+    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, saleUnit: value } : m)));
+  }
+  function updateFactor(productId: string, value: number) {
+    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, conversionFactor: value } : m)));
+  }
+  function markAsBase(productId: string) {
+    // Mismo criterio que en la creación: cambiar la base invalida los
+    // factores de los demás — se ponen en 0 en vez de arrastrar equivalencias
+    // que ya no significan lo mismo.
+    setMembers((prev) => prev.map((m) => (
+      m.productId === productId
+        ? { ...m, isCanonical: true, conversionFactor: 1 }
+        : { ...m, isCanonical: false, conversionFactor: 0 }
+    )));
+  }
+  function togglePackage(productId: string) {
+    setMembers((prev) => {
+      const alreadyMarked = prev.find((m) => m.productId === productId)?.isPackagePresentation;
+      return prev.map((m) => (m.isCanonical ? m : { ...m, isPackagePresentation: !alreadyMarked && m.productId === productId }));
+    });
+  }
+
+  const collisions = findUnitCollisions(members);
+  const duplicateFactors = findDuplicateFactors(members);
+  const missingUnit = members.some((m) => !m.saleUnit.trim());
+  const missingFactor = members.some((m) => !m.isCanonical && !(m.conversionFactor > 0));
+  const canSave = collisions.length === 0 && !missingUnit && !missingFactor;
+
+  async function save() {
+    if (!canSave) {
+      if (collisions.length > 0) showToast("error", `Dos presentaciones no pueden venderse por la misma unidad (${collisions[0].unit}). Cambiá una.`);
+      else if (missingUnit) showToast("error", "Cada presentación necesita su unidad de venta.");
+      else showToast("error", "Cada presentación necesita un factor de conversión mayor que 0.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await apiFetch(`/api/inventory/stock-groups/${group.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          members: members.map((m) => ({
+            productId: m.productId,
+            saleUnit: m.saleUnit,
+            conversionFactor: m.conversionFactor,
+            isCanonical: m.isCanonical,
+            isPackagePresentation: group.tracksPackages && m.isPackagePresentation,
+          })),
+        }),
+      });
+      const raw = await readJson(res);
+      if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo guardar la fusión."); return; }
+      showToast("success", "Presentaciones actualizadas.");
+      onSaved();
+    } catch {
+      showToast("error", "Error de red al guardar.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ModalShell title={`Editar presentaciones — ${group.name}`} onClose={onClose} wide>
+      <div className="space-y-4">
+        <p className="text-[12.5px] text-[var(--color-text-muted)]">
+          Corregí la unidad de venta y el factor de cada presentación. No agrega ni quita productos de la fusión.
+        </p>
+        <div className="space-y-2">
+          {members.map((m) => (
+            <FusionMemberRow
+              key={m.productId}
+              sku={m.sku}
+              name={m.name}
+              saleUnit={m.saleUnit}
+              conversionFactor={m.conversionFactor}
+              isCanonical={m.isCanonical}
+              isPackagePresentation={m.isPackagePresentation}
+              canonicalSaleUnit={canonical?.saleUnit ?? ""}
+              onUnitChange={(value) => updateUnit(m.productId, value)}
+              onFactorChange={(value) => updateFactor(m.productId, value)}
+              onMarkBase={() => markAsBase(m.productId)}
+              onTogglePackage={() => togglePackage(m.productId)}
+            />
+          ))}
+          <datalist id="presentation-units">
+            {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
+          </datalist>
+        </div>
+
+        {duplicateFactors.map((dup) => (
+          <p key={dup.factor} className="text-[11.5px] text-[var(--color-warning-700)]">
+            ⚠ Hay {dup.productIds.length} presentaciones con el mismo factor ({dup.factor}). Revisá que sea correcto antes de guardar.
+          </p>
+        ))}
+
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>Cancelar</Button>
+          <Button variant="primary" loading={saving} disabled={!canSave} onClick={save}>Guardar cambios</Button>
+        </div>
+      </div>
     </ModalShell>
   );
 }
