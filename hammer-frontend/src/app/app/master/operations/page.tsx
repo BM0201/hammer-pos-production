@@ -471,7 +471,7 @@ export default function MasterOperationsPage() {
                 Un día que no se confirma <b className="text-[var(--color-text)]">nunca bloquea hoy ni se pierde</b> — cuando pasa su fecha sale de curso
                 y espera en la cola <Badge variant="warning">Esperando confirmación</Badge> hasta que Master lo firme, con calma, sin caducidad.
               </p>
-              <p>Sus cajas huérfanas pasan a revisión; nada se fuerza en silencio. Un ítem "en atención" no bloquea confirmar — solo pide una nota.</p>
+              <p>Sus cajas huérfanas pasan a revisión; nada se fuerza en silencio. Un ítem &ldquo;en atención&rdquo; no bloquea confirmar — solo pide una nota.</p>
             </Card>
           )}
 
