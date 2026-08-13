@@ -1105,7 +1105,7 @@ export async function updateStockGroup(id: string, input: UpdateStockGroupInput,
     }
 
     return updatedGroup;
-  });
+  }, { timeout: 20000, maxWait: 10000 });
 
   await logAuditEvent({
     actorUserId,
