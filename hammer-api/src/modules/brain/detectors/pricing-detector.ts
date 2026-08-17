@@ -4,6 +4,7 @@ import { riskScoreFor, severityForMargin } from "@/modules/brain/scoring";
 import { simulatePriceChange } from "@/modules/brain/prediction/price-simulation";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
+import { checkStockGroupPricingHealth, type FusionPricingIssueKind } from "@/modules/catalog/fusion-pricing-health";
 import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceBatch } from "@/modules/pricing/commercial-intelligence";
 import { calculatePricingSuggestion } from "@/modules/pricing/calculator";
@@ -287,6 +288,64 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
       // nuevo y por tanto una decisión duplicada del mismo producto.
       fingerprintParts: ["pricing", "scope-misconfiguration", calculation.branchId, calculation.productId],
     });
+  }
+
+  // prompt-costos-precios-fusion.md §2.3/§5 — coherencia de costo/precio en
+  // FUSIONES: COST_BASIS_CONFLICT, PRICE_BASIS_CONFLICT, PLACEHOLDER_COST y
+  // el extremo ALTO de MARGIN_OUTLIER. Los dos bloques de arriba (balance-
+  // por-balance, setting-por-setting) ya cubren margen bajo/costo>=precio,
+  // pero solo para productos con su PROPIA fila de InventoryBalance o
+  // BranchProductSetting — un miembro derivado sin override (sin fila
+  // propia de ninguna de las dos) nunca pasa por ninguno de los dos loops.
+  // checkStockGroupPricingHealth sí cubre TODOS los miembros de cada grupo,
+  // vía el mismo motor (getEffectiveProductPricingBatch) — es la única
+  // manera de que Brain vea el override desviado que "no rompe nada
+  // visible" (el caso piedrín) o el costo de relleno del canónico.
+  const activeGroups = await prisma.productStockGroup.findMany({
+    where: { isActive: true },
+    select: { id: true, code: true, name: true },
+    take: 200,
+  });
+  const severityForFusionIssue = (kind: FusionPricingIssueKind) =>
+    kind === "UNSELLABLE" || kind === "COST_BASIS_CONFLICT" || kind === "PLACEHOLDER_COST" ? "HIGH" : "MEDIUM";
+  const titleForFusionIssue = (kind: FusionPricingIssueKind) =>
+    kind === "UNSELLABLE" ? "Fusion invendible" : kind === "COST_BASIS_CONFLICT" ? "Costo inconsistente en fusion" : kind === "PRICE_BASIS_CONFLICT" ? "Precio inconsistente en fusion" : kind === "PLACEHOLDER_COST" ? "Costo de relleno en fusion" : "Margen atipico en fusion";
+  const recommendationForFusionIssue = (kind: FusionPricingIssueKind) =>
+    kind === "UNSELLABLE"
+      ? "El guard ya bloquea la venta en el mostrador — corregir costo o precio del canonico."
+      : kind === "PLACEHOLDER_COST"
+        ? "Corregir el costo del producto canonico con un valor real de adquisicion (no 0 ni 1.00)."
+        : kind === "COST_BASIS_CONFLICT"
+          ? "Los campos de costo propios de los miembros derivados quedaron obsoletos (ya no se leen para vender) — limpiarlos evita confusion en reportes."
+          : kind === "PRICE_BASIS_CONFLICT"
+            ? "Revisar si el override de precio es intencional; si no, alinearlo al precio implicito de fusion (canonico x factor)."
+            : "Revisar el costo: un margen fuera de rango casi siempre significa un costo de relleno, no un producto genuinamente asi de rentable.";
+
+  for (const group of activeGroups) {
+    const health = await checkStockGroupPricingHealth(prisma, {
+      stockGroupId: group.id,
+      branchIds: ctx.branchId ? [ctx.branchId] : undefined,
+    });
+    for (const issue of health.issues) {
+      const severity = severityForFusionIssue(issue.kind);
+      decisions.push({
+        category: "PRICING",
+        severity,
+        title: `${titleForFusionIssue(issue.kind)}: ${group.code}`,
+        description: `${group.name}: ${issue.detail}`,
+        recommendation: recommendationForFusionIssue(issue.kind),
+        branchId: issue.branchId,
+        // COST_BASIS_CONFLICT / PRICE_BASIS_CONFLICT implican varios miembros — su
+        // productId es una lista "id1, id2", no un producto único.
+        productId: issue.productId.includes(",") ? undefined : issue.productId,
+        confidenceScore: 0.8,
+        riskScore: riskScoreFor(severity, 0.8),
+        proposedActionType: `REVIEW_FUSION_${issue.kind}`,
+        evidenceJson: { stockGroupId: group.id, stockGroupCode: group.code, ...issue },
+        sourceJson: { detector: "pricing-detector", checker: "checkStockGroupPricingHealth" },
+        fingerprintParts: ["pricing", "fusion-coherence", issue.kind, group.id, issue.branchId, issue.productId],
+      });
+    }
   }
 
   return decisions;

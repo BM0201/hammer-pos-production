@@ -95,6 +95,12 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "BELOW_COST_NOT_ALLOWED") {
       return errJson("BELOW_COST_NOT_ALLOWED", "El precio no puede ser menor al costo. Corrige el costo y el precio juntos.", 409);
     }
+    if (error.message === "FUSION_COST_WRITE_NOT_ALLOWED") {
+      return errJson("FUSION_COST_WRITE_NOT_ALLOWED", "Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", 409);
+    }
+    if (error.message.startsWith("FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED:")) {
+      return errJson("FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED", error.message.replace(/^FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED:\s?/, ""), 409);
+    }
 
     // Stock errors
     if (error.message === "INSUFFICIENT_STOCK" || error.message === "INSUFFICIENT_STOCK_AT_PAYMENT") {

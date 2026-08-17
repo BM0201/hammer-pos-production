@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { formatDualStock } from "@/modules/inventory/unit-conversion";
-import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { getEffectiveProductPricing, FUSION_PRICE_OVERRIDE_THRESHOLD, relativeDeviation } from "@/modules/catalog/effective-pricing";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches } from "@/modules/catalog/product-search";
 import type { CatalogInventoryQuery, UpdateBranchProductSettingInput, MassDeleteProductsInput } from "./validators";
@@ -444,6 +444,21 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
       price: input.branchPrice,
       cost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost),
     });
+
+    // prompt-costos-precios-fusion.md §2.2: el override sigue permitido (hay
+    // razones legítimas — vender por metro más barato que por lata suelta),
+    // pero deja de ser invisible. Un desvío grande respecto al precio
+    // implícito de fusión exige confirmación explícita en vez de guardarse
+    // como "un precio suelto más".
+    if (pricing.isFusionMember && pricing.impliedFusionPrice !== null) {
+      const deviation = relativeDeviation(new Prisma.Decimal(input.branchPrice), pricing.impliedFusionPrice);
+      if (deviation !== null && deviation > FUSION_PRICE_OVERRIDE_THRESHOLD && !input.overridePriceConfirmed) {
+        const pct = Math.round(deviation * 100);
+        throw new Error(
+          `FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED: El precio implícito de esta presentación (canónico × factor) es ${pricing.impliedFusionPrice.toFixed(2)}; estás guardando ${input.branchPrice.toFixed(2)}, un ${pct}% de desvío. Confirma si es intencional.`,
+        );
+      }
+    }
   }
 
   const data = {

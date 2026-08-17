@@ -3,9 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { mapProductWithEffectivePricing, resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
-import { formatDualStock, convertBaseQtyToSaleQty } from "@/modules/inventory/unit-conversion";
+import { formatDualStock, convertBaseQtyToSaleQty, getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import type { ProductStockConversion } from "@/modules/inventory/unit-conversion";
-import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { assertPriceNotBelowCost, assertNotFusionMemberCostWrite } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
 
 type CatalogProductWithBranchPricing = {
@@ -144,22 +144,54 @@ async function batchMapProductsWithBranchInventory<TProduct extends CatalogProdu
     balanceByCanonicalId.set(bal.productId, bal);
   }
 
+  // 3. Batch-fetch the CANONICAL's own cost/price fields — solo lo necesitan
+  // los miembros derivados (isCanonical=false), pero se busca para todo
+  // canonicalIds en un solo query igual que balances. Sin esto, el costo/
+  // precio efectivo de un miembro derivado seguía saliendo de sus propios
+  // campos (el bug de fondo: prompt-costos-precios-fusion.md §1/§2.1).
+  const [canonicalProducts, canonicalSettings] = await Promise.all([
+    prisma.product.findMany({
+      where: { id: { in: Array.from(canonicalIds) } },
+      select: { id: true, standardSalePrice: true, globalCost: true, averageCost: true, lastPurchaseCost: true },
+    }),
+    prisma.branchProductSetting.findMany({
+      where: { branchId, productId: { in: Array.from(canonicalIds) } },
+      select: { branchId: true, productId: true, branchCost: true, branchPrice: true },
+    }),
+  ]);
+  const canonicalProductById = new Map(canonicalProducts.map((p) => [p.id, p]));
+  const canonicalSettingById = new Map(canonicalSettings.map((s) => [s.productId, s]));
+
   return products.map((product) => {
     const conversion = conversionByProductId.get(product.id) ?? null;
     const canonicalId = conversion?.canonicalProductId ?? product.id;
     const balance = balanceByCanonicalId.get(canonicalId) ?? null;
-    return mapSingleProductWithBranchInventory(product, branchId, conversion, balance);
+    const canonicalProduct = conversion && !conversion.isCanonical ? canonicalProductById.get(canonicalId) ?? null : null;
+    const canonicalSetting = conversion && !conversion.isCanonical ? canonicalSettingById.get(canonicalId) ?? null : null;
+    return mapSingleProductWithBranchInventory(product, branchId, conversion, balance, canonicalProduct, canonicalSetting);
   });
 }
+
+type CanonicalCostRow = {
+  id: string;
+  standardSalePrice: Prisma.Decimal;
+  globalCost: Prisma.Decimal | null;
+  averageCost: Prisma.Decimal | null;
+  lastPurchaseCost: Prisma.Decimal | null;
+};
+type CanonicalBranchSettingRow = { branchId: string; productId: string; branchCost: Prisma.Decimal | null; branchPrice: Prisma.Decimal | null };
 
 export function mapSingleProductWithBranchInventory<TProduct extends CatalogProductWithBranchPricing>(
   product: TProduct,
   branchId: string,
   conversion: ProductStockConversion | null,
   balance: InventoryBalanceRow | null,
+  canonicalProduct: CanonicalCostRow | null = null,
+  canonicalBranchSetting: CanonicalBranchSettingRow | null = null,
 ) {
   // Effective pricing from already-fetched branchProductSettings + inventoryBalances
   const branchSetting = product.branchProductSettings?.find((s) => s.branchId === branchId);
+  const isFusionMember = Boolean(conversion && !conversion.isCanonical);
   const saleUnitWac = balance?.weightedAverageCost && conversion
     ? balance.weightedAverageCost.mul(conversion.conversionFactor)
     : balance?.weightedAverageCost ?? null;
@@ -173,6 +205,18 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
     branchPrice: branchSetting?.branchPrice ?? null,
     branchCost: branchSetting?.branchCost ?? null,
     weightedAverageCost: saleUnitWac,
+    fusion: isFusionMember && conversion && canonicalProduct
+      ? {
+          conversionFactor: conversion.conversionFactor,
+          canonicalBranchCost: canonicalBranchSetting?.branchCost ?? null,
+          canonicalAverageCost: canonicalProduct.averageCost,
+          canonicalGlobalCost: canonicalProduct.globalCost,
+          canonicalLastPurchaseCost: canonicalProduct.lastPurchaseCost,
+          canonicalBaseWeightedAverageCost: balance?.weightedAverageCost ?? null,
+          canonicalBranchPrice: canonicalBranchSetting?.branchPrice ?? null,
+          canonicalStandardSalePrice: canonicalProduct.standardSalePrice,
+        }
+      : null,
   });
 
   const mapped = mapProductWithEffectivePricing(product, branchId);
@@ -225,9 +269,8 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
 
   return {
     ...mapped,
+    ...effective,
     categoryName: product.category?.name ?? null,
-    effectiveCost: effective.effectiveCost,
-    weightedAverageCost: effective.weightedAverageCost,
     stockOnHand: displaySaleStock,
     availableStock: displaySaleStock,
     availableBaseStock: balance?.quantityOnHand.toNumber() ?? fallbackQty,
@@ -574,6 +617,15 @@ export async function updateProduct(productId: string, input: {
     select: { id: true, sku: true, categoryId: true, category: { select: { name: true } }, standardSalePrice: true, globalCost: true },
   });
   if (!previous) throw new Error("NOT_FOUND");
+
+  // prompt-costos-precios-fusion.md §2.1: el costo de un miembro DERIVADO de
+  // una fusión vive en el canónico, no en el miembro. Cargarlo acá lo
+  // volvería a pisar en silencio (el bug de fondo: la LATA DE ARENA con
+  // globalCost=1.00 tapando el WAC real del canónico). Se rechaza con
+  // mensaje, no se permite "por si acaso" — igual en import-service.ts.
+  if (input.globalCost !== undefined && input.globalCost !== null) {
+    assertNotFusionMemberCostWrite(await getProductStockConversion(prisma, productId));
+  }
 
   // Auditoría 2026-07-22 (ALTO Catálogo): bloqueo de precio bajo costo,
   // ausente hasta ahora en la edición de producto global.

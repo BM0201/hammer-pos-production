@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { assertPriceNotBelowCost, assertNotFusionMemberCostWrite } from "@/modules/pricing/price-guard";
 
 /**
  * Auditoría 2026-07-22 (ALTO Catálogo): faltaba el bloqueo de "precio bajo
@@ -33,4 +33,25 @@ test("costo cero: no bloquea (evita falsos positivos de productos con costo 0 en
 
 test("sin precio en el cambio (undefined): no bloquea — este cambio no toca el precio", () => {
   assert.doesNotThrow(() => assertPriceNotBelowCost({ price: undefined, cost: 100 }));
+});
+
+/**
+ * prompt-costos-precios-fusion.md §2.1/§5 prueba 4 — "Intento de guardar un
+ * costo sobre un miembro derivado → se rechaza indicando que va en el
+ * canónico". Sin excepción: ni edición de producto ni importación Excel
+ * pueden escribir costo en un miembro derivado.
+ */
+test("miembro derivado de una fusión (isCanonical=false): rechaza el intento de cargar costo", () => {
+  assert.throws(
+    () => assertNotFusionMemberCostWrite({ isCanonical: false }),
+    /FUSION_COST_WRITE_NOT_ALLOWED/,
+  );
+});
+
+test("canónico (isCanonical=true): permite cargar costo — es la base legítima de la fusión", () => {
+  assert.doesNotThrow(() => assertNotFusionMemberCostWrite({ isCanonical: true }));
+});
+
+test("producto sin fusión (conversion=null): permite cargar costo con normalidad", () => {
+  assert.doesNotThrow(() => assertNotFusionMemberCostWrite(null));
 });

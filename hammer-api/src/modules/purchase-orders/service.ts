@@ -158,19 +158,16 @@ export async function updateGlobalProductCostForReceiptTx(
     },
   });
 
-  if (resolution.inventoryProductId !== input.productId) {
-    await tx.product.update({
-      where: { id: input.productId },
-      data: {
-        globalCost: input.receivedUnitCost,
-        averageCost: input.receivedUnitCost,
-        lastPurchaseCost: input.receivedUnitCost,
-        costUpdatedAt: new Date(),
-        costSource: "PURCHASE_RECEIPT",
-        costUpdatedByUserId: input.actorUserId,
-      },
-    });
-  }
+  // prompt-costos-precios-fusion.md §1/§2.1: antes esto ESCRIBÍA además el
+  // costo crudo recibido (en la unidad de venta de la LÍNEA, sin normalizar)
+  // directo sobre el Product del miembro derivado — la causa real, no solo
+  // "alguien lo tecleó a mano", del desfase 18.6× del ejemplo de arena:
+  // recibir una PO de "LATA DE ARENA" a C$1.00 dejaba globalCost=1.00 en ese
+  // Product, y esa lectura le ganaba en prioridad al WAC del canónico. El
+  // costo de un miembro derivado ahora se resuelve SIEMPRE desde el
+  // canónico (resolveEffectivePricing), así que no hay nada que escribir
+  // acá — el update de arriba sobre resolution.inventoryProductId (el
+  // canónico) ya es la única fuente de verdad.
 
   await tx.auditLog.create({
     data: {

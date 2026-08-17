@@ -22,3 +22,17 @@ export function assertPriceNotBelowCost(input: {
     throw error;
   }
 }
+
+/**
+ * prompt-costos-precios-fusion.md §2.1: el costo de un miembro DERIVADO de
+ * una fusión vive en el canónico, nunca en el miembro. Se rechaza la carga
+ * a mano en vez de tolerarla — es exactamente el mecanismo que produjo el
+ * desfase de 18.6× del ejemplo de arena (un globalCost de relleno en la
+ * LATA le ganaba en prioridad al WAC correcto del canónico). Sin excepción:
+ * ni edición de producto, ni importación Excel, pueden escribir costo aquí.
+ */
+export function assertNotFusionMemberCostWrite(conversion: { isCanonical: boolean } | null | undefined): void {
+  if (conversion && !conversion.isCanonical) {
+    throw new Error("FUSION_COST_WRITE_NOT_ALLOWED");
+  }
+}

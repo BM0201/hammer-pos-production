@@ -20,6 +20,10 @@ export const updateBranchProductSettingSchema = z.object({
   minPrice: z.coerce.number().nonnegative().optional().nullable(),
   wholesalePrice: z.coerce.number().nonnegative().optional().nullable(),
   marginPercent: z.coerce.number().optional().nullable(),
+  /** prompt-costos-precios-fusion.md §2.2: confirma un override de precio en
+   * un miembro derivado que se desvía del precio implícito de fusión más
+   * allá del umbral (FUSION_PRICE_OVERRIDE_THRESHOLD). */
+  overridePriceConfirmed: z.boolean().optional(),
 }).refine((data) => Object.keys(data).some((key) => !["branchId", "productId"].includes(key)), {
   message: "Debes enviar al menos un campo configurable.",
 });

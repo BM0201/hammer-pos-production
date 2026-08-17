@@ -5,7 +5,8 @@ import { readCsvContent, readExcelBase64 } from "@/modules/import-excel/excel-re
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { assertPriceNotBelowCost, assertNotFusionMemberCostWrite } from "@/modules/pricing/price-guard";
+import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
 
 export const INVENTORY_IMPORT_BATCH_STATUS = {
   UPLOADED: "UPLOADED",
@@ -1005,6 +1006,17 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
           }
 
           if ((importType === "BRANCH_PRICES_COSTS" || importType === "GLOBAL_PRICES_COSTS") && line.targetBranchId && (unitCost !== null || standardSalePrice !== null)) {
+            // prompt-costos-precios-fusion.md §2.1: el costo de un miembro
+            // DERIVADO de una fusión vive en el canónico — cargarlo acá lo
+            // pisaría en silencio otra vez, igual que updateProduct. El
+            // precio SÍ se permite (es un override legítimo, §2.2).
+            if (unitCost !== null) {
+              try {
+                assertNotFusionMemberCostWrite(await getProductStockConversion(tx, product.id));
+              } catch {
+                throw new ImportLineExecutionError("Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", line.id, line.rowNumber);
+              }
+            }
             const pricing = await getEffectiveProductPricing(tx, { branchId: line.targetBranchId, productId: product.id });
             const nextPrice = standardSalePrice ?? (pricing.branchPrice === null ? null : Number(pricing.branchPrice));
             const nextCost = unitCost ?? (pricing.effectiveCost === null ? null : Number(pricing.effectiveCost));

@@ -131,3 +131,85 @@ test("updateGlobalProductCostForReceiptTx: el costo global recién actualizado e
   // getEffectiveProductPricing lee como costo efectivo para CUALQUIER sucursal
   // que no tenga su propio branchCost — así el precio de compra queda unificado.
 });
+
+test("updateGlobalProductCostForReceiptTx: recibir un miembro DERIVADO de una fusión ya NO escribe costo en su propio Product (prompt-costos-precios-fusion.md §1/§2.1)", async () => {
+  // Antes de este fix, recibir una PO de "METRO DE ARENA" a C$1.00/metro
+  // escribía ADEMÁS globalCost=1.00 directo sobre el Product del METRO — el
+  // origen real (no solo "alguien lo tecleó a mano") del desfase 18.6x del
+  // ejemplo de arena del doc: esa lectura le ganaba en prioridad al WAC
+  // correcto del canónico. Ahora el costo de un miembro derivado se resuelve
+  // SIEMPRE desde el canónico, así que no debe haber ESCRITURA sobre el
+  // Product del miembro derivado — solo sobre el canónico.
+  const canonicalId = "prod-lata-arena";
+  const derivedId = "prod-metro-arena";
+  const groupProducts = [
+    { productId: canonicalId, isCanonical: true, conversionFactor: new Prisma.Decimal(1) },
+    { productId: derivedId, isCanonical: false, conversionFactor: new Prisma.Decimal(25) },
+  ];
+  const memberRow = (productId: string) => {
+    if (productId === canonicalId) {
+      return { productId, saleUnit: "LATA", conversionFactor: new Prisma.Decimal(1), isCanonical: true, isPackagePresentation: false, isActive: true };
+    }
+    if (productId === derivedId) {
+      return { productId, saleUnit: "METRO", conversionFactor: new Prisma.Decimal(25), isCanonical: false, isPackagePresentation: false, isActive: true };
+    }
+    return null;
+  };
+  const canonicalProduct = { id: canonicalId, globalCost: null as Prisma.Decimal | null, averageCost: null as Prisma.Decimal | null, lastPurchaseCost: null as Prisma.Decimal | null };
+  const productUpdates: Array<{ id: string; data: Record<string, unknown> }> = [];
+
+  const tx = {
+    productStockGroupMember: {
+      findFirst: async ({ where }: { where: { productId: string } }) => {
+        const member = memberRow(where.productId);
+        if (!member) return null;
+        return {
+          ...member,
+          stockGroupId: "group-arena",
+          stockGroup: {
+            id: "group-arena", code: "ARENA", name: "Arena",
+            baseUnit: "LATA", packageUnit: null, conversionFactorToBase: null,
+            tracksPackages: false, approximateFactor: false,
+            minimumClosedPackageReserve: new Prisma.Decimal(1), autoOpenForUnitSale: true,
+            products: groupProducts,
+          },
+        };
+      },
+    },
+    product: {
+      findUniqueOrThrow: async ({ where }: { where: { id: string } }) => {
+        assert.equal(where.id, canonicalId); // solo se CONSULTA el canónico
+        return { ...canonicalProduct };
+      },
+      update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        productUpdates.push({ id: where.id, data });
+        if (where.id === canonicalId) Object.assign(canonicalProduct, data);
+        return { ...canonicalProduct };
+      },
+    },
+    inventoryBalance: {
+      aggregate: async ({ where }: { where: { productId: string } }) => {
+        assert.equal(where.productId, canonicalId);
+        return { _sum: { quantityOnHand: new Prisma.Decimal(0) } };
+      },
+    },
+    auditLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => data,
+    },
+  };
+
+  await updateGlobalProductCostForReceiptTx(tx as unknown as Prisma.TransactionClient, {
+    actorUserId: "user-1",
+    branchId: "branch-a",
+    productId: derivedId, // se recibió la línea del METRO, no de la LATA
+    purchaseOrderId: "po-1",
+    purchaseOrderLineId: "line-1",
+    receivedQuantity: new Prisma.Decimal(1), // 1 metro
+    receivedUnitCost: new Prisma.Decimal(1), // C$1.00/metro — el valor de relleno del ejemplo del doc
+  });
+
+  // Solo UN update de Product, sobre el canónico — antes del fix eran dos
+  // (canónico + el METRO derivado, con globalCost=1.00 puesto ahí a mano).
+  assert.equal(productUpdates.length, 1);
+  assert.equal(productUpdates[0].id, canonicalId);
+});
