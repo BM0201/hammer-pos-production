@@ -14,6 +14,7 @@ import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-servi
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 import { resolveCancellationCashPlan, type CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
+import { bumpBankAccountUsageTx } from "@/modules/treasury/service";
 
 type DirectSaleTenderInput = {
   method: PaymentMethod;
@@ -21,6 +22,8 @@ type DirectSaleTenderInput = {
   receivedAmount?: number | null;
   changeAmount?: number | null;
   referenceNumber?: string | null;
+  /** Solo TRANSFER — a qué cuenta propia entró (correccion-destino-y-pantalla-cobro.md §2.2). */
+  bankAccountId?: string | null;
 };
 
 // FIX BUG-010: Use crypto-random suffix instead of Date.now() to prevent collisions
@@ -970,8 +973,10 @@ export async function submitDirectSale(input: {
         receivedAmount: tender.receivedAmount === null || tender.receivedAmount === undefined ? null : new Prisma.Decimal(tender.receivedAmount),
         changeAmount: tender.changeAmount === null || tender.changeAmount === undefined ? null : new Prisma.Decimal(tender.changeAmount),
         referenceNumber: tender.referenceNumber ?? null,
+        bankAccountId: tender.method === PaymentMethod.TRANSFER ? tender.bankAccountId ?? null : null,
       })),
     });
+    await bumpBankAccountUsageTx(tx, tenderSummary.tenders.filter((t) => t.method === PaymentMethod.TRANSFER).map((t) => t.bankAccountId));
 
     // Auto-dispatch if dispatch module is also disabled
     if (!branchConfig.enableDispatch) {

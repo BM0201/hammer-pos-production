@@ -5,6 +5,7 @@ import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
 import { resolveOperationalDayForOperationTx, refreshOperationalDaySummaryTx, getOperationalWindowForNow, businessDateFromNow } from "@/modules/operations/service";
 import { resolveAutoCloseReview } from "@/modules/cash-session/review-policy";
 import { cashMovementsNetTotal, computeExpectedCash } from "@/modules/cash-session/expected-cash";
+import { createAutoDefaultedDeclarationTx } from "@/modules/treasury/service";
 
 function toDecimal(value: number): Prisma.Decimal {
   return new Prisma.Decimal(value);
@@ -679,6 +680,18 @@ export async function reviewAutoClosedCashSession(input: {
       },
     });
     await refreshOperationalDaySummaryTx(tx, session.operationalDayId);
+
+    // prompt-pantallas-recorrido-dinero.md §3, "El cierre automático": la
+    // sesión recién obtuvo un countedCashAmount real por primera vez (al
+    // auto-cerrarse nadie contó nada). Si todavía no hay declaración de
+    // destino para esta caja, se crea una auto-defaulted con todo en
+    // Retener — la verdad física — reemplazable después por la real.
+    await createAutoDefaultedDeclarationTx(tx, {
+      cashSessionId: session.id,
+      branchId: session.physicalCashBox.branchId,
+      countedCashAmount: countedCash,
+      actorUserId: input.actorUserId,
+    });
 
     await tx.auditLog.create({
       data: {

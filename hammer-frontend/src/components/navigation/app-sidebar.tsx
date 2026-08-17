@@ -47,6 +47,8 @@ import {
   Merge,
   ScrollText,
   ReceiptText,
+  Camera,
+  PiggyBank,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -104,9 +106,11 @@ const MASTER_NAV: NavSection[] = [
     items: [
       { href: "/app/master/users", label: "RRHH", icon: Users, capabilities: [CAPABILITIES.MASTER_USERS_VIEW, CAPABILITIES.MASTER_USERS_MANAGE] },
       { href: "/app/master/finance", label: "Finanzas & Contabilidad", icon: Landmark, capabilities: [CAPABILITIES.FINANCE_VIEW, CAPABILITIES.PRICING_VIEW] },
+      { href: "/app/master/treasury", label: "Tesorería", icon: PiggyBank, capabilities: [CAPABILITIES.TREASURY_MANAGE] },
       { href: "/app/master/branches", label: "Sucursales", icon: Building2, capabilities: [CAPABILITIES.MASTER_ACCESS] },
       { href: "/app/master/approvals", label: "Aprobaciones", icon: ShieldCheck, capabilities: [CAPABILITIES.APPROVAL_REQUEST_REVIEW] },
       { href: "/app/master/security", label: "Security Center", icon: Shield, capabilities: [CAPABILITIES.MASTER_ACCESS] },
+      { href: "/app/master/cameras", label: "Cámaras", icon: Camera, capabilities: [CAPABILITIES.MASTER_CAMERAS_VIEW] },
       { href: "/app/master/audit", label: "Auditoría", icon: ScrollText, capabilities: [CAPABILITIES.AUDIT_VIEW] },
       { href: "/app/master/settings/print", label: "Impresión", icon: Printer },
     ],
@@ -332,6 +336,18 @@ export function AppSidebar({
   }, []);
   useOperationalPolling({ enabled: isMaster, intervalMs: 60_000, task: fetchPendingReviewDays });
 
+  // Contador de cámaras en falla (módulo Cámaras, prompt §4.2) — snapshot
+  // ligero, nunca el estado en vivo: se recalcula tras cada heartbeat.
+  const [camerasFailingCount, setCamerasFailingCount] = useState(0);
+  const fetchCamerasSummary = useCallback(async () => {
+    const res = await apiFetch("/api/master/cameras/summary");
+    if (!res.ok) return;
+    const raw = await res.json();
+    const data = unwrapApiData(raw) as { failingCount: number };
+    setCamerasFailingCount(data.failingCount ?? 0);
+  }, []);
+  useOperationalPolling({ enabled: isMaster, intervalMs: 60_000, task: fetchCamerasSummary });
+
   /* ── Rail behavior: always starts collapsed, user expands temporarily ── */
   const [collapsed, setCollapsed] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -478,7 +494,11 @@ export function AppSidebar({
               {section.items.map((item) => {
                 const active = item.href === activeHref;
                 const Icon = item.icon;
-                const pendingBadge = item.href === "/app/master/operations" ? pendingReviewDaysCount : 0;
+                const pendingBadge = item.href === "/app/master/operations"
+                  ? pendingReviewDaysCount
+                  : item.href === "/app/master/cameras"
+                    ? camerasFailingCount
+                    : 0;
                 return (
                   <div key={item.href} className="relative sidebar-nav-item">
                     <Link

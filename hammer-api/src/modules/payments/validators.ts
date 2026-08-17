@@ -8,6 +8,7 @@ export const paymentTenderSchema = z.object({
   receivedAmount: positiveMoneySchema.optional().nullable(),
   changeAmount: z.coerce.number().min(0).optional().nullable(),
   referenceNumber: z.string().max(100).optional().nullable(),
+  bankAccountId: z.string().cuid().optional().nullable(),
 });
 
 export const postPaymentSchema = z.object({

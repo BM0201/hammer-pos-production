@@ -5,13 +5,14 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { Route } from "next";
 import {
-  LayoutDashboard, Receipt, Calculator, Users, Truck, BarChart3, Settings, ArrowRight, Info,
+  LayoutDashboard, Receipt, Calculator, Users, Truck, BarChart3, Settings, ArrowRight, Info, Landmark,
 } from "lucide-react";
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ExpenseManager } from "@/components/expenses/expense-manager";
 import { FinanceSummaryPanel } from "@/components/finance/finance-summary-panel";
 import { PayrollFinancePanel } from "@/components/finance/payroll-finance-panel";
+import { BanksTreasuryPanel } from "@/components/finance/banks-treasury-panel";
 
 /**
  * Finanzas & Contabilidad — contenedor principal.
@@ -26,13 +27,14 @@ import { PayrollFinancePanel } from "@/components/finance/payroll-finance-panel"
  * Planilla ya vive en payroll-finance-panel.tsx (Planilla V2).
  */
 
-type FinanceTabKey = "summary" | "expenses" | "pricing" | "payroll" | "freight" | "reports" | "config";
+type FinanceTabKey = "summary" | "expenses" | "pricing" | "payroll" | "freight" | "banks" | "reports" | "config";
 
 export function FinanceAccountingManager() {
   const sessionState = useSession();
   const session = sessionState.status === "authenticated" ? sessionState.session : null;
   // La planilla expone salarios → solo con permiso explícito (caja/sales no la ven).
   const canViewPayroll = Boolean(session && canInAnyAssignedBranch(session, CAPABILITIES.FINANCE_VIEW_PAYROLL));
+  const canManageTreasury = Boolean(session && canInAnyAssignedBranch(session, CAPABILITIES.TREASURY_MANAGE));
 
   const searchParams = useSearchParams();
   // Los cortes quincenales viven DENTRO de Planilla (tab "Cortes Quincenales"
@@ -50,13 +52,16 @@ export function FinanceAccountingManager() {
     if (canViewPayroll) {
       base.push({ key: "payroll", label: "Planilla", icon: Users });
     }
+    base.push({ key: "freight", label: "Fletes / costos internos", icon: Truck });
+    if (canManageTreasury) {
+      base.push({ key: "banks", label: "Bancos y efectivo", icon: Landmark });
+    }
     base.push(
-      { key: "freight", label: "Fletes / costos internos", icon: Truck },
       { key: "reports", label: "Reportes", icon: BarChart3 },
       { key: "config", label: "Configuración", icon: Settings },
     );
     return base;
-  }, [canViewPayroll]);
+  }, [canViewPayroll, canManageTreasury]);
 
   const initialTab: FinanceTabKey = tabs.some((t) => t.key === requestedTab) ? requestedTab : "summary";
   const [activeTab, setActiveTab] = useState<FinanceTabKey>(initialTab);
@@ -111,6 +116,8 @@ export function FinanceAccountingManager() {
           y la tabla viven dentro del panel; los tabs Calcular Nómina / Préstamos /
           Historial se reutilizan de EmployeeManager con tab fijo. */}
       {activeTab === "payroll" && canViewPayroll && <PayrollFinancePanel />}
+
+      {activeTab === "banks" && canManageTreasury && <BanksTreasuryPanel />}
 
       {activeTab === "reports" && (
         <div className="space-y-3">

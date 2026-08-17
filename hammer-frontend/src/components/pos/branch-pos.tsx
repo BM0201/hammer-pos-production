@@ -65,8 +65,6 @@ export function BranchPos({ branchId }: { branchId: string }) {
     branchConfig,
     activeCashSessionId,
     hasOpenCashSession,
-    paymentMethod,
-    setPaymentMethod,
     canSendToCashier,
     canCollectHere,
   } = usePosCashContext(branchId);
@@ -79,8 +77,10 @@ export function BranchPos({ branchId }: { branchId: string }) {
 
   const onNoticeError = useCallback((msg: string) => setNoticeTimed(msg, 10000), [setNoticeTimed]);
 
-  const { printModalOrderId, setPrintModalOrderId, printModalOrderNumber, setPrintModalOrderNumber, autoPrintCompletedOrder } =
-    usePosPrint(branchId, onNoticeError);
+  const {
+    printModalOrderId, setPrintModalOrderId, printModalOrderNumber, setPrintModalOrderNumber,
+    printModalTenders, setPrintModalTenders, autoPrintCompletedOrder,
+  } = usePosPrint(branchId, onNoticeError);
 
   const {
     search, setSearch, products, productGroups, loadingProducts, showingTopSelling,
@@ -107,13 +107,12 @@ export function BranchPos({ branchId }: { branchId: string }) {
     isSubmittingPayment, includeTransport, setIncludeTransport,
     transportAmount, setTransportAmount, transportTouched, setTransportTouched,
     transportAmountValue, transportValidationError,
-    referenceNumber, setReferenceNumber,
     completeTicket,
   } = usePosCheckout({
     order, ticketLines, reloadOrder,
     canSendToCashier, canCollectHere, activeCashSessionId,
-    paymentMethod, branchConfig, loadRealtimeSummary,
-    autoPrintCompletedOrder, setPrintModalOrderId, setPrintModalOrderNumber,
+    branchConfig, loadRealtimeSummary,
+    autoPrintCompletedOrder, setPrintModalOrderId, setPrintModalOrderNumber, setPrintModalTenders,
     onNotice: (msg, ms) => setNoticeTimed(msg, ms),
     onCompleted: () => {
       setSearch("");
@@ -523,11 +522,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
         open={chargeDialogOpen}
         onClose={() => setChargeDialogOpen(false)}
         total={displayedTotalAmount}
-        paymentMethod={paymentMethod}
-        setPaymentMethod={setPaymentMethod}
-        referenceNumber={referenceNumber}
-        setReferenceNumber={setReferenceNumber}
-        onConfirm={(cashDetail) => completeTicket("DIRECT", cashDetail)}
+        branchId={branchId}
+        onConfirm={(tenders) => completeTicket("DIRECT", tenders)}
         isSubmitting={isSubmittingPayment}
       />
 
@@ -535,9 +531,11 @@ export function BranchPos({ branchId }: { branchId: string }) {
         <PrintModal
           orderId={printModalOrderId}
           orderNumber={printModalOrderNumber}
+          tenders={printModalTenders}
           onClose={() => {
             setPrintModalOrderId(null);
             setPrintModalOrderNumber("");
+            setPrintModalTenders(null);
           }}
         />
       ) : null}

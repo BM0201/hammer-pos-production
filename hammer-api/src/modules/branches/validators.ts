@@ -20,6 +20,9 @@ export const updateBranchSchema = z.object({
   isActive: z.boolean().optional(),
   enableCashier: z.boolean().optional(),
   enableDispatch: z.boolean().optional(),
+  /// Fondo de caja: lo que la sesión debería poder abrir al día siguiente
+  /// (correccion-destino-y-pantalla-cobro.md §1.1). null = lo quita.
+  cashFundAmount: z.coerce.number().min(0).nullable().optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: "Debe enviar al menos un campo para actualizar.",
 });

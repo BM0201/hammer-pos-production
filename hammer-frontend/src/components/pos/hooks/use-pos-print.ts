@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
 import { openPrintableDocument, recordPrintAudit } from "@/lib/printing";
+import type { ComposedTender } from "@/components/payments/payment-composer";
 
 type PrintSettings = { autoPrintTicket?: boolean; autoPrintDelivery?: boolean };
 // Only the fields autoPrintCompletedOrder actually reads — compatible with TicketOrder.
@@ -12,6 +13,10 @@ export function usePosPrint(branchId: string, onPrintError: (msg: string) => voi
   const [printSettings, setPrintSettings] = useState<PrintSettings | null>(null);
   const [printModalOrderId, setPrintModalOrderId] = useState<string | null>(null);
   const [printModalOrderNumber, setPrintModalOrderNumber] = useState<string>("");
+  // Para la Pantalla 2 (post-cobro): el vuelto y el desglose por medio se
+  // muestran ahí, no desaparecen al confirmar
+  // (prompt-pantallas-recorrido-dinero.md §Pantalla 2).
+  const [printModalTenders, setPrintModalTenders] = useState<ComposedTender[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,6 +52,8 @@ export function usePosPrint(branchId: string, onPrintError: (msg: string) => voi
     setPrintModalOrderId,
     printModalOrderNumber,
     setPrintModalOrderNumber,
+    printModalTenders,
+    setPrintModalTenders,
     autoPrintCompletedOrder,
   };
 }

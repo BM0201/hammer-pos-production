@@ -23,13 +23,18 @@ export async function GET() {
               some: { userId: session.userId, isActive: true },
             },
           },
-      select: { id: true, code: true, name: true, isActive: true, isDefaultSupplier: true },
+      select: { id: true, code: true, name: true, isActive: true, isDefaultSupplier: true, cashFundAmount: true },
       orderBy: { name: "asc" },
     });
 
+    // cashFundAmount viaja como number: el cajero lo necesita en vivo para
+    // ver el desglose fondo/pendiente al declarar destino del efectivo
+    // (prompt-pantallas-recorrido-dinero.md §3).
+    const withNumericFund = branches.map((b) => ({ ...b, cashFundAmount: b.cashFundAmount === null ? null : Number(b.cashFundAmount) }));
+
     // Near-static reference data fetched by ~18 screens; 5 min private browser
     // cache (never shared/CDN) cuts repeat invocations without cross-user risk.
-    return okCached(branches, 300);
+    return okCached(withNumericFund, 300);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

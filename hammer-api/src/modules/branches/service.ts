@@ -206,6 +206,7 @@ export async function updateMasterBranch(branchId: string, input: UpdateBranchIn
     const branchData: Prisma.BranchUpdateInput = {};
     if (typeof input.name === "string") branchData.name = input.name.trim();
     if (typeof input.isActive === "boolean") branchData.isActive = input.isActive;
+    if (input.cashFundAmount !== undefined) branchData.cashFundAmount = input.cashFundAmount;
 
     if (Object.keys(branchData).length > 0) {
       await tx.branch.update({

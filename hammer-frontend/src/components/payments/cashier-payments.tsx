@@ -5,14 +5,14 @@ import Link from "next/link";
 import type { Route } from "next";
 import { useCashSessionStatus } from "@/lib/client/use-cash-session-status";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { showToast } from "@/components/ui/toast";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
 import { apiFetch } from "@/lib/client/api";
 import { PrintModal } from "@/components/print/print-modal";
+import { PaymentComposer, type ComposedTender, type BankAccountOption } from "@/components/payments/payment-composer";
+import { unwrapApiData } from "@/lib/client/api";
 import "@/styles/responsive.css";
 
 type OrderLine = {
@@ -40,19 +40,25 @@ type PendingOrder = {
 export function CashierPayments({ branchId }: { branchId: string }) {
   const [orders, setOrders] = useState<PendingOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string>("");
-  const [method, setMethod] = useState("CASH");
-  const [referenceNumber, setReferenceNumber] = useState("");
   const [message, setMessage] = useState<string>("");
   // FASE 3: el estado de la sesión de caja se lee en modo solo-lectura.
   // El control de apertura/cierre de caja vive ahora en la pantalla "Caja".
   const { state: cashSessionState, cashBoxLabel, operatorRequired, requiresCashBoxSelection } = useCashSessionStatus(branchId);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingOrders, setIsLoadingOrders] = useState(true);
-  const referenceRef = useRef<HTMLInputElement | null>(null);
+  const [bankAccounts, setBankAccounts] = useState<BankAccountOption[]>([]);
+
+  useEffect(() => {
+    apiFetch(`/api/master/treasury/bank-accounts?branchId=${branchId}&forPayments=true`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw) => setBankAccounts(raw ? (unwrapApiData(raw) as BankAccountOption[]) : []))
+      .catch(() => setBankAccounts([]));
+  }, [branchId]);
 
   // ── Print Modal (FASE 3) ──
   const [printModalOrderId, setPrintModalOrderId] = useState<string | null>(null);
   const [printModalOrderNumber, setPrintModalOrderNumber] = useState<string>("");
+  const [printModalTenders, setPrintModalTenders] = useState<ComposedTender[] | null>(null);
 
   const selectedOrderIdRef = useRef(selectedOrderId);
   useEffect(() => {
@@ -104,20 +110,17 @@ export function CashierPayments({ branchId }: { branchId: string }) {
 
   const selected = useMemo(() => orders.find((order) => order.id === selectedOrderId), [orders, selectedOrderId]);
 
-  const referenceRequired = method === "CARD" || method === "TRANSFER";
-
   const canSubmitPayment = Boolean(
     selected
     && cashSessionState.hasOpenSession
     && cashSessionState.cashSessionId
-    && !isSubmitting
-    && (!referenceRequired || referenceNumber.trim() !== ""),
+    && !isSubmitting,
   );
 
   /** Track recently-paid order IDs to prevent duplicate submissions from rapid clicks */
   const recentlyPaidRef = useRef<Set<string>>(new Set());
 
-  const paySelected = useCallback(async () => {
+  const paySelected = useCallback(async (tenders: ComposedTender[]) => {
     if (!selected || isSubmitting) return;
 
     // Double-payment guard: prevent submitting the same order within short timeframe
@@ -145,11 +148,6 @@ export function CashierPayments({ branchId }: { branchId: string }) {
       return;
     }
 
-    if (referenceRequired && !referenceNumber.trim()) {
-      showToast("warning", "El método de pago seleccionado requiere un número de referencia. Ingresa el número antes de cobrar.");
-      return;
-    }
-
     const orderId = selected.id;
 
     recentlyPaidRef.current.add(orderId);
@@ -163,9 +161,11 @@ export function CashierPayments({ branchId }: { branchId: string }) {
         body: JSON.stringify({
           saleOrderId: orderId,
           cashSessionId: cashSessionState.cashSessionId,
-          method,
           amount: Number(selected.grandTotal),
-          referenceNumber: referenceNumber.trim() || null,
+          // postPaymentSchema exige `method` aunque vengan tenders —
+          // normalizeTenders igual lo recalcula a partir del arreglo.
+          method: tenders.length > 1 ? "MIXED" : tenders[0].method,
+          tenders,
         }),
       });
 
@@ -180,16 +180,15 @@ export function CashierPayments({ branchId }: { branchId: string }) {
 
       setMessage("Pago aplicado. Orden enviada al flujo de despacho. ✓");
       showToast("success", "Pago aplicado correctamente");
-      setReferenceNumber("");
 
       // FASE 3: Mostrar modal de impresión post-pago
       if (selected) {
         setPrintModalOrderId(selected.id);
         setPrintModalOrderNumber(selected.orderNumber);
+        setPrintModalTenders(tenders);
       }
 
       await load();
-      referenceRef.current?.focus();
     } catch (error) {
       console.error("[CASHIER][paySelected]", error);
       const humanized = mapPosErrorToSpanish({ fallback: "No se pudo registrar el pago.", thrownError: error });
@@ -200,40 +199,7 @@ export function CashierPayments({ branchId }: { branchId: string }) {
       // Clear the guard after a short delay so the same order can be retried if needed
       setTimeout(() => recentlyPaidRef.current.delete(orderId), 3000);
     }
-  }, [cashSessionState, isSubmitting, load, method, operatorRequired, referenceNumber, referenceRequired, requiresCashBoxSelection, selected]);
-
-  // Keep refs in sync so hotkey handler always reads latest values
-  const canSubmitRef = useRef(canSubmitPayment);
-  const isSubmittingRef = useRef(isSubmitting);
-  useEffect(() => { canSubmitRef.current = canSubmitPayment; }, [canSubmitPayment]);
-  useEffect(() => { isSubmittingRef.current = isSubmitting; }, [isSubmitting]);
-
-  useEffect(() => {
-    function handleHotkeys(event: KeyboardEvent) {
-      if (event.key === "F1") {
-        event.preventDefault();
-        setMethod("CASH");
-      }
-      if (event.key === "F2") {
-        event.preventDefault();
-        setMethod("CARD");
-      }
-      if (event.key === "F3") {
-        event.preventDefault();
-        setMethod("TRANSFER");
-      }
-      if (event.key === "Enter" && document.activeElement === referenceRef.current && canSubmitRef.current && !isSubmittingRef.current) {
-        event.preventDefault();
-        paySelected().catch(() => setMessage("No se pudo registrar el pago."));
-      }
-      if (event.key === "Escape") {
-        setReferenceNumber("");
-      }
-    }
-
-    window.addEventListener("keydown", handleHotkeys);
-    return () => window.removeEventListener("keydown", handleHotkeys);
-  }, [paySelected]);
+  }, [cashSessionState, isSubmitting, load, operatorRequired, requiresCashBoxSelection, selected]);
 
   const transportAmt = selected ? Number(selected.transportAmount ?? 0) : 0;
   const subtotalAmt = selected ? Number(selected.subtotal ?? 0) : 0;
@@ -424,65 +390,20 @@ export function CashierPayments({ branchId }: { branchId: string }) {
                   {transportAmt > 0 && <div className="text-xs text-[var(--color-text-muted)]">Incluye transporte: C$ {transportAmt.toFixed(2)}</div>}
                 </div>
 
-                <div className="grid gap-2">
-                  <div className="text-xs font-medium text-[var(--color-text-muted)]">Método de pago</div>
-                  <div className="flex gap-1 rounded-xl bg-[var(--color-surface-muted)] p-1">
-                    {[
-                      { code: "CASH", label: "Efectivo" },
-                      { code: "CARD", label: "Tarjeta" },
-                      { code: "TRANSFER", label: "Transfer." },
-                    ].map((option) => (
-                      <button
-                        key={option.code}
-                        onClick={() => setMethod(option.code)}
-                        disabled={isSubmitting}
-                        data-testid={`cashier-method-${option.code}`}
-                        className={[
-                          "flex flex-1 items-center justify-center rounded-lg py-2 text-sm font-medium transition-colors",
-                          method === option.code
-                            ? "bg-[var(--color-pay)] text-white shadow-sm"
-                            : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]",
-                        ].join(" ")}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-[var(--color-text-secondary)]">
-                    Referencia
-                    {referenceRequired
-                      ? <span className="ml-1 text-[var(--color-danger-600)]">*</span>
-                      : <span className="ml-1 text-[var(--color-text-soft)] font-normal">(opcional)</span>}
-                  </label>
-                  <Input
-                    ref={referenceRef}
-                    value={referenceNumber}
-                    onChange={(event) => setReferenceNumber(event.target.value)}
-                    placeholder={referenceRequired ? "Número de autorización / transacción (requerido)" : "Recibo / transacción"}
-                    disabled={isSubmitting}
-                    data-testid="cashier-reference-input"
-                    className="rounded-lg"
+                {canSubmitPayment || isSubmitting ? (
+                  <PaymentComposer
+                    key={selected.id}
+                    total={Number(selected.grandTotal)}
+                    isSubmitting={isSubmitting}
+                    submitLabel={`Cobrar C$ ${Number(selected.grandTotal).toFixed(2)}`}
+                    onSubmit={(tenders) => { void paySelected(tenders); }}
+                    bankAccounts={bankAccounts}
                   />
-                  {referenceRequired && !referenceNumber.trim() && (
-                    <p className="mt-1 text-xs text-[var(--color-danger-600)]">
-                      Este método de pago requiere número de referencia.
-                    </p>
-                  )}
-                </div>
-
-                <Button
-                  variant="success"
-                  onClick={paySelected}
-                  disabled={!canSubmitPayment}
-                  loading={isSubmitting}
-                  data-testid="cashier-submit-payment"
-                  className="w-full rounded-lg py-3 text-base"
-                >
-                  {isSubmitting ? "Procesando pago…" : `Cobrar C$ ${Number(selected.grandTotal).toFixed(2)}`}
-                </Button>
+                ) : (
+                  <p className="text-center text-sm text-[var(--color-text-muted)]">
+                    Abre una sesión de caja válida para poder cobrar esta orden.
+                  </p>
+                )}
               </>
             ) : (
               <div className="flex flex-1 items-center justify-center">
@@ -500,9 +421,11 @@ export function CashierPayments({ branchId }: { branchId: string }) {
         <PrintModal
           orderId={printModalOrderId}
           orderNumber={printModalOrderNumber}
+          tenders={printModalTenders}
           onClose={() => {
             setPrintModalOrderId(null);
             setPrintModalOrderNumber("");
+            setPrintModalTenders(null);
           }}
         />
       )}

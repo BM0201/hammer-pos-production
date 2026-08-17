@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
 import { apiFetch } from "@/lib/client/api";
+import type { ComposedTender } from "@/components/payments/payment-composer";
 import type { TicketLine, TicketOrder } from "../types";
 
 type PrintableOrder = { id: string; orderNumber: string };
@@ -15,19 +16,17 @@ type PosCheckoutOpts = {
   canSendToCashier: boolean;
   canCollectHere: boolean;
   activeCashSessionId: string | null;
-  paymentMethod: string;
   /** Only `enableDispatch` is read — structurally compatible with the full BranchConfig. */
   branchConfig: { enableDispatch: boolean } | null;
   loadRealtimeSummary: () => Promise<void>;
   autoPrintCompletedOrder: (order: PrintableOrder) => Promise<void>;
   setPrintModalOrderId: (id: string | null) => void;
   setPrintModalOrderNumber: (num: string) => void;
+  setPrintModalTenders: (tenders: ComposedTender[] | null) => void;
   onNotice: (msg: string, ms?: number) => void;
   /** Called after a successful checkout: reset catalog search and focus the search input. */
   onCompleted: () => void;
 };
-
-export type CashTenderDetail = { receivedAmount: number; changeAmount: number };
 
 export function usePosCheckout(opts: PosCheckoutOpts) {
   // Mirror opts into a ref so completeTicket is always reading the latest
@@ -42,7 +41,6 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
   const [includeTransport, setIncludeTransport] = useState(false);
   const [transportAmount, setTransportAmount] = useState("");
   const [transportTouched, setTransportTouched] = useState(false);
-  const [referenceNumber, setReferenceNumber] = useState("");
 
   const transportAmountNumber = Number(transportAmount);
   const transportAmountValue =
@@ -60,7 +58,7 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
     return null;
   }, [includeTransport, transportAmount]);
 
-  async function completeTicket(target: "QUEUE" | "DIRECT", cashDetail: CashTenderDetail | null = null) {
+  async function completeTicket(target: "QUEUE" | "DIRECT", tenders: ComposedTender[] | null = null) {
     const {
       order,
       ticketLines,
@@ -68,12 +66,12 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
       canSendToCashier,
       canCollectHere,
       activeCashSessionId,
-      paymentMethod,
       branchConfig,
       loadRealtimeSummary,
       autoPrintCompletedOrder,
       setPrintModalOrderId,
       setPrintModalOrderNumber,
+      setPrintModalTenders,
       onNotice,
       onCompleted,
     } = optsRef.current;
@@ -103,15 +101,10 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
       return;
     }
 
-    if (isDirectSale && paymentMethod === "CREDIT") {
-      onNotice("Credito no disponible en venta directa: usa caja o selecciona otro metodo de pago.", 10000);
-      return;
-    }
-
-    if (isDirectSale && (paymentMethod === "CARD" || paymentMethod === "TRANSFER") && !referenceNumber.trim()) {
-      onNotice("El método de pago seleccionado requiere un número de referencia. Ingresa el número antes de cobrar.", 10000);
-      return;
-    }
+    // La validación de cada medio (referencia requerida, recibido >= monto,
+    // suma exacta) ya la hizo el PaymentComposer antes de llamar acá — si es
+    // venta directa, siempre debe venir con tenders armados.
+    if (isDirectSale && !tenders?.length) return;
 
     inFlightRef.current = true;
     setIsSubmittingPayment(true);
@@ -120,22 +113,13 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
       if (isDirectSale) {
         const body: Record<string, unknown> = {
           cashSessionId: activeCashSessionId,
-          method: paymentMethod,
           requiresTransport: includeTransport,
+          // Pago armado por el PaymentComposer — uno o varios medios que ya
+          // suman exacto al total (validado en la interfaz antes de llegar
+          // acá). El backend deriva MIXED solo cuando hay más de un tender.
+          tenders,
         };
         if (includeTransport) body.transportAmount = transportAmountValue;
-        if (referenceNumber.trim()) body.referenceNumber = referenceNumber.trim();
-        // Efectivo con monto tecleado en el diálogo: registrar recibido/vuelto
-        // reales (alimentan la conciliación de vuelto del Día Operativo).
-        if (paymentMethod === "CASH" && cashDetail) {
-          const amount = Math.round((Number(order.grandTotal) + transportAmountValue) * 100) / 100;
-          body.tenders = [{
-            method: "CASH",
-            amount,
-            receivedAmount: cashDetail.receivedAmount,
-            changeAmount: cashDetail.changeAmount,
-          }];
-        }
 
         const response = await apiFetch(`/api/sales/orders/${order.id}/direct-sale`, {
           method: "POST",
@@ -172,6 +156,7 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
         await autoPrintCompletedOrder(order);
         setPrintModalOrderId(order.id);
         setPrintModalOrderNumber(order.orderNumber);
+        setPrintModalTenders(tenders);
       } else {
         const body: Record<string, unknown> = { requiresTransport: includeTransport };
         if (includeTransport) body.transportAmount = transportAmountValue;
@@ -201,7 +186,6 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
       setIncludeTransport(false);
       setTransportAmount("");
       setTransportTouched(false);
-      setReferenceNumber("");
       await reloadOrder();
       await loadRealtimeSummary();
       onCompleted();
@@ -227,8 +211,6 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
     setTransportTouched,
     transportAmountValue,
     transportValidationError,
-    referenceNumber,
-    setReferenceNumber,
     completeTicket,
   };
 }

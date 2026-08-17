@@ -335,6 +335,10 @@ model Branch {
   name              String
   isActive          Boolean  @default(true)
   isDefaultSupplier Boolean  @default(false)
+  /// Fondo de caja: lo que la sesión de caja de esta sucursal debería poder
+  /// abrir al día siguiente. Sin configurar, todo lo retenido cuenta como
+  /// esperando depósito — conservador y correcto (correccion-destino-y-pantalla-cobro.md §1.1).
+  cashFundAmount    Decimal? @db.Decimal(14, 2)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -387,6 +391,12 @@ model Branch {
   replenishmentDrafts         ReplenishmentDraft[]          @relation("BranchReplenishmentDrafts")
   replenishmentDraftItems     ReplenishmentDraftItem[]      @relation("ReplenishmentDraftItemBranch")
   replenishmentSignalSnapshot ReplenishmentSignalSnapshot?
+  cameras                     Camera[]
+  cameraAgent                 BranchCameraAgent?
+  cameraHealthSnapshot        CameraHealthSnapshot?
+  bankAccounts                BankAccount[]
+  bankDeposits                BankDeposit[]
+  cashDestinationDeclarations CashDestinationDeclaration[]
 }
 
 model User {
@@ -415,6 +425,10 @@ model User {
   assignedCashOperators       CashSessionOperator[]    @relation("CashSessionOperatorAssignedBy")
   createdCashMovements        CashMovement[]           @relation("CashMovementCreatedBy")
   approvedCashMovements       CashMovement[]           @relation("CashMovementApprovedBy")
+  confirmedBankDeposits       BankDeposit[]
+  declaredCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationDeclaredBy")
+  handOverCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationHandOverUser")
+  carriedCashDeposits         CashDestinationDeclaration[] @relation("CashDestinationDepositCarrier")
   openedOperationalDays       OperationalDay[]         @relation("OperationalDayOpenedBy")
   sweptOperationalDays        OperationalDay[]         @relation("OperationalDaySweptBy")
   reviewedOperationalDays     OperationalDay[]         @relation("OperationalDayReviewedBy")
@@ -555,6 +569,7 @@ model CashSession {
   operators       CashSessionOperator[]
   cashMovements   CashMovement[]
   refunds         Refund[]
+  destinationDeclaration CashDestinationDeclaration?
 
   @@index([physicalCashBoxId, status])
   @@index([operationalDayId])
@@ -1345,14 +1360,19 @@ model PaymentTender {
   receivedAmount   Decimal?
   changeAmount     Decimal?
   referenceNumber  String?
+  /// Solo TRANSFER — a qué cuenta propia entró el dinero. Sin esto el saldo
+  /// esperado por cuenta no se puede calcular (correccion-destino-y-pantalla-cobro.md §2.2).
+  bankAccountId    String?
   createdAt        DateTime      @default(now())
 
   payment        Payment         @relation(fields: [paymentId], references: [id], onDelete: Cascade)
   operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
+  bankAccount    BankAccount?    @relation(fields: [bankAccountId], references: [id])
 
   @@index([paymentId])
   @@index([method])
   @@index([operationalDayId, method])
+  @@index([bankAccountId])
 }
 
 model DispatchTicket {
@@ -3259,4 +3279,241 @@ model ReplenishmentSignalSnapshot {
   generatedAt   DateTime @default(now())
 
   branch Branch @relation(fields: [branchId], references: [id])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * MÓDULO CÁMARAS — ver vivo + salud, sin grabar ni persistir video
+ * (prompt-modulo-camaras.md + camaras-adenda-agente.md)
+ * ════════════════════════════════════════════════════════════════
+ */
+
+enum CameraLocation {
+  CAJA
+  DESPACHO
+  PATIO
+  PASILLO
+  OTRO
+}
+
+/// Los 9 estados de salud del prompt §3, más UNKNOWN — "no tengo información",
+/// nunca se deriva de la ausencia de datos hacia OFFLINE (adenda §3).
+enum CameraHealthState {
+  OFFLINE
+  NO_STREAM
+  NO_FRAMES
+  FROZEN
+  BLACK
+  BLURRY
+  MOVED
+  DEGRADED
+  OK
+  UNKNOWN
+}
+
+/// Por qué una cámara quedó en determinado estado — sin esto el historial no
+/// distingue "el agente no reportó" de "el NVR no respondió" (adenda §3).
+enum CameraStatusSource {
+  AGENT_REPORT
+  AGENT_UNREACHABLE
+  NVR_UNREACHABLE
+}
+
+enum BranchCameraAgentStatus {
+  ONLINE
+  STALE
+  OFFLINE
+}
+
+/// Registro de cámaras — sucursal, ubicación (alimenta severidad), credenciales
+/// cifradas. Nunca almacena video/cuadros/imágenes/audio (fuera de alcance por diseño).
+model Camera {
+  id                    String         @id @default(cuid())
+  branchId              String
+  name                  String
+  location              CameraLocation @default(OTRO)
+  /// Segmento de red (ej. switch físico) — permite agrupar una caída de
+  /// infraestructura en una sola alerta en vez de una por cámara (adenda §3).
+  networkSegment        String?
+  ipAddress             String
+  onvifPort             Int            @default(80)
+  rtspChannel           String?
+  manufacturer          String?
+  model                 String?
+  /// AES-256-GCM vía credentials-crypto.ts — nunca texto plano en la base.
+  credentialsCiphertext String
+  isActive              Boolean        @default(true)
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  branch        Branch                 @relation(fields: [branchId], references: [id])
+  statusHistory CameraStatusHistory[]
+
+  @@unique([branchId, ipAddress, rtspChannel])
+  @@index([branchId, isActive])
+}
+
+/// Un registro por sucursal — el agente físico corriendo ahí. Heartbeat
+/// independiente del sondeo de cámaras (adenda §3, regla central).
+model BranchCameraAgent {
+  branchId           String                  @id
+  agentVersion       String
+  /// Despliegue escalonado por sucursal (adenda §2.1) — no una constante global.
+  targetAgentVersion String                  @default("0.1.0")
+  lastHeartbeatAt    DateTime?
+  nvrReachable       Boolean                 @default(false)
+  lastNvrCheckAt     DateTime?
+  status             BranchCameraAgentStatus @default(OFFLINE)
+  /// SHA-256 del token que el agente presenta en cada heartbeat (bearer) —
+  /// el heartbeat no tiene sesión de usuario, es máquina a máquina. El
+  /// token en texto plano solo existe una vez, al provisionar, en agent.config.
+  agentTokenHash     String
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id])
+}
+
+/// Una fila POR CAMBIO DE ESTADO, no por chequeo (prompt §6) — responde
+/// "¿desde cuándo está caída?" sin inflar la tabla con una cámara sana.
+model CameraStatusHistory {
+  id         String             @id @default(cuid())
+  cameraId   String
+  status     CameraHealthState
+  source     CameraStatusSource
+  changedAt  DateTime           @default(now())
+  /// Cuándo se disparó el aviso por este episodio (ventana de estabilización
+  /// ya cumplida) — null mientras no se avisó todavía. Antirruido (prompt §4):
+  /// se avisa UNA vez por episodio, no en cada heartbeat que sigue fallando.
+  notifiedAt DateTime?
+
+  camera Camera @relation(fields: [cameraId], references: [id])
+
+  @@index([cameraId, changedAt])
+}
+
+/// Snapshot ligero para el contador del sidebar — mismo patrón que
+/// ReplenishmentSignalSnapshot, nunca el estado en vivo (prompt §4.2).
+model CameraHealthSnapshot {
+  branchId     String   @id
+  failingCount Int      @default(0)
+  unknownCount Int      @default(0)
+  generatedAt  DateTime @default(now())
+
+  branch Branch @relation(fields: [branchId], references: [id])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * TESORERÍA — destino del efectivo y cuentas bancarias
+ * (correccion-destino-y-pantalla-cobro.md)
+ * ════════════════════════════════════════════════════════════════
+ */
+
+/// El efectivo retenido en sucursal, cuando hay caja fuerte, tiene dos
+/// lugares posibles — la posición de efectivo los distingue (§1, respuesta
+/// del usuario a "¿hay caja fuerte en sucursal?": sí).
+enum RetainedCashLocation {
+  DRAWER
+  SAFE
+}
+
+/// Son varias, editable solo por Master (respuesta del usuario a §5).
+/// branchId null = cuenta central, disponible para todas las sucursales.
+model BankAccount {
+  id            String   @id @default(cuid())
+  bankName      String
+  accountAlias  String
+  accountNumber String
+  currency      String   @default("NIO")
+  branchId      String?
+  isActive      Boolean  @default(true)
+  /// Titular de la cuenta — las cuentas comparten banco, solo se
+  /// distinguen por moneda y número; el nombre completo evita el error de
+  /// mandar a la cuenta equivocada (prompt-pantallas-recorrido-dinero.md §1.3).
+  owner         String?
+  /// Solo las cuentas con esto en true aparecen en el selector de cobro
+  /// (PaymentComposer) — "menos opciones previene el error mejor que
+  /// agrandar el botón" (§1.3). true por defecto: las cuentas ya cargadas
+  /// hoy son todas de cobro; Master desmarca la que no corresponda.
+  acceptsCustomerPayments Boolean @default(true)
+  /// Para "ordenadas por uso, para que la memoria muscular funcione" (§1.3)
+  /// — se actualiza cada vez que un PaymentTender la usa como destino.
+  lastUsedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  branch                 Branch?                       @relation(fields: [branchId], references: [id])
+  receivedTenders        PaymentTender[]
+  deposits               BankDeposit[]
+  cashDestinationDeposits CashDestinationDeclaration[]
+
+  @@index([branchId, isActive])
+}
+
+/// Depósito confirmado — una de las dos fuentes del saldo esperado de una
+/// cuenta (§2.2): saldo esperado = depósitos confirmados + transferencias
+/// recibidas a esa cuenta. La resolución de "efectivo esperando depósito"
+/// hacia "ya depositado" pasa por acá.
+model BankDeposit {
+  id                String   @id @default(cuid())
+  bankAccountId     String
+  branchId          String
+  amount            Decimal
+  depositedAt       DateTime @default(now())
+  confirmedByUserId String
+  referenceNumber   String?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+  branch      Branch      @relation(fields: [branchId], references: [id])
+  confirmedBy User        @relation(fields: [confirmedByUserId], references: [id])
+
+  @@index([branchId, depositedAt])
+  @@index([bankAccountId, depositedAt])
+}
+
+/// Una por cierre de sesión de caja. Los tres destinos son la misma
+/// pregunta ("¿qué pasa con este efectivo antes de terminar el día?") — no
+/// hay motivo que capturar, solo quién lo recibe cuando sale (§1).
+/// retainCashFundPortion/retainAwaitingDepositPortion: la descomposición
+/// automática de "Retener" contra Branch.cashFundAmount (§1.1) — el usuario
+/// declara un solo número, la separación es del sistema.
+model CashDestinationDeclaration {
+  id                String   @id @default(cuid())
+  cashSessionId     String   @unique
+  branchId          String
+  declaredByUserId  String
+
+  handOverAmount    Decimal  @default(0)
+  handOverUserId    String?
+
+  depositAmount        Decimal  @default(0)
+  depositCarrierUserId String?
+  depositBankAccountId String?
+
+  retainAmount                 Decimal              @default(0)
+  retainCashFundPortion        Decimal              @default(0)
+  retainAwaitingDepositPortion Decimal              @default(0)
+  awaitingDepositLocation      RetainedCashLocation @default(DRAWER)
+
+  /// true cuando el sistema la generó sola porque el cron cerró la sesión y
+  /// nadie declaró nada — todo en Retener, que es la verdad física (la
+  /// plata se quedó donde estaba). Se reemplaza por la declaración real en
+  /// la revisión de esa caja (prompt-pantallas-recorrido-dinero.md §3,
+  /// "El cierre automático").
+  isAutoDefaulted Boolean @default(false)
+
+  notes     String?
+  createdAt DateTime @default(now())
+
+  cashSession        CashSession  @relation(fields: [cashSessionId], references: [id])
+  branch             Branch       @relation(fields: [branchId], references: [id])
+  declaredBy         User         @relation("CashDestinationDeclaredBy", fields: [declaredByUserId], references: [id])
+  handOverUser       User?        @relation("CashDestinationHandOverUser", fields: [handOverUserId], references: [id])
+  depositCarrierUser User?        @relation("CashDestinationDepositCarrier", fields: [depositCarrierUserId], references: [id])
+  depositBankAccount BankAccount? @relation(fields: [depositBankAccountId], references: [id])
+
+  @@index([branchId, createdAt])
 }

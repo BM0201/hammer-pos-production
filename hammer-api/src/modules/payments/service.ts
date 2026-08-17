@@ -14,6 +14,7 @@ import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+import { bumpBankAccountUsageTx } from "@/modules/treasury/service";
 
 type PaymentTenderInput = {
   method: PaymentMethod;
@@ -21,6 +22,8 @@ type PaymentTenderInput = {
   receivedAmount?: number | null;
   changeAmount?: number | null;
   referenceNumber?: string | null;
+  /** Solo TRANSFER — a qué cuenta propia entró (correccion-destino-y-pantalla-cobro.md §2.2). */
+  bankAccountId?: string | null;
 };
 
 export async function listPendingPaymentOrders(params: { branchId: string; includeAllBranches: boolean }) {
@@ -498,8 +501,10 @@ export async function postSaleOrderPayment(input: {
             receivedAmount: tender.receivedAmount === null || tender.receivedAmount === undefined ? null : new Prisma.Decimal(tender.receivedAmount),
             changeAmount: tender.changeAmount === null || tender.changeAmount === undefined ? null : new Prisma.Decimal(tender.changeAmount),
             referenceNumber: tender.referenceNumber ?? null,
+            bankAccountId: tender.method === PaymentMethod.TRANSFER ? tender.bankAccountId ?? null : null,
           })),
         });
+        await bumpBankAccountUsageTx(tx, tenderSummary.tenders.filter((t) => t.method === PaymentMethod.TRANSFER).map((t) => t.bankAccountId));
       } catch (error) {
         if (
           error instanceof Prisma.PrismaClientKnownRequestError

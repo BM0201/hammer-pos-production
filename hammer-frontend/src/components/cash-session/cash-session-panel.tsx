@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
 import { CashMovementsPanel } from "./cash-movements-panel";
+import { CashDestinationDeclarationModal } from "./cash-destination-declaration-modal";
 
 type CashBox = {
   id: string;
@@ -86,6 +87,10 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
   const [closingAmount, setClosingAmount] = useState("0");
   const [reviewAmount, setReviewAmount] = useState("");
   const [reviewNote, setReviewNote] = useState("");
+  // correccion-destino-y-pantalla-cobro.md §1: se abre justo después de
+  // cerrar — "Después" queda disponible, la declaración nunca bloquea el
+  // cierre en sí, que ya ocurrió.
+  const [declaration, setDeclaration] = useState<{ cashSessionId: string; countedAmount: number } | null>(null);
   const [reviewingSessionId, setReviewingSessionId] = useState("");
   const [message, setMessage] = useState("");
   const [reconcilingSessionId, setReconcilingSessionId] = useState("");
@@ -347,6 +352,7 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
         return;
       }
 
+      setDeclaration({ cashSessionId: reconcilingSessionId, countedAmount: Number(closingAmount) });
       setActiveSession(null);
       setReconcilingSessionId("");
       publishStatus({
@@ -717,6 +723,16 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
           {message}
         </p>
       ) : null}
+
+      {declaration && (
+        <CashDestinationDeclarationModal
+          cashSessionId={declaration.cashSessionId}
+          branchId={branchId}
+          countedAmount={declaration.countedAmount}
+          onClose={() => setDeclaration(null)}
+          onSaved={() => setDeclaration(null)}
+        />
+      )}
     </section>
   );
 }
