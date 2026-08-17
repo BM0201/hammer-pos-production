@@ -4,6 +4,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { timingSafeEqualStrings } from "@/lib/timing-safe-compare";
 import { autoCloseExpiredCashSessions } from "@/modules/cash-session/auto-close-service";
 import { sweepStaleOperationalDaysToAwaitingReview } from "@/modules/operations/service";
+import { sweepStaleAgents } from "@/modules/cameras/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,12 +27,14 @@ function parseNowOverride(url: URL) {
 }
 
 /**
- * Cron cada 10 min (vercel.json). Día Operativo 360: solo quedan dos pasos.
+ * Cron cada 10 min (vercel.json).
  *  1. cashSessionClose — cierre automático de CAJA por horario (B4, reloj
  *     independiente del día operativo — se mantiene intacto, es la barrera
  *     real contra vender de noche).
  *  2. operationalDaySweep — barrido ACTIVE → AWAITING_REVIEW de días de
  *     fecha pasada. Nunca finaliza ni confirma nada.
+ *  3. cameraAgentSweep — módulo Cámaras: agentes de sucursal sin heartbeat
+ *     reciente pasan a OFFLINE y sus cámaras a UNKNOWN (adenda §3).
  * autoOpenOperationalDays, autoClosePendingOperationalDaysBacklog y
  * autoCloseTodaysOperationalDaysAtDeadline desaparecieron: el día se crea
  * solo con la primera operación, y confirmar es siempre un acto humano.
@@ -45,10 +48,11 @@ async function handle(request: Request) {
 
     const cashSessionClose = await autoCloseExpiredCashSessions({ dryRun, now, actor: "SYSTEM" });
     const operationalDaySweep = await sweepStaleOperationalDaysToAwaitingReview({ dryRun, now });
+    const cameraAgentSweep = await sweepStaleAgents({ dryRun, now });
 
     return NextResponse.json({
       ok: true,
-      steps: { cashSessionClose, operationalDaySweep },
+      steps: { cashSessionClose, operationalDaySweep, cameraAgentSweep },
     });
   } catch (error) {
     if (error instanceof Error && error.message === "CRON_SECRET_MISSING")

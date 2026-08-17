@@ -12,6 +12,8 @@ export const CAPABILITIES = {
   MASTER_USERS_MANAGE: "master.users.manage",
   MASTER_SESSIONS_VIEW: "master.sessions.view",
   MASTER_CASH_MONITOR_VIEW: "master.cash_monitor.view",
+  MASTER_CAMERAS_VIEW: "master.cameras.view",
+  TREASURY_MANAGE: "treasury.manage",
   MASTER_CATALOG_MANAGE: "master.catalog.manage",
   MASTER_INVENTORY_VIEW: "master.inventory.view",
   MASTER_SALES_VIEW: "master.sales.view",

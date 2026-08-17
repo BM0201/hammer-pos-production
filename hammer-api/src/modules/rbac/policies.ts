@@ -6,6 +6,8 @@ export const CAPABILITIES = {
   MASTER_USERS_VIEW: "master.users.view",
   MASTER_SESSIONS_VIEW: "master.sessions.view",
   MASTER_CASH_MONITOR_VIEW: "master.cash_monitor.view",
+  MASTER_CAMERAS_VIEW: "master.cameras.view",
+  TREASURY_MANAGE: "treasury.manage",
   SYSTEM_ADMIN_ACCESS: "system.admin.access",
   SYSTEM_ADMIN_ROLE_CONFIG: "system.admin.role.config",
   SYSTEM_ADMIN_SETTINGS: "system.admin.settings",
