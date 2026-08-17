@@ -35,11 +35,12 @@ import {
   fmtDateShort,
   fmtRatePct3,
   initials,
-  nextBiweeklyPayday,
   round2,
   type PayrollBreakdown,
   type PayrollRates,
 } from "./payroll-calc";
+import { useNextPayday } from "./use-next-payday";
+import { usePendingHalf } from "./use-pending-half";
 
 /**
  * Finanzas & Contabilidad › Planilla — tab Empleados (Planilla V2).
@@ -332,7 +333,11 @@ export function PayrollFinancePanel() {
 
   const now = new Date();
   const periodLabel = `${MES_LARGO[now.getMonth()]} ${now.getFullYear()}`;
-  const payday = nextBiweeklyPayday(now);
+  const { payday } = useNextPayday();
+  // Quincena PENDIENTE de la corrida real (estado de desembolsos), no del
+  // calendario — solo con sucursal seleccionada, la única corrida sin
+  // ambigüedad (prompt-planilla-calendario-quincenas.md §1).
+  const { half: pendingHalfForBranch } = usePendingHalf(now.getFullYear(), now.getMonth() + 1, selectedBranch);
 
   // "Planilla del patrón": lo que llega en las facturas del INSS y del INATEC
   // (mismo formato del documento real: CUOTA LABORAL + CUOTA PATRONAL = total
@@ -553,14 +558,26 @@ export function PayrollFinancePanel() {
             <CalendarDays className="h-3 w-3" />
             {periodLabel}
           </span>
-          <span
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-success-100)] bg-[var(--color-success-50)] px-3 py-0.5 text-xs font-semibold text-[var(--color-success-700)]"
-            title={payday.adjustedNote ? `${payday.adjustedNote} — para pagar bien y a tiempo` : undefined}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success-500)]" />
-            Próximo pago: {payday.label}
-            {payday.adjusted && <span className="font-bold" aria-hidden="true">*</span>}
-          </span>
+          {pendingHalfForBranch ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-0.5 text-xs font-semibold text-[var(--color-warning-700)]"
+              title="Según el estado real de los desembolsos de esta sucursal — no es una fecha de calendario."
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-warning-500)]" />
+              Falta pagar: {pendingHalfForBranch}ª quincena
+            </span>
+          ) : (
+            payday && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-success-100)] bg-[var(--color-success-50)] px-3 py-0.5 text-xs font-semibold text-[var(--color-success-700)]"
+                title={payday.adjustedNote ? `${payday.adjustedNote} — para pagar bien y a tiempo` : undefined}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success-500)]" />
+                Próximo pago: {payday.label}
+                {payday.adjusted && <span className="font-bold" aria-hidden="true">*</span>}
+              </span>
+            )
+          )}
         </h2>
         <div className="flex flex-wrap items-center gap-2">
           <button

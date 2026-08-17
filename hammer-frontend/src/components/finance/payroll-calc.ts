@@ -393,45 +393,53 @@ export type PaydayInfo = {
   daysUntil: number;
 };
 
-/** Fecha efectiva de pago de una quincena concreta (con la regla de la casa). */
-function effectivePayday(year: number, month: number, half: 1 | 2): Omit<PaydayInfo, "label" | "daysUntil"> {
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  const baseDay = half === 1 ? 15 : 30;
-  // Mes sin 30 (febrero): se paga el último día disponible.
-  const shortMonth = half === 2 && lastDay < 30;
-  let payDay = half === 1 ? 15 : Math.min(30, lastDay);
-  const notes: string[] = [];
-  if (shortMonth) notes.push(`el mes no tiene 30: se paga el ${payDay}`);
-  // Domingo → se adelanta al sábado.
-  if (new Date(year, month, payDay).getDay() === 0) {
-    notes.push(`el ${payDay} cae domingo: se adelanta al sábado ${payDay - 1}`);
-    payDay -= 1;
-  }
+/** Forma cruda que devuelve GET /api/payroll/next-payday (payday-calendar.ts, backend). */
+export type NextPaydayApiResult = {
+  date: string; // ISO
+  nominalDay: number;
+  adjusted: boolean;
+  adjustedReason: "SUNDAY" | "SHORT_MONTH" | null;
+  half: 1 | 2;
+  year: number;
+  month: number;
+};
+
+/**
+ * Traduce la respuesta cruda de la API a la forma que ya consume la UI
+ * (label, adjustedNote, daysUntil). Pura formateo de texto — el CÁLCULO de
+ * qué día es viene del backend (prompt-planilla-calendario-quincenas.md §3:
+ * "las fechas vienen de la API"), esto solo las escribe bonito.
+ */
+export function buildPaydayInfo(raw: NextPaydayApiResult, now: Date = new Date()): PaydayInfo {
+  const date = new Date(raw.date);
+  const daysUntil = Math.round((date.getTime() - now.getTime()) / 86_400_000);
+  const adjustedNote = raw.adjustedReason === "SUNDAY"
+    ? `el ${raw.nominalDay} cae domingo: se adelanta al sábado ${date.getUTCDate()}`
+    : raw.adjustedReason === "SHORT_MONTH"
+      ? `el mes no tiene 30: se paga el ${date.getUTCDate()}`
+      : null;
   return {
-    date: new Date(year, month, payDay),
-    half,
-    baseDay,
-    adjusted: notes.length > 0,
-    adjustedNote: notes.length > 0 ? notes.join("; ") : null,
+    date,
+    half: raw.half,
+    baseDay: raw.nominalDay,
+    adjusted: raw.adjusted,
+    adjustedNote,
+    daysUntil,
+    label: `${raw.half}ª quincena · ${DIA[date.getUTCDay()]} ${date.getUTCDate()} ${MES_CORTO[date.getUTCMonth()]}`,
   };
 }
 
 /**
- * Próximo pago quincenal a partir de `now`, con fecha EFECTIVA ajustada.
- * Si el pago ajustado de la quincena ya pasó, devuelve el siguiente.
+ * Quincena PENDIENTE de pago de una corrida. Distinta de nextPayday()
+ * (backend, vía useNextPayday/buildPaydayInfo), que responde "¿cuál es el
+ * próximo día de pago?" — una pregunta de calendario que avanza sola apenas
+ * pasa la fecha, sin importar si el pago se hizo. En la pantalla de
+ * Planilla, lo que corresponde mostrar es qué quincena falta, no qué fecha
+ * viene (prompt-planilla-calendario-quincenas.md §1).
  */
-export function nextBiweeklyPayday(now: Date = new Date()): PaydayInfo {
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const candidates: Array<Omit<PaydayInfo, "label" | "daysUntil">> = [
-    effectivePayday(now.getFullYear(), now.getMonth(), 1),
-    effectivePayday(now.getFullYear(), now.getMonth(), 2),
-    effectivePayday(now.getFullYear(), now.getMonth() + 1, 1),
-  ];
-  const next = candidates.find((c) => c.date >= today) ?? candidates[candidates.length - 1];
-  const daysUntil = Math.round((next.date.getTime() - today.getTime()) / 86_400_000);
-  return {
-    ...next,
-    label: `${next.half}ª quincena · ${DIA[next.date.getDay()]} ${next.date.getDate()} ${MES_CORTO[next.date.getMonth()]}`,
-    daysUntil,
-  };
+export function pendingHalf(disbursements: { period: "FIRST_HALF" | "SECOND_HALF"; status: string }[]): 1 | 2 | null {
+  const firstPending = disbursements.some((d) => d.period === "FIRST_HALF" && d.status === "PENDING");
+  if (firstPending) return 1;
+  const secondPending = disbursements.some((d) => d.period === "SECOND_HALF" && d.status === "PENDING");
+  return secondPending ? 2 : null;
 }

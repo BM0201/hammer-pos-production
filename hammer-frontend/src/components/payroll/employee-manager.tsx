@@ -20,7 +20,8 @@ import {
   CalendarDays,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { DEFAULT_PAYROLL_RATES, splitNetPayBiweekly, type PayrollBreakdown, type PayrollRates } from "@/components/finance/payroll-calc";
+import { DEFAULT_PAYROLL_RATES, splitNetPayBiweekly, MES_LARGO, type PayrollBreakdown, type PayrollRates } from "@/components/finance/payroll-calc";
+import { usePaydayForMonth, type PaydayForMonthEntry } from "@/components/finance/use-payday-for-month";
 import { AttendancePanel } from "@/components/finance/attendance-panel";
 import { AttendanceCalendar } from "@/components/payroll/attendance-calendar";
 import { EmployeeProfileDrawer } from "@/components/payroll/employee-profile-drawer";
@@ -208,6 +209,10 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
   // Vista de cálculo: "MONTH" muestra el total mensual; "BIWEEKLY" divide entre
   // las dos quincenas (mitad), reflejando cómo se desembolsa realmente el pago.
   const [payrollView, setPayrollView] = useState<"MONTH" | "BIWEEKLY">("MONTH");
+  // Fechas reales de pago del mes elegido (misma fuente que usará el backend
+  // al postear) — para el texto explícito de posteo (§4 del doc).
+  const [payrollMonthYear, payrollMonthNum] = payrollMonth.split("-").map(Number);
+  const { firstHalf: firstHalfPayday, secondHalf: secondHalfPayday } = usePaydayForMonth(payrollMonthYear, payrollMonthNum);
   const [history, setHistory] = useState<SalaryRecord[]>([]);
   const [payrollRuns, setPayrollRuns] = useState<PayrollRunSummary[]>([]);
 
@@ -953,6 +958,53 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                   );
                 })()}
               </div>
+              {payrollResult?.payrollRunStatus === "DRAFT" && (() => {
+                const totals = payrollResult.employees.reduce(
+                  (acc, e) => {
+                    const split = splitNetPayBiweekly(e.grossSalary, e.netPay);
+                    acc.first += split.firstHalf;
+                    acc.second += split.secondHalf;
+                    return acc;
+                  },
+                  { first: 0, second: 0 },
+                );
+                const fmtPaydayDate = (raw: PaydayForMonthEntry | null) => {
+                  if (!raw) return null;
+                  const d = new Date(raw.date);
+                  return `${d.getUTCDate()} ${MES_LARGO[d.getUTCMonth()].toLowerCase().slice(0, 3)}`;
+                };
+                const noteFor = (raw: PaydayForMonthEntry | null) =>
+                  raw?.adjustedReason === "SUNDAY"
+                    ? "el día nominal cae domingo, se adelanta al sábado"
+                    : raw?.adjustedReason === "SHORT_MONTH"
+                      ? "el mes no llega al día 30"
+                      : null;
+                const monthLabel =
+                  Number.isInteger(payrollMonthNum) && payrollMonthNum >= 1 && payrollMonthNum <= 12
+                    ? `${MES_LARGO[payrollMonthNum - 1]} ${payrollMonthYear}`
+                    : payrollMonth;
+                return (
+                  <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-3 text-sm">
+                    <p className="font-bold text-[var(--color-text)]">Vas a postear: {monthLabel}</p>
+                    <div className="mt-1.5 grid gap-1.5 text-[var(--color-text-secondary)] sm:grid-cols-2">
+                      <div>
+                        <span className="font-semibold">1ª quincena</span> — {fmt(totals.first)}
+                        {firstHalfPayday && ` · ${fmtPaydayDate(firstHalfPayday)}`}
+                        {noteFor(firstHalfPayday) && (
+                          <span className="block text-xs text-[var(--color-warning-600)]">{noteFor(firstHalfPayday)}</span>
+                        )}
+                      </div>
+                      <div>
+                        <span className="font-semibold">2ª quincena</span> — {fmt(totals.second)}
+                        {secondHalfPayday && ` · ${fmtPaydayDate(secondHalfPayday)}`}
+                        {noteFor(secondHalfPayday) && (
+                          <span className="block text-xs text-[var(--color-warning-600)]">{noteFor(secondHalfPayday)}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
               <p className="text-xs text-[var(--color-text-soft)]">El cálculo crea un borrador; postear sincroniza gastos de nómina y aplica deducciones de préstamos sin duplicarlas.</p>
               {cashStatus.length > 0 && (() => {
                 const pendingRows = cashStatus.filter((c) => c.pendingCount > 0);

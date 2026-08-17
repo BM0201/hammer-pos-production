@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
-import { nextBiweeklyPayday } from "@/components/finance/payroll-calc";
+import { useNextPayday } from "@/components/finance/use-next-payday";
 
 const MANAGEMENT_LINKS: { href: string; label: string; description: string; icon: LucideIcon }[] = [
   { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", description: "Revisar y aprobar cierres", icon: Wallet },
@@ -496,13 +496,15 @@ const ATTENTION_TONE_STYLES: Record<AttentionTone, { bg: string; border: string;
 };
 
 /* ── Recordatorio de pago de planilla (15 y 30) ──
- * Regla de la casa (payroll-calc.nextBiweeklyPayday): si el 15 o el 30 cae
- * DOMINGO, o el mes no tiene 30 (febrero), el pago se ADELANTA un día — así
- * se paga bien y a tiempo. El banner sube de tono cuando el pago está encima
- * (hoy o mañana) para recordar postear la nómina y procesar el corte.
+ * Regla de la casa (GET /api/payroll/next-payday, payday-calendar.ts en el
+ * backend): si el 15 o el 30 cae DOMINGO, o el mes no tiene 30 (febrero), el
+ * pago se ADELANTA un día — así se paga bien y a tiempo. El banner sube de
+ * tono cuando el pago está encima (hoy o mañana) para recordar postear la
+ * nómina y procesar el corte.
  */
 function PayrollPaydayReminder() {
-  const payday = nextBiweeklyPayday();
+  const { payday } = useNextPayday();
+  if (!payday) return null;
   const urgent = payday.daysUntil <= 1;
   const whenLabel =
     payday.daysUntil === 0 ? "HOY" : payday.daysUntil === 1 ? "MAÑANA" : `en ${payday.daysUntil} días`;

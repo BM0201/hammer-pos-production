@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { tryApplyPayrollCashOutNow } from "@/modules/payroll/payroll-cash-sync";
 import { splitNetPayBiweekly } from "@/modules/payroll/biweekly-split";
+import { paydayFor } from "@/modules/payroll/payday-calendar";
 
 function decimal(v: number): Prisma.Decimal {
   return new Prisma.Decimal(v);
@@ -13,32 +14,16 @@ function round2(v: number): number {
 }
 
 /**
- * Día 15 del mes dado.
- *
- * Depende ÚNICAMENTE de (year, month) — nunca de "hoy" ni de cuándo se marca
- * el desembolso como pagado. Esto es a propósito: si la nómina de julio se
- * paga tarde (el 30, en vez del 15), su scheduledDate sigue siendo 15 de
- * julio; si la de agosto TAMBIÉN se paga tarde (el 16, en vez del 15), su
- * scheduledDate es 15 de agosto — nunca se contamina con el mes de la
- * corrida anterior, porque cada PayrollRun trae su propio (year, month)
- * explícito (elegido por el usuario al calcular la nómina, ver
- * calculatePayrollRun), no derivado de la fecha del sistema.
- */
-export function scheduledFirstHalf(year: number, month: number): Date {
-  return new Date(year, month - 1, 15);
-}
-
-/** Último día del mes dado. Misma garantía que scheduledFirstHalf: puro en (year, month). */
-export function scheduledSecondHalf(year: number, month: number): Date {
-  return new Date(year, month, 0); // day 0 of next month = last day of this month
-}
-
-/**
  * Genera (o regenera) los dos disbursements de cada PayrollLine de una corrida
  * con la regla del mes: 1ª quincena = medio salario completo; las deducciones
  * mensuales (INSS/IR/préstamos, que se cobran UNA vez al mes) van en la 2ª
  * (ver biweekly-split.ts). Seguro de repetir: borra solo los PENDING
  * existentes; lanza error si alguno ya está PAID.
+ *
+ * scheduledDate sale de paydayFor(run.year, run.month, half) — depende
+ * ÚNICAMENTE de (year, month) de la corrida, nunca de "hoy" ni de cuándo se
+ * marca el desembolso como pagado: si la nómina de julio se paga tarde (el
+ * 30, en vez del 15), su scheduledDate sigue siendo el 15 de julio.
  */
 export async function generateDisbursementsForRun(
   payrollRunId: string,
@@ -83,7 +68,7 @@ export async function generateDisbursementsForRun(
           period: PayrollDisbursementPeriod.FIRST_HALF,
           amount: decimal(firstHalf),
           status: PayrollDisbursementStatus.PENDING,
-          scheduledDate: scheduledFirstHalf(run.year, run.month),
+          scheduledDate: paydayFor(run.year, run.month, 1).date,
         },
         {
           payrollRunId,
@@ -93,11 +78,35 @@ export async function generateDisbursementsForRun(
           period: PayrollDisbursementPeriod.SECOND_HALF,
           amount: decimal(secondHalf),
           status: PayrollDisbursementStatus.PENDING,
-          scheduledDate: scheduledSecondHalf(run.year, run.month),
+          scheduledDate: paydayFor(run.year, run.month, 2).date,
         },
       ],
     });
   }
+}
+
+/**
+ * Desembolsos (solo período + estado) de la corrida de un mes — para que el
+ * frontend calcule pendingHalf() sin adivinar contra el calendario
+ * (prompt-planilla-calendario-quincenas.md §1). Sin corrida para ese mes,
+ * arreglo vacío: pendingHalf([]) da null y la pantalla no ofrece pagar nada
+ * todavía, correctamente.
+ */
+export async function getDisbursementPeriodsForMonth(
+  year: number,
+  month: number,
+  branchId?: string | null,
+): Promise<{ period: PayrollDisbursementPeriod; status: PayrollDisbursementStatus }[]> {
+  const run = await prisma.payrollRun.findFirst({
+    where: { year, month, ...(branchId ? { branchId } : {}) },
+    select: { id: true },
+  });
+  if (!run) return [];
+
+  return prisma.payrollDisbursement.findMany({
+    where: { payrollRunId: run.id },
+    select: { period: true, status: true },
+  });
 }
 
 /**
