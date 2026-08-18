@@ -14,6 +14,7 @@ export const CAPABILITIES = {
   MASTER_CASH_MONITOR_VIEW: "master.cash_monitor.view",
   MASTER_CAMERAS_VIEW: "master.cameras.view",
   TREASURY_MANAGE: "treasury.manage",
+  TREASURY_VIEW_BRANCH: "treasury.view_branch",
   MASTER_CATALOG_MANAGE: "master.catalog.manage",
   MASTER_INVENTORY_VIEW: "master.inventory.view",
   MASTER_SALES_VIEW: "master.sales.view",
@@ -180,6 +181,7 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.CASH_MOVEMENT_CREATE,
     CAPABILITIES.CASH_MOVEMENT_APPROVE,
     CAPABILITIES.CASH_MOVEMENT_VIEW,
+    CAPABILITIES.TREASURY_VIEW_BRANCH,
     CAPABILITIES.OPERATING_EXPENSE_VIEW,
     CAPABILITIES.OPERATING_EXPENSE_CREATE,
     // Finanzas de su sucursal (sin planilla: los salarios no se exponen a admin de sucursal).

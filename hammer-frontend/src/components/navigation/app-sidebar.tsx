@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, type CSSProperties } from "re
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname } from "next/navigation";
-import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import { canInAnyAssignedBranch, canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { isMasterRole, isMasterOrAbove, isOwnerRole, isSystemAdminRole, isAccountantRole, resolveRoleHome } from "@/modules/rbac/role-routing";
 import { getRoleColor } from "@/lib/role-colors";
 import { getEffectiveCapabilitySet, hasEffectiveCapability } from "@/lib/navigation/visible-modules";
@@ -12,6 +12,8 @@ import type { SessionPayload } from "@/types/auth";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
+import { getActiveBranchId } from "@/lib/client/active-branch";
+import { CashIndicatorPanel } from "@/components/navigation/cash-indicator-panel";
 import {
   LayoutDashboard,
   Users,
@@ -243,6 +245,9 @@ function buildNavSections(
   if (hasAny(CAPABILITIES.CASH_VIEW, CAPABILITIES.CASH_SESSION_MANAGE) && canInAnyAssignedBranch(session, CAPABILITIES.CASH_VIEW)) {
     operationItems.push({ href: "/app/branch/cash", label: "Caja", icon: Wallet });
   }
+  if (hasAny(CAPABILITIES.TREASURY_VIEW_BRANCH) && canInAnyAssignedBranch(session, CAPABILITIES.TREASURY_VIEW_BRANCH)) {
+    operationItems.push({ href: "/app/branch/money-week", label: "Dinero de la semana", icon: PiggyBank });
+  }
   if (hasAny(CAPABILITIES.CASH_PAYMENTS_VIEW, CAPABILITIES.CASH_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)) {
     operationItems.push({ href: "/app/branch/cashier/payments", label: "Cobros", icon: CreditCard });
   }
@@ -304,9 +309,11 @@ export function AppSidebar({
   globalRoles,
   branchMemberships,
   effectiveCapabilities,
+  branchIds,
+  primaryBranchId,
   username,
   userId,
-}: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships" | "effectiveCapabilities"> & { username: string; userId: string }) {
+}: Pick<SessionPayload, "roleCode" | "globalRoles" | "branchMemberships" | "effectiveCapabilities" | "branchIds" | "primaryBranchId"> & { username: string; userId: string }) {
   const pathname = usePathname();
   const sections = buildNavSections({ roleCode, globalRoles, branchMemberships, effectiveCapabilities });
 
@@ -347,6 +354,14 @@ export function AppSidebar({
     setCamerasFailingCount(data.failingCount ?? 0);
   }, []);
   useOperationalPolling({ enabled: isMaster, intervalMs: 60_000, task: fetchCamerasSummary });
+
+  // Indicador de efectivo (prompt-indicador-efectivo-inteligente.md) — misma
+  // sucursal activa que usa el resto de la app (getActiveBranchId), no una
+  // resuelta aparte solo para este panel.
+  const cashIndicatorBranchId = getActiveBranchId(branchIds, primaryBranchId) || null;
+  const capabilitySession = { globalRoles, branchMemberships };
+  const canViewCashIndicator = isMaster || (cashIndicatorBranchId !== null && canInBranch(capabilitySession, cashIndicatorBranchId, CAPABILITIES.TREASURY_VIEW_BRANCH));
+  const canSendCashDeposit = cashIndicatorBranchId !== null && canInBranch(capabilitySession, cashIndicatorBranchId, CAPABILITIES.CASH_SESSION_OPERATE);
 
   /* ── Rail behavior: always starts collapsed, user expands temporarily ── */
   const [collapsed, setCollapsed] = useState(true);
@@ -477,6 +492,11 @@ export function AppSidebar({
           </>
         )}
       </div>
+
+      {/* ── 1.5. Indicador de efectivo (oculto colapsado / sin permiso / sin nada que reportar) ── */}
+      {!isCollapsed && canViewCashIndicator && (
+        <CashIndicatorPanel branchId={cashIndicatorBranchId} isMaster={isMaster} canSendDeposit={canSendCashDeposit} />
+      )}
 
       {/* ── 2. Nav (flex-1, overflow-y auto) ── */}
       <nav className="flex-1 overflow-y-auto px-2 py-1 space-y-4">

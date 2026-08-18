@@ -65,3 +65,23 @@ export function operationalWindow(businessDate: Date) {
 export function getOperationalWindowForNow(now = new Date()) {
   return operationalWindow(businessDateFromNow(now));
 }
+
+/**
+ * Semana calendario lunes-domingo (Managua) que contiene `businessDate`.
+ * `businessDate` ya viene anclado a medianoche UTC representando el día
+ * calendario local (businessDateFromInstant), así que getUTCDay() da el día
+ * de semana correcto sin volver a tocar zona horaria (prompt-modulo-dinero-
+ * semana-sucursal.md §3: "no la hora local del navegador").
+ */
+export function weekStartForBusinessDate(businessDate: Date): Date {
+  const weekday = businessDate.getUTCDay(); // 0=domingo..6=sábado
+  const daysSinceMonday = (weekday + 6) % 7; // lunes=0, martes=1, ..., domingo=6
+  return new Date(businessDate.getTime() - daysSinceMonday * 24 * 60 * 60 * 1000);
+}
+
+/** Lunes y domingo (ambos como businessDate, medianoche UTC) de la semana que contiene `businessDate`. */
+export function businessDateWeekRange(businessDate: Date): { weekStart: Date; weekEnd: Date } {
+  const weekStart = weekStartForBusinessDate(businessDate);
+  const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+  return { weekStart, weekEnd };
+}

@@ -163,6 +163,8 @@ export function AppShellRouter({
         globalRoles={session.globalRoles}
         branchMemberships={session.branchMemberships}
         effectiveCapabilities={session.effectiveCapabilities}
+        branchIds={session.branchIds}
+        primaryBranchId={session.primaryBranchId}
         username={session.username}
         userId={session.userId}
       />

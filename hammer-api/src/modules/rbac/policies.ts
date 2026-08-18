@@ -8,6 +8,11 @@ export const CAPABILITIES = {
   MASTER_CASH_MONITOR_VIEW: "master.cash_monitor.view",
   MASTER_CAMERAS_VIEW: "master.cameras.view",
   TREASURY_MANAGE: "treasury.manage",
+  /** Solo lectura del indicador de efectivo de LA PROPIA sucursal — sin
+   * confirmar depósitos, eso sigue siendo TREASURY_MANAGE (prompt-indicador-
+   * efectivo-inteligente.md §6: "Admin de sucursal → su sucursal. Panel con
+   * acciones" salvo confirmar, que es solo de Master). */
+  TREASURY_VIEW_BRANCH: "treasury.view_branch",
   SYSTEM_ADMIN_ACCESS: "system.admin.access",
   SYSTEM_ADMIN_ROLE_CONFIG: "system.admin.role.config",
   SYSTEM_ADMIN_SETTINGS: "system.admin.settings",
@@ -178,6 +183,7 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.CASH_MOVEMENT_CREATE,
     CAPABILITIES.CASH_MOVEMENT_APPROVE,
     CAPABILITIES.CASH_MOVEMENT_VIEW,
+    CAPABILITIES.TREASURY_VIEW_BRANCH,
     CAPABILITIES.OPERATING_EXPENSE_VIEW,
     CAPABILITIES.OPERATING_EXPENSE_CREATE,
     // Finanzas de su sucursal (sin planilla: los salarios no se exponen a admin de sucursal).
