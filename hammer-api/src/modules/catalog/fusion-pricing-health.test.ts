@@ -115,7 +115,11 @@ function createArenaFakeDb(input: {
 test("Prueba 9 (doc): canónico con costo efectivo C$1.00 y stock > 0 → PLACEHOLDER_COST", async () => {
   const db = createArenaFakeDb({
     products: { [CANONICAL_ID]: { globalCost: new Prisma.Decimal(1) } }, // relleno, exactamente el ejemplo del doc
-    canonicalBalance: { quantityOnHand: 126.5, weightedAverageCost: 18.55 }, // el WAC correcto queda tapado por globalCost=1
+    // WAC en 0 (sin compras todavía) — no hay costo real que tapar: desde
+    // prompt-costos-precios-sucursal.md B2/B4, un WAC real siempre gana sobre
+    // el relleno; el placeholder solo se resuelve cuando de verdad no hay
+    // nada mejor, que es el escenario que esto prueba ahora.
+    canonicalBalance: { quantityOnHand: 126.5, weightedAverageCost: 0 },
   });
   const result = await checkStockGroupPricingHealth(db, { stockGroupId: STOCK_GROUP_ID, branchIds: [BRANCH_ID] });
   assert.equal(result.healthy, false);
@@ -176,7 +180,9 @@ test("margen absurdamente alto (costo de relleno) → MARGIN_OUTLIER, el caso de
   const db = createArenaFakeDb({
     products: { [CANONICAL_ID]: { globalCost: new Prisma.Decimal(1) } },
     settings: [{ productId: CANONICAL_ID, branchPrice: new Prisma.Decimal(35) }], // margen = (35-1)/35 = 97.14%
-    canonicalBalance: { quantityOnHand: 10, weightedAverageCost: 18.55 },
+    // WAC en 0 (sin compras): igual que arriba, con un WAC real disponible
+    // ya no sería un costo de relleno — B2/B4 lo habría resuelto solos.
+    canonicalBalance: { quantityOnHand: 10, weightedAverageCost: 0 },
   });
   const result = await checkStockGroupPricingHealth(db, { stockGroupId: STOCK_GROUP_ID, branchIds: [BRANCH_ID] });
   const issue = result.issues.find((i) => i.kind === "MARGIN_OUTLIER" && i.productId === CANONICAL_ID);

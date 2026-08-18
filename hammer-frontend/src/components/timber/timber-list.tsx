@@ -35,7 +35,7 @@ type TimberItem = {
   stockOnHand?: number;
   effectiveCost?: number | null;
   effectivePrice?: number | null;
-  priceSource?: "BRANCH" | "MISSING";
+  priceSource?: "BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED";
   costSource?: "BRANCH" | "WAC" | "NONE";
   warnings?: string[];
   product: {
@@ -49,6 +49,19 @@ type TimberItem = {
 
 /** Conversion map: internal vara lengths → display pies */
 const VARA_TO_PIES: Record<number, number> = { 16: 6, 14: 5, 11: 4, 8: 3 };
+
+/**
+ * "STANDARD" (precio general, sin fila por sucursal) no es "Sin precio" —
+ * antes de que effective-pricing.ts respaldara al precio estándar, la única
+ * alternativa a BRANCH era efectivamente no tener precio; ya no es así
+ * (prompt-costos-precios-sucursal.md B1).
+ */
+const PRICE_SOURCE_LABEL: Record<"BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED", string> = {
+  BRANCH: "Sucursal",
+  STANDARD: "Precio estándar",
+  FUSION_DERIVED: "Derivado de fusión",
+  MISSING: "Sin precio",
+};
 
 type TimberListData = {
   items: TimberItem[];
@@ -247,7 +260,7 @@ export function TimberList() {
                     </TD>
                     <TD className="text-right font-mono font-semibold text-[var(--color-warehouse-700)]">
                       {sellingPrice !== null ? `C$${sellingPrice.toFixed(2)}` : "Sin precio"}
-                      {item.priceSource ? <div className="text-[0.6rem] text-[var(--color-text-soft)]">{item.priceSource === "BRANCH" ? "Sucursal" : "Sin precio"}</div> : null}
+                      {item.priceSource ? <div className="text-[0.6rem] text-[var(--color-text-soft)]">{PRICE_SOURCE_LABEL[item.priceSource]}</div> : null}
                     </TD>
                     <TD className="text-right">
                       <Badge variant={sellingPrice === null ? "neutral" : "success"}>

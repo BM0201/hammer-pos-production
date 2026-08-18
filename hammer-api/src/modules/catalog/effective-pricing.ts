@@ -14,7 +14,7 @@ export type EffectivePricing = {
   averageCost: Prisma.Decimal | null;
   lastPurchaseCost: Prisma.Decimal | null;
   effectiveCost: Prisma.Decimal | null;
-  priceSource: "BRANCH" | "MISSING" | "FUSION_DERIVED";
+  priceSource: "BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED";
   costSource: "BRANCH" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
   /**
    * true cuando el producto es un miembro DERIVADO de una fusión activa (no
@@ -35,23 +35,6 @@ export type EffectivePricing = {
    * DELIBERADO sobre impliedFusionPrice, no "un precio suelto más" (§2.2).
    */
   isFusionPriceOverride: boolean;
-};
-
-type ProductWithOptionalBranchPricing = {
-  id: string;
-  standardSalePrice: Prisma.Decimal;
-  globalCost?: Prisma.Decimal | null;
-  averageCost?: Prisma.Decimal | null;
-  lastPurchaseCost?: Prisma.Decimal | null;
-  branchProductSettings?: Array<{
-    branchId: string;
-    branchPrice: Prisma.Decimal | null;
-    branchCost: Prisma.Decimal | null;
-  }>;
-  inventoryBalances?: Array<{
-    branchId: string;
-    weightedAverageCost: Prisma.Decimal;
-  }>;
 };
 
 /**
@@ -231,36 +214,6 @@ async function getEffectiveProductPricingBatch(
   return result;
 }
 
-function mapProductWithEffectivePricing<TProduct extends ProductWithOptionalBranchPricing>(
-  product: TProduct,
-  branchId?: string,
-): TProduct | (Omit<TProduct, "branchProductSettings" | "inventoryBalances"> & EffectivePricing) {
-  if (!branchId) return product;
-
-  const { branchProductSettings: _settings, inventoryBalances: _balances, ...productData } = product;
-  const branchSetting = product.branchProductSettings?.find((setting) => setting.branchId === branchId);
-  const inventoryBalance = product.inventoryBalances?.find((balance) => balance.branchId === branchId);
-
-  return {
-    ...productData,
-    ...resolveEffectivePricing({
-      productId: product.id,
-      standardSalePrice: product.standardSalePrice,
-      globalCost: product.globalCost ?? null,
-      averageCost: product.averageCost ?? null,
-      lastPurchaseCost: product.lastPurchaseCost ?? null,
-      branchPrice: branchSetting?.branchPrice ?? null,
-      branchCost: branchSetting?.branchCost ?? null,
-      weightedAverageCost: inventoryBalance?.weightedAverageCost ?? null,
-      // Sin datos del canónico pre-cargados en este objeto: no hay forma de
-      // resolver fusión aquí sin una consulta extra. Los llamadores que
-      // necesitan precisión de fusión (catalog/service.ts) pasan `fusion`
-      // directo a resolveEffectivePricingFromParts en vez de usar este mapper.
-      fusion: null,
-    }),
-  };
-}
-
 type CostChainInput = {
   branchCost: Prisma.Decimal | null | undefined;
   averageCost: Prisma.Decimal | null | undefined;
@@ -270,36 +223,51 @@ type CostChainInput = {
 };
 
 /**
- * Prioridad de costo: branchCost > averageCost > globalCost >
- * lastPurchaseCost > WAC > null. branchCost permite que cada sucursal
- * registre su propio costo de adquisición (p.ej. proveedor local
- * diferente), lo que produce snapshots de margen correctos.
+ * Prioridad: branchCost > weightedAverageCost > averageCost > globalCost >
+ * lastPurchaseCost > null.
  *
- * Función propia porque ahora se llama en DOS contextos: sobre los campos
- * propios de un producto normal (o el canónico de una fusión), o —desde
- * fuera de este archivo, en la auditoría de coherencia— sobre los campos
- * propios de un miembro DERIVADO para detectar qué costo implicarían si
- * todavía se leyeran (ya no se leen, pero pueden seguir ahí como dato
- * corrupto sin limpiar).
+ * Los dos primeros son POR SUCURSAL; los tres últimos son globales y solo
+ * entran cuando la sucursal no tiene costo propio. El WAC —el único costo
+ * por sucursal que el sistema calcula solo, a partir de las compras reales
+ * de esa sucursal— antes estaba último, detrás de tres campos idénticos
+ * para toda la red: dos sucursales que compran al mismo producto a precios
+ * distintos mostraban el mismo margen (prompt-costos-precios-sucursal.md
+ * B2). `branchCost` sigue primero porque es una declaración explícita del
+ * usuario y debe poder sobreescribir el cálculo.
+ *
+ * Un WAC de 0 no es un costo — es "no sé", no "vale nada". Un balance recién
+ * creado (sin compras todavía, o el de un miembro derivado de una fusión que
+ * `rebuildStockGroupBalancesTx` deja en cero por diseño) se ignora y cae al
+ * siguiente respaldo; nunca produce un costo efectivo de cero, que desactiva
+ * el guard de venta bajo costo (B4).
+ *
+ * Función propia porque se llama en DOS contextos: sobre los campos propios
+ * de un producto normal (o el canónico de una fusión), o —desde fuera de
+ * este archivo, en la auditoría de coherencia— sobre los campos propios de
+ * un miembro DERIVADO para detectar qué costo implicarían si todavía se
+ * leyeran (ya no se leen, pero pueden seguir ahí como dato corrupto sin
+ * limpiar).
  */
 export function resolveCostChain(input: CostChainInput): { cost: Prisma.Decimal | null; source: EffectivePricing["costSource"] } {
+  const usableWac = input.weightedAverageCost && input.weightedAverageCost.gt(0) ? input.weightedAverageCost : null;
+
   const cost = input.branchCost
+    ?? usableWac
     ?? input.averageCost
     ?? input.globalCost
     ?? input.lastPurchaseCost
-    ?? input.weightedAverageCost
     ?? null;
 
   const source: EffectivePricing["costSource"] = input.branchCost !== null && input.branchCost !== undefined
     ? "BRANCH"
-    : input.averageCost !== null && input.averageCost !== undefined
-      ? "GLOBAL_AVERAGE"
-      : input.globalCost !== null && input.globalCost !== undefined
-        ? "GLOBAL"
-        : input.lastPurchaseCost !== null && input.lastPurchaseCost !== undefined
-          ? "LAST_PURCHASE"
-          : input.weightedAverageCost !== null
-            ? "WAC_ESTIMATE"
+    : usableWac !== null
+      ? "WAC_ESTIMATE"
+      : input.averageCost !== null && input.averageCost !== undefined
+        ? "GLOBAL_AVERAGE"
+        : input.globalCost !== null && input.globalCost !== undefined
+          ? "GLOBAL"
+          : input.lastPurchaseCost !== null && input.lastPurchaseCost !== undefined
+            ? "LAST_PURCHASE"
             : "NONE";
 
   return { cost, source };
@@ -385,7 +353,18 @@ function resolveEffectivePricing(input: {
     };
   }
 
-  const effectivePrice = input.branchPrice;
+  // Respaldo al precio estándar (B1): sin esto, un producto sin fila
+  // BranchProductSetting para esta sucursal no tenía precio ahí — y esas
+  // filas no se crean solas. "STANDARD" es deliberadamente visible (no se
+  // colapsa en el mismo valor que BRANCH): un producto vendiéndose al
+  // precio general porque nadie le puso precio en esta sucursal es una
+  // situación que hay que poder listar, no un detalle que se tapa.
+  // standardSalePrice es NOT NULL en Product, así que "MISSING" ya no puede
+  // ocurrir por esta vía — queda en el tipo por compatibilidad con
+  // consumidores que aún lo esperan como caso límite.
+  const effectivePrice = input.branchPrice ?? input.standardSalePrice;
+  const priceSource: EffectivePricing["priceSource"] = input.branchPrice !== null ? "BRANCH" : "STANDARD";
+
   const { cost: effectiveCost, source: costSource } = resolveCostChain({
     branchCost: input.branchCost,
     averageCost: input.averageCost,
@@ -405,7 +384,7 @@ function resolveEffectivePricing(input: {
     averageCost: input.averageCost ?? null,
     lastPurchaseCost: input.lastPurchaseCost ?? null,
     effectiveCost,
-    priceSource: input.branchPrice === null ? "MISSING" : "BRANCH",
+    priceSource,
     costSource,
     isFusionMember: false,
     impliedFusionPrice: null,
@@ -417,5 +396,4 @@ export {
   resolveEffectivePricing as resolveEffectivePricingFromParts,
   getEffectiveProductPricing,
   getEffectiveProductPricingBatch,
-  mapProductWithEffectivePricing,
 };

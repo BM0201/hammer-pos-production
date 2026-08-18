@@ -2,8 +2,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
-import { mapProductWithEffectivePricing, resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
-import { formatDualStock, convertBaseQtyToSaleQty, getProductStockConversion } from "@/modules/inventory/unit-conversion";
+import { resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
+import { formatDualStock, convertBaseQtyToSaleQty, convertBaseUnitCostToSaleUnitCost, getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import type { ProductStockConversion } from "@/modules/inventory/unit-conversion";
 import { assertPriceNotBelowCost, assertNotFusionMemberCostWrite } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
@@ -193,7 +193,7 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
   const branchSetting = product.branchProductSettings?.find((s) => s.branchId === branchId);
   const isFusionMember = Boolean(conversion && !conversion.isCanonical);
   const saleUnitWac = balance?.weightedAverageCost && conversion
-    ? balance.weightedAverageCost.mul(conversion.conversionFactor)
+    ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: balance.weightedAverageCost, conversionFactor: conversion.conversionFactor })
     : balance?.weightedAverageCost ?? null;
 
   const effective = resolveEffectivePricingFromParts({
@@ -219,7 +219,14 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
       : null,
   });
 
-  const mapped = mapProductWithEffectivePricing(product, branchId);
+  // Una sola resolución: `effective` ya sale del canónico cuando corresponde
+  // (fusion arriba) y tiene el respaldo al precio estándar y la prioridad de
+  // costo correctos (prompt-costos-precios-sucursal.md). Antes se calculaba
+  // una segunda vez con mapProductWithEffectivePricing —ciega a la fusión,
+  // sin convertir el WAC por factor— y se descartaba entera: `effective` ya
+  // pisaba todos sus campos de precio/costo al spreadearse después. Cómputo
+  // duplicado sin efecto observable; se borra en vez de "arreglarse".
+  const { branchProductSettings: _branchProductSettings, inventoryBalances: _inventoryBalances, ...productData } = product;
 
   const dualStock = conversion && balance
     ? formatDualStock({
@@ -268,15 +275,15 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
     ?? fallbackQty;
 
   return {
-    ...mapped,
+    ...productData,
     ...effective,
     categoryName: product.category?.name ?? null,
     stockOnHand: displaySaleStock,
     availableStock: displaySaleStock,
     availableBaseStock: balance?.quantityOnHand.toNumber() ?? fallbackQty,
     availableSaleStock: displaySaleStock,
-    baseUnit: conversion?.baseUnit ?? (mapped as { unit: string }).unit,
-    saleUnit: conversion?.saleUnit ?? (mapped as { unit: string }).unit,
+    baseUnit: conversion?.baseUnit ?? product.unit,
+    saleUnit: conversion?.saleUnit ?? product.unit,
     stockConversion: conversion ? {
       stockGroupId: conversion.stockGroupId,
       stockGroupCode: conversion.stockGroupCode,

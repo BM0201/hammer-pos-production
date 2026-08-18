@@ -65,7 +65,7 @@ export type PricingProductContext = {
   standardSalePrice: number;
   branchPrice: number | null;
   effectivePrice: number | null;
-  priceSource: "BRANCH" | "MISSING";
+  priceSource: "BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED";
   branchCost: number | null;
   weightedAverageCost: number | null;
   effectiveCost: number | null;

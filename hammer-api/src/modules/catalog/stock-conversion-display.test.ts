@@ -84,3 +84,30 @@ test("Caja/Unidad/Libra: Caja (empaque cerrado) sigue mostrando el conteo de caj
   const mapped = mapSingleProductWithBranchInventory(baseProduct("prod-caja"), BRANCH_ID, conversion, balanceRow());
   assert.equal(mapped.availableSaleStock, 2);
 });
+
+/* ── prompt-costos-precios-sucursal.md B3/B5 — vía mapSingleProductWithBranchInventory,
+ * el camino real que usa el catálogo del POS (batchMapProductsWithBranchInventory
+ * pasa canonicalProduct/canonicalBranchSetting exactamente así). ── */
+
+test("Libra (factor 100, derivada): el costo efectivo sale del canónico × factor, IGNORA el globalCost de relleno propio del miembro (B3)", () => {
+  const conversion = conversionFor({ productId: "prod-libra", saleUnit: "LIBRA", conversionFactor: 100, isCanonical: false, isPackagePresentation: false });
+  const product = { ...baseProduct("prod-libra"), globalCost: new Prisma.Decimal(1) }; // relleno tecleado a mano en el miembro
+  const canonicalProduct = { id: "prod-unidad", standardSalePrice: new Prisma.Decimal(30), globalCost: null, averageCost: null, lastPurchaseCost: null };
+  const mapped = mapSingleProductWithBranchInventory(product, BRANCH_ID, conversion, balanceRow(), canonicalProduct, null);
+  // balanceRow().weightedAverageCost = 10 (del canónico) × factor 100 = 1000 — NO 1.00.
+  assert.equal(mapped.effectiveCost?.toNumber(), 1000);
+  assert.notEqual(mapped.effectiveCost?.toNumber(), 1);
+  assert.equal(mapped.isFusionMember, true);
+});
+
+test("Libra (factor 100, derivada): costSource es coherente con effectiveCost — mismo objeto, no dos resoluciones parcialmente pisadas (B5)", () => {
+  const conversion = conversionFor({ productId: "prod-libra", saleUnit: "LIBRA", conversionFactor: 100, isCanonical: false, isPackagePresentation: false });
+  const product = { ...baseProduct("prod-libra"), globalCost: new Prisma.Decimal(1) };
+  const canonicalProduct = { id: "prod-unidad", standardSalePrice: new Prisma.Decimal(30), globalCost: null, averageCost: null, lastPurchaseCost: null };
+  const mapped = mapSingleProductWithBranchInventory(product, BRANCH_ID, conversion, balanceRow(), canonicalProduct, null);
+  // La fuente que se muestra (WAC_ESTIMATE, del canónico) tiene que corresponder
+  // al número que efectivamente se usó — antes solo se pisaban effectiveCost y
+  // weightedAverageCost, costSource podía quedar de la resolución vieja.
+  assert.equal(mapped.costSource, "WAC_ESTIMATE");
+  assert.equal(mapped.effectiveCost?.toNumber(), 1000);
+});

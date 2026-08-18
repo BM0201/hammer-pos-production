@@ -3,15 +3,19 @@ import test from "node:test";
 import { Prisma } from "@prisma/client";
 import {
   resolveEffectivePricingFromParts,
+  resolveCostChain,
   resolveFusionMemberCost,
   relativeDeviation,
   FUSION_PRICE_OVERRIDE_THRESHOLD,
   type FusionMemberPricingBasis,
 } from "@/modules/catalog/effective-pricing";
 
-// Re-export the private function for testing by re-implementing the pure logic.
-// We test the exported type surface via mapProductWithEffectivePricing with
-// controlled inputs instead of spinning up a DB connection.
+// prompt-costos-precios-sucursal.md: "al terminar debe existir una sola
+// resolución de costo y precio" — los tests llaman a las funciones REALES y
+// exportadas (resolveEffectivePricingFromParts, resolveCostChain), nunca a
+// una reimplementación de mano. Una copia hecha a mano acá mismo habría sido
+// exactamente el tipo de quinta implementación divergente que este doc
+// existe para eliminar (era, de hecho, el estado anterior de este archivo).
 
 function d(v: number | null) {
   return v === null ? null : new Prisma.Decimal(v);
@@ -28,35 +32,6 @@ type PricingInput = {
   weightedAverageCost: Prisma.Decimal | null;
 };
 
-// Inline the pure resolution logic mirrored from effective-pricing.ts so tests
-// remain in-process without a DB.
-function resolveEffectivePricingPure(input: PricingInput) {
-  const effectivePrice = input.branchPrice;
-  const effectiveCost = input.branchCost
-    ?? input.averageCost
-    ?? input.globalCost
-    ?? input.lastPurchaseCost
-    ?? input.weightedAverageCost
-    ?? null;
-  const costSource = input.branchCost !== null && input.branchCost !== undefined
-    ? "BRANCH"
-    : input.averageCost !== null && input.averageCost !== undefined
-      ? "GLOBAL_AVERAGE"
-      : input.globalCost !== null && input.globalCost !== undefined
-        ? "GLOBAL"
-        : input.lastPurchaseCost !== null && input.lastPurchaseCost !== undefined
-          ? "LAST_PURCHASE"
-          : input.weightedAverageCost !== null
-            ? "WAC_ESTIMATE"
-            : "NONE";
-  return {
-    effectiveCost,
-    costSource,
-    effectivePrice,
-    priceSource: input.branchPrice === null ? "MISSING" : "BRANCH",
-  };
-}
-
 const BASE: PricingInput = {
   productId: "prod-1",
   standardSalePrice: d(100)!,
@@ -68,91 +43,117 @@ const BASE: PricingInput = {
   weightedAverageCost: null,
 };
 
+function resolve(input: PricingInput) {
+  return resolveEffectivePricingFromParts({ ...input, fusion: null });
+}
+
+/* ── Prioridad de costo (B2): branchCost > WAC > averageCost > globalCost > lastPurchaseCost ── */
+
 test("effectiveCost: branchCost tiene prioridad sobre todos los otros costos", () => {
-  const result = resolveEffectivePricingPure({
-    ...BASE,
-    branchCost: d(10),
-    averageCost: d(20),
-    globalCost: d(30),
-    lastPurchaseCost: d(40),
-    weightedAverageCost: d(50),
-  });
+  const result = resolve({ ...BASE, branchCost: d(10), averageCost: d(20), globalCost: d(30), lastPurchaseCost: d(40), weightedAverageCost: d(50) });
   assert.equal(result.effectiveCost?.toNumber(), 10);
   assert.equal(result.costSource, "BRANCH");
 });
 
-test("effectiveCost: usa averageCost cuando no hay branchCost", () => {
-  const result = resolveEffectivePricingPure({
-    ...BASE,
-    branchCost: null,
-    averageCost: d(20),
-    globalCost: d(30),
-  });
-  assert.equal(result.effectiveCost?.toNumber(), 20);
-  assert.equal(result.costSource, "GLOBAL_AVERAGE");
-});
-
-test("effectiveCost: usa globalCost cuando no hay branch ni average", () => {
-  const result = resolveEffectivePricingPure({
-    ...BASE,
-    branchCost: null,
-    averageCost: null,
-    globalCost: d(30),
-    lastPurchaseCost: d(40),
-  });
-  assert.equal(result.effectiveCost?.toNumber(), 30);
-  assert.equal(result.costSource, "GLOBAL");
-});
-
-test("effectiveCost: usa lastPurchaseCost cuando no hay branch/average/global", () => {
-  const result = resolveEffectivePricingPure({
-    ...BASE,
-    branchCost: null,
-    averageCost: null,
-    globalCost: null,
-    lastPurchaseCost: d(40),
-    weightedAverageCost: d(50),
-  });
-  assert.equal(result.effectiveCost?.toNumber(), 40);
-  assert.equal(result.costSource, "LAST_PURCHASE");
-});
-
-test("effectiveCost: usa WAC cuando no hay otros costos", () => {
-  const result = resolveEffectivePricingPure({
-    ...BASE,
-    weightedAverageCost: d(50),
-  });
+test("Sucursal (doc) Prueba 5: sucursal con WAC propio y averageCost global cargado → gana el WAC, no el global (B2)", () => {
+  const result = resolve({ ...BASE, branchCost: null, averageCost: d(20), globalCost: d(30), lastPurchaseCost: d(40), weightedAverageCost: d(50) });
   assert.equal(result.effectiveCost?.toNumber(), 50);
   assert.equal(result.costSource, "WAC_ESTIMATE");
 });
 
-test("effectiveCost: retorna null y NONE cuando no hay ningún costo", () => {
-  const result = resolveEffectivePricingPure(BASE);
+test("Sucursal (doc) Prueba 6: sucursal con branchCost cargado → gana ese, sin importar el WAC", () => {
+  const result = resolve({ ...BASE, branchCost: d(15), weightedAverageCost: d(50) });
+  assert.equal(result.effectiveCost?.toNumber(), 15);
+  assert.equal(result.costSource, "BRANCH");
+});
+
+test("Sucursal (doc) Prueba 7: dos sucursales con WAC distinto para el mismo producto → costos efectivos distintos (la regresión que define el arreglo)", () => {
+  const rivas = resolve({ ...BASE, weightedAverageCost: d(18.55) });
+  const managua = resolve({ ...BASE, weightedAverageCost: d(22.10) });
+  assert.notEqual(rivas.effectiveCost?.toNumber(), managua.effectiveCost?.toNumber());
+  assert.equal(rivas.costSource, "WAC_ESTIMATE");
+  assert.equal(managua.costSource, "WAC_ESTIMATE");
+});
+
+test("effectiveCost: usa averageCost cuando no hay branchCost ni WAC", () => {
+  const result = resolve({ ...BASE, averageCost: d(20), globalCost: d(30) });
+  assert.equal(result.effectiveCost?.toNumber(), 20);
+  assert.equal(result.costSource, "GLOBAL_AVERAGE");
+});
+
+test("effectiveCost: usa globalCost cuando no hay branch, WAC ni average", () => {
+  const result = resolve({ ...BASE, globalCost: d(30), lastPurchaseCost: d(40) });
+  assert.equal(result.effectiveCost?.toNumber(), 30);
+  assert.equal(result.costSource, "GLOBAL");
+});
+
+test("effectiveCost: usa lastPurchaseCost cuando no hay ningún otro", () => {
+  const result = resolve({ ...BASE, lastPurchaseCost: d(40) });
+  assert.equal(result.effectiveCost?.toNumber(), 40);
+  assert.equal(result.costSource, "LAST_PURCHASE");
+});
+
+test("Sucursal (doc) Prueba 9: sin ninguna fuente → effectiveCost null, costSource NONE", () => {
+  const result = resolve(BASE);
   assert.equal(result.effectiveCost, null);
   assert.equal(result.costSource, "NONE");
 });
 
-test("effectivePrice: usa branchPrice cuando existe", () => {
-  const result = resolveEffectivePricingPure({ ...BASE, branchPrice: d(90) });
+/* ── WAC de cero (B4): no es un costo, es "no sé" ── */
+
+test("Sucursal (doc) Prueba 8: WAC en cero se ignora y cae al siguiente respaldo — nunca produce costo efectivo cero", () => {
+  const result = resolve({ ...BASE, weightedAverageCost: d(0), averageCost: d(25) });
+  assert.equal(result.effectiveCost?.toNumber(), 25);
+  assert.equal(result.costSource, "GLOBAL_AVERAGE");
+  assert.notEqual(result.effectiveCost?.toNumber(), 0);
+});
+
+test("WAC en cero sin ningún otro respaldo → effectiveCost null (NONE), no cero", () => {
+  const result = resolve({ ...BASE, weightedAverageCost: d(0) });
+  assert.equal(result.effectiveCost, null);
+  assert.equal(result.costSource, "NONE");
+});
+
+test("resolveCostChain: WAC en cero se trata igual que ausente, directamente en la función exportada", () => {
+  const withZero = resolveCostChain({ branchCost: null, averageCost: null, globalCost: null, lastPurchaseCost: d(40), weightedAverageCost: d(0) });
+  const withoutWac = resolveCostChain({ branchCost: null, averageCost: null, globalCost: null, lastPurchaseCost: d(40), weightedAverageCost: null });
+  assert.equal(withZero.cost?.toNumber(), withoutWac.cost?.toNumber());
+  assert.equal(withZero.source, withoutWac.source);
+});
+
+test("effectiveCost: branchCost=0 SÍ se respeta (0 es una declaración explícita, no 'no sé') — no cae al siguiente nivel", () => {
+  const result = resolve({ ...BASE, branchCost: d(0), averageCost: d(20) });
+  // null-coalescing solo salta null/undefined, no 0 — a diferencia del WAC, branchCost=0 es una decisión del usuario
+  assert.equal(result.effectiveCost?.toNumber(), 0);
+  assert.equal(result.costSource, "BRANCH");
+});
+
+/* ── Respaldo de precio (B1) ── */
+
+test("Sucursal (doc) Prueba 1: producto con branchPrice → effectivePrice es ese, priceSource BRANCH", () => {
+  const result = resolve({ ...BASE, branchPrice: d(90) });
   assert.equal(result.effectivePrice?.toNumber(), 90);
   assert.equal(result.priceSource, "BRANCH");
 });
 
-test("effectivePrice: es null (sin fallback a standardSalePrice) cuando no hay branchPrice", () => {
-  const result = resolveEffectivePricingPure({ ...BASE, branchPrice: null });
-  assert.equal(result.effectivePrice, null);
-  assert.equal(result.priceSource, "MISSING");
+test("Sucursal (doc) Prueba 2: producto SIN branchPrice y con standardSalePrice → effectivePrice es el estándar, priceSource STANDARD", () => {
+  const result = resolve({ ...BASE, standardSalePrice: d(650)!, branchPrice: null });
+  assert.equal(result.effectivePrice?.toNumber(), 650);
+  assert.equal(result.priceSource, "STANDARD");
+  assert.notEqual(result.effectivePrice, null); // antes de B1 esto era null
 });
 
-test("effectiveCost: branchCost=0 no cae al siguiente nivel (mantiene BRANCH con 0)", () => {
-  const result = resolveEffectivePricingPure({
-    ...BASE,
-    branchCost: d(0),
-    averageCost: d(20),
-  });
-  // null-coalescing solo salta null/undefined, no 0
-  assert.equal(result.effectiveCost?.toNumber(), 0);
-  assert.equal(result.costSource, "BRANCH");
+// Prueba 3 del doc ("producto sin ninguno → MISSING") no es representable
+// acá: standardSalePrice es NOT NULL en el schema de Product (siempre required
+// al crear), así que con el fix de B1 ya no existe un producto real sin
+// ningún precio — MISSING queda en el tipo por compatibilidad, no se prueba
+// como alcanzable porque no lo es.
+
+test("Sucursal (doc) Prueba 4: sucursal nueva sin fila BranchProductSetting → el producto con precio estándar SÍ tiene precio ahí", () => {
+  // Simula el escenario exacto: branchPrice null porque nunca se creó la fila.
+  const result = resolve({ ...BASE, standardSalePrice: d(199.99)!, branchPrice: null, branchCost: null });
+  assert.equal(result.effectivePrice?.toNumber(), 199.99);
+  assert.equal(result.priceSource, "STANDARD");
 });
 
 /* ── prompt-costos-precios-fusion.md §5 — pruebas 1, 2, 3, 5, 6, sobre las

@@ -58,6 +58,20 @@ import {
  * para servir un solo tab a la vez (Gastos, Precios, Fletes, Configuración) sin
  * duplicar código. La meta final es extraerla a components/finance/*-panel.tsx.
  */
+/**
+ * "STANDARD" (respaldo al precio general, sin fila por sucursal) no es un
+ * precio de sucursal — antes de que effective-pricing.ts respaldara al
+ * precio estándar, la única alternativa a BRANCH era no tener precio, así
+ * que un texto fijo "(Sucursal)" no era tan incorrecto; ahora sí lo es
+ * (prompt-costos-precios-sucursal.md B1).
+ */
+const PRICE_SOURCE_LABEL: Record<PricingProductContext["priceSource"], string> = {
+  BRANCH: "Sucursal",
+  STANDARD: "Precio estándar",
+  FUSION_DERIVED: "Derivado de fusión",
+  MISSING: "Sin precio",
+};
+
 /** Historial por categoría del presupuesto inteligente (GET /api/finance/expense-history). */
 type ExpenseCategoryStats = {
   category: string;
@@ -1434,7 +1448,7 @@ export function ExpenseManager({
                         <div className="flex justify-between"><span>Categoria</span><strong>{productContext.categoryName}</strong></div>
                         <div className="flex justify-between"><span>Precio semilla (referencia)</span><strong>{formatC(productContext.standardSalePrice)}</strong></div>
                         <div className="flex justify-between"><span>Precio sucursal</span><strong>{productContext.branchPrice === null ? "Sin precio" : formatC(productContext.branchPrice)}</strong></div>
-                        <div className="flex justify-between"><span>Precio efectivo</span><strong>{productContext.effectivePrice === null ? "Sin precio en esta sucursal" : `${formatC(productContext.effectivePrice)} (Sucursal)`}</strong></div>
+                        <div className="flex justify-between"><span>Precio efectivo</span><strong>{productContext.effectivePrice === null ? "Sin precio en esta sucursal" : `${formatC(productContext.effectivePrice)} (${PRICE_SOURCE_LABEL[productContext.priceSource]})`}</strong></div>
                         <div className="flex justify-between"><span>Costo efectivo</span><strong>{productContext.effectiveCost === null ? "Sin costo" : `${formatC(productContext.effectiveCost)} (${productContext.costSource})`}</strong></div>
                         <div className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-800">
                           Politica: margen {productContext.categoryPolicy.targetMarginPercent}% · utilidad {formatC(productContext.categoryPolicy.minProfitAmount)} · gasto {formatC(productContext.categoryPolicy.monthlyExpenseAllocation)} · redondeo {productContext.categoryPolicy.roundingRule}

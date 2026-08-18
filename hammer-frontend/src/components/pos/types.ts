@@ -10,7 +10,7 @@ export type ProductRow = {
   standardSalePrice: string;
   branchPrice?: string | null;
   effectivePrice?: string | null;
-  priceSource?: "BRANCH" | "MISSING";
+  priceSource?: "BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED";
   unit: string;
   stockOnHand?: number;
   availableStock?: number;
