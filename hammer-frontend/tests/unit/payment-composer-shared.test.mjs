@@ -47,3 +47,39 @@ test("ambos consumidores importan del mismo path — no hay una segunda copia di
   const importLine = 'from "@/components/payments/payment-composer"';
   assert.ok(dialog.includes(importLine) && cashier.includes(importLine));
 });
+
+/**
+ * prompt-correccion-dialogo-cobro.md prueba 1 + el problema que describe:
+ * el compositor se agregó ENCIMA de las pestañas, no en su reemplazo — el
+ * componente tenía SingleLineEditor (con su propio selector de método tipo
+ * pestaña, onMethodChange) coexistiendo con los botones "+ método" del
+ * compositor. Se borró: no se oculta, no queda como atajo.
+ */
+test("payment-composer.tsx no tiene un selector de método tipo pestaña coexistiendo con los botones de agregar línea", () => {
+  const c = read("components/payments/payment-composer.tsx");
+  assert.ok(!c.includes("function SingleLineEditor") && !c.includes("<SingleLineEditor"), "el editor de caso único con pestañas de método debe estar borrado, no oculto (se permite mencionarlo en un comentario explicando por qué se borró)");
+  assert.ok(!c.includes("onMethodChange"), "no debe quedar un callback para cambiar el método de la línea actual");
+  assert.ok(!c.includes("changeSingleLineMethod"), "no debe quedar la función que cambiaba el método de la única línea");
+  // Sí debe quedar la única manera de fijar el método: agregar una línea de ese método.
+  assert.ok(c.includes("function addLine"), "agregar una línea es la única forma de fijar su método");
+});
+
+/**
+ * prompt-correccion-dialogo-cobro.md §2.5/prueba 11: "en un mostrador el
+ * botón de confirmar no puede estar fuera de pantalla" — verificación
+ * estructural (no hay DOM/render en este repo) de que la maqueta de tres
+ * zonas está en el código: el diálogo tiene alto máximo con flex-col, y
+ * PaymentComposer separa la lista (con scroll) del pie fijo.
+ */
+test("charge-dialog.tsx tiene alto máximo con estructura de tres zonas (encabezado fijo, cuerpo con scroll)", () => {
+  const c = read("components/pos/components/charge-dialog.tsx");
+  assert.match(c, /max-h-\[85vh\]/, "el diálogo debe tener alto máximo — el pie no puede quedar fuera de pantalla");
+  assert.ok(c.includes("flex-col"), "estructura de columna para separar encabezado fijo del cuerpo con scroll");
+});
+
+test("payment-composer.tsx separa la lista de líneas (con scroll) del pie fijo (agregar + confirmar)", () => {
+  const c = read("components/payments/payment-composer.tsx");
+  assert.ok(c.includes("overflow-y-auto"), "la lista de líneas debe ser el único área con scroll");
+  assert.ok(c.includes("flex-none space-y-2 pt-3"), "el pie (agregar método + confirmar) debe quedar fuera del área con scroll, en su propia zona fija");
+  assert.ok(c.includes('data-testid="payment-composer-confirm"'), "el botón de confirmar debe seguir siendo ubicable");
+});

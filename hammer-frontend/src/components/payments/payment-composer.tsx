@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Banknote, CreditCard, ArrowLeftRight, Plus, X, Check, ChevronRight, ChevronLeft, Copy, AlertTriangle } from "lucide-react";
+import { Banknote, CreditCard, ArrowLeftRight, Plus, X, Check, ChevronRight, ChevronLeft, ChevronDown, Copy, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
@@ -10,7 +10,10 @@ import toast from "react-hot-toast";
  * Composición de pago compartida entre el diálogo de cobro del POS
  * (charge-dialog.tsx) y la cola de cajero (cashier-payments.tsx) —
  * correccion-destino-y-pantalla-cobro.md §2.3/§2.4,
- * prompt-pantallas-recorrido-dinero.md §1 (Pantalla 1 · Cobro).
+ * prompt-pantallas-recorrido-dinero.md §1 (Pantalla 1 · Cobro),
+ * prompt-correccion-dialogo-cobro.md (sin pestañas: una sola lista de
+ * líneas, se agrega una del método que corresponda — nunca "se elige un
+ * método" por separado de agregar la línea).
  *
  * Modelo mental: no se elige un método, se arma el pago hasta cubrir el
  * total. El backend ya soporta esto de punta a punta (PaymentTender,
@@ -24,7 +27,7 @@ export type BankAccountOption = {
   bankName: string;
   accountAlias: string;
   accountNumber: string;
-  currency: string;
+  currencyCode: string;
   owner: string | null;
 };
 
@@ -75,19 +78,40 @@ function newLine(method: TenderMethod, amount: number, existing: DraftLine[]): D
   };
 }
 
+const BILLETES = [50, 100, 200, 500, 1000] as const;
+const BILLETE_MAYOR = 1000;
+
 /**
- * Montos rápidos calculados desde el total, no una tabla fija — Exacto y
- * los redondeos hacia arriba más cercanos. C$100/C$200/C$500 fijos no
- * significan nada frente a un total de C$890: ninguno alcanza a cubrirlo
- * (prompt-pantallas-recorrido-dinero.md §1.2).
+ * Montos con los que realmente te pagan un total dado (prompt-correccion-
+ * dialogo-cobro.md §2.4). El exacto primero; después el siguiente múltiplo
+ * de 50 (el vuelto chico que se da con monedas y billetes bajos); después
+ * las denominaciones de billete que superan el total; si ninguna alcanza
+ * (el total supera hasta el billete más grande), se completa con múltiplos
+ * del billete mayor. El algoritmo anterior usaba pasos fijos de
+ * 500/1000/2000: correcto para C$890, absurdo para C$45, donde ofrecía
+ * tres montos que nadie va a entregar por un clavo.
  */
 export function quickCashAmounts(total: number): number[] {
   if (!(total > 0)) return [];
-  const out = [round2(total)];
-  for (const step of [500, 1000, 2000]) {
-    const rounded = Math.ceil(total / step) * step;
-    if (rounded > total && !out.includes(rounded)) out.push(rounded);
+  const out: number[] = [round2(total)];
+
+  const nextFifty = Math.ceil(total / 50) * 50;
+  if (nextFifty > total && !out.includes(nextFifty)) out.push(nextFifty);
+
+  for (const bill of BILLETES) {
+    if (out.length >= 4) break;
+    if (bill >= total && !out.includes(bill)) out.push(bill);
   }
+
+  if (out.length < 4) {
+    let candidate = Math.ceil(total / BILLETE_MAYOR) * BILLETE_MAYOR;
+    if (candidate <= total) candidate += BILLETE_MAYOR;
+    while (out.length < 4) {
+      if (!out.includes(candidate)) out.push(candidate);
+      candidate += BILLETE_MAYOR;
+    }
+  }
+
   return out.slice(0, 4);
 }
 
@@ -131,6 +155,9 @@ export function PaymentComposer({
   bankAccounts = [],
 }: PaymentComposerProps) {
   const [lines, setLines] = useState<DraftLine[]>(() => [newLine("CASH", total, [])]);
+  // Acordeón: solo una línea abierta a la vez (§2.2, prueba 12). La línea
+  // inicial de efectivo arranca abierta — es el caso simple, un toque.
+  const [openLineId, setOpenLineId] = useState<string | null>(() => lines[0]?.id ?? null);
   const [pickerLineId, setPickerLineId] = useState<string | null>(null);
   const accountsAvailable = bankAccounts.length > 0;
 
@@ -140,6 +167,7 @@ export function PaymentComposer({
   const exactMatch = Math.abs(missing) < 0.005;
   const allLinesValid = validations.every((v) => v.valid);
   const canConfirm = !isSubmitting && lines.length > 0 && exactMatch && allLinesValid;
+  const hasCashLine = lines.some((l) => l.method === "CASH");
 
   function updateLine(id: string, patch: Partial<DraftLine>) {
     setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
@@ -151,17 +179,18 @@ export function PaymentComposer({
 
   function removeLine(id: string) {
     setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.id !== id) : prev));
+    setOpenLineId((prev) => (prev === id ? null : prev));
   }
 
   function addLine(method: TenderMethod) {
     const line = newLine(method, Math.max(missing, 0), lines);
     setLines((prev) => [...prev, line]);
+    setOpenLineId(line.id);
     if (method === "TRANSFER" && bankAccounts.length > 0) setPickerLineId(line.id);
   }
 
-  function changeSingleLineMethod(method: TenderMethod) {
-    setLines((prev) => (prev.length === 1 ? [{ ...prev[0], method, receivedRaw: "", referenceNumber: "", bankAccountId: "", touched: false }] : prev));
-    if (method === "TRANSFER" && bankAccounts.length > 0 && lines.length === 1) setPickerLineId(lines[0].id);
+  function toggleOpen(id: string) {
+    setOpenLineId((prev) => (prev === id ? null : id));
   }
 
   function confirm() {
@@ -185,7 +214,6 @@ export function PaymentComposer({
     onSubmit(tenders);
   }
 
-  const isSimpleCase = lines.length === 1;
   const pickerLine = pickerLineId ? lines.find((l) => l.id === pickerLineId) ?? null : null;
 
   if (pickerLine) {
@@ -201,78 +229,73 @@ export function PaymentComposer({
   }
 
   return (
-    <div className="space-y-3">
-      {isSimpleCase ? (
-        <SingleLineEditor
-          line={lines[0]}
-          total={total}
-          validation={validations[0]}
-          availableMethods={availableMethods}
-          bankAccounts={bankAccounts}
-          onMethodChange={changeSingleLineMethod}
-          onChange={(patch) => updateLine(lines[0].id, patch)}
-          onTouch={() => touchLine(lines[0].id)}
-          onOpenAccountPicker={() => setPickerLineId(lines[0].id)}
-        />
-      ) : (
-        <div className="space-y-2">
-          {lines.map((line, i) => (
-            <TenderRow
-              key={line.id}
-              line={line}
-              validation={validations[i]}
-              bankAccounts={bankAccounts}
-              onChange={(patch) => updateLine(line.id, patch)}
-              onTouch={() => touchLine(line.id)}
-              onRemove={() => removeLine(line.id)}
-              onOpenAccountPicker={() => setPickerLineId(line.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      <div className="flex flex-wrap gap-1.5">
-        {availableMethods.map((method) => {
-          const Meta = METHOD_META[method];
-          return (
-            <button
-              key={method}
-              type="button"
-              onClick={() => addLine(method)}
-              disabled={isSubmitting}
-              className="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-pay)] hover:text-[var(--color-pay)]"
-            >
-              <Plus className="h-3 w-3" /> {Meta.label}
-            </button>
-          );
-        })}
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Barra de cubierto/falta — siempre visible (§2.3), no solo con 2+ líneas. */}
+      <div
+        className={[
+          "mb-3 flex flex-none items-center justify-between rounded-xl px-4 py-2.5 text-sm font-semibold",
+          exactMatch
+            ? "border border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"
+            : "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]",
+        ].join(" ")}
+      >
+        <span>Cubierto C$ {covered.toFixed(2)}</span>
+        <span>{exactMatch ? "Completo" : missing > 0 ? `Falta C$ ${missing.toFixed(2)}` : `Sobra C$ ${Math.abs(missing).toFixed(2)}`}</span>
       </div>
 
-      {!isSimpleCase && (
-        <div
-          className={[
-            "flex items-center justify-between rounded-xl px-4 py-2.5 text-sm font-semibold",
-            exactMatch
-              ? "border border-[var(--color-success-200)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"
-              : "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]",
-          ].join(" ")}
-        >
-          <span>Cubierto C$ {covered.toFixed(2)}</span>
-          <span>{missing > 0 ? `Falta C$ ${missing.toFixed(2)}` : missing < 0 ? `Sobra C$ ${Math.abs(missing).toFixed(2)}` : "Exacto"}</span>
-        </div>
-      )}
+      {/* Lista de líneas — única área con scroll (§1/§2.5). */}
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+        {lines.map((line, i) => (
+          <LineItem
+            key={line.id}
+            line={line}
+            validation={validations[i]}
+            total={total}
+            open={openLineId === line.id}
+            removable={lines.length > 1}
+            bankAccounts={bankAccounts}
+            onToggleOpen={() => toggleOpen(line.id)}
+            onChange={(patch) => updateLine(line.id, patch)}
+            onTouch={() => touchLine(line.id)}
+            onRemove={() => removeLine(line.id)}
+            onOpenAccountPicker={() => setPickerLineId(line.id)}
+          />
+        ))}
+      </div>
 
-      <Button
-        variant="success"
-        className="w-full rounded-xl py-3 text-base font-bold"
-        onClick={confirm}
-        disabled={isSubmitting || (lines.length > 0 && !exactMatch)}
-        loading={isSubmitting}
-        icon={<Check className="h-5 w-5" />}
-        data-testid="payment-composer-confirm"
-      >
-        {submitLabel}
-      </Button>
+      {/* Pie fijo: agregar método + confirmar (§2.5, prueba 11). */}
+      <div className="flex-none space-y-2 pt-3">
+        <div className="flex flex-wrap gap-1.5">
+          {availableMethods
+            .filter((method) => method !== "CASH" || !hasCashLine) // §3: efectivo, una sola línea (prueba 5)
+            .map((method) => {
+              const Meta = METHOD_META[method];
+              return (
+                <button
+                  key={method}
+                  type="button"
+                  onClick={() => addLine(method)}
+                  disabled={isSubmitting}
+                  className="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-pay)] hover:text-[var(--color-pay)]"
+                >
+                  <Plus className="h-3 w-3" /> {Meta.label}
+                </button>
+              );
+            })}
+        </div>
+
+        <Button
+          variant="success"
+          className="w-full rounded-xl py-3 text-base font-bold"
+          onClick={confirm}
+          disabled={isSubmitting || !exactMatch}
+          loading={isSubmitting}
+          icon={<Check className="h-5 w-5" />}
+          data-testid="payment-composer-confirm"
+        >
+          {submitLabel}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -289,157 +312,24 @@ function CardSettlementNote() {
   );
 }
 
-/** Caso simple (1 solo medio): numpad grande para efectivo, referencia para tarjeta/transferencia — se ve casi igual que hoy. */
-function SingleLineEditor({
-  line, total, validation, availableMethods, bankAccounts, onMethodChange, onChange, onTouch, onOpenAccountPicker,
+/**
+ * Una línea del cobro — encabezado siempre visible (ícono, método, monto
+ * editable, quitar) y, si está abierta, el cuerpo propio del método debajo
+ * (prompt-correccion-dialogo-cobro.md §2.2). Reemplaza los dos componentes
+ * viejos (SingleLineEditor + TenderRow): antes el caso de una sola línea
+ * tenía su propio layout con pestañas de método — ahora toda línea se ve
+ * igual, se abra o no.
+ */
+function LineItem({
+  line, validation, total, open, removable, bankAccounts, onToggleOpen, onChange, onTouch, onRemove, onOpenAccountPicker,
 }: {
   line: DraftLine;
+  validation: LineValidation;
   total: number;
-  validation: LineValidation;
-  availableMethods: TenderMethod[];
+  open: boolean;
+  removable: boolean;
   bankAccounts: BankAccountOption[];
-  onMethodChange: (method: TenderMethod) => void;
-  onChange: (patch: Partial<DraftLine>) => void;
-  onTouch: () => void;
-  onOpenAccountPicker: () => void;
-}) {
-  const received = Number(line.receivedRaw) || 0;
-  const change = received - total;
-  const selectedAccount = bankAccounts.find((a) => a.id === line.bankAccountId) ?? null;
-  const quickAmounts = useMemo(() => quickCashAmounts(total), [total]);
-
-  function appendDigit(digit: string) {
-    if (digit === "00" && !line.receivedRaw) return;
-    const next = line.receivedRaw + digit;
-    if (next.replace(".", "").length > 10) return;
-    onChange({ receivedRaw: next });
-  }
-
-  return (
-    <div className="space-y-3">
-      {availableMethods.length > 1 && (
-        <div className="flex gap-1 rounded-xl bg-[var(--color-surface-muted)] p-1">
-          {availableMethods.map((method) => {
-            const Meta = METHOD_META[method];
-            const Icon = Meta.icon;
-            return (
-              <button
-                key={method}
-                type="button"
-                onClick={() => onMethodChange(method)}
-                className={[
-                  "flex flex-1 items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-medium transition-colors",
-                  line.method === method ? "bg-[var(--color-pay)] text-white shadow-sm" : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]",
-                ].join(" ")}
-              >
-                <Icon className="h-3.5 w-3.5" /> {Meta.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {line.method === "CASH" ? (
-        <div>
-          <div className="mb-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-4 py-3">
-            <p className="text-[0.68rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Recibido</p>
-            <p className={["mt-0.5 text-2xl font-bold tabular-nums", line.receivedRaw ? "text-[var(--color-text)]" : "text-[var(--color-text-soft)]"].join(" ")}>
-              C$ {line.receivedRaw ? received.toFixed(2) : "0.00"}
-            </p>
-          </div>
-
-          {line.receivedRaw.length > 0 ? (
-            <div className={["mb-3 rounded-xl px-4 py-2.5 text-center", validation.insufficientCash ? "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" : "border border-[var(--color-success-200)] bg-[var(--color-success-50)]"].join(" ")}>
-              {validation.insufficientCash ? (
-                <p className="text-sm font-semibold text-[var(--color-danger-600)]">Falta C$ {(total - received).toFixed(2)}</p>
-              ) : (
-                <p className="text-sm font-semibold text-[var(--color-success-700)]">Vuelto C$ {change.toFixed(2)}</p>
-              )}
-            </div>
-          ) : null}
-
-          <div className="mb-3 grid grid-cols-4 gap-1.5">
-            {quickAmounts.map((amt, i) => (
-              <button key={amt} onClick={() => onChange({ receivedRaw: String(amt) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-pay)] hover:text-[var(--color-pay)] transition-colors">
-                {i === 0 ? "Exacto" : `C$${amt}`}
-              </button>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-3 gap-1.5">
-            {["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0"].map((d) => (
-              <button key={d} onClick={() => appendDigit(d)} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] py-3 text-lg font-semibold text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]">
-                {d}
-              </button>
-            ))}
-            <button onClick={() => onChange({ receivedRaw: line.receivedRaw.slice(0, -1) })} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] py-3 flex items-center justify-center text-lg text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]" aria-label="Borrar">
-              ⌫
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {line.method === "TRANSFER" && bankAccounts.length > 0 ? (
-            <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
-                Cuenta de destino <span className="text-[var(--color-danger-600)]">*</span>
-              </label>
-              <button
-                type="button"
-                onClick={onOpenAccountPicker}
-                data-testid="payment-composer-open-account-picker"
-                className="flex w-full items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-left text-sm hover:border-[var(--color-pay)]"
-              >
-                {selectedAccount ? (
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-1.5">
-                      <span className="font-semibold text-[var(--color-text)]">{selectedAccount.bankName}</span>
-                      <CurrencyChip currency={selectedAccount.currency} />
-                    </span>
-                    <span className="block truncate text-xs text-[var(--color-text-muted)]">{selectedAccount.owner ?? selectedAccount.accountAlias}</span>
-                  </span>
-                ) : (
-                  <span className="text-[var(--color-text-soft)]">Elegí a cuál cuenta entró…</span>
-                )}
-                <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-text-soft)]" />
-              </button>
-              {line.touched && validation.needsBankAccount ? (
-                <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para transferencias.</p>
-              ) : null}
-            </div>
-          ) : null}
-          <div>
-            <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
-              Número de referencia <span className="text-[var(--color-danger-600)]">*</span>
-            </label>
-            <input
-              className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-soft)] focus:border-[var(--color-pay)] focus:ring-2 focus:ring-[var(--color-pay)]/10"
-              type="text"
-              value={line.referenceNumber}
-              onChange={(e) => onChange({ referenceNumber: e.target.value })}
-              onBlur={onTouch}
-              placeholder={line.method === "CARD" ? "Nro. de autorización" : "Nro. de transacción"}
-              autoFocus
-              data-testid="payment-composer-reference"
-            />
-            {line.touched && validation.needsReference ? (
-              <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para {line.method === "CARD" ? "tarjeta" : "transferencia"}.</p>
-            ) : null}
-          </div>
-          {line.method === "CARD" ? <CardSettlementNote /> : null}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Fila compacta — se usa desde el segundo medio en adelante. */
-function TenderRow({
-  line, validation, bankAccounts, onChange, onTouch, onRemove, onOpenAccountPicker,
-}: {
-  line: DraftLine;
-  validation: LineValidation;
-  bankAccounts: BankAccountOption[];
+  onToggleOpen: () => void;
   onChange: (patch: Partial<DraftLine>) => void;
   onTouch: () => void;
   onRemove: () => void;
@@ -450,76 +340,133 @@ function TenderRow({
   const received = Number(line.receivedRaw) || 0;
   const change = line.method === "CASH" && line.receivedRaw ? round2(received - validation.amount) : null;
   const selectedAccount = bankAccounts.find((a) => a.id === line.bankAccountId) ?? null;
+  const quickAmounts = useMemo(() => quickCashAmounts(validation.amount || total), [validation.amount, total]);
+
+  function appendDigit(digit: string) {
+    if (digit === "00" && !line.receivedRaw) return;
+    const next = line.receivedRaw + digit;
+    if (next.replace(".", "").length > 10) return;
+    onChange({ receivedRaw: next });
+  }
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5">
-      <div className="flex items-center gap-2">
-        <Icon className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
-        <span className="w-24 shrink-0 text-xs font-semibold text-[var(--color-text)]">{Meta.label}</span>
+    <div className={["rounded-xl border bg-[var(--color-surface)] transition-colors", open ? "border-[var(--color-pay)]" : "border-[var(--color-border)]"].join(" ")}>
+      <div className="flex items-center gap-2 p-2.5">
+        <button type="button" onClick={onToggleOpen} className="flex flex-1 items-center gap-2 text-left" data-testid={`payment-composer-line-header-${line.method}`}>
+          <Icon className="h-4 w-4 shrink-0 text-[var(--color-text-muted)]" />
+          <span className="shrink-0 text-sm font-semibold text-[var(--color-text)]">{Meta.label}</span>
+          <ChevronDown className={["ml-auto h-3.5 w-3.5 shrink-0 text-[var(--color-text-soft)] transition-transform", open ? "rotate-180" : ""].join(" ")} />
+        </button>
         <Input
           type="number"
           min="0.01"
           step="0.01"
           value={line.amountRaw}
+          onClick={(e) => e.stopPropagation()}
           onChange={(e) => onChange({ amountRaw: e.target.value })}
           onBlur={onTouch}
-          className="flex-1"
+          className="w-24 shrink-0 text-right"
           data-testid={`payment-composer-amount-${line.method}`}
         />
-        <button type="button" onClick={onRemove} className="shrink-0 rounded p-1 text-[var(--color-text-soft)] hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)]" aria-label="Quitar">
-          <X className="h-3.5 w-3.5" />
-        </button>
+        {removable && (
+          <button type="button" onClick={onRemove} className="shrink-0 rounded p-1 text-[var(--color-text-soft)] hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)]" aria-label="Quitar">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
-      {line.method === "CASH" ? (
-        <div className="mt-2 flex items-center gap-2 pl-6">
-          <Input
-            type="number"
-            min="0"
-            step="0.01"
-            placeholder="Recibido (opcional, exacto por defecto)"
-            value={line.receivedRaw}
-            onChange={(e) => onChange({ receivedRaw: e.target.value })}
-            onBlur={onTouch}
-            className="flex-1 text-xs"
-          />
-          {change !== null && (
-            <span className={change < 0 ? "text-xs font-semibold text-[var(--color-danger-600)]" : "text-xs font-semibold text-[var(--color-success-700)]"}>
-              {change < 0 ? `Falta C$${Math.abs(change).toFixed(2)}` : `Vuelto C$${change.toFixed(2)}`}
-            </span>
-          )}
-        </div>
-      ) : (
-        <div className="mt-2 space-y-1.5 pl-6">
-          {line.method === "TRANSFER" && bankAccounts.length > 0 ? (
+
+      {open && (
+        <div className="border-t border-[var(--color-border)] p-3 pt-2.5">
+          {line.method === "CASH" ? (
             <div>
-              <button
-                type="button"
-                onClick={onOpenAccountPicker}
-                className="flex w-full items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-2 text-left text-xs hover:border-[var(--color-pay)]"
-              >
-                {selectedAccount ? (
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate font-medium text-[var(--color-text)]">{selectedAccount.bankName} · {selectedAccount.owner ?? selectedAccount.accountAlias}</span>
-                    <CurrencyChip currency={selectedAccount.currency} />
-                  </span>
-                ) : (
-                  <span className="text-[var(--color-text-soft)]">Cuenta de destino…</span>
-                )}
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-soft)]" />
-              </button>
-              {line.touched && validation.needsBankAccount ? <p className="mt-1 text-[0.65rem] text-[var(--color-danger-600)]">Requerido.</p> : null}
+              <div className="mb-2.5 flex items-center justify-between rounded-lg bg-[var(--color-surface-muted)] px-3 py-2">
+                <span className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Recibido</span>
+                <span className={["text-lg font-bold tabular-nums", line.receivedRaw ? "text-[var(--color-text)]" : "text-[var(--color-text-soft)]"].join(" ")}>
+                  C$ {line.receivedRaw ? received.toFixed(2) : "0.00"}
+                </span>
+              </div>
+
+              {line.receivedRaw.length > 0 ? (
+                <div className={["mb-2.5 rounded-lg px-3 py-2 text-center", validation.insufficientCash ? "border border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" : "border border-[var(--color-warning-200)] bg-[var(--color-warning-50)]"].join(" ")}>
+                  {validation.insufficientCash ? (
+                    <p className="text-sm font-semibold text-[var(--color-danger-600)]">Falta C$ {(validation.amount - received).toFixed(2)}</p>
+                  ) : (
+                    <p className="text-sm font-semibold text-[var(--color-warning-700)]">Vuelto C$ {change!.toFixed(2)}</p>
+                  )}
+                </div>
+              ) : null}
+
+              <div className="mb-2.5 grid grid-cols-4 gap-1.5">
+                {quickAmounts.map((amt, i) => (
+                  <button key={amt} onClick={() => onChange({ receivedRaw: String(amt) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-pay)] hover:text-[var(--color-pay)] transition-colors" data-testid="payment-composer-quick-amount">
+                    {i === 0 ? "Exacto" : `C$${amt}`}
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5">
+                {["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0"].map((d) => (
+                  <button key={d} onClick={() => appendDigit(d)} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 text-base font-semibold text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]">
+                    {d}
+                  </button>
+                ))}
+                <button onClick={() => onChange({ receivedRaw: line.receivedRaw.slice(0, -1) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 flex items-center justify-center text-base text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]" aria-label="Borrar">
+                  ⌫
+                </button>
+              </div>
             </div>
-          ) : null}
-          <Input
-            type="text"
-            placeholder={line.method === "CARD" ? "Nro. de autorización" : "Nro. de transacción"}
-            value={line.referenceNumber}
-            onChange={(e) => onChange({ referenceNumber: e.target.value })}
-            onBlur={onTouch}
-            className="text-xs"
-          />
-          {line.touched && validation.needsReference ? <p className="mt-1 text-[0.65rem] text-[var(--color-danger-600)]">Requerido.</p> : null}
-          {line.method === "CARD" ? <CardSettlementNote /> : null}
+          ) : (
+            <div className="space-y-2.5">
+              {line.method === "TRANSFER" && bankAccounts.length > 0 ? (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
+                    Cuenta de destino <span className="text-[var(--color-danger-600)]">*</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={onOpenAccountPicker}
+                    data-testid="payment-composer-open-account-picker"
+                    className="flex w-full items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-left text-sm hover:border-[var(--color-pay)]"
+                  >
+                    {selectedAccount ? (
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-1.5">
+                          <span className="font-semibold text-[var(--color-text)]">{selectedAccount.bankName}</span>
+                          <CurrencyChip currency={selectedAccount.currencyCode} />
+                        </span>
+                        <span className="block truncate text-xs text-[var(--color-text-muted)]">{selectedAccount.owner ?? selectedAccount.accountAlias}</span>
+                      </span>
+                    ) : (
+                      <span className="text-[var(--color-text-soft)]">Elegí a cuál cuenta entró…</span>
+                    )}
+                    <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-text-soft)]" />
+                  </button>
+                  {line.touched && validation.needsBankAccount ? (
+                    <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para transferencias.</p>
+                  ) : null}
+                </div>
+              ) : null}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
+                  Número de referencia <span className="text-[var(--color-danger-600)]">*</span>
+                </label>
+                <input
+                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-soft)] focus:border-[var(--color-pay)] focus:ring-2 focus:ring-[var(--color-pay)]/10"
+                  type="text"
+                  value={line.referenceNumber}
+                  onChange={(e) => onChange({ referenceNumber: e.target.value })}
+                  onBlur={onTouch}
+                  placeholder={line.method === "CARD" ? "Nro. de autorización" : "Nro. de transacción"}
+                  autoFocus
+                  data-testid="payment-composer-reference"
+                />
+                {line.touched && validation.needsReference ? (
+                  <p className="mt-1 text-xs text-[var(--color-danger-600)]">Requerido para {line.method === "CARD" ? "tarjeta" : "transferencia"}.</p>
+                ) : null}
+              </div>
+              {line.method === "CARD" ? <CardSettlementNote /> : null}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -545,7 +492,9 @@ function CurrencyChip({ currency }: { currency: string }) {
  * entró la transferencia — banco y moneda como titular visual, nombre
  * completo y número completo en monoespaciada grande, botón de copiar para
  * cuando el cajero le dicta la cuenta al cliente
- * (prompt-pantallas-recorrido-dinero.md §1.3).
+ * (prompt-pantallas-recorrido-dinero.md §1.3). Sin tocar (§4 de la
+ * corrección) — solo se le aplicó la misma estructura de tres zonas para
+ * que su botón de confirmar también quede siempre visible.
  */
 function AccountPickerStep({
   total, accounts, selectedId, onPick, onDone,
@@ -568,9 +517,11 @@ function AccountPickerStep({
     }
   }
 
+  const selectedAccount = accounts.find((a) => a.id === selectedId) ?? null;
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2.5">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-none items-center gap-2.5 pb-3">
         <button type="button" onClick={onDone} className="rounded-lg p-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]" aria-label="Volver" data-testid="payment-composer-account-back">
           <ChevronLeft className="h-4.5 w-4.5" />
         </button>
@@ -580,7 +531,7 @@ function AccountPickerStep({
         </div>
       </div>
 
-      <div className="space-y-2">
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
         {accounts.map((account) => {
           const selected = account.id === selectedId;
           return (
@@ -599,7 +550,7 @@ function AccountPickerStep({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="text-base font-bold text-[var(--color-text)]">{account.bankName}</span>
-                  <CurrencyChip currency={account.currency} />
+                  <CurrencyChip currency={account.currencyCode} />
                 </div>
                 {account.owner ? (
                   <p className="mt-1 text-xs uppercase tracking-wide text-[var(--color-text-muted)]">{account.owner}</p>
@@ -626,27 +577,25 @@ function AccountPickerStep({
         })}
       </div>
 
-      {(() => {
-        const account = accounts.find((a) => a.id === selectedId);
-        if (!account || account.currency === "NIO") return null;
-        return (
+      <div className="flex-none space-y-2 pt-3">
+        {selectedAccount && selectedAccount.currencyCode !== "NIO" && (
           <div className="flex items-start gap-2 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2.5 text-xs text-[var(--color-warning-700)]">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>Venta en córdobas a cuenta en {account.currency === "USD" ? "dólares" : account.currency}. Vas a tener que fijar el tipo de cambio.</span>
+            <span>Venta en córdobas a cuenta en {selectedAccount.currencyCode === "USD" ? "dólares" : selectedAccount.currencyCode}. Vas a tener que fijar el tipo de cambio.</span>
           </div>
-        );
-      })()}
+        )}
 
-      <Button
-        variant="success"
-        className="w-full rounded-xl py-3 text-sm font-bold"
-        onClick={onDone}
-        disabled={!selectedId}
-        icon={<Check className="h-4 w-4" />}
-        data-testid="payment-composer-account-confirm"
-      >
-        {selectedId ? "Confirmar cuenta" : "Elegí una cuenta"}
-      </Button>
+        <Button
+          variant="success"
+          className="w-full rounded-xl py-3 text-sm font-bold"
+          onClick={onDone}
+          disabled={!selectedId}
+          icon={<Check className="h-4 w-4" />}
+          data-testid="payment-composer-account-confirm"
+        >
+          {selectedId ? "Confirmar cuenta" : "Elegí una cuenta"}
+        </Button>
+      </div>
     </div>
   );
 }

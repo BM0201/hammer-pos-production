@@ -11,12 +11,10 @@
  * sobre un arreglo con CASH+CARD ya confirma exactamente ese comportamiento,
  * y esta pasada no tocó ningún código de backend.
  *
- * La prueba 7 (transferencia con cuenta de destino -> sube el saldo
- * esperado de esa cuenta) es un aggregate de Prisma directo
- * (getBankAccountExpectedBalance en treasury/service.ts) — no hay lógica de
- * decisión que mirar ahí, es SELECT SUM(...) WHERE bankAccountId = X. Se
- * deja sin espejo puro a propósito, siguiendo la convención del repo de no
- * mockear una transacción completa de Prisma para probar una suma.
+ * La prueba 7 (transferencia con cuenta de destino -> sube el saldo de esa
+ * cuenta) ya está cubierta en hammer-api/src/modules/treasury/ledger.test.ts
+ * (createTreasuryEntryTx con fake tx) desde prompt-libro-mayor-tesoreria.md
+ * — el saldo real ahora sale del libro mayor, no de un aggregate suelto.
  *
  * Ejecutar: npm run test:unit:logic
  */
@@ -197,24 +195,47 @@ describe("validateLine: cuenta de destino en transferencias", () => {
 });
 
 /**
- * prompt-pantallas-recorrido-dinero.md §1.2/§5 — Prueba 9: "Total C$890 →
- * los montos rápidos son Exacto, 1,000, 2,000. Ninguno menor al total."
- * quickCashAmounts es real (importada de payment-composer.tsx, no
- * reimplementada) — reemplazó la tabla fija [100, 200, 500] que era el bug
- * reportado: ninguno de esos tres alcanzaba a cubrir un total de C$890.
+ * prompt-correccion-dialogo-cobro.md §2.4/§5 — quickCashAmounts es real
+ * (importada de payment-composer.tsx, no reimplementada). Reemplaza el
+ * algoritmo de pasos fijos 500/1000/2000: correcto para C$890, absurdo
+ * para C$45 (donde ofrecía tres montos que nadie entrega por un clavo). El
+ * nuevo: exacto, siguiente múltiplo de 50, billetes (50/100/200/500/1000)
+ * que superan el total, y si ninguno alcanza, múltiplos del billete mayor.
  */
-describe("Prueba 9 (doc): quickCashAmounts para un total de C$890", () => {
-  it("Exacto (890), 1000, 2000 — ninguno menor al total", () => {
+describe("Prueba 2 (doc): quickCashAmounts para un total de C$45", () => {
+  it("Exacto · 50 · 100 · 200 — ninguno mayor a C$200", () => {
+    const amounts = quickCashAmounts(45);
+    assert.deepEqual(amounts, [45, 50, 100, 200]);
+    assert.ok(amounts.every((a) => a <= 200), "ningún monto rápido debe superar C$200");
+  });
+});
+
+describe("Prueba 3 (doc): quickCashAmounts para un total de C$890", () => {
+  it("Exacto · 900 · 1,000 · 2,000", () => {
     const amounts = quickCashAmounts(890);
-    assert.deepEqual(amounts, [890, 1000, 2000]);
-    assert.ok(amounts.every((a) => a >= 890), "ningún monto rápido debe ser menor al total");
+    assert.deepEqual(amounts, [890, 900, 1000, 2000]);
+  });
+});
+
+describe("Prueba 4 (doc): quickCashAmounts para un total de C$1,200", () => {
+  it("ningún monto rápido menor al total", () => {
+    const amounts = quickCashAmounts(1200);
+    assert.ok(amounts.every((a) => a >= 1200), "ningún monto rápido debe ser menor al total");
+    assert.equal(amounts[0], 1200, "el primero siempre es el exacto");
+  });
+});
+
+describe("quickCashAmounts: C$45.50 (tabla del doc)", () => {
+  it("Exacto · 50 · 100 · 200", () => {
+    const amounts = quickCashAmounts(45.5);
+    assert.deepEqual(amounts, [45.5, 50, 100, 200]);
   });
 });
 
 describe("quickCashAmounts: casos base", () => {
-  it("total ya redondo (1000) -> no repite el mismo redondeo dos veces", () => {
+  it("total ya múltiplo exacto de 1000 -> el billete mayor no se ofrece dos veces, sigue con múltiplos nuevos", () => {
     const amounts = quickCashAmounts(1000);
-    assert.deepEqual(amounts, [1000, 2000]);
+    assert.deepEqual(amounts, [1000, 2000, 3000, 4000]);
   });
 
   it("total <= 0 -> sin montos rápidos que ofrecer", () => {
@@ -222,10 +243,15 @@ describe("quickCashAmounts: casos base", () => {
     assert.deepEqual(quickCashAmounts(-5), []);
   });
 
-  it("total pequeño (45) -> Exacto y los tres redondeos, máximo 4 valores", () => {
-    const amounts = quickCashAmounts(45);
-    assert.equal(amounts.length, 4);
-    assert.equal(amounts[0], 45);
-    assert.ok(amounts.every((a) => a >= 45));
+  it("el primer monto siempre es el total exacto, sin importar la magnitud", () => {
+    assert.equal(quickCashAmounts(45)[0], 45);
+    assert.equal(quickCashAmounts(890)[0], 890);
+    assert.equal(quickCashAmounts(45.5)[0], 45.5);
+  });
+
+  it("nunca devuelve más de 4 montos", () => {
+    for (const total of [1, 45, 45.5, 890, 1000, 1200, 12345]) {
+      assert.ok(quickCashAmounts(total).length <= 4, `total=${total}`);
+    }
   });
 });

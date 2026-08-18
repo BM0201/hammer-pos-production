@@ -31,16 +31,20 @@ export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubm
       {/* Backdrop */}
       <div className="fixed inset-0 z-40 bg-black/50" onClick={onClose} aria-hidden="true" />
 
-      {/* Dialog */}
+      {/* Dialog — tres zonas: encabezado fijo, cuerpo con scroll, pie fijo
+          dentro de PaymentComposer (prompt-correccion-dialogo-cobro.md §2.5:
+          "en un mostrador el botón de confirmar no puede estar fuera de
+          pantalla"). max-h-[85vh], no 92vh: deja aire para que el pie
+          nunca quede pegado al borde de la pantalla. */}
       <div
-        className="fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[92vh] max-w-sm overflow-y-auto animate-[slideUp_150ms_ease-out] rounded-t-2xl border-t border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-[var(--shadow-modal)] sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl"
+        className="fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[85vh] max-w-sm flex-col animate-[slideUp_150ms_ease-out] rounded-t-2xl border-t border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-[var(--shadow-modal)] sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl"
         role="dialog"
         aria-modal="true"
         aria-label="Cobrar"
         data-testid="charge-dialog"
       >
-        {/* Header */}
-        <div className="mb-4 flex items-center justify-between">
+        {/* Header — fijo */}
+        <div className="mb-4 flex flex-none items-center justify-between">
           <div>
             <h2 className="text-base font-bold text-[var(--color-text)]">Total a cobrar</h2>
             <p className="text-xl font-bold tabular-nums text-[var(--color-pay)]">C$ {total.toFixed(2)}</p>
@@ -55,7 +59,9 @@ export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubm
         </div>
 
         {/* key=open fuerza reset del composer cada vez que se abre el diálogo */}
-        <PaymentComposer key={String(open)} total={total} isSubmitting={isSubmitting} onSubmit={onConfirm} bankAccounts={bankAccounts} />
+        <div className="min-h-0 flex-1">
+          <PaymentComposer key={String(open)} total={total} isSubmitting={isSubmitting} onSubmit={onConfirm} bankAccounts={bankAccounts} />
+        </div>
       </div>
 
       <style>{`
