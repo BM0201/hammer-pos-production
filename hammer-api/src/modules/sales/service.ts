@@ -14,7 +14,7 @@ import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-servi
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 import { resolveCancellationCashPlan, type CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
-import { bumpBankAccountUsageTx } from "@/modules/treasury/service";
+import { bumpBankAccountUsageTx, recordSaleTenderEntriesTx } from "@/modules/treasury/service";
 
 type DirectSaleTenderInput = {
   method: PaymentMethod;
@@ -977,6 +977,8 @@ export async function submitDirectSale(input: {
       })),
     });
     await bumpBankAccountUsageTx(tx, tenderSummary.tenders.filter((t) => t.method === PaymentMethod.TRANSFER).map((t) => t.bankAccountId));
+    const createdTenders = await tx.paymentTender.findMany({ where: { paymentId: payment.id }, select: { id: true, method: true, amount: true, bankAccountId: true } });
+    await recordSaleTenderEntriesTx(tx, { tenders: createdTenders, occurredAt: now, createdByUserId: input.actorUserId });
 
     // Auto-dispatch if dispatch module is also disabled
     if (!branchConfig.enableDispatch) {

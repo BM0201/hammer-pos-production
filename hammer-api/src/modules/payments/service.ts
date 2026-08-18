@@ -14,7 +14,7 @@ import { getBranchModuleConfig } from "@/modules/branch-config/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
-import { bumpBankAccountUsageTx } from "@/modules/treasury/service";
+import { bumpBankAccountUsageTx, recordSaleTenderEntriesTx } from "@/modules/treasury/service";
 
 type PaymentTenderInput = {
   method: PaymentMethod;
@@ -505,6 +505,8 @@ export async function postSaleOrderPayment(input: {
           })),
         });
         await bumpBankAccountUsageTx(tx, tenderSummary.tenders.filter((t) => t.method === PaymentMethod.TRANSFER).map((t) => t.bankAccountId));
+        const createdTenders = await tx.paymentTender.findMany({ where: { paymentId: payment.id }, select: { id: true, method: true, amount: true, bankAccountId: true } });
+        await recordSaleTenderEntriesTx(tx, { tenders: createdTenders, occurredAt: now, createdByUserId: input.actorUserId });
       } catch (error) {
         if (
           error instanceof Prisma.PrismaClientKnownRequestError

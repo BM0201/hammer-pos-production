@@ -2,9 +2,9 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { ok, fail } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
-import { getBankAccountExpectedBalance } from "@/modules/treasury/service";
+import { getTreasuryAccountBalance } from "@/modules/treasury/service";
 
-/** Saldo esperado (§2.2) = depósitos confirmados + transferencias recibidas a esa cuenta. */
+/** Saldo real de la cuenta (prompt-libro-mayor-tesoreria.md §2.3) = apertura + IN - OUT del libro mayor. */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: bankAccountId } = await params;
@@ -12,7 +12,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     assertAuthenticated(session);
     assertMaster(session);
 
-    return ok(await getBankAccountExpectedBalance(bankAccountId));
+    return ok(await getTreasuryAccountBalance(bankAccountId));
   } catch (error) {
     return toHttpErrorResponse(error);
   }

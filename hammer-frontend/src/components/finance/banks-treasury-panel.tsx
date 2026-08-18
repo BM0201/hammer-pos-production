@@ -1,31 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Landmark, RefreshCcw, X, Check, AlertTriangle } from "lucide-react";
+import Link from "next/link";
+import { Landmark, RefreshCcw, AlertTriangle, ArrowRight } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
 
 type Branch = { id: string; code: string; name: string };
 
-type AccountBalance = {
-  confirmedDeposits: number;
-  transfersReceived: number;
-  paymentsMadeFromAccount: number;
-  expectedBalance: number;
-};
+type TreasuryAccountBalance = { balance: number; pendingOpening: boolean };
 
-type BankAccountWithBalance = {
+type TreasuryAccountRow = {
   id: string;
+  type: "BANK" | "SETTLEMENT" | "CUSTODY" | "SAFE";
   bankName: string;
   accountAlias: string;
   accountNumber: string;
-  currency: string;
+  currencyCode: string;
   branchId: string | null;
-  isActive: boolean;
-  balance: AccountBalance;
+  owner: string | null;
+  balance: TreasuryAccountBalance;
 };
 
 type ExposureStatus = {
@@ -36,18 +32,18 @@ type ExposureStatus = {
 };
 
 /**
- * Panel de Bancos y efectivo (correccion-destino-y-pantalla-cobro.md §5,
- * último paso pendiente). Saldo esperado = depósitos confirmados +
- * transferencias recibidas − pagos hechos desde la cuenta (§2.2; el tercer
- * término todavía no existe como funcionalidad en Hammer, queda en 0).
+ * Vista resumida de Bancos y efectivo, embebida en Finanzas — el libro
+ * mayor completo (posición, detalle con saldo corriente, confirmar
+ * depósitos) vive en Tesorería (prompt-libro-mayor-tesoreria.md §6); acá
+ * solo se resume y se linkea, para no mantener dos flujos de confirmación
+ * en paralelo que puedan desincronizarse.
  */
 export function BanksTreasuryPanel() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string>("");
-  const [accounts, setAccounts] = useState<BankAccountWithBalance[]>([]);
+  const [accounts, setAccounts] = useState<TreasuryAccountRow[]>([]);
   const [exposure, setExposure] = useState<ExposureStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [depositTarget, setDepositTarget] = useState<BankAccountWithBalance | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -55,13 +51,12 @@ export function BanksTreasuryPanel() {
       const branchesRes = await apiFetch("/api/master/branches");
       const branchesRaw = await branchesRes.json();
       if (!branchesRes.ok) throw new Error(branchesRaw?.error?.message ?? "No se pudieron cargar las sucursales.");
-      const branchList = unwrapApiData(branchesRaw) as Branch[];
-      setBranches(branchList);
+      setBranches(unwrapApiData(branchesRaw) as Branch[]);
 
       const accountsRes = await apiFetch("/api/master/treasury/bank-accounts/with-balances");
       const accountsRaw = await accountsRes.json();
       if (!accountsRes.ok) throw new Error(accountsRaw?.error?.message ?? "No se pudieron cargar las cuentas.");
-      setAccounts(unwrapApiData(accountsRaw) as BankAccountWithBalance[]);
+      setAccounts((unwrapApiData(accountsRaw) as TreasuryAccountRow[]).filter((a) => a.type === "BANK"));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cargar el panel de Bancos.");
     } finally {
@@ -88,34 +83,40 @@ export function BanksTreasuryPanel() {
           <Landmark className="h-4 w-4 text-[var(--color-master-600)]" />
           <h2 className="text-sm font-semibold text-[var(--color-text)]">Bancos y efectivo</h2>
         </div>
-        <Button variant="ghost" size="sm" loading={loading} onClick={() => void load()} icon={<RefreshCcw className="h-3.5 w-3.5" />}>Actualizar</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" loading={loading} onClick={() => void load()} icon={<RefreshCcw className="h-3.5 w-3.5" />}>Actualizar</Button>
+          <Link href="/app/master/treasury">
+            <Button variant="secondary" size="sm" icon={<ArrowRight className="h-3.5 w-3.5" />}>Abrir Tesorería completa</Button>
+          </Link>
+        </div>
       </div>
 
-      {/* Saldo esperado por cuenta */}
+      {/* Saldo real por cuenta (libro mayor) */}
       <Card className="p-4">
-        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Saldo esperado por cuenta</h3>
-        <p className="mb-3 text-xs text-[var(--color-text-muted)]">Depósitos confirmados + transferencias recibidas a esa cuenta. No es un estado de cuenta bancario — es lo que Hammer espera ver ahí.</p>
+        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Saldo por cuenta</h3>
+        <p className="mb-3 text-xs text-[var(--color-text-muted)]">Calculado del libro mayor de Tesorería — apertura declarada + entradas − salidas. &quot;Esperado&quot;: Hammer no se conecta al banco.</p>
         {accounts.length === 0 ? (
           <p className="py-4 text-center text-sm text-[var(--color-text-muted)]">Sin cuentas registradas. Agrégalas desde Tesorería.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="hm-table w-full">
               <thead>
-                <tr><th>Cuenta</th><th>Sucursal</th><th className="text-right">Depósitos</th><th className="text-right">Transferencias</th><th className="text-right">Saldo esperado</th><th></th></tr>
+                <tr><th>Cuenta</th><th>Sucursal</th><th className="text-right">Saldo</th></tr>
               </thead>
               <tbody>
                 {accounts.map((a) => (
                   <tr key={a.id}>
                     <td>
                       <div className="font-medium">{a.bankName}</div>
-                      <div className="text-xs text-[var(--color-text-muted)]">{a.accountAlias} · {a.accountNumber}</div>
+                      <div className="text-xs text-[var(--color-text-muted)]">{a.owner ?? a.accountAlias} · {a.accountNumber}</div>
                     </td>
                     <td className="text-xs">{branchName(a.branchId)}</td>
-                    <td className="text-right font-mono text-xs">C$ {a.balance.confirmedDeposits.toFixed(2)}</td>
-                    <td className="text-right font-mono text-xs">C$ {a.balance.transfersReceived.toFixed(2)}</td>
-                    <td className="text-right font-mono text-sm font-semibold">C$ {a.balance.expectedBalance.toFixed(2)}</td>
-                    <td>
-                      <Button variant="secondary" size="sm" onClick={() => setDepositTarget(a)}>Registrar depósito</Button>
+                    <td className="text-right font-mono text-sm font-semibold">
+                      {a.balance.pendingOpening ? (
+                        <span className="text-xs font-semibold text-[var(--color-warning-600)]">Pendiente de apertura</span>
+                      ) : (
+                        `${a.currencyCode === "USD" ? "$" : "C$"} ${a.balance.balance.toFixed(2)}`
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -144,60 +145,6 @@ export function BanksTreasuryPanel() {
           </div>
         )}
       </Card>
-
-      {depositTarget && (
-        <ConfirmDepositModal account={depositTarget} onClose={() => setDepositTarget(null)} onSaved={() => { setDepositTarget(null); void load(); }} />
-      )}
-    </div>
-  );
-}
-
-function ConfirmDepositModal({ account, onClose, onSaved }: { account: BankAccountWithBalance; onClose: () => void; onSaved: () => void }) {
-  const [amount, setAmount] = useState("");
-  const [referenceNumber, setReferenceNumber] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!account.branchId) {
-      toast.error("Esta cuenta es central (sin sucursal) — todavía no se puede confirmar un depósito sin elegir a cuál sucursal pertenece.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await apiFetch(`/api/master/treasury/bank-accounts/${account.id}/deposits`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bankAccountId: account.id, branchId: account.branchId, amount: Number(amount), referenceNumber: referenceNumber || null }),
-      });
-      const raw = await res.json();
-      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo confirmar el depósito.");
-      toast.success("Depósito confirmado.");
-      onSaved();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo confirmar el depósito.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-3 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Confirmar depósito — {account.bankName} · {account.accountAlias}</h3>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Cerrar</Button>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Monto</label>
-          <Input type="number" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Referencia (opcional)</label>
-          <Input value={referenceNumber} onChange={(e) => setReferenceNumber(e.target.value)} />
-        </div>
-        <Button type="submit" variant="success" loading={saving} className="w-full" icon={<Check className="h-4 w-4" />}>Confirmar</Button>
-      </form>
     </div>
   );
 }

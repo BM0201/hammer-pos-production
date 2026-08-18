@@ -394,9 +394,10 @@ model Branch {
   cameras                     Camera[]
   cameraAgent                 BranchCameraAgent?
   cameraHealthSnapshot        CameraHealthSnapshot?
-  bankAccounts                BankAccount[]
+  treasuryAccounts            TreasuryAccount[]
   bankDeposits                BankDeposit[]
   cashDestinationDeclarations CashDestinationDeclaration[]
+  depositPolicy               BranchDepositPolicy?
 }
 
 model User {
@@ -429,6 +430,9 @@ model User {
   declaredCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationDeclaredBy")
   handOverCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationHandOverUser")
   carriedCashDeposits         CashDestinationDeclaration[] @relation("CashDestinationDepositCarrier")
+  heldTreasuryAccounts        TreasuryAccount[]             @relation("TreasuryAccountHolder")
+  createdTreasuryEntries      TreasuryEntry[]               @relation("TreasuryEntryCreatedBy")
+  createdExchangeRates        ExchangeRate[]                @relation("ExchangeRateCreatedBy")
   openedOperationalDays       OperationalDay[]         @relation("OperationalDayOpenedBy")
   sweptOperationalDays        OperationalDay[]         @relation("OperationalDaySweptBy")
   reviewedOperationalDays     OperationalDay[]         @relation("OperationalDayReviewedBy")
@@ -611,6 +615,7 @@ model CashMovement {
   approvedBy           User?                 @relation("CashMovementApprovedBy", fields: [approvedByUserId], references: [id])
   payrollDisbursements PayrollDisbursement[]
   operatingExpense     OperatingExpense?
+  treasuryEntry        TreasuryEntry?
 
   @@index([cashSessionId, createdAt])
   @@index([type])
@@ -1365,9 +1370,10 @@ model PaymentTender {
   bankAccountId    String?
   createdAt        DateTime      @default(now())
 
-  payment        Payment         @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
-  bankAccount    BankAccount?    @relation(fields: [bankAccountId], references: [id])
+  payment        Payment          @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  operationalDay OperationalDay?  @relation(fields: [operationalDayId], references: [id])
+  bankAccount    TreasuryAccount? @relation(fields: [bankAccountId], references: [id])
+  treasuryEntry  TreasuryEntry?
 
   @@index([paymentId])
   @@index([method])
@@ -3418,15 +3424,37 @@ enum RetainedCashLocation {
   SAFE
 }
 
-/// Son varias, editable solo por Master (respuesta del usuario a §5).
+enum TreasuryAccountType {
+  BANK       /// cuenta bancaria real
+  SETTLEMENT /// tarjeta cobrada, adquirente aún no liquida
+  CUSTODY    /// en manos de una persona, en tránsito
+  SAFE       /// caja fuerte de sucursal, si existe
+}
+
+/// El catálogo de cuentas de tesorería — antes "BankAccount", solo cuentas
+/// bancarias. Se amplió a toda cuenta de tesorería (prompt-libro-mayor-
+/// tesoreria.md §1/§2.1) porque una cuenta bancaria y un bolsillo de
+/// custodia son la misma clase de cosa: un lugar donde el dinero puede
+/// estar, con su propio saldo. Una cuenta, una moneda — nunca multimoneda,
+/// o los saldos dejan de ser sumables.
+/// Editable por Master salvo CUSTODY, que se autocrea por persona
+/// (findOrCreateCustodyAccountTx en treasury/service.ts).
 /// branchId null = cuenta central, disponible para todas las sucursales.
-model BankAccount {
-  id            String   @id @default(cuid())
+model TreasuryAccount {
+  id            String              @id @default(cuid())
+  type          TreasuryAccountType @default(BANK)
+  code          String?             @unique
+  /// bankName/accountAlias/accountNumber quedan como String no-nulo incluso
+  /// para SETTLEMENT/CUSTODY/SAFE (con un valor descriptivo en vez de un
+  /// banco real) para no propagar `| null` a todo el código que ya los lee
+  /// — decisión deliberada, no el schema literal del doc.
   bankName      String
   accountAlias  String
   accountNumber String
-  currency      String   @default("NIO")
+  currencyCode  CurrencyCode        @default(NIO)
   branchId      String?
+  /// Solo type=CUSTODY: de quién es este bolsillo.
+  holderUserId  String?
   isActive      Boolean  @default(true)
   /// Titular de la cuenta — las cuentas comparten banco, solo se
   /// distinguen por moneda y número; el nombre completo evita el error de
@@ -3440,15 +3468,26 @@ model BankAccount {
   /// Para "ordenadas por uso, para que la memoria muscular funcione" (§1.3)
   /// — se actualiza cada vez que un PaymentTender la usa como destino.
   lastUsedAt    DateTime?
+  /// Saldo de apertura y desde cuándo corre el libro (prompt-libro-mayor-
+  /// tesoreria.md §5). El saldo NUNCA se guarda editable más allá de este
+  /// punto de partida — desde acá se calcula, nunca se pisa.
+  /// openingBalanceAt null = "pendiente de apertura", la pantalla no
+  /// inventa un saldo.
+  openingBalance    Decimal  @default(0)
+  openingBalanceAt  DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  branch                 Branch?                       @relation(fields: [branchId], references: [id])
-  receivedTenders        PaymentTender[]
-  deposits               BankDeposit[]
+  branch                  Branch?                       @relation(fields: [branchId], references: [id])
+  holderUser              User?                         @relation("TreasuryAccountHolder", fields: [holderUserId], references: [id])
+  receivedTenders         PaymentTender[]
+  deposits                BankDeposit[]
   cashDestinationDeposits CashDestinationDeclaration[]
+  entries                 TreasuryEntry[]
 
   @@index([branchId, isActive])
+  @@index([type, isActive])
+  @@index([holderUserId])
 }
 
 /// Depósito confirmado — una de las dos fuentes del saldo esperado de una
@@ -3466,9 +3505,13 @@ model BankDeposit {
   notes             String?
   createdAt         DateTime @default(now())
 
-  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
-  branch      Branch      @relation(fields: [branchId], references: [id])
-  confirmedBy User        @relation(fields: [confirmedByUserId], references: [id])
+  bankAccount     TreasuryAccount @relation(fields: [bankAccountId], references: [id])
+  branch          Branch          @relation(fields: [branchId], references: [id])
+  confirmedBy     User            @relation(fields: [confirmedByUserId], references: [id])
+  /// Dos filas del libro mayor (OUT de custodia + IN a banco) comparten el
+  /// mismo depósito — por eso NO es @unique acá, a diferencia de
+  /// cashMovementId/paymentTenderId en TreasuryEntry.
+  treasuryEntries TreasuryEntry[]
 
   @@index([branchId, depositedAt])
   @@index([bankAccountId, depositedAt])
@@ -3508,12 +3551,128 @@ model CashDestinationDeclaration {
   notes     String?
   createdAt DateTime @default(now())
 
-  cashSession        CashSession  @relation(fields: [cashSessionId], references: [id])
-  branch             Branch       @relation(fields: [branchId], references: [id])
-  declaredBy         User         @relation("CashDestinationDeclaredBy", fields: [declaredByUserId], references: [id])
-  handOverUser       User?        @relation("CashDestinationHandOverUser", fields: [handOverUserId], references: [id])
-  depositCarrierUser User?        @relation("CashDestinationDepositCarrier", fields: [depositCarrierUserId], references: [id])
-  depositBankAccount BankAccount? @relation(fields: [depositBankAccountId], references: [id])
+  cashSession        CashSession      @relation(fields: [cashSessionId], references: [id])
+  branch             Branch           @relation(fields: [branchId], references: [id])
+  declaredBy         User             @relation("CashDestinationDeclaredBy", fields: [declaredByUserId], references: [id])
+  handOverUser       User?            @relation("CashDestinationHandOverUser", fields: [handOverUserId], references: [id])
+  depositCarrierUser User?            @relation("CashDestinationDepositCarrier", fields: [depositCarrierUserId], references: [id])
+  depositBankAccount TreasuryAccount? @relation(fields: [depositBankAccountId], references: [id])
 
   @@index([branchId, createdAt])
+}
+
+enum TreasuryEntryDirection {
+  IN
+  OUT
+}
+
+/// Tipos de fila del libro mayor — una por cada evento de la tabla del §3
+/// (prompt-libro-mayor-tesoreria.md). RETAIN_TO_SAFE no tiene nombre propio
+/// en la tabla del doc (esa fila no lista entryType); se nombró por
+/// consistencia con el resto.
+enum TreasuryEntryType {
+  SALE_TRANSFER
+  SALE_CARD
+  CARD_SETTLEMENT
+  CARD_FEE
+  DEPOSIT_DISPATCH
+  HANDOVER
+  RETAIN_TO_SAFE
+  DEPOSIT_CONFIRMED
+  SUPPLIER_PAYMENT
+  PAYROLL
+  EXPENSE
+  CUSTOMER_ADVANCE
+  RECONCILIATION
+}
+
+enum TreasuryCounterpartyType {
+  CUSTOMER
+  SUPPLIER
+  EMPLOYEE
+  ACQUIRER
+  INTERNAL
+  ADJUSTMENT
+}
+
+/// El libro mayor de tesorería (prompt-libro-mayor-tesoreria.md §2.2): una
+/// fila por LADO de cada movimiento. Un movimiento entre dos cuentas
+/// internas produce DOS filas unidas por transferId; contra el exterior
+/// (venta que entra, gasto que sale), UNA. El saldo de una cuenta NUNCA se
+/// guarda — se calcula sumando estas filas (§2.3): ver
+/// getTreasuryAccountBalance en treasury/service.ts. Si en algún momento
+/// existe una columna "balance" editable en algún lado, el diseño está mal.
+model TreasuryEntry {
+  id           String                 @id @default(cuid())
+  accountId    String
+  direction    TreasuryEntryDirection
+  /// SIEMPRE positivo — el signo lo da direction, no el monto: sumar mal
+  /// filtrado con negativos da un número plausible y equivocado (§2.2).
+  amount       Decimal
+  currencyCode CurrencyCode
+
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  /// Las dos patas de una transferencia interna comparten transferId. Nulo
+  /// cuando la contraparte es externa (venta, gasto, proveedor).
+  transferId String?
+
+  entryType        TreasuryEntryType
+  counterpartyType TreasuryCounterpartyType
+  counterpartyName String?
+
+  /// Trazabilidad hacia el origen — a lo sumo uno de estos viene lleno.
+  cashMovementId   String? @unique
+  paymentTenderId  String? @unique
+  bankDepositId    String?
+  expensePaymentId String? @unique
+
+  reference       String?
+  notes           String?
+  createdByUserId String
+
+  account       TreasuryAccount @relation(fields: [accountId], references: [id])
+  cashMovement  CashMovement?   @relation(fields: [cashMovementId], references: [id])
+  paymentTender PaymentTender?  @relation(fields: [paymentTenderId], references: [id])
+  bankDeposit   BankDeposit?    @relation(fields: [bankDepositId], references: [id])
+  createdBy     User            @relation("TreasuryEntryCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([accountId, occurredAt, createdAt])
+  @@index([transferId])
+  @@index([entryType, occurredAt])
+}
+
+/// Cada cuenta tiene su moneda y las entradas se guardan sin convertir — la
+/// posición total exige una tasa y su fecha, y las muestra (§4). Los tres
+/// comprobantes de Lafise dan 36.5 consistente: cuando un depósito trae las
+/// dos cifras, se registra con source=BANK_RECEIPT en vez de teclearla.
+model ExchangeRate {
+  id              String       @id @default(cuid())
+  fromCurrency    CurrencyCode
+  toCurrency      CurrencyCode
+  rate            Decimal
+  effectiveAt     DateTime
+  source          String /// MANUAL | BANK_RECEIPT
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  createdBy User @relation("ExchangeRateCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([fromCurrency, toCurrency, effectiveAt])
+}
+
+/// prompt-indicador-efectivo-inteligente.md §2.2/§7 — la política de
+/// depósito de UNA sucursal (nunca un umbral global). Sin fila para una
+/// sucursal, el indicador de efectivo no calcula estados ni proyección
+/// para ella — no inventa un umbral que nadie fijó.
+model BranchDepositPolicy {
+  id              String   @id @default(cuid())
+  branchId        String   @unique
+  thresholdAmount Decimal
+  maxDaysHolding  Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id])
 }
