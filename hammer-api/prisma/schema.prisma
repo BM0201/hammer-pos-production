@@ -1,0 +1,3716 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled connection (e.g. pgbouncer / Neon pooler) — used by the app
+  url       = env("DATABASE_URL")
+  // Direct connection — used by `prisma migrate` and introspection
+  directUrl = env("DIRECT_URL")
+}
+
+enum RoleCode {
+  SYSTEM_ADMIN
+  OWNER
+  MASTER
+  BRANCH_ADMIN
+  SALES
+  CASHIER
+  WAREHOUSE
+  ACCOUNTANT
+}
+
+enum CashSessionStatus {
+  OPEN
+  RECONCILING
+  CLOSED
+  AUTO_CLOSED_PENDING_REVIEW
+  AUTO_CLOSED
+  PERMANENTLY_CLOSED
+}
+
+/// Día Operativo 360 — eje del SISTEMA (automático). ACTIVE = el día de su
+/// fecha, acepta operaciones. AWAITING_REVIEW = pasó su fecha, dejó de
+/// aceptar operaciones nuevas, espera revisión humana indefinidamente.
+/// CANCELLED = anulación explícita de Master. Ningún proceso automático
+/// mueve un día a CANCELLED ni lo saca de ahí.
+enum OperationalDayLifecycle {
+  ACTIVE
+  AWAITING_REVIEW
+  CANCELLED
+}
+
+/// Día Operativo 360 — eje de MASTER (manual), ortogonal a lifecycle. PENDING
+/// es el default y no caduca: un día puede esperar confirmación indefinidamente
+/// sin que ningún cron lo toque. CONFIRMED solo lo escribe un humano real.
+enum OperationalDayReviewStatus {
+  PENDING
+  CONFIRMED
+}
+
+enum SaleOrderStatus {
+  DRAFT
+  PENDING_PAYMENT
+  PAID
+  DISPATCH_PENDING
+  DISPATCHED
+  CANCELLED
+  RETURN_REQUESTED
+  RETURN_APPROVED
+  RETURN_REJECTED
+  RETURNED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  CREDIT
+  MIXED
+}
+
+enum PaymentStatus {
+  POSTED
+  VOIDED
+}
+
+enum PaymentWorkflowMode {
+  QUEUE_ONLY
+  DIRECT_ONLY
+  HYBRID
+}
+
+enum DispatchWorkflowMode {
+  DISABLED
+  ENABLED
+}
+
+enum CashSessionOperatorRole {
+  OWNER_OPERATOR
+  CASHIER_OPERATOR
+  SALES_DIRECT_OPERATOR
+  SUPERVISOR_OPERATOR
+}
+
+enum CashMovementType {
+  CASH_IN
+  CASH_OUT
+  CHANGE_IN
+  BANK_DEPOSIT_OUT
+  EXPENSE_OUT
+  REFUND_OUT
+  CORRECTION /// legado: corrección que SUMA a la gaveta (entrada)
+  CORRECTION_OUT /// corrección que RESTA de la gaveta (salida)
+}
+
+enum DispatchStatus {
+  PENDING
+  IN_PROGRESS
+  DISPATCHED
+  CANCELLED
+}
+
+enum ApprovalType {
+  RETURN
+  PRICE_OVERRIDE
+  CREDIT_EXCEPTION
+  STOCK_ADJUSTMENT
+  TRANSFER_EXCEPTION
+  CASH_SESSION_DISCREPANCY /// DEPRECATED: ya no se crean nuevos registros de este tipo (ver cash-session/service.ts). Las discrepancias de caja ahora se manejan inline en el cierre de sesión, no vía cola de aprobaciones. Se mantiene solo por compatibilidad histórica con registros existentes.
+  OPERATION_OVERRIDE
+}
+
+enum ApprovalStatus {
+  REQUESTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  EXECUTED
+}
+
+enum TransferStatus {
+  DRAFT
+  REQUESTED
+  APPROVED
+  REJECTED
+  IN_TRANSIT
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum InventoryMovementType {
+  PURCHASE_IN
+  SALE_OUT
+  RETURN_IN
+  RETURN_OUT
+  RETURN_IN_DAMAGED
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  TRANSFER_OUT
+  TRANSFER_IN
+  PACKAGE_IN
+  PACKAGE_SALE_OUT
+  PACKAGE_OPENED
+  PACKAGE_AUTO_OPENED
+  PACKAGE_CLOSED /// Fusión triple: reempaca sueltas de vuelta a empaque cerrado (reverso de PACKAGE_OPENED)
+  LOOSE_UNIT_SALE_OUT
+  LOOSE_UNIT_RETURN_IN
+  LOOSE_ADJUSTMENT
+  PACKAGE_ADJUSTMENT
+  TIMBER_INTAKE_IN
+  PRODUCTION_CONSUME
+  PRODUCTION_OUTPUT
+  PRODUCTION_WASTE
+  PRODUCTION_REVERSAL_IN /// Producción v2 Fase 4: devuelve al inventario un insumo consumido por un lote revertido
+  PRODUCTION_REVERSAL_OUT /// Producción v2 Fase 4: retira el producto terminado agregado por un lote revertido
+}
+
+enum BrainDecisionStatus {
+  OPEN
+  APPROVED
+  MANUAL_REVIEW
+  EXECUTING
+  EXECUTED
+  DISMISSED
+  SNOOZED
+  EXPIRED
+  FAILED
+}
+
+enum BrainDecisionCategory {
+  INVENTORY
+  REORDER
+  PRICING
+  CASH
+  SALES
+  DISPATCH
+  PURCHASING
+  PRODUCTION
+  SECURITY
+  AUDIT
+  SYSTEM
+}
+
+enum BrainDecisionSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum AlertSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+enum CreditScope {
+  BRANCH_LOCAL
+  UNIVERSAL
+}
+
+enum CurrencyCode {
+  NIO
+  USD
+}
+
+enum DocumentMode {
+  DELIVERY_ORDER_ONLY
+  MANUAL_INVOICE_REQUIRED
+  MANUAL_INVOICE_REGISTERED
+}
+
+enum ManualInvoiceStatus {
+  NOT_REQUIRED
+  PENDING
+  REGISTERED
+  CANCELLED
+}
+
+enum SaleCancellationStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  EXECUTED
+  CANCELLED
+}
+
+enum SaleReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  EXECUTED
+  CANCELLED
+}
+
+enum SaleReturnType {
+  PARTIAL
+  TOTAL
+}
+
+enum ReturnedItemCondition {
+  GOOD
+  DAMAGED
+  NOT_RETURNED
+}
+
+enum ReturnInventoryDestination {
+  SELLABLE
+  DAMAGED
+  NONE
+}
+
+enum RefundMethod {
+  CASH
+  CARD
+  TRANSFER
+  CREDIT_NOTE
+  MIXED
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  POSTED
+  REJECTED
+  CANCELLED
+}
+
+enum CreditNoteStatus {
+  DRAFT
+  APPROVED
+  AVAILABLE
+  PARTIALLY_USED
+  USED
+  VOIDED
+  EXPIRED
+}
+
+enum CustomerRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  BLOCKED
+}
+
+enum InventoryCondition {
+  SELLABLE
+  DAMAGED
+}
+
+enum PrinterMode {
+  BROWSER_PRINT
+  QZ_TRAY
+  NETWORK_ESCPOS
+  PDF_ONLY
+}
+
+enum PaperWidth {
+  W58MM
+  W80MM
+  A4
+}
+
+enum DocumentType {
+  DELIVERY_ORDER
+  PURCHASE_TICKET
+  PAYMENT_RECEIPT
+  PRODUCTION_ORDER
+}
+
+model Branch {
+  id                String   @id @default(cuid())
+  code              String   @unique
+  name              String
+  isActive          Boolean  @default(true)
+  isDefaultSupplier Boolean  @default(false)
+  /// Fondo de caja: lo que la sesión de caja de esta sucursal debería poder
+  /// abrir al día siguiente. Sin configurar, todo lo retenido cuenta como
+  /// esperando depósito — conservador y correcto (correccion-destino-y-pantalla-cobro.md §1.1).
+  cashFundAmount    Decimal? @db.Decimal(14, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  userBranchRoles             UserBranchRole[]
+  physicalCashBoxes           PhysicalCashBox[]
+  customerScopes              CustomerBranchScope[]
+  creditProfiles              CustomerCreditProfile[]
+  inventoryBalances           InventoryBalance[]
+  inventoryConditionBalances  InventoryConditionBalance[]
+  inventoryMovements          InventoryMovement[]
+  saleOrders                  SaleOrder[]
+  saleCancellations           SaleCancellation[]
+  saleReturns                 SaleReturn[]
+  refunds                     Refund[]
+  dispatchTickets             DispatchTicket[]              @relation("BranchDispatchTickets")
+  approvalRequests            ApprovalRequest[]             @relation("BranchApprovalRequests")
+  auditLogs                   AuditLog[]                    @relation("BranchAuditLogs")
+  outgoingTransfers           Transfer[]                    @relation("TransferFromBranch")
+  incomingTransfers           Transfer[]                    @relation("TransferToBranch")
+  internalFreightOrigins      InternalFreightRoute[]        @relation("InternalFreightRouteOrigin")
+  internalFreightDestinations InternalFreightRoute[]        @relation("InternalFreightRouteDestination")
+  purchaseOrders              PurchaseOrder[]
+  timberTrips                 TimberTrip[]
+  operatingExpenses           OperatingExpense[]
+  pricingConfig               PricingConfig?
+  productPricings             ProductPricing[]
+  categoryPricingPolicies     BranchCategoryPricingPolicy[]
+  branchProductSettings       BranchProductSetting[]
+  employees                   Employee[]
+  employeeLoans               EmployeeLoan[]
+  attendanceRollCalls         AttendanceRollCall[]
+  payrollRuns                 PayrollRun[]
+  payrollDisbursements        PayrollDisbursement[]
+  discounts                   Discount[]
+  branchRoleConfigs           BranchRoleConfig[]
+  cashClosures                CashClosure[]
+  transportServices           TransportService[]
+  moduleConfig                BranchModuleConfig?
+  reorderPolicies             StockReorderPolicy[]
+  reorderAlerts               ReorderAlert[]                @relation("ReorderAlertBranch")
+  reorderAlertSources         ReorderAlert[]                @relation("ReorderAlertSourceBranch")
+  suggestionBatches           ReorderSuggestionBatch[]      @relation("SuggestionBatchBranch")
+  suggestionBatchSources      ReorderSuggestionBatch[]      @relation("SuggestionBatchSourceBranch")
+  productionBatches           ProductionBatch[]             @relation("ProductionBatches")
+  printSettings               PrintSettings?
+  brainDecisions              BrainDecision[]
+  operationalDays             OperationalDay[]
+  userPresences               UserPresence[]
+  creditNotes                 CreditNote[]                  @relation("BranchCreditNotes")
+  replenishmentDrafts         ReplenishmentDraft[]          @relation("BranchReplenishmentDrafts")
+  replenishmentDraftItems     ReplenishmentDraftItem[]      @relation("ReplenishmentDraftItemBranch")
+  replenishmentSignalSnapshot ReplenishmentSignalSnapshot?
+  cameras                     Camera[]
+  cameraAgent                 BranchCameraAgent?
+  cameraHealthSnapshot        CameraHealthSnapshot?
+  treasuryAccounts            TreasuryAccount[]
+  bankDeposits                BankDeposit[]
+  cashDestinationDeclarations CashDestinationDeclaration[]
+  depositPolicy               BranchDepositPolicy?
+}
+
+model User {
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  username           String    @unique
+  passwordHash       String
+  fullName           String
+  globalRole         RoleCode?
+  isActive           Boolean   @default(true)
+  mustChangePassword Boolean   @default(true)
+  sessionVersion     Int       @default(0) /// Incremented on password/role changes to invalidate existing tokens
+  /// MFA/TOTP — secreto cifrado en producción (AES-256-GCM con MFA_ENCRYPTION_KEY)
+  mfaEnabled         Boolean   @default(false)
+  mfaSecret          String? /// Base32 TOTP secret (nullable = MFA not configured)
+  mfaRecoveryCodes   Json? /// Array of SHA-256 hashed backup codes
+  mfaEnabledAt       DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  userBranchRoles             UserBranchRole[]
+  openedSessions              CashSession[]                @relation("CashSessionOpenedBy")
+  closedSessions              CashSession[]                @relation("CashSessionClosedBy")
+  reviewedCashSessions        CashSession[]                @relation("CashSessionReviewedBy")
+  cashSessionOperators        CashSessionOperator[]        @relation("CashSessionOperatorUser")
+  assignedCashOperators       CashSessionOperator[]        @relation("CashSessionOperatorAssignedBy")
+  createdCashMovements        CashMovement[]               @relation("CashMovementCreatedBy")
+  approvedCashMovements       CashMovement[]               @relation("CashMovementApprovedBy")
+  confirmedBankDeposits       BankDeposit[]
+  declaredCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationDeclaredBy")
+  handOverCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationHandOverUser")
+  carriedCashDeposits         CashDestinationDeclaration[] @relation("CashDestinationDepositCarrier")
+  heldTreasuryAccounts        TreasuryAccount[]            @relation("TreasuryAccountHolder")
+  createdTreasuryEntries      TreasuryEntry[]              @relation("TreasuryEntryCreatedBy")
+  createdExchangeRates        ExchangeRate[]               @relation("ExchangeRateCreatedBy")
+  openedOperationalDays       OperationalDay[]             @relation("OperationalDayOpenedBy")
+  sweptOperationalDays        OperationalDay[]             @relation("OperationalDaySweptBy")
+  reviewedOperationalDays     OperationalDay[]             @relation("OperationalDayReviewedBy")
+  createdOrders               SaleOrder[]                  @relation("SaleOrderCreatedBy")
+  requestedSaleCancellations  SaleCancellation[]           @relation("SaleCancellationRequestedBy")
+  approvedSaleCancellations   SaleCancellation[]           @relation("SaleCancellationApprovedBy")
+  requestedSaleReturns        SaleReturn[]                 @relation("SaleReturnRequestedBy")
+  approvedSaleReturns         SaleReturn[]                 @relation("SaleReturnApprovedBy")
+  postedRefunds               Refund[]                     @relation("RefundPostedBy")
+  approvedRefunds             Refund[]                     @relation("RefundApprovedBy")
+  createdCreditNotes          CreditNote[]                 @relation("CreditNoteCreatedBy")
+  approvedCreditNotes         CreditNote[]                 @relation("CreditNoteApprovedBy")
+  payments                    Payment[]
+  preparedDispatchTickets     DispatchTicket[]             @relation("DispatchPreparedBy")
+  dispatchTickets             DispatchTicket[]             @relation("DispatchProcessedBy")
+  requestedApprovals          ApprovalRequest[]            @relation("ApprovalRequestedBy")
+  resolvedApprovals           ApprovalRequest[]            @relation("ApprovalResolvedBy")
+  requestedTransfers          Transfer[]                   @relation("TransferRequestedBy")
+  approvedTransfers           Transfer[]                   @relation("TransferApprovedBy")
+  auditLogs                   AuditLog[]
+  purchaseOrders              PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
+  createdDiscounts            Discount[]                   @relation("DiscountCreatedBy")
+  updatedBranchRoleConfigs    BranchRoleConfig[]           @relation("BranchRoleConfigUpdatedBy")
+  updatedSystemSettings       SystemSetting[]              @relation("SystemSettingUpdatedBy")
+  createdTransportServices    TransportService[]           @relation("TransportServiceCreatedBy")
+  updatedBranchModuleConfigs  BranchModuleConfig[]         @relation("BranchModuleConfigUpdatedBy")
+  updatedReorderPolicies      StockReorderPolicy[]         @relation("ReorderPolicyUpdatedBy")
+  resolvedReorderAlerts       ReorderAlert[]               @relation("ReorderAlertResolvedBy")
+  reviewedSuggestionBatches   ReorderSuggestionBatch[]     @relation("SuggestionBatchReviewedBy")
+  createdRecipes              ProductionRecipe[]           @relation("RecipeCreator")
+  createdBatches              ProductionBatch[]            @relation("BatchCreator")
+  userPermissions             UserPermission[]
+  grantedPermissions          UserPermission[]             @relation("PermissionGrantedBy")
+  registeredManualInvoices    SaleOrder[]                  @relation("ManualInvoiceRegisteredBy")
+  documentPrintLogs           DocumentPrintLog[]           @relation("DocumentPrintedBy")
+  createdDocumentTemplates    DocumentTemplate[]           @relation("DocumentTemplateCreatedBy")
+  resolvedBrainDecisions      BrainDecision[]              @relation("BrainDecisionResolvedBy")
+  brainDecisionActionLogs     BrainDecisionActionLog[]     @relation("BrainDecisionActionActor")
+  legacyBrainDecisions        BrainDecision[]              @relation("BrainDecisionLegacyUser")
+  targetedBrainDecisions      BrainDecision[]              @relation("BrainDecisionTargetUser")
+  presences                   UserPresence[]
+  createdReplenishmentDrafts  ReplenishmentDraft[]         @relation("ReplenishmentDraftCreatedBy")
+  approvedReplenishmentDrafts ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
+
+  @@index([globalRole, isActive])
+}
+
+model UserPresence {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  sessionId      String?
+  branchId       String?
+  username       String?
+  roleCode       String?
+  status         String    @default("ONLINE")
+  currentPath    String?
+  currentModule  String?
+  lastSeenAt     DateTime  @default(now())
+  connectedAt    DateTime  @default(now())
+  disconnectedAt DateTime?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id])
+  branch Branch? @relation(fields: [branchId], references: [id])
+
+  @@index([branchId])
+  @@index([status])
+  @@index([lastSeenAt])
+}
+
+model UserBranchRole {
+  id         String   @id @default(cuid())
+  userId     String
+  branchId   String
+  roleCode   RoleCode
+  isActive   Boolean  @default(true)
+  assignedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id])
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([userId, branchId, roleCode])
+  @@index([userId, isActive])
+  @@index([branchId, roleCode, isActive])
+}
+
+model PhysicalCashBox {
+  id          String   @id @default(cuid())
+  branchId    String
+  code        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  branch   Branch        @relation(fields: [branchId], references: [id])
+  sessions CashSession[]
+
+  @@unique([branchId, code])
+}
+
+model CashSession {
+  id                 String            @id @default(cuid())
+  physicalCashBoxId  String
+  operationalDayId   String?
+  openedByUserId     String
+  closedByUserId     String?
+  reviewedByUserId   String?
+  status             CashSessionStatus
+  openedAt           DateTime
+  closedAt           DateTime?
+  autoClosedAt       DateTime?
+  autoClosedReason   String?
+  autoClosedBySystem Boolean           @default(false)
+  openingAmount      Decimal
+  closingAmount      Decimal?
+  expectedCashAmount Decimal?
+  countedCashAmount  Decimal?
+  differenceAmount   Decimal?
+  requiresReview     Boolean           @default(false)
+  reviewedAt         DateTime?
+  reviewNote         String?
+  notes              String?
+  activeSessionKey   String?           @unique
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  physicalCashBox        PhysicalCashBox             @relation(fields: [physicalCashBoxId], references: [id])
+  operationalDay         OperationalDay?             @relation(fields: [operationalDayId], references: [id])
+  openedBy               User                        @relation("CashSessionOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy               User?                       @relation("CashSessionClosedBy", fields: [closedByUserId], references: [id])
+  reviewedBy             User?                       @relation("CashSessionReviewedBy", fields: [reviewedByUserId], references: [id])
+  payments               Payment[]
+  operators              CashSessionOperator[]
+  cashMovements          CashMovement[]
+  refunds                Refund[]
+  destinationDeclaration CashDestinationDeclaration?
+
+  @@index([physicalCashBoxId, status])
+  @@index([operationalDayId])
+  @@index([status, requiresReview])
+}
+
+model CashSessionOperator {
+  id               String                  @id @default(cuid())
+  cashSessionId    String
+  userId           String
+  operatorRole     CashSessionOperatorRole
+  assignedByUserId String
+  assignedAt       DateTime                @default(now())
+  revokedAt        DateTime?
+  isActive         Boolean                 @default(true)
+
+  cashSession CashSession @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
+  user        User        @relation("CashSessionOperatorUser", fields: [userId], references: [id])
+  assignedBy  User        @relation("CashSessionOperatorAssignedBy", fields: [assignedByUserId], references: [id])
+
+  @@unique([cashSessionId, userId])
+  @@index([cashSessionId, isActive])
+  @@index([userId, isActive])
+}
+
+model CashMovement {
+  id               String           @id @default(cuid())
+  cashSessionId    String
+  type             CashMovementType
+  amount           Decimal
+  reason           String
+  notes            String?
+  createdByUserId  String
+  approvedByUserId String?
+  createdAt        DateTime         @default(now())
+
+  cashSession          CashSession           @relation(fields: [cashSessionId], references: [id])
+  createdBy            User                  @relation("CashMovementCreatedBy", fields: [createdByUserId], references: [id])
+  approvedBy           User?                 @relation("CashMovementApprovedBy", fields: [approvedByUserId], references: [id])
+  payrollDisbursements PayrollDisbursement[]
+  operatingExpense     OperatingExpense?
+  treasuryEntry        TreasuryEntry?
+
+  @@index([cashSessionId, createdAt])
+  @@index([type])
+}
+
+model OperationalDay {
+  id           String   @id @default(cuid())
+  branchId     String
+  businessDate DateTime
+
+  lifecycle    OperationalDayLifecycle    @default(ACTIVE)
+  reviewStatus OperationalDayReviewStatus @default(PENDING)
+
+  openedByUserId String
+  openedAt       DateTime @default(now())
+
+  /// Momento en que el día salió de ACTIVE. No implica revisión.
+  sweptAt       DateTime?
+  sweptBySystem Boolean   @default(false)
+  sweptByUserId String?
+
+  /// Firma humana. NUNCA la escribe un proceso automático.
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  reviewNote       String?
+
+  salesTotal                   Decimal  @default(0)
+  paidOrdersTotal              Decimal  @default(0)
+  pendingPaymentTotal          Decimal  @default(0)
+  expectedCashTotal            Decimal?
+  countedCashTotal             Decimal?
+  cashDifferenceTotal          Decimal?
+  openCashSessionsCount        Int      @default(0)
+  autoClosedPendingReviewCount Int      @default(0)
+  pendingDispatchCount         Int      @default(0)
+  criticalBrainDecisionCount   Int      @default(0)
+  notes                        String?
+  checklistJson                Json?
+  summaryJson                  Json?
+  reviewSummaryJson            Json?
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  branch     Branch @relation(fields: [branchId], references: [id])
+  openedBy   User   @relation("OperationalDayOpenedBy", fields: [openedByUserId], references: [id])
+  sweptBy    User?  @relation("OperationalDaySweptBy", fields: [sweptByUserId], references: [id])
+  reviewedBy User?  @relation("OperationalDayReviewedBy", fields: [reviewedByUserId], references: [id])
+
+  cashSessions      CashSession[]
+  saleOrders        SaleOrder[]
+  payments          Payment[]
+  paymentTenders    PaymentTender[]
+  dispatchTickets   DispatchTicket[]
+  transportServices TransportService[]
+  refunds           Refund[]
+  saleCancellations SaleCancellation[]
+  saleReturns       SaleReturn[]
+
+  @@unique([branchId, businessDate])
+  @@index([branchId, lifecycle])
+  @@index([reviewStatus, businessDate])
+  @@index([businessDate])
+}
+
+model Customer {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  legalName   String
+  displayName String
+  taxId       String?
+  phone       String?
+  email       String?
+  address     String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  branchScopes   CustomerBranchScope[]
+  creditProfiles CustomerCreditProfile[]
+  creditScore    CustomerCreditScore?
+  saleOrders     SaleOrder[]
+  saleReturns    SaleReturn[]
+  refunds        Refund[]
+  creditNotes    CreditNote[]
+}
+
+model CustomerBranchScope {
+  id         String   @id @default(cuid())
+  customerId String
+  branchId   String
+  isAllowed  Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  branch   Branch   @relation(fields: [branchId], references: [id])
+
+  @@unique([customerId, branchId])
+}
+
+model CustomerCreditProfile {
+  id               String      @id @default(cuid())
+  customerId       String
+  scope            CreditScope
+  branchId         String?
+  creditLimit      Decimal
+  creditUsed       Decimal     @default(0)
+  paymentTermsDays Int         @default(0)
+  isActive         Boolean     @default(false)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  branch   Branch?  @relation(fields: [branchId], references: [id])
+
+  @@index([customerId, scope])
+  @@index([branchId, isActive])
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  parentId  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent                  Category?                     @relation("CategoryToCategory", fields: [parentId], references: [id])
+  children                Category[]                    @relation("CategoryToCategory")
+  products                Product[]
+  categoryPricingPolicies BranchCategoryPricingPolicy[]
+  productStockGroups      ProductStockGroup[]
+}
+
+model BranchCategoryPricingPolicy {
+  id                         String   @id @default(cuid())
+  branchId                   String
+  categoryId                 String
+  minMarginPercent           Decimal  @default(15)
+  targetMarginPercent        Decimal  @default(30)
+  minProfitAmount            Decimal  @default(0)
+  maxDiscountPercent         Decimal  @default(0)
+  estimatedMonthlyUnits      Decimal  @default(1)
+  estimatedMonthlySalesValue Decimal?
+  monthlyExpenseAllocation   Decimal  @default(0)
+  stockPolicy                String   @default("NORMAL")
+  priceMode                  String   @default("CATEGORY")
+  roundingRule               String   @default("NEAREST_1")
+  isActive                   Boolean  @default(true)
+  notes                      String?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  branch   Branch   @relation(fields: [branchId], references: [id])
+  category Category @relation(fields: [categoryId], references: [id])
+
+  @@unique([branchId, categoryId])
+  @@index([branchId, isActive])
+  @@index([categoryId])
+}
+
+model Product {
+  id                  String    @id @default(cuid())
+  sku                 String    @unique
+  barcode             String?   @unique
+  name                String
+  description         String?
+  categoryId          String
+  unit                String
+  isActive            Boolean   @default(true)
+  allowsFraction      Boolean   @default(false)
+  isTimber            Boolean   @default(false)
+  standardSalePrice   Decimal
+  globalCost          Decimal?
+  averageCost         Decimal?
+  lastPurchaseCost    Decimal?
+  costUpdatedAt       DateTime?
+  costSource          String?
+  costUpdatedByUserId String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  /// ABC-XYZ Classification fields
+  abcClassification    String? /// "A", "B", "C"
+  xyzClassification    String? /// "X", "Y", "Z"
+  rotationIndex        Decimal? /// IR = Cost of Sales / Average Inventory
+  averageDailySales    Decimal? /// Average units sold per day
+  daysInStock          Int? /// Days since last PURCHASE_IN
+  lastClassificationAt DateTime?
+  suggestedMargin      Decimal? /// Suggested margin based on classification
+
+  category                   Category                    @relation(fields: [categoryId], references: [id])
+  inventoryBalances          InventoryBalance[]
+  inventoryConditionBalances InventoryConditionBalance[]
+  inventoryMovements         InventoryMovement[]
+  orderLines                 SaleOrderLine[]
+  saleReturnItems            SaleReturnItem[]
+  transferLines              TransferLine[]
+  internalFreightLines       InternalFreightTripLine[]
+  purchaseOrderLines         PurchaseOrderLine[]
+  timberProduct              TimberProduct?
+  productPricings            ProductPricing[]
+  branchProductSettings      BranchProductSetting[]
+  productAnalytics           ProductAnalytics[]
+  reorderPolicies            StockReorderPolicy[]
+  reorderAlerts              ReorderAlert[]
+  reorderSuggestionLines     ReorderSuggestionLine[]
+  stockGroupMemberships      ProductStockGroupMember[]
+  recipesAsOutput            ProductionRecipe[]          @relation("RecipeOutput")
+  recipesAsInput             ProductionRecipeInput[]     @relation("RecipeInput")
+  batchInputs                ProductionBatchInput[]      @relation("BatchInput")
+  brainDecisions             BrainDecision[]
+  replenishmentDraftItems    ReplenishmentDraftItem[]    @relation("ReplenishmentDraftItemProduct")
+
+  @@index([abcClassification])
+  @@index([rotationIndex])
+}
+
+model ProductStockGroup {
+  id                          String   @id @default(cuid())
+  code                        String   @unique
+  name                        String
+  baseUnit                    String
+  packageUnit                 String?
+  conversionFactorToBase      Decimal?
+  tracksPackages              Boolean  @default(false)
+  approximateFactor           Boolean  @default(false)
+  minimumClosedPackageReserve Decimal  @default(1)
+  autoOpenForUnitSale         Boolean  @default(true)
+  categoryId                  String?
+  isActive                    Boolean  @default(true)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  category Category?                 @relation(fields: [categoryId], references: [id])
+  products ProductStockGroupMember[]
+
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+model ProductStockGroupMember {
+  id                    String   @id @default(cuid())
+  stockGroupId          String
+  productId             String
+  saleUnit              String
+  conversionFactor      Decimal
+  isCanonical           Boolean  @default(false)
+  isPackagePresentation Boolean  @default(false)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  stockGroup ProductStockGroup @relation(fields: [stockGroupId], references: [id])
+  product    Product           @relation(fields: [productId], references: [id])
+
+  @@unique([stockGroupId, productId])
+  @@index([productId])
+  @@index([stockGroupId, isActive])
+}
+
+/// Timber product dimensions and pre-calculated pricing.
+/// Linked 1:1 with Product (isTimber=true).
+/// Formulas from "FORMULA PARA MADERA.xlsx" — see src/modules/timber/calculator.ts
+model TimberProduct {
+  id        String  @id @default(cuid())
+  productId String  @unique
+  product   Product @relation(fields: [productId], references: [id])
+
+  /// "TABLA" (width >= 10") or "CUADRO" (width < 10") or "TABLILLA" (1x6, 1x8)
+  timberType String
+
+  /// Dimensions: thickness & width in inches, length in feet
+  thickness Decimal
+  width     Decimal
+  length    Decimal
+
+  /// Calculated: (T × W × L) / 12
+  boardFeet    Decimal
+  /// Calculated: boardFeet × costPerFoot
+  baseCost     Decimal
+  /// Price per inch used for this product
+  pricePerInch Decimal
+  /// Calculated: T × W × varas × pricePerInch
+  sellingPrice Decimal
+
+  /// Vara length for this dimension (16→6, 15→5, 14→5, 11→4, 8→3)
+  varaLength Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tripLines TimberTripLine[]
+
+  @@index([timberType])
+}
+
+/// Global timber pricing configuration (adjustable by MASTER)
+model TimberPricingConfig {
+  id                   String  @id @default(cuid())
+  /// Cost per board foot (default C$20.00)
+  costPerFoot          Decimal @default(20)
+  /// Price per inch for TABLA (width >= 10", default C$8.90)
+  pricePerInchTabla    Decimal @default(8.9)
+  /// Price per inch for TABLILLA (1x6, 1x8, default C$6.90)
+  pricePerInchTablilla Decimal @default(6.9)
+  /// Price per inch for CUADRO (rest, default C$6.90)
+  pricePerInchCuadro   Decimal @default(6.9)
+
+  /// Madera v2 Fase 4 — configuración como datos (reemplaza constantes hardcodeadas).
+  /// Array de { lengthFeet: number, varas: number, forceCuadro: boolean }. Semilla: VARA_LENGTH_MAP
+  /// + LENGTHS_THAT_FORCE_CUADRO de calculator.ts.
+  cubicationTable Json?
+  /// Anchos (pulgadas) que clasifican como TABLA cuando el grosor es 1 o 2. Semilla: [10, 12].
+  tablaWidths     Json?
+  /// Anchos (pulgadas) que clasifican como TABLILLA cuando el grosor es 1. Semilla: [6, 8].
+  tablillaWidths  Json?
+
+  /// Margen objetivo (0-1) usado para la alerta de margen y la política TARGET_MARGIN. Default 40%.
+  targetMarginPercent            Decimal @default(0.40)
+  /// Múltiplo (C$) al que se redondea HACIA ARRIBA el precio de la política TARGET_MARGIN —
+  /// nunca hacia el más cercano, porque redondear al más cercano podría quedar bajo el margen
+  /// objetivo. Default 1 (entero más próximo hacia arriba).
+  targetMarginRoundingMultiple   Decimal @default(1)
+  /// Tolerancia de conciliación con factura (0-1). Default 1%.
+  reconciliationTolerancePercent Decimal @default(0.01)
+  /// Avisar (no bloquear) si un viaje deja margen bajo el objetivo.
+  warnBelowTargetMargin          Boolean @default(true)
+  /// Bloquear la confirmación si hay margen negativo, salvo override explícito auditado.
+  blockNegativeMargin            Boolean @default(true)
+
+  /// Who last updated
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
+
+/// A timber trip (viaje de madera) — wood arrives by trip, is cubicated, then enters inventory
+enum TimberTripStatus {
+  DRAFT
+  CUBICADO
+  CONFIRMED
+  TRANSFERRED
+  CANCELLED
+}
+
+model TimberTrip {
+  id                  String @id @default(cuid())
+  /// Human-readable trip code (e.g., "VJM-2026-001")
+  tripCode            String @unique
+  /// Destination branch where the wood arrives
+  destinationBranchId String
+  destinationBranch   Branch @relation(fields: [destinationBranchId], references: [id])
+
+  status TimberTripStatus @default(DRAFT)
+
+  /// Total cost of the trip (purchase price of all wood)
+  woodTripTotalCost   Decimal @default(0)
+  /// Computed: woodTripTotalCost / totalFeet — costo de la madera SOLA (sin gastos), se conserva para reporte
+  computedCostPerFoot Decimal @default(0)
+
+  /// Madera v2 Fase 1.1 — gastos del viaje (aditivo). Se prorratean por pie.
+  freightAmount       Decimal @default(0)
+  fuelAmount          Decimal @default(0)
+  perDiemAmount       Decimal @default(0)
+  permitsAmount       Decimal @default(0)
+  otherExpensesAmount Decimal @default(0)
+  /// Computed: suma de los 5 gastos de arriba
+  tripExpensesTotal   Decimal @default(0)
+  /// Computed: (maderaTotal + tripExpensesTotal) / totalFeet — el costo real que se usa
+  /// para costear líneas, WAC de inventario y márgenes (reemplaza a computedCostPerFoot).
+  landedCostPerFoot   Decimal @default(0)
+
+  /// Madera v2 Fase 1.3 — conciliación con la factura del aserradero (opcional).
+  invoicedFeet Decimal?
+
+  /// Madera v2 Fase 2.3 — política de precio de venta al confirmar el viaje.
+  /// RECALC_FROM_PRICE_PER_INCH (default) · COST_ONLY · TARGET_MARGIN
+  pricePolicy String @default("RECALC_FROM_PRICE_PER_INCH")
+
+  /// Pricing snapshot at time of calculation
+  pricePerInchTabla    Decimal @default(8.9)
+  pricePerInchTablilla Decimal @default(6.9)
+  pricePerInchCuadro   Decimal @default(6.9)
+
+  /// Totals (calculated)
+  totalPieces   Int     @default(0)
+  totalFeet     Decimal @default(0)
+  totalCost     Decimal @default(0)
+  totalSale     Decimal @default(0)
+  totalProfit   Decimal @default(0)
+  marginPercent Decimal @default(0)
+
+  /// Supplier/origin info
+  supplierName String?
+  origin       String?
+  notes        String?
+
+  /// Who created/processed
+  createdById                String?
+  confirmedById              String?
+  confirmedAt                DateTime?
+  /// Madera v2 Fase 3 — motivo cuando se confirma con margen negativo (override explícito).
+  marginOverrideReason       String?
+  /// Madera v2 Fase 1.3 — confirmación explícita al confirmar fuera de tolerancia de conciliación.
+  reconciliationAcknowledged Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines TimberTripLine[]
+
+  @@index([status])
+  @@index([destinationBranchId])
+}
+
+/// A line in a timber trip — represents a specific measure/dimension with piece count
+model TimberTripLine {
+  id     String     @id @default(cuid())
+  tripId String
+  trip   TimberTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  /// Link to the timber product (measure) — optional until confirmed
+  timberProductId String?
+  timberProduct   TimberProduct? @relation(fields: [timberProductId], references: [id])
+
+  /// Dimension snapshot
+  thicknessIn Int
+  widthIn     Int
+  lengthIn    Int
+  varaLength  Int
+  priceGroup  String /// TABLA, TABLILLA, CUADRO
+
+  /// Quantities
+  pieces Int @default(0)
+
+  /// Calculated values
+  calculatedFeet              Decimal @default(0)
+  calculatedCostFeet          Decimal @default(0)
+  calculatedCostPerPiece      Decimal @default(0)
+  calculatedSalePricePerPiece Decimal @default(0)
+  calculatedSaleTotal         Decimal @default(0)
+  calculatedProfit            Decimal @default(0)
+  calculatedMarginPct         Decimal @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tripId])
+}
+
+model InventoryBalance {
+  id                    String   @id @default(cuid())
+  branchId              String
+  productId             String
+  quantityOnHand        Decimal  @default(0)
+  closedPackageQuantity Decimal  @default(0)
+  looseUnitQuantity     Decimal  @default(0)
+  weightedAverageCost   Decimal  @default(0)
+  inventoryValue        Decimal  @default(0)
+  updatedAt             DateTime @updatedAt
+
+  branch  Branch  @relation(fields: [branchId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([branchId, productId])
+}
+
+model InventoryConditionBalance {
+  id        String             @id @default(cuid())
+  branchId  String
+  productId String
+  condition InventoryCondition
+  quantity  Decimal            @default(0)
+  updatedAt DateTime           @updatedAt
+
+  branch  Branch  @relation(fields: [branchId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([branchId, productId, condition])
+  @@index([branchId, condition])
+  @@index([productId, condition])
+}
+
+model InventoryMovement {
+  id                       String                @id @default(cuid())
+  branchId                 String
+  productId                String
+  movementType             InventoryMovementType
+  quantity                 Decimal
+  unitCost                 Decimal
+  referenceType            String
+  referenceId              String
+  notes                    String?
+  inputProductId           String?
+  inputQuantity            Decimal?
+  inputUnit                String?
+  packageUnit              String?
+  baseUnit                 String?
+  conversionFactorSnapshot Decimal?
+  estimatedUnits           Decimal?
+  actualUnits              Decimal?
+  closedPackageBefore      Decimal?
+  closedPackageAfter       Decimal?
+  looseUnitBefore          Decimal?
+  looseUnitAfter           Decimal?
+  equivalentBaseBefore     Decimal?
+  equivalentBaseAfter      Decimal?
+  reason                   String?
+  userId                   String?
+  createdAt                DateTime              @default(now())
+
+  branch  Branch  @relation(fields: [branchId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([branchId, productId, createdAt])
+  @@index([referenceType, referenceId])
+  @@index([movementType, createdAt])
+}
+
+model InventoryImportBatch {
+  id                       String    @id @default(cuid())
+  importType               String
+  destinationMode          String
+  defaultBranchId          String?
+  fileHash                 String
+  summaryJson              Json
+  rawJson                  Json?
+  status                   String    @default("PREVIEWED")
+  createdByUserId          String
+  executedByUserId         String?
+  createdAt                DateTime  @default(now())
+  executedAt               DateTime?
+  createMissingProducts    Boolean   @default(false)
+  defaultCategoryId        String?
+  defaultUnit              String?
+  defaultStandardSalePrice Decimal?
+  resultJson               Json?
+
+  lines InventoryImportLine[]
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+model InventoryImportLine {
+  id                String    @id @default(cuid())
+  batchId           String
+  rowNumber         Int
+  sku               String
+  name              String
+  categoryCode      String?
+  unit              String?
+  action            String
+  targetBranchId    String?
+  targetBranchCode  String?
+  targetBranchName  String?
+  quantity          Decimal?
+  unitCost          Decimal?
+  standardSalePrice Decimal?
+  productStatus     String
+  status            String
+  messagesJson      Json
+  rawJson           Json?
+  createdProductId  String?
+  updatedProductId  String?
+  executionStatus   String?
+  executionMessage  String?
+  executedAt        DateTime?
+
+  batch InventoryImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId, status])
+  @@index([sku])
+}
+
+model BranchProductSetting {
+  id                    String    @id @default(cuid())
+  branchId              String
+  productId             String
+  isAvailable           Boolean   @default(true)
+  minStock              Decimal?
+  maxStock              Decimal?
+  reorderPoint          Decimal?
+  /// Reposición v2: excluye el producto del motor de reposición en esta sucursal
+  /// (nunca genera señal). Distinto de isAvailable (visibilidad en catálogo/POS).
+  replenishmentExcluded Boolean   @default(false)
+  branchCost            Decimal?
+  branchPrice           Decimal?
+  minPrice              Decimal?
+  wholesalePrice        Decimal?
+  priceSource           String?
+  marginPercent         Decimal?
+  lastPriceUpdateAt     DateTime?
+  priceUpdatedByUserId  String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  branch  Branch  @relation(fields: [branchId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([branchId, productId])
+  @@index([branchId, isAvailable])
+  @@index([productId])
+}
+
+model SaleOrder {
+  id                String          @id @default(cuid())
+  orderNumber       String          @unique
+  branchId          String
+  operationalDayId  String?
+  customerId        String?
+  createdByUserId   String
+  status            SaleOrderStatus
+  subtotal          Decimal         @default(0)
+  discountTotal     Decimal         @default(0)
+  taxTotal          Decimal         @default(0)
+  grandTotal        Decimal         @default(0)
+  requiresTransport Boolean         @default(false)
+  transportAmount   Decimal         @default(0)
+  notes             String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  /// Momento REAL de la anulación (sellado en cancelSaleOrder). El resumen del
+  /// día filtra por esta columna; updatedAt solo queda como fallback legacy
+  /// (una edición posterior re-contaba la anulación en el día de la edición).
+  cancelledAt       DateTime?
+
+  // ── Fecha operativa / offline (ERP source-of-truth) ──
+  // saleOccurredAt: cuándo ocurrió realmente la venta (en POS, incluso offline).
+  // postedAt: cuándo se asentó al día operativo. syncedAt: cuándo se sincronizó.
+  saleOccurredAt  DateTime?
+  postedAt        DateTime?
+  syncedAt        DateTime?
+  offlineClientId String?   @unique
+
+  // ── Documentos comerciales ──
+  documentMode          DocumentMode @default(DELIVERY_ORDER_ONLY)
+  requiresManualInvoice Boolean      @default(false)
+
+  // Orden de entrega
+  deliveryOrderNumber    String?   @unique
+  deliveryOrderIssuedAt  DateTime?
+  deliveryOrderPrintedAt DateTime?
+
+  // Factura manual
+  manualInvoiceSeries         String?
+  manualInvoiceNumber         String?
+  manualInvoiceDate           DateTime?
+  manualInvoiceCustomerName   String?
+  manualInvoiceCustomerRuc    String?
+  manualInvoiceStatus         ManualInvoiceStatus @default(NOT_REQUIRED)
+  manualInvoiceRegisteredById String?
+  manualInvoiceRegisteredAt   DateTime?
+  manualInvoiceNotes          String?
+
+  branch                      Branch             @relation(fields: [branchId], references: [id])
+  operationalDay              OperationalDay?    @relation(fields: [operationalDayId], references: [id])
+  customer                    Customer?          @relation(fields: [customerId], references: [id])
+  createdBy                   User               @relation("SaleOrderCreatedBy", fields: [createdByUserId], references: [id])
+  manualInvoiceRegisteredBy   User?              @relation("ManualInvoiceRegisteredBy", fields: [manualInvoiceRegisteredById], references: [id])
+  lines                       SaleOrderLine[]
+  payments                    Payment[]
+  cancellations               SaleCancellation[] @relation("SaleCancellationOriginalOrder")
+  replacementForCancellations SaleCancellation[] @relation("SaleCancellationReplacementOrder")
+  returns                     SaleReturn[]
+  creditNotes                 CreditNote[]
+  dispatchTickets             DispatchTicket[]
+  transportServices           TransportService[]
+  documentPrintLogs           DocumentPrintLog[]
+
+  @@unique([branchId, manualInvoiceSeries, manualInvoiceNumber])
+  @@index([branchId, status])
+  @@index([branchId, createdByUserId, status])
+  @@index([customerId, createdAt])
+  @@index([deliveryOrderNumber])
+  @@index([manualInvoiceSeries, manualInvoiceNumber])
+  @@index([operationalDayId])
+  @@index([branchId, operationalDayId, status])
+  // Dashboard de ventas y ventanas de dia operativo filtran por sucursal + rango de fechas
+  @@index([branchId, createdAt])
+}
+
+model SaleOrderLine {
+  id                    String   @id @default(cuid())
+  saleOrderId           String
+  productId             String
+  quantity              Decimal
+  unitPrice             Decimal
+  costSnapshot          Decimal?
+  marginSnapshot        Decimal?
+  marginPercentSnapshot Decimal?
+  costSourceSnapshot    String?
+  discountAmount        Decimal  @default(0)
+  lineSubtotal          Decimal
+  createdAt             DateTime @default(now())
+
+  saleOrder   SaleOrder        @relation(fields: [saleOrderId], references: [id])
+  product     Product          @relation(fields: [productId], references: [id])
+  returnItems SaleReturnItem[]
+
+  @@unique([saleOrderId, productId])
+  @@index([saleOrderId])
+  // Señales de venta / analytics / top-selling agrupan por productId constantemente
+  @@index([productId])
+}
+
+model Payment {
+  /// DB-level partial unique index (manual migration):
+  /// Payment_one_posted_per_sale_order ON (saleOrderId) WHERE status='POSTED'
+  id               String        @id @default(cuid())
+  saleOrderId      String
+  cashSessionId    String
+  operationalDayId String?
+  receivedByUserId String
+  method           PaymentMethod
+  status           PaymentStatus @default(POSTED)
+  amount           Decimal
+  currencyCode     CurrencyCode  @default(NIO)
+  referenceNumber  String?
+  paidAt           DateTime      @default(now())
+  postedAt         DateTime?
+  syncedAt         DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  saleOrder      SaleOrder       @relation(fields: [saleOrderId], references: [id])
+  cashSession    CashSession     @relation(fields: [cashSessionId], references: [id])
+  operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
+  receivedBy     User            @relation(fields: [receivedByUserId], references: [id])
+  tenders        PaymentTender[]
+  refunds        Refund[]
+
+  @@index([cashSessionId, paidAt])
+  @@index([operationalDayId])
+  @@index([cashSessionId, operationalDayId])
+  // Resumen realtime de ventas (poll cada 12-15s por usuario POS) filtra status+ventana paidAt
+  @@index([status, paidAt])
+}
+
+model PaymentTender {
+  id               String        @id @default(cuid())
+  paymentId        String
+  operationalDayId String?
+  method           PaymentMethod
+  amount           Decimal
+  receivedAmount   Decimal?
+  changeAmount     Decimal?
+  referenceNumber  String?
+  /// Solo TRANSFER — a qué cuenta propia entró el dinero. Sin esto el saldo
+  /// esperado por cuenta no se puede calcular (correccion-destino-y-pantalla-cobro.md §2.2).
+  bankAccountId    String?
+  createdAt        DateTime      @default(now())
+
+  payment        Payment          @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  operationalDay OperationalDay?  @relation(fields: [operationalDayId], references: [id])
+  bankAccount    TreasuryAccount? @relation(fields: [bankAccountId], references: [id])
+  treasuryEntry  TreasuryEntry?
+
+  @@index([paymentId])
+  @@index([method])
+  @@index([operationalDayId, method])
+  @@index([bankAccountId])
+}
+
+model DispatchTicket {
+  id                 String         @id @default(cuid())
+  saleOrderId        String
+  branchId           String
+  operationalDayId   String?
+  status             DispatchStatus @default(PENDING)
+  preparedByUserId   String?
+  dispatchedByUserId String?
+  dispatchedAt       DateTime?
+  notes              String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  saleOrder      SaleOrder       @relation(fields: [saleOrderId], references: [id])
+  branch         Branch          @relation("BranchDispatchTickets", fields: [branchId], references: [id])
+  operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
+  preparedBy     User?           @relation("DispatchPreparedBy", fields: [preparedByUserId], references: [id])
+  processedBy    User?           @relation("DispatchProcessedBy", fields: [dispatchedByUserId], references: [id])
+
+  @@index([branchId, status])
+  @@index([operationalDayId])
+}
+
+model ApprovalRequest {
+  id                String         @id @default(cuid())
+  type              ApprovalType
+  status            ApprovalStatus @default(REQUESTED)
+  branchId          String
+  referenceType     String
+  referenceId       String
+  reason            String
+  payloadJson       Json?
+  requestedByUserId String
+  resolvedByUserId  String?
+  resolvedAt        DateTime?
+  resolutionNotes   String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  branch           Branch            @relation("BranchApprovalRequests", fields: [branchId], references: [id])
+  requestedBy      User              @relation("ApprovalRequestedBy", fields: [requestedByUserId], references: [id])
+  resolvedBy       User?             @relation("ApprovalResolvedBy", fields: [resolvedByUserId], references: [id])
+  saleCancellation SaleCancellation?
+  saleReturn       SaleReturn?
+
+  @@index([branchId, status, type])
+  @@index([referenceType, referenceId])
+}
+
+model SaleCancellation {
+  id                     String                 @id @default(cuid())
+  saleOrderId            String
+  branchId               String
+  operationalDayId       String?
+  approvalRequestId      String?                @unique
+  requestedByUserId      String
+  approvedByMasterId     String?
+  status                 SaleCancellationStatus @default(REQUESTED)
+  reason                 String
+  hadTransport           Boolean                @default(false)
+  transportWasExecuted   Boolean                @default(false)
+  replacementSaleOrderId String?
+  createdAt              DateTime               @default(now())
+  approvedAt             DateTime?
+  executedAt             DateTime?
+
+  saleOrder            SaleOrder        @relation("SaleCancellationOriginalOrder", fields: [saleOrderId], references: [id])
+  branch               Branch           @relation(fields: [branchId], references: [id])
+  operationalDay       OperationalDay?  @relation(fields: [operationalDayId], references: [id])
+  approvalRequest      ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
+  requestedBy          User             @relation("SaleCancellationRequestedBy", fields: [requestedByUserId], references: [id])
+  approvedByMaster     User?            @relation("SaleCancellationApprovedBy", fields: [approvedByMasterId], references: [id])
+  replacementSaleOrder SaleOrder?       @relation("SaleCancellationReplacementOrder", fields: [replacementSaleOrderId], references: [id])
+  refunds              Refund[]
+
+  @@index([saleOrderId])
+  @@index([branchId, status])
+  @@index([operationalDayId])
+  @@index([requestedByUserId])
+  @@index([approvedByMasterId])
+}
+
+model SaleReturn {
+  id                          String           @id @default(cuid())
+  returnNumber                String           @unique
+  saleOrderId                 String
+  branchId                    String
+  customerId                  String?
+  operationalDayId            String?
+  approvalRequestId           String?          @unique
+  requestedByUserId           String
+  approvedByMasterId          String?
+  status                      SaleReturnStatus @default(REQUESTED)
+  returnType                  SaleReturnType
+  reason                      String
+  affectsClosedOperationalDay Boolean          @default(false)
+  requiresMasterApproval      Boolean          @default(true)
+  createdAt                   DateTime         @default(now())
+  approvedAt                  DateTime?
+  executedAt                  DateTime?
+
+  saleOrder        SaleOrder        @relation(fields: [saleOrderId], references: [id])
+  branch           Branch           @relation(fields: [branchId], references: [id])
+  customer         Customer?        @relation(fields: [customerId], references: [id])
+  operationalDay   OperationalDay?  @relation(fields: [operationalDayId], references: [id])
+  approvalRequest  ApprovalRequest? @relation(fields: [approvalRequestId], references: [id])
+  requestedBy      User             @relation("SaleReturnRequestedBy", fields: [requestedByUserId], references: [id])
+  approvedByMaster User?            @relation("SaleReturnApprovedBy", fields: [approvedByMasterId], references: [id])
+  items            SaleReturnItem[]
+  refunds          Refund[]
+  creditNotes      CreditNote[]
+
+  @@index([saleOrderId])
+  @@index([branchId, status])
+  @@index([customerId])
+  @@index([operationalDayId])
+  @@index([requestedByUserId])
+  @@index([approvedByMasterId])
+}
+
+model SaleReturnItem {
+  id                   String                     @id @default(cuid())
+  saleReturnId         String
+  saleOrderLineId      String
+  productId            String
+  quantity             Decimal
+  unitPricePaid        Decimal
+  discountAllocated    Decimal                    @default(0)
+  refundableAmount     Decimal
+  condition            ReturnedItemCondition
+  inventoryDestination ReturnInventoryDestination
+  createdAt            DateTime                   @default(now())
+
+  saleReturn    SaleReturn    @relation(fields: [saleReturnId], references: [id], onDelete: Cascade)
+  saleOrderLine SaleOrderLine @relation(fields: [saleOrderLineId], references: [id])
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@index([saleReturnId])
+  @@index([saleOrderLineId])
+  @@index([productId])
+  @@index([condition, inventoryDestination])
+}
+
+model Refund {
+  id                 String       @id @default(cuid())
+  saleReturnId       String?
+  saleCancellationId String?
+  paymentId          String?
+  cashSessionId      String?
+  operationalDayId   String?
+  branchId           String
+  customerId         String?
+  method             RefundMethod
+  amount             Decimal
+  status             RefundStatus @default(REQUESTED)
+  requiresApproval   Boolean      @default(true)
+  postedByUserId     String?
+  approvedByMasterId String?
+  postedAt           DateTime?
+  createdAt          DateTime     @default(now())
+
+  saleReturn       SaleReturn?       @relation(fields: [saleReturnId], references: [id])
+  saleCancellation SaleCancellation? @relation(fields: [saleCancellationId], references: [id])
+  payment          Payment?          @relation(fields: [paymentId], references: [id])
+  cashSession      CashSession?      @relation(fields: [cashSessionId], references: [id])
+  operationalDay   OperationalDay?   @relation(fields: [operationalDayId], references: [id])
+  branch           Branch            @relation(fields: [branchId], references: [id])
+  customer         Customer?         @relation(fields: [customerId], references: [id])
+  postedBy         User?             @relation("RefundPostedBy", fields: [postedByUserId], references: [id])
+  approvedByMaster User?             @relation("RefundApprovedBy", fields: [approvedByMasterId], references: [id])
+
+  @@index([saleReturnId])
+  @@index([saleCancellationId])
+  @@index([paymentId])
+  @@index([cashSessionId])
+  @@index([branchId, status])
+  @@index([customerId])
+  @@index([operationalDayId])
+}
+
+model CreditNote {
+  id                 String           @id @default(cuid())
+  creditNoteNumber   String           @unique
+  sequence           Int
+  branchId           String
+  customerId         String
+  saleOrderId        String?
+  saleReturnId       String?
+  amount             Decimal
+  availableAmount    Decimal
+  reason             String
+  status             CreditNoteStatus @default(DRAFT)
+  issuedAt           DateTime
+  createdByUserId    String
+  approvedByMasterId String?
+  createdAt          DateTime         @default(now())
+  expiresAt          DateTime?
+
+  branch           Branch      @relation("BranchCreditNotes", fields: [branchId], references: [id])
+  customer         Customer    @relation(fields: [customerId], references: [id])
+  saleOrder        SaleOrder?  @relation(fields: [saleOrderId], references: [id])
+  saleReturn       SaleReturn? @relation(fields: [saleReturnId], references: [id])
+  createdBy        User        @relation("CreditNoteCreatedBy", fields: [createdByUserId], references: [id])
+  approvedByMaster User?       @relation("CreditNoteApprovedBy", fields: [approvedByMasterId], references: [id])
+
+  @@unique([branchId, sequence])
+  @@index([customerId, status])
+  @@index([branchId, status])
+  @@index([saleOrderId])
+  @@index([saleReturnId])
+  @@index([createdByUserId])
+  @@index([approvedByMasterId])
+}
+
+model CustomerCreditScore {
+  id                  String            @id @default(cuid())
+  customerId          String            @unique
+  score               Int               @default(0)
+  riskLevel           CustomerRiskLevel @default(MEDIUM)
+  totalPurchases      Decimal           @default(0)
+  totalReturns        Decimal           @default(0)
+  returnRate          Decimal           @default(0)
+  unpaidBalance       Decimal           @default(0)
+  latePaymentsCount   Int               @default(0)
+  creditNotesIssued   Int               @default(0)
+  manualInvoicesCount Int               @default(0)
+  lastReviewAt        DateTime?
+  updatedAt           DateTime          @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([riskLevel])
+  @@index([updatedAt])
+}
+
+model Transfer {
+  id                String         @id @default(cuid())
+  transferNumber    String         @unique
+  fromBranchId      String
+  toBranchId        String
+  status            TransferStatus @default(DRAFT)
+  requestedByUserId String
+  approvedByUserId  String?
+  approvedAt        DateTime?
+  dispatchedAt      DateTime?
+  receivedAt        DateTime?
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  fromBranch           Branch                @relation("TransferFromBranch", fields: [fromBranchId], references: [id])
+  toBranch             Branch                @relation("TransferToBranch", fields: [toBranchId], references: [id])
+  requestedBy          User                  @relation("TransferRequestedBy", fields: [requestedByUserId], references: [id])
+  approvedBy           User?                 @relation("TransferApprovedBy", fields: [approvedByUserId], references: [id])
+  lines                TransferLine[]
+  internalFreightTrips InternalFreightTrip[]
+
+  @@index([fromBranchId, toBranchId, status])
+}
+
+model TransferLine {
+  id                 String  @id @default(cuid())
+  transferId         String
+  productId          String
+  quantityRequested  Decimal
+  quantityDispatched Decimal @default(0)
+  quantityReceived   Decimal @default(0)
+  unitCostSnapshot   Decimal
+
+  transfer             Transfer                  @relation(fields: [transferId], references: [id])
+  product              Product                   @relation(fields: [productId], references: [id])
+  internalFreightLines InternalFreightTripLine[]
+
+  @@unique([transferId, productId])
+  @@index([transferId])
+}
+
+model InternalFreightRoute {
+  id                      String   @id @default(cuid())
+  originBranchId          String
+  destinationBranchId     String
+  name                    String
+  roundTripKm             Decimal
+  defaultAllocationMethod String   @default("BY_VALUE") /// BY_VALUE, BY_QUANTITY, MANUAL
+  isActive                Boolean  @default(true)
+  notes                   String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  originBranch      Branch                @relation("InternalFreightRouteOrigin", fields: [originBranchId], references: [id])
+  destinationBranch Branch                @relation("InternalFreightRouteDestination", fields: [destinationBranchId], references: [id])
+  trips             InternalFreightTrip[]
+
+  @@index([originBranchId, destinationBranchId, isActive])
+}
+
+model Truck {
+  id                        String   @id @default(cuid())
+  name                      String
+  plate                     String?
+  fuelEfficiencyKmPerGallon Decimal?
+  maintenanceCostPerKm      Decimal  @default(0)
+  isActive                  Boolean  @default(true)
+  notes                     String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  trips InternalFreightTrip[]
+}
+
+model InternalFreightTrip {
+  id                 String   @id @default(cuid())
+  routeId            String
+  transferId         String?
+  truckId            String?
+  tripDate           DateTime @default(now())
+  fuelPricePerGallon Decimal
+  fuelCost           Decimal
+  maintenanceCost    Decimal
+  driverCost         Decimal  @default(0)
+  helperCost         Decimal  @default(0)
+  otherCost          Decimal  @default(0)
+  totalTripCost      Decimal
+  allocationMethod   String   @default("BY_VALUE") /// BY_VALUE, BY_QUANTITY, MANUAL
+  status             String   @default("DRAFT") /// DRAFT, CALCULATED, APPLIED, CANCELLED
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  route    InternalFreightRoute      @relation(fields: [routeId], references: [id])
+  transfer Transfer?                 @relation(fields: [transferId], references: [id])
+  truck    Truck?                    @relation(fields: [truckId], references: [id])
+  lines    InternalFreightTripLine[]
+
+  @@index([routeId, status])
+  @@index([transferId])
+}
+
+model InternalFreightTripLine {
+  id                      String   @id @default(cuid())
+  tripId                  String
+  productId               String
+  transferLineId          String?
+  quantity                Decimal
+  lineValue               Decimal
+  allocatedFreight        Decimal
+  allocatedFreightPerUnit Decimal
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  trip         InternalFreightTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  product      Product             @relation(fields: [productId], references: [id])
+  transferLine TransferLine?       @relation(fields: [transferLineId], references: [id])
+
+  @@index([tripId])
+  @@index([productId])
+  @@index([transferLineId])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * EMPLOYEE / PAYROLL MODULE
+ * ════════════════════════════════════════════════════════════════
+ */
+
+model Employee {
+  id                String    @id @default(cuid())
+  fullName          String
+  position          String /// "Supervisor", "Vendedor", "Cajero", "Bodeguero", etc.
+  branchId          String
+  monthlySalary     Decimal
+  startDate         DateTime
+  endDate           DateTime?
+  isActive          Boolean   @default(true)
+  /// Retener IR salarial (Ley 822) en nómina. Varía POR TRABAJADOR: quienes
+  /// tributan por su cuenta (otro régimen) no llevan retención — default off;
+  /// se marca en la ficha cuando a un empleado sí se le retiene.
+  applyIrRetention  Boolean   @default(false)
+  /// Salario COTIZABLE reportado al INSS (puede diferir del salario real).
+  /// INSS laboral/patronal e INATEC se calculan sobre ESTA base (así cuadran
+  /// con la factura del INSS). Null = usar monthlySalary. Las prestaciones
+  /// (aguinaldo/vacaciones/indemnización) siempre usan el salario real.
+  inssSalary        Decimal?
+  /// Número de cédula de identidad (documento del trabajador).
+  nationalId        String?
+  /// Última LIQUIDACIÓN Y RECONTRATACIÓN (rollover, sigue activo): resetea el
+  /// reloj de antigüedad para indemnización/vacaciones SIN interrumpir el
+  /// empleo — evita que la indemnización acumule como bola de nieve sin
+  /// límite si nunca se liquida. `startDate` NUNCA cambia (ingreso real
+  /// original); null = nunca se ha liquidado, todo se ancla en startDate.
+  lastLiquidationAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  branch               Branch                  @relation(fields: [branchId], references: [id])
+  salaryHistory        EmployeeSalaryHistory[]
+  vacationEntries      VacationEntry[]
+  settlements          EmployeeSettlement[]
+  operatingExpenses    OperatingExpense[]
+  loans                EmployeeLoan[]
+  payrollLines         PayrollLine[]
+  payrollDisbursements PayrollDisbursement[]
+  absences             EmployeeAbsence[]
+  attendanceMarks      AttendanceMark[]
+
+  @@index([branchId])
+  @@index([isActive])
+}
+
+model EmployeeSalaryHistory {
+  id             String   @id @default(cuid())
+  employeeId     String
+  month          DateTime /// First day of the month
+  daysWorked     Int
+  totalDays      Int
+  proratedSalary Decimal
+  fullSalary     Decimal
+  createdAt      DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, month])
+  @@index([month])
+}
+
+model EmployeeLoan {
+  id                   String   @id @default(cuid())
+  employeeId           String
+  branchId             String
+  principalAmount      Decimal
+  outstandingBalance   Decimal
+  installmentAmount    Decimal?
+  installmentFrequency String   @default("MONTHLY") /// MONTHLY, BIWEEKLY (quincenal): la cuota se descuenta en cada quincena
+  issuedAt             DateTime @default(now())
+  status               String   @default("ACTIVE") /// ACTIVE, PAID, CANCELLED
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  employee     Employee                  @relation(fields: [employeeId], references: [id])
+  branch       Branch                    @relation(fields: [branchId], references: [id])
+  installments EmployeeLoanInstallment[]
+
+  @@index([employeeId, status])
+  @@index([branchId, status])
+  @@index([issuedAt])
+}
+
+model EmployeeLoanInstallment {
+  id            String    @id @default(cuid())
+  loanId        String
+  payrollRunId  String?
+  payrollLineId String?
+  dueYear       Int
+  dueMonth      Int
+  amount        Decimal
+  status        String    @default("PENDING") /// PENDING, DEDUCTED, PAID, CANCELLED
+  deductedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  loan        EmployeeLoan @relation(fields: [loanId], references: [id])
+  payrollRun  PayrollRun?  @relation(fields: [payrollRunId], references: [id])
+  payrollLine PayrollLine? @relation(fields: [payrollLineId], references: [id])
+
+  @@index([loanId, status])
+  @@index([dueYear, dueMonth, status])
+  @@index([payrollRunId])
+  @@index([payrollLineId])
+}
+
+model PayrollRun {
+  id                String    @id @default(cuid())
+  branchId          String?
+  year              Int
+  month             Int
+  status            String    @default("DRAFT") /// DRAFT, POSTED, VOIDED
+  totalGross        Decimal   @default(0)
+  totalDeductions   Decimal   @default(0)
+  totalNet          Decimal   @default(0)
+  totalEmployerCost Decimal   @default(0)
+  postedAt          DateTime?
+  postedByUserId    String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  branch           Branch?                   @relation(fields: [branchId], references: [id])
+  lines            PayrollLine[]
+  disbursements    PayrollDisbursement[]
+  loanInstallments EmployeeLoanInstallment[]
+
+  @@unique([branchId, year, month])
+  @@index([year, month, status])
+}
+
+model PayrollLine {
+  id                   String   @id @default(cuid())
+  payrollRunId         String
+  employeeId           String
+  grossSalary          Decimal
+  loanDeductions       Decimal  @default(0)
+  otherDeductions      Decimal  @default(0)
+  /// Desglose Nicaragua (payroll-nicaragua.ts): retenciones al empleado…
+  inssLaboral          Decimal  @default(0)
+  ir                   Decimal  @default(0) /// IR salarial mensual (tabla Ley 822)
+  /// …y cargas patronales que componen el costo empresa.
+  inssPatronal         Decimal  @default(0)
+  inatec               Decimal  @default(0)
+  provisions           Decimal  @default(0) /// suma de las tres provisiones del período
+  /// Desglose por prestación (0 en corridas históricas o en modo ON_PAYMENT):
+  aguinaldoAccrual     Decimal  @default(0) /// 1/12 (Arts. 93–99 CT)
+  vacacionesAccrual    Decimal  @default(0) /// 2.5 días/mes (Arts. 76–82 CT)
+  indemnizacionAccrual Decimal  @default(0) /// tramo Art. 45 según antigüedad
+  /// Faltas INJUSTIFICADAS del período: días y pago no devengado (día × salario/30).
+  absenceDays          Decimal  @default(0)
+  absenceDeduction     Decimal  @default(0)
+  netPay               Decimal
+  employerCost         Decimal
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  payrollRun       PayrollRun                @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee         Employee                  @relation(fields: [employeeId], references: [id])
+  loanInstallments EmployeeLoanInstallment[]
+  disbursements    PayrollDisbursement[]
+
+  @@unique([payrollRunId, employeeId])
+  @@index([employeeId])
+}
+
+/// Régimen de afiliación al INSS (Decreto 06-2019). Las tasas laboral/patronal
+/// se derivan del régimen + conteo GLOBAL de empleados activos (<50 / ≥50) en
+/// resolveInssRates (payroll-nicaragua.ts) — no se guardan tasas sueltas.
+enum InssRegime {
+  INTEGRAL /// laboral 7%; patronal 21.5% (<50) / 22.5% (≥50)
+  IVM_RP /// laboral 5%; patronal 15.5% (<50) / 16.5% (≥50)
+}
+
+/// Cuándo se reconoce cada prestación social en el costo mensual. La obligación
+/// legal (aguinaldo Arts. 93–99, vacaciones Arts. 76–82, indemnización Art. 45 CT)
+/// existe en AMBOS modos — por eso no hay valor "OFF": solo cambia si se
+/// provisiona mes a mes o si el gasto se reconoce al pagar.
+enum BenefitAccrualMode {
+  ACCRUE_MONTHLY /// provisiona 1/12, 2.5 días y tramo Art. 45 en el costo mensual
+  ON_PAYMENT /// el gasto se reconoce al pagar (diciembre / goce / liquidación)
+}
+
+/// Configuración de nómina Nicaragua (fila única). La tabla progresiva del IR
+/// (Ley 822) y las tasas INSS/INATEC viven versionadas en código
+/// (payroll-nicaragua.ts), NO aquí: solo cambian por reforma de ley. Si no
+/// existe fila, el servicio usa DEFAULT_PAYROLL_RATES.
+model PayrollRateConfig {
+  id                     String             @id @default(cuid())
+  inssRegime             InssRegime         @default(INTEGRAL)
+  aguinaldoMode          BenefitAccrualMode @default(ACCRUE_MONTHLY)
+  vacacionesMode         BenefitAccrualMode @default(ACCRUE_MONTHLY)
+  indemnizacionMode      BenefitAccrualMode @default(ACCRUE_MONTHLY)
+  /// Salario mínimo sectorial: solo para ADVERTIR salarios por debajo (warning, no bloqueo).
+  salarioMinimoSectorial Decimal            @default(0)
+  updatedByUserId        String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+}
+
+/// Ledger de vacaciones: cada entrada es un evento REAL con fecha (gozadas =
+/// descansadas, o pagadas en dinero) — reemplaza el contador suelto que antes
+/// vivía en Employee (vacationDaysTaken), que dependía de que alguien lo
+/// actualizara sin dejar rastro de CUÁNDO ni QUÉ pasó. El saldo se calcula
+/// como acumulado por período de aniversario laboral (vacationPeriodsToDate)
+/// menos la suma de este ledger (Arts. 76–82 CT).
+model VacationEntry {
+  id              String   @id @default(cuid())
+  employeeId      String
+  /// Día en que se gozó o pagó (fecha pura, medianoche UTC).
+  date            DateTime
+  days            Decimal
+  kind            String /// "GOZADAS" (descansadas, salario normal) | "PAGADAS" (en dinero, gravable)
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, date])
+}
+
+/// Liquidación de un trabajador — registro CONTABLE de lo pagado, en dos
+/// modalidades:
+///  - ROLLOVER (liquidación y recontratación INMEDIATA): el empleado SIGUE
+///    ACTIVO. Se paga lo acumulado (aguinaldo proporcional, vacaciones,
+///    indemnización Art. 45) para evitar que la indemnización crezca sin
+///    límite ("bola de nieve"), y el reloj de antigüedad se resetea
+///    (Employee.lastLiquidationAt) — sin causal, siempre paga indemnización.
+///  - TERMINATION (baja definitiva): termina el empleo; requiere `causal`
+///    (Arts. 45/48 CT) que decide si la indemnización aplica.
+model EmployeeSettlement {
+  id                String   @id @default(cuid())
+  employeeId        String
+  kind              String /// "ROLLOVER" | "TERMINATION"
+  /// Causal de terminación (solo TERMINATION) — ver SEVERANCE_CAUSALES.
+  causal            String?
+  date              DateTime @default(now())
+  aguinaldoPaid     Decimal  @default(0)
+  vacationDaysPaid  Decimal  @default(0)
+  vacationValuePaid Decimal  @default(0)
+  indemnizacionPaid Decimal  @default(0)
+  loanDeduction     Decimal  @default(0)
+  totalPaid         Decimal
+  notes             String?
+  createdByUserId   String?
+  createdAt         DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId, date])
+}
+
+/// Asistencia correlacionada con la nómina: cada FALTA INJUSTIFICADA descuenta
+/// un día de pago (salario diario = mensual ÷ 30) en el cálculo del mes. Las
+/// justificadas (permiso, enfermedad con constancia…) quedan registradas pero
+/// NO descuentan.
+model EmployeeAbsence {
+  id              String   @id @default(cuid())
+  employeeId      String
+  /// Día de la falta (fecha pura, medianoche UTC).
+  date            DateTime
+  kind            String /// "UNJUSTIFIED" (descuenta) | "JUSTIFIED" (no descuenta)
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@unique([employeeId, date])
+  @@index([employeeId, date])
+}
+
+/// Pase de asistencia diario POR SUCURSAL: se toma desde el POS antes de
+/// abrir caja (ventana emergente con el personal activo de la sucursal).
+/// Registra QUE se pasó lista y quién; las faltas marcadas viven en
+/// EmployeeAbsence. Único por sucursal+día — el modal solo aparece una vez.
+///
+/// `reviewStatus`: el pase lo toma el CAJERO — para evitar marcas falsas entre
+/// compañeros ("buddy punching"), Master debe CONFIRMAR (o corregir) cada
+/// pase; PENDING hasta que Master revise. Cada re-toma del día vuelve a dejarlo
+/// en PENDING (una corrección del cajero también necesita re-revisión).
+model AttendanceRollCall {
+  id               String    @id @default(cuid())
+  branchId         String
+  /// Día del pase (fecha pura, medianoche UTC).
+  date             DateTime
+  takenByUserId    String?
+  presentCount     Int       @default(0)
+  absentCount      Int       @default(0)
+  reviewStatus     String    @default("PENDING") /// PENDING | CONFIRMED
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  branch Branch           @relation(fields: [branchId], references: [id])
+  marks  AttendanceMark[]
+
+  @@unique([branchId, date])
+}
+
+/// Marca POR TRABAJADOR de un pase de asistencia: estado + hora real de
+/// llegada (solo tiene sentido si PRESENT). Antes la presencia era implícita
+/// (ausencia de fila en EmployeeAbsence); ahora queda un registro explícito y
+/// auditable por trabajador, con la hora, para que Master pueda confirmar o
+/// corregir marcas falsas.
+model AttendanceMark {
+  id         String    @id @default(cuid())
+  rollCallId String
+  employeeId String
+  status     String /// PRESENT | UNJUSTIFIED | JUSTIFIED
+  /// Hora en que se tomó el pase (se guarda para PRESENT como "hora de llegada").
+  arrivalAt  DateTime?
+  notes      String?
+  createdAt  DateTime  @default(now())
+
+  rollCall AttendanceRollCall @relation(fields: [rollCallId], references: [id])
+  employee Employee           @relation(fields: [employeeId], references: [id])
+
+  @@unique([rollCallId, employeeId])
+  @@index([employeeId])
+}
+
+/// Registro CONTABLE del pago mensual de las facturas del patrón (INSS e
+/// INATEC): el INSS se cobra UNA vez al mes (factura vence ≈17 del mes
+/// siguiente) — aquí queda si ya se pagó o no. Es solo estado/auditoría: el
+/// costo ya está reconocido en employerCost (no genera otro gasto, evitando
+/// doble conteo).
+model EmployerContributionPayment {
+  id           String   @id @default(cuid())
+  /// Período FACTURADO (la factura de junio se paga en julio).
+  year         Int
+  month        Int
+  kind         String /// "INSS" | "INATEC"
+  amount       Decimal
+  paidAt       DateTime @default(now())
+  paidByUserId String?
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  @@unique([year, month, kind])
+  @@index([year, month])
+}
+
+enum PayrollDisbursementPeriod {
+  FIRST_HALF /// Pago del día 15
+  SECOND_HALF /// Pago del día 30 / último día del mes
+}
+
+enum PayrollDisbursementStatus {
+  PENDING
+  PAID
+}
+
+/// Cada mitad (50/50 fijo) del neto a pagar de una PayrollLine, pagadera el 15 y el 30.
+model PayrollDisbursement {
+  id             String                    @id @default(cuid())
+  payrollRunId   String
+  payrollLineId  String
+  employeeId     String
+  branchId       String
+  period         PayrollDisbursementPeriod
+  amount         Decimal /// neto/2, redondeado; la 2da mitad ajusta el residuo de centavos
+  status         PayrollDisbursementStatus @default(PENDING)
+  scheduledDate  DateTime /// fecha calendario del 15 o del último día del mes, según `period`
+  paidAt         DateTime?
+  paidByUserId   String?
+  cashMovementId String? /// null = aún no aplicado a ninguna caja física
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  payrollRun   PayrollRun    @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  payrollLine  PayrollLine   @relation(fields: [payrollLineId], references: [id], onDelete: Cascade)
+  employee     Employee      @relation(fields: [employeeId], references: [id])
+  branch       Branch        @relation(fields: [branchId], references: [id])
+  cashMovement CashMovement? @relation(fields: [cashMovementId], references: [id])
+
+  @@unique([payrollLineId, period])
+  @@index([branchId, status, scheduledDate])
+  @@index([payrollRunId])
+  @@index([cashMovementId])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * PRODUCT ANALYTICS (ABC-XYZ CLASSIFICATION)
+ * ════════════════════════════════════════════════════════════════
+ */
+
+model ProductAnalytics {
+  id               String   @id @default(cuid())
+  productId        String
+  month            DateTime /// First day of the month
+  totalSales       Decimal /// Total sales value
+  unitsSold        Int
+  averageInventory Decimal
+  rotationIndex    Decimal
+  abcClass         String /// A, B, C
+  xyzClass         String /// X, Y, Z
+  salesVariance    Decimal /// Coefficient of variation of daily sales
+  createdAt        DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, month])
+  @@index([month])
+  @@index([abcClass])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * OPERATING EXPENSES & SUGGESTED PRICING MODULE
+ * ════════════════════════════════════════════════════════════════
+ */
+
+enum ExpenseCategory {
+  PAYROLL
+  UTILITIES
+  RENT
+  FOOD
+  MAINTENANCE
+  TRANSPORT
+  MARKETING
+  TAXES /// Impuestos del negocio: Alcaldía (municipal) y DGI
+  OTHER
+}
+
+enum ProrationMethod {
+  BY_QUANTITY
+  BY_VALUE
+}
+
+/// Monthly operating expense for a branch
+model OperatingExpense {
+  id               String          @id @default(cuid())
+  branchId         String
+  category         ExpenseCategory
+  description      String
+  amount           Decimal /// Monthly amount in C$
+  isActive         Boolean         @default(true)
+  effectiveFrom    DateTime        @default(now())
+  effectiveTo      DateTime?
+  createdByUserId  String?
+  employeeId       String? /// Link to Employee when category=PAYROLL
+  isAutoCalculated Boolean         @default(false) /// True for auto-generated payroll expenses
+  cashMovementId   String?         @unique /// Link to the CashMovement (EXPENSE_OUT) generated when the expense is actually paid from cash
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  branch       Branch        @relation(fields: [branchId], references: [id])
+  employee     Employee?     @relation(fields: [employeeId], references: [id])
+  cashMovement CashMovement? @relation(fields: [cashMovementId], references: [id])
+
+  @@index([branchId, isActive])
+  @@index([category])
+  @@index([cashMovementId])
+}
+
+/// Pricing configuration per branch (margin, proration, estimated units)
+model PricingConfig {
+  id                    String          @id @default(cuid())
+  branchId              String          @unique
+  desiredMarginPercent  Decimal         @default(30) /// e.g. 30 = 30%
+  prorationMethod       ProrationMethod @default(BY_QUANTITY)
+  estimatedMonthlyUnits Decimal         @default(1000) /// Estimated units sold per month
+  isActive              Boolean         @default(true)
+  updatedByUserId       String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id])
+}
+
+/// History of suggested prices calculated for products
+model ProductPricing {
+  id                      String   @id @default(cuid())
+  productId               String
+  branchId                String
+  purchaseCost            Decimal /// Cost per unit (purchase price)
+  operatingExpensePerUnit Decimal /// Prorated expense per unit
+  totalCostPerUnit        Decimal /// purchaseCost + operatingExpensePerUnit
+  marginPercent           Decimal /// Margin used for this calculation
+  suggestedPrice          Decimal /// totalCostPerUnit / (1 - marginPercent/100)
+  appliedPrice            Decimal? /// Price actually applied (manual override)
+  totalMonthlyExpenses    Decimal /// Snapshot of total monthly expenses
+  estimatedMonthlyUnits   Decimal /// Snapshot of estimated monthly units
+  notes                   String?
+  calculatedAt            DateTime @default(now())
+  calculatedByUserId      String?
+
+  product Product @relation(fields: [productId], references: [id])
+  branch  Branch  @relation(fields: [branchId], references: [id])
+
+  @@index([productId, branchId, calculatedAt])
+  @@index([branchId, calculatedAt])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * PURCHASE ORDERS MODULE
+ * ════════════════════════════════════════════════════════════════
+ */
+
+enum PurchaseOrderStatus {
+  DRAFT
+  APPROVED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id                   String              @id @default(cuid())
+  orderNumber          String              @unique
+  date                 DateTime            @default(now())
+  supplier             String?
+  supplierId           String?
+  supplierNameSnapshot String?
+  supplierSnapshotJson Json?
+  status               PurchaseOrderStatus @default(DRAFT)
+  total                Decimal             @default(0)
+  subtotalBeforeTax    Decimal             @default(0)
+  taxAmount            Decimal             @default(0)
+  freightAmount        Decimal             @default(0)
+  otherChargesAmount   Decimal             @default(0)
+  globalDiscountAmount Decimal             @default(0)
+  purchaseTaxTreatment String              @default("INCLUDE_IN_COST") /// INCLUDE_IN_COST, SEPARATE_CREDIT
+  notes                String?
+  branchId             String
+  userId               String
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  branch      Branch              @relation(fields: [branchId], references: [id])
+  createdBy   User                @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
+  supplierRef Supplier?           @relation(fields: [supplierId], references: [id])
+  lines       PurchaseOrderLine[]
+
+  @@index([branchId, status])
+  @@index([supplierId])
+  @@index([date])
+}
+
+model PurchaseOrderLine {
+  id                           String   @id @default(cuid())
+  purchaseOrderId              String
+  productId                    String
+  quantity                     Decimal
+  unitCost                     Decimal /// Compatibility: final unit cost used for inventory
+  unitCostBeforeTax            Decimal  @default(0)
+  taxRate                      Decimal  @default(15)
+  unitTaxAmount                Decimal  @default(0)
+  costWithTax                  Decimal  @default(0)
+  allocatedFreightPerUnit      Decimal  @default(0)
+  allocatedOtherChargesPerUnit Decimal  @default(0)
+  allocatedDiscountPerUnit     Decimal  @default(0)
+  finalUnitCost                Decimal  @default(0)
+  subtotal                     Decimal
+  previousGlobalCost           Decimal?
+  newGlobalCost                Decimal?
+  previousAverageCost          Decimal?
+  newAverageCost               Decimal?
+  receivedQtySnapshot          Decimal?
+  supplierIdSnapshot           String?
+  supplierNameSnapshot         String?
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@unique([purchaseOrderId, productId])
+  @@index([purchaseOrderId])
+}
+
+model Supplier {
+  id                     String   @id @default(cuid())
+  name                   String
+  commercialName         String?
+  ruc                    String?  @unique
+  phone                  String?
+  phone2                 String?
+  email                  String?
+  address                String?
+  contactName            String?
+  contactPhone           String?
+  bankName               String?
+  bankAccountNumber      String?
+  accountHolder          String?
+  paymentTerms           String?
+  creditLimit            Decimal?
+  notes                  String?
+  category               String?
+  defaultCurrency        String?
+  leadTimeDays           Int?
+  preferredPaymentMethod String?
+  supplierCode           String?  @unique
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  purchaseOrders          PurchaseOrder[]
+  reorderPolicies         StockReorderPolicy[]     @relation("ReorderPolicyPreferredSupplier")
+  replenishmentDraftItems ReplenishmentDraftItem[] @relation("ReplenishmentDraftItemSupplier")
+
+  @@index([name])
+  @@index([isActive])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * DISCOUNTS MODULE (FASE 2)
+ * ════════════════════════════════════════════════════════════════
+ */
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+model Discount {
+  id              String       @id @default(cuid())
+  name            String
+  description     String?
+  type            DiscountType
+  value           Decimal /// Percentage (e.g., 10 = 10%) or fixed amount in C$
+  /// Comma-separated product IDs (null = no product filter)
+  productIds      String?
+  /// Comma-separated ABC categories: "A,B" etc. (null = no ABC filter)
+  abcCategories   String?
+  /// Comma-separated XYZ categories: "X,Y" etc. (null = no XYZ filter)
+  xyzCategories   String?
+  startDate       DateTime?
+  endDate         DateTime?
+  active          Boolean      @default(true)
+  /// If null, applies to all branches
+  branchId        String?
+  createdByUserId String
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  createdBy User    @relation("DiscountCreatedBy", fields: [createdByUserId], references: [id])
+  branch    Branch? @relation(fields: [branchId], references: [id])
+
+  @@index([active, startDate, endDate])
+  @@index([branchId])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * BRANCH ROLE CONFIGURATION (FASE 2)
+ * ════════════════════════════════════════════════════════════════
+ */
+
+model BranchRoleConfig {
+  id              String   @id @default(cuid())
+  branchId        String
+  role            RoleCode
+  enabled         Boolean  @default(true)
+  updatedByUserId String?
+  updatedAt       DateTime @updatedAt
+
+  branch    Branch @relation(fields: [branchId], references: [id])
+  updatedBy User?  @relation("BranchRoleConfigUpdatedBy", fields: [updatedByUserId], references: [id])
+
+  @@unique([branchId, role])
+  @@index([branchId])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * SYSTEM SETTINGS (FASE 2)
+ * ════════════════════════════════════════════════════════════════
+ */
+
+model SystemSetting {
+  id              String   @id @default(cuid())
+  key             String   @unique
+  value           String
+  updatedByUserId String?
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  updatedBy User? @relation("SystemSettingUpdatedBy", fields: [updatedByUserId], references: [id])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  occurredAt   DateTime @default(now())
+  actorUserId  String?
+  branchId     String?
+  module       String
+  action       String
+  entityType   String
+  entityId     String
+  metadataJson Json?
+  ipAddress    String?
+  userAgent    String?
+
+  actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  branch Branch? @relation("BranchAuditLogs", fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@index([occurredAt])
+  @@index([module, action])
+  @@index([entityType, entityId])
+  // Historial de producto consulta por entityId sin entityType (catalog-inventory);
+  // sin este indice era full scan sobre la tabla de mayor crecimiento del sistema
+  @@index([entityId, occurredAt])
+}
+
+model BrainDecision {
+  id                 String                @id @default(cuid())
+  category           BrainDecisionCategory
+  severity           BrainDecisionSeverity
+  status             BrainDecisionStatus   @default(OPEN)
+  title              String
+  description        String
+  recommendation     String
+  branchId           String?
+  productId          String?
+  userId             String?
+  targetUserId       String?
+  executedEntityType String?
+  executedEntityId   String?
+  actionResultJson   Json?
+  confidenceScore    Decimal?
+  impactAmount       Decimal?
+  riskScore          Decimal?
+  priorityScore      Decimal?
+  proposedActionType String?
+  proposedActionJson Json?
+  evidenceJson       Json?
+  sourceJson         Json?
+  fingerprint        String                @unique
+  idempotencyKey     String?               @unique
+  firstDetectedAt    DateTime              @default(now())
+  lastDetectedAt     DateTime              @default(now())
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  expiresAt          DateTime?
+  resolvedAt         DateTime?
+  resolvedByUserId   String?
+
+  branch     Branch?                  @relation(fields: [branchId], references: [id])
+  product    Product?                 @relation(fields: [productId], references: [id])
+  resolvedBy User?                    @relation("BrainDecisionResolvedBy", fields: [resolvedByUserId], references: [id])
+  legacyUser User?                    @relation("BrainDecisionLegacyUser", fields: [userId], references: [id])
+  targetUser User?                    @relation("BrainDecisionTargetUser", fields: [targetUserId], references: [id])
+  actionLogs BrainDecisionActionLog[]
+  outcomes   BrainDecisionOutcome[]
+
+  @@index([status, severity, category])
+  @@index([branchId])
+  @@index([productId])
+  @@index([targetUserId])
+  @@index([fingerprint])
+  @@index([idempotencyKey])
+  @@index([createdAt])
+  @@index([priorityScore])
+}
+
+model BrainDecisionActionLog {
+  id           String   @id @default(cuid())
+  decisionId   String
+  actorUserId  String?
+  action       String
+  note         String?
+  metadataJson Json?
+  createdAt    DateTime @default(now())
+
+  decision BrainDecision @relation(fields: [decisionId], references: [id])
+  actor    User?         @relation("BrainDecisionActionActor", fields: [actorUserId], references: [id])
+
+  @@index([decisionId])
+  @@index([actorUserId])
+}
+
+model BrainDecisionOutcome {
+  id             String   @id @default(cuid())
+  decisionId     String
+  measuredAt     DateTime @default(now())
+  outcomeType    String
+  expectedImpact Decimal?
+  actualImpact   Decimal?
+  successScore   Decimal?
+  notes          String?
+  metadataJson   Json?
+
+  decision BrainDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+
+  @@index([decisionId])
+  @@index([outcomeType])
+  @@index([measuredAt])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * AUTOMATIC CASH CLOSURE MODULE
+ * ════════════════════════════════════════════════════════════════
+ */
+
+model CashClosure {
+  id                  String    @id @default(cuid())
+  branchId            String
+  closureDate         DateTime /// The date of this closure (date only, start of day)
+  closedAt            DateTime  @default(now()) /// Actual timestamp of closure
+  closureType         String /// "AUTO" | "MANUAL" | "PERMANENT"
+  totalSales          Decimal   @default(0)
+  transactionCount    Int       @default(0)
+  cashTotal           Decimal   @default(0)
+  cardTotal           Decimal   @default(0)
+  transferTotal       Decimal   @default(0)
+  creditTotal         Decimal   @default(0)
+  mixedTotal          Decimal   @default(0)
+  productsSold        Int       @default(0)
+  reportJson          Json? /// Detailed closure report
+  isReopened          Boolean   @default(false)
+  reopenedAt          DateTime?
+  reopenedByUserId    String?
+  reopenCount         Int       @default(0) /// How many times reopened
+  emergencySalesCount Int       @default(0) /// Sales after reopening
+  maxEmergencySales   Int       @default(3) /// Max allowed emergency sales
+  isPermanentlyClosed Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  branch Branch           @relation(fields: [branchId], references: [id])
+  logs   CashClosureLog[]
+
+  @@unique([branchId, closureDate])
+  @@index([branchId, closureDate])
+  @@index([closureType])
+}
+
+model CashClosureLog {
+  id                String   @id @default(cuid())
+  cashClosureId     String
+  action            String /// "AUTO_CLOSE" | "REOPEN" | "EMERGENCY_SALE" | "PERMANENT_CLOSE"
+  performedByUserId String?
+  metadataJson      Json?
+  createdAt         DateTime @default(now())
+
+  cashClosure CashClosure @relation(fields: [cashClosureId], references: [id])
+
+  @@index([cashClosureId, createdAt])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * SECURITY: Rate Limiting, Token Revocation, CSRF
+ * ════════════════════════════════════════════════════════════════
+ */
+
+model LoginAttempt {
+  id          String   @id @default(cuid())
+  identifier  String /// username or IP
+  attemptedAt DateTime @default(now())
+  success     Boolean  @default(false)
+
+  @@index([identifier, attemptedAt])
+}
+
+model RevokedSession {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique /// SHA-256 hash of the session token
+  userId    String
+  revokedAt DateTime @default(now())
+  expiresAt DateTime /// When the token would have expired
+  reason    String? /// "LOGOUT" | "PASSWORD_CHANGE" | "ADMIN_REVOKE"
+
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+model CsrfToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  sessionId String /// Tied to a session userId
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([token])
+  @@index([expiresAt])
+}
+
+enum TransportServiceStatus {
+  PENDING
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+model TransportService {
+  id                   String                 @id @default(cuid())
+  saleOrderId          String
+  branchId             String
+  operationalDayId     String?
+  customerName         String
+  reference            String?
+  price                Decimal
+  scheduledPaymentTime DateTime?
+  status               TransportServiceStatus @default(PENDING)
+  notes                String?
+  createdByUserId      String
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  deliveredAt          DateTime?
+
+  saleOrder      SaleOrder       @relation(fields: [saleOrderId], references: [id])
+  branch         Branch          @relation(fields: [branchId], references: [id])
+  operationalDay OperationalDay? @relation(fields: [operationalDayId], references: [id])
+  createdBy      User            @relation("TransportServiceCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([branchId, status])
+  @@index([saleOrderId])
+  @@index([operationalDayId])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * BRANCH MODULE CONFIGURATION (OWNER-managed)
+ * Controls which workflow steps are active per branch.
+ * ════════════════════════════════════════════════════════════════
+ */
+
+model BranchModuleConfig {
+  id                                  String               @id @default(cuid())
+  branchId                            String               @unique
+  enableCashier                       Boolean              @default(true)
+  enableDispatch                      Boolean              @default(true)
+  paymentWorkflowMode                 PaymentWorkflowMode  @default(HYBRID)
+  dispatchWorkflowMode                DispatchWorkflowMode @default(ENABLED)
+  requireOpenCashSessionForDirectSale Boolean              @default(true)
+  allowSellerDirectPayment            Boolean              @default(true)
+  allowCashierQueue                   Boolean              @default(true)
+  updatedByUserId                     String?
+  updatedAt                           DateTime             @updatedAt
+  createdAt                           DateTime             @default(now())
+
+  branch    Branch @relation(fields: [branchId], references: [id])
+  updatedBy User?  @relation("BranchModuleConfigUpdatedBy", fields: [updatedByUserId], references: [id])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * REORDER ENGINE — Smart inventory replenishment
+ * Detects low-stock products, suggests purchases or transfers.
+ * ════════════════════════════════════════════════════════════════
+ */
+
+enum ReorderAlertType {
+  PURCHASE
+  TRANSFER
+  BOTH
+}
+
+enum ReorderAlertStatus {
+  OPEN
+  DISMISSED
+  CONVERTED_TO_PURCHASE_ORDER
+  CONVERTED_TO_TRANSFER
+}
+
+enum ReorderSuggestionType {
+  PURCHASE
+  TRANSFER
+}
+
+enum ReorderSuggestionStatus {
+  DRAFT
+  CONVERTED
+  DISMISSED
+}
+
+/// Per-product per-branch reorder policy (configurable thresholds)
+model StockReorderPolicy {
+  id                  String   @id @default(cuid())
+  branchId            String
+  productId           String
+  minQuantity         Decimal  @default(0) /// Absolute minimum — CRITICAL alert if below
+  reorderPoint        Decimal /// When stock <= this, generate alert
+  targetQuantity      Decimal /// Desired stock level after replenishment
+  safetyStock         Decimal  @default(0) /// Extra buffer above targetQuantity
+  preferredSupplier   String? /// Preferred supplier name for purchases (legacy free-text, kept for history)
+  /// Reposición v2: proveedor real (FK). Si está seteado, tiene prioridad sobre preferredSupplier.
+  preferredSupplierId String?
+  leadTimeDays        Int      @default(0) /// Average supplier delivery time in days
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  updatedByUserId     String?
+
+  branch               Branch    @relation(fields: [branchId], references: [id])
+  product              Product   @relation(fields: [productId], references: [id])
+  updatedBy            User?     @relation("ReorderPolicyUpdatedBy", fields: [updatedByUserId], references: [id])
+  preferredSupplierRef Supplier? @relation("ReorderPolicyPreferredSupplier", fields: [preferredSupplierId], references: [id])
+
+  @@unique([branchId, productId])
+  @@index([branchId, isActive])
+}
+
+/// Individual low-stock alert per product per branch
+model ReorderAlert {
+  id                    String             @id @default(cuid())
+  branchId              String
+  productId             String
+  currentQuantity       Decimal /// Stock at time of evaluation
+  reorderPoint          Decimal /// Threshold that triggered this alert
+  targetQuantity        Decimal /// Target stock level
+  suggestedQuantity     Decimal /// How much to order/transfer
+  alertType             ReorderAlertType /// PURCHASE, TRANSFER, or BOTH
+  status                ReorderAlertStatus @default(OPEN)
+  nearestSourceBranchId String? /// Branch with surplus (for TRANSFER)
+  nearestSourceStock    Decimal? /// How much that branch has
+  preferredSupplier     String? /// Supplier name (for PURCHASE)
+  reason                String /// Human-readable explanation
+  linkedPurchaseOrderId String? /// PO created from this alert (reference only)
+  linkedTransferId      String? /// Transfer created from this alert (reference only)
+  createdAt             DateTime           @default(now())
+  resolvedAt            DateTime?
+  resolvedByUserId      String?
+
+  branch          Branch                  @relation("ReorderAlertBranch", fields: [branchId], references: [id])
+  product         Product                 @relation(fields: [productId], references: [id])
+  sourceBranch    Branch?                 @relation("ReorderAlertSourceBranch", fields: [nearestSourceBranchId], references: [id])
+  resolvedBy      User?                   @relation("ReorderAlertResolvedBy", fields: [resolvedByUserId], references: [id])
+  suggestionLines ReorderSuggestionLine[]
+
+  @@index([branchId, status])
+  @@index([productId, branchId, status])
+  @@index([createdAt])
+}
+
+/// Groups alerts into actionable batches (by supplier or source branch)
+model ReorderSuggestionBatch {
+  id                    String                  @id @default(cuid())
+  branchId              String /// Destination branch (needs product)
+  supplier              String? /// Supplier name (for PURCHASE batches)
+  suggestionType        ReorderSuggestionType
+  status                ReorderSuggestionStatus @default(DRAFT)
+  sourceBranchId        String? /// Source branch (for TRANSFER batches)
+  totalEstimatedCost    Decimal? /// Sum of lines (qty * WAC)
+  createdAt             DateTime                @default(now())
+  createdBySystem       Boolean                 @default(true)
+  reviewedByUserId      String?
+  reviewedAt            DateTime?
+  linkedPurchaseOrderId String?
+  linkedTransferId      String?
+
+  branch       Branch                  @relation("SuggestionBatchBranch", fields: [branchId], references: [id])
+  sourceBranch Branch?                 @relation("SuggestionBatchSourceBranch", fields: [sourceBranchId], references: [id])
+  reviewedBy   User?                   @relation("SuggestionBatchReviewedBy", fields: [reviewedByUserId], references: [id])
+  lines        ReorderSuggestionLine[]
+
+  @@index([branchId, status])
+  @@index([suggestionType, status])
+}
+
+/// Line item within a suggestion batch
+model ReorderSuggestionLine {
+  id                String   @id @default(cuid())
+  batchId           String
+  alertId           String? /// Alert that originated this line
+  productId         String
+  currentQuantity   Decimal
+  suggestedQuantity Decimal
+  unitCostSnapshot  Decimal? /// WAC at evaluation time
+  sourceBranchId    String? /// For TRANSFER lines
+  notes             String?
+
+  batch   ReorderSuggestionBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  alert   ReorderAlert?          @relation(fields: [alertId], references: [id])
+  product Product                @relation(fields: [productId], references: [id])
+
+  @@index([batchId])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * PRODUCTION MODULE
+ * Recetas de producción y lotes de fabricación.
+ * ════════════════════════════════════════════════════════════════
+ */
+
+/// Estado del lote de producción
+enum ProductionBatchStatus {
+  DRAFT /// Borrador
+  PLANNED /// Planificado (reserva insumos disponibles)
+  IN_PROGRESS /// En proceso
+  COMPLETED /// Completado
+  CANCELLED /// Cancelado
+  REVERSED /// Producción v2 Fase 4: un COMPLETED revertido — insumos devueltos, terminado retirado
+}
+
+/// Receta de producción (cómo fabricar un producto terminado)
+model ProductionRecipe {
+  id          String  @id @default(cuid())
+  name        String /// "Bloque 10x20x40 Estándar"
+  code        String  @unique /// "BLOQUE-10X20X40-STD"
+  description String?
+
+  finishedProductId String
+  finishedProduct   Product @relation("RecipeOutput", fields: [finishedProductId], references: [id])
+
+  expectedQuantity Float /// 1000 bloques
+  expectedUnit     String /// "unidad"
+
+  recipeType   String @default("MANUFACTURING") /// MANUFACTURING, CONVERSION, CUTTING, MIXING, PACKAGING, REPACKAGING
+  recipeFamily String @default("GENERAL") /// WOOD, CEMENT, STONE, METAL, BLOCKS, PAINT, GENERAL
+
+  targetMarginPct Decimal? /// 0.30 = 30%
+  yieldPercent    Decimal? /// rendimiento esperado; 1 = 100%
+  wastePercent    Decimal? /// merma esperada; 0.05 = 5%
+
+  /// Producción v2 Fase 1 — mano de obra es C$0 por defecto (el trabajador ya está en
+  /// planilla). Si se activa, contribuye laborCostPerBatch (monto fijo) al costo del lote.
+  laborEnabled      Boolean  @default(false)
+  laborCostPerBatch Decimal? /// monto fijo por lote cuando laborEnabled=true
+
+  /// Overhead es C$0 por defecto (se produce a mano, sin mezcladora). NONE | FIXED | PCT_MAT.
+  /// processingCostPerBatch es el monto (FIXED) o la fracción 0-1 (PCT_MAT) según el modo.
+  overheadMode           String   @default("NONE")
+  processingCostPerBatch Decimal?
+
+  isActive        Boolean  @default(true)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdByUserId String
+  createdBy       User     @relation("RecipeCreator", fields: [createdByUserId], references: [id])
+
+  inputs  ProductionRecipeInput[]
+  batches ProductionBatch[]
+
+  @@index([finishedProductId])
+  @@index([code])
+  @@index([isActive])
+}
+
+/// Insumos de la receta (cemento, arena, etc.)
+model ProductionRecipeInput {
+  id       String           @id @default(cuid())
+  recipeId String
+  recipe   ProductionRecipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  inputProductId String
+  inputProduct   Product @relation("RecipeInput", fields: [inputProductId], references: [id])
+
+  quantity Float /// 50 bolsas de cemento
+  unit     String /// "bolsa", "lata", "kg", "m3"
+
+  notes String?
+
+  @@index([recipeId])
+  @@index([inputProductId])
+}
+
+/// Lote de producción (ejecución de una receta)
+model ProductionBatch {
+  id          String @id @default(cuid())
+  batchNumber String @unique /// "PROD-2026-05-001"
+
+  recipeId String
+  recipe   ProductionRecipe @relation(fields: [recipeId], references: [id])
+
+  branchId String
+  branch   Branch @relation("ProductionBatches", fields: [branchId], references: [id])
+
+  status ProductionBatchStatus @default(DRAFT)
+
+  plannedQuantity      Float /// 1000 unidades planeadas
+  producedGoodQuantity Float? /// 980 unidades buenas
+  producedBadQuantity  Float? /// 20 unidades rechazadas
+
+  materialsCost  Decimal?
+  laborCost      Decimal?
+  overheadCost   Decimal?
+  totalCost      Decimal?
+  unitCost       Decimal? /// costo unitario REAL: totalCost / producedGoodQuantity
+  suggestedPrice Decimal? /// unitCost / (1 - targetMargin)
+
+  /// Producción v2 Fase 5 — costo estándar de la receta al momento de cerrar (frozen),
+  /// para variancia sin recalcular después.
+  standardUnitCost      Decimal?
+  standardMaterialsCost Decimal?
+
+  /// Producción v2 Fase 3 — política de precio al cerrar. RECALC_TARGET_MARGIN (default) |
+  /// KEEP_CURRENT | APPROVAL_IF_DELTA.
+  pricePolicy           String  @default("RECALC_TARGET_MARGIN")
+  priceApprovalRequired Boolean @default(false)
+
+  /// Producción v2 Fase 1 — trabajadores/horas informativos (productividad), NUNCA
+  /// contribuyen al costo. [{ workerName: string, hours: number }]
+  laborEntries Json?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  cancelledAt DateTime?
+
+  /// Producción v2 Fase 4 — reversión de un lote COMPLETED.
+  reversedAt       DateTime?
+  reversedByUserId String?
+  reversalReason   String?
+
+  notes String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdByUserId String
+  createdBy       User     @relation("BatchCreator", fields: [createdByUserId], references: [id])
+
+  inputs ProductionBatchInput[]
+
+  @@index([recipeId])
+  @@index([branchId])
+  @@index([status])
+  @@index([batchNumber])
+}
+
+/// Consumo real de insumos en el lote
+model ProductionBatchInput {
+  id      String          @id @default(cuid())
+  batchId String
+  batch   ProductionBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  inputProductId String
+  inputProduct   Product @relation("BatchInput", fields: [inputProductId], references: [id])
+
+  plannedQuantity Float /// 50 bolsas planeadas
+  actualQuantity  Float? /// 52 bolsas reales consumidas (= consumo estándar, lo calcula el servidor)
+  unit            String /// "bolsa"
+
+  /// Producción v2 Fase 2 — cuánto de plannedQuantity está reservado (aparta stock)
+  /// mientras el lote está PLANNED/IN_PROGRESS. 0 cuando no hay reserva activa.
+  reservedQuantity Decimal @default(0)
+
+  unitCost  Decimal? /// costo unitario real (WAC del sistema al cerrar) — nunca del cliente
+  totalCost Decimal? /// actualQuantity * unitCost
+
+  @@index([batchId])
+  @@index([inputProductId])
+}
+
+/// Configuración global de Producción (Fase 3) — política de precio y redondeo.
+model ProductionPricingConfig {
+  id                     String   @id @default(cuid())
+  defaultTargetMarginPct Decimal  @default(0.30)
+  /// Umbral (0-1) para la política APPROVAL_IF_DELTA: si |precioNuevo/precioActual - 1| lo supera, requiere aprobación.
+  priceApprovalDeltaPct  Decimal  @default(0.15)
+  /// Múltiplo (C$) al que se redondea HACIA ARRIBA el precio sugerido — mismo criterio que Madera v2.
+  priceRoundingMultiple  Decimal  @default(1)
+  updatedBy              String?
+  updatedAt              DateTime @updatedAt
+  createdAt              DateTime @default(now())
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * RBAC GRANULAR — Permisos por usuario
+ * ════════════════════════════════════════════════════════════════
+ */
+
+model UserPermission {
+  id         String   @id @default(cuid())
+  userId     String
+  permission String /// e.g. "production.recipes.view"
+  granted    Boolean  @default(true)
+  grantedBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user          User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grantedByUser User? @relation("PermissionGrantedBy", fields: [grantedBy], references: [id])
+
+  @@unique([userId, permission])
+  @@index([userId])
+  @@index([permission])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * IMPRESIÓN — Configuración, plantillas y logs
+ * ════════════════════════════════════════════════════════════════
+ */
+
+/// Configuración de impresión por sucursal
+model PrintSettings {
+  id                        String      @id @default(cuid())
+  branchId                  String      @unique
+  cashRegisterId            String?
+  name                      String      @default("Configuracion principal")
+  printerName               String? /// Nombre de la impresora (para QZ Tray / network)
+  printerMode               PrinterMode @default(BROWSER_PRINT)
+  paperWidth                PaperWidth  @default(W80MM)
+  fontSize                  Int         @default(12)
+  logoUrl                   String? /// URL del logo para encabezado
+  footerText                String? /// Texto de pie de página personalizado
+  autoPrint                 Boolean     @default(false) /// Imprimir automáticamente al pagar
+  autoPrintDelivery         Boolean     @default(false)
+  copies                    Int         @default(1)
+  copiesDeliveryOrder       Int         @default(1)
+  cutPaper                  Boolean     @default(true) /// Enviar comando de corte (térmica)
+  openDrawer                Boolean     @default(false) /// Abrir cajón al imprimir
+  showQr                    Boolean     @default(false) /// Incluir QR en documentos
+  businessName              String?
+  businessLegalName         String?
+  taxId                     String?
+  address                   String?
+  phone                     String?
+  showPricesOnDeliveryOrder Boolean     @default(false)
+  showCostData              Boolean     @default(false)
+  showCashierName           Boolean     @default(true)
+  showCustomerData          Boolean     @default(true)
+  ticketTemplate            String?
+  deliveryTemplate          String?
+  receiptTemplate           String?
+  isDefault                 Boolean     @default(false)
+  isActive                  Boolean     @default(true)
+  createdAt                 DateTime    @default(now())
+  updatedAt                 DateTime    @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@index([branchId, isActive])
+}
+
+/// Plantillas de documentos comerciales
+model DocumentTemplate {
+  id              String       @id @default(cuid())
+  name            String /// e.g. "delivery-order-thermal", "purchase-ticket-a4"
+  documentType    DocumentType
+  description     String?
+  templateContent Json /// Configuración JSON de la plantilla
+  isDefault       Boolean      @default(false)
+  isActive        Boolean      @default(true)
+  createdByUserId String
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  createdBy User @relation("DocumentTemplateCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@unique([name])
+  @@index([documentType, isActive])
+}
+
+/// Log de impresión de documentos (auditoría)
+model DocumentPrintLog {
+  id            String       @id @default(cuid())
+  saleOrderId   String
+  documentType  DocumentType
+  printedById   String
+  printedAt     DateTime     @default(now())
+  isReprint     Boolean      @default(false)
+  reprintReason String?
+
+  saleOrder SaleOrder @relation(fields: [saleOrderId], references: [id])
+  printedBy User      @relation("DocumentPrintedBy", fields: [printedById], references: [id])
+
+  @@index([saleOrderId])
+  @@index([printedById, printedAt])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * MFA — Token temporal durante el challenge MFA post-login
+ * ════════════════════════════════════════════════════════════════
+ */
+model MfaPendingToken {
+  id        String   @id @default(cuid())
+  token     String   @unique /// HMAC firmado, no almacenamos en texto plano
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@index([expiresAt])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * SECURITY ALERTS — Alertas de seguridad generadas por el sistema
+ * ════════════════════════════════════════════════════════════════
+ */
+model SecurityAlert {
+  id             String        @id @default(cuid())
+  severity       AlertSeverity
+  type           String /// e.g. "FAILED_LOGIN_BURST", "IDOR_ATTEMPT", "MFA_DISABLED"
+  title          String
+  description    String
+  actorUserId    String?
+  branchId       String?
+  entityType     String?
+  entityId       String?
+  metadataJson   Json?
+  status         AlertStatus   @default(OPEN)
+  createdAt      DateTime      @default(now())
+  acknowledgedBy String?
+  acknowledgedAt DateTime?
+  resolvedBy     String?
+  resolvedAt     DateTime?
+  note           String? /// Motivo al reconocer/resolver
+
+  @@index([severity, status])
+  @@index([createdAt])
+  @@index([type])
+  @@index([actorUserId])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * REPLENISHMENT DRAFT MODULE
+ * Borrador editable de reposición inteligente por sucursal.
+ * ════════════════════════════════════════════════════════════════
+ */
+
+enum ReplenishmentDraftStatus {
+  DRAFT
+  REVIEWED
+  APPROVED
+  PARTIALLY_APPROVED
+  CONVERTED_TO_TRANSFER
+  CONVERTED_TO_PURCHASE_REQUEST
+  CONVERTED_TO_PRODUCTION_ORDER
+  CANCELLED
+}
+
+enum ReplenishmentDraftItemStatus {
+  PENDING_REVIEW
+  APPROVED
+  IGNORED
+  QUANTITY_EDITED
+  TRANSFER_CREATED
+  PURCHASE_REQUEST_CREATED
+  PRODUCTION_ORDER_CREATED
+  MANUAL_REVIEW_REQUIRED
+}
+
+enum ReplenishmentDraftSource {
+  CENTRAL
+  OTHER_BRANCH
+  SUPPLIER
+  PRODUCTION
+  DO_NOT_REPLENISH
+  MANUAL_REVIEW
+}
+
+enum ReplenishmentDraftCriticality {
+  CRITICAL
+  LOW
+  PREVENTIVE
+  OBSERVE
+  NORMAL
+  DO_NOT_RECOMMEND
+  MANUAL_REVIEW
+  SENSITIVE
+}
+
+/// Borrador editable de reposición — snapshot de recomendaciones listo para revisión Master
+model ReplenishmentDraft {
+  id                String                   @id @default(cuid())
+  branchId          String
+  createdByUserId   String
+  approvedByUserId  String?
+  status            ReplenishmentDraftStatus @default(DRAFT)
+  includePreventive Boolean                  @default(false)
+  includeSensitive  Boolean                  @default(false)
+  categoryId        String?
+  notes             String?
+  generatedAt       DateTime                 @default(now())
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  approvedAt        DateTime?
+  convertedAt       DateTime?
+
+  branch     Branch                   @relation("BranchReplenishmentDrafts", fields: [branchId], references: [id])
+  createdBy  User                     @relation("ReplenishmentDraftCreatedBy", fields: [createdByUserId], references: [id])
+  approvedBy User?                    @relation("ReplenishmentDraftApprovedBy", fields: [approvedByUserId], references: [id])
+  items      ReplenishmentDraftItem[]
+
+  @@index([branchId, status])
+  @@index([createdAt])
+  @@index([createdByUserId])
+}
+
+/// Línea del borrador — snapshot inmutable del estado al momento de generación
+model ReplenishmentDraftItem {
+  id                    String                        @id @default(cuid())
+  draftId               String
+  productId             String
+  branchId              String
+  categoryId            String?
+  categoryName          String?
+  productName           String
+  sku                   String
+  currentStock          Decimal
+  salesLast30Days       Decimal                       @default(0)
+  salesLast60Days       Decimal                       @default(0)
+  salesLast90Days       Decimal                       @default(0)
+  lastSoldAt            DateTime?
+  criticality           ReplenishmentDraftCriticality
+  recommendedSource     ReplenishmentDraftSource
+  sourceBranchId        String?
+  suggestedQuantity     Decimal
+  finalQuantity         Decimal?
+  reason                String
+  warnings              Json                          @default("[]")
+  isSensitive           Boolean                       @default(false)
+  requiresManualReview  Boolean                       @default(false)
+  status                ReplenishmentDraftItemStatus  @default(PENDING_REVIEW)
+  linkedTransferId      String?
+  linkedPurchaseOrderId String?
+  /// Reposición v2: proveedor real para agrupar la conversión del Plan (items PURCHASE)
+  supplierId            String?
+  /// Reposición v2: último costo de compra sin IVA, snapshot al agregar al plan
+  estimatedUnitCost     Decimal?
+  /// Reposición v2: true si el item se agregó a mano (no viene de una señal)
+  addedManually         Boolean                       @default(false)
+  notes                 String?
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+
+  draft       ReplenishmentDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  product     Product            @relation("ReplenishmentDraftItemProduct", fields: [productId], references: [id])
+  branch      Branch             @relation("ReplenishmentDraftItemBranch", fields: [branchId], references: [id])
+  supplierRef Supplier?          @relation("ReplenishmentDraftItemSupplier", fields: [supplierId], references: [id])
+
+  @@index([draftId])
+  @@index([productId, branchId])
+  @@index([status])
+}
+
+/// Reposición v2: snapshot ligero de conteos por severidad, recalculado tras cierre de
+/// día / recepción de PO / recepción de traslado / refresh manual — no es la fuente de
+/// verdad (las señales se calculan en lectura), solo alimenta el badge del sidebar y el Brain.
+model ReplenishmentSignalSnapshot {
+  branchId      String   @id
+  criticalCount Int      @default(0)
+  lowCount      Int      @default(0)
+  coveredCount  Int      @default(0)
+  generatedAt   DateTime @default(now())
+
+  branch Branch @relation(fields: [branchId], references: [id])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * MÓDULO CÁMARAS — ver vivo + salud, sin grabar ni persistir video
+ * (prompt-modulo-camaras.md + camaras-adenda-agente.md)
+ * ════════════════════════════════════════════════════════════════
+ */
+
+enum CameraLocation {
+  CAJA
+  DESPACHO
+  PATIO
+  PASILLO
+  OTRO
+}
+
+/// Los 9 estados de salud del prompt §3, más UNKNOWN — "no tengo información",
+/// nunca se deriva de la ausencia de datos hacia OFFLINE (adenda §3).
+enum CameraHealthState {
+  OFFLINE
+  NO_STREAM
+  NO_FRAMES
+  FROZEN
+  BLACK
+  BLURRY
+  MOVED
+  DEGRADED
+  OK
+  UNKNOWN
+}
+
+/// Por qué una cámara quedó en determinado estado — sin esto el historial no
+/// distingue "el agente no reportó" de "el NVR no respondió" (adenda §3).
+enum CameraStatusSource {
+  AGENT_REPORT
+  AGENT_UNREACHABLE
+  NVR_UNREACHABLE
+}
+
+enum BranchCameraAgentStatus {
+  ONLINE
+  STALE
+  OFFLINE
+}
+
+/// Registro de cámaras — sucursal, ubicación (alimenta severidad), credenciales
+/// cifradas. Nunca almacena video/cuadros/imágenes/audio (fuera de alcance por diseño).
+model Camera {
+  id                    String         @id @default(cuid())
+  branchId              String
+  name                  String
+  location              CameraLocation @default(OTRO)
+  /// Segmento de red (ej. switch físico) — permite agrupar una caída de
+  /// infraestructura en una sola alerta en vez de una por cámara (adenda §3).
+  networkSegment        String?
+  ipAddress             String
+  onvifPort             Int            @default(80)
+  rtspChannel           String?
+  manufacturer          String?
+  model                 String?
+  /// AES-256-GCM vía credentials-crypto.ts — nunca texto plano en la base.
+  credentialsCiphertext String
+  isActive              Boolean        @default(true)
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  branch        Branch                @relation(fields: [branchId], references: [id])
+  statusHistory CameraStatusHistory[]
+
+  @@unique([branchId, ipAddress, rtspChannel])
+  @@index([branchId, isActive])
+}
+
+/// Un registro por sucursal — el agente físico corriendo ahí. Heartbeat
+/// independiente del sondeo de cámaras (adenda §3, regla central).
+model BranchCameraAgent {
+  branchId           String                  @id
+  agentVersion       String
+  /// Despliegue escalonado por sucursal (adenda §2.1) — no una constante global.
+  targetAgentVersion String                  @default("0.1.0")
+  lastHeartbeatAt    DateTime?
+  nvrReachable       Boolean                 @default(false)
+  lastNvrCheckAt     DateTime?
+  status             BranchCameraAgentStatus @default(OFFLINE)
+  /// SHA-256 del token que el agente presenta en cada heartbeat (bearer) —
+  /// el heartbeat no tiene sesión de usuario, es máquina a máquina. El
+  /// token en texto plano solo existe una vez, al provisionar, en agent.config.
+  agentTokenHash     String
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id])
+}
+
+/// Una fila POR CAMBIO DE ESTADO, no por chequeo (prompt §6) — responde
+/// "¿desde cuándo está caída?" sin inflar la tabla con una cámara sana.
+model CameraStatusHistory {
+  id         String             @id @default(cuid())
+  cameraId   String
+  status     CameraHealthState
+  source     CameraStatusSource
+  changedAt  DateTime           @default(now())
+  /// Cuándo se disparó el aviso por este episodio (ventana de estabilización
+  /// ya cumplida) — null mientras no se avisó todavía. Antirruido (prompt §4):
+  /// se avisa UNA vez por episodio, no en cada heartbeat que sigue fallando.
+  notifiedAt DateTime?
+
+  camera Camera @relation(fields: [cameraId], references: [id])
+
+  @@index([cameraId, changedAt])
+}
+
+/// Snapshot ligero para el contador del sidebar — mismo patrón que
+/// ReplenishmentSignalSnapshot, nunca el estado en vivo (prompt §4.2).
+model CameraHealthSnapshot {
+  branchId     String   @id
+  failingCount Int      @default(0)
+  unknownCount Int      @default(0)
+  generatedAt  DateTime @default(now())
+
+  branch Branch @relation(fields: [branchId], references: [id])
+}
+
+/**
+ * ════════════════════════════════════════════════════════════════
+ * TESORERÍA — destino del efectivo y cuentas bancarias
+ * (correccion-destino-y-pantalla-cobro.md)
+ * ════════════════════════════════════════════════════════════════
+ */
+
+/// El efectivo retenido en sucursal, cuando hay caja fuerte, tiene dos
+/// lugares posibles — la posición de efectivo los distingue (§1, respuesta
+/// del usuario a "¿hay caja fuerte en sucursal?": sí).
+enum RetainedCashLocation {
+  DRAWER
+  SAFE
+}
+
+enum TreasuryAccountType {
+  BANK /// cuenta bancaria real
+  SETTLEMENT /// tarjeta cobrada, adquirente aún no liquida
+  CUSTODY /// en manos de una persona, en tránsito
+  SAFE /// caja fuerte de sucursal, si existe
+}
+
+/// El catálogo de cuentas de tesorería — antes "BankAccount", solo cuentas
+/// bancarias. Se amplió a toda cuenta de tesorería (prompt-libro-mayor-
+/// tesoreria.md §1/§2.1) porque una cuenta bancaria y un bolsillo de
+/// custodia son la misma clase de cosa: un lugar donde el dinero puede
+/// estar, con su propio saldo. Una cuenta, una moneda — nunca multimoneda,
+/// o los saldos dejan de ser sumables.
+/// Editable por Master salvo CUSTODY, que se autocrea por persona
+/// (findOrCreateCustodyAccountTx en treasury/service.ts).
+/// branchId null = cuenta central, disponible para todas las sucursales.
+model TreasuryAccount {
+  id                      String              @id @default(cuid())
+  type                    TreasuryAccountType @default(BANK)
+  code                    String?             @unique
+  /// bankName/accountAlias/accountNumber quedan como String no-nulo incluso
+  /// para SETTLEMENT/CUSTODY/SAFE (con un valor descriptivo en vez de un
+  /// banco real) para no propagar `| null` a todo el código que ya los lee
+  /// — decisión deliberada, no el schema literal del doc.
+  bankName                String
+  accountAlias            String
+  accountNumber           String
+  currencyCode            CurrencyCode        @default(NIO)
+  branchId                String?
+  /// Solo type=CUSTODY: de quién es este bolsillo.
+  holderUserId            String?
+  isActive                Boolean             @default(true)
+  /// Titular de la cuenta — las cuentas comparten banco, solo se
+  /// distinguen por moneda y número; el nombre completo evita el error de
+  /// mandar a la cuenta equivocada (prompt-pantallas-recorrido-dinero.md §1.3).
+  owner                   String?
+  /// Solo las cuentas con esto en true aparecen en el selector de cobro
+  /// (PaymentComposer) — "menos opciones previene el error mejor que
+  /// agrandar el botón" (§1.3). true por defecto: las cuentas ya cargadas
+  /// hoy son todas de cobro; Master desmarca la que no corresponda.
+  acceptsCustomerPayments Boolean             @default(true)
+  /// Para "ordenadas por uso, para que la memoria muscular funcione" (§1.3)
+  /// — se actualiza cada vez que un PaymentTender la usa como destino.
+  lastUsedAt              DateTime?
+  /// Saldo de apertura y desde cuándo corre el libro (prompt-libro-mayor-
+  /// tesoreria.md §5). El saldo NUNCA se guarda editable más allá de este
+  /// punto de partida — desde acá se calcula, nunca se pisa.
+  /// openingBalanceAt null = "pendiente de apertura", la pantalla no
+  /// inventa un saldo.
+  openingBalance          Decimal             @default(0)
+  openingBalanceAt        DateTime?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  branch                  Branch?                      @relation(fields: [branchId], references: [id])
+  holderUser              User?                        @relation("TreasuryAccountHolder", fields: [holderUserId], references: [id])
+  receivedTenders         PaymentTender[]
+  deposits                BankDeposit[]
+  cashDestinationDeposits CashDestinationDeclaration[]
+  entries                 TreasuryEntry[]
+  cards                   TreasuryCard[]
+
+  @@index([branchId, isActive])
+  @@index([type, isActive])
+  @@index([holderUserId])
+}
+
+/// Tarjeta (débito/crédito) LIGADA a una cuenta de tesorería. Modela el
+/// requerimiento del negocio: cada cuenta puede tener una o varias tarjetas
+/// físicas con las que se pagan proveedores/gastos, para que un pago se
+/// registre "con la tarjeta X de la cuenta Y" y baje el saldo de esa misma
+/// cuenta. No guarda el número completo — solo los últimos 4 y datos
+/// descriptivos (no es un almacén de PAN/CVV, eso nunca se persiste acá).
+model TreasuryCard {
+  id        String           @id @default(cuid())
+  accountId String
+  /// Nombre con el que la reconoce el usuario, ej. "BAC Empresarial Débito".
+  label     String
+  /// VISA | MASTERCARD | AMEX | OTRA — texto libre corto, no un enum rígido.
+  brand     String?
+  /// Últimos 4 dígitos, solo para identificarla visualmente.
+  last4     String?
+  cardType  TreasuryCardType @default(DEBIT)
+  isActive  Boolean          @default(true)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  account TreasuryAccount @relation(fields: [accountId], references: [id])
+  entries TreasuryEntry[]
+
+  @@index([accountId, isActive])
+}
+
+enum TreasuryCardType {
+  DEBIT
+  CREDIT
+}
+
+/// Depósito confirmado — una de las dos fuentes del saldo esperado de una
+/// cuenta (§2.2): saldo esperado = depósitos confirmados + transferencias
+/// recibidas a esa cuenta. La resolución de "efectivo esperando depósito"
+/// hacia "ya depositado" pasa por acá.
+model BankDeposit {
+  id                String   @id @default(cuid())
+  bankAccountId     String
+  branchId          String
+  amount            Decimal
+  depositedAt       DateTime @default(now())
+  confirmedByUserId String
+  referenceNumber   String?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  bankAccount     TreasuryAccount @relation(fields: [bankAccountId], references: [id])
+  branch          Branch          @relation(fields: [branchId], references: [id])
+  confirmedBy     User            @relation(fields: [confirmedByUserId], references: [id])
+  /// Dos filas del libro mayor (OUT de custodia + IN a banco) comparten el
+  /// mismo depósito — por eso NO es @unique acá, a diferencia de
+  /// cashMovementId/paymentTenderId en TreasuryEntry.
+  treasuryEntries TreasuryEntry[]
+
+  @@index([branchId, depositedAt])
+  @@index([bankAccountId, depositedAt])
+}
+
+/// Una por cierre de sesión de caja. Los tres destinos son la misma
+/// pregunta ("¿qué pasa con este efectivo antes de terminar el día?") — no
+/// hay motivo que capturar, solo quién lo recibe cuando sale (§1).
+/// retainCashFundPortion/retainAwaitingDepositPortion: la descomposición
+/// automática de "Retener" contra Branch.cashFundAmount (§1.1) — el usuario
+/// declara un solo número, la separación es del sistema.
+model CashDestinationDeclaration {
+  id               String @id @default(cuid())
+  cashSessionId    String @unique
+  branchId         String
+  declaredByUserId String
+
+  handOverAmount Decimal @default(0)
+  handOverUserId String?
+
+  depositAmount        Decimal @default(0)
+  depositCarrierUserId String?
+  depositBankAccountId String?
+
+  retainAmount                 Decimal              @default(0)
+  retainCashFundPortion        Decimal              @default(0)
+  retainAwaitingDepositPortion Decimal              @default(0)
+  awaitingDepositLocation      RetainedCashLocation @default(DRAWER)
+
+  /// true cuando el sistema la generó sola porque el cron cerró la sesión y
+  /// nadie declaró nada — todo en Retener, que es la verdad física (la
+  /// plata se quedó donde estaba). Se reemplaza por la declaración real en
+  /// la revisión de esa caja (prompt-pantallas-recorrido-dinero.md §3,
+  /// "El cierre automático").
+  isAutoDefaulted Boolean @default(false)
+
+  notes     String?
+  createdAt DateTime @default(now())
+
+  cashSession        CashSession      @relation(fields: [cashSessionId], references: [id])
+  branch             Branch           @relation(fields: [branchId], references: [id])
+  declaredBy         User             @relation("CashDestinationDeclaredBy", fields: [declaredByUserId], references: [id])
+  handOverUser       User?            @relation("CashDestinationHandOverUser", fields: [handOverUserId], references: [id])
+  depositCarrierUser User?            @relation("CashDestinationDepositCarrier", fields: [depositCarrierUserId], references: [id])
+  depositBankAccount TreasuryAccount? @relation(fields: [depositBankAccountId], references: [id])
+
+  @@index([branchId, createdAt])
+}
+
+enum TreasuryEntryDirection {
+  IN
+  OUT
+}
+
+/// Tipos de fila del libro mayor — una por cada evento de la tabla del §3
+/// (prompt-libro-mayor-tesoreria.md). RETAIN_TO_SAFE no tiene nombre propio
+/// en la tabla del doc (esa fila no lista entryType); se nombró por
+/// consistencia con el resto.
+enum TreasuryEntryType {
+  SALE_TRANSFER
+  SALE_CARD
+  CARD_SETTLEMENT
+  CARD_FEE
+  DEPOSIT_DISPATCH
+  HANDOVER
+  RETAIN_TO_SAFE
+  DEPOSIT_CONFIRMED
+  SUPPLIER_PAYMENT
+  PAYROLL
+  EXPENSE
+  CUSTOMER_ADVANCE
+  RECONCILIATION
+}
+
+enum TreasuryCounterpartyType {
+  CUSTOMER
+  SUPPLIER
+  EMPLOYEE
+  ACQUIRER
+  INTERNAL
+  ADJUSTMENT
+}
+
+/// El libro mayor de tesorería (prompt-libro-mayor-tesoreria.md §2.2): una
+/// fila por LADO de cada movimiento. Un movimiento entre dos cuentas
+/// internas produce DOS filas unidas por transferId; contra el exterior
+/// (venta que entra, gasto que sale), UNA. El saldo de una cuenta NUNCA se
+/// guarda — se calcula sumando estas filas (§2.3): ver
+/// getTreasuryAccountBalance en treasury/service.ts. Si en algún momento
+/// existe una columna "balance" editable en algún lado, el diseño está mal.
+model TreasuryEntry {
+  id           String                 @id @default(cuid())
+  accountId    String
+  direction    TreasuryEntryDirection
+  /// SIEMPRE positivo — el signo lo da direction, no el monto: sumar mal
+  /// filtrado con negativos da un número plausible y equivocado (§2.2).
+  amount       Decimal
+  currencyCode CurrencyCode
+
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  /// Las dos patas de una transferencia interna comparten transferId. Nulo
+  /// cuando la contraparte es externa (venta, gasto, proveedor).
+  transferId String?
+
+  entryType        TreasuryEntryType
+  counterpartyType TreasuryCounterpartyType
+  counterpartyName String?
+
+  /// Trazabilidad hacia el origen — a lo sumo uno de estos viene lleno.
+  cashMovementId   String? @unique
+  paymentTenderId  String? @unique
+  bankDepositId    String?
+  expensePaymentId String? @unique
+
+  /// Solo en pagos salientes (OUT) hechos con una tarjeta ligada a la cuenta:
+  /// deja el rastro de "con qué tarjeta se pagó". Nulo en el resto.
+  cardId String?
+
+  reference       String?
+  notes           String?
+  createdByUserId String
+
+  account       TreasuryAccount @relation(fields: [accountId], references: [id])
+  cashMovement  CashMovement?   @relation(fields: [cashMovementId], references: [id])
+  paymentTender PaymentTender?  @relation(fields: [paymentTenderId], references: [id])
+  bankDeposit   BankDeposit?    @relation(fields: [bankDepositId], references: [id])
+  card          TreasuryCard?   @relation(fields: [cardId], references: [id])
+  createdBy     User            @relation("TreasuryEntryCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([accountId, occurredAt, createdAt])
+  @@index([transferId])
+  @@index([entryType, occurredAt])
+  @@index([cardId])
+}
+
+/// Cada cuenta tiene su moneda y las entradas se guardan sin convertir — la
+/// posición total exige una tasa y su fecha, y las muestra (§4). Los tres
+/// comprobantes de Lafise dan 36.5 consistente: cuando un depósito trae las
+/// dos cifras, se registra con source=BANK_RECEIPT en vez de teclearla.
+model ExchangeRate {
+  id              String       @id @default(cuid())
+  fromCurrency    CurrencyCode
+  toCurrency      CurrencyCode
+  rate            Decimal
+  effectiveAt     DateTime
+  source          String /// MANUAL | BANK_RECEIPT
+  createdByUserId String
+  createdAt       DateTime     @default(now())
+
+  createdBy User @relation("ExchangeRateCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([fromCurrency, toCurrency, effectiveAt])
+}
+
+/// prompt-indicador-efectivo-inteligente.md §2.2/§7 — la política de
+/// depósito de UNA sucursal (nunca un umbral global). Sin fila para una
+/// sucursal, el indicador de efectivo no calcula estados ni proyección
+/// para ella — no inventa un umbral que nadie fijó.
+model BranchDepositPolicy {
+  id              String   @id @default(cuid())
+  branchId        String   @unique
+  thresholdAmount Decimal
+  maxDaysHolding  Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id])
+}

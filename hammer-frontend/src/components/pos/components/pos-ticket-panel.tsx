@@ -1,0 +1,421 @@
+"use client";
+
+import React from "react";
+import { Receipt, X } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import type { TicketLine, TicketOrder } from "../types";
+import { PosCheckoutBar } from "./pos-checkout-bar";
+
+type PosContextMessages = {
+  noCashBoxes?: string | null;
+  noAssignedSession?: string | null;
+} | null | undefined;
+
+type PosTicketPanelProps = {
+  ticketPanelRef: { current: HTMLDivElement | null };
+  onEscapeToSearch: () => void;
+
+  order: TicketOrder | null;
+  orderStatusLabel: string;
+  hasTicketLines: boolean;
+  ticketLines: TicketLine[];
+
+  lineDraftQuantities: Record<string, string>;
+  lineQuantityErrors: Record<string, string>;
+  lineUpdatingId: string | null;
+  isSubmittingPayment: boolean;
+  isBusy: boolean;
+  setLineDraftQuantities: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setLineQuantityErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  commitLineQuantity: (line: TicketLine, forcedValue?: number, silent?: boolean) => void;
+  removeLine: (lineId: string) => void;
+
+  includeTransport: boolean;
+  setIncludeTransport: (v: boolean) => void;
+  transportAmount: string;
+  setTransportAmount: (v: string) => void;
+  transportTouched: boolean;
+  setTransportTouched: (v: boolean) => void;
+  transportAmountValue: number;
+  transportValidationError: string | null;
+  onClearNotice: () => void;
+
+  canCollectHere: boolean;
+  canSendToCashier: boolean;
+  activeCashSessionId: string | null;
+  posContextMessages: PosContextMessages;
+
+  displayedTotalAmount: number;
+  sendButtonRef: { current: HTMLButtonElement | null };
+  onCompleteQueue: () => void;
+  onOpenChargeDialog: () => void;
+  onUpdateNotes: (notes: string) => void;
+};
+
+export function PosTicketPanel({
+  ticketPanelRef,
+  onEscapeToSearch,
+  order,
+  orderStatusLabel,
+  hasTicketLines,
+  ticketLines,
+  lineDraftQuantities,
+  lineQuantityErrors,
+  setLineDraftQuantities,
+  lineUpdatingId,
+  isSubmittingPayment,
+  isBusy,
+  commitLineQuantity,
+  removeLine,
+  includeTransport,
+  setIncludeTransport,
+  transportAmount,
+  setTransportAmount,
+  transportTouched,
+  setTransportTouched,
+  transportAmountValue,
+  transportValidationError,
+  onClearNotice,
+  canCollectHere,
+  canSendToCashier,
+  activeCashSessionId,
+  posContextMessages,
+  displayedTotalAmount,
+  sendButtonRef,
+  onCompleteQueue,
+  onOpenChargeDialog,
+  onUpdateNotes,
+}: PosTicketPanelProps) {
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Tab" && !event.shiftKey) {
+      event.preventDefault();
+      sendButtonRef.current?.focus();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onEscapeToSearch();
+    }
+  }
+
+  return (
+    <div
+      ref={ticketPanelRef}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      className="h-full min-h-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-strong)]"
+      data-testid="pos-ticket-zone"
+    >
+      <Card noPadding className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border-[var(--color-border)] shadow-sm">
+        {/* Header */}
+        <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
+          <Receipt className="h-4 w-4 text-[var(--color-text-muted)]" />
+          <div>
+            <h2 className="text-sm font-semibold leading-tight text-[var(--color-text)]">Ticket actual</h2>
+            <p className="text-[0.7rem] text-[var(--color-text-muted)]">
+              Orden: {order?.orderNumber ?? "preparando..."} · {orderStatusLabel}
+            </p>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2" data-testid="pos-ticket-lines">
+          {/* Line items — stepper design */}
+          {hasTicketLines ? (
+            <div>
+              {ticketLines.map((line) => {
+                const qty = Number(line.quantity);
+                const busy = lineUpdatingId === line.id || isSubmittingPayment;
+
+                const draftValue = lineDraftQuantities[line.id] ?? (qty % 1 === 0 ? String(qty) : qty.toFixed(2));
+                const lineError = lineQuantityErrors[line.id];
+
+                function commitDraft() {
+                  const parsed = Number(draftValue);
+                  // Evita un PATCH innecesario cuando el valor no cambió (ej. blur sin editar).
+                  if (Number.isFinite(parsed) && parsed === qty) return;
+                  commitLineQuantity(line);
+                }
+
+                return (
+                  <div key={line.id} className="border-b border-[var(--color-border)] py-2.5">
+                    <div className="flex items-center gap-2">
+                      {/* Product info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13.5px] font-medium leading-tight text-[var(--color-text)]">
+                          {line.product?.name ?? line.productId}
+                        </div>
+                        <div className="text-[11px] text-[var(--color-text-muted)]">
+                          C$ {Number(line.unitPrice).toFixed(2)} c/u
+                          {Number(line.discountAmount) > 0
+                            ? ` · -C$ ${Number(line.discountAmount).toFixed(2)}`
+                            : ""}
+                        </div>
+                      </div>
+
+                      {/* Stepper + entrada directa de cantidad */}
+                      <div className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-1">
+                        <button
+                          type="button"
+                          aria-label="Reducir cantidad"
+                          className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                          disabled={busy}
+                          onClick={() => {
+                            if (qty <= 1) removeLine(line.id);
+                            else commitLineQuantity(line, qty - 1, true);
+                          }}
+                          data-testid={`pos-line-dec-${line.id}`}
+                        >
+                          −
+                        </button>
+                        {/* Tocar y escribir directo evita tener que tocar la flecha
+                            muchas veces para cantidades grandes (ej. 20). */}
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          aria-label="Cantidad"
+                          className="w-9 border-0 bg-transparent p-0 text-center text-[13.5px] font-medium tabular-nums text-[var(--color-text)] outline-none disabled:opacity-60"
+                          value={draftValue}
+                          disabled={busy}
+                          onFocus={(event) => event.target.select()}
+                          onChange={(event) => {
+                            const raw = event.target.value;
+                            if (/^\d*\.?\d*$/.test(raw)) {
+                              setLineDraftQuantities((prev) => ({ ...prev, [line.id]: raw }));
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              commitDraft();
+                              event.currentTarget.blur();
+                            }
+                          }}
+                          onBlur={commitDraft}
+                          data-testid={`pos-line-qty-${line.id}`}
+                        />
+                        <button
+                          type="button"
+                          aria-label="Aumentar cantidad"
+                          className="flex h-6 w-6 items-center justify-center rounded-full text-base text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-alt)] disabled:opacity-40"
+                          disabled={busy}
+                          onClick={() => commitLineQuantity(line, qty + 1, true)}
+                          data-testid={`pos-line-inc-${line.id}`}
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      {/* Line total */}
+                      <span className="min-w-[64px] text-right text-[13px] font-semibold tabular-nums text-[var(--color-text)]">
+                        C$ {Number(line.lineSubtotal).toFixed(2)}
+                      </span>
+
+                      {/* Remove */}
+                      <button
+                        type="button"
+                        aria-label="Eliminar línea"
+                        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-[var(--color-text-soft)] transition-colors hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)] disabled:opacity-40"
+                        disabled={busy}
+                        onClick={() => removeLine(line.id)}
+                        data-testid={`pos-line-remove-${line.id}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+
+                    {lineError ? (
+                      <p className="mt-1 text-right text-[11px] font-medium text-[var(--color-danger-600)]">
+                        {lineError}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {/* Empty state */}
+          {order && !hasTicketLines ? (
+            <div className="mt-4 rounded-xl border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-muted)] p-8 text-center">
+              <p className="text-sm font-semibold text-[var(--color-text)]">Ticket vacío</p>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">Toca un producto para agregarlo.</p>
+            </div>
+          ) : null}
+
+          {/* Totals */}
+          {hasTicketLines ? (
+            <div className="mt-3 space-y-1 border-t border-[var(--color-border)] pt-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-[var(--color-text-secondary)]">Subtotal</span>
+                <span className="tabular-nums text-[var(--color-text-secondary)]">
+                  C$ {Number(order?.subtotal ?? 0).toFixed(2)}
+                </span>
+              </div>
+              {Number(order?.discountTotal ?? 0) > 0 ? (
+                <div className="flex justify-between">
+                  <span className="text-[var(--color-text-secondary)]">Descuento</span>
+                  <span className="tabular-nums text-[var(--color-text-secondary)]">
+                    -C$ {Number(order?.discountTotal ?? 0).toFixed(2)}
+                  </span>
+                </div>
+              ) : null}
+              {Number(order?.taxTotal ?? 0) > 0 ? (
+                <div className="flex justify-between">
+                  <span className="text-[var(--color-text-secondary)]">IVA</span>
+                  <span className="tabular-nums text-[var(--color-text-secondary)]">
+                    C$ {Number(order?.taxTotal ?? 0).toFixed(2)}
+                  </span>
+                </div>
+              ) : null}
+              {includeTransport && transportAmountValue > 0 ? (
+                <div className="flex justify-between">
+                  <span className="text-[var(--color-text-secondary)]">Transporte</span>
+                  <span className="tabular-nums text-[var(--color-text-secondary)]">
+                    C$ {transportAmountValue.toFixed(2)}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* Transport toggle */}
+          <label
+            className={[
+              "mt-3 flex cursor-pointer select-none items-start gap-3 rounded-lg border p-3 transition-colors",
+              includeTransport
+                ? "border-[var(--color-pay)] bg-[color-mix(in_srgb,var(--color-pay)_6%,transparent)]"
+                : "border-[var(--color-border)] bg-[var(--color-surface)]",
+            ].join(" ")}
+            data-testid="pos-transport-toggle"
+          >
+            <input
+              type="checkbox"
+              checked={includeTransport}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setIncludeTransport(checked);
+                if (!checked) {
+                  setTransportAmount("");
+                  setTransportTouched(false);
+                }
+              }}
+              className="mt-0.5 h-4 w-4 rounded border-[var(--color-border)]"
+              disabled={isBusy}
+            />
+            <span>
+              <span className="block text-sm font-semibold text-[var(--color-text)]">Agregar transporte</span>
+              <span className="block text-xs text-[var(--color-text-muted)]">Flete, envío o entrega a domicilio</span>
+            </span>
+          </label>
+
+          {includeTransport ? (
+            <div className="mt-2 space-y-1">
+              <label className="block text-xs font-medium text-[var(--color-text-muted)]">
+                Monto de transporte (C$)
+              </label>
+              <input
+                className={[
+                  "w-full rounded-lg border px-3 py-2 text-sm outline-none",
+                  "bg-[var(--color-surface)] text-[var(--color-text)] placeholder:text-[var(--color-text-soft)]",
+                  "focus:ring-2 transition-colors",
+                  transportTouched && transportValidationError
+                    ? "border-[var(--color-danger-500)] focus:border-[var(--color-danger-500)] focus:ring-[var(--color-danger-100)]"
+                    : "border-[var(--color-border)] focus:border-[var(--color-pay)] focus:ring-[var(--color-pay)]/10",
+                ].join(" ")}
+                type="number"
+                min="0"
+                step="0.01"
+                value={transportAmount}
+                onChange={(event) => {
+                  setTransportAmount(event.target.value);
+                  if (transportTouched) onClearNotice();
+                }}
+                onBlur={() => setTransportTouched(true)}
+                placeholder="Ej: 150.00"
+                disabled={isBusy}
+                data-testid="pos-transport-amount"
+              />
+              {transportTouched && transportValidationError ? (
+                <p className="text-xs text-[var(--color-danger-600)]" data-testid="pos-transport-error">
+                  {transportValidationError}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* Notes */}
+          {order ? (
+            <div className="mt-3">
+              <label className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]">
+                Notas / instrucciones
+              </label>
+              <textarea
+                className="w-full resize-none rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-soft)] focus:border-[var(--color-pay)] focus:ring-2 focus:ring-[var(--color-pay)]/10"
+                rows={2}
+                maxLength={1000}
+                placeholder="Instrucciones especiales, nombre del cliente, referencias..."
+                defaultValue={order.notes ?? ""}
+                disabled={isBusy}
+                data-testid="pos-order-notes"
+                onBlur={(e) => onUpdateNotes(e.currentTarget.value)}
+              />
+            </div>
+          ) : null}
+
+          {/* Backend workflow messages */}
+          {posContextMessages?.noCashBoxes ? (
+            <div
+              className="mt-3 rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3"
+              data-testid="pos-no-cashboxes"
+            >
+              <p className="text-xs font-medium text-[var(--color-danger-600)]">
+                ⚠️ {posContextMessages.noCashBoxes}
+              </p>
+              <p className="mt-1 text-xs text-[var(--color-danger-600)]">
+                Pide a un administrador que cree una caja física para esta sucursal.
+              </p>
+            </div>
+          ) : posContextMessages?.noAssignedSession ? (
+            <div
+              className="mt-3 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3"
+              data-testid="pos-no-session"
+            >
+              <p className="text-xs font-medium text-[var(--color-warning-700)]">
+                {posContextMessages.noAssignedSession}
+              </p>
+            </div>
+          ) : null}
+
+          {/* No-action warning */}
+          {!canSendToCashier && !canCollectHere ? (
+            <div
+              className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3"
+              data-testid="pos-no-actions"
+            >
+              <p className="text-xs text-[var(--color-text-secondary)]">
+                Tu perfil o la configuración de esta sucursal no permite enviar a caja ni cobrar aquí.
+                Contacta a un administrador para revisar permisos.
+              </p>
+            </div>
+          ) : null}
+        </div>
+
+        <PosCheckoutBar
+          hasTicketLines={hasTicketLines}
+          displayedTotalAmount={displayedTotalAmount}
+          canSendToCashier={canSendToCashier}
+          canCollectHere={canCollectHere}
+          activeCashSessionId={activeCashSessionId}
+          isBusy={isBusy}
+          isSubmittingPayment={isSubmittingPayment}
+          hasOrder={Boolean(order)}
+          includeTransport={includeTransport}
+          transportValidationError={transportValidationError}
+          sendButtonRef={sendButtonRef}
+          onCompleteQueue={onCompleteQueue}
+          onOpenChargeDialog={onOpenChargeDialog}
+        />
+      </Card>
+    </div>
+  );
+}

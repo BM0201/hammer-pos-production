@@ -1,0 +1,331 @@
+"use client";
+
+import { Badge } from "@/components/ui/badge";
+import { Building2, Calendar, Clock, TrendingUp, Wallet, AlertTriangle, CheckCircle2, XCircle, Activity, Truck, Brain } from "lucide-react";
+
+export type OperationalDay = {
+  id: string;
+  branchId: string;
+  businessDate: string;
+  /** Eje del sistema: ACTIVE (día en curso) | AWAITING_REVIEW (esperando confirmación) | CANCELLED. */
+  lifecycle: "ACTIVE" | "AWAITING_REVIEW" | "CANCELLED";
+  /** Eje de Master: PENDING (default, sin caducidad) | CONFIRMED (firmado por un humano). */
+  reviewStatus: "PENDING" | "CONFIRMED";
+  openedAt: string;
+  sweptAt?: string | null;
+  reviewedAt?: string | null;
+  salesTotal: string | number;
+  paidOrdersTotal: string | number;
+  pendingPaymentTotal: string | number;
+  expectedCashTotal?: string | number | null;
+  countedCashTotal?: string | number | null;
+  cashDifferenceTotal?: string | number | null;
+  openCashSessionsCount: number;
+  autoClosedPendingReviewCount: number;
+  pendingDispatchCount: number;
+  criticalBrainDecisionCount: number;
+  /** Transitorio (no persistido): ventas offline sincronizadas tras salir de ACTIVE, pendientes de revisión. */
+  lateOfflineSyncCount?: number;
+  branch?: { id: string; code: string; name: string };
+  openedBy?: { username: string; fullName?: string | null };
+  reviewedBy?: { username: string; fullName?: string | null } | null;
+  cashSessions?: CashSessionRow[];
+  summaryJson?: {
+    paymentsByMethod?: Array<{ method: string; amount: number; count: number }>;
+    cashExpensesTotal?: number | string | null;
+    cashOutflowsTotal?: number | string | null;
+    sourceMode?: "OPERATIONAL_DAY_ID" | "MIXED" | "LEGACY_TIME_WINDOW";
+    changeAmountTotal?: number | string | null;
+    /** Esperado de sesiones sin revisar (fuera de expected/counted/difference). */
+    expectedCashPendingReviewTotal?: number | string | null;
+    refunds?: { total: number; count: number; byMethod?: Record<string, number> } | null;
+    cashMovements?: { net: number; inflows: number; outflows: number; expenses: number } | null;
+    expectedVsCountedByCashSession?: Array<{
+      cashSessionId: string;
+      physicalCashBoxCode: string | null;
+      expected: number;
+      counted: number;
+      difference: number;
+      requiresReview: boolean;
+    }>;
+    lateOfflineSyncCount?: number;
+  } | null;
+};
+
+export type CashSessionRow = {
+  id: string;
+  status: string;
+  openingAmount: string | number;
+  expectedCashAmount?: string | number | null;
+  countedCashAmount?: string | number | null;
+  differenceAmount?: string | number | null;
+  openedAt: string;
+  closedAt?: string | null;
+  autoClosedAt?: string | null;
+  requiresReview: boolean;
+  autoClosedBySystem?: boolean;
+  physicalCashBox?: { code: string; description?: string | null };
+  openedBy?: { username: string; fullName?: string | null };
+  closedBy?: { username: string; fullName?: string | null } | null;
+};
+
+function money(value: string | number | null | undefined) {
+  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
+}
+
+function businessDateDisplay(iso: string) {
+  return new Date(iso).toLocaleDateString("es-NI", { timeZone: "UTC", weekday: "long", year: "numeric", month: "long", day: "numeric" });
+}
+
+function timeAgo(iso: string) {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 60) return `hace ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `hace ${minutes} min`;
+  return `hace ${Math.floor(minutes / 60)} h`;
+}
+
+const LIFECYCLE_CONFIG: Record<string, { label: string; badge: "success" | "warning" | "neutral" | "danger"; barColor: string }> = {
+  ACTIVE:          { label: "En curso",              badge: "success", barColor: "var(--color-success-500)" },
+  AWAITING_REVIEW: { label: "Esperando confirmación", badge: "warning", barColor: "var(--color-warning-500)" },
+  CANCELLED:       { label: "Anulado",                badge: "danger",  barColor: "var(--color-danger-500)" },
+};
+
+type KpiTileProps = {
+  label: string;
+  value: string | number;
+  icon: React.ElementType;
+  tone?: "ok" | "alert" | "warn" | "default";
+  subtext?: string;
+};
+
+function KpiTile({ label, value, icon: Icon, tone = "default", subtext }: KpiTileProps) {
+  const styles = {
+    ok:      { tile: "hm-kpi-tile border-[var(--color-success-100)] bg-[color-mix(in_srgb,var(--color-success-50)_25%,white)]", bar: "linear-gradient(90deg,var(--color-success-400),var(--color-success-600))", iconBg: "bg-[var(--color-success-50)] border border-[var(--color-success-100)]", iconColor: "text-[var(--color-success-600)]" },
+    alert:   { tile: "hm-kpi-tile border-[var(--color-danger-200)] bg-[color-mix(in_srgb,var(--color-danger-50)_35%,white)]",   bar: "linear-gradient(90deg,var(--color-danger-400),var(--color-danger-600))",  iconBg: "bg-[var(--color-danger-50)] border border-[var(--color-danger-100)]",   iconColor: "text-[var(--color-danger-600)]" },
+    warn:    { tile: "hm-kpi-tile border-[var(--color-warning-200)] bg-[color-mix(in_srgb,var(--color-warning-50)_30%,white)]", bar: "linear-gradient(90deg,var(--color-warning-400),var(--color-warning-600))", iconBg: "bg-[var(--color-warning-50)] border border-[var(--color-warning-100)]", iconColor: "text-[var(--color-warning-700)]" },
+    default: { tile: "hm-kpi-tile", bar: "linear-gradient(90deg,var(--color-info-400),var(--color-info-600))", iconBg: "bg-[var(--color-surface-alt)] border border-[var(--color-border)]", iconColor: "text-[var(--color-text-muted)]" },
+  };
+  const s = styles[tone];
+  return (
+    <div className={`${s.tile} hm-shine group`}>
+      <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: s.bar }} />
+      <div className="flex items-start justify-between gap-2 mt-0.5">
+        <div className="min-w-0 flex-1">
+          <p className="text-[0.65rem] font-bold uppercase tracking-[0.1em] text-[var(--color-text-muted)] mb-1.5">{label}</p>
+          <p className="hm-num-lg">{value}</p>
+          {subtext && <p className="mt-1 text-[0.625rem] text-[var(--color-text-soft)] truncate">{subtext}</p>}
+        </div>
+        <div className={`hm-icon-wrap hm-icon-wrap-md ${s.iconBg} flex-shrink-0 mt-0.5 transition-transform duration-200 group-hover:scale-105`}>
+          <Icon className={`${s.iconColor}`} style={{ width: "1rem", height: "1rem" }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Día Operativo v2 Fase 3 — default local solo para cuando el padre aún no cargó la config; el valor real viene de /api/master/operations/cash-tolerance-config. */
+const FALLBACK_CASH_TOLERANCE = 100;
+
+export function OperationalDaySummary({ day, cashDifferenceTolerance = FALLBACK_CASH_TOLERANCE }: { day: OperationalDay; cashDifferenceTolerance?: number }) {
+  const lifecycleCfg = LIFECYCLE_CONFIG[day.lifecycle] ?? LIFECYCLE_CONFIG.ACTIVE;
+  const lateOffline = Number(day.lateOfflineSyncCount ?? day.summaryJson?.lateOfflineSyncCount ?? 0);
+  const diff = Number(day.cashDifferenceTotal ?? 0);
+  const cashDiffTone: KpiTileProps["tone"] = Math.abs(diff) > cashDifferenceTolerance ? "alert" : diff !== 0 ? "warn" : "ok";
+
+  return (
+    <section className="space-y-4">
+      {/* ── Header card ── */}
+      <div className="hm-module-card overflow-hidden">
+        {/* Role accent bar */}
+        <div className="h-1" style={{ background: `linear-gradient(90deg, ${lifecycleCfg.barColor}, transparent)` }} />
+        <div className="hm-module-card-header">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="hm-icon-wrap hm-icon-wrap-md bg-[var(--color-info-50)] border border-[var(--color-info-100)] flex-shrink-0">
+              <Building2 className="text-[var(--color-info-600)]" style={{ width: "1.125rem", height: "1.125rem" }} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[0.625rem] font-bold uppercase tracking-[0.1em] text-[var(--color-text-muted)]">Día Operativo 360</p>
+              <h1 className="text-lg font-extrabold text-[var(--color-text)] leading-tight truncate">
+                {day.branch?.code ?? "SUC"} — {day.branch?.name ?? day.branchId}
+              </h1>
+            </div>
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {lateOffline > 0 && (
+              <Badge variant="warning" title="Ventas offline sincronizadas tras dejar de estar en curso — requieren revisión Master.">
+                {lateOffline} venta{lateOffline !== 1 ? "s" : ""} offline pendiente{lateOffline !== 1 ? "s" : ""} de revisión
+              </Badge>
+            )}
+            {day.reviewStatus === "CONFIRMED" ? <Badge variant="success">Confirmado</Badge> : <Badge variant={lifecycleCfg.badge}>{lifecycleCfg.label}</Badge>}
+          </div>
+        </div>
+
+        <div className="px-5 py-3 flex flex-wrap gap-x-5 gap-y-1.5 text-[0.75rem] text-[var(--color-text-muted)] border-t border-[var(--color-border)] bg-[var(--color-surface-muted)]">
+          <span className="flex items-center gap-1.5">
+            <Calendar style={{ width: "0.875rem", height: "0.875rem" }} />
+            {businessDateDisplay(day.businessDate)}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Clock style={{ width: "0.875rem", height: "0.875rem" }} />
+            Abierto por <strong className="text-[var(--color-text-secondary)]">{day.openedBy?.fullName ?? day.openedBy?.username ?? "usuario"}</strong> · {timeAgo(day.openedAt)}
+          </span>
+          {day.reviewedBy && (
+            <span className="flex items-center gap-1.5 text-[var(--color-success-700)]">
+              <CheckCircle2 style={{ width: "0.875rem", height: "0.875rem" }} />
+              Confirmado por <strong>{day.reviewedBy.fullName ?? day.reviewedBy.username}</strong>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ── KPI groups ── */}
+      {/* Finanzas */}
+      <div className="space-y-2">
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.14em] text-[var(--color-text-muted)] flex items-center gap-1.5">
+          <TrendingUp style={{ width: "0.75rem", height: "0.75rem" }} />
+          Finanzas
+        </p>
+        <div className="hm-kpi-grid">
+          <KpiTile label="Ventas totales"   value={money(day.salesTotal)}          icon={TrendingUp} tone="default" />
+          <KpiTile label="Pagadas"          value={money(day.paidOrdersTotal)}      icon={CheckCircle2} tone="ok" />
+          <KpiTile label="Pendiente pago"   value={money(day.pendingPaymentTotal)}  icon={Activity}
+            tone={Number(day.pendingPaymentTotal) > 0 ? "warn" : "ok"}
+            subtext={Number(day.pendingPaymentTotal) > 0 ? "Resolver antes de cerrar" : undefined}
+          />
+        </div>
+      </div>
+
+      {/* Caja */}
+      <div className="space-y-2">
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.14em] text-[var(--color-text-muted)] flex items-center gap-1.5">
+          <Wallet style={{ width: "0.75rem", height: "0.75rem" }} />
+          Caja
+        </p>
+        <div className="hm-kpi-grid">
+          <KpiTile label="Cajas abiertas"      value={day.openCashSessionsCount}          icon={Wallet}
+            tone={
+              day.openCashSessionsCount === 0
+                ? "ok"
+                : day.lifecycle !== "ACTIVE"
+                  ? "alert"
+                  : "default"
+            }
+            subtext={
+              day.openCashSessionsCount === 0
+                ? "Sin cajas abiertas"
+                : day.lifecycle !== "ACTIVE"
+                  ? "Requiere atención — el día ya no está en curso"
+                  : "En uso — operación normal"
+            }
+          />
+          <KpiTile label="Auto-cierre pendiente" value={day.autoClosedPendingReviewCount} icon={AlertTriangle}
+            tone={day.autoClosedPendingReviewCount > 0 ? "alert" : "ok"}
+            subtext={
+              day.autoClosedPendingReviewCount > 0
+                ? Number(day.summaryJson?.expectedCashPendingReviewTotal ?? 0) > 0
+                  ? `Requieren revisión · esperado sin revisar: ${money(day.summaryJson?.expectedCashPendingReviewTotal)}`
+                  : "Requieren revisión"
+                : undefined
+            }
+          />
+          {/* expected/counted/difference comparan solo sesiones revisadas
+              (requiresReview: false); las pendientes se informan arriba. */}
+          <KpiTile label="Diferencia de caja"  value={money(day.cashDifferenceTotal)}     icon={XCircle}
+            tone={cashDiffTone}
+            subtext={Math.abs(diff) > cashDifferenceTolerance ? "Diferencia alta — requiere nota" : diff !== 0 ? "Diferencia pequeña" : "Sin diferencia"}
+          />
+          <KpiTile label="Gastos / egresos de caja" value={money(day.summaryJson?.cashOutflowsTotal)} icon={Wallet}
+            tone="default"
+            subtext={
+              Number(day.summaryJson?.cashExpensesTotal ?? 0) > 0
+                ? `Gastos: ${money(day.summaryJson?.cashExpensesTotal)}`
+                : "Sin gastos registrados"
+            }
+          />
+        </div>
+      </div>
+
+      {/* Operaciones */}
+      <div className="space-y-2">
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.14em] text-[var(--color-text-muted)] flex items-center gap-1.5">
+          <Activity style={{ width: "0.75rem", height: "0.75rem" }} />
+          Operaciones
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <KpiTile label="Despachos pendientes"  value={day.pendingDispatchCount}       icon={Truck}
+            tone={day.pendingDispatchCount > 2 ? "warn" : day.pendingDispatchCount > 0 ? "default" : "ok"}
+          />
+          <KpiTile label="Brain crítico"         value={day.criticalBrainDecisionCount} icon={Brain}
+            tone={day.criticalBrainDecisionCount > 0 ? "warn" : "ok"}
+            subtext={day.criticalBrainDecisionCount > 0 ? "Decisiones críticas pendientes" : undefined}
+          />
+        </div>
+      </div>
+
+      {/* ── Conciliación de caja (esperado vs contado), devoluciones y vuelto ── */}
+      {(() => {
+        const evc = day.summaryJson?.expectedVsCountedByCashSession ?? [];
+        const refunds = day.summaryJson?.refunds ?? null;
+        const change = Number(day.summaryJson?.changeAmountTotal ?? 0);
+        const sourceMode = day.summaryJson?.sourceMode;
+        const hasAny = evc.length > 0 || (refunds && refunds.count > 0) || change > 0 || (sourceMode && sourceMode !== "OPERATIONAL_DAY_ID");
+        if (!hasAny) return null;
+        return (
+          <div className="space-y-2">
+            <p className="text-[0.625rem] font-bold uppercase tracking-[0.14em] text-[var(--color-text-muted)] flex items-center gap-1.5">
+              <Wallet style={{ width: "0.75rem", height: "0.75rem" }} />
+              Conciliación de caja
+              {sourceMode && sourceMode !== "OPERATIONAL_DAY_ID" && (
+                <Badge variant={sourceMode === "MIXED" ? "warning" : "neutral"}>
+                  {sourceMode === "MIXED" ? "Fuente mixta" : "Ventana legacy"}
+                </Badge>
+              )}
+            </p>
+
+            {evc.length > 0 && (
+              <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+                <table className="hm-table w-full text-left text-xs">
+                  <thead>
+                    <tr>
+                      <th>Caja</th>
+                      <th className="text-right">Esperado</th>
+                      <th className="text-right">Contado</th>
+                      <th className="text-right">Diferencia</th>
+                      <th>Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {evc.map((s) => (
+                      <tr key={s.cashSessionId}>
+                        <td className="font-semibold">{s.physicalCashBoxCode ?? "—"}</td>
+                        <td className="text-right">{money(s.expected)}</td>
+                        <td className="text-right">{money(s.counted)}</td>
+                        <td className={`text-right font-semibold ${Math.abs(s.difference) > 0.009 ? (Math.abs(s.difference) > cashDifferenceTolerance ? "text-[var(--color-danger-700)]" : "text-[var(--color-warning-700)]") : ""}`}>
+                          {money(s.difference)}
+                        </td>
+                        <td>
+                          {s.requiresReview
+                            ? <Badge variant="warning">Revisión</Badge>
+                            : <Badge variant="success">OK</Badge>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <KpiTile label="Vuelto entregado" value={money(change)} icon={Wallet} tone="default" />
+              <KpiTile label="Devoluciones del día" value={money(refunds?.total ?? 0)} icon={XCircle}
+                tone={(refunds?.count ?? 0) > 0 ? "warn" : "ok"}
+                subtext={(refunds?.count ?? 0) > 0 ? `${refunds!.count} devolución(es)` : "Sin devoluciones"}
+              />
+            </div>
+          </div>
+        );
+      })()}
+    </section>
+  );
+}

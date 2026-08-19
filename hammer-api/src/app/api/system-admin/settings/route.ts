@@ -1,0 +1,36 @@
+import { getCurrentSession } from "@/modules/auth/service";
+import { assertAuthenticated, assertSystemAdmin } from "@/modules/auth/access";
+import { toHttpErrorResponse } from "@/lib/http";
+import { getSystemSettings, updateSystemSetting } from "@/modules/system-admin/service";
+import { requireCsrf } from "@/modules/security/csrf";
+import { ok, fail } from "@/lib/api/response";
+
+export async function GET() {
+  try {
+    const session = await getCurrentSession();
+    assertAuthenticated(session);
+    assertSystemAdmin(session);
+    const data = await getSystemSettings();
+    return ok(data);
+  } catch (err) {
+    return toHttpErrorResponse(err);
+  }
+}
+
+export async function PUT(request: Request) {
+  try {
+    const session = await getCurrentSession();
+    assertAuthenticated(session);
+    await requireCsrf(request, session);
+    assertSystemAdmin(session);
+    const body = await request.json();
+    const { key, value } = body;
+    if (!key || value === undefined) {
+      return fail("VALIDATION_ERROR", "key and value are required", 400);
+    }
+    const data = await updateSystemSetting(key, String(value), session.userId);
+    return ok(data);
+  } catch (err) {
+    return toHttpErrorResponse(err);
+  }
+}

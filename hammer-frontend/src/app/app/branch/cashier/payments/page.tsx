@@ -1,0 +1,33 @@
+"use client";
+
+import { CashierPayments } from "@/components/payments/cashier-payments";
+import { useSession } from "@/lib/client/session";
+import { getActiveBranchId } from "@/lib/client/active-branch";
+
+export default function BranchCashierPaymentsPage() {
+  const sessionState = useSession();
+
+  if (sessionState.status === "loading") {
+    return <p className="text-[var(--color-text-muted)] animate-pulse">Cargando…</p>;
+  }
+  if (sessionState.status !== "authenticated") {
+    return <p className="text-[var(--color-danger-600)]">Sesión no válida.</p>;
+  }
+
+  const branchId = getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId);
+  if (!branchId) {
+    return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
+  }
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Cobros</h1>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Cola de órdenes pendientes de cobro. El control de apertura y cierre de caja está en la pantalla <strong>Caja</strong>.
+        </p>
+      </div>
+      <CashierPayments branchId={branchId} />
+    </section>
+  );
+}

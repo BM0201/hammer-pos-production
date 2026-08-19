@@ -1,0 +1,65 @@
+import { NextRequest } from "next/server";
+import { getCurrentSession } from "@/modules/auth/service";
+import { assertAuthenticated, assertFinanceAccess } from "@/modules/auth/access";
+import { toHttpErrorResponse } from "@/lib/http";
+import { updateExpenseSchema } from "@/modules/pricing/validators";
+import { requireCsrf } from "@/modules/security/csrf";
+import { fail, ok } from "@/lib/api/response";
+import {
+  updateOperatingExpense,
+  deleteOperatingExpense,
+} from "@/modules/pricing/service";
+
+type Params = { params: Promise<{ id: string }> };
+
+/**
+ * PUT /api/expenses/[id]
+ */
+export async function PUT(req: NextRequest, { params }: Params) {
+  try {
+    const session = await getCurrentSession();
+    assertAuthenticated(session);
+    await requireCsrf(req, session);
+    assertFinanceAccess(session);
+
+    const { id } = await params;
+    const body = await req.json();
+    const parsed = updateExpenseSchema.parse(body);
+    // Mismo guard que en la creación: la planilla se sincroniza sola al
+    // postear la nómina — reclasificar un gasto a PAYROLL la duplicaría.
+    if (parsed.category === "PAYROLL") {
+      return fail(
+        "VALIDATION_ERROR",
+        "La planilla no se registra como gasto manual: se sincroniza automáticamente al postear la nómina.",
+        400,
+      );
+    }
+    const updated = await updateOperatingExpense(id, parsed, session.userId);
+
+    return ok(updated);
+  } catch (error) {
+    if (error instanceof Error && error.name === "ZodError") {
+      return fail("VALIDATION_ERROR", "Datos inv\u00e1lidos", 400);
+    }
+    return toHttpErrorResponse(error);
+  }
+}
+
+/**
+ * DELETE /api/expenses/[id]
+ */
+export async function DELETE(req: NextRequest, { params }: Params) {
+  try {
+    const session = await getCurrentSession();
+    assertAuthenticated(session);
+    await requireCsrf(req, session);
+    assertFinanceAccess(session);
+
+    const { id } = await params;
+    await deleteOperatingExpense(id, session.userId);
+
+    return ok({ deleted: true });
+  } catch (error) {
+    return toHttpErrorResponse(error);
+  }
+}
