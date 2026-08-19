@@ -961,22 +961,81 @@ export async function listTreasuryCards(accountId: string) {
   });
 }
 
+type EntrySumRow = { accountId: string; direction: "IN" | "OUT"; _sum: { amount: Prisma.Decimal | number | null } };
+
+/**
+ * Arma el TreasuryAccountBalance de cada cuenta a partir de UN groupBy
+ * (accountId, direction) en vez de 2 aggregates por cuenta — misma fórmula
+ * que getTreasuryAccountBalance (computeAccountBalance), sin duplicarla.
+ * Aislada como función pura para poder probarla sin base de datos.
+ */
+export function assembleAccountBalances(
+  accounts: Array<{ id: string; openingBalance: Prisma.Decimal | number; openingBalanceAt: Date | null }>,
+  sumRows: EntrySumRow[],
+): Map<string, TreasuryAccountBalance> {
+  const sums = new Map<string, { in: number; out: number }>();
+  for (const row of sumRows) {
+    const bucket = sums.get(row.accountId) ?? { in: 0, out: 0 };
+    const amount = Number(row._sum.amount ?? 0);
+    if (row.direction === "IN") bucket.in += amount;
+    else bucket.out += amount;
+    sums.set(row.accountId, bucket);
+  }
+
+  const result = new Map<string, TreasuryAccountBalance>();
+  for (const account of accounts) {
+    const openingBalance = Number(account.openingBalance);
+    const { in: totalIn, out: totalOut } = sums.get(account.id) ?? { in: 0, out: 0 };
+    result.set(account.id, {
+      openingBalance,
+      openingBalanceAt: account.openingBalanceAt,
+      totalIn,
+      totalOut,
+      balance: computeAccountBalance(openingBalance, totalIn, totalOut),
+      pendingOpening: account.openingBalanceAt === null,
+    });
+  }
+  return result;
+}
+
 /**
  * Cuentas de banco + su saldo esperado (libro mayor) + las tarjetas activas
  * ligadas a cada una. Es la vista que la pantalla de Tesorería necesita para
  * mostrar "cuánto hay depositado por cuenta y con qué tarjetas se paga desde
- * ella".
+ * ella". Tres consultas fijas, independientes de la cantidad de cuentas —
+ * antes eran ~16 round trips a Neon con 5 cuentas (2 aggregates + 1 findMany
+ * por cuenta), y esta es la pantalla que el Master abre primero.
  */
 export async function listBankAccountsWithBalancesAndCards(branchId?: string | null) {
   const accounts = await listBankAccounts(branchId);
-  return Promise.all(accounts.map(async (account) => ({
-    ...account,
-    balance: await getTreasuryAccountBalance(account.id),
-    cards: await prisma.treasuryCard.findMany({
-      where: { accountId: account.id, isActive: true },
+  if (accounts.length === 0) return [];
+
+  const ids = accounts.map((account) => account.id);
+  const [sumRows, cards] = await Promise.all([
+    prisma.treasuryEntry.groupBy({
+      by: ["accountId", "direction"],
+      where: { accountId: { in: ids } },
+      _sum: { amount: true },
+    }),
+    prisma.treasuryCard.findMany({
+      where: { accountId: { in: ids }, isActive: true },
       orderBy: { label: "asc" },
     }),
-  })));
+  ]);
+
+  const balances = assembleAccountBalances(accounts, sumRows);
+  const cardsByAccount = new Map<string, typeof cards>();
+  for (const card of cards) {
+    const list = cardsByAccount.get(card.accountId) ?? [];
+    list.push(card);
+    cardsByAccount.set(card.accountId, list);
+  }
+
+  return accounts.map((account) => ({
+    ...account,
+    balance: balances.get(account.id)!,
+    cards: cardsByAccount.get(account.id) ?? [],
+  }));
 }
 
 // ─── Pagos SALIENTES desde una cuenta registrada ──────────────────────────
