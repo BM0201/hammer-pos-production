@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { AlertTriangle, Banknote, Send, X } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
@@ -32,13 +31,17 @@ export type CashPosition = {
   policy: { thresholdAmount: number; maxDaysHolding: number } | null;
 };
 
-const STATE_META: Record<Exclude<CashIndicatorState, "CLEAR">, { label: string; tone: "neutral" | "amber" | "critical" }> = {
+// CLEAR nunca llega a CashStateCard (los llamadores lo filtran antes) — se
+// incluye igual para que el índice sea total y no dependa de un `!` o un
+// fallback silencioso si algún día cambia el filtrado.
+export const STATE_META: Record<CashIndicatorState, { label: string; tone: "neutral" | "amber" | "critical" }> = {
   ACCUMULATING: { label: "Acumulando", tone: "neutral" },
   APPROACHING: { label: "Cerca del umbral", tone: "neutral" },
   READY: { label: "Listo para depositar", tone: "amber" },
   OVERDUE: { label: "Retenido de más", tone: "amber" },
   CRITICAL: { label: "Crítico", tone: "critical" },
   IN_TRANSIT_ONLY: { label: "En tránsito", tone: "neutral" },
+  CLEAR: { label: "Al día", tone: "neutral" },
 };
 
 const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -48,42 +51,49 @@ function fmtDate(iso: string | null) {
   return new Date(iso).toLocaleDateString("es-NI", { weekday: "long", day: "2-digit", month: "short" });
 }
 
-export function CashIndicatorPanel({ branchId, isMaster, canSendDeposit }: { branchId: string | null; isMaster: boolean; canSendDeposit: boolean }) {
+/**
+ * Exclusivo de Admin de Sucursal (prompt-ajustes-finales-tesoreria.md §1):
+ * el panel dejó de instanciarse para Master — lo que Master veía acá (la
+ * sucursal peor calificada + el conteo de las demás) ahora vive en la
+ * sección "Efectivo por sucursal" de la pantalla de Tesorería, listando
+ * TODAS las sucursales sin colapsar ninguna detrás de un link.
+ */
+export function CashIndicatorPanel({ branchId, canSendDeposit }: { branchId: string | null; canSendDeposit: boolean }) {
   const [position, setPosition] = useState<CashPosition | null>(null);
-  const [branchLabel, setBranchLabel] = useState<string | null>(null);
-  const [otherBranchesFlagged, setOtherBranchesFlagged] = useState(0);
   const [showSendModal, setShowSendModal] = useState(false);
 
   const load = useCallback(async () => {
-    if (!isMaster && !branchId) return;
-    const url = isMaster ? "/api/master/treasury/cash-positions" : `/api/treasury/cash-position?branchId=${branchId}`;
-    const res = await apiFetch(url);
+    if (!branchId) return;
+    const res = await apiFetch(`/api/treasury/cash-position?branchId=${branchId}`);
     if (!res.ok) return;
     const raw = await res.json();
-    if (isMaster) {
-      const rows = unwrapApiData(raw) as Array<{ branch: { id: string; name: string }; position: CashPosition }>;
-      // Master: prioriza la de peor estado (§6, "las que están en READY u OVERDUE arriba").
-      const priority: Record<string, number> = { CRITICAL: 0, OVERDUE: 1, READY: 2, APPROACHING: 3, IN_TRANSIT_ONLY: 4, ACCUMULATING: 5, CLEAR: 6 };
-      const sorted = [...rows].sort((a, b) => (priority[a.position.state] ?? 9) - (priority[b.position.state] ?? 9));
-      const worst = sorted[0];
-      setPosition(worst ? worst.position : null);
-      setBranchLabel(worst ? worst.branch.name : null);
-      setOtherBranchesFlagged(sorted.slice(1).filter((r) => r.position.state !== "CLEAR").length);
-    } else {
-      setPosition(unwrapApiData(raw) as CashPosition);
-    }
-  }, [branchId, isMaster]);
+    setPosition(unwrapApiData(raw) as CashPosition);
+  }, [branchId]);
 
-  useOperationalPolling({ enabled: isMaster || Boolean(branchId), intervalMs: 90_000, task: load });
+  useOperationalPolling({ enabled: Boolean(branchId), intervalMs: 90_000, task: load });
 
-  if ((!isMaster && !branchId) || !position || position.state === "CLEAR") return null;
+  if (!branchId || !position || position.state === "CLEAR") return null;
 
+  return (
+    <div className="mx-3 mb-2">
+      <CashStateCard position={position} branchLabel={null}
+        onSendDeposit={canSendDeposit && (position.state === "READY" || position.state === "OVERDUE" || position.state === "CRITICAL")
+          ? () => setShowSendModal(true)
+          : null}
+      />
+      {showSendModal && (
+        <SendDepositModal branchId={branchId} pendingDeposit={position.pendingDeposit} onClose={() => setShowSendModal(false)} onSent={() => { setShowSendModal(false); void load(); }} />
+      )}
+    </div>
+  );
+}
+
+function CashStateCard({ position, branchLabel, onSendDeposit }: { position: CashPosition; branchLabel: string | null; onSendDeposit: (() => void) | null }) {
   const meta = STATE_META[position.state];
-
   return (
     <div
       className={[
-        "mx-3 mb-2 rounded-lg border px-2.5 py-2 text-[0.6875rem]",
+        "rounded-lg border px-2.5 py-2 text-[0.6875rem]",
         meta.tone === "critical" ? "border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" :
         meta.tone === "amber" ? "border-[var(--color-warning-200)] bg-[var(--color-warning-50)]" :
         "border-[var(--color-border)] bg-[var(--color-surface-alt)]",
@@ -135,20 +145,10 @@ export function CashIndicatorPanel({ branchId, isMaster, canSendDeposit }: { bra
         </p>
       )}
 
-      {canSendDeposit && !isMaster && (position.state === "READY" || position.state === "OVERDUE" || position.state === "CRITICAL") && (
-        <Button variant="secondary" size="sm" className="mt-2 w-full" icon={<Send className="h-3 w-3" />} onClick={() => setShowSendModal(true)}>
+      {onSendDeposit && (
+        <Button variant="secondary" size="sm" className="mt-2 w-full" icon={<Send className="h-3 w-3" />} onClick={onSendDeposit}>
           Enviar depósito
         </Button>
-      )}
-
-      {isMaster && (
-        <Link href="/app/master/treasury" className="mt-2 block text-center text-[0.625rem] font-semibold text-[var(--color-pay)] hover:underline">
-          {otherBranchesFlagged > 0 ? `Ver Tesorería (${otherBranchesFlagged} más con algo pendiente)` : "Ver Tesorería"}
-        </Link>
-      )}
-
-      {showSendModal && branchId && (
-        <SendDepositModal branchId={branchId} pendingDeposit={position.pendingDeposit} onClose={() => setShowSendModal(false)} onSent={() => { setShowSendModal(false); void load(); }} />
       )}
     </div>
   );

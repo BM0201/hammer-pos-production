@@ -357,10 +357,13 @@ export function AppSidebar({
 
   // Indicador de efectivo (prompt-indicador-efectivo-inteligente.md) — misma
   // sucursal activa que usa el resto de la app (getActiveBranchId), no una
-  // resuelta aparte solo para este panel.
+  // resuelta aparte solo para este panel. Exclusivo de Admin de Sucursal
+  // (prompt-ajustes-finales-tesoreria.md §1): lo que Master veía acá ahora
+  // vive en la sección "Efectivo por sucursal" de la pantalla de Tesorería,
+  // sin ninguna sucursal oculta detrás de un link.
   const cashIndicatorBranchId = getActiveBranchId(branchIds, primaryBranchId) || null;
   const capabilitySession = { globalRoles, branchMemberships };
-  const canViewCashIndicator = isMaster || (cashIndicatorBranchId !== null && canInBranch(capabilitySession, cashIndicatorBranchId, CAPABILITIES.TREASURY_VIEW_BRANCH));
+  const canViewCashIndicator = cashIndicatorBranchId !== null && canInBranch(capabilitySession, cashIndicatorBranchId, CAPABILITIES.TREASURY_VIEW_BRANCH);
   const canSendCashDeposit = cashIndicatorBranchId !== null && canInBranch(capabilitySession, cashIndicatorBranchId, CAPABILITIES.CASH_SESSION_OPERATE);
 
   /* ── Rail behavior: always starts collapsed, user expands temporarily ── */
@@ -493,9 +496,9 @@ export function AppSidebar({
         )}
       </div>
 
-      {/* ── 1.5. Indicador de efectivo (oculto colapsado / sin permiso / sin nada que reportar) ── */}
-      {!isCollapsed && canViewCashIndicator && (
-        <CashIndicatorPanel branchId={cashIndicatorBranchId} isMaster={isMaster} canSendDeposit={canSendCashDeposit} />
+      {/* ── 1.5. Indicador de efectivo — exclusivo de Admin de Sucursal (oculto colapsado / Master / sin permiso / sin nada que reportar) ── */}
+      {!isCollapsed && canViewCashIndicator && !isMaster && (
+        <CashIndicatorPanel branchId={cashIndicatorBranchId} canSendDeposit={canSendCashDeposit} />
       )}
 
       {/* ── 2. Nav (flex-1, overflow-y auto) ── */}

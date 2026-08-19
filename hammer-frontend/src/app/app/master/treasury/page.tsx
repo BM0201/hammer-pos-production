@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
+import { STATE_META, type CashPosition, type CashIndicatorState } from "@/components/navigation/cash-indicator-panel";
 
 type Branch = { id: string; code: string; name: string; cashFundAmount: string | null };
 
@@ -47,7 +48,22 @@ type Position = {
 
 type DepositPolicy = { id: string; branchId: string; thresholdAmount: string; maxDaysHolding: number };
 
+type CashPositionRow = { branch: { id: string; code: string; name: string }; position: CashPosition };
+
 const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * Orden de severidad (prompt-ajustes-finales-tesoreria.md §1/§2): la
+ * sucursal más urgente encabeza la lista. Solo estos estados cuentan como
+ * "necesita atención" — ACCUMULATING es información neutra (está juntando
+ * efectivo con normalidad), no una alerta; contarlo como pendiente producía
+ * un mensaje de alarma sin nada urgente en ningún lado (§2, la regresión
+ * reportada en el sidebar de Master, corregida acá donde ahora vive el dato).
+ */
+const STATE_PRIORITY: Record<CashIndicatorState, number> = {
+  CRITICAL: 0, OVERDUE: 1, READY: 2, APPROACHING: 3, ACCUMULATING: 4, IN_TRANSIT_ONLY: 5, CLEAR: 6,
+};
+const FLAGGED_STATES = new Set<CashIndicatorState>(["APPROACHING", "READY", "OVERDUE", "CRITICAL", "IN_TRANSIT_ONLY"]);
 
 /**
  * prompt-libro-mayor-tesoreria.md §6 — la pantalla lidera con el dinero
@@ -59,6 +75,7 @@ export default function TreasuryPage() {
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
   const [position, setPosition] = useState<Position | null>(null);
   const [policies, setPolicies] = useState<DepositPolicy[]>([]);
+  const [cashPositions, setCashPositions] = useState<CashPositionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [detailAccountId, setDetailAccountId] = useState<string | null>(null);
@@ -66,24 +83,28 @@ export default function TreasuryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [branchesRes, accountsRes, positionRes, policiesRes] = await Promise.all([
+      const [branchesRes, accountsRes, positionRes, policiesRes, cashPositionsRes] = await Promise.all([
         apiFetch("/api/master/branches"),
         apiFetch("/api/master/treasury/bank-accounts/with-balances"),
         apiFetch("/api/master/treasury/position"),
         apiFetch("/api/master/treasury/deposit-policy"),
+        apiFetch("/api/master/treasury/cash-positions"),
       ]);
       const branchesRaw = await branchesRes.json();
       const accountsRaw = await accountsRes.json();
       const positionRaw = await positionRes.json();
       const policiesRaw = await policiesRes.json();
+      const cashPositionsRaw = await cashPositionsRes.json();
       if (!branchesRes.ok) throw new Error(branchesRaw?.error?.message ?? "No se pudieron cargar las sucursales.");
       if (!accountsRes.ok) throw new Error(accountsRaw?.error?.message ?? "No se pudieron cargar las cuentas.");
       if (!positionRes.ok) throw new Error(positionRaw?.error?.message ?? "No se pudo cargar la posición.");
       if (!policiesRes.ok) throw new Error(policiesRaw?.error?.message ?? "No se pudo cargar la política de depósito.");
+      if (!cashPositionsRes.ok) throw new Error(cashPositionsRaw?.error?.message ?? "No se pudo cargar el efectivo por sucursal.");
       setBranches(unwrapApiData(branchesRaw) as Branch[]);
       setAccounts(unwrapApiData(accountsRaw) as BankAccount[]);
       setPosition(unwrapApiData(positionRaw) as Position);
       setPolicies(unwrapApiData(policiesRaw) as DepositPolicy[]);
+      setCashPositions(unwrapApiData(cashPositionsRaw) as CashPositionRow[]);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cargar Tesorería.");
     } finally {
@@ -204,6 +225,28 @@ export default function TreasuryPage() {
               {position.accountsPendingOpening.length} cuenta(s) sin saldo de apertura declarado — su saldo de abajo es solo el movimiento desde que se cargaron, no el real. Configuración → cargar apertura.
             </p>
           )}
+        </Card>
+      )}
+
+      {/* Efectivo por sucursal (prompt-ajustes-finales-tesoreria.md §1) — lo que antes vivía
+          comprimido en el sidebar de Master, acá sin ninguna sucursal oculta detrás de un link. */}
+      {cashPositions.length > 0 && (
+        <Card className="p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Wallet className="h-4 w-4 text-[var(--color-master-600)]" />
+              <h2 className="text-sm font-semibold text-[var(--color-text)]">Efectivo por sucursal</h2>
+            </div>
+            {(() => {
+              const urgentCount = cashPositions.filter((r) => FLAGGED_STATES.has(r.position.state)).length;
+              return urgentCount > 0 ? <Badge variant="warning">{urgentCount} necesitan atención</Badge> : null;
+            })()}
+          </div>
+          <div className="space-y-1.5">
+            {[...cashPositions]
+              .sort((a, b) => STATE_PRIORITY[a.position.state] - STATE_PRIORITY[b.position.state])
+              .map((row) => <CashPositionRowItem key={row.branch.id} branch={row.branch} position={row.position} />)}
+          </div>
         </Card>
       )}
 
@@ -363,6 +406,36 @@ function PositionTile({ icon: Icon, label, data, rate, amber }: {
           + ${usd.toLocaleString("es-NI", { minimumFractionDigits: 2 })} {rate ? `≈ ${fmt(usd * rate.rate)} (tasa ${rate.rate})` : "(sin tasa cargada)"}
         </p>
       )}
+    </div>
+  );
+}
+
+function CashPositionRowItem({ branch, position }: { branch: { id: string; code: string; name: string }; position: CashPosition }) {
+  const meta = STATE_META[position.state];
+  return (
+    <div
+      className={[
+        "flex items-center justify-between gap-3 rounded-lg border p-3",
+        meta.tone === "critical" ? "border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" :
+        meta.tone === "amber" ? "border-[var(--color-warning-200)] bg-[var(--color-warning-50)]" :
+        "border-[var(--color-border)] bg-[var(--color-surface)]",
+      ].join(" ")}
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-[var(--color-text)]">{branch.name}</span>
+          <Badge variant={meta.tone === "critical" ? "danger" : meta.tone === "amber" ? "warning" : "neutral"}>{meta.label}</Badge>
+        </div>
+        <p className="text-xs text-[var(--color-text-muted)]">
+          En caja hoy {fmt(position.cashInDrawerToday)} · Acumulado {fmt(position.accumulatedAmount)}
+          {position.inTransitAmount > 0.01 ? ` · En tránsito ${fmt(position.inTransitAmount)}` : ""}
+        </p>
+      </div>
+      <div className="shrink-0 text-right">
+        <p className="text-xs text-[var(--color-text-muted)]">Para depositar</p>
+        <p className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{fmt(position.pendingDeposit)}</p>
+        {position.pendingDepositNote && <p className="text-[0.6875rem] italic text-[var(--color-text-soft)]">{position.pendingDepositNote}</p>}
+      </div>
     </div>
   );
 }
