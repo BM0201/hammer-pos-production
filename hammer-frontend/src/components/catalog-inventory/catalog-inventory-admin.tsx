@@ -3200,12 +3200,42 @@ function PricingPanel({
     return tokens.every((token) => text.includes(token));
   }), [focusedProductId, productFilter, products]);
 
-  // Re-sync draft when products reference changes (after external load)
+  // Re-sync draft when products reference changes (after external load).
+  //
+  // Antes esto reconstruía los drafts DESDE CERO en cada recarga (guardar un
+  // precio/costo, buscar, filtrar…), borrando cualquier valor que el usuario
+  // estuviera tecleando en OTRA fila sin guardar: el "se resetea solo" que
+  // reportó el usuario. Ahora se fusiona: se toman los valores del servidor
+  // pero se conservan las celdas de precio marcadas dirty y los costos que el
+  // usuario cambió y todavía no guardó.
   useEffect(() => {
     if (productsRef.current !== products) {
       productsRef.current = products;
-      setDraft(buildPricingDraft(products, branches));
-      setGlobalCostDraft(Object.fromEntries(products.map((p) => [p.id, p.globalCost != null ? String(p.globalCost) : ""])));
+      const serverDraft = buildPricingDraft(products, branches);
+      setDraft((prev) => {
+        for (const product of products) {
+          const prevRow = prev[product.id];
+          if (!prevRow) continue;
+          for (const branch of branches) {
+            if (prevRow[branch.id]?.dirty) {
+              serverDraft[product.id][branch.id] = prevRow[branch.id];
+            }
+          }
+        }
+        return serverDraft;
+      });
+      setGlobalCostDraft((prev) => {
+        const next: Record<string, string> = {};
+        for (const product of products) {
+          const serverValue = product.globalCost != null ? String(product.globalCost) : "";
+          const prevValue = prev[product.id];
+          // El usuario tecleó algo distinto al valor del servidor y aún no lo
+          // guardó → se conserva su edición en curso; si coincide, se toma el
+          // valor del servidor (ya guardado / actualizado).
+          next[product.id] = prevValue !== undefined && prevValue !== serverValue ? prevValue : serverValue;
+        }
+        return next;
+      });
     }
   }, [products, branches]);
 
@@ -3383,7 +3413,22 @@ function PricingPanel({
                     ))}
                   </td>
                   <td className="py-1.5">
-                    {onSaveGlobalCost ? (
+                    {/* Miembro DERIVADO de una fusión: el costo NO se edita acá.
+                        En una fusión hay UN material físico → UN solo costo, el
+                        de la unidad base; el del derivado se calcula solo (base
+                        × factor). Dejar el campo editable hacía que el usuario
+                        tecleara un costo que el sistema ignora al vender y que
+                        "se reseteaba solo" tras recargar — el bug reportado.
+                        Se muestra el costo derivado en solo lectura y se guía a
+                        editar la unidad base. */}
+                    {p.stockConversion && !p.stockConversion.isCanonical ? (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-mono text-xs">{formatMoneyOrNd(row.effectiveCost)}</span>
+                        <span className="text-[0.6rem] text-[var(--color-text-muted)]">
+                          Derivado de {p.stockConversion.baseUnit} × {Number(p.stockConversion.conversionFactor)} · edítalo en la unidad base
+                        </span>
+                      </div>
+                    ) : onSaveGlobalCost ? (
                       <div className="flex items-center gap-1">
                         <Input
                           className={`h-7 text-xs flex-1 ${globalCostDraft[p.id] !== (p.globalCost != null ? String(p.globalCost) : "") ? "ring-2 ring-amber-300/60" : ""}`}

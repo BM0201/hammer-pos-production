@@ -261,6 +261,31 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     : [];
   const sharedBalanceByBranchProduct = new Map(sharedInventoryBalances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]));
 
+  /* ── Costo base del canónico por fusión ──
+     En una fusión hay UN material físico → UNA base de costo: la del
+     canónico. El costo de un miembro DERIVADO se deriva SIEMPRE del canónico
+     × factor (ver modules/catalog/effective-pricing.ts → resolveFusionMemberCost).
+     Antes `baseCost` salía de los campos propios del miembro derivado
+     (averageCost/globalCost/lastPurchaseCost), que la fusión ignora: el
+     catálogo mostraba un costo distinto al que realmente se usa al vender
+     (ej. LATA con globalCost=1.00 mientras el METRO derivaba otro valor del
+     canónico), y cualquier costo tecleado en un miembro derivado "no pegaba".
+     Acá se resuelve el costo global del canónico y luego cada derivado lo
+     escala por su propio factor, quedando consistente con la venta. */
+  const canonicalCostByProductId = new Map<string, number>();
+  if (inventoryProductIds.length > 0) {
+    const canonicalProducts = await prisma.product.findMany({
+      where: { id: { in: inventoryProductIds } },
+      select: { id: true, averageCost: true, globalCost: true, lastPurchaseCost: true },
+    });
+    for (const canonicalProduct of canonicalProducts) {
+      canonicalCostByProductId.set(
+        canonicalProduct.id,
+        decimalToNumber(canonicalProduct.averageCost ?? canonicalProduct.globalCost ?? canonicalProduct.lastPurchaseCost),
+      );
+    }
+  }
+
   filteredProducts = filteredProducts.map((product) => {
     const conversion = conversionByProductId.get(product.id) ?? null;
     const inventoryProductId = conversion?.canonicalProductId ?? product.id;
@@ -288,7 +313,14 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     const displayedClosedPackageQty = selectedShared?.closedPackageQuantity ?? aggregateClosedPackageQty;
     const displayedLooseUnitQty = selectedShared?.looseUnitQuantity ?? aggregateLooseUnitQty;
     const displayedWac = selectedShared?.weightedAverageCost ?? (aggregateBaseQty.gt(0) ? aggregateInventoryValue.div(aggregateBaseQty) : null);
-    const productCost = decimalToNumber(product.averageCost ?? product.globalCost ?? product.lastPurchaseCost);
+    // Miembro DERIVADO de fusión: el costo sale del canónico × factor, no de
+    // sus propios campos (que la fusión ignora). El canónico y los productos
+    // sin fusión conservan su costo propio.
+    const isDerivedFusionMember = Boolean(conversion && !conversion.isCanonical);
+    const derivedFactor = conversion ? Number(conversion.conversionFactor) : 1;
+    const productCost = isDerivedFusionMember
+      ? (canonicalCostByProductId.get(inventoryProductId) ?? 0) * (Number.isFinite(derivedFactor) ? derivedFactor : 1)
+      : decimalToNumber(product.averageCost ?? product.globalCost ?? product.lastPurchaseCost);
     const sharedStock = conversion && displayedBaseQty
         ? formatDualStock({
             baseQuantity: displayedBaseQty,
@@ -311,6 +343,9 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         branchesWithStock: sharedBalances.filter((balance) => decimalToNumber(balance.quantityOnHand) > 0).length,
         inventoryValue: Number(aggregateInventoryValue),
         baseCost: productCost,
+        // El costo derivado del canónico también decide si el miembro figura
+        // como "sin costo": un derivado con canónico válido ya no se marca así.
+        hasNoCost: productCost <= 0,
         weightedAverageCostEstimate: displayedWac ? Number(displayedWac) : null,
         hasZeroStock: displayedBaseQty.eq(0),
         hasNegativeStock: displayedBaseQty.lt(0),
