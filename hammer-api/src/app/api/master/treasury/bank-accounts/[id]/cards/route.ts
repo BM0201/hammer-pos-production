@@ -12,6 +12,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const { id } = await params;
     const session = await getCurrentSession();
     assertAuthenticated(session);
+    assertMaster(session);
     return ok(await listTreasuryCards(id));
   } catch (error) {
     return toHttpErrorResponse(error);

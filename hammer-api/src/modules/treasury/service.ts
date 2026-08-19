@@ -953,10 +953,10 @@ export async function updateTreasuryCard(id: string, input: {
   return card;
 }
 
-/** Tarjetas activas de una cuenta (o de todas, si no se pasa accountId). */
-export async function listTreasuryCards(accountId?: string) {
+/** Tarjetas activas de una cuenta. */
+export async function listTreasuryCards(accountId: string) {
   return prisma.treasuryCard.findMany({
-    where: { isActive: true, ...(accountId ? { accountId } : {}) },
+    where: { accountId, isActive: true },
     orderBy: [{ accountId: "asc" }, { label: "asc" }],
   });
 }
