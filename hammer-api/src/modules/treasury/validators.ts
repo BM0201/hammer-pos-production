@@ -106,15 +106,28 @@ export const updateTreasuryCardSchema = z.object({
  * Baja el saldo esperado de esa cuenta (fila OUT del libro mayor).
  * allowNegativeBalance solo para sobregiro/crédito reales.
  */
-export const recordAccountPaymentSchema = z.object({
-  accountId: z.string().cuid(),
-  amount: z.coerce.number().positive(),
-  entryType: z.enum(["SUPPLIER_PAYMENT", "PAYROLL", "EXPENSE"]),
-  counterpartyType: z.enum(["CUSTOMER", "SUPPLIER", "EMPLOYEE", "ACQUIRER", "INTERNAL", "ADJUSTMENT"]).default("SUPPLIER"),
-  counterpartyName: z.string().max(150).optional().nullable(),
-  cardId: z.string().cuid().optional().nullable(),
-  occurredAt: z.coerce.date().optional(),
-  reference: z.string().max(100).optional().nullable(),
-  notes: z.string().max(500).optional().nullable(),
-  allowNegativeBalance: z.boolean().optional(),
-});
+export const recordAccountPaymentSchema = z
+  .object({
+    accountId: z.string().cuid(),
+    amount: z.coerce.number().positive(),
+    entryType: z.enum(["SUPPLIER_PAYMENT", "PAYROLL", "EXPENSE"]),
+    counterpartyType: z.enum(["CUSTOMER", "SUPPLIER", "EMPLOYEE", "ACQUIRER", "INTERNAL", "ADJUSTMENT"]).default("SUPPLIER"),
+    counterpartyName: z.string().max(150).optional().nullable(),
+    cardId: z.string().cuid().optional().nullable(),
+    occurredAt: z.coerce.date().optional(),
+    reference: z.string().max(100).optional().nullable(),
+    notes: z.string().max(500).optional().nullable(),
+    allowNegativeBalance: z.boolean().optional(),
+    // Obligatoria cuando allowNegativeBalance es true — ver superRefine abajo.
+    // El mínimo de 10 caracteres es deliberado: obliga a escribir una razón, no una letra.
+    overrideReason: z.string().min(10).max(300).optional().nullable(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.allowNegativeBalance && !data.overrideReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["overrideReason"],
+        message: "overrideReason es obligatorio (mínimo 10 caracteres) al usar allowNegativeBalance.",
+      });
+    }
+  });

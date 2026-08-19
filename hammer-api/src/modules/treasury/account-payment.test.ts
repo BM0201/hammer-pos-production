@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
 import { recordAccountPaymentTx } from "@/modules/treasury/service";
+import { recordAccountPaymentSchema } from "@/modules/treasury/validators";
 
 /**
  * Pagos salientes desde una cuenta registrada (proveedor/planilla/gasto) —
@@ -173,4 +174,33 @@ test("el lock se toma incluso con allowNegativeBalance", async () => {
   const { tx, calls } = createFakeTx({ accounts: [{ ...BANK, openingBalance: 1000 }] });
   await recordAccountPaymentTx(tx, { accountId: "bank-1", amount: 1500, entryType: "SUPPLIER_PAYMENT", counterpartyType: "SUPPLIER", allowNegativeBalance: true, createdByUserId: "u" });
   assert.ok(calls.includes("lock"), "el lock debe tomarse aunque el guard de saldo se salte con el override");
+});
+
+const SCHEMA_BASE = {
+  accountId: "cabcdefghijklmnop",
+  amount: 100,
+  entryType: "SUPPLIER_PAYMENT" as const,
+  counterpartyType: "SUPPLIER" as const,
+};
+
+test("allowNegativeBalance: true sin overrideReason — el schema rechaza", () => {
+  const result = recordAccountPaymentSchema.safeParse({ ...SCHEMA_BASE, allowNegativeBalance: true });
+  assert.equal(result.success, false);
+});
+
+test("allowNegativeBalance: true con razón de 10+ caracteres — el schema acepta", () => {
+  const result = recordAccountPaymentSchema.safeParse({
+    ...SCHEMA_BASE,
+    allowNegativeBalance: true,
+    overrideReason: "sobregiro autorizado por gerencia",
+  });
+  assert.equal(result.success, true);
+});
+
+test("overrideReason presente sin allowNegativeBalance — acepta (es solo una nota, no habilita nada)", () => {
+  const result = recordAccountPaymentSchema.safeParse({
+    ...SCHEMA_BASE,
+    overrideReason: "esto no debería habilitar nada",
+  });
+  assert.equal(result.success, true);
 });

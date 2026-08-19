@@ -1009,6 +1009,7 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
   notes?: string | null;
   expensePaymentId?: string | null;
   allowNegativeBalance?: boolean;
+  overrideReason?: string | null;
   createdByUserId: string;
 }) {
   if (!OUTGOING_ENTRY_TYPES.includes(input.entryType)) {
@@ -1066,6 +1067,14 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
     }
   }
 
+  // TreasuryEntry no tiene columna para overrideReason (deuda para una
+  // migración posterior). Hasta entonces, se antepone a notes con un
+  // prefijo reconocible en vez de pisar el texto libre del operador.
+  const notes =
+    input.allowNegativeBalance && input.overrideReason
+      ? `[SOBREGIRO AUTORIZADO] ${input.overrideReason}${input.notes ? `\n${input.notes}` : ""}`
+      : (input.notes ?? null);
+
   return createTreasuryEntryTx(tx, {
     accountId: input.accountId,
     direction: "OUT",
@@ -1076,7 +1085,7 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
     cardId: input.cardId ?? null,
     occurredAt: input.occurredAt,
     reference: input.reference ?? null,
-    notes: input.notes ?? null,
+    notes,
     expensePaymentId: input.expensePaymentId ?? null,
     createdByUserId: input.createdByUserId,
   });
@@ -1094,6 +1103,7 @@ export async function recordAccountPayment(input: {
   reference?: string | null;
   notes?: string | null;
   allowNegativeBalance?: boolean;
+  overrideReason?: string | null;
   actorUserId: string;
 }) {
   const entry = await prisma.$transaction((tx) =>
@@ -1113,6 +1123,8 @@ export async function recordAccountPayment(input: {
       entryType: input.entryType,
       cardId: input.cardId ?? null,
       counterpartyName: input.counterpartyName ?? null,
+      allowNegativeBalance: input.allowNegativeBalance ?? false,
+      overrideReason: input.overrideReason ?? null,
     },
   });
   return entry;
