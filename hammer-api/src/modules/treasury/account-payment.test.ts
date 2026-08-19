@@ -17,6 +17,7 @@ function createFakeTx(opts: { accounts: FakeAccount[]; cards?: FakeCard[]; exist
   const cards = new Map((opts.cards ?? []).map((c) => [c.id, c]));
   const entries: FakeEntry[] = [];
   const seeded = opts.existingEntries ?? [];
+  const calls: string[] = [];
   let seq = 0;
 
   const tx = {
@@ -32,6 +33,7 @@ function createFakeTx(opts: { accounts: FakeAccount[]; cards?: FakeCard[]; exist
     },
     treasuryEntry: {
       aggregate: async ({ where }: { where: { accountId: string; direction: "IN" | "OUT" } }) => {
+        calls.push("aggregate");
         const created = entries.filter((e) => e.accountId === where.accountId && e.direction === where.direction).reduce((s, e) => s + Number(e.amount), 0);
         const pre = seeded.filter((e) => e.accountId === where.accountId && e.direction === where.direction).reduce((s, e) => s + e.amount, 0);
         return { _sum: { amount: new Prisma.Decimal(created + pre) } };
@@ -43,8 +45,14 @@ function createFakeTx(opts: { accounts: FakeAccount[]; cards?: FakeCard[]; exist
         return row;
       },
     },
+    // Spy del lock de fila: registra "lock" en el mismo orden que "aggregate"
+    // para que los tests puedan probar que el lock ocurre ANTES de leer el saldo.
+    $queryRaw: async (..._args: unknown[]) => {
+      calls.push("lock");
+      return [];
+    },
   };
-  return { tx: tx as unknown as Prisma.TransactionClient, entries };
+  return { tx: tx as unknown as Prisma.TransactionClient, entries, calls };
 }
 
 const BANK: FakeAccount = { id: "bank-1", type: "BANK", isActive: true, openingBalance: 10_000, currencyCode: "NIO" };
@@ -149,4 +157,20 @@ test("rechaza monto <= 0", async () => {
     () => recordAccountPaymentTx(tx, { accountId: "bank-1", amount: 0, entryType: "EXPENSE", counterpartyType: "SUPPLIER", createdByUserId: "u" }),
     /VALIDATION_ERROR/,
   );
+});
+
+test("el pago toma el lock de la cuenta antes de leer el saldo", async () => {
+  const { tx, calls } = createFakeTx({ accounts: [BANK] });
+  await recordAccountPaymentTx(tx, { accountId: "bank-1", amount: 100, entryType: "EXPENSE", counterpartyType: "SUPPLIER", createdByUserId: "u" });
+  const lockIndex = calls.indexOf("lock");
+  const firstAggregateIndex = calls.indexOf("aggregate");
+  assert.notEqual(lockIndex, -1, "el lock debe tomarse");
+  assert.notEqual(firstAggregateIndex, -1, "el guard debe leer el saldo");
+  assert.ok(lockIndex < firstAggregateIndex, "el lock debe tomarse antes del primer aggregate");
+});
+
+test("el lock se toma incluso con allowNegativeBalance", async () => {
+  const { tx, calls } = createFakeTx({ accounts: [{ ...BANK, openingBalance: 1000 }] });
+  await recordAccountPaymentTx(tx, { accountId: "bank-1", amount: 1500, entryType: "SUPPLIER_PAYMENT", counterpartyType: "SUPPLIER", allowNegativeBalance: true, createdByUserId: "u" });
+  assert.ok(calls.includes("lock"), "el lock debe tomarse aunque el guard de saldo se salte con el override");
 });

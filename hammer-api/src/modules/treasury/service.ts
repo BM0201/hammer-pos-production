@@ -1042,6 +1042,15 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
     }
   }
 
+  // Lock de fila: serializa los pagos concurrentes sobre esta misma cuenta.
+  // Sin esto, dos pagos simultaneos leen el mismo saldo, ambos pasan el guard
+  // y ambos insertan su fila OUT — el saldo esperado queda negativo por una
+  // ruta que el guard cree haber cerrado. Se toma siempre, incluso con
+  // allowNegativeBalance: un pago con override que corre en paralelo con uno
+  // sin override debe serializarse igual, o el override "ayuda" al otro a
+  // violar su propio guard.
+  await tx.$queryRaw`SELECT id FROM "TreasuryAccount" WHERE id = ${input.accountId} FOR UPDATE`;
+
   if (!input.allowNegativeBalance) {
     const [inAgg, outAgg] = await Promise.all([
       tx.treasuryEntry.aggregate({ where: { accountId: input.accountId, direction: "IN" }, _sum: { amount: true } }),
