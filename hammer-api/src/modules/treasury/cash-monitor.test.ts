@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { projectThresholdReach, detectBelowTypicalCash, computeCashIndicatorState } from "@/modules/treasury/cash-monitor";
+import { projectThresholdReach, detectBelowTypicalCash, computeCashIndicatorState, computeAmountToDeposit } from "@/modules/treasury/cash-monitor";
 
 /**
  * prompt-indicador-efectivo-inteligente.md §8 — pruebas sobre las
@@ -167,4 +167,34 @@ test("con poca historia para ese día de semana (menos de 3 muestras) → no se 
     todayAmount: 100, weekday: 2, meanForWeekday: 5000, stddevForWeekday: 1000, samplesForWeekday: 2,
   });
   assert.equal(anomaly, null);
+});
+
+// ── §2.1 · Para depositar (prompt-correccion-ubicacion-formula-datos-prueba.md) ──
+
+test("Prueba 1 (doc): hoy=0, acumulado=100, sin fondo → amount:100, floorConfigured:false", () => {
+  const result = computeAmountToDeposit({ cashInDrawerToday: 0, accumulatedAmount: 100, cashFloor: null });
+  assert.equal(result.amount, 100);
+  assert.equal(result.floorConfigured, false);
+});
+
+test("Prueba 2 (doc): fondo configurado en 150 (>= el total) → amount:0, floorConfigured:true", () => {
+  const result = computeAmountToDeposit({ cashInDrawerToday: 0, accumulatedAmount: 100, cashFloor: 150 });
+  assert.equal(result.amount, 0);
+  assert.equal(result.floorConfigured, true);
+});
+
+test("Prueba 3 (doc): fondo en 30 → amount:70", () => {
+  const result = computeAmountToDeposit({ cashInDrawerToday: 0, accumulatedAmount: 100, cashFloor: 30 });
+  assert.equal(result.amount, 70);
+  assert.equal(result.floorConfigured, true);
+});
+
+test("computeAmountToDeposit: suma SIEMPRE los dos términos, hoy y acumulado juntos", () => {
+  const result = computeAmountToDeposit({ cashInDrawerToday: 5000, accumulatedAmount: 12000, cashFloor: null });
+  assert.equal(result.amount, 17000);
+});
+
+test("computeAmountToDeposit: el resultado nunca es negativo aunque el fondo supere el total", () => {
+  const result = computeAmountToDeposit({ cashInDrawerToday: 10, accumulatedAmount: 5, cashFloor: 10000 });
+  assert.equal(result.amount, 0);
 });

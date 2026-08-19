@@ -21,6 +21,32 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/* ── §2.1 · Para depositar — pura, sin DB ────────────────────────────── */
+
+/**
+ * "Para depositar" tiene que incluir SIEMPRE los tres términos: lo que hay
+ * hoy en la sesión abierta MÁS lo acumulado de declaraciones previas, menos
+ * el fondo de caja (prompt-correccion-ubicacion-formula-datos-prueba.md
+ * C2/§2.2). Extraída como función propia y con nombre — antes vivía inline
+ * dentro de getBranchCashPosition, donde un futuro cambio en el orden de
+ * los términos no tenía ningún test que lo pescara.
+ *
+ * cashFloor null = sin configurar: se muestra el total completo, nunca se
+ * inventa un descuento (floorConfigured en false dispara la nota "sin fondo
+ * configurado" en la interfaz).
+ */
+export function computeAmountToDeposit(input: {
+  cashInDrawerToday: number;
+  accumulatedAmount: number;
+  cashFloor: number | null;
+}): { amount: number; floorConfigured: boolean } {
+  const total = round2(input.cashInDrawerToday + input.accumulatedAmount);
+  if (input.cashFloor === null) {
+    return { amount: total, floorConfigured: false };
+  }
+  return { amount: Math.max(0, round2(total - input.cashFloor)), floorConfigured: true };
+}
+
 /* ── §2.2 · La proyección — pura, sin DB ─────────────────────────────── */
 
 export type ThresholdProjection = {
@@ -262,13 +288,13 @@ export async function getBranchCashPosition(branchId: string, now: Date = new Da
   const oldestRetainedAt = retainedDeclarations[0]?.createdAt ?? null;
   const daysSinceOldestRetained = oldestRetainedAt ? Math.floor((now.getTime() - oldestRetainedAt.getTime()) / MS_PER_DAY) : 0;
 
-  // "Para depositar" descuenta el fondo de caja. Sin cashFundAmount
-  // configurado, todo aparece como pendiente — conservador, con la nota
-  // que evita que el panel finja precisión que no tiene (§2.1).
   const cashFundAmount = branch.cashFundAmount === null ? null : Number(branch.cashFundAmount);
-  const rawTotal = round2(cashInDrawerToday + accumulatedAmount);
-  const pendingDeposit = cashFundAmount === null ? rawTotal : Math.max(0, round2(rawTotal - cashFundAmount));
-  const pendingDepositNote = cashFundAmount === null ? "sin fondo configurado" : null;
+  const { amount: pendingDeposit, floorConfigured } = computeAmountToDeposit({
+    cashInDrawerToday,
+    accumulatedAmount,
+    cashFloor: cashFundAmount,
+  });
+  const pendingDepositNote = floorConfigured ? null : "sin fondo configurado";
 
   const state = computeCashIndicatorState({
     accumulatedAmount,

@@ -4,6 +4,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { headers } from "next/headers";
 import { ToastContainer } from "@/components/ui/toast";
+import { TestEnvironmentBanner } from "@/components/layout/test-environment-banner";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -49,6 +50,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             __html: `if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'}).then(function(reg){reg.update();}).catch(function(){});}`,
           }}
         />
+        <TestEnvironmentBanner />
         {children}
         <ToastContainer />
       </body>
