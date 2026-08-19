@@ -3392,7 +3392,7 @@ function PricingPanel({
             {filteredProducts.map((p) => {
               if (!activeBranch) return null;
               const row = buildBranchPricingCostRow(p, activeBranch);
-              const cell = draft[p.id]?.[activeBranch.id] ?? { cost: "", price: "", dirty: false };
+              const cell = draft[p.id]?.[activeBranch.id] ?? { price: "", dirty: false };
               const priceKey = `${p.id}-${activeBranch.id}-price`;
               const hasDirty = Boolean(cell.dirty);
               const isMissing = row.effectivePrice === null;

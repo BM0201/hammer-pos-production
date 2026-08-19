@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Landmark, Plus, X, Check, RefreshCcw, PiggyBank, Wallet, Vault, Users, ArrowLeftRight, ChevronRight, AlarmClock, ListFilter } from "lucide-react";
+import { Landmark, Plus, X, Check, RefreshCcw, PiggyBank, Wallet, Vault, Users, ArrowLeftRight, ChevronRight, AlarmClock, ListFilter, CreditCard, Banknote } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,16 @@ type TreasuryAccountBalance = {
   pendingOpening: boolean;
 };
 
+type TreasuryCard = {
+  id: string;
+  accountId: string;
+  label: string;
+  brand: string | null;
+  last4: string | null;
+  cardType: "DEBIT" | "CREDIT";
+  isActive: boolean;
+};
+
 type BankAccount = {
   id: string;
   type: AccountType;
@@ -35,6 +45,7 @@ type BankAccount = {
   owner: string | null;
   acceptsCustomerPayments: boolean;
   balance: TreasuryAccountBalance;
+  cards?: TreasuryCard[];
 };
 
 type Position = {
@@ -295,6 +306,9 @@ export default function TreasuryPage() {
           </div>
         )}
       </Card>
+
+      {/* Tarjetas ligadas + pagos SALIENTES desde una cuenta registrada */}
+      <AccountPaymentsPanel accounts={bankAccountsOnly} onChanged={() => void load()} />
 
       {/* Cuentas de tesorería no-bancarias (SETTLEMENT/CUSTODY/SAFE) — de solo lectura salvo SAFE, que Master crea a mano */}
       {otherAccounts.length > 0 && (
@@ -1029,5 +1043,202 @@ function ConfirmDepositForm({ custody, bankAccounts, onClose, onConfirmed }: { c
         <Button type="submit" variant="success" loading={saving} className="w-full" icon={<Check className="h-4 w-4" />}>Confirmar depósito</Button>
       </form>
     </div>
+  );
+}
+
+
+
+/**
+ * Tarjetas ligadas a una cuenta + registro de pagos que SALEN de esa cuenta
+ * (proveedor, planilla, gasto). Es la contraparte del cobro: el cobro entra
+ * por venta, el pago sale por acá y baja el saldo esperado de la MISMA cuenta.
+ * "Esperado" porque Hammer no se conecta al banco — refleja lo que el negocio
+ * registró, no el extracto bancario.
+ */
+function AccountPaymentsPanel({ accounts, onChanged }: { accounts: BankAccount[]; onChanged: () => void }) {
+  const [accountId, setAccountId] = useState("");
+  const [entryType, setEntryType] = useState<"SUPPLIER_PAYMENT" | "PAYROLL" | "EXPENSE">("SUPPLIER_PAYMENT");
+  const [cardId, setCardId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [counterpartyName, setCounterpartyName] = useState("");
+  const [reference, setReference] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [showAddCard, setShowAddCard] = useState(false);
+
+  const account = accounts.find((a) => a.id === accountId) ?? null;
+  const cards = account?.cards ?? [];
+  const cardType = entryType === "PAYROLL" ? "EMPLOYEE" : "SUPPLIER";
+
+  async function submitPayment(event: React.FormEvent) {
+    event.preventDefault();
+    if (!accountId) { toast.error("Selecciona la cuenta de la que sale el pago."); return; }
+    const numeric = Number(amount);
+    if (!Number.isFinite(numeric) || numeric <= 0) { toast.error("El monto debe ser mayor que 0."); return; }
+    setSaving(true);
+    try {
+      const res = await apiFetch("/api/master/treasury/payments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId,
+          amount: numeric,
+          entryType,
+          counterpartyType: cardType,
+          counterpartyName: counterpartyName.trim() || null,
+          cardId: cardId || null,
+          reference: reference.trim() || null,
+          notes: notes.trim() || null,
+        }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar el pago.");
+      toast.success("Pago registrado. El saldo de la cuenta bajó.");
+      setAmount(""); setCounterpartyName(""); setReference(""); setNotes(""); setCardId("");
+      onChanged();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <Banknote className="h-4 w-4 text-[var(--color-master-600)]" />
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Pagos desde cuentas</h2>
+      </div>
+      <p className="mb-3 text-xs text-[var(--color-text-muted)]">
+        Registra un pago a proveedor, planilla o gasto que sale de una cuenta registrada — baja su saldo esperado. Si se paga con una tarjeta ligada a la cuenta, queda el rastro de con cuál.
+      </p>
+
+      {accounts.length === 0 ? (
+        <p className="py-4 text-center text-sm text-[var(--color-text-muted)]">Agrega una cuenta bancaria primero.</p>
+      ) : (
+        <form onSubmit={submitPayment} className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Cuenta de origen</label>
+              <select className="hm-input w-full" value={accountId} onChange={(e) => { setAccountId(e.target.value); setCardId(""); }} required>
+                <option value="">Selecciona una cuenta…</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.bankName} · {a.owner ?? a.accountAlias} · {a.accountNumber}
+                    {a.balance.pendingOpening ? " (pendiente de apertura)" : ` · ${a.currencyCode === "USD" ? "$" : "C$"}${a.balance.balance.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Tipo de pago</label>
+              <select className="hm-input w-full" value={entryType} onChange={(e) => setEntryType(e.target.value as typeof entryType)}>
+                <option value="SUPPLIER_PAYMENT">Proveedor</option>
+                <option value="PAYROLL">Planilla</option>
+                <option value="EXPENSE">Gasto</option>
+              </select>
+            </div>
+          </div>
+
+          {account && (
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-text-muted)]">
+                  <CreditCard className="h-3.5 w-3.5" /> Tarjetas de esta cuenta
+                </div>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setShowAddCard((v) => !v)} icon={<Plus className="h-3.5 w-3.5" />}>
+                  {showAddCard ? "Cancelar" : "Agregar tarjeta"}
+                </Button>
+              </div>
+              {cards.length === 0 ? (
+                <p className="text-xs text-[var(--color-text-muted)]">Sin tarjetas ligadas. El pago se registra como transferencia/efectivo de la cuenta.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => setCardId("")}
+                    className={["rounded-md border px-2.5 py-1 text-xs", cardId === "" ? "border-[var(--color-master-500)] bg-[var(--color-master-50)] font-semibold" : "border-[var(--color-border)]"].join(" ")}>
+                    Sin tarjeta
+                  </button>
+                  {cards.map((c) => (
+                    <button key={c.id} type="button" onClick={() => setCardId(c.id)}
+                      className={["rounded-md border px-2.5 py-1 text-xs", cardId === c.id ? "border-[var(--color-master-500)] bg-[var(--color-master-50)] font-semibold" : "border-[var(--color-border)]"].join(" ")}>
+                      {c.label}{c.last4 ? ` ··${c.last4}` : ""} <Badge variant="neutral">{c.cardType === "CREDIT" ? "Crédito" : "Débito"}</Badge>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {showAddCard && (
+                <AddCardForm accountId={account.id} onSaved={() => { setShowAddCard(false); onChanged(); }} />
+              )}
+            </div>
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Monto</label>
+              <Input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">{entryType === "PAYROLL" ? "Empleado" : "Proveedor / beneficiario"}</label>
+              <Input value={counterpartyName} onChange={(e) => setCounterpartyName(e.target.value)} placeholder="Nombre" />
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Referencia</label>
+              <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="No. de factura / comprobante" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Notas</label>
+              <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </div>
+          </div>
+          <Button type="submit" variant="success" loading={saving} className="w-full sm:w-auto" icon={<Check className="h-4 w-4" />}>Registrar pago</Button>
+        </form>
+      )}
+    </Card>
+  );
+}
+
+function AddCardForm({ accountId, onSaved }: { accountId: string; onSaved: () => void }) {
+  const [label, setLabel] = useState("");
+  const [brand, setBrand] = useState("");
+  const [last4, setLast4] = useState("");
+  const [cardType, setCardType] = useState<"DEBIT" | "CREDIT">("DEBIT");
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!label.trim()) { toast.error("Ponle un nombre a la tarjeta."); return; }
+    if (last4 && !/^\d{4}$/.test(last4)) { toast.error("Los últimos 4 deben ser 4 dígitos."); return; }
+    setSaving(true);
+    try {
+      const res = await apiFetch(`/api/master/treasury/bank-accounts/${accountId}/cards`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: label.trim(), brand: brand.trim() || null, last4: last4 || null, cardType }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo agregar la tarjeta.");
+      toast.success("Tarjeta agregada.");
+      setLabel(""); setBrand(""); setLast4(""); setCardType("DEBIT");
+      onSaved();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo agregar la tarjeta.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-3 grid gap-2 border-t border-[var(--color-border)] pt-3 sm:grid-cols-4">
+      <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Nombre (ej. BAC Empresarial)" className="sm:col-span-2" />
+      <Input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="Marca (VISA…)" />
+      <Input value={last4} onChange={(e) => setLast4(e.target.value)} placeholder="Últimos 4" maxLength={4} inputMode="numeric" />
+      <select className="hm-input" value={cardType} onChange={(e) => setCardType(e.target.value as "DEBIT" | "CREDIT")}>
+        <option value="DEBIT">Débito</option>
+        <option value="CREDIT">Crédito</option>
+      </select>
+      <Button type="submit" variant="secondary" size="sm" loading={saving} className="sm:col-span-3" icon={<Plus className="h-3.5 w-3.5" />}>Guardar tarjeta</Button>
+    </form>
   );
 }

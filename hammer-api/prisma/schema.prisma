@@ -419,63 +419,63 @@ model User {
   updatedAt          DateTime  @updatedAt
 
   userBranchRoles             UserBranchRole[]
-  openedSessions              CashSession[]            @relation("CashSessionOpenedBy")
-  closedSessions              CashSession[]            @relation("CashSessionClosedBy")
-  reviewedCashSessions        CashSession[]            @relation("CashSessionReviewedBy")
-  cashSessionOperators        CashSessionOperator[]    @relation("CashSessionOperatorUser")
-  assignedCashOperators       CashSessionOperator[]    @relation("CashSessionOperatorAssignedBy")
-  createdCashMovements        CashMovement[]           @relation("CashMovementCreatedBy")
-  approvedCashMovements       CashMovement[]           @relation("CashMovementApprovedBy")
+  openedSessions              CashSession[]                @relation("CashSessionOpenedBy")
+  closedSessions              CashSession[]                @relation("CashSessionClosedBy")
+  reviewedCashSessions        CashSession[]                @relation("CashSessionReviewedBy")
+  cashSessionOperators        CashSessionOperator[]        @relation("CashSessionOperatorUser")
+  assignedCashOperators       CashSessionOperator[]        @relation("CashSessionOperatorAssignedBy")
+  createdCashMovements        CashMovement[]               @relation("CashMovementCreatedBy")
+  approvedCashMovements       CashMovement[]               @relation("CashMovementApprovedBy")
   confirmedBankDeposits       BankDeposit[]
   declaredCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationDeclaredBy")
   handOverCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationHandOverUser")
   carriedCashDeposits         CashDestinationDeclaration[] @relation("CashDestinationDepositCarrier")
-  heldTreasuryAccounts        TreasuryAccount[]             @relation("TreasuryAccountHolder")
-  createdTreasuryEntries      TreasuryEntry[]               @relation("TreasuryEntryCreatedBy")
-  createdExchangeRates        ExchangeRate[]                @relation("ExchangeRateCreatedBy")
-  openedOperationalDays       OperationalDay[]         @relation("OperationalDayOpenedBy")
-  sweptOperationalDays        OperationalDay[]         @relation("OperationalDaySweptBy")
-  reviewedOperationalDays     OperationalDay[]         @relation("OperationalDayReviewedBy")
-  createdOrders               SaleOrder[]              @relation("SaleOrderCreatedBy")
-  requestedSaleCancellations  SaleCancellation[]       @relation("SaleCancellationRequestedBy")
-  approvedSaleCancellations   SaleCancellation[]       @relation("SaleCancellationApprovedBy")
-  requestedSaleReturns        SaleReturn[]             @relation("SaleReturnRequestedBy")
-  approvedSaleReturns         SaleReturn[]             @relation("SaleReturnApprovedBy")
-  postedRefunds               Refund[]                 @relation("RefundPostedBy")
-  approvedRefunds             Refund[]                 @relation("RefundApprovedBy")
-  createdCreditNotes          CreditNote[]             @relation("CreditNoteCreatedBy")
-  approvedCreditNotes         CreditNote[]             @relation("CreditNoteApprovedBy")
+  heldTreasuryAccounts        TreasuryAccount[]            @relation("TreasuryAccountHolder")
+  createdTreasuryEntries      TreasuryEntry[]              @relation("TreasuryEntryCreatedBy")
+  createdExchangeRates        ExchangeRate[]               @relation("ExchangeRateCreatedBy")
+  openedOperationalDays       OperationalDay[]             @relation("OperationalDayOpenedBy")
+  sweptOperationalDays        OperationalDay[]             @relation("OperationalDaySweptBy")
+  reviewedOperationalDays     OperationalDay[]             @relation("OperationalDayReviewedBy")
+  createdOrders               SaleOrder[]                  @relation("SaleOrderCreatedBy")
+  requestedSaleCancellations  SaleCancellation[]           @relation("SaleCancellationRequestedBy")
+  approvedSaleCancellations   SaleCancellation[]           @relation("SaleCancellationApprovedBy")
+  requestedSaleReturns        SaleReturn[]                 @relation("SaleReturnRequestedBy")
+  approvedSaleReturns         SaleReturn[]                 @relation("SaleReturnApprovedBy")
+  postedRefunds               Refund[]                     @relation("RefundPostedBy")
+  approvedRefunds             Refund[]                     @relation("RefundApprovedBy")
+  createdCreditNotes          CreditNote[]                 @relation("CreditNoteCreatedBy")
+  approvedCreditNotes         CreditNote[]                 @relation("CreditNoteApprovedBy")
   payments                    Payment[]
-  preparedDispatchTickets     DispatchTicket[]         @relation("DispatchPreparedBy")
-  dispatchTickets             DispatchTicket[]         @relation("DispatchProcessedBy")
-  requestedApprovals          ApprovalRequest[]        @relation("ApprovalRequestedBy")
-  resolvedApprovals           ApprovalRequest[]        @relation("ApprovalResolvedBy")
-  requestedTransfers          Transfer[]               @relation("TransferRequestedBy")
-  approvedTransfers           Transfer[]               @relation("TransferApprovedBy")
+  preparedDispatchTickets     DispatchTicket[]             @relation("DispatchPreparedBy")
+  dispatchTickets             DispatchTicket[]             @relation("DispatchProcessedBy")
+  requestedApprovals          ApprovalRequest[]            @relation("ApprovalRequestedBy")
+  resolvedApprovals           ApprovalRequest[]            @relation("ApprovalResolvedBy")
+  requestedTransfers          Transfer[]                   @relation("TransferRequestedBy")
+  approvedTransfers           Transfer[]                   @relation("TransferApprovedBy")
   auditLogs                   AuditLog[]
-  purchaseOrders              PurchaseOrder[]          @relation("PurchaseOrderCreatedBy")
-  createdDiscounts            Discount[]               @relation("DiscountCreatedBy")
-  updatedBranchRoleConfigs    BranchRoleConfig[]       @relation("BranchRoleConfigUpdatedBy")
-  updatedSystemSettings       SystemSetting[]          @relation("SystemSettingUpdatedBy")
-  createdTransportServices    TransportService[]       @relation("TransportServiceCreatedBy")
-  updatedBranchModuleConfigs  BranchModuleConfig[]     @relation("BranchModuleConfigUpdatedBy")
-  updatedReorderPolicies      StockReorderPolicy[]     @relation("ReorderPolicyUpdatedBy")
-  resolvedReorderAlerts       ReorderAlert[]           @relation("ReorderAlertResolvedBy")
-  reviewedSuggestionBatches   ReorderSuggestionBatch[] @relation("SuggestionBatchReviewedBy")
-  createdRecipes              ProductionRecipe[]       @relation("RecipeCreator")
-  createdBatches              ProductionBatch[]        @relation("BatchCreator")
+  purchaseOrders              PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
+  createdDiscounts            Discount[]                   @relation("DiscountCreatedBy")
+  updatedBranchRoleConfigs    BranchRoleConfig[]           @relation("BranchRoleConfigUpdatedBy")
+  updatedSystemSettings       SystemSetting[]              @relation("SystemSettingUpdatedBy")
+  createdTransportServices    TransportService[]           @relation("TransportServiceCreatedBy")
+  updatedBranchModuleConfigs  BranchModuleConfig[]         @relation("BranchModuleConfigUpdatedBy")
+  updatedReorderPolicies      StockReorderPolicy[]         @relation("ReorderPolicyUpdatedBy")
+  resolvedReorderAlerts       ReorderAlert[]               @relation("ReorderAlertResolvedBy")
+  reviewedSuggestionBatches   ReorderSuggestionBatch[]     @relation("SuggestionBatchReviewedBy")
+  createdRecipes              ProductionRecipe[]           @relation("RecipeCreator")
+  createdBatches              ProductionBatch[]            @relation("BatchCreator")
   userPermissions             UserPermission[]
-  grantedPermissions          UserPermission[]         @relation("PermissionGrantedBy")
-  registeredManualInvoices    SaleOrder[]              @relation("ManualInvoiceRegisteredBy")
-  documentPrintLogs           DocumentPrintLog[]       @relation("DocumentPrintedBy")
-  createdDocumentTemplates    DocumentTemplate[]       @relation("DocumentTemplateCreatedBy")
-  resolvedBrainDecisions      BrainDecision[]          @relation("BrainDecisionResolvedBy")
-  brainDecisionActionLogs     BrainDecisionActionLog[] @relation("BrainDecisionActionActor")
-  legacyBrainDecisions        BrainDecision[]          @relation("BrainDecisionLegacyUser")
-  targetedBrainDecisions      BrainDecision[]          @relation("BrainDecisionTargetUser")
+  grantedPermissions          UserPermission[]             @relation("PermissionGrantedBy")
+  registeredManualInvoices    SaleOrder[]                  @relation("ManualInvoiceRegisteredBy")
+  documentPrintLogs           DocumentPrintLog[]           @relation("DocumentPrintedBy")
+  createdDocumentTemplates    DocumentTemplate[]           @relation("DocumentTemplateCreatedBy")
+  resolvedBrainDecisions      BrainDecision[]              @relation("BrainDecisionResolvedBy")
+  brainDecisionActionLogs     BrainDecisionActionLog[]     @relation("BrainDecisionActionActor")
+  legacyBrainDecisions        BrainDecision[]              @relation("BrainDecisionLegacyUser")
+  targetedBrainDecisions      BrainDecision[]              @relation("BrainDecisionTargetUser")
   presences                   UserPresence[]
-  createdReplenishmentDrafts  ReplenishmentDraft[]     @relation("ReplenishmentDraftCreatedBy")
-  approvedReplenishmentDrafts ReplenishmentDraft[]     @relation("ReplenishmentDraftApprovedBy")
+  createdReplenishmentDrafts  ReplenishmentDraft[]         @relation("ReplenishmentDraftCreatedBy")
+  approvedReplenishmentDrafts ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
 
   @@index([globalRole, isActive])
 }
@@ -564,15 +564,15 @@ model CashSession {
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
-  physicalCashBox PhysicalCashBox       @relation(fields: [physicalCashBoxId], references: [id])
-  operationalDay  OperationalDay?       @relation(fields: [operationalDayId], references: [id])
-  openedBy        User                  @relation("CashSessionOpenedBy", fields: [openedByUserId], references: [id])
-  closedBy        User?                 @relation("CashSessionClosedBy", fields: [closedByUserId], references: [id])
-  reviewedBy      User?                 @relation("CashSessionReviewedBy", fields: [reviewedByUserId], references: [id])
-  payments        Payment[]
-  operators       CashSessionOperator[]
-  cashMovements   CashMovement[]
-  refunds         Refund[]
+  physicalCashBox        PhysicalCashBox             @relation(fields: [physicalCashBoxId], references: [id])
+  operationalDay         OperationalDay?             @relation(fields: [operationalDayId], references: [id])
+  openedBy               User                        @relation("CashSessionOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy               User?                       @relation("CashSessionClosedBy", fields: [closedByUserId], references: [id])
+  reviewedBy             User?                       @relation("CashSessionReviewedBy", fields: [reviewedByUserId], references: [id])
+  payments               Payment[]
+  operators              CashSessionOperator[]
+  cashMovements          CashMovement[]
+  refunds                Refund[]
   destinationDeclaration CashDestinationDeclaration?
 
   @@index([physicalCashBoxId, status])
@@ -639,8 +639,8 @@ model OperationalDay {
 
   /// Firma humana. NUNCA la escribe un proceso automático.
   reviewedByUserId String?
-  reviewedAt        DateTime?
-  reviewNote         String?
+  reviewedAt       DateTime?
+  reviewNote       String?
 
   salesTotal                   Decimal  @default(0)
   paidOrdersTotal              Decimal  @default(0)
@@ -915,15 +915,15 @@ model TimberProduct {
 
 /// Global timber pricing configuration (adjustable by MASTER)
 model TimberPricingConfig {
-  id                   String   @id @default(cuid())
+  id                   String  @id @default(cuid())
   /// Cost per board foot (default C$20.00)
-  costPerFoot          Decimal  @default(20)
+  costPerFoot          Decimal @default(20)
   /// Price per inch for TABLA (width >= 10", default C$8.90)
-  pricePerInchTabla    Decimal  @default(8.9)
+  pricePerInchTabla    Decimal @default(8.9)
   /// Price per inch for TABLILLA (1x6, 1x8, default C$6.90)
-  pricePerInchTablilla Decimal  @default(6.9)
+  pricePerInchTablilla Decimal @default(6.9)
   /// Price per inch for CUADRO (rest, default C$6.90)
-  pricePerInchCuadro   Decimal  @default(6.9)
+  pricePerInchCuadro   Decimal @default(6.9)
 
   /// Madera v2 Fase 4 — configuración como datos (reemplaza constantes hardcodeadas).
   /// Array de { lengthFeet: number, varas: number, forceCuadro: boolean }. Semilla: VARA_LENGTH_MAP
@@ -935,22 +935,22 @@ model TimberPricingConfig {
   tablillaWidths  Json?
 
   /// Margen objetivo (0-1) usado para la alerta de margen y la política TARGET_MARGIN. Default 40%.
-  targetMarginPercent Decimal @default(0.40)
+  targetMarginPercent            Decimal @default(0.40)
   /// Múltiplo (C$) al que se redondea HACIA ARRIBA el precio de la política TARGET_MARGIN —
   /// nunca hacia el más cercano, porque redondear al más cercano podría quedar bajo el margen
   /// objetivo. Default 1 (entero más próximo hacia arriba).
-  targetMarginRoundingMultiple Decimal @default(1)
+  targetMarginRoundingMultiple   Decimal @default(1)
   /// Tolerancia de conciliación con factura (0-1). Default 1%.
   reconciliationTolerancePercent Decimal @default(0.01)
   /// Avisar (no bloquear) si un viaje deja margen bajo el objetivo.
-  warnBelowTargetMargin Boolean @default(true)
+  warnBelowTargetMargin          Boolean @default(true)
   /// Bloquear la confirmación si hay margen negativo, salvo override explícito auditado.
-  blockNegativeMargin   Boolean @default(true)
+  blockNegativeMargin            Boolean @default(true)
 
   /// Who last updated
-  updatedBy            String?
-  updatedAt            DateTime @updatedAt
-  createdAt            DateTime @default(now())
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
 }
 
 /// A timber trip (viaje de madera) — wood arrives by trip, is cubicated, then enters inventory
@@ -978,16 +978,16 @@ model TimberTrip {
   computedCostPerFoot Decimal @default(0)
 
   /// Madera v2 Fase 1.1 — gastos del viaje (aditivo). Se prorratean por pie.
-  freightAmount      Decimal @default(0)
-  fuelAmount         Decimal @default(0)
-  perDiemAmount      Decimal @default(0)
-  permitsAmount      Decimal @default(0)
+  freightAmount       Decimal @default(0)
+  fuelAmount          Decimal @default(0)
+  perDiemAmount       Decimal @default(0)
+  permitsAmount       Decimal @default(0)
   otherExpensesAmount Decimal @default(0)
   /// Computed: suma de los 5 gastos de arriba
-  tripExpensesTotal  Decimal @default(0)
+  tripExpensesTotal   Decimal @default(0)
   /// Computed: (maderaTotal + tripExpensesTotal) / totalFeet — el costo real que se usa
   /// para costear líneas, WAC de inventario y márgenes (reemplaza a computedCostPerFoot).
-  landedCostPerFoot  Decimal @default(0)
+  landedCostPerFoot   Decimal @default(0)
 
   /// Madera v2 Fase 1.3 — conciliación con la factura del aserradero (opcional).
   invoicedFeet Decimal?
@@ -1015,13 +1015,13 @@ model TimberTrip {
   notes        String?
 
   /// Who created/processed
-  createdById   String?
-  confirmedById String?
-  confirmedAt   DateTime?
+  createdById                String?
+  confirmedById              String?
+  confirmedAt                DateTime?
   /// Madera v2 Fase 3 — motivo cuando se confirma con margen negativo (override explícito).
-  marginOverrideReason String?
+  marginOverrideReason       String?
   /// Madera v2 Fase 1.3 — confirmación explícita al confirmar fuera de tolerancia de conciliación.
-  reconciliationAcknowledged Boolean @default(false)
+  reconciliationAcknowledged Boolean   @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2988,15 +2988,15 @@ model ProductionBatchInput {
 
 /// Configuración global de Producción (Fase 3) — política de precio y redondeo.
 model ProductionPricingConfig {
-  id                    String   @id @default(cuid())
-  defaultTargetMarginPct Decimal @default(0.30)
+  id                     String   @id @default(cuid())
+  defaultTargetMarginPct Decimal  @default(0.30)
   /// Umbral (0-1) para la política APPROVAL_IF_DELTA: si |precioNuevo/precioActual - 1| lo supera, requiere aprobación.
-  priceApprovalDeltaPct Decimal  @default(0.15)
+  priceApprovalDeltaPct  Decimal  @default(0.15)
   /// Múltiplo (C$) al que se redondea HACIA ARRIBA el precio sugerido — mismo criterio que Madera v2.
-  priceRoundingMultiple Decimal  @default(1)
-  updatedBy             String?
-  updatedAt             DateTime @updatedAt
-  createdAt             DateTime @default(now())
+  priceRoundingMultiple  Decimal  @default(1)
+  updatedBy              String?
+  updatedAt              DateTime @updatedAt
+  createdAt              DateTime @default(now())
 }
 
 /**
@@ -3352,7 +3352,7 @@ model Camera {
   createdAt             DateTime       @default(now())
   updatedAt             DateTime       @updatedAt
 
-  branch        Branch                 @relation(fields: [branchId], references: [id])
+  branch        Branch                @relation(fields: [branchId], references: [id])
   statusHistory CameraStatusHistory[]
 
   @@unique([branchId, ipAddress, rtspChannel])
@@ -3425,10 +3425,10 @@ enum RetainedCashLocation {
 }
 
 enum TreasuryAccountType {
-  BANK       /// cuenta bancaria real
+  BANK /// cuenta bancaria real
   SETTLEMENT /// tarjeta cobrada, adquirente aún no liquida
-  CUSTODY    /// en manos de una persona, en tránsito
-  SAFE       /// caja fuerte de sucursal, si existe
+  CUSTODY /// en manos de una persona, en tránsito
+  SAFE /// caja fuerte de sucursal, si existe
 }
 
 /// El catálogo de cuentas de tesorería — antes "BankAccount", solo cuentas
@@ -3441,53 +3441,85 @@ enum TreasuryAccountType {
 /// (findOrCreateCustodyAccountTx en treasury/service.ts).
 /// branchId null = cuenta central, disponible para todas las sucursales.
 model TreasuryAccount {
-  id            String              @id @default(cuid())
-  type          TreasuryAccountType @default(BANK)
-  code          String?             @unique
+  id                      String              @id @default(cuid())
+  type                    TreasuryAccountType @default(BANK)
+  code                    String?             @unique
   /// bankName/accountAlias/accountNumber quedan como String no-nulo incluso
   /// para SETTLEMENT/CUSTODY/SAFE (con un valor descriptivo en vez de un
   /// banco real) para no propagar `| null` a todo el código que ya los lee
   /// — decisión deliberada, no el schema literal del doc.
-  bankName      String
-  accountAlias  String
-  accountNumber String
-  currencyCode  CurrencyCode        @default(NIO)
-  branchId      String?
+  bankName                String
+  accountAlias            String
+  accountNumber           String
+  currencyCode            CurrencyCode        @default(NIO)
+  branchId                String?
   /// Solo type=CUSTODY: de quién es este bolsillo.
-  holderUserId  String?
-  isActive      Boolean  @default(true)
+  holderUserId            String?
+  isActive                Boolean             @default(true)
   /// Titular de la cuenta — las cuentas comparten banco, solo se
   /// distinguen por moneda y número; el nombre completo evita el error de
   /// mandar a la cuenta equivocada (prompt-pantallas-recorrido-dinero.md §1.3).
-  owner         String?
+  owner                   String?
   /// Solo las cuentas con esto en true aparecen en el selector de cobro
   /// (PaymentComposer) — "menos opciones previene el error mejor que
   /// agrandar el botón" (§1.3). true por defecto: las cuentas ya cargadas
   /// hoy son todas de cobro; Master desmarca la que no corresponda.
-  acceptsCustomerPayments Boolean @default(true)
+  acceptsCustomerPayments Boolean             @default(true)
   /// Para "ordenadas por uso, para que la memoria muscular funcione" (§1.3)
   /// — se actualiza cada vez que un PaymentTender la usa como destino.
-  lastUsedAt    DateTime?
+  lastUsedAt              DateTime?
   /// Saldo de apertura y desde cuándo corre el libro (prompt-libro-mayor-
   /// tesoreria.md §5). El saldo NUNCA se guarda editable más allá de este
   /// punto de partida — desde acá se calcula, nunca se pisa.
   /// openingBalanceAt null = "pendiente de apertura", la pantalla no
   /// inventa un saldo.
-  openingBalance    Decimal  @default(0)
-  openingBalanceAt  DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  openingBalance          Decimal             @default(0)
+  openingBalanceAt        DateTime?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
 
-  branch                  Branch?                       @relation(fields: [branchId], references: [id])
-  holderUser              User?                         @relation("TreasuryAccountHolder", fields: [holderUserId], references: [id])
+  branch                  Branch?                      @relation(fields: [branchId], references: [id])
+  holderUser              User?                        @relation("TreasuryAccountHolder", fields: [holderUserId], references: [id])
   receivedTenders         PaymentTender[]
   deposits                BankDeposit[]
   cashDestinationDeposits CashDestinationDeclaration[]
   entries                 TreasuryEntry[]
+  cards                   TreasuryCard[]
 
   @@index([branchId, isActive])
   @@index([type, isActive])
   @@index([holderUserId])
+}
+
+/// Tarjeta (débito/crédito) LIGADA a una cuenta de tesorería. Modela el
+/// requerimiento del negocio: cada cuenta puede tener una o varias tarjetas
+/// físicas con las que se pagan proveedores/gastos, para que un pago se
+/// registre "con la tarjeta X de la cuenta Y" y baje el saldo de esa misma
+/// cuenta. No guarda el número completo — solo los últimos 4 y datos
+/// descriptivos (no es un almacén de PAN/CVV, eso nunca se persiste acá).
+model TreasuryCard {
+  id        String           @id @default(cuid())
+  accountId String
+  /// Nombre con el que la reconoce el usuario, ej. "BAC Empresarial Débito".
+  label     String
+  /// VISA | MASTERCARD | AMEX | OTRA — texto libre corto, no un enum rígido.
+  brand     String?
+  /// Últimos 4 dígitos, solo para identificarla visualmente.
+  last4     String?
+  cardType  TreasuryCardType @default(DEBIT)
+  isActive  Boolean          @default(true)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  account TreasuryAccount @relation(fields: [accountId], references: [id])
+  entries TreasuryEntry[]
+
+  @@index([accountId, isActive])
+}
+
+enum TreasuryCardType {
+  DEBIT
+  CREDIT
 }
 
 /// Depósito confirmado — una de las dos fuentes del saldo esperado de una
@@ -3524,15 +3556,15 @@ model BankDeposit {
 /// automática de "Retener" contra Branch.cashFundAmount (§1.1) — el usuario
 /// declara un solo número, la separación es del sistema.
 model CashDestinationDeclaration {
-  id                String   @id @default(cuid())
-  cashSessionId     String   @unique
-  branchId          String
-  declaredByUserId  String
+  id               String @id @default(cuid())
+  cashSessionId    String @unique
+  branchId         String
+  declaredByUserId String
 
-  handOverAmount    Decimal  @default(0)
-  handOverUserId    String?
+  handOverAmount Decimal @default(0)
+  handOverUserId String?
 
-  depositAmount        Decimal  @default(0)
+  depositAmount        Decimal @default(0)
   depositCarrierUserId String?
   depositBankAccountId String?
 
@@ -3628,6 +3660,10 @@ model TreasuryEntry {
   bankDepositId    String?
   expensePaymentId String? @unique
 
+  /// Solo en pagos salientes (OUT) hechos con una tarjeta ligada a la cuenta:
+  /// deja el rastro de "con qué tarjeta se pagó". Nulo en el resto.
+  cardId String?
+
   reference       String?
   notes           String?
   createdByUserId String
@@ -3636,11 +3672,13 @@ model TreasuryEntry {
   cashMovement  CashMovement?   @relation(fields: [cashMovementId], references: [id])
   paymentTender PaymentTender?  @relation(fields: [paymentTenderId], references: [id])
   bankDeposit   BankDeposit?    @relation(fields: [bankDepositId], references: [id])
+  card          TreasuryCard?   @relation(fields: [cardId], references: [id])
   createdBy     User            @relation("TreasuryEntryCreatedBy", fields: [createdByUserId], references: [id])
 
   @@index([accountId, occurredAt, createdAt])
   @@index([transferId])
   @@index([entryType, occurredAt])
+  @@index([cardId])
 }
 
 /// Cada cuenta tiene su moneda y las entradas se guardan sin convertir — la
@@ -3655,7 +3693,7 @@ model ExchangeRate {
   effectiveAt     DateTime
   source          String /// MANUAL | BANK_RECEIPT
   createdByUserId String
-  createdAt       DateTime @default(now())
+  createdAt       DateTime     @default(now())
 
   createdBy User @relation("ExchangeRateCreatedBy", fields: [createdByUserId], references: [id])
 

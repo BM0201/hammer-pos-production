@@ -139,6 +139,7 @@ type EntryLinkage = {
   paymentTenderId?: string | null;
   bankDepositId?: string | null;
   expensePaymentId?: string | null;
+  cardId?: string | null;
 };
 
 type CreateEntryInput = EntryLinkage & {
@@ -180,6 +181,7 @@ export async function createTreasuryEntryTx(tx: Prisma.TransactionClient, input:
       paymentTenderId: input.paymentTenderId ?? null,
       bankDepositId: input.bankDepositId ?? null,
       expensePaymentId: input.expensePaymentId ?? null,
+      cardId: input.cardId ?? null,
       reference: input.reference ?? null,
       notes: input.notes ?? null,
       createdByUserId: input.createdByUserId,
@@ -873,4 +875,236 @@ export async function listActiveBranchMembers(branchId: string) {
     orderBy: { user: { fullName: "asc" } },
   });
   return roles.map((r) => r.user);
+}
+
+
+
+// ─── Tarjetas ligadas a una cuenta ────────────────────────────────────────
+//
+// El negocio paga proveedores/gastos con tarjetas (débito/crédito) que
+// pertenecen a una cuenta bancaria concreta. Modelarlas como filas ligadas a
+// la cuenta permite registrar un pago "con la tarjeta X" y que el saldo baje
+// en la MISMA cuenta a la que pertenece la tarjeta — sin duplicar cuentas ni
+// inventar un saldo aparte por tarjeta (la tarjeta no tiene saldo propio: es
+// un instrumento de su cuenta).
+
+export async function createTreasuryCard(input: {
+  accountId: string;
+  label: string;
+  brand?: string | null;
+  last4?: string | null;
+  cardType?: "DEBIT" | "CREDIT";
+  actorUserId: string;
+}) {
+  const account = await prisma.treasuryAccount.findUniqueOrThrow({
+    where: { id: input.accountId },
+    select: { id: true, type: true, branchId: true },
+  });
+  if (account.type !== "BANK") {
+    throw new Error("VALIDATION_ERROR: solo las cuentas de banco pueden tener tarjetas ligadas");
+  }
+  const card = await prisma.treasuryCard.create({
+    data: {
+      accountId: input.accountId,
+      label: input.label,
+      brand: input.brand ?? null,
+      last4: input.last4 ?? null,
+      cardType: input.cardType ?? "DEBIT",
+    },
+  });
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: account.branchId ?? undefined,
+    module: "treasury",
+    action: "TREASURY_CARD_CREATED",
+    entityType: "TreasuryCard",
+    entityId: card.id,
+    metadataJson: { accountId: card.accountId, label: card.label, cardType: card.cardType, last4: card.last4 },
+  });
+  return card;
+}
+
+export async function updateTreasuryCard(id: string, input: {
+  label?: string;
+  brand?: string | null;
+  last4?: string | null;
+  cardType?: "DEBIT" | "CREDIT";
+  isActive?: boolean;
+  actorUserId: string;
+}) {
+  const card = await prisma.treasuryCard.update({
+    where: { id },
+    data: {
+      label: input.label,
+      brand: input.brand,
+      last4: input.last4,
+      cardType: input.cardType,
+      isActive: input.isActive,
+    },
+  });
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    module: "treasury",
+    action: "TREASURY_CARD_UPDATED",
+    entityType: "TreasuryCard",
+    entityId: card.id,
+    metadataJson: { isActive: card.isActive },
+  });
+  return card;
+}
+
+/** Tarjetas activas de una cuenta (o de todas, si no se pasa accountId). */
+export async function listTreasuryCards(accountId?: string) {
+  return prisma.treasuryCard.findMany({
+    where: { isActive: true, ...(accountId ? { accountId } : {}) },
+    orderBy: [{ accountId: "asc" }, { label: "asc" }],
+  });
+}
+
+/**
+ * Cuentas de banco + su saldo esperado (libro mayor) + las tarjetas activas
+ * ligadas a cada una. Es la vista que la pantalla de Tesorería necesita para
+ * mostrar "cuánto hay depositado por cuenta y con qué tarjetas se paga desde
+ * ella".
+ */
+export async function listBankAccountsWithBalancesAndCards(branchId?: string | null) {
+  const accounts = await listBankAccounts(branchId);
+  return Promise.all(accounts.map(async (account) => ({
+    ...account,
+    balance: await getTreasuryAccountBalance(account.id),
+    cards: await prisma.treasuryCard.findMany({
+      where: { accountId: account.id, isActive: true },
+      orderBy: { label: "asc" },
+    }),
+  })));
+}
+
+// ─── Pagos SALIENTES desde una cuenta registrada ──────────────────────────
+
+const OUTGOING_ENTRY_TYPES: TreasuryEntryType[] = ["SUPPLIER_PAYMENT", "PAYROLL", "EXPENSE"];
+
+/**
+ * Registra un pago que SALE de una cuenta registrada (proveedor, planilla o
+ * gasto) — la pieza que faltaba para que "los pagos se hagan desde esas
+ * cuentas" baje el saldo de la cuenta. Produce UNA fila OUT del libro mayor
+ * (§2.2: contra el exterior, una sola pata), opcionalmente con la tarjeta
+ * usada. Siempre dentro de una transacción del llamador.
+ *
+ * - La cuenta debe ser BANK y estar activa (no se paga desde una custodia o
+ *   una liquidación de tarjeta: esas son bolsillos de tránsito).
+ * - Si se indica tarjeta, debe pertenecer a esa misma cuenta y estar activa.
+ * - Por defecto NO permite dejar el saldo esperado en negativo (evita el
+ *   típico error de teclear de más); `allowNegativeBalance` lo habilita para
+ *   los casos reales de sobregiro/tarjeta de crédito.
+ */
+export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input: {
+  accountId: string;
+  amount: number;
+  entryType: "SUPPLIER_PAYMENT" | "PAYROLL" | "EXPENSE";
+  counterpartyType: TreasuryCounterpartyType;
+  counterpartyName?: string | null;
+  cardId?: string | null;
+  occurredAt?: Date;
+  reference?: string | null;
+  notes?: string | null;
+  expensePaymentId?: string | null;
+  allowNegativeBalance?: boolean;
+  createdByUserId: string;
+}) {
+  if (!OUTGOING_ENTRY_TYPES.includes(input.entryType)) {
+    throw new Error("VALIDATION_ERROR: tipo de pago saliente inválido");
+  }
+  if (input.amount <= 0) {
+    throw new Error("VALIDATION_ERROR: el monto del pago debe ser mayor que 0");
+  }
+
+  const account = await tx.treasuryAccount.findUniqueOrThrow({
+    where: { id: input.accountId },
+    select: { id: true, type: true, isActive: true, openingBalance: true },
+  });
+  if (account.type !== "BANK") {
+    throw new Error("VALIDATION_ERROR: solo se puede pagar desde una cuenta de banco registrada");
+  }
+  if (!account.isActive) {
+    throw new Error("VALIDATION_ERROR: la cuenta está inactiva");
+  }
+
+  if (input.cardId) {
+    const card = await tx.treasuryCard.findUnique({
+      where: { id: input.cardId },
+      select: { accountId: true, isActive: true },
+    });
+    if (!card || card.accountId !== input.accountId) {
+      throw new Error("VALIDATION_ERROR: la tarjeta no pertenece a esta cuenta");
+    }
+    if (!card.isActive) {
+      throw new Error("VALIDATION_ERROR: la tarjeta está inactiva");
+    }
+  }
+
+  if (!input.allowNegativeBalance) {
+    const [inAgg, outAgg] = await Promise.all([
+      tx.treasuryEntry.aggregate({ where: { accountId: input.accountId, direction: "IN" }, _sum: { amount: true } }),
+      tx.treasuryEntry.aggregate({ where: { accountId: input.accountId, direction: "OUT" }, _sum: { amount: true } }),
+    ]);
+    const balance = computeAccountBalance(
+      Number(account.openingBalance),
+      Number(inAgg._sum.amount ?? 0),
+      Number(outAgg._sum.amount ?? 0),
+    );
+    if (round2(balance - input.amount) < 0) {
+      throw new Error("VALIDATION_ERROR: el pago dejaría el saldo esperado en negativo");
+    }
+  }
+
+  return createTreasuryEntryTx(tx, {
+    accountId: input.accountId,
+    direction: "OUT",
+    amount: round2(input.amount),
+    entryType: input.entryType,
+    counterpartyType: input.counterpartyType,
+    counterpartyName: input.counterpartyName ?? null,
+    cardId: input.cardId ?? null,
+    occurredAt: input.occurredAt,
+    reference: input.reference ?? null,
+    notes: input.notes ?? null,
+    expensePaymentId: input.expensePaymentId ?? null,
+    createdByUserId: input.createdByUserId,
+  });
+}
+
+/** Envoltorio público: abre la transacción y audita el pago saliente. */
+export async function recordAccountPayment(input: {
+  accountId: string;
+  amount: number;
+  entryType: "SUPPLIER_PAYMENT" | "PAYROLL" | "EXPENSE";
+  counterpartyType: TreasuryCounterpartyType;
+  counterpartyName?: string | null;
+  cardId?: string | null;
+  occurredAt?: Date;
+  reference?: string | null;
+  notes?: string | null;
+  allowNegativeBalance?: boolean;
+  actorUserId: string;
+}) {
+  const entry = await prisma.$transaction((tx) =>
+    recordAccountPaymentTx(tx, { ...input, createdByUserId: input.actorUserId }),
+  );
+  const account = await prisma.treasuryAccount.findUnique({ where: { id: input.accountId }, select: { branchId: true } });
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: account?.branchId ?? undefined,
+    module: "treasury",
+    action: "TREASURY_ACCOUNT_PAYMENT_RECORDED",
+    entityType: "TreasuryEntry",
+    entityId: entry.id,
+    metadataJson: {
+      accountId: input.accountId,
+      amount: input.amount,
+      entryType: input.entryType,
+      cardId: input.cardId ?? null,
+      counterpartyName: input.counterpartyName ?? null,
+    },
+  });
+  return entry;
 }

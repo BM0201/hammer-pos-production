@@ -81,3 +81,40 @@ export const setBranchDepositPolicySchema = z.object({
   thresholdAmount: z.coerce.number().positive(),
   maxDaysHolding: z.coerce.number().int().positive(),
 });
+
+/**
+ * Tarjeta (débito/crédito) ligada a una cuenta de banco. No se acepta el
+ * número completo — solo los últimos 4 (identificación visual), nunca PAN/CVV.
+ */
+export const createTreasuryCardSchema = z.object({
+  label: z.string().min(1).max(80),
+  brand: z.string().max(40).optional().nullable(),
+  last4: z.string().regex(/^\d{4}$/, "Deben ser 4 dígitos").optional().nullable(),
+  cardType: z.enum(["DEBIT", "CREDIT"]).optional(),
+});
+
+export const updateTreasuryCardSchema = z.object({
+  label: z.string().min(1).max(80).optional(),
+  brand: z.string().max(40).optional().nullable(),
+  last4: z.string().regex(/^\d{4}$/, "Deben ser 4 dígitos").optional().nullable(),
+  cardType: z.enum(["DEBIT", "CREDIT"]).optional(),
+  isActive: z.boolean().optional(),
+});
+
+/**
+ * Un pago que SALE de una cuenta registrada (proveedor, planilla o gasto).
+ * Baja el saldo esperado de esa cuenta (fila OUT del libro mayor).
+ * allowNegativeBalance solo para sobregiro/crédito reales.
+ */
+export const recordAccountPaymentSchema = z.object({
+  accountId: z.string().cuid(),
+  amount: z.coerce.number().positive(),
+  entryType: z.enum(["SUPPLIER_PAYMENT", "PAYROLL", "EXPENSE"]),
+  counterpartyType: z.enum(["CUSTOMER", "SUPPLIER", "EMPLOYEE", "ACQUIRER", "INTERNAL", "ADJUSTMENT"]).default("SUPPLIER"),
+  counterpartyName: z.string().max(150).optional().nullable(),
+  cardId: z.string().cuid().optional().nullable(),
+  occurredAt: z.coerce.date().optional(),
+  reference: z.string().max(100).optional().nullable(),
+  notes: z.string().max(500).optional().nullable(),
+  allowNegativeBalance: z.boolean().optional(),
+});

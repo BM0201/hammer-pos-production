@@ -2,7 +2,7 @@ import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
-import { listBankAccountsWithBalances } from "@/modules/treasury/service";
+import { listBankAccountsWithBalancesAndCards } from "@/modules/treasury/service";
 
 /**
  * Panel de Bancos (§5) — saldo esperado por cuenta. Separado del GET
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     assertMaster(session);
 
     const branchId = new URL(request.url).searchParams.get("branchId");
-    return ok(await listBankAccountsWithBalances(branchId));
+    return ok(await listBankAccountsWithBalancesAndCards(branchId));
   } catch (error) {
     return toHttpErrorResponse(error);
   }
