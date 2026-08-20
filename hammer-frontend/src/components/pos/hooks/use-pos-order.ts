@@ -26,6 +26,16 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
   const [lineDraftQuantities, setLineDraftQuantities] = useState<Record<string, string>>({});
   const [lineQuantityErrors, setLineQuantityErrors] = useState<Record<string, string>>({});
   const [lineUpdatingId, setLineUpdatingId] = useState<string | null>(null);
+  // prompt-fusionado-invendible-409.md §P-3 — pendiente cuando el POST de
+  // lines devuelve 409 BELOW_COST_OVERRIDE_REASON_REQUIRED: el rol SÍ tiene
+  // autoridad, solo falta la razón. BELOW_COST_NOT_ALLOWED (sin autoridad)
+  // sigue siendo el toast de siempre, sin puerta de escape.
+  const [belowCostConfirm, setBelowCostConfirm] = useState<{
+    product: ProductRow;
+    effectiveCost: number | null;
+    netUnitPriceAfterDiscount: number | null;
+  } | null>(null);
+  const [isSubmittingOverride, setIsSubmittingOverride] = useState(false);
 
   const ticketLines = useMemo(() => order?.lines ?? [], [order?.lines]);
 
@@ -183,9 +193,17 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
     }
   }
 
+  async function postSaleOrderLine(orderId: string, productId: string, overrideReason?: string) {
+    return apiFetch(`/api/sales/orders/${orderId}/lines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId, quantity: 1, ...(overrideReason ? { overrideReason } : {}) }),
+    });
+  }
+
   async function addProduct(product: ProductRow) {
     const { stockByProductId, onNotice, onProductAdded } = optsRef.current;
-    if (!order || isMutatingOrder) return;
+    if (!order || isMutatingOrder || belowCostConfirm) return;
 
     const knownAvailableStock = product.availableSaleStock ?? product.sharedStock?.saleQuantity ?? product.availableStock ?? stockByProductId[product.id];
     if (typeof knownAvailableStock === "number" && knownAvailableStock <= 0) {
@@ -200,13 +218,19 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
       if (existing) {
         await commitLineQuantity(existing, Number(existing.quantity) + 1, true);
       } else {
-        const response = await apiFetch(`/api/sales/orders/${order.id}/lines`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ productId: product.id, quantity: 1 }),
-        });
+        const response = await postSaleOrderLine(order.id, product.id);
         const json = (await response.json()) as ApiErrorPayload;
         if (!response.ok) {
+          const reasonKey = (json.error?.code ?? json.reason ?? "").toUpperCase();
+          if (reasonKey === "BELOW_COST_OVERRIDE_REASON_REQUIRED") {
+            const details = json.error?.details as { effectiveCost?: number | null; netUnitPriceAfterDiscount?: number | null } | undefined;
+            setBelowCostConfirm({
+              product,
+              effectiveCost: details?.effectiveCost ?? null,
+              netUnitPriceAfterDiscount: details?.netUnitPriceAfterDiscount ?? null,
+            });
+            return;
+          }
           onNotice(mapPosErrorToSpanish({ payload: json, status: response.status, fallback: "No se pudo agregar el producto." }), 10000);
           return;
         }
@@ -220,6 +244,36 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
       onNotice(mapPosErrorToSpanish({ fallback: "No se pudo agregar el producto.", thrownError: error }), 10000);
     } finally {
       setIsMutatingOrder(false);
+    }
+  }
+
+  function cancelBelowCostOverride() {
+    setBelowCostConfirm(null);
+  }
+
+  async function confirmBelowCostOverride(overrideReason: string) {
+    const { onNotice, onProductAdded } = optsRef.current;
+    if (!order || !belowCostConfirm) return;
+    const { product } = belowCostConfirm;
+
+    setIsSubmittingOverride(true);
+    try {
+      const response = await postSaleOrderLine(order.id, product.id, overrideReason);
+      const json = (await response.json()) as ApiErrorPayload;
+      if (!response.ok) {
+        onNotice(mapPosErrorToSpanish({ payload: json, status: response.status, fallback: "No se pudo agregar el producto." }), 10000);
+        return;
+      }
+
+      setBelowCostConfirm(null);
+      await reloadOrder();
+      onNotice(`Producto agregado: ${product.name}.`);
+      onProductAdded?.();
+    } catch (error) {
+      console.error("[POS][confirmBelowCostOverride]", error);
+      onNotice(mapPosErrorToSpanish({ fallback: "No se pudo agregar el producto.", thrownError: error }), 10000);
+    } finally {
+      setIsSubmittingOverride(false);
     }
   }
 
@@ -258,5 +312,9 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
     lineQuantityErrors,
     setLineQuantityErrors,
     lineUpdatingId,
+    belowCostConfirm,
+    isSubmittingOverride,
+    confirmBelowCostOverride,
+    cancelBelowCostOverride,
   };
 }

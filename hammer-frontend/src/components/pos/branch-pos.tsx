@@ -17,6 +17,7 @@ import { AttendanceRollCallModal, localToday } from "@/components/cash-session/a
 import { PosCatalogPanel } from "./components/pos-catalog-panel";
 import { PosTicketPanel } from "./components/pos-ticket-panel";
 import { ChargeDialog } from "./components/charge-dialog";
+import { BelowCostOverrideDialog } from "./components/below-cost-override-dialog";
 import { OfflineBanner } from "./offline-banner";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/client/api";
@@ -93,6 +94,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
     addProduct, commitLineQuantity, removeLine, updateOrderNotes,
     ticketLines, lineDraftQuantities, setLineDraftQuantities,
     lineQuantityErrors, setLineQuantityErrors, lineUpdatingId,
+    belowCostConfirm, isSubmittingOverride, confirmBelowCostOverride, cancelBelowCostOverride,
   } = usePosOrder(branchId, {
     fetchStockForProduct,
     stockByProductId,
@@ -525,6 +527,13 @@ export function BranchPos({ branchId }: { branchId: string }) {
         branchId={branchId}
         onConfirm={(tenders) => completeTicket("DIRECT", tenders)}
         isSubmitting={isSubmittingPayment}
+      />
+
+      <BelowCostOverrideDialog
+        pending={belowCostConfirm}
+        isSubmitting={isSubmittingOverride}
+        onCancel={cancelBelowCostOverride}
+        onConfirm={confirmBelowCostOverride}
       />
 
       {printModalOrderId ? (

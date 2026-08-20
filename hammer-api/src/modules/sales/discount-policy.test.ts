@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
 import { computeDiscountAgainstCatalogPrice, validateDiscountForRole } from "@/modules/sales/discount-policy";
+import { resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
 
 function decimal(value: number) {
   return new Prisma.Decimal(value);
@@ -170,4 +171,68 @@ test("una venta manual (sin campaña) de un cajero sigue bloqueada igual que ant
 
   assert.equal(result.allowed, false);
   assert.equal(result.code, "DISCOUNT_LIMIT_EXCEEDED");
+});
+
+/**
+ * prompt-fusionado-invendible-409.md §4.1 — regresión del síntoma real
+ * (HIERRO en Rivas): un miembro derivado de fusión con effectiveCost =
+ * canónicoCost × factor y effectivePrice por debajo. El guard está haciendo
+ * exactamente su trabajo (§R-1: prohibido tocarlo) — este test fija ese
+ * comportamiento para que nadie lo "arregle" después confundiéndolo con un bug.
+ */
+test("Fase 2 (síntoma real): miembro de fusión con costo inflado por encima del precio — MASTER exige razón, CAJA queda bloqueado sin puerta de escape", () => {
+  // HIERRO DE 3/8 8MM" en Rivas antes de P-1: WAC del canónico contaminado
+  // (C$185.89) × factor 14 = costo efectivo C$2602.41, muy por encima del
+  // precio real de venta (C$1750.00) — el caso exacto que devolvía 409.
+  const pricing = resolveEffectivePricingFromParts({
+    productId: "hierro-3-8-8mm",
+    standardSalePrice: decimal(1),
+    globalCost: null,
+    averageCost: null,
+    lastPurchaseCost: null,
+    branchPrice: decimal(1750),
+    branchCost: null,
+    weightedAverageCost: null,
+    fusion: {
+      conversionFactor: decimal(14),
+      canonicalBranchCost: null,
+      canonicalAverageCost: null,
+      canonicalGlobalCost: null,
+      canonicalLastPurchaseCost: null,
+      canonicalBaseWeightedAverageCost: decimal(185.8865),
+      canonicalBranchPrice: null,
+      canonicalStandardSalePrice: decimal(100),
+    },
+  });
+  assert.equal(pricing.effectiveCost?.toNumber(), 185.8865 * 14);
+  assert.ok(pricing.effectivePrice!.lt(pricing.effectiveCost!), "el precio real debe quedar por debajo del costo inflado — la premisa del síntoma");
+
+  const forMaster = validateDiscountForRole({
+    role: "MASTER",
+    discountPercent: decimal(0),
+    effectiveCost: pricing.effectiveCost,
+    netUnitPriceAfterDiscount: pricing.effectivePrice!,
+  });
+  assert.equal(forMaster.allowed, false);
+  assert.equal(forMaster.code, "BELOW_COST_OVERRIDE_REASON_REQUIRED");
+
+  const forCaja = validateDiscountForRole({
+    role: "CAJA",
+    discountPercent: decimal(0),
+    effectiveCost: pricing.effectiveCost,
+    netUnitPriceAfterDiscount: pricing.effectivePrice!,
+  });
+  assert.equal(forCaja.allowed, false);
+  assert.equal(forCaja.code, "BELOW_COST_NOT_ALLOWED");
+
+  // MASTER con razón de override sí puede — la puerta de escape existe, pero
+  // solo para el rol con autoridad (§R-1: no se relaja el guard).
+  const forMasterWithReason = validateDiscountForRole({
+    role: "MASTER",
+    discountPercent: decimal(0),
+    effectiveCost: pricing.effectiveCost,
+    netUnitPriceAfterDiscount: pricing.effectivePrice!,
+    overrideReason: "Sobregiro autorizado mientras se corrige el costo base del canónico.",
+  });
+  assert.equal(forMasterWithReason.allowed, true);
 });
