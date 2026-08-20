@@ -7,8 +7,10 @@ import {
   resolveFusionMemberCost,
   relativeDeviation,
   FUSION_PRICE_OVERRIDE_THRESHOLD,
+  getEffectiveProductPricingBatch,
   type FusionMemberPricingBasis,
 } from "@/modules/catalog/effective-pricing";
+import { validateDiscountForRole } from "@/modules/sales/discount-policy";
 
 // prompt-costos-precios-sucursal.md: "al terminar debe existir una sola
 // resolución de costo y precio" — los tests llaman a las funciones REALES y
@@ -304,4 +306,96 @@ test("Prueba 6b: un desvío razonable (descuento por volumen legítimo) NO exige
 
 test("relativeDeviation: referencia <= 0 no tiene desvío calculable (null, no división por cero)", () => {
   assert.equal(relativeDeviation(d(10)!, d(0)!), null);
+});
+
+/* ── prompt-fusionado-invendible-409.md §P-2 — sellability no puede divergir
+ * del guard real (validateDiscountForRole, discount-policy.ts): mismo par
+ * (costo, precio) → misma conclusión, sin descuento de por medio (caso base
+ * de la tarjeta del catálogo, antes de cualquier clic). ── */
+
+function guardWouldBlockBelowCost(effectiveCost: Prisma.Decimal | null, effectivePrice: Prisma.Decimal | null): boolean {
+  const policy = validateDiscountForRole({
+    role: "CAJA", // sin autoridad de override — el caso que importa: ¿el guard bloquearía a alguien?
+    discountPercent: new Prisma.Decimal(0),
+    effectiveCost,
+    netUnitPriceAfterDiscount: effectivePrice ?? new Prisma.Decimal(0),
+  });
+  return !policy.allowed && policy.code === "BELOW_COST_NOT_ALLOWED";
+}
+
+const SELLABILITY_CASES: Array<{ label: string; cost: number | null; price: number | null }> = [
+  { label: "precio por debajo del costo", cost: 100, price: 90 },
+  { label: "precio igual al costo (no es 'por debajo')", cost: 100, price: 100 },
+  { label: "precio por encima del costo", cost: 100, price: 110 },
+  { label: "sin costo conocido", cost: null, price: 100 },
+  { label: "costo cero (tratado como 'no sé', igual que el guard)", cost: 0, price: 100 },
+  { label: "miembro de fusión con costo inflado por encima del precio", cost: 14400, price: 2055 },
+];
+
+for (const c of SELLABILITY_CASES) {
+  test(`sellability vs guard: ${c.label}`, () => {
+    const result = resolve({ ...BASE, branchCost: d(c.cost), branchPrice: d(c.price) });
+    const blocked = guardWouldBlockBelowCost(d(c.cost), d(c.price));
+    assert.equal(result.sellability === "BELOW_COST", blocked, `sellability=${result.sellability} pero el guard ${blocked ? "SÍ" : "NO"} bloquearía`);
+  });
+}
+
+test("sellability: NO_COST cuando no hay costo efectivo, incluso con precio alto", () => {
+  const result = resolve({ ...BASE, branchCost: null, averageCost: null, globalCost: null, lastPurchaseCost: null, weightedAverageCost: null, branchPrice: d(500) });
+  assert.equal(result.sellability, "NO_COST");
+});
+
+test("sellability: miembro de fusión con costo inflado (el síntoma de Fase 2) da BELOW_COST", () => {
+  const result = resolveEffectivePricingFromParts({
+    productId: "prod-hierro-3-8-8mm",
+    standardSalePrice: d(1)!,
+    globalCost: null,
+    averageCost: null,
+    lastPurchaseCost: null,
+    branchPrice: d(1750)!,
+    branchCost: null,
+    weightedAverageCost: null,
+    fusion: { ...FUSION_BASE, conversionFactor: d(14)!, canonicalBaseWeightedAverageCost: d(185.89)! }, // WAC contaminado real
+  });
+  assert.equal(result.effectiveCost?.toNumber(), 185.89 * 14);
+  assert.equal(result.sellability, "BELOW_COST");
+});
+
+/* ── P-2 — consulta constante: getEffectiveProductPricingBatch resuelve N
+ * pares (sucursal, producto) con un número FIJO de round trips, no O(N). ── */
+
+function createCountingFakeDb(fixtures: {
+  members?: unknown[];
+  products?: Array<{ id: string; standardSalePrice: Prisma.Decimal; globalCost: Prisma.Decimal | null; averageCost: Prisma.Decimal | null; lastPurchaseCost: Prisma.Decimal | null }>;
+  settings?: Array<{ branchId: string; productId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null }>;
+  balances?: Array<{ branchId: string; productId: string; weightedAverageCost: Prisma.Decimal | null }>;
+}) {
+  const calls = { productStockGroupMember: 0, product: 0, branchProductSetting: 0, inventoryBalance: 0 };
+  const db = {
+    productStockGroupMember: { findMany: async () => { calls.productStockGroupMember += 1; return fixtures.members ?? []; } },
+    product: { findMany: async () => { calls.product += 1; return fixtures.products ?? []; } },
+    branchProductSetting: { findMany: async () => { calls.branchProductSetting += 1; return fixtures.settings ?? []; } },
+    inventoryBalance: { findMany: async () => { calls.inventoryBalance += 1; return fixtures.balances ?? []; } },
+  };
+  return { db: db as unknown as Prisma.TransactionClient, calls };
+}
+
+test("getEffectiveProductPricingBatch: mismo número de consultas para 1 producto que para 20 (independiente de N)", async () => {
+  const branchId = "branch-1";
+  const makeItems = (n: number) => Array.from({ length: n }, (_, i) => ({ branchId, productId: `prod-${i}` }));
+  const makeProducts = (n: number) => Array.from({ length: n }, (_, i) => ({
+    id: `prod-${i}`, standardSalePrice: d(100)!, globalCost: null, averageCost: null, lastPurchaseCost: null,
+  }));
+
+  const { db: db1, calls: calls1 } = createCountingFakeDb({ products: makeProducts(1) });
+  await getEffectiveProductPricingBatch(db1, makeItems(1));
+
+  const { db: db20, calls: calls20 } = createCountingFakeDb({ products: makeProducts(20) });
+  await getEffectiveProductPricingBatch(db20, makeItems(20));
+
+  assert.deepEqual(calls1, calls20, "el número de round trips no debe crecer con N");
+  assert.equal(calls20.productStockGroupMember, 1);
+  assert.equal(calls20.product, 1);
+  assert.equal(calls20.branchProductSetting, 1);
+  assert.equal(calls20.inventoryBalance, 1);
 });

@@ -35,7 +35,23 @@ export type EffectivePricing = {
    * DELIBERADO sobre impliedFusionPrice, no "un precio suelto más" (§2.2).
    */
   isFusionPriceOverride: boolean;
+  /**
+   * prompt-fusionado-invendible-409.md §P-2 — el catálogo del POS avisa
+   * ANTES del clic con la MISMA comparación que usa el guard de venta bajo
+   * costo (discount-policy.ts validateDiscountForRole, caso sin descuento):
+   * BELOW_COST cuando hay costo positivo y el precio efectivo queda por
+   * debajo; NO_COST cuando no hay costo conocido (se vende, sin margen
+   * visible); OK en cualquier otro caso. Calculado acá, no en el caller, para
+   * que la advertencia no pueda divergir del bloqueo real en addSaleOrderLine.
+   */
+  sellability: "OK" | "BELOW_COST" | "NO_COST";
 };
+
+function computeSellability(effectiveCost: Prisma.Decimal | null, effectivePrice: Prisma.Decimal | null): EffectivePricing["sellability"] {
+  if (effectiveCost === null || effectiveCost.lte(0)) return "NO_COST";
+  if (effectivePrice !== null && effectivePrice.lt(effectiveCost)) return "BELOW_COST";
+  return "OK";
+}
 
 /**
  * Umbral de desvío (relativo al precio implícito de fusión) que exige
@@ -350,6 +366,7 @@ function resolveEffectivePricing(input: {
       isFusionMember: true,
       impliedFusionPrice,
       isFusionPriceOverride,
+      sellability: computeSellability(effectiveCost, effectivePrice),
     };
   }
 
@@ -389,6 +406,7 @@ function resolveEffectivePricing(input: {
     isFusionMember: false,
     impliedFusionPrice: null,
     isFusionPriceOverride: false,
+    sellability: computeSellability(effectiveCost, effectivePrice),
   };
 }
 
