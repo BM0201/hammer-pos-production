@@ -101,6 +101,10 @@ export function PosCatalogPanel({
       0;
     const hasNoStock = availableStock <= 0;
     const isLowStock = !hasNoStock && availableStock < 5;
+    // El clic NO se deshabilita acá: el rechazo real sigue siendo del
+    // backend (addSaleOrderLine), la tarjeta solo lo anticipa para que el
+    // cajero no lo descubra recién con el cliente enfrente.
+    const isBelowCost = product.sellability === "BELOW_COST";
 
     return (
       <button
@@ -111,7 +115,7 @@ export function PosCatalogPanel({
           selected
             ? "border-[var(--color-pay)] bg-[color-mix(in_srgb,var(--color-pay)_8%,transparent)]"
             : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-strong)]",
-          hasNoStock || hasNoPrice ? "opacity-60" : "",
+          hasNoStock || hasNoPrice || isBelowCost ? "opacity-60" : "",
         ].join(" ")}
         onClick={() => {
           setActiveProductIndex(index);
@@ -129,7 +133,7 @@ export function PosCatalogPanel({
         <div
           className={[
             "text-[11px]",
-            hasNoPrice || isLowStock
+            hasNoPrice || isLowStock || isBelowCost
               ? "text-[var(--color-warning-700)]"
               : hasNoStock
                 ? "text-[var(--color-danger-600)]"
@@ -140,8 +144,10 @@ export function PosCatalogPanel({
             ? "Sin precio asignado"
             : hasNoStock
             ? "Sin stock"
+            : isBelowCost
+            ? "No vendible — costo sobre precio"
             : `Stock ${availableStock % 1 === 0 ? availableStock : availableStock.toFixed(2)}`}
-          {product.saleUnit ? ` ${product.saleUnit}` : ""}
+          {!hasNoPrice && !hasNoStock && !isBelowCost && product.saleUnit ? ` ${product.saleUnit}` : ""}
         </div>
       </button>
     );

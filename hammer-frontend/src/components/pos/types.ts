@@ -11,6 +11,7 @@ export type ProductRow = {
   branchPrice?: string | null;
   effectivePrice?: string | null;
   priceSource?: "BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED";
+  sellability?: "OK" | "BELOW_COST" | "NO_COST";
   unit: string;
   stockOnHand?: number;
   availableStock?: number;
