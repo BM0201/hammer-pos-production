@@ -1,7 +1,7 @@
 import { BrainDecisionCategory, BrainDecisionSeverity, CashMovementType, DispatchStatus, Prisma, SaleOrderStatus, InventoryMovementType, PaymentMethod, PaymentStatus, CashSessionStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { logAuditEvent } from "@/modules/audit/service";
+import { logAuditEvent, attachAuditToError, writePendingAuditFromError } from "@/modules/audit/service";
 import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
@@ -265,7 +265,8 @@ export async function addSaleOrderLine(input: {
   // esto — sigue exigiendo su propia razón de override, sin importar el origen.
   discountFromActiveCampaign?: boolean;
 }) {
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
     if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
 
@@ -306,47 +307,44 @@ export async function addSaleOrderLine(input: {
     });
 
     if (!policy.allowed) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
-          entityType: "SaleOrder",
-          entityId: input.saleOrderId,
-          metadataJson: {
-            reason: policy.code,
-            productId: input.productId,
-            effectiveCost: pricing.effectiveCost?.toString() ?? null,
-            netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
-            userRole: input.actorRole ?? null,
-            discountFromActiveCampaign: Boolean(input.discountFromActiveCampaign),
-            discountPolicyRole,
-            overrideReason: input.overrideReason ?? null,
-            priceSource: pricing.priceSource,
-            costSource: pricing.costSource,
-            discountPercent: discountPercent.toString(),
-            roleMaxDiscountPercent: getMaxDiscountPercentForRole(discountPolicyRole),
-            categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
-            commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
-            effectiveMaxDiscountPercent: effectiveDiscountLimitForAudit({
-              role: discountPolicyRole,
-              categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
-              commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
-            }),
-            combinedClass: commercialIntelligence.combinedClass,
-            riskLevel: commercialIntelligence.riskLevel,
-            categoryId: categoryPolicy.categoryId,
-            categoryName: categoryPolicy.categoryName,
-          },
-        },
-      });
       const error = new Error(policy.code);
       (error as any).details = {
         effectiveCost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost),
         netUnitPriceAfterDiscount: Number(netUnitPriceAfterDiscount),
       };
-      throw error;
+      throw attachAuditToError(error, {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
+        entityType: "SaleOrder",
+        entityId: input.saleOrderId,
+        metadataJson: {
+          reason: policy.code,
+          productId: input.productId,
+          effectiveCost: pricing.effectiveCost?.toString() ?? null,
+          netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
+          userRole: input.actorRole ?? null,
+          discountFromActiveCampaign: Boolean(input.discountFromActiveCampaign),
+          discountPolicyRole,
+          overrideReason: input.overrideReason ?? null,
+          priceSource: pricing.priceSource,
+          costSource: pricing.costSource,
+          discountPercent: discountPercent.toString(),
+          roleMaxDiscountPercent: getMaxDiscountPercentForRole(discountPolicyRole),
+          categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+          commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+          effectiveMaxDiscountPercent: effectiveDiscountLimitForAudit({
+            role: discountPolicyRole,
+            categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+            commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+          }),
+          combinedClass: commercialIntelligence.combinedClass,
+          riskLevel: commercialIntelligence.riskLevel,
+          categoryId: categoryPolicy.categoryId,
+          categoryName: categoryPolicy.categoryName,
+        },
+      });
     }
 
     const lineSubtotal = calculateLineSubtotal(quantity, unitPrice, discountAmount);
@@ -406,7 +404,11 @@ export async function addSaleOrderLine(input: {
     });
 
     return { line, order: orderUpdated };
-  });
+    });
+  } catch (error) {
+    await writePendingAuditFromError(error);
+    throw error;
+  }
 }
 
 export async function updateSaleOrderLine(input: {
@@ -420,7 +422,8 @@ export async function updateSaleOrderLine(input: {
   actorRole?: string;
   overrideReason?: string | null;
 }) {
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
     if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
 
@@ -429,21 +432,18 @@ export async function updateSaleOrderLine(input: {
     });
 
     if (!existing) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
-          entityType: "SaleOrderLine",
-          entityId: input.lineId,
-          metadataJson: {
-            reason: "LINE_NOT_IN_ORDER",
-            saleOrderId: input.saleOrderId,
-          },
+      throw attachAuditToError(new Error("SALE_ORDER_LINE_NOT_FOUND"), {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
+        entityType: "SaleOrderLine",
+        entityId: input.lineId,
+        metadataJson: {
+          reason: "LINE_NOT_IN_ORDER",
+          saleOrderId: input.saleOrderId,
         },
       });
-      throw new Error("SALE_ORDER_LINE_NOT_FOUND");
     }
 
     const quantity = new Prisma.Decimal(input.quantity ?? existing.quantity);
@@ -477,44 +477,41 @@ export async function updateSaleOrderLine(input: {
       riskLevel: commercialIntelligence.riskLevel,
     });
     if (!policy.allowed) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
-          entityType: "SaleOrderLine",
-          entityId: input.lineId,
-          metadataJson: {
-            reason: policy.code,
-            effectiveCost: pricing.effectiveCost?.toString() ?? null,
-            netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
-            userRole: input.actorRole ?? null,
-            overrideReason: input.overrideReason ?? null,
-            priceSource: pricing.priceSource,
-            costSource: pricing.costSource,
-            discountPercent: discountPercent.toString(),
-            roleMaxDiscountPercent: getMaxDiscountPercentForRole(input.actorRole),
-            categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
-            commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
-            effectiveMaxDiscountPercent: effectiveDiscountLimitForAudit({
-              role: input.actorRole,
-              categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
-              commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
-            }),
-            combinedClass: commercialIntelligence.combinedClass,
-            riskLevel: commercialIntelligence.riskLevel,
-            categoryId: categoryPolicy.categoryId,
-            categoryName: categoryPolicy.categoryName,
-          },
-        },
-      });
       const error = new Error(policy.code);
       (error as any).details = {
         effectiveCost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost),
         netUnitPriceAfterDiscount: Number(netUnitPriceAfterDiscount),
       };
-      throw error;
+      throw attachAuditToError(error, {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
+        entityType: "SaleOrderLine",
+        entityId: input.lineId,
+        metadataJson: {
+          reason: policy.code,
+          effectiveCost: pricing.effectiveCost?.toString() ?? null,
+          netUnitPriceAfterDiscount: netUnitPriceAfterDiscount.toString(),
+          userRole: input.actorRole ?? null,
+          overrideReason: input.overrideReason ?? null,
+          priceSource: pricing.priceSource,
+          costSource: pricing.costSource,
+          discountPercent: discountPercent.toString(),
+          roleMaxDiscountPercent: getMaxDiscountPercentForRole(input.actorRole),
+          categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+          commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+          effectiveMaxDiscountPercent: effectiveDiscountLimitForAudit({
+            role: input.actorRole,
+            categoryMaxDiscountPercent: categoryPolicy.categoryPolicy.maxDiscountPercent,
+            commercialRecommendedMaxDiscountPercent: commercialIntelligence.recommendedMaxDiscountPercent,
+          }),
+          combinedClass: commercialIntelligence.combinedClass,
+          riskLevel: commercialIntelligence.riskLevel,
+          categoryId: categoryPolicy.categoryId,
+          categoryName: categoryPolicy.categoryName,
+        },
+      });
     }
 
     const lineSubtotal = calculateLineSubtotal(quantity, unitPrice, discountAmount);
@@ -561,7 +558,11 @@ export async function updateSaleOrderLine(input: {
     });
 
     return { line: updated, order: orderUpdated };
-  });
+    });
+  } catch (error) {
+    await writePendingAuditFromError(error);
+    throw error;
+  }
 }
 
 export async function updateSaleOrderNotes(input: {
@@ -579,7 +580,8 @@ export async function updateSaleOrderNotes(input: {
 }
 
 export async function removeSaleOrderLine(input: { saleOrderId: string; lineId: string; actorUserId: string }) {
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
     if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
 
@@ -588,22 +590,19 @@ export async function removeSaleOrderLine(input: { saleOrderId: string; lineId: 
     });
 
     if (deleted.count !== 1) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
-          entityType: "SaleOrderLine",
-          entityId: input.lineId,
-          metadataJson: {
-            reason: "LINE_NOT_IN_ORDER",
-            saleOrderId: input.saleOrderId,
-            deletedCount: deleted.count,
-          },
+      throw attachAuditToError(new Error("SALE_ORDER_LINE_NOT_FOUND"), {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: SALE_AUDIT_EVENTS.ORDER_LINE_MUTATION_DENIED,
+        entityType: "SaleOrderLine",
+        entityId: input.lineId,
+        metadataJson: {
+          reason: "LINE_NOT_IN_ORDER",
+          saleOrderId: input.saleOrderId,
+          deletedCount: deleted.count,
         },
       });
-      throw new Error("SALE_ORDER_LINE_NOT_FOUND");
     }
 
     const orderUpdated = await recalcOrderTotalsTx(tx, input.saleOrderId);
@@ -623,7 +622,11 @@ export async function removeSaleOrderLine(input: { saleOrderId: string; lineId: 
     });
 
     return orderUpdated;
-  });
+    });
+  } catch (error) {
+    await writePendingAuditFromError(error);
+    throw error;
+  }
 }
 
 export async function submitSaleOrderToPendingPayment(input: {
@@ -632,37 +635,32 @@ export async function submitSaleOrderToPendingPayment(input: {
   requiresTransport?: boolean;
   transportAmount?: number;
 }) {
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({ where: { id: input.saleOrderId } });
     if (order.status !== SaleOrderStatus.DRAFT) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
-          entityType: "SaleOrder",
-          entityId: order.id,
-          metadataJson: { reason: "INVALID_TRANSITION", currentStatus: order.status },
-        },
+      throw attachAuditToError(new Error("INVALID_TRANSITION"), {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
+        entityType: "SaleOrder",
+        entityId: order.id,
+        metadataJson: { reason: "INVALID_TRANSITION", currentStatus: order.status },
       });
-      throw new Error("INVALID_TRANSITION");
     }
 
     const lines = await tx.saleOrderLine.findMany({ where: { saleOrderId: input.saleOrderId } });
     if (lines.length === 0) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
-          entityType: "SaleOrder",
-          entityId: order.id,
-          metadataJson: { reason: "ORDER_EMPTY" },
-        },
+      throw attachAuditToError(new Error("ORDER_EMPTY"), {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
+        entityType: "SaleOrder",
+        entityId: order.id,
+        metadataJson: { reason: "ORDER_EMPTY" },
       });
-      throw new Error("ORDER_EMPTY");
     }
 
     for (const line of lines) {
@@ -672,33 +670,30 @@ export async function submitSaleOrderToPendingPayment(input: {
         quantity: line.quantity,
       });
       if (!availability.ok) {
-        await tx.auditLog.create({
-          data: {
-            actorUserId: input.actorUserId,
-            branchId: order.branchId,
-            module: "sales",
-            action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
-            entityType: "SaleOrder",
-            entityId: order.id,
-            metadataJson: {
-              reason: availability.reason ?? "INSUFFICIENT_STOCK",
-              productId: line.productId,
-              inventoryProductId: availability.inventoryProductId,
-              stockMode: availability.stockMode,
-              requestedQty: availability.requestedQuantity.toString(),
-              requiredBaseQty: availability.requestedBaseQuantity.toString(),
-              availableSaleQty: availability.availableSaleQuantity.toString(),
-              availableBaseQty: availability.availableBaseQuantity.toString(),
-              details: Object.fromEntries(
-                Object.entries(availability.details).map(([key, value]) => [
-                  key,
-                  value instanceof Prisma.Decimal ? value.toString() : value ?? null,
-                ]),
-              ),
-            },
+        throw attachAuditToError(new Error(availability.reason ?? "INSUFFICIENT_STOCK"), {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "sales",
+          action: SALE_AUDIT_EVENTS.ORDER_SUBMIT_DENIED,
+          entityType: "SaleOrder",
+          entityId: order.id,
+          metadataJson: {
+            reason: availability.reason ?? "INSUFFICIENT_STOCK",
+            productId: line.productId,
+            inventoryProductId: availability.inventoryProductId,
+            stockMode: availability.stockMode,
+            requestedQty: availability.requestedQuantity.toString(),
+            requiredBaseQty: availability.requestedBaseQuantity.toString(),
+            availableSaleQty: availability.availableSaleQuantity.toString(),
+            availableBaseQty: availability.availableBaseQuantity.toString(),
+            details: Object.fromEntries(
+              Object.entries(availability.details).map(([key, value]) => [
+                key,
+                value instanceof Prisma.Decimal ? value.toString() : value ?? null,
+              ]),
+            ),
           },
         });
-        throw new Error(availability.reason ?? "INSUFFICIENT_STOCK");
       }
     }
 
@@ -749,7 +744,11 @@ export async function submitSaleOrderToPendingPayment(input: {
     });
 
     return updated;
-  });
+    });
+  } catch (error) {
+    await writePendingAuditFromError(error);
+    throw error;
+  }
 }
 
 function normalizeDirectSaleTenders(input: {
@@ -807,7 +806,8 @@ export async function submitDirectSale(input: {
     throw new Error("DIRECT_PAYMENT_DISABLED");
   }
 
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     const order = await tx.saleOrder.findUniqueOrThrow({
       where: { id: input.saleOrderId },
       include: { lines: true, payments: true },
@@ -854,50 +854,41 @@ export async function submitDirectSale(input: {
     });
     if (!session) throw new Error("INVALID_CASH_SESSION");
     if (session.status === CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: "PAYMENT_BLOCKED_AUTO_CLOSED_SESSION",
-          entityType: "CashSession",
-          entityId: session.id,
-          metadataJson: { saleOrderId: order.id, status: session.status },
-        },
+      throw attachAuditToError(new Error("CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW"), {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: "PAYMENT_BLOCKED_AUTO_CLOSED_SESSION",
+        entityType: "CashSession",
+        entityId: session.id,
+        metadataJson: { saleOrderId: order.id, status: session.status },
       });
-      throw new Error("CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW");
     }
     if (session.status !== CashSessionStatus.OPEN || !session.activeSessionKey) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: "PAYMENT_BLOCKED_NO_OPEN_CASH_SESSION",
-          entityType: "CashSession",
-          entityId: session.id,
-          metadataJson: { saleOrderId: order.id, status: session.status, hasActiveSessionKey: Boolean(session.activeSessionKey) },
-        },
+      throw attachAuditToError(new Error("CASH_SESSION_NOT_OPEN"), {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: "PAYMENT_BLOCKED_NO_OPEN_CASH_SESSION",
+        entityType: "CashSession",
+        entityId: session.id,
+        metadataJson: { saleOrderId: order.id, status: session.status, hasActiveSessionKey: Boolean(session.activeSessionKey) },
       });
-      throw new Error("CASH_SESSION_NOT_OPEN");
     }
     // Defensivo, no una compuerta del día operativo: si la sesión sigue OPEN
     // (ya verificado arriba), su día por construcción debería seguir ACTIVE —
     // sweepDayToAwaitingReviewTx siempre cierra las cajas OPEN de un día antes
     // de barrerlo. Esto solo atrapa una corrupción de datos real.
     if (!session.operationalDay || session.operationalDay.lifecycle !== "ACTIVE") {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: order.branchId,
-          module: "sales",
-          action: "PAYMENT_BLOCKED_OPERATIONAL_DAY_NOT_ACTIVE",
-          entityType: "OperationalDay",
-          entityId: session.operationalDayId ?? order.branchId,
-          metadataJson: { saleOrderId: order.id, operationalDayId: session.operationalDayId, lifecycle: session.operationalDay?.lifecycle ?? null },
-        },
+      throw attachAuditToError(new Error("OPERATIONAL_DAY_NOT_ACTIVE"), {
+        actorUserId: input.actorUserId,
+        branchId: order.branchId,
+        module: "sales",
+        action: "PAYMENT_BLOCKED_OPERATIONAL_DAY_NOT_ACTIVE",
+        entityType: "OperationalDay",
+        entityId: session.operationalDayId ?? order.branchId,
+        metadataJson: { saleOrderId: order.id, operationalDayId: session.operationalDayId, lifecycle: session.operationalDay?.lifecycle ?? null },
       });
-      throw new Error("OPERATIONAL_DAY_NOT_ACTIVE");
     }
     if (!session.physicalCashBox?.isActive) throw new Error("CASH_BOX_INACTIVE");
     if (session.physicalCashBox.branchId !== order.branchId) throw new Error("CASH_BOX_BRANCH_MISMATCH");
@@ -1032,7 +1023,11 @@ export async function submitDirectSale(input: {
     await refreshOperationalDaySummaryTx(tx, session.operationalDayId);
 
     return updatedOrder;
-  });
+    });
+  } catch (error) {
+    await writePendingAuditFromError(error);
+    throw error;
+  }
 }
 
 /* ──────────────────────────────────────────────────────────────────────── */

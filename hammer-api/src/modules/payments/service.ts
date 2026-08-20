@@ -8,6 +8,7 @@ import {
   SaleOrderStatus,
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { attachAuditToError, writePendingAuditFromError } from "@/modules/audit/service";
 import { consumeSharedStockForSaleTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
 import { PAYMENT_AUDIT_EVENTS } from "@/modules/payments/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
@@ -86,18 +87,15 @@ async function validateCashSessionForOrderTx(tx: Prisma.TransactionClient, param
     || actor?.globalRole === RoleCode.OWNER;
 
   if (!actor || (!isGlobalAllowed && actor.userBranchRoles.length === 0)) {
-    await tx.auditLog.create({
-      data: {
-        actorUserId: params.actorUserId,
-        branchId: params.branchId,
-        module: "payments",
-        action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-        entityType: "SaleOrder",
-        entityId: params.saleOrderId,
-        metadataJson: { reason: "FORBIDDEN_BRANCH" },
-      },
+    throw attachAuditToError(new Error("FORBIDDEN_BRANCH"), {
+      actorUserId: params.actorUserId,
+      branchId: params.branchId,
+      module: "payments",
+      action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+      entityType: "SaleOrder",
+      entityId: params.saleOrderId,
+      metadataJson: { reason: "FORBIDDEN_BRANCH" },
     });
-    throw new Error("FORBIDDEN_BRANCH");
   }
 
   await tx.$queryRaw`
@@ -113,117 +111,99 @@ async function validateCashSessionForOrderTx(tx: Prisma.TransactionClient, param
   });
 
   if (!session) {
-    await tx.auditLog.create({
-      data: {
-        actorUserId: params.actorUserId,
-        branchId: params.branchId,
-        module: "payments",
-        action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-        entityType: "SaleOrder",
-        entityId: params.saleOrderId,
-        metadataJson: { reason: "INVALID_CASH_SESSION", cashSessionId: params.cashSessionId },
-      },
+    throw attachAuditToError(new Error("INVALID_CASH_SESSION"), {
+      actorUserId: params.actorUserId,
+      branchId: params.branchId,
+      module: "payments",
+      action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+      entityType: "SaleOrder",
+      entityId: params.saleOrderId,
+      metadataJson: { reason: "INVALID_CASH_SESSION", cashSessionId: params.cashSessionId },
     });
-    throw new Error("INVALID_CASH_SESSION");
   }
 
   if (session.status === CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW) {
-    await tx.auditLog.create({
-      data: {
-        actorUserId: params.actorUserId,
-        branchId: params.branchId,
-        module: "payments",
-        action: "PAYMENT_BLOCKED_AUTO_CLOSED_SESSION",
-        entityType: "SaleOrder",
-        entityId: params.saleOrderId,
-        metadataJson: {
-          reason: "CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW",
-          cashSessionId: session.id,
-          status: session.status,
-        },
+    throw attachAuditToError(new Error("CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW"), {
+      actorUserId: params.actorUserId,
+      branchId: params.branchId,
+      module: "payments",
+      action: "PAYMENT_BLOCKED_AUTO_CLOSED_SESSION",
+      entityType: "SaleOrder",
+      entityId: params.saleOrderId,
+      metadataJson: {
+        reason: "CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW",
+        cashSessionId: session.id,
+        status: session.status,
       },
     });
-    throw new Error("CASH_SESSION_AUTO_CLOSED_PENDING_REVIEW");
   }
 
   if (session.status !== CashSessionStatus.OPEN || !session.activeSessionKey) {
-    await tx.auditLog.create({
-      data: {
-        actorUserId: params.actorUserId,
-        branchId: params.branchId,
-        module: "payments",
-        action: "PAYMENT_BLOCKED_NO_OPEN_CASH_SESSION",
-        entityType: "SaleOrder",
-        entityId: params.saleOrderId,
-        metadataJson: {
-          reason: "CASH_SESSION_NOT_OPEN",
-          cashSessionId: session.id,
-          status: session.status,
-          hasActiveSessionKey: Boolean(session.activeSessionKey),
-        },
+    throw attachAuditToError(new Error("CASH_SESSION_NOT_OPEN"), {
+      actorUserId: params.actorUserId,
+      branchId: params.branchId,
+      module: "payments",
+      action: "PAYMENT_BLOCKED_NO_OPEN_CASH_SESSION",
+      entityType: "SaleOrder",
+      entityId: params.saleOrderId,
+      metadataJson: {
+        reason: "CASH_SESSION_NOT_OPEN",
+        cashSessionId: session.id,
+        status: session.status,
+        hasActiveSessionKey: Boolean(session.activeSessionKey),
       },
     });
-    throw new Error("CASH_SESSION_NOT_OPEN");
   }
 
   // Defensivo, no una compuerta del día operativo: si la sesión sigue OPEN
   // (ya verificado arriba), su día por construcción debería seguir ACTIVE.
   if (!session.operationalDay || session.operationalDay.lifecycle !== "ACTIVE") {
-    await tx.auditLog.create({
-      data: {
-        actorUserId: params.actorUserId,
-        branchId: params.branchId,
-        module: "payments",
-        action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-        entityType: "SaleOrder",
-        entityId: params.saleOrderId,
-        metadataJson: {
-          reason: "OPERATIONAL_DAY_NOT_ACTIVE",
-          cashSessionId: session.id,
-          operationalDayId: session.operationalDayId,
-          operationalDayLifecycle: session.operationalDay?.lifecycle ?? null,
-        },
+    throw attachAuditToError(new Error("OPERATIONAL_DAY_NOT_ACTIVE"), {
+      actorUserId: params.actorUserId,
+      branchId: params.branchId,
+      module: "payments",
+      action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+      entityType: "SaleOrder",
+      entityId: params.saleOrderId,
+      metadataJson: {
+        reason: "OPERATIONAL_DAY_NOT_ACTIVE",
+        cashSessionId: session.id,
+        operationalDayId: session.operationalDayId,
+        operationalDayLifecycle: session.operationalDay?.lifecycle ?? null,
       },
     });
-    throw new Error("OPERATIONAL_DAY_NOT_ACTIVE");
   }
 
   if (!session.physicalCashBox?.isActive) {
-    await tx.auditLog.create({
-      data: {
-        actorUserId: params.actorUserId,
-        branchId: params.branchId,
-        module: "payments",
-        action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-        entityType: "SaleOrder",
-        entityId: params.saleOrderId,
-        metadataJson: {
-          reason: "CASH_BOX_INACTIVE",
-          cashSessionId: session.id,
-          physicalCashBoxId: session.physicalCashBoxId,
-        },
+    throw attachAuditToError(new Error("CASH_BOX_INACTIVE"), {
+      actorUserId: params.actorUserId,
+      branchId: params.branchId,
+      module: "payments",
+      action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+      entityType: "SaleOrder",
+      entityId: params.saleOrderId,
+      metadataJson: {
+        reason: "CASH_BOX_INACTIVE",
+        cashSessionId: session.id,
+        physicalCashBoxId: session.physicalCashBoxId,
       },
     });
-    throw new Error("CASH_BOX_INACTIVE");
   }
 
   if (session.physicalCashBox.branchId !== params.branchId) {
-    await tx.auditLog.create({
-      data: {
-        actorUserId: params.actorUserId,
-        branchId: params.branchId,
-        module: "payments",
-        action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-        entityType: "SaleOrder",
-        entityId: params.saleOrderId,
-        metadataJson: {
-          reason: "CASH_BOX_BRANCH_MISMATCH",
-          cashSessionId: session.id,
-          cashBoxBranchId: session.physicalCashBox.branchId,
-        },
+    throw attachAuditToError(new Error("CASH_BOX_BRANCH_MISMATCH"), {
+      actorUserId: params.actorUserId,
+      branchId: params.branchId,
+      module: "payments",
+      action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+      entityType: "SaleOrder",
+      entityId: params.saleOrderId,
+      metadataJson: {
+        reason: "CASH_BOX_BRANCH_MISMATCH",
+        cashSessionId: session.id,
+        cashBoxBranchId: session.physicalCashBox.branchId,
       },
     });
-    throw new Error("CASH_BOX_BRANCH_MISMATCH");
   }
 
   const canOperate = await userCanOperateCashSessionTx(tx, {
@@ -232,18 +212,15 @@ async function validateCashSessionForOrderTx(tx: Prisma.TransactionClient, param
     branchId: params.branchId,
   });
   if (!canOperate) {
-    await tx.auditLog.create({
-      data: {
-        actorUserId: params.actorUserId,
-        branchId: params.branchId,
-        module: "payments",
-        action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-        entityType: "SaleOrder",
-        entityId: params.saleOrderId,
-        metadataJson: { reason: "CASH_SESSION_OPERATOR_REQUIRED", cashSessionId: session.id },
-      },
+    throw attachAuditToError(new Error("CASH_SESSION_OPERATOR_REQUIRED"), {
+      actorUserId: params.actorUserId,
+      branchId: params.branchId,
+      module: "payments",
+      action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+      entityType: "SaleOrder",
+      entityId: params.saleOrderId,
+      metadataJson: { reason: "CASH_SESSION_OPERATOR_REQUIRED", cashSessionId: session.id },
     });
-    throw new Error("CASH_SESSION_OPERATOR_REQUIRED");
   }
 
   return session;
@@ -314,56 +291,47 @@ export async function postSaleOrderPayment(input: {
       });
 
       if (order.status !== SaleOrderStatus.PENDING_PAYMENT) {
-        await tx.auditLog.create({
-          data: {
-            actorUserId: input.actorUserId,
-            branchId: order.branchId,
-            module: "payments",
-            action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-            entityType: "SaleOrder",
-            entityId: order.id,
-            metadataJson: { reason: "PAYMENT_INVALID_STATUS", currentStatus: order.status },
-          },
+        throw attachAuditToError(new Error("PAYMENT_INVALID_STATUS"), {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "payments",
+          action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+          entityType: "SaleOrder",
+          entityId: order.id,
+          metadataJson: { reason: "PAYMENT_INVALID_STATUS", currentStatus: order.status },
         });
-        throw new Error("PAYMENT_INVALID_STATUS");
       }
 
       const existingPayment = order.payments.find((payment) => payment.status === PaymentStatus.POSTED);
       if (existingPayment) {
-        await tx.auditLog.create({
-          data: {
-            actorUserId: input.actorUserId,
-            branchId: order.branchId,
-            module: "payments",
-            action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-            entityType: "SaleOrder",
-            entityId: order.id,
-            metadataJson: { reason: "PAYMENT_ALREADY_POSTED", paymentId: existingPayment.id },
-          },
+        throw attachAuditToError(new Error("PAYMENT_ALREADY_POSTED"), {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "payments",
+          action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+          entityType: "SaleOrder",
+          entityId: order.id,
+          metadataJson: { reason: "PAYMENT_ALREADY_POSTED", paymentId: existingPayment.id },
         });
-        throw new Error("PAYMENT_ALREADY_POSTED");
       }
 
       const orderTotal = new Prisma.Decimal(order.grandTotal);
       const tenderSummary = normalizeTenders(input);
       const requestedAmount = tenderSummary.total;
       if (!requestedAmount.eq(orderTotal)) {
-        await tx.auditLog.create({
-          data: {
-            actorUserId: input.actorUserId,
-            branchId: order.branchId,
-            module: "payments",
-            action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-            entityType: "SaleOrder",
-            entityId: order.id,
-            metadataJson: {
-              reason: "INVALID_PAYMENT_AMOUNT",
-              orderTotal: orderTotal.toString(),
-              requestedAmount: requestedAmount.toString(),
-            },
+        throw attachAuditToError(new Error("INVALID_PAYMENT_AMOUNT"), {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "payments",
+          action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+          entityType: "SaleOrder",
+          entityId: order.id,
+          metadataJson: {
+            reason: "INVALID_PAYMENT_AMOUNT",
+            orderTotal: orderTotal.toString(),
+            requestedAmount: requestedAmount.toString(),
           },
         });
-        throw new Error("INVALID_PAYMENT_AMOUNT");
       }
 
       const session = await validateCashSessionForOrderTx(tx, {
@@ -392,33 +360,30 @@ export async function postSaleOrderPayment(input: {
           quantity: line.quantity,
         });
         if (!availability.ok) {
-          await tx.auditLog.create({
-            data: {
-              actorUserId: input.actorUserId,
-              branchId: order.branchId,
-              module: "payments",
-              action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-              entityType: "SaleOrder",
-              entityId: order.id,
-              metadataJson: {
-                reason: availability.reason ?? "INSUFFICIENT_STOCK_AT_PAYMENT",
-                productId: line.productId,
-                inventoryProductId: availability.inventoryProductId,
-                stockMode: availability.stockMode,
-                requested: availability.requestedQuantity.toString(),
-                requiredBaseQty: availability.requestedBaseQuantity.toString(),
-                availableSaleQty: availability.availableSaleQuantity.toString(),
-                availableBaseQty: availability.availableBaseQuantity.toString(),
-                details: Object.fromEntries(
-                  Object.entries(availability.details).map(([key, value]) => [
-                    key,
-                    value instanceof Prisma.Decimal ? value.toString() : value ?? null,
-                  ]),
-                ),
-              },
+          throw attachAuditToError(new Error(availability.reason ?? "INSUFFICIENT_STOCK_AT_PAYMENT"), {
+            actorUserId: input.actorUserId,
+            branchId: order.branchId,
+            module: "payments",
+            action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+            entityType: "SaleOrder",
+            entityId: order.id,
+            metadataJson: {
+              reason: availability.reason ?? "INSUFFICIENT_STOCK_AT_PAYMENT",
+              productId: line.productId,
+              inventoryProductId: availability.inventoryProductId,
+              stockMode: availability.stockMode,
+              requested: availability.requestedQuantity.toString(),
+              requiredBaseQty: availability.requestedBaseQuantity.toString(),
+              availableSaleQty: availability.availableSaleQuantity.toString(),
+              availableBaseQty: availability.availableBaseQuantity.toString(),
+              details: Object.fromEntries(
+                Object.entries(availability.details).map(([key, value]) => [
+                  key,
+                  value instanceof Prisma.Decimal ? value.toString() : value ?? null,
+                ]),
+              ),
             },
           });
-          throw new Error(availability.reason ?? "INSUFFICIENT_STOCK_AT_PAYMENT");
         }
       }
 
@@ -439,20 +404,17 @@ export async function postSaleOrderPayment(input: {
           inventoryDeductions.push(...movementResult.movements.map((movement) => movement.id));
         }
       } catch (error) {
-        await tx.auditLog.create({
-          data: {
-            actorUserId: input.actorUserId,
-            branchId: order.branchId,
-            module: "payments",
-            action: PAYMENT_AUDIT_EVENTS.PAYMENT_INVENTORY_DEDUCTION_FAILED,
-            entityType: "SaleOrder",
-            entityId: order.id,
-            metadataJson: {
-              reason: error instanceof Error ? error.message : "UNKNOWN_ERROR",
-            },
+        throw attachAuditToError(error instanceof Error ? error : new Error("UNKNOWN_ERROR"), {
+          actorUserId: input.actorUserId,
+          branchId: order.branchId,
+          module: "payments",
+          action: PAYMENT_AUDIT_EVENTS.PAYMENT_INVENTORY_DEDUCTION_FAILED,
+          entityType: "SaleOrder",
+          entityId: order.id,
+          metadataJson: {
+            reason: error instanceof Error ? error.message : "UNKNOWN_ERROR",
           },
         });
-        throw error;
       }
 
       await tx.auditLog.create({
@@ -512,18 +474,15 @@ export async function postSaleOrderPayment(input: {
           error instanceof Prisma.PrismaClientKnownRequestError
           && error.code === "P2002"
         ) {
-          await tx.auditLog.create({
-            data: {
-              actorUserId: input.actorUserId,
-              branchId: order.branchId,
-              module: "payments",
-              action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
-              entityType: "SaleOrder",
-              entityId: order.id,
-              metadataJson: { reason: "PAYMENT_ALREADY_POSTED", source: "DB_CONSTRAINT" },
-            },
+          throw attachAuditToError(new Error("PAYMENT_ALREADY_POSTED"), {
+            actorUserId: input.actorUserId,
+            branchId: order.branchId,
+            module: "payments",
+            action: PAYMENT_AUDIT_EVENTS.PAYMENT_DENIED,
+            entityType: "SaleOrder",
+            entityId: order.id,
+            metadataJson: { reason: "PAYMENT_ALREADY_POSTED", source: "DB_CONSTRAINT" },
           });
-          throw new Error("PAYMENT_ALREADY_POSTED");
         }
         throw error;
       }
@@ -614,6 +573,7 @@ export async function postSaleOrderPayment(input: {
       return { payment, order: updatedOrder, inventoryMovementIds: inventoryDeductions };
     });
   } catch (error) {
+    await writePendingAuditFromError(error);
     if (
       error instanceof Prisma.PrismaClientKnownRequestError
       && error.code === "P2002"

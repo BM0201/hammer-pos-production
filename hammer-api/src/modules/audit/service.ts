@@ -13,6 +13,33 @@ type AuditInput = {
   userAgent?: string;
 };
 
+/**
+ * prompt-auditoria-rechazos-y-cierre-de-costos.md A-0 — tx.auditLog.create()
+ * dentro de un prisma.$transaction seguido de throw en el MISMO camino se
+ * revierte junto con todo lo demás: Prisma deshace la transacción entera,
+ * incluida la fila de auditoría que iba a explicar el rechazo. Confirmado en
+ * producción — SALE_ORDER_LINE_MUTATION_DENIED tenía cero filas después de
+ * 24k+ eventos de auditoría reales.
+ *
+ * Patrón de arreglo: dentro de la transacción, en vez de escribir la fila,
+ * se adjunta el payload al error con attachAuditToError. La función pública
+ * que abre la $transaction la envuelve en try/catch y llama a
+ * writePendingAuditFromError ANTES de relanzar — ya fuera de la transacción
+ * revertida. logAuditEvent ya tiene su propio try/catch (nunca rompe el
+ * flujo principal), así que un fallo al auditar jamás convierte un 409 en 500.
+ */
+type AuditableError = Error & { auditPayload?: AuditInput };
+
+export function attachAuditToError<E extends Error>(error: E, payload: AuditInput): E {
+  (error as AuditableError).auditPayload = payload;
+  return error;
+}
+
+export async function writePendingAuditFromError(error: unknown): Promise<void> {
+  const payload = (error as AuditableError | null | undefined)?.auditPayload;
+  if (payload) await logAuditEvent(payload);
+}
+
 export async function logAuditEvent(input: AuditInput): Promise<void> {
   try {
     let actorUserId = input.actorUserId ?? undefined;

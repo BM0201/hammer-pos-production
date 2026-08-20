@@ -8,6 +8,7 @@ import {
   buildChecklist,
 } from "@/modules/operations/day-summary";
 import { getCashToleranceConfig, resolveCashToleranceForBranch } from "@/modules/operations/cash-tolerance-config";
+import { attachAuditToError, writePendingAuditFromError } from "@/modules/audit/service";
 
 const TIMEZONE = OPERATIONAL_TIMEZONE;
 
@@ -287,7 +288,8 @@ export async function revertOperationalDayConfirmation(input: { id: string; acto
 
 /** Anulación explícita de Master — solo si el día no tuvo actividad real (o con override + nota). */
 export async function cancelOperationalDay(input: { id: string; actorUserId: string; note: string; override?: boolean }) {
-  return prisma.$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "OperationalDay" WHERE id = ${input.id} FOR UPDATE`;
     const day = await tx.operationalDay.findUniqueOrThrow({ where: { id: input.id } });
 
@@ -332,20 +334,17 @@ export async function cancelOperationalDay(input: { id: string; actorUserId: str
       cashMovementsCount > 0;
 
     if (hasRealActivity && !input.override) {
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: day.branchId,
-          module: "operations",
-          action: "OPERATIONAL_DAY_CANCEL_BLOCKED",
-          entityType: "OperationalDay",
-          entityId: day.id,
-          metadataJson: toJsonValue({ checklist: cancelChecklist, note: input.note }),
-        },
-      });
       const err = new Error("OPERATIONAL_DAY_HAS_REAL_ACTIVITY");
       (err as unknown as { checklist: typeof cancelChecklist }).checklist = cancelChecklist;
-      throw err;
+      throw attachAuditToError(err, {
+        actorUserId: input.actorUserId,
+        branchId: day.branchId,
+        module: "operations",
+        action: "OPERATIONAL_DAY_CANCEL_BLOCKED",
+        entityType: "OperationalDay",
+        entityId: day.id,
+        metadataJson: { checklist: cancelChecklist, note: input.note },
+      });
     }
 
     const cancelled = await tx.operationalDay.update({
@@ -370,7 +369,11 @@ export async function cancelOperationalDay(input: { id: string; actorUserId: str
       },
     });
     return cancelled;
-  });
+    });
+  } catch (error) {
+    await writePendingAuditFromError(error);
+    throw error;
+  }
 }
 
 /**
