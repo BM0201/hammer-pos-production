@@ -1,7 +1,6 @@
 "use client";
 
 import { AlertTriangle, Settings2, TrendingUp } from "lucide-react";
-import Link from "next/link";
 import { STATE_META, type CashPosition } from "@/components/navigation/cash-indicator-panel";
 
 const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -106,10 +105,10 @@ function NoPolicyBar({ accumulatedAmount, configureHref }: { accumulatedAmount: 
       <div className="mt-2 flex items-center justify-between gap-2">
         <p className="text-xs text-[var(--color-text-muted)]">Sin política de depósito configurada — sin umbral ni techo que mostrar.</p>
         {configureHref && (
-          <Link href={configureHref} className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-[var(--color-master-600)] hover:underline">
+          <a href={configureHref} className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-[var(--color-master-600)] hover:underline">
             <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
             Configurar
-          </Link>
+          </a>
         )}
       </div>
     </div>
