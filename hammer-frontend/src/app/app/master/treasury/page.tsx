@@ -9,6 +9,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
 import { STATE_META, type CashPosition, type CashIndicatorState } from "@/components/navigation/cash-indicator-panel";
+import { CashAccumulationBar } from "@/components/finance/cash-accumulation-bar";
+import { RetainedCashExpenseSheet } from "@/components/finance/retained-cash-expense-sheet";
+import { RetainedCashExpenseList } from "@/components/finance/retained-cash-expense-list";
 
 type Branch = { id: string; code: string; name: string; cashFundAmount: string | null };
 
@@ -90,6 +93,9 @@ export default function TreasuryPage() {
   const [loading, setLoading] = useState(true);
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [detailAccountId, setDetailAccountId] = useState<string | null>(null);
+  const [expandedCashBranchId, setExpandedCashBranchId] = useState<string | null>(null);
+  const [expenseSheetBranchId, setExpenseSheetBranchId] = useState<string | null>(null);
+  const [expenseListRefreshKey, setExpenseListRefreshKey] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -256,7 +262,17 @@ export default function TreasuryPage() {
           <div className="space-y-1.5">
             {[...cashPositions]
               .sort((a, b) => STATE_PRIORITY[a.position.state] - STATE_PRIORITY[b.position.state])
-              .map((row) => <CashPositionRowItem key={row.branch.id} branch={row.branch} position={row.position} />)}
+              .map((row) => (
+                <CashPositionRowItem
+                  key={row.branch.id}
+                  branch={row.branch}
+                  position={row.position}
+                  expanded={expandedCashBranchId === row.branch.id}
+                  onToggle={() => setExpandedCashBranchId((current) => (current === row.branch.id ? null : row.branch.id))}
+                  onRegisterExpense={() => setExpenseSheetBranchId(row.branch.id)}
+                  refreshKey={expenseListRefreshKey}
+                />
+              ))}
           </div>
         </Card>
       )}
@@ -365,7 +381,7 @@ export default function TreasuryPage() {
       </Card>
 
       {/* Política de depósito — la base del indicador de efectivo de la barra lateral */}
-      <Card className="p-4">
+      <Card id="politica-de-deposito" className="scroll-mt-4 p-4">
         <div className="mb-3 flex items-center gap-2">
           <AlarmClock className="h-4 w-4 text-[var(--color-master-600)]" />
           <h2 className="text-sm font-semibold text-[var(--color-text)]">Política de depósito por sucursal</h2>
@@ -396,6 +412,15 @@ export default function TreasuryPage() {
           onChanged={() => void load()}
         />
       )}
+
+      <RetainedCashExpenseSheet
+        open={expenseSheetBranchId !== null}
+        onClose={() => setExpenseSheetBranchId(null)}
+        branchId={expenseSheetBranchId ?? ""}
+        position={cashPositions.find((r) => r.branch.id === expenseSheetBranchId)?.position ?? null}
+        bankAccounts={bankAccountsOnly}
+        onSaved={() => { setExpenseListRefreshKey((k) => k + 1); void load(); }}
+      />
     </section>
   );
 }
@@ -424,32 +449,56 @@ function PositionTile({ icon: Icon, label, data, rate, amber }: {
   );
 }
 
-function CashPositionRowItem({ branch, position }: { branch: { id: string; code: string; name: string }; position: CashPosition }) {
+function CashPositionRowItem({
+  branch,
+  position,
+  expanded,
+  onToggle,
+  onRegisterExpense,
+  refreshKey,
+}: {
+  branch: { id: string; code: string; name: string };
+  position: CashPosition;
+  expanded: boolean;
+  onToggle: () => void;
+  onRegisterExpense: () => void;
+  refreshKey: number;
+}) {
   const meta = STATE_META[position.state];
   return (
     <div
       className={[
-        "flex items-center justify-between gap-3 rounded-lg border p-3",
+        "rounded-lg border",
         meta.tone === "critical" ? "border-[var(--color-danger-200)] bg-[var(--color-danger-50)]" :
         meta.tone === "amber" ? "border-[var(--color-warning-200)] bg-[var(--color-warning-50)]" :
         "border-[var(--color-border)] bg-[var(--color-surface)]",
       ].join(" ")}
     >
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-semibold text-[var(--color-text)]">{branch.name}</span>
-          <Badge variant={meta.tone === "critical" ? "danger" : meta.tone === "amber" ? "warning" : "neutral"}>{meta.label}</Badge>
+      <button type="button" onClick={onToggle} className="flex w-full items-center justify-between gap-3 p-3 text-left">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-[var(--color-text)]">{branch.name}</span>
+            <Badge variant={meta.tone === "critical" ? "danger" : meta.tone === "amber" ? "warning" : "neutral"}>{meta.label}</Badge>
+          </div>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            En caja hoy {fmt(position.cashInDrawerToday)} · Acumulado {fmt(position.accumulatedAmount)}
+            {position.inTransitAmount > 0.01 ? ` · En tránsito ${fmt(position.inTransitAmount)}` : ""}
+          </p>
         </div>
-        <p className="text-xs text-[var(--color-text-muted)]">
-          En caja hoy {fmt(position.cashInDrawerToday)} · Acumulado {fmt(position.accumulatedAmount)}
-          {position.inTransitAmount > 0.01 ? ` · En tránsito ${fmt(position.inTransitAmount)}` : ""}
-        </p>
-      </div>
-      <div className="shrink-0 text-right">
-        <p className="text-xs text-[var(--color-text-muted)]">Para depositar</p>
-        <p className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{fmt(position.pendingDeposit)}</p>
-        {position.pendingDepositNote && <p className="text-[0.6875rem] italic text-[var(--color-text-soft)]">{position.pendingDepositNote}</p>}
-      </div>
+        <div className="shrink-0 text-right">
+          <p className="text-xs text-[var(--color-text-muted)]">Para depositar</p>
+          <p className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{fmt(position.pendingDeposit)}</p>
+          {position.pendingDepositNote && <p className="text-[0.6875rem] italic text-[var(--color-text-soft)]">{position.pendingDepositNote}</p>}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="space-y-3 border-t border-[var(--color-border)] p-3">
+          <CashAccumulationBar position={position} configureHref="#politica-de-deposito" />
+          <Button variant="secondary" size="sm" onClick={onRegisterExpense}>Registrar gasto con efectivo retenido</Button>
+          <RetainedCashExpenseList branchId={branch.id} refreshKey={refreshKey} />
+        </div>
+      )}
     </div>
   );
 }
