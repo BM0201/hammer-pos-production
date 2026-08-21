@@ -131,3 +131,22 @@ export const recordAccountPaymentSchema = z
       });
     }
   });
+
+/**
+ * prompt-tesoreria-gasto-retenido-y-techo.md T-1/T-5 — gasto pagado con
+ * efectivo retenido (cuenta SAFE), no con la gaveta abierta. receiptReference
+ * siempre obligatoria: no hay módulo de documentos/adjuntos en este código
+ * base, se decidió una referencia de texto en vez de construir carga de
+ * archivos nueva (2026-08-21).
+ */
+export const recordRetainedCashExpenseSchema = z.object({
+  branchId: z.string().cuid(),
+  category: z.enum(["PAYROLL", "UTILITIES", "RENT", "FOOD", "MAINTENANCE", "TRANSPORT", "MARKETING", "TAXES", "OTHER"]),
+  description: z.string().min(1).max(200),
+  amount: z.coerce.number().positive(),
+  receiptReference: z.string().min(1).max(150),
+});
+
+export const voidRetainedCashExpenseSchema = z.object({
+  reason: z.string().min(10).max(300),
+});

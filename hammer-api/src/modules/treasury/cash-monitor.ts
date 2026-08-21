@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 import { mean, stddev } from "@/modules/ai-insights/analyzer";
-import { createTreasuryEntryTx, findOrCreateCustodyAccountTx } from "@/modules/treasury/service";
+import { createTreasuryEntryTx, findOrCreateCustodyAccountTx, getActiveRetainedCashExpenses } from "@/modules/treasury/service";
 
 /**
  * prompt-indicador-efectivo-inteligente.md — indicador de efectivo en la
@@ -284,7 +284,15 @@ export async function getBranchCashPosition(branchId: string, now: Date = new Da
     orderBy: { createdAt: "asc" },
   });
 
-  const accumulatedAmount = round2(retainedDeclarations.reduce((sum, d) => sum + Number(d.retainAwaitingDepositPortion), 0));
+  // prompt-tesoreria-gasto-retenido-y-techo.md D-1 — un gasto pagado con
+  // efectivo retenido baja el acumulado, con el mismo corte que ya usa esta
+  // función para las declaraciones (desde el último despacho/confirmación).
+  // No se envejece nada acá — este indicador no calcula antigüedad por
+  // declaración, solo el monto total.
+  const cashExpensesSinceCutoff = await getActiveRetainedCashExpenses(branchId, lastDispatchOrConfirm?.occurredAt ?? null);
+  const totalDeclared = retainedDeclarations.reduce((sum, d) => sum + Number(d.retainAwaitingDepositPortion), 0);
+  const totalCashExpenses = cashExpensesSinceCutoff.reduce((sum, e) => sum + e.amount, 0);
+  const accumulatedAmount = round2(Math.max(0, totalDeclared - totalCashExpenses));
   const oldestRetainedAt = retainedDeclarations[0]?.createdAt ?? null;
   const daysSinceOldestRetained = oldestRetainedAt ? Math.floor((now.getTime() - oldestRetainedAt.getTime()) / MS_PER_DAY) : 0;
 

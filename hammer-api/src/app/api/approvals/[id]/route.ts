@@ -16,6 +16,7 @@ import {
 } from "@/modules/sales-returns/service";
 import { markOrderDispatched } from "@/modules/dispatch/service";
 import { createInventoryMovement, listInventoryBalances, resolveStockAdjustmentMovement } from "@/modules/inventory/service";
+import { executeApprovedRetainedCashExpense } from "@/modules/treasury/service";
 
 // Auditoría 2026-07-22, hallazgos C2+C3: la cola genérica solo actualizaba
 // ApprovalRequest.status — nunca ejecutaba la acción real (ajuste de
@@ -169,6 +170,39 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             entityId: approval.id,
             metadataJson: {
               orderId: approval.referenceId,
+              reason: executionError instanceof Error ? executionError.message : "UNKNOWN",
+            },
+          });
+          throw executionError;
+        }
+      }
+    } else if (approval.referenceType === "RETAINED_CASH_EXPENSE") {
+      const resolved = await approvalService.resolveRequest({
+        requestId: id,
+        actorUserId: session.userId,
+        decision: parsed.data.decision,
+        resolutionNotes: parsed.data.resolutionNotes,
+      });
+      data = resolved;
+      if (parsed.data.decision === "APPROVE") {
+        try {
+          const payload = approval.payloadJson as {
+            branchId: string; category: string; description: string; amount: number; receiptReference: string; safeAccountId: string;
+          } | null;
+          if (!payload) throw new Error("RETAINED_CASH_EXPENSE_PAYLOAD_MISSING");
+          await executeApprovedRetainedCashExpense({
+            actorUserId: session.userId,
+            payload: payload as Parameters<typeof executeApprovedRetainedCashExpense>[0]["payload"],
+          });
+        } catch (executionError) {
+          await logAuditEvent({
+            actorUserId: session.userId,
+            branchId: approval.branchId,
+            module: "approvals",
+            action: "RETAINED_CASH_EXPENSE_EXECUTION_FAILED",
+            entityType: "ApprovalRequest",
+            entityId: approval.id,
+            metadataJson: {
               reason: executionError instanceof Error ? executionError.message : "UNKNOWN",
             },
           });

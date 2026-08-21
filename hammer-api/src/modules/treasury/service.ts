@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { Prisma, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode } from "@prisma/client";
+import { Prisma, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory } from "@prisma/client";
 import { decomposeRetainedAmount, computeExposureAlert, type ExposureAlertThreshold } from "@/modules/treasury/decomposition";
 import { computeOutstandingAwaitingDeposit, countBusinessDaysBetween } from "@/modules/treasury/exposure";
 import { logAuditEvent } from "@/modules/audit/service";
+import { approvalService } from "@/modules/approvals/service";
+import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -604,7 +606,7 @@ export async function listCustodyAccountsWithBalance(branchId?: string | null) {
  * número; sin threshold, `exceeds` siempre es false.
  */
 export async function getBranchExposureStatus(branchId: string, threshold: ExposureAlertThreshold | null, now: Date = new Date()) {
-  const [declarations, deposits] = await Promise.all([
+  const [declarations, deposits, cashExpenses] = await Promise.all([
     prisma.cashDestinationDeclaration.findMany({
       where: { branchId, retainAwaitingDepositPortion: { gt: 0 } },
       select: { createdAt: true, retainAwaitingDepositPortion: true },
@@ -613,21 +615,70 @@ export async function getBranchExposureStatus(branchId: string, threshold: Expos
       where: { branchId },
       select: { depositedAt: true, amount: true },
     }),
+    getActiveRetainedCashExpenses(branchId, null),
   ]);
 
   const outstanding = computeOutstandingAwaitingDeposit(
     declarations.map((d) => ({ createdAt: d.createdAt, amount: Number(d.retainAwaitingDepositPortion) })),
     deposits.map((d) => ({ depositedAt: d.depositedAt, amount: Number(d.amount) })),
+    cashExpenses,
   );
   const businessDays = outstanding.oldestOutstandingDate
     ? countBusinessDaysBetween(outstanding.oldestOutstandingDate, now)
     : 0;
+
+  if (outstanding.cashExpensesExceedRetained) {
+    await logAuditEvent({
+      branchId,
+      module: "treasury",
+      action: "CASH_EXPENSE_EXCEEDS_RETAINED",
+      entityType: "Branch",
+      entityId: branchId,
+      metadataJson: {
+        outstandingAmount: outstanding.outstandingAmount,
+        note: "Los gastos pagados con efectivo retenido superan lo declarado menos lo depositado — descuadre real, no redondeado en silencio.",
+      },
+    });
+  }
 
   return {
     ...outstanding,
     businessDaysWithoutDeposit: businessDays,
     alert: computeExposureAlert(outstanding.outstandingAmount, businessDays, threshold),
   };
+}
+
+/**
+ * Gastos pagados con efectivo retenido, aún vigentes (no anulados), sobre
+ * cuentas SAFE de la sucursal — la "fuente de gastos" de D-1. Un gasto
+ * anulado (OperatingExpense.isActive=false) queda excluido: su asiento
+ * inverso ya devolvió el monto al acumulado por la vía normal (T-1
+ * voidRetainedCashExpense), no hace falta descontarlo dos veces acá.
+ *
+ * `since` opcional: getBranchCashPosition (cash-monitor.ts) lo usa con el
+ * mismo corte que ya aplica a las declaraciones (desde el último despacho/
+ * confirmación) — mismo criterio, evita que un gasto de un ciclo anterior
+ * ya cerrado siga descontando del acumulado del ciclo actual.
+ */
+export async function getActiveRetainedCashExpenses(branchId: string, since: Date | null = null): Promise<Array<{ occurredAt: Date; amount: number }>> {
+  const entries = await prisma.treasuryEntry.findMany({
+    where: {
+      account: { branchId, type: "SAFE" },
+      entryType: "EXPENSE",
+      direction: "OUT",
+      expensePaymentId: { not: null },
+      ...(since ? { occurredAt: { gt: since } } : {}),
+    },
+    select: { occurredAt: true, amount: true, expensePaymentId: true },
+  });
+  if (entries.length === 0) return [];
+  const expenseIds = entries.map((e) => e.expensePaymentId!).filter(Boolean);
+  const activeExpenseIds = new Set(
+    (await prisma.operatingExpense.findMany({ where: { id: { in: expenseIds }, isActive: true }, select: { id: true } })).map((e) => e.id),
+  );
+  return entries
+    .filter((e) => e.expensePaymentId && activeExpenseIds.has(e.expensePaymentId))
+    .map((e) => ({ occurredAt: e.occurredAt, amount: Number(e.amount) }));
 }
 
 // ─── Declaración de destino del efectivo al cerrar caja (§1) ──────────────
@@ -1187,4 +1238,240 @@ export async function recordAccountPayment(input: {
     },
   });
   return entry;
+}
+
+// ─── Gasto pagado con efectivo retenido (prompt-tesoreria-gasto-retenido-y-techo.md T-1) ──
+//
+// H-1 del doc: createOperatingExpense con registerCashMovement:true exige una
+// SESIÓN DE CAJA ABIERTA — pero el efectivo retenido esperando depósito no es
+// la gaveta abierta, es dinero de cierres anteriores acumulado en la cuenta
+// SAFE. Pagar el diésel con esa plata dejaba el gasto anotado y el efectivo
+// contado como si siguiera ahí. Esta vía es la que faltaba.
+//
+// No se puede reusar recordAccountPaymentTx: rechaza cualquier cuenta que no
+// sea type=BANK. Se reimplementa el mismo patrón de lock + guard de saldo no
+// negativo (H-2, Fase 1) escrito directo sobre createTreasuryEntryTx, sobre
+// la cuenta SAFE.
+
+const EXPENSE_CATEGORY_COUNTERPARTY: Record<ExpenseCategory, TreasuryCounterpartyType> = {
+  PAYROLL: "EMPLOYEE",
+  UTILITIES: "SUPPLIER",
+  RENT: "SUPPLIER",
+  FOOD: "SUPPLIER",
+  MAINTENANCE: "SUPPLIER",
+  TRANSPORT: "SUPPLIER",
+  MARKETING: "SUPPLIER",
+  TAXES: "ADJUSTMENT",
+  OTHER: "SUPPLIER",
+};
+
+export type RetainedCashExpenseInput = {
+  branchId: string;
+  category: ExpenseCategory;
+  description: string;
+  amount: number;
+  /**
+   * Referencia del comprobante (número de factura/recibo). No hay módulo de
+   * documentos/adjuntos en este código base — se pidió (y se decidió, 2026-08-21)
+   * una referencia de texto obligatoria en vez de construir un subsistema de
+   * carga de archivos nuevo. Siempre obligatoria en esta vía: pagar con
+   * efectivo retenido es un desembolso real, no presupuesto.
+   */
+  receiptReference: string;
+  actorUserId: string;
+};
+
+async function recordRetainedCashExpenseTx(
+  tx: Prisma.TransactionClient,
+  input: RetainedCashExpenseInput,
+  safeAccountId: string,
+) {
+  // Lock de fila: mismo patrón que H-2 (Fase 1) — serializa gastos
+  // concurrentes sobre la misma caja fuerte antes de leer el saldo.
+  await tx.$queryRaw`SELECT id FROM "TreasuryAccount" WHERE id = ${safeAccountId} FOR UPDATE`;
+
+  const [account, inAgg, outAgg] = await Promise.all([
+    tx.treasuryAccount.findUniqueOrThrow({ where: { id: safeAccountId }, select: { openingBalance: true } }),
+    tx.treasuryEntry.aggregate({ where: { accountId: safeAccountId, direction: "IN" }, _sum: { amount: true } }),
+    tx.treasuryEntry.aggregate({ where: { accountId: safeAccountId, direction: "OUT" }, _sum: { amount: true } }),
+  ]);
+  const balance = computeAccountBalance(
+    Number(account.openingBalance),
+    Number(inAgg._sum.amount ?? 0),
+    Number(outAgg._sum.amount ?? 0),
+  );
+  if (round2(balance - input.amount) < 0) {
+    throw new Error("VALIDATION_ERROR: el gasto dejaría el efectivo retenido en negativo");
+  }
+
+  // Eventual, acotado a su propio mes (T-1): un gasto pagado con efectivo
+  // retenido es un desembolso puntual, no una línea de presupuesto mensual.
+  // effectiveFrom = effectiveTo = hoy evita que contamine el prorrateo de
+  // precios de meses futuros (PricingConfig sobre totalMonthlyExpenses).
+  const today = new Date();
+  const expense = await tx.operatingExpense.create({
+    data: {
+      branchId: input.branchId,
+      category: input.category,
+      description: input.description,
+      amount: new Prisma.Decimal(input.amount),
+      effectiveFrom: today,
+      effectiveTo: today,
+      createdByUserId: input.actorUserId,
+    },
+  });
+
+  const entry = await createTreasuryEntryTx(tx, {
+    accountId: safeAccountId,
+    direction: "OUT",
+    entryType: "EXPENSE",
+    counterpartyType: EXPENSE_CATEGORY_COUNTERPARTY[input.category],
+    amount: round2(input.amount),
+    expensePaymentId: expense.id,
+    reference: input.receiptReference,
+    notes: input.description,
+    createdByUserId: input.actorUserId,
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "treasury",
+      action: "RETAINED_CASH_EXPENSE_RECORDED",
+      entityType: "OperatingExpense",
+      entityId: expense.id,
+      metadataJson: {
+        category: input.category,
+        amount: input.amount,
+        receiptReference: input.receiptReference,
+        treasuryEntryId: entry.id,
+        safeAccountId,
+      },
+    },
+  });
+
+  return { expense, treasuryEntry: entry };
+}
+
+export type RetainedCashExpenseResult =
+  | { status: "RECORDED"; expenseId: string; treasuryEntryId: string }
+  | { status: "PENDING_APPROVAL"; requestId: string; created: boolean };
+
+/**
+ * Envoltorio público. Bloqueos duros (R-2, ningún control es opcional):
+ * sin cuenta SAFE activa → SAFE_ACCOUNT_REQUIRED; sin maxCashExpenseAmount
+ * en la política → CASH_EXPENSE_POLICY_REQUIRED (sin política no se inventa
+ * un tope). Sobre el tope: no mueve dinero — crea un ApprovalRequest y
+ * devuelve PENDING_APPROVAL; la ejecución real vive en
+ * executeApprovedRetainedCashExpense, llamada desde
+ * /api/approvals/[id]/route.ts al aprobar, igual que STOCK_ADJUSTMENT y
+ * DISPATCH_OVERRIDE.
+ */
+export async function recordRetainedCashExpense(input: RetainedCashExpenseInput): Promise<RetainedCashExpenseResult> {
+  if (input.amount <= 0) throw new Error("VALIDATION_ERROR: el monto del gasto debe ser mayor que 0");
+  if (!input.receiptReference?.trim()) throw new Error("VALIDATION_ERROR: se requiere una referencia de comprobante");
+  if (input.category === "PAYROLL") throw new Error("VALIDATION_ERROR: la planilla no se registra a mano, se sincroniza automáticamente");
+
+  const safeAccount = await findSafeAccountForBranch(prisma, input.branchId);
+  if (!safeAccount) throw new Error("SAFE_ACCOUNT_REQUIRED");
+
+  const policy = await prisma.branchDepositPolicy.findUnique({ where: { branchId: input.branchId } });
+  if (!policy || policy.maxCashExpenseAmount === null) throw new Error("CASH_EXPENSE_POLICY_REQUIRED");
+
+  const cap = Number(policy.maxCashExpenseAmount);
+  if (input.amount > cap) {
+    const approval = await approvalService.createRequest({
+      branchId: input.branchId,
+      requestedByUserId: input.actorUserId,
+      type: APPROVAL_REQUEST_TYPES.OPERATION_OVERRIDE,
+      referenceType: "RETAINED_CASH_EXPENSE",
+      referenceId: randomUUID(),
+      reason: input.description,
+      payloadJson: {
+        branchId: input.branchId,
+        category: input.category,
+        description: input.description,
+        amount: input.amount,
+        receiptReference: input.receiptReference,
+        safeAccountId: safeAccount.id,
+        cap,
+      },
+    });
+    return { status: "PENDING_APPROVAL", requestId: approval.requestId, created: approval.created };
+  }
+
+  const { expense, treasuryEntry } = await prisma.$transaction((tx) => recordRetainedCashExpenseTx(tx, input, safeAccount.id));
+  return { status: "RECORDED", expenseId: expense.id, treasuryEntryId: treasuryEntry.id };
+}
+
+/** Llamada desde /api/approvals/[id]/route.ts cuando referenceType === "RETAINED_CASH_EXPENSE" y decision === "APPROVE". */
+export async function executeApprovedRetainedCashExpense(input: {
+  actorUserId: string;
+  payload: { branchId: string; category: ExpenseCategory; description: string; amount: number; receiptReference: string; safeAccountId: string };
+}) {
+  const { expense, treasuryEntry } = await prisma.$transaction((tx) =>
+    recordRetainedCashExpenseTx(
+      tx,
+      {
+        branchId: input.payload.branchId,
+        category: input.payload.category,
+        description: input.payload.description,
+        amount: input.payload.amount,
+        receiptReference: input.payload.receiptReference,
+        actorUserId: input.actorUserId,
+      },
+      input.payload.safeAccountId,
+    ),
+  );
+  return { expenseId: expense.id, treasuryEntryId: treasuryEntry.id };
+}
+
+/**
+ * No borra nada — escribe un TreasuryEntry inverso (mismo expensePaymentId,
+ * así queda ligado al original) y marca el OperatingExpense inactivo. El
+ * acumulado retenido vuelve a subir por la misma vía por la que bajó.
+ */
+export async function voidRetainedCashExpense(input: { expenseId: string; actorUserId: string; reason: string }) {
+  if (!input.reason?.trim()) throw new Error("VALIDATION_ERROR: se requiere una razón de anulación");
+
+  return prisma.$transaction(async (tx) => {
+    const expense = await tx.operatingExpense.findUniqueOrThrow({ where: { id: input.expenseId } });
+    if (!expense.isActive) throw new Error("VALIDATION_ERROR: este gasto ya está anulado");
+
+    const originalEntry = await tx.treasuryEntry.findUnique({ where: { expensePaymentId: input.expenseId } });
+    if (!originalEntry) throw new Error("VALIDATION_ERROR: este gasto no tiene una entrada de tesorería asociada (no se pagó con efectivo retenido)");
+
+    const reversal = await createTreasuryEntryTx(tx, {
+      accountId: originalEntry.accountId,
+      direction: "IN",
+      entryType: "RECONCILIATION",
+      counterpartyType: "ADJUSTMENT",
+      amount: Number(originalEntry.amount),
+      reference: originalEntry.reference,
+      notes: `Anulación: ${input.reason}`,
+      createdByUserId: input.actorUserId,
+    });
+
+    await tx.operatingExpense.update({ where: { id: input.expenseId }, data: { isActive: false } });
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: expense.branchId,
+        module: "treasury",
+        action: "RETAINED_CASH_EXPENSE_VOIDED",
+        entityType: "OperatingExpense",
+        entityId: expense.id,
+        metadataJson: {
+          reason: input.reason,
+          originalTreasuryEntryId: originalEntry.id,
+          reversalTreasuryEntryId: reversal.id,
+          amount: originalEntry.amount.toString(),
+        },
+      },
+    });
+
+    return { expenseId: expense.id, reversalTreasuryEntryId: reversal.id };
+  });
 }

@@ -56,6 +56,81 @@ describe("computeOutstandingAwaitingDeposit — FIFO agregado", () => {
   });
 });
 
+/**
+ * prompt-tesoreria-gasto-retenido-y-techo.md D-1 — un gasto pagado con
+ * efectivo retenido baja el MONTO pendiente, pero NO envejece la
+ * declaración: gastar no es depositar. Si envejeciera igual que un
+ * depósito, gastar se volvería la forma de apagar la alarma de depósito
+ * vencido.
+ */
+describe("computeOutstandingAwaitingDeposit — D-1 (gastos en efectivo retenido)", () => {
+  it("un gasto reduce el monto pendiente", () => {
+    const declarations = [{ createdAt: new Date("2026-08-01"), amount: 50000 }];
+    const cashExpenses = [{ occurredAt: new Date("2026-08-10"), amount: 15000 }];
+    const result = computeOutstandingAwaitingDeposit(declarations, [], cashExpenses);
+    assert.equal(result.outstandingAmount, 35000);
+  });
+
+  it("un gasto NO mueve oldestOutstandingDate — la antigüedad se calcula solo contra depósitos", () => {
+    const declarations = [
+      { createdAt: new Date("2026-08-01"), amount: 50000 },
+      { createdAt: new Date("2026-08-15"), amount: 20000 },
+    ];
+    // Sin este gasto, oldestOutstandingDate sería 2026-08-01 (nada depositado).
+    // Con el gasto, el MONTO baja, pero la declaración más vieja sigue siendo
+    // la misma — gastar no depositó nada.
+    const cashExpenses = [{ occurredAt: new Date("2026-08-10"), amount: 15000 }];
+    const result = computeOutstandingAwaitingDeposit(declarations, [], cashExpenses);
+    assert.equal(result.outstandingAmount, 55000);
+    assert.deepEqual(result.oldestOutstandingDate, new Date("2026-08-01"));
+  });
+
+  it("un depósito SÍ mueve oldestOutstandingDate (regresión — el camino ya existente sigue igual)", () => {
+    const declarations = [
+      { createdAt: new Date("2026-08-01"), amount: 50000 },
+      { createdAt: new Date("2026-08-15"), amount: 20000 },
+    ];
+    const deposits = [{ depositedAt: new Date("2026-08-05"), amount: 50000 }];
+    const result = computeOutstandingAwaitingDeposit(declarations, deposits, []);
+    assert.deepEqual(result.oldestOutstandingDate, new Date("2026-08-15"));
+  });
+
+  it("gastos que superan lo retenido (declarado - depositado) → monto 0, nunca negativo, anomalía marcada", () => {
+    const declarations = [{ createdAt: new Date("2026-08-01"), amount: 10000 }];
+    const cashExpenses = [{ occurredAt: new Date("2026-08-10"), amount: 25000 }];
+    const result = computeOutstandingAwaitingDeposit(declarations, [], cashExpenses);
+    assert.equal(result.outstandingAmount, 0);
+    assert.equal(result.oldestOutstandingDate, null);
+    assert.equal(result.cashExpensesExceedRetained, true);
+  });
+
+  it("gastos que NO superan lo retenido → cashExpensesExceedRetained en false", () => {
+    const declarations = [{ createdAt: new Date("2026-08-01"), amount: 50000 }];
+    const cashExpenses = [{ occurredAt: new Date("2026-08-10"), amount: 15000 }];
+    const result = computeOutstandingAwaitingDeposit(declarations, [], cashExpenses);
+    assert.equal(result.cashExpensesExceedRetained, false);
+  });
+
+  it("gastos que se comen exactamente toda la pila (declarado - depositado) → el contador se apaga solo, sin antigüedad", () => {
+    const declarations = [
+      { createdAt: new Date("2026-08-01"), amount: 30000 },
+      { createdAt: new Date("2026-08-10"), amount: 20000 },
+    ];
+    const cashExpenses = [{ occurredAt: new Date("2026-08-15"), amount: 50000 }];
+    const result = computeOutstandingAwaitingDeposit(declarations, [], cashExpenses);
+    assert.equal(result.outstandingAmount, 0);
+    assert.equal(result.oldestOutstandingDate, null);
+    assert.equal(result.cashExpensesExceedRetained, false, "50000 == 50000, no lo supera, lo cubre exacto");
+  });
+
+  it("sin cashExpenses (parámetro por defecto) — se comporta exactamente igual que antes de D-1", () => {
+    const declarations = [{ createdAt: new Date("2026-08-01"), amount: 50000 }];
+    const result = computeOutstandingAwaitingDeposit(declarations, []);
+    assert.equal(result.outstandingAmount, 50000);
+    assert.equal(result.cashExpensesExceedRetained, false);
+  });
+});
+
 describe("countBusinessDaysBetween — lunes a viernes", () => {
   it("mismo día -> 0", () => {
     assert.equal(countBusinessDaysBetween(new Date("2026-08-10T08:00:00Z"), new Date("2026-08-10T18:00:00Z")), 0);
