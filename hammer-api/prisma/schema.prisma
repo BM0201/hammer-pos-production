@@ -3705,12 +3705,17 @@ model ExchangeRate {
 /// sucursal, el indicador de efectivo no calcula estados ni proyección
 /// para ella — no inventa un umbral que nadie fijó.
 model BranchDepositPolicy {
-  id              String   @id @default(cuid())
-  branchId        String   @unique
-  thresholdAmount Decimal
-  maxDaysHolding  Int
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  branchId             String   @unique
+  thresholdAmount      Decimal
+  maxDaysHolding       Int
+  /// prompt-tesoreria-gasto-retenido-y-techo.md T-1 — tope por gasto pagado
+  /// con efectivo retenido. Nullable a propósito: sin política configurada,
+  /// no se inventa un número — el gasto con efectivo retenido simplemente
+  /// no se permite (mismo criterio que el resto del módulo).
+  maxCashExpenseAmount Decimal?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   branch Branch @relation(fields: [branchId], references: [id])
 }
