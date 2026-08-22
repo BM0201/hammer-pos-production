@@ -14,6 +14,40 @@ function decimalToNumber(value: Prisma.Decimal | number | string | null | undefi
   return Number(value);
 }
 
+/**
+ * Costo a MOSTRAR en el catálogo ("precios y costos"), coherente con el motor
+ * de venta (modules/catalog/effective-pricing.ts → resolveCostChain).
+ *
+ * Prioridad: WAC (costo promedio ponderado, si es > 0) > averageCost >
+ * globalCost > lastPurchaseCost. Un WAC de 0 significa "no sé", no "vale 0", y
+ * se ignora. Para un miembro DERIVADO de fusión, `wac` y los campos de costo
+ * son los del CANÓNICO (en unidad base) y `factor` los escala a la unidad del
+ * derivado; para el canónico y los productos sin fusión, `factor` = 1 y son sus
+ * propios campos.
+ *
+ * BUG que corrige: antes el catálogo tomaba el costo SOLO de
+ * averageCost/globalCost/lastPurchaseCost e IGNORABA el WAC. Al comprar arena
+ * por CAMIONADA y AJUSTAR el stock físico (en latas) se actualiza el WAC del
+ * canónico (LATA), pero NO esos tres campos (solo las recepciones de orden de
+ * compra los actualizan). Resultado: la venta usaba el WAC correcto (WAC ×
+ * factor para METRO GRANDE/PEQUEÑA), mientras el catálogo mostraba un costo
+ * viejo o en cero, un margen equivocado y marcaba la LATA y sus derivados como
+ * "sin costo". Al incluir el WAC aquí, el costo mostrado coincide con el de
+ * venta.
+ */
+export function resolveCatalogDisplayCost(input: {
+  wac: number | null;
+  averageCost: Prisma.Decimal | number | string | null | undefined;
+  globalCost: Prisma.Decimal | number | string | null | undefined;
+  lastPurchaseCost: Prisma.Decimal | number | string | null | undefined;
+  factor?: number;
+}): number {
+  const factor = input.factor !== undefined && Number.isFinite(input.factor) ? (input.factor as number) : 1;
+  const usableWac = input.wac !== null && Number.isFinite(input.wac) && input.wac > 0 ? input.wac : null;
+  const baseCost = usableWac ?? decimalToNumber(input.averageCost ?? input.globalCost ?? input.lastPurchaseCost);
+  return baseCost * factor;
+}
+
 type CatalogStockConversion = {
   stockGroupId: string;
   stockGroupCode: string;
@@ -70,7 +104,24 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     const totalStock = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand), 0);
     const totalValue = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.inventoryValue), 0);
     const branchesWithStock = productBalances.filter((row: any) => decimalToNumber(row.quantityOnHand) > 0).length;
-    const productCost = decimalToNumber(product.averageCost ?? product.globalCost ?? product.lastPurchaseCost);
+    // WAC propio (costo promedio ponderado) de este producto: por sucursal si se
+    // filtró una, o promedio ponderado por cantidad en toda la red. Se usa con
+    // prioridad sobre averageCost/globalCost/lastPurchaseCost para que el costo
+    // mostrado coincida con el de venta (ver resolveCatalogDisplayCost). Los
+    // miembros de fusión con `conversion` se recalculan más abajo desde el
+    // canónico; este bloque cubre los productos SIN fusión.
+    const wacQty = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand), 0);
+    const wacValue = productBalances.reduce(
+      (sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand) * decimalToNumber(row.weightedAverageCost),
+      0,
+    );
+    const ownWac = wacQty > 0 ? wacValue / wacQty : null;
+    const productCost = resolveCatalogDisplayCost({
+      wac: ownWac,
+      averageCost: product.averageCost,
+      globalCost: product.globalCost,
+      lastPurchaseCost: product.lastPurchaseCost,
+    });
     const critical = productBalances.some((row: any) => {
       const policy = policyMap.get(`${product.id}:${row.branchId}`);
       const rp = policy ? decimalToNumber(policy.reorderPoint) : CRITICAL_STOCK_FALLBACK;
@@ -318,9 +369,27 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     // sin fusión conservan su costo propio.
     const isDerivedFusionMember = Boolean(conversion && !conversion.isCanonical);
     const derivedFactor = conversion ? Number(conversion.conversionFactor) : 1;
+    // `displayedWac` es el WAC en unidad BASE: para un miembro derivado es el del
+    // canónico (inventoryProductId apunta al canónico), para el canónico/sin
+    // fusión es el suyo. Se prioriza sobre los campos de costo, igual que el
+    // motor de venta, para que el catálogo no muestre un costo distinto al real.
+    const displayedWacNum = displayedWac !== null ? Number(displayedWac) : null;
     const productCost = isDerivedFusionMember
-      ? (canonicalCostByProductId.get(inventoryProductId) ?? 0) * (Number.isFinite(derivedFactor) ? derivedFactor : 1)
-      : decimalToNumber(product.averageCost ?? product.globalCost ?? product.lastPurchaseCost);
+      ? resolveCatalogDisplayCost({
+          // WAC del canónico (base) × factor, con el costo global del canónico
+          // como respaldo cuando aún no hay WAC.
+          wac: displayedWacNum,
+          averageCost: canonicalCostByProductId.get(inventoryProductId) ?? 0,
+          globalCost: undefined,
+          lastPurchaseCost: undefined,
+          factor: derivedFactor,
+        })
+      : resolveCatalogDisplayCost({
+          wac: displayedWacNum,
+          averageCost: product.averageCost,
+          globalCost: product.globalCost,
+          lastPurchaseCost: product.lastPurchaseCost,
+        });
     const sharedStock = conversion && displayedBaseQty
         ? formatDualStock({
             baseQuantity: displayedBaseQty,
