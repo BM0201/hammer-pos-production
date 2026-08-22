@@ -63,6 +63,56 @@ export function validateMovementInputs(input: {
 }
 
 /* ────────────────────────────────────────────────────────────────
+ * Guard: detect the "paquete cost entered as unit cost" mistake
+ * ────────────────────────────────────────────────────────────────
+ * Root cause of the "Finanzas todo en negativo" incident: staff typed
+ * the cost of a WHOLE PACKAGE (e.g. a "HIERRO" = 14 varillas, a metro/
+ * lata of arena/piedrín) into the per-unit cost field of an inbound
+ * movement. That inflated the WAC ~conversionFactor× and ballooned COGS
+ * on every subsequent sale, turning gross profit red.
+ *
+ * This guard fires ONLY on inbound movements for packaged products that
+ * already have a real reference WAC. It flags a unit cost that looks like
+ * it was multiplied by (roughly) the package factor. It is intentionally
+ * conservative (RATIO 0.6, MIN_FACTOR 4) so normal price increases and
+ * spikes pass; only clearly package-sized costs are blocked.
+ *
+ * Limitation: it cannot catch the FIRST entry of a brand-new product
+ * (no reference WAC yet). It covers the common re-entry case seen in the
+ * production data. A legitimate large jump can be forced through by
+ * passing allowHighUnitCost = true.
+ */
+export function detectPackageCostAsUnitCost(input: {
+  inbound: boolean;
+  baseMovementUnitCost: Prisma.Decimal;
+  existingWac: Prisma.Decimal;
+  packageFactor: Prisma.Decimal;
+  allowHighUnitCost?: boolean;
+}): void {
+  if (input.allowHighUnitCost) return;
+  if (!input.inbound) return;
+
+  const FLOOR = new Prisma.Decimal(2); // ignora WAC placeholder ~C$1-2
+  const MIN_FACTOR = new Prisma.Decimal(4); // metales/agregados; ignora presentaciones sueltas
+  const RATIO = new Prisma.Decimal("0.6"); // margen para alzas normales de precio
+
+  if (input.packageFactor.lt(MIN_FACTOR)) return;
+  if (input.existingWac.lte(FLOOR)) return;
+
+  const threshold = input.existingWac.mul(input.packageFactor).mul(RATIO);
+  if (input.baseMovementUnitCost.gte(threshold)) {
+    const factorStr = input.packageFactor.toFixed(0);
+    throw new WacValidationError(
+      "SUSPECTED_PACKAGE_COST_AS_UNIT_COST",
+      `El costo por unidad ingresado (C$${input.baseMovementUnitCost.toFixed(2)}) parece ser el costo del ` +
+        `PAQUETE completo, no el de una sola unidad. El costo de referencia por unidad es ~C$${input.existingWac.toFixed(2)} ` +
+        `y este producto trae ${factorStr} unidades por paquete. Divida el costo del paquete entre ${factorStr} e ingrese ` +
+        `el costo por unidad. Si de verdad es el costo correcto, reintente autorizando costo alto (allowHighUnitCost).`,
+    );
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
  * Core WAC recalculation with validations
  * ──────────────────────────────────────────────────────────────── */
 export function recalculateWeightedAverage(input: {

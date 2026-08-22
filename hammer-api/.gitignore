@@ -29,3 +29,7 @@ Thumbs.db
 # Misc
 *.tsbuildinfo
 .vercel
+
+
+# Backups locales de scripts de corrección de datos (no versionar)
+scripts/backups/

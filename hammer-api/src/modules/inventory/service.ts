@@ -2,7 +2,7 @@ import { InventoryMovementType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
-import { isInboundMovement, recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
+import { detectPackageCostAsUnitCost, isInboundMovement, recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
 import {
   convertBaseQtyToSaleQty,
@@ -232,6 +232,12 @@ type InventoryMovementInput = {
   referenceId: string;
   notes?: string | null;
   composition?: MovementComposition;
+  /**
+   * Autoriza explícitamente un costo por unidad inusualmente alto, saltando
+   * el guard SUSPECTED_PACKAGE_COST_AS_UNIT_COST. Úsese sólo cuando el usuario
+   * confirma que el costo ingresado es correcto (no es el costo del paquete).
+   */
+  allowHighUnitCost?: boolean;
 };
 
 type ConsumeSharedStockForSaleInput = {
@@ -555,6 +561,19 @@ export async function createInventoryMovementTx(
   if (!balance) {
     throw new Error("INVENTORY_BALANCE_NOT_FOUND");
   }
+
+  // ── Guard anti "costo del paquete ingresado como costo unitario" ──────
+  // Bloquea la causa raíz del incidente "Finanzas en negativo": un costo
+  // por unidad que en realidad es el costo del PAQUETE completo (inflado
+  // ~conversionFactor×). Sólo actúa en entradas de productos empacados con
+  // un WAC de referencia real; se puede autorizar con allowHighUnitCost.
+  detectPackageCostAsUnitCost({
+    inbound,
+    baseMovementUnitCost,
+    existingWac: balance.weightedAverageCost,
+    packageFactor,
+    allowHighUnitCost: input.allowHighUnitCost,
+  });
 
   // ── BASE_AUTO: si faltan sueltas para una salida, abrir paquetes cerrados
   // DENTRO de esta misma transacción antes del movimiento principal.
