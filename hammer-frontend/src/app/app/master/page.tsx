@@ -39,7 +39,7 @@ import { useNextPayday } from "@/components/finance/use-next-payday";
 const MANAGEMENT_LINKS: { href: string; label: string; description: string; icon: LucideIcon }[] = [
   { href: "/app/master/cash-closure-reports", label: "Cierres de Caja", description: "Revisar y aprobar cierres", icon: Wallet },
   { href: "/app/master/cash-boxes", label: "Cajas Físicas", description: "Administrar cajas por sucursal", icon: Settings },
-  { href: "/app/master/settings/operational-automation", label: "Automatización Operativa", description: "Apertura de día, cierre de cajas y cierre operativo", icon: Activity },
+  { href: "/app/master/settings/operational-day-auto", label: "Automatización Operativa", description: "Apertura de día, cierre de cajas y cierre operativo", icon: Activity },
   { href: "/app/master/users/activity", label: "Detalle de usuarios", description: "Actividad y sesiones en detalle", icon: Activity },
 ];
 

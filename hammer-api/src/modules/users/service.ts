@@ -34,9 +34,7 @@ export async function listUsersWithMemberships() {
       // Conteo de actividad para saber si el usuario puede eliminarse por
       // completo (0 = nunca movió nada → borrado permanente permitido).
       _count: {
-        select: Object.fromEntries(
-          USER_ACTIVITY_RELATIONS.map((relation) => [relation, true]),
-        ) as Prisma.UserCountOutputTypeSelect,
+        select: buildActivityCountSelect(),
       },
     },
   });
@@ -121,8 +119,8 @@ const USER_ACTIVITY_RELATIONS = [
   "createdCashMovements",
   "approvedCashMovements",
   "openedOperationalDays",
-  "closedOperationalDays",
-  "approvedOperationalDays",
+  "sweptOperationalDays",
+  "reviewedOperationalDays",
   "createdOrders",
   "requestedSaleCancellations",
   "approvedSaleCancellations",
@@ -160,7 +158,13 @@ const USER_ACTIVITY_RELATIONS = [
   "targetedBrainDecisions",
   "createdReplenishmentDrafts",
   "approvedReplenishmentDrafts",
-] as const;
+] as const satisfies readonly (keyof Prisma.UserCountOutputTypeSelect)[];
+
+function buildActivityCountSelect(): Prisma.UserCountOutputTypeSelect {
+  return Object.fromEntries(
+    USER_ACTIVITY_RELATIONS.map((relation) => [relation, true]),
+  ) as Prisma.UserCountOutputTypeSelect;
+}
 
 /**
  * Devuelve el total de registros de actividad de un usuario. 0 significa que
@@ -168,13 +172,9 @@ const USER_ACTIVITY_RELATIONS = [
  * completo.
  */
 export async function getUserActivityCount(userId: string): Promise<number> {
-  const countSelect = Object.fromEntries(
-    USER_ACTIVITY_RELATIONS.map((relation) => [relation, true]),
-  );
-
   const result = await prisma.user.findUnique({
     where: { id: userId },
-    select: { _count: { select: countSelect as Prisma.UserCountOutputTypeSelect } },
+    select: { _count: { select: buildActivityCountSelect() } },
   });
 
   if (!result) return 0;

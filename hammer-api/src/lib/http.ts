@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { MissingDatabaseUrlError, isDatabaseConnectionError } from "@/lib/prisma";
 import { isCsrfError } from "@/modules/security/csrf";
 
@@ -290,6 +291,14 @@ export function toHttpErrorResponse(error: unknown) {
     if ("code" in error && (error as Record<string, unknown>).code === "P2034") {
       return errJson("CONFLICT", "Conflicto de escritura en la transaccion. Reintenta la operacion.", 409);
     }
+  }
+
+  // Cualquier otro error de Prisma (schema desincronizado, select invalido,
+  // etc.) que no matcheo un codigo conocido arriba: lo dejamos rastreado en
+  // logs en vez de caer al 500 mudo del fallback final.
+  if (error instanceof Prisma.PrismaClientValidationError || error instanceof Prisma.PrismaClientKnownRequestError) {
+    console.error("[prisma]", error);
+    return errJson("QUERY_ERROR", "Error de consulta en base de datos.", 500);
   }
 
   console.error("[HTTP_ERROR]", error);

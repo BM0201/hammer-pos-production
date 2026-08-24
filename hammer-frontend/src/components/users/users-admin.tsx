@@ -799,6 +799,7 @@ export function UsersAdmin() {
   const [bulkResetResults, setBulkResetResults] = useState<BulkResetResult[] | null>(null);
 
   const [initialLoading, setInitialLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [creatingUser, setCreatingUser] = useState(false);
   const [savingUser, setSavingUser] = useState(false);
   const [assigningMembership, setAssigningMembership] = useState(false);
@@ -927,41 +928,46 @@ export function UsersAdmin() {
   }, [allFilteredSelected, filteredUsers]);
 
   async function load() {
+    try {
+      const response = await fetch("/api/master/users", { cache: "no-store" });
+      const json = (await response.json()) as {
+        data?: { users?: UserRow[]; branches?: BranchOption[] };
+        message?: string;
+        reason?: string;
+        error?: string;
+      };
 
-    const response = await fetch("/api/master/users", { cache: "no-store" });
-    const json = (await response.json()) as {
-      data?: { users?: UserRow[]; branches?: BranchOption[] };
-      message?: string;
-      reason?: string;
-      error?: string;
-    };
+      if (!response.ok) {
+        throw new Error(getErrorMessage(json, "No se pudieron cargar los usuarios."));
+      }
 
-    if (!response.ok) {
-      throw new Error(getErrorMessage(json, "No se pudieron cargar los usuarios."));
+      const nextUsers = json.data?.users ?? [];
+      const nextBranches = json.data?.branches ?? [];
+      setUsers(nextUsers);
+      setBranches(nextBranches);
+
+      setSelectedUserId((prev) => {
+        if (prev && nextUsers.some((user) => user.id === prev)) return prev;
+        return nextUsers[0]?.id ?? "";
+      });
+
+      setMembershipForm((prev) => ({
+        ...prev,
+        branchId: prev.branchId && nextBranches.some((branch) => branch.id === prev.branchId)
+          ? prev.branchId
+          : nextBranches.find((branch) => branch.isActive)?.id ?? nextBranches[0]?.id ?? "",
+      }));
+      setCreateForm((prev) => ({
+        ...prev,
+        branchId: prev.branchId && nextBranches.some((branch) => branch.id === prev.branchId)
+          ? prev.branchId
+          : nextBranches.find((branch) => branch.isActive)?.id ?? nextBranches[0]?.id ?? "",
+      }));
+      setLoadError(null);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "No se pudieron cargar los usuarios.");
+      throw error;
     }
-
-    const nextUsers = json.data?.users ?? [];
-    const nextBranches = json.data?.branches ?? [];
-    setUsers(nextUsers);
-    setBranches(nextBranches);
-
-    setSelectedUserId((prev) => {
-      if (prev && nextUsers.some((user) => user.id === prev)) return prev;
-      return nextUsers[0]?.id ?? "";
-    });
-
-    setMembershipForm((prev) => ({
-      ...prev,
-      branchId: prev.branchId && nextBranches.some((branch) => branch.id === prev.branchId)
-        ? prev.branchId
-        : nextBranches.find((branch) => branch.isActive)?.id ?? nextBranches[0]?.id ?? "",
-    }));
-    setCreateForm((prev) => ({
-      ...prev,
-      branchId: prev.branchId && nextBranches.some((branch) => branch.id === prev.branchId)
-        ? prev.branchId
-        : nextBranches.find((branch) => branch.isActive)?.id ?? nextBranches[0]?.id ?? "",
-    }));
   }
 
   const sortedMemberships = useMemo(() => {
@@ -1475,6 +1481,25 @@ export function UsersAdmin() {
               <div className="py-8 text-center text-sm text-[var(--color-text-soft)]">
                 <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2 text-[var(--color-info-500)]" />
                 Cargando usuarios...
+              </div>
+            ) : loadError ? (
+              <div className="rounded-lg border border-dashed border-[var(--color-danger-300)] bg-[var(--color-danger-50)] p-4 text-center text-sm text-[var(--color-danger-700)]">
+                <AlertTriangle className="h-5 w-5 mx-auto mb-2" />
+                {loadError}
+                <div className="mt-3">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      setInitialLoading(true);
+                      load()
+                        .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo cargar usuarios."))
+                        .finally(() => setInitialLoading(false));
+                    }}
+                  >
+                    Reintentar
+                  </Button>
+                </div>
               </div>
             ) : tableView ? (
               <div className="space-y-2">
