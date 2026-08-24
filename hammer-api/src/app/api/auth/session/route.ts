@@ -12,14 +12,18 @@ export async function GET(request: Request) {
       return fail("UNAUTHENTICATED", "No autenticado", 401);
     }
 
-    // Fetch mustChangePassword from DB so the frontend can enforce the redirect
+    // Fetch mustChangePassword/themePreference from DB so the frontend can
+    // enforce the redirect and prime the theme on a device without a local
+    // per-user preference yet (FIX 5, prompt-destello-modo-claro.md).
     let mustChangePassword = false;
+    let themePreference: "light" | "dark" | null = null;
     try {
       const user = await prisma.user.findUnique({
         where: { id: session.userId },
-        select: { mustChangePassword: true },
+        select: { mustChangePassword: true, themePreference: true },
       });
       mustChangePassword = user?.mustChangePassword ?? false;
+      themePreference = user?.themePreference === "light" || user?.themePreference === "dark" ? user.themePreference : null;
     } catch {
       // If DB is unavailable degrade gracefully
     }
@@ -49,6 +53,7 @@ export async function GET(request: Request) {
         branchIds: session.branchIds,
         sessionVersion: enriched?.sessionVersion ?? session.sessionVersion ?? 0,
         mustChangePassword,
+        themePreference,
         effectiveCapabilities: enriched?.globalCapabilities ?? [],
         modules: enriched?.modules,
         activeBranchId: enriched?.activeBranchId ?? session.primaryBranchId,

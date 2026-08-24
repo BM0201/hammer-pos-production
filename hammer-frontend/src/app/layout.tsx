@@ -17,7 +17,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0f172a",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#EDECEA" },
+    { media: "(prefers-color-scheme: dark)", color: "#1A1917" },
+  ],
   width: "device-width",
   initialScale: 1,
 };
@@ -30,11 +33,15 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   return (
     <html lang="es" className={inter.variable} suppressHydrationWarning>
       <body className="min-h-screen" suppressHydrationWarning>
-        {/* Runs before first paint to avoid FOUC on theme reload */}
+        {/* Runs before first paint to avoid FOUC on theme reload. Prefers the
+            per-user key (hammer-theme-<userId>) over the shared global key —
+            on a shared terminal the global key still carries the PREVIOUS
+            user's theme until applyUserTheme runs (after the splash), so
+            reading it first would flash the wrong theme for the new user. */}
         <script
           nonce={nonce}
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('hammer-theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();`,
+            __html: `(function(){try{var u=localStorage.getItem('hammer-theme-user');var t=u&&localStorage.getItem('hammer-theme-'+u);if(!t)t=localStorage.getItem('hammer-theme');if(!t)t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';var d=document.documentElement;d.dataset.theme=t;d.style.colorScheme=t;}catch(e){}})();`,
           }}
         />
         {/* Register service worker for offline POS support.

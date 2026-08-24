@@ -60,5 +60,7 @@ export type SessionPayload = {
   modules?: ModuleFlags;
   activeBranchId?: string | null;
   branches?: SessionBranch[];
+  /** "light" | "dark" | null = seguir al sistema. Fallback cuando no hay preferencia local en ESTE dispositivo. */
+  themePreference?: "light" | "dark" | null;
   exp: number;
 };

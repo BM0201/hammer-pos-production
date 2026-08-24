@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSelectedLayoutSegments, useRouter } from "next/navigation";
 import type { Route } from "next";
 import type { ReactNode } from "react";
@@ -17,7 +17,7 @@ import { getRoleColor } from "@/lib/role-colors";
 
 type ShellSession = Pick<
   SessionPayload,
-  "userId" | "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId" | "effectiveCapabilities"
+  "userId" | "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId" | "effectiveCapabilities" | "themePreference"
 >;
 
 const MODULE_META: Record<string, { title: string; subtitle: string }> = {
@@ -87,10 +87,16 @@ export function AppShellRouter({
 
   const roleCfg = getRoleColor(session.roleCode);
 
-  // Apply this user's stored theme once the session is known
-  useEffect(() => {
-    applyUserTheme(session.userId);
-  }, [session.userId]);
+  // Apply this user's stored theme once the session is known — useLayoutEffect
+  // (no useEffect) porque el login es una navegación cliente (router.push, no
+  // reload): el script pre-paint de layout.tsx no vuelve a correr, así que
+  // este es el único punto donde se corrige el tema antes de que el usuario
+  // vea el primer paint del shell real. useEffect deja un frame con el tema
+  // del usuario anterior (terminal compartida); useLayoutEffect corre
+  // sincrónico ANTES de que el navegador pinte.
+  useLayoutEffect(() => {
+    applyUserTheme(session.userId, session.themePreference);
+  }, [session.userId, session.themePreference]);
 
   const handleLogout = useCallback(async () => {
     setLoggingOut(true);

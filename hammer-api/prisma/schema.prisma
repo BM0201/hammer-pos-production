@@ -415,6 +415,10 @@ model User {
   mfaSecret          String? /// Base32 TOTP secret (nullable = MFA not configured)
   mfaRecoveryCodes   Json? /// Array of SHA-256 hashed backup codes
   mfaEnabledAt       DateTime?
+  /// "light" | "dark" | null = seguir al sistema. Fallback para un dispositivo
+  /// nuevo o una caché limpiada — el navegador prioriza localStorage por
+  /// usuario en ESTE dispositivo por encima de esto (theme-toggle.tsx).
+  themePreference    String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 

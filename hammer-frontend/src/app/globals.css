@@ -265,7 +265,8 @@
   --color-pay-on-dark: #34D399;
 }
 
-:root { color-scheme: light; }
+:root { color-scheme: light dark; }
+[data-theme="light"] { color-scheme: light; }
 
 /* ── v8 :root — surface-raised + v7 bridge ─────────────────────────── */
 :root {

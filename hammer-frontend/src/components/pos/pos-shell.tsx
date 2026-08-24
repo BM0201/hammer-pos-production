@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
@@ -28,7 +28,7 @@ import { getRoleColor } from "@/lib/role-colors";
 
 type ShellSession = Pick<
   SessionPayload,
-  "userId" | "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId" | "effectiveCapabilities"
+  "userId" | "username" | "roleCode" | "globalRoles" | "branchMemberships" | "branchIds" | "primaryBranchId" | "effectiveCapabilities" | "themePreference"
 >;
 
 type NavSection = { title: string; items: NavItem[] };
@@ -148,8 +148,11 @@ export function PosShell({ session, children }: { session: ShellSession; childre
     return () => document.removeEventListener("mousedown", handler);
   }, [accountOpen]);
 
-  /* Apply stored theme */
-  useEffect(() => { applyUserTheme(session.userId); }, [session.userId]);
+  /* Apply stored theme — useLayoutEffect, no useEffect: el login es una
+     navegación cliente (router.push), el script pre-paint no vuelve a
+     correr, y esto tiene que corregir el tema ANTES del primer paint real
+     (terminal compartida) en vez de un frame después. */
+  useLayoutEffect(() => { applyUserTheme(session.userId, session.themePreference); }, [session.userId, session.themePreference]);
 
   /* Heartbeat */
   const pathnameRef = useRef(pathname);
