@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Landmark, Plus, X, Check, RefreshCcw, PiggyBank, Wallet, Vault, Users, ArrowLeftRight, ChevronRight, AlarmClock, ListFilter, CreditCard, Banknote } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { STATE_META, type CashPosition, type CashIndicatorState } from "@/compon
 import { CashAccumulationBar } from "@/components/finance/cash-accumulation-bar";
 import { RetainedCashExpenseSheet } from "@/components/finance/retained-cash-expense-sheet";
 import { RetainedCashExpenseList } from "@/components/finance/retained-cash-expense-list";
+import { DirectDepositSheet } from "@/components/finance/direct-deposit-sheet";
 
 type Branch = { id: string; code: string; name: string; cashFundAmount: string | null };
 
@@ -64,6 +65,22 @@ type DepositPolicy = { id: string; branchId: string; thresholdAmount: string; ma
 
 type CashPositionRow = { branch: { id: string; code: string; name: string }; position: CashPosition };
 
+type DepositSummary = {
+  period: { from: string; to: string };
+  deposited: { total: number; count: number; accountsCount: number };
+  byAccount: Array<{
+    accountId: string;
+    bankName: string;
+    accountAlias: string;
+    accountNumber: string;
+    currencyCode: string;
+    total: number;
+    count: number;
+    lastDepositAt: string | null;
+  }>;
+  byBranch: Array<{ branchId: string; branchName: string; total: number; count: number }>;
+};
+
 const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /**
@@ -90,38 +107,44 @@ export default function TreasuryPage() {
   const [position, setPosition] = useState<Position | null>(null);
   const [policies, setPolicies] = useState<DepositPolicy[]>([]);
   const [cashPositions, setCashPositions] = useState<CashPositionRow[]>([]);
+  const [depositSummary, setDepositSummary] = useState<DepositSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [detailAccountId, setDetailAccountId] = useState<string | null>(null);
   const [expandedCashBranchId, setExpandedCashBranchId] = useState<string | null>(null);
   const [expenseSheetBranchId, setExpenseSheetBranchId] = useState<string | null>(null);
   const [expenseListRefreshKey, setExpenseListRefreshKey] = useState(0);
+  const [depositSheetBranchId, setDepositSheetBranchId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [branchesRes, accountsRes, positionRes, policiesRes, cashPositionsRes] = await Promise.all([
+      const [branchesRes, accountsRes, positionRes, policiesRes, cashPositionsRes, depositSummaryRes] = await Promise.all([
         apiFetch("/api/master/branches"),
         apiFetch("/api/master/treasury/bank-accounts/with-balances"),
         apiFetch("/api/master/treasury/position"),
         apiFetch("/api/master/treasury/deposit-policy"),
         apiFetch("/api/master/treasury/cash-positions"),
+        apiFetch("/api/master/treasury/deposit-summary"),
       ]);
       const branchesRaw = await branchesRes.json();
       const accountsRaw = await accountsRes.json();
       const positionRaw = await positionRes.json();
       const policiesRaw = await policiesRes.json();
       const cashPositionsRaw = await cashPositionsRes.json();
+      const depositSummaryRaw = await depositSummaryRes.json();
       if (!branchesRes.ok) throw new Error(branchesRaw?.error?.message ?? "No se pudieron cargar las sucursales.");
       if (!accountsRes.ok) throw new Error(accountsRaw?.error?.message ?? "No se pudieron cargar las cuentas.");
       if (!positionRes.ok) throw new Error(positionRaw?.error?.message ?? "No se pudo cargar la posición.");
       if (!policiesRes.ok) throw new Error(policiesRaw?.error?.message ?? "No se pudo cargar la política de depósito.");
       if (!cashPositionsRes.ok) throw new Error(cashPositionsRaw?.error?.message ?? "No se pudo cargar el efectivo por sucursal.");
+      if (!depositSummaryRes.ok) throw new Error(depositSummaryRaw?.error?.message ?? "No se pudo cargar el resumen de depósitos.");
       setBranches(unwrapApiData(branchesRaw) as Branch[]);
       setAccounts(unwrapApiData(accountsRaw) as BankAccount[]);
       setPosition(unwrapApiData(positionRaw) as Position);
       setPolicies(unwrapApiData(policiesRaw) as DepositPolicy[]);
       setCashPositions(unwrapApiData(cashPositionsRaw) as CashPositionRow[]);
+      setDepositSummary(unwrapApiData(depositSummaryRaw) as DepositSummary);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cargar Tesorería.");
     } finally {
@@ -245,6 +268,10 @@ export default function TreasuryPage() {
         </Card>
       )}
 
+      {/* Totales consolidados — Tesorería pasa de tablero informativo a operativo: cuánto hay
+          acumulado/para depositar/en tránsito en las sucursales, y cuánto se depositó ya este mes. */}
+      {cashPositions.length > 0 && <TreasuryTotalsBar cashPositions={cashPositions} depositSummary={depositSummary} />}
+
       {/* Efectivo por sucursal (prompt-ajustes-finales-tesoreria.md §1) — lo que antes vivía
           comprimido en el sidebar de Master, acá sin ninguna sucursal oculta detrás de un link. */}
       {cashPositions.length > 0 && (
@@ -270,6 +297,7 @@ export default function TreasuryPage() {
                   expanded={expandedCashBranchId === row.branch.id}
                   onToggle={() => setExpandedCashBranchId((current) => (current === row.branch.id ? null : row.branch.id))}
                   onRegisterExpense={() => setExpenseSheetBranchId(row.branch.id)}
+                  onDeposit={() => setDepositSheetBranchId(row.branch.id)}
                   refreshKey={expenseListRefreshKey}
                 />
               ))}
@@ -421,6 +449,16 @@ export default function TreasuryPage() {
         bankAccounts={bankAccountsOnly}
         onSaved={() => { setExpenseListRefreshKey((k) => k + 1); void load(); }}
       />
+
+      <DirectDepositSheet
+        open={depositSheetBranchId !== null}
+        onClose={() => setDepositSheetBranchId(null)}
+        branchId={depositSheetBranchId ?? ""}
+        branchName={branches.find((b) => b.id === depositSheetBranchId)?.name ?? ""}
+        pendingDeposit={cashPositions.find((r) => r.branch.id === depositSheetBranchId)?.position.pendingDeposit ?? 0}
+        accounts={bankAccountsOnly}
+        onDone={() => void load()}
+      />
     </section>
   );
 }
@@ -449,12 +487,85 @@ function PositionTile({ icon: Icon, label, data, rate, amber }: {
   );
 }
 
+/**
+ * Totales consolidados — Tesorería pasa de tablero informativo a operativo:
+ * las tres primeras cifras se derivan de cashPositions ya cargado (sin fetch
+ * extra); "Depositado (mes)" viene del nuevo resumen de depósitos. El
+ * subtexto de "Depositado" expande el desglose por cuenta.
+ */
+function TreasuryTotalsBar({ cashPositions, depositSummary }: { cashPositions: CashPositionRow[]; depositSummary: DepositSummary | null }) {
+  const [showByAccount, setShowByAccount] = useState(false);
+
+  const totals = useMemo(() => {
+    return cashPositions.reduce(
+      (acc, row) => ({
+        accumulated: acc.accumulated + row.position.accumulatedAmount,
+        pendingDeposit: acc.pendingDeposit + row.position.pendingDeposit,
+        inTransit: acc.inTransit + row.position.inTransitAmount,
+      }),
+      { accumulated: 0, pendingDeposit: 0, inTransit: 0 },
+    );
+  }, [cashPositions]);
+
+  return (
+    <Card className="p-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <TotalTile label="Total acumulado" value={totals.accumulated} />
+        <TotalTile label="Total para depositar" value={totals.pendingDeposit} amber={totals.pendingDeposit > 0} />
+        <TotalTile label="En tránsito" value={totals.inTransit} amber={totals.inTransit > 0} />
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+          <div className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Depositado (mes)</div>
+          <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{fmt(depositSummary?.deposited.total ?? 0)}</p>
+          {depositSummary && depositSummary.deposited.count > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowByAccount((v) => !v)}
+              className="mt-0.5 text-xs text-[var(--color-pay)] hover:underline"
+            >
+              {depositSummary.deposited.count} depósito{depositSummary.deposited.count !== 1 ? "s" : ""} en {depositSummary.deposited.accountsCount} cuenta{depositSummary.deposited.accountsCount !== 1 ? "s" : ""}
+            </button>
+          ) : (
+            <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">Sin depósitos este mes</p>
+          )}
+        </div>
+      </div>
+
+      {showByAccount && depositSummary && depositSummary.byAccount.length > 0 && (
+        <div className="mt-3 space-y-1.5 border-t border-[var(--color-border)] pt-3">
+          {depositSummary.byAccount.map((row) => (
+            <div key={row.accountId} className="flex items-center justify-between gap-3 rounded-lg bg-[var(--color-surface-alt)] px-3 py-2 text-xs">
+              <div className="min-w-0">
+                <span className="font-semibold text-[var(--color-text)]">{row.bankName} · {row.accountAlias}</span>
+                <span className="ml-2 text-[var(--color-text-muted)]">
+                  {row.count} depósito{row.count !== 1 ? "s" : ""}
+                  {row.lastDepositAt ? ` · última ${new Date(row.lastDepositAt).toLocaleDateString("es-NI", { day: "2-digit", month: "2-digit" })}` : ""}
+                </span>
+              </div>
+              <span className="shrink-0 font-mono font-bold tabular-nums text-[var(--color-text)]">{fmt(row.total)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function TotalTile({ label, value, amber }: { label: string; value: number; amber?: boolean }) {
+  return (
+    <div className={["rounded-xl border p-3", amber ? "border-[var(--color-warning-200)] bg-[var(--color-warning-50)]" : "border-[var(--color-border)] bg-[var(--color-surface-alt)]"].join(" ")}>
+      <div className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">{label}</div>
+      <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{fmt(value)}</p>
+    </div>
+  );
+}
+
 function CashPositionRowItem({
   branch,
   position,
   expanded,
   onToggle,
   onRegisterExpense,
+  onDeposit,
   refreshKey,
 }: {
   branch: { id: string; code: string; name: string };
@@ -462,6 +573,7 @@ function CashPositionRowItem({
   expanded: boolean;
   onToggle: () => void;
   onRegisterExpense: () => void;
+  onDeposit: () => void;
   refreshKey: number;
 }) {
   const meta = STATE_META[position.state];
@@ -495,7 +607,18 @@ function CashPositionRowItem({
       {expanded && (
         <div className="space-y-3 border-t border-[var(--color-border)] p-3">
           <CashAccumulationBar position={position} configureHref="#politica-de-deposito" />
-          <Button variant="secondary" size="sm" onClick={onRegisterExpense}>Registrar gasto con efectivo retenido</Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={onRegisterExpense}>Registrar gasto con efectivo retenido</Button>
+            <Button
+              variant="success"
+              size="sm"
+              onClick={onDeposit}
+              disabled={position.pendingDeposit <= 0.01}
+              title={position.pendingDeposit <= 0.01 ? "Nada disponible para depositar" : undefined}
+            >
+              Depositar a cuenta
+            </Button>
+          </div>
           <RetainedCashExpenseList branchId={branch.id} refreshKey={refreshKey} />
         </div>
       )}

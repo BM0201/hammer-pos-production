@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory } from "@prisma/client";
 import { decomposeRetainedAmount, computeExposureAlert, type ExposureAlertThreshold } from "@/modules/treasury/decomposition";
 import { computeOutstandingAwaitingDeposit, countBusinessDaysBetween } from "@/modules/treasury/exposure";
+import { getBranchCashPosition } from "@/modules/treasury/cash-monitor";
 import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
@@ -349,11 +350,17 @@ export function computeAccountBalance(openingBalance: number, totalIn: number, t
   return round2(openingBalance + totalIn - totalOut);
 }
 
-export async function getTreasuryAccountBalance(accountId: string): Promise<TreasuryAccountBalance> {
-  const account = await prisma.treasuryAccount.findUniqueOrThrow({ where: { id: accountId }, select: { openingBalance: true, openingBalanceAt: true } });
+/**
+ * Misma lectura que getTreasuryAccountBalance, pero contra un `tx` — para
+ * llamarla desde dentro de una transacción sin que la lectura se escape a su
+ * propia conexión (ver confirmBankDeposit: leer el saldo fuera de la
+ * transacción que va a gastarlo permite doble depósito concurrente).
+ */
+export async function getTreasuryAccountBalanceTx(tx: Prisma.TransactionClient, accountId: string): Promise<TreasuryAccountBalance> {
+  const account = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: accountId }, select: { openingBalance: true, openingBalanceAt: true } });
   const [inAgg, outAgg] = await Promise.all([
-    prisma.treasuryEntry.aggregate({ where: { accountId, direction: "IN" }, _sum: { amount: true } }),
-    prisma.treasuryEntry.aggregate({ where: { accountId, direction: "OUT" }, _sum: { amount: true } }),
+    tx.treasuryEntry.aggregate({ where: { accountId, direction: "IN" }, _sum: { amount: true } }),
+    tx.treasuryEntry.aggregate({ where: { accountId, direction: "OUT" }, _sum: { amount: true } }),
   ]);
   const openingBalance = Number(account.openingBalance);
   const totalIn = Number(inAgg._sum.amount ?? 0);
@@ -366,6 +373,10 @@ export async function getTreasuryAccountBalance(accountId: string): Promise<Trea
     balance: computeAccountBalance(openingBalance, totalIn, totalOut),
     pendingOpening: account.openingBalanceAt === null,
   };
+}
+
+export async function getTreasuryAccountBalance(accountId: string): Promise<TreasuryAccountBalance> {
+  return getTreasuryAccountBalanceTx(prisma, accountId);
 }
 
 /**
@@ -537,7 +548,7 @@ export async function confirmBankDeposit(input: {
   if (input.amount <= 0) throw new Error("INVALID_DEPOSIT_AMOUNT: el monto depositado debe ser mayor que 0");
 
   return prisma.$transaction(async (tx) => {
-    const custodyBalance = await getTreasuryAccountBalance(input.custodyAccountId);
+    const custodyBalance = await getTreasuryAccountBalanceTx(tx, input.custodyAccountId);
     if (input.amount > custodyBalance.balance + 0.01) {
       throw new Error(`VALIDATION_ERROR: el monto confirmado (C$${input.amount}) supera lo que hay en custodia (C$${custodyBalance.balance})`);
     }
@@ -587,6 +598,143 @@ export async function confirmBankDeposit(input: {
 
     return { deposit, transferId, remainderInCustody: remainder };
   });
+}
+
+type DirectDepositInput = {
+  branchId: string;
+  bankAccountId: string;
+  amount: number;
+  actorUserId: string;
+  referenceNumber?: string | null;
+  notes?: string | null;
+};
+
+/**
+ * El cuerpo transaccional de depositBranchCashDirect (abajo), separado del
+ * wrapper que abre la transacción para poder probarlo con un tx en memoria
+ * (mismo patrón que recordAccountPaymentTx/account-payment.test.ts):
+ * getBranchCashPosition usa el cliente global de Prisma — no se puede fakear
+ * sin una base de datos real — así que el wrapper la resuelve ANTES de abrir
+ * la transacción y le pasa acá solo los dos números que hacen falta.
+ *
+ * POR QUÉ SE DESPACHA max(amount, accumulatedAmount) Y NO SOLO `amount`:
+ * getBranchCashPosition corta el acumulado por TIEMPO — busca el último
+ * DEPOSIT_DISPATCH/DEPOSIT_CONFIRMED sobre una cuenta CUSTODY de la sucursal
+ * y descarta TODA declaración anterior a esa fecha, sin importar el monto
+ * despachado. Si acá se despachara solo `amount` en un depósito PARCIAL, ese
+ * despacho igual movería el corte hacia adelante y accumulatedAmount
+ * quedaría en 0 aunque falte plata por depositar — un descuadre silencioso
+ * (la sucursal reportaría "al día" con dinero todavía retenido). Por eso se
+ * despacha el acumulado COMPLETO a la custodia del actor y se transfiere al
+ * banco solo `amount`: el remanente (accumulatedAmount - amount, si amount
+ * es menor) se queda en esa custodia como "en tránsito" — el mismo
+ * remanente que ya maneja confirmBankDeposit cuando confirma menos de lo que
+ * hay en custodia. Si `amount` excede accumulatedAmount (cubre además algo
+ * del efectivo de hoy en la gaveta abierta), no queda remanente.
+ */
+export async function depositBranchCashDirectTx(
+  tx: Prisma.TransactionClient,
+  input: DirectDepositInput,
+  pendingDeposit: number,
+  accumulatedAmount: number,
+) {
+  if (input.amount > pendingDeposit + 0.01) {
+    throw new Error(`VALIDATION_ERROR: el monto supera lo disponible para depositar (C$${pendingDeposit})`);
+  }
+
+  const bank = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.bankAccountId } });
+  if (bank.type !== "BANK") {
+    throw new Error("VALIDATION_ERROR: la cuenta destino no es bancaria");
+  }
+  if (!bank.isActive) {
+    throw new Error("VALIDATION_ERROR: la cuenta destino está inactiva");
+  }
+  if (bank.currencyCode !== "NIO") {
+    throw new Error(
+      "VALIDATION_ERROR: depósito directo solo a cuentas en córdobas (una cuenta en dólares requiere tipo de cambio explícito)",
+    );
+  }
+
+  const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.actorUserId, branchId: input.branchId });
+
+  const dispatchAmount = round2(Math.max(input.amount, accumulatedAmount));
+  await createTreasuryEntryTx(tx, {
+    accountId: custody.id,
+    direction: "IN",
+    amount: dispatchAmount,
+    entryType: "DEPOSIT_DISPATCH",
+    counterpartyType: "INTERNAL",
+    notes: "Depósito directo desde efectivo retenido de sucursal",
+    createdByUserId: input.actorUserId,
+  });
+
+  const deposit = await tx.bankDeposit.create({
+    data: {
+      bankAccountId: input.bankAccountId,
+      branchId: input.branchId,
+      amount: input.amount,
+      confirmedByUserId: input.actorUserId,
+      referenceNumber: input.referenceNumber ?? null,
+      notes: input.notes ?? null,
+    },
+  });
+
+  const { transferId } = await createInternalTransferTx(tx, {
+    fromAccountId: custody.id,
+    toAccountId: input.bankAccountId,
+    fromAmount: input.amount,
+    entryType: "DEPOSIT_CONFIRMED",
+    counterpartyType: "INTERNAL",
+    bankDepositId: deposit.id,
+    reference: input.referenceNumber ?? null,
+    notes: input.notes ?? null,
+    createdByUserId: input.actorUserId,
+  });
+
+  return {
+    deposit,
+    transferId,
+    custodyAccountId: custody.id,
+    remainderInCustody: round2(dispatchAmount - input.amount),
+  };
+}
+
+/**
+ * Depósito DIRECTO: el efectivo acumulado de la sucursal (getBranchCashPosition,
+ * cash-monitor.ts) sale directo a una cuenta bancaria en córdobas, sin pasar
+ * por "enviar a alguien y que Master confirme después" (confirmBankDeposit,
+ * arriba). El tope se recalcula acá — nunca se confía en el monto del
+ * cliente como límite. Ver depositBranchCashDirectTx para el porqué del
+ * paso por custodia con el acumulado completo.
+ */
+export async function depositBranchCashDirect(input: DirectDepositInput) {
+  if (input.amount <= 0) throw new Error("INVALID_DEPOSIT_AMOUNT: el monto depositado debe ser mayor que 0");
+
+  const position = await getBranchCashPosition(input.branchId);
+  const result = await prisma.$transaction((tx) =>
+    depositBranchCashDirectTx(tx, input, position.pendingDeposit, position.accumulatedAmount),
+  );
+
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: input.branchId,
+    module: "treasury",
+    action: "DIRECT_BANK_DEPOSIT",
+    entityType: "BankDeposit",
+    entityId: result.deposit.id,
+    metadataJson: {
+      branchId: input.branchId,
+      bankAccountId: input.bankAccountId,
+      amount: input.amount,
+      custodyAccountId: result.custodyAccountId,
+      pendingDepositBefore: position.pendingDeposit,
+      accumulatedBefore: position.accumulatedAmount,
+      remainderLeftInCustody: result.remainderInCustody,
+      transferId: result.transferId,
+    },
+  });
+
+  return { deposit: result.deposit, transferId: result.transferId, custodyAccountId: result.custodyAccountId };
 }
 
 /** §6.1/Pantalla 4 — cuentas CUSTODY con saldo > 0: lo que hay "en tránsito" a la espera de que alguien lo confirme. */

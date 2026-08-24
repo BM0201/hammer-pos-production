@@ -484,6 +484,105 @@ export async function getTreasuryEntriesByAccount(input: { from: Date; to: Date;
   }));
 }
 
+/* ── §6 · Resumen de depósitos por cuenta y sucursal, en un rango ────── */
+
+export type DepositSummary = {
+  period: { from: Date; to: Date };
+  deposited: { total: number; count: number; accountsCount: number };
+  byAccount: Array<{
+    accountId: string;
+    bankName: string;
+    accountAlias: string;
+    accountNumber: string;
+    currencyCode: string;
+    total: number;
+    count: number;
+    lastDepositAt: Date | null;
+  }>;
+  byBranch: Array<{ branchId: string; branchName: string; total: number; count: number }>;
+};
+
+/**
+ * Totales de depósito por cuenta y por sucursal en un período — la barra de
+ * totales de Tesorería (§Tesorería operativa). `accountsCount` es la
+ * cantidad de cuentas DISTINTAS con al menos un depósito, no la cantidad de
+ * depósitos — son dos números distintos y la pantalla los usa por separado.
+ *
+ * `_max: { depositedAt: true }` en el mismo groupBy da "última fecha" sin un
+ * findMany aparte — un groupBy más, no uno menos, que reconstruir la misma
+ * respuesta con una consulta extra.
+ */
+export async function getDepositSummary(input: { from: Date; to: Date }): Promise<DepositSummary> {
+  const where = { depositedAt: { gte: input.from, lte: input.to } };
+
+  const [byAccountGroup, byBranchGroup] = await Promise.all([
+    prisma.bankDeposit.groupBy({
+      by: ["bankAccountId"],
+      where,
+      _sum: { amount: true },
+      _count: { _all: true },
+      _max: { depositedAt: true },
+    }),
+    prisma.bankDeposit.groupBy({
+      by: ["branchId"],
+      where,
+      _sum: { amount: true },
+      _count: { _all: true },
+    }),
+  ]);
+
+  if (byAccountGroup.length === 0) {
+    return { period: input, deposited: { total: 0, count: 0, accountsCount: 0 }, byAccount: [], byBranch: [] };
+  }
+
+  const [accounts, branches] = await Promise.all([
+    prisma.treasuryAccount.findMany({
+      where: { id: { in: byAccountGroup.map((g) => g.bankAccountId) } },
+      select: { id: true, bankName: true, accountAlias: true, accountNumber: true, currencyCode: true },
+    }),
+    prisma.branch.findMany({
+      where: { id: { in: byBranchGroup.map((g) => g.branchId) } },
+      select: { id: true, name: true },
+    }),
+  ]);
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  const branchById = new Map(branches.map((b) => [b.id, b]));
+
+  const byAccount = byAccountGroup
+    .map((g) => {
+      const account = accountById.get(g.bankAccountId);
+      return {
+        accountId: g.bankAccountId,
+        bankName: account?.bankName ?? "—",
+        accountAlias: account?.accountAlias ?? "—",
+        accountNumber: account?.accountNumber ?? "",
+        currencyCode: account?.currencyCode ?? "NIO",
+        total: round2(Number(g._sum.amount ?? 0)),
+        count: g._count._all,
+        lastDepositAt: g._max.depositedAt,
+      };
+    })
+    .sort((a, b) => b.total - a.total);
+
+  const byBranch = byBranchGroup.map((g) => ({
+    branchId: g.branchId,
+    branchName: branchById.get(g.branchId)?.name ?? "—",
+    total: round2(Number(g._sum.amount ?? 0)),
+    count: g._count._all,
+  }));
+
+  return {
+    period: input,
+    deposited: {
+      total: round2(byAccount.reduce((sum, a) => sum + a.total, 0)),
+      count: byAccount.reduce((sum, a) => sum + a.count, 0),
+      accountsCount: byAccount.length,
+    },
+    byAccount,
+    byBranch,
+  };
+}
+
 /* ── Política de depósito (§6.5-equivalente: configuración) ──────────── */
 
 export async function setBranchDepositPolicy(input: { branchId: string; thresholdAmount: number; maxDaysHolding: number; actorUserId: string }) {

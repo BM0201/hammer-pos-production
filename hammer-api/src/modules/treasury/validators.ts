@@ -51,6 +51,20 @@ export const confirmBankDepositSchema = z.object({
   notes: z.string().max(500).optional().nullable(),
 });
 
+/**
+ * Depósito directo: el acumulado de la sucursal (getBranchCashPosition) va
+ * directo a una cuenta bancaria en córdobas, sin pasar por "enviar a alguien
+ * y confirmar después". El tope real (pendingDeposit) se recalcula en el
+ * servidor — este schema no lo valida, solo la forma del payload.
+ */
+export const directBranchDepositSchema = z.object({
+  branchId: z.string().cuid(),
+  bankAccountId: z.string().cuid(),
+  amount: z.coerce.number().positive(),
+  referenceNumber: z.string().max(100).optional().nullable(),
+  notes: z.string().max(500).optional().nullable(),
+});
+
 export const declareCashDestinationSchema = z.object({
   cashSessionId: z.string().cuid(),
   branchId: z.string().cuid(),
