@@ -14,6 +14,7 @@ import {
   ChevronUp,
   Menu,
   X,
+  ArrowLeftRight,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
@@ -55,6 +56,13 @@ function buildPosNav(session: ShellSession): NavSection[] {
     canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_OPEN)
   ) {
     cajaItems.push({ href: "/app/branch/cash", label: "Caja", icon: Wallet });
+  }
+  if (canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_OPERATE)) {
+    cajaItems.push({
+      href: "/app/branch/cash-destination",
+      label: "Destino del efectivo",
+      icon: ArrowLeftRight,
+    });
   }
   cajaItems.push({ href: "/app/branch", label: "Mi día", icon: LayoutDashboard, exact: true });
   if (canInAnyAssignedBranch(session, CAPABILITIES.CASH_SESSION_CLOSE_REQUEST)) {

@@ -85,3 +85,18 @@ export function businessDateWeekRange(businessDate: Date): { weekStart: Date; we
   const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
   return { weekStart, weekEnd };
 }
+
+/**
+ * El siguiente día hábil (lunes-viernes, sin feriados — mismo criterio que
+ * countBusinessDaysBetween en treasury/exposure.ts) después del día de
+ * negocio de `now`, como businessDate (medianoche UTC anclada a
+ * America/Managua). Nunca +24h fijas: un viernes "mañana" es lunes, y esta
+ * función existe justo para que ningún caller tenga que acordarse de eso.
+ */
+export function nextBusinessDayFrom(now: Date = new Date()): Date {
+  let cursor = businessDateFromNow(now);
+  do {
+    cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
+  } while (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6);
+  return cursor;
+}

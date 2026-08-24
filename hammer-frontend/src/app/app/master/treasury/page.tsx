@@ -63,7 +63,7 @@ type Position = {
 
 type DepositPolicy = { id: string; branchId: string; thresholdAmount: string; maxDaysHolding: number };
 
-type CashPositionRow = { branch: { id: string; code: string; name: string }; position: CashPosition };
+type CashPositionRow = { branch: { id: string; code: string; name: string }; position: CashPosition; consecutivePostponements: number };
 
 type DepositSummary = {
   period: { from: string; to: string };
@@ -294,6 +294,7 @@ export default function TreasuryPage() {
                   key={row.branch.id}
                   branch={row.branch}
                   position={row.position}
+                  consecutivePostponements={row.consecutivePostponements}
                   expanded={expandedCashBranchId === row.branch.id}
                   onToggle={() => setExpandedCashBranchId((current) => (current === row.branch.id ? null : row.branch.id))}
                   onRegisterExpense={() => setExpenseSheetBranchId(row.branch.id)}
@@ -562,6 +563,7 @@ function TotalTile({ label, value, amber }: { label: string; value: number; ambe
 function CashPositionRowItem({
   branch,
   position,
+  consecutivePostponements,
   expanded,
   onToggle,
   onRegisterExpense,
@@ -570,6 +572,7 @@ function CashPositionRowItem({
 }: {
   branch: { id: string; code: string; name: string };
   position: CashPosition;
+  consecutivePostponements: number;
   expanded: boolean;
   onToggle: () => void;
   onRegisterExpense: () => void;
@@ -591,6 +594,10 @@ function CashPositionRowItem({
           <div className="flex items-center gap-2">
             <span className="font-semibold text-[var(--color-text)]">{branch.name}</span>
             <Badge variant={meta.tone === "critical" ? "danger" : meta.tone === "amber" ? "warning" : "neutral"}>{meta.label}</Badge>
+            {/* Si el cajero declara una posposición y Master nunca la ve, posponer
+                es un botón que solo sirve para que la plata se quede quieta sin
+                que nadie se entere (Parte 3). */}
+            {consecutivePostponements > 0 && <Badge variant="warning">Pospuesto {consecutivePostponements}x</Badge>}
           </div>
           <p className="text-xs text-[var(--color-text-muted)]">
             En caja hoy {fmt(position.cashInDrawerToday)} · Acumulado {fmt(position.accumulatedAmount)}

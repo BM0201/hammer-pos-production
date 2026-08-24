@@ -398,6 +398,7 @@ model Branch {
   bankDeposits                BankDeposit[]
   cashDestinationDeclarations CashDestinationDeclaration[]
   depositPolicy               BranchDepositPolicy?
+  cashDepositPostponements    CashDepositPostponement[]
 }
 
 model User {
@@ -480,6 +481,7 @@ model User {
   presences                   UserPresence[]
   createdReplenishmentDrafts  ReplenishmentDraft[]         @relation("ReplenishmentDraftCreatedBy")
   approvedReplenishmentDrafts ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
+  cashDepositPostponements    CashDepositPostponement[]
 
   @@index([globalRole, isActive])
 }
@@ -578,6 +580,7 @@ model CashSession {
   cashMovements          CashMovement[]
   refunds                Refund[]
   destinationDeclaration CashDestinationDeclaration?
+  depositPostponements   CashDepositPostponement[]
 
   @@index([physicalCashBoxId, status])
   @@index([operationalDayId])
@@ -3551,6 +3554,31 @@ model BankDeposit {
 
   @@index([branchId, depositedAt])
   @@index([bankAccountId, depositedAt])
+}
+
+/// Una decisión de "hoy no se deposita, se queda en caja hasta mañana" —
+/// registra la decisión, NO un movimiento: el efectivo sigue en la gaveta,
+/// nada del libro mayor cambia (postponeCashDeposit, treasury/cash-monitor.ts,
+/// misma familia que sendCashOutToCustody). Deliberadamente no tiene una
+/// TreasuryEntry asociada — una la tendría si esto fuera un despacho real,
+/// y eso reiniciaría el corte de "días sin depositar" que esta acción existe
+/// para NO reiniciar.
+model CashDepositPostponement {
+  id               String   @id @default(cuid())
+  cashSessionId    String
+  branchId         String
+  amount           Decimal
+  reason           String?
+  postponedUntil   DateTime
+  declaredByUserId String
+  createdAt        DateTime @default(now())
+
+  cashSession CashSession @relation(fields: [cashSessionId], references: [id])
+  branch      Branch      @relation(fields: [branchId], references: [id])
+  declaredBy  User        @relation(fields: [declaredByUserId], references: [id])
+
+  @@index([branchId, createdAt])
+  @@index([cashSessionId])
 }
 
 /// Una por cierre de sesión de caja. Los tres destinos son la misma

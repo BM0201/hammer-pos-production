@@ -91,6 +91,16 @@ export const sendCashOutSchema = z.object({
   reason: z.enum(["DEPOSIT_DISPATCH", "HANDOVER"]),
 });
 
+/**
+ * "Dejar en caja hasta mañana" — registra una DECISIÓN, no un movimiento
+ * (postponeCashDeposit, cash-monitor.ts). El efectivo sigue en la gaveta.
+ */
+export const postponeDepositSchema = z.object({
+  cashSessionId: z.string().cuid(),
+  amount: z.coerce.number().positive(),
+  reason: z.string().max(300).optional().nullable(),
+});
+
 export const setBranchDepositPolicySchema = z.object({
   thresholdAmount: z.coerce.number().positive(),
   maxDaysHolding: z.coerce.number().int().positive(),
