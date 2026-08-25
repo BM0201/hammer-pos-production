@@ -751,7 +751,8 @@ export async function submitSaleOrderToPendingPayment(input: {
   }
 }
 
-function normalizeDirectSaleTenders(input: {
+/** Pura (sin DB) — aislada como export para poder probar los guards (PAYMENT_REFERENCE_REQUIRED, PAYMENT_BANK_ACCOUNT_REQUIRED, etc.) sin transacción. */
+export function normalizeDirectSaleTenders(input: {
   amount: number;
   method: PaymentMethod;
   referenceNumber?: string | null;
@@ -773,6 +774,9 @@ function normalizeDirectSaleTenders(input: {
     }
     if ((tender.method === PaymentMethod.CARD || tender.method === PaymentMethod.TRANSFER) && !tender.referenceNumber) {
       throw new Error("PAYMENT_REFERENCE_REQUIRED");
+    }
+    if (tender.method === PaymentMethod.TRANSFER && !tender.bankAccountId) {
+      throw new Error("PAYMENT_BANK_ACCOUNT_REQUIRED");
     }
   }
 

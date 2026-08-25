@@ -14,6 +14,11 @@ import { getCashSessionDestinationSummaryTx, selectSupersededPostponements } fro
  * availableToMove salía de session.expectedCashAmount (columna que
  * offline-sync nunca actualizaba) en vez de calcularse en vivo. La prueba
  * 2 de abajo es la que blinda exactamente esa regresión.
+ *
+ * Parte C (prompt-tesoreria-dinero-digital.md) reemplazó collectedThisToday
+ * por `money`: physical/inAccount/pendingSettlement/other — los tres
+ * estados del dinero, no un mismo casillero repetido cuatro veces. Las
+ * pruebas 9-10 son las nuevas de esa parte.
  */
 
 type FakeSession = {
@@ -25,10 +30,11 @@ type FakeSession = {
   operationalDayId: string | null;
   physicalCashBox: { branchId: string };
 };
-type FakeTender = { method: PaymentMethod; amount: number; changeAmount?: number; cashSessionId: string; status: "POSTED" };
+type FakeTender = { method: PaymentMethod; amount: number; changeAmount?: number; cashSessionId: string; status: "POSTED"; bankAccountId?: string | null };
 type FakeMovement = { type: CashMovementType; amount: number; cashSessionId: string };
 type FakeBranch = { id: string; cashFundAmount: number | null };
 type FakePostponement = { id: string; cashSessionId: string; branchId: string; amount: number; reason: string | null; postponedUntil: Date; createdAt: Date };
+type FakeAccount = { id: string; bankName: string; accountAlias: string; accountNumber: string };
 
 function createFakeTx(opts: {
   sessions: FakeSession[];
@@ -36,6 +42,7 @@ function createFakeTx(opts: {
   movements?: FakeMovement[];
   branches?: FakeBranch[];
   postponements?: FakePostponement[];
+  accounts?: FakeAccount[];
   policy?: { branchId: string; maxDaysHolding: number } | null;
 }) {
   const sessions = new Map(opts.sessions.map((s) => [s.id, s]));
@@ -43,6 +50,7 @@ function createFakeTx(opts: {
   const movements = [...(opts.movements ?? [])];
   const branches = new Map((opts.branches ?? []).map((b) => [b.id, b]));
   const postponements = [...(opts.postponements ?? [])];
+  const accounts = new Map((opts.accounts ?? []).map((a) => [a.id, a]));
 
   const tx = {
     cashSession: {
@@ -74,12 +82,12 @@ function createFakeTx(opts: {
         }
         return { _sum: { changeAmount: matches.reduce((s, t) => s + (t.changeAmount ?? 0), 0) } };
       },
-      // getCashSessionDestinationSummaryTx llama esto para collectedThisSession —
-      // SIN filtro de fecha/operationalDay (esa es exactamente la Prueba 3).
+      // getCashSessionDestinationSummaryTx llama esto para money — SIN
+      // filtro de fecha/operationalDay (esa es exactamente la Prueba 3).
       findMany: async ({ where }: { where: { payment: { cashSessionId: string; status: string } } }) =>
         tenders
           .filter((t) => t.cashSessionId === where.payment.cashSessionId && t.status === where.payment.status)
-          .map((t) => ({ method: t.method, amount: t.amount })),
+          .map((t) => ({ method: t.method, amount: t.amount, bankAccountId: t.bankAccountId ?? null })),
     },
     cashMovement: {
       findMany: async ({ where }: { where: { cashSessionId: string } }) =>
@@ -88,6 +96,10 @@ function createFakeTx(opts: {
     treasuryEntry: {
       findMany: async () => [] as unknown[],
       findFirst: async () => null,
+    },
+    treasuryAccount: {
+      findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.map((id) => accounts.get(id)).filter((a): a is FakeAccount => Boolean(a)),
     },
     cashDepositPostponement: {
       findMany: async ({ where }: { where: { cashSessionId: string } }) =>
@@ -107,15 +119,15 @@ function createFakeTx(opts: {
 const BRANCH = "branch-1";
 const SESSION_ID = "session-1";
 
-test("Prueba 1 — tenders CASH C$890, apertura C$400, fondo C$400 → collectedThisSession.cash=890, availableToMove=890", async () => {
+test("Prueba 1 — tenders CASH C$890, apertura C$400, fondo C$400 → inDrawer=1290, availableToMove=890", async () => {
   const { tx } = createFakeTx({
     sessions: [{ id: SESSION_ID, status: "OPEN", openingAmount: 400, expectedCashAmount: 0, countedCashAmount: null, operationalDayId: null, physicalCashBox: { branchId: BRANCH } }],
     tenders: [{ method: PaymentMethod.CASH, amount: 890, cashSessionId: SESSION_ID, status: "POSTED" }],
     branches: [{ id: BRANCH, cashFundAmount: 400 }],
   });
   const result = await getCashSessionDestinationSummaryTx(tx, SESSION_ID);
-  assert.equal(result.collectedThisSession.cash, 890);
-  assert.equal(result.availableToMove, 890, "400 (apertura) + 890 (cobrado) - 400 (fondo) = 890");
+  assert.equal(result.money.physical.inDrawer, 1290, "400 (apertura) + 890 (cobrado en efectivo)");
+  assert.equal(result.money.physical.availableToMove, 890, "1290 - 400 (fondo) = 890");
 });
 
 test("Prueba 2 (LA DE LA REGRESIÓN) — expectedCashAmount desactualizado en CashSession → availableToMove sale del cálculo en vivo, no de esa columna", async () => {
@@ -128,8 +140,8 @@ test("Prueba 2 (LA DE LA REGRESIÓN) — expectedCashAmount desactualizado en Ca
   // La columna stale viaja tal cual — es informativa, para detectar la divergencia.
   assert.equal(result.session.expectedCashAmount, 0);
   // Pero availableToMove NUNCA sale de ahí: 1000 (apertura) + 500 (cobrado) = 1500.
-  assert.equal(result.availableToMove, 1500, "el cálculo en vivo ignora la columna stale");
-  assert.notEqual(result.availableToMove, result.session.expectedCashAmount);
+  assert.equal(result.money.physical.availableToMove, 1500, "el cálculo en vivo ignora la columna stale");
+  assert.notEqual(result.money.physical.availableToMove, result.session.expectedCashAmount);
 });
 
 test("Prueba 3 — un tender con fecha de negocio distinta a hoy (sesión todavía abierta) entra en el total, no se descarta por ninguna ventana de fechas", async () => {
@@ -146,7 +158,7 @@ test("Prueba 3 — un tender con fecha de negocio distinta a hoy (sesión todav�
     branches: [{ id: BRANCH, cashFundAmount: 0 }],
   });
   const result = await getCashSessionDestinationSummaryTx(tx, SESSION_ID);
-  assert.equal(result.collectedThisSession.cash, 890, "ambos tenders entran, sin importar a qué día operativo pertenecen");
+  assert.equal(result.money.physical.inDrawer, 890, "ambos tenders entran, sin importar a qué día operativo pertenecen");
 });
 
 test("Prueba 4 — efectivo cobrado 0 y fondo mayor a la apertura → availableToMove es 0, nunca negativo", async () => {
@@ -156,8 +168,8 @@ test("Prueba 4 — efectivo cobrado 0 y fondo mayor a la apertura → availableT
     branches: [{ id: BRANCH, cashFundAmount: 500 }], // fondo > lo que hay en gaveta
   });
   const result = await getCashSessionDestinationSummaryTx(tx, SESSION_ID);
-  assert.equal(result.collectedThisSession.cash, 0);
-  assert.equal(result.availableToMove, 0, "400 - 500 sería -100; se clampea a 0");
+  assert.equal(result.money.physical.inDrawer, 400);
+  assert.equal(result.money.physical.availableToMove, 0, "400 - 500 sería -100; se clampea a 0");
 });
 
 test("Prueba 5 — tras un HANDOVER de C$500, availableToMove baja exactamente C$500 (no se descuenta dos veces)", async () => {
@@ -171,7 +183,7 @@ test("Prueba 5 — tras un HANDOVER de C$500, availableToMove baja exactamente C
   // Sin el movimiento: 1000 + 500 = 1500. Con el movimiento (BANK_DEPOSIT_OUT
   // está en CASH_OUTFLOW_TYPES): 1500 - 500 = 1000. Si se descontara dos
   // veces (acá y de nuevo en el frontend) daría 500.
-  assert.equal(result.availableToMove, 1000);
+  assert.equal(result.money.physical.availableToMove, 1000);
 });
 
 test("Prueba 6a — una posposición igual al efectivo que queda tras el HANDOVER queda superada (cancelada)", () => {
@@ -199,4 +211,55 @@ test("Prueba 6c — si lo que queda alcanza para cubrir todo lo pospuesto, no ca
 test("Prueba 6d — sin posposiciones activas, no hay nada que cancelar", () => {
   const superseded = selectSupersededPostponements([], 0);
   assert.deepEqual(superseded, []);
+});
+
+test("Prueba 9 — efectivo + transferencia a dos cuentas + tarjeta: los tres buckets salen separados y byAccount trae las dos cuentas", async () => {
+  const { tx } = createFakeTx({
+    sessions: [{ id: SESSION_ID, status: "OPEN", openingAmount: 0, expectedCashAmount: 0, countedCashAmount: null, operationalDayId: null, physicalCashBox: { branchId: BRANCH } }],
+    tenders: [
+      { method: PaymentMethod.CASH, amount: 890, cashSessionId: SESSION_ID, status: "POSTED" },
+      { method: PaymentMethod.TRANSFER, amount: 3000, cashSessionId: SESSION_ID, status: "POSTED", bankAccountId: "acct-lafise" },
+      { method: PaymentMethod.TRANSFER, amount: 1200, cashSessionId: SESSION_ID, status: "POSTED", bankAccountId: "acct-bac" },
+      { method: PaymentMethod.CARD, amount: 1850, cashSessionId: SESSION_ID, status: "POSTED" },
+    ],
+    branches: [{ id: BRANCH, cashFundAmount: 0 }],
+    accounts: [
+      { id: "acct-lafise", bankName: "LAFISE", accountAlias: "Cuenta corriente", accountNumber: "0011223344821" },
+      { id: "acct-bac", bankName: "BAC", accountAlias: "Cuenta corriente", accountNumber: "5566778801130" },
+    ],
+  });
+  const result = await getCashSessionDestinationSummaryTx(tx, SESSION_ID);
+
+  assert.equal(result.money.physical.inDrawer, 890, "solo el efectivo está en la gaveta");
+  assert.equal(result.money.inAccount.total, 4200);
+  assert.equal(result.money.pendingSettlement.total, 1850);
+  assert.equal(result.money.other.total, 0);
+
+  assert.equal(result.money.inAccount.byAccount.length, 2);
+  const lafise = result.money.inAccount.byAccount.find((a) => a.accountId === "acct-lafise")!;
+  const bac = result.money.inAccount.byAccount.find((a) => a.accountId === "acct-bac")!;
+  assert.equal(lafise.amount, 3000);
+  assert.equal(lafise.bankName, "LAFISE");
+  assert.equal(lafise.last4, "4821");
+  assert.equal(bac.amount, 1200);
+  assert.equal(bac.last4, "1130");
+});
+
+test("Prueba 10 — availableToMove no incluye nada de inAccount ni pendingSettlement: solo el efectivo físico se puede mover", async () => {
+  const { tx } = createFakeTx({
+    sessions: [{ id: SESSION_ID, status: "OPEN", openingAmount: 0, expectedCashAmount: 0, countedCashAmount: null, operationalDayId: null, physicalCashBox: { branchId: BRANCH } }],
+    tenders: [
+      { method: PaymentMethod.CASH, amount: 100, cashSessionId: SESSION_ID, status: "POSTED" },
+      { method: PaymentMethod.TRANSFER, amount: 5000, cashSessionId: SESSION_ID, status: "POSTED", bankAccountId: "acct-lafise" },
+      { method: PaymentMethod.CARD, amount: 8000, cashSessionId: SESSION_ID, status: "POSTED" },
+    ],
+    branches: [{ id: BRANCH, cashFundAmount: 0 }],
+    accounts: [{ id: "acct-lafise", bankName: "LAFISE", accountAlias: "Cuenta corriente", accountNumber: "4821" }],
+  });
+  const result = await getCashSessionDestinationSummaryTx(tx, SESSION_ID);
+  // Si transferencia u/o tarjeta se colaran en availableToMove, esto daría
+  // 13100 (100+5000+8000) o algo mayor a 100 — el bug que esta prueba blinda.
+  assert.equal(result.money.physical.availableToMove, 100);
+  assert.equal(result.money.inAccount.total, 5000);
+  assert.equal(result.money.pendingSettlement.total, 8000);
 });

@@ -674,9 +674,26 @@ export async function postponeCashDeposit(input: {
 
 export type CashDestinationSummary = {
   session: { id: string; openedAt: Date; expectedCashAmount: number };
-  collectedThisSession: { cash: number; transfer: number; card: number; other: number; total: number };
-  cashFundAmount: number;
-  availableToMove: number;
+  /**
+   * Parte C — los tres estados del dinero, no un mismo casillero repetido
+   * cuatro veces. Mismo vocabulario que el panel de Tesorería de Master
+   * (BANCOS → "En cuenta"/inAccount, POR LIQUIDAR → "Por liquidar"/
+   * pendingSettlement): si el POS y Tesorería nombran distinto el mismo
+   * dinero, el personal aprende dos sistemas.
+   */
+  money: {
+    /** Lo único que se puede mover — vive en la gaveta física. */
+    physical: { inDrawer: number; cashFund: number; availableToMove: number };
+    /** TRANSFER — ya está en el banco, no en la gaveta. */
+    inAccount: {
+      total: number;
+      byAccount: Array<{ accountId: string; bankName: string; accountAlias: string; last4: string; amount: number }>;
+    };
+    /** CARD — en SETTLEMENT, el adquirente todavía no liquidó. */
+    pendingSettlement: { total: number };
+    /** CREDIT y cualquier método futuro. */
+    other: { total: number };
+  };
   movements: Array<{ id: string; type: "HANDOVER" | "DEPOSIT_DISPATCH"; amount: number; carrierName: string; bankName: string | null; occurredAt: Date }>;
   postponements: Array<{ id: string; amount: number; reason: string | null; postponedUntil: Date; createdAt: Date }>;
   consecutivePostponements: number;
@@ -690,19 +707,21 @@ export type CashDestinationSummary = {
  * debería: este endpoint solo expone lo que esa sesión movió, no el resto
  * de la sucursal).
  *
- * availableToMove sale del cálculo EN VIVO (calculateExpectedCashForSessionTx),
- * nunca de session.expectedCashAmount — esa columna puede quedar stale
- * (ver offline-sync.service.ts) y mostrar efectivo cobrado con C$0.00
- * disponible al mismo tiempo era exactamente ese bug. session.expectedCashAmount
- * SÍ viaja en la respuesta tal cual, como dato informativo para detectar la
- * divergencia si vuelve a pasar.
+ * money.physical.availableToMove sale del cálculo EN VIVO
+ * (calculateExpectedCashForSessionTx), nunca de session.expectedCashAmount
+ * — esa columna puede quedar stale (ver offline-sync.service.ts) y mostrar
+ * efectivo cobrado con C$0.00 disponible al mismo tiempo era exactamente
+ * ese bug. session.expectedCashAmount SÍ viaja en la respuesta tal cual,
+ * como dato informativo para detectar la divergencia si vuelve a pasar.
  *
- * collectedThisSession es el total de la SESIÓN (nunca pasa por una ventana
- * de fechas — sumar por método alcanza) — "cash" ahí es cobro bruto, no lo
- * que queda disponible: availableToMove ya descuenta el fondo de caja
- * (mismo criterio que decomposeRetainedAmount/computeAmountToDeposit — el
- * fondo se queda en la gaveta para dar vuelto mañana) y los movimientos de
- * hoy (BANK_DEPOSIT_OUT ya está neteado dentro del cálculo en vivo).
+ * Los totales de la sesión (physical/inAccount/pendingSettlement/other)
+ * nunca pasan por una ventana de fechas — sumar por método alcanza, no
+ * hace falta un weekStart para totalizar UNA sesión. availableToMove ya
+ * descuenta el fondo de caja (mismo criterio que decomposeRetainedAmount/
+ * computeAmountToDeposit — el fondo se queda en la gaveta para dar vuelto
+ * mañana) y los movimientos de hoy (BANK_DEPOSIT_OUT ya está neteado
+ * dentro del cálculo en vivo) — inAccount/pendingSettlement NUNCA
+ * participan de availableToMove: esa plata no está en la gaveta.
  */
 export async function getCashSessionDestinationSummary(cashSessionId: string): Promise<CashDestinationSummary> {
   return prisma.$transaction((tx) => getCashSessionDestinationSummaryTx(tx, cashSessionId));
@@ -725,7 +744,7 @@ export async function getCashSessionDestinationSummaryTx(tx: Prisma.TransactionC
     calculateExpectedCashForSessionTx(tx, cashSessionId, session.openingAmount),
     tx.paymentTender.findMany({
       where: { payment: { cashSessionId, status: PaymentStatus.POSTED } },
-      select: { method: true, amount: true },
+      select: { method: true, amount: true, bankAccountId: true },
     }),
     tx.treasuryEntry.findMany({
       where: { entryType: { in: ["HANDOVER", "DEPOSIT_DISPATCH"] }, cashMovement: { cashSessionId } },
@@ -748,19 +767,46 @@ export async function getCashSessionDestinationSummaryTx(tx: Prisma.TransactionC
     tx.branchDepositPolicy.findUnique({ where: { branchId }, select: { maxDaysHolding: true } }),
   ]);
 
-  const collectedThisSession = tenderRows.reduce(
-    (acc, t) => {
-      const amount = Number(t.amount);
-      const bucket: keyof typeof acc = t.method === PaymentMethod.CASH ? "cash"
-        : t.method === PaymentMethod.TRANSFER ? "transfer"
-        : t.method === PaymentMethod.CARD ? "card"
-        : "other"; // CREDIT y cualquier método futuro — nunca se descarta plata.
-      acc[bucket] = round2(acc[bucket] + amount);
-      acc.total = round2(acc.total + amount);
-      return acc;
-    },
-    { cash: 0, transfer: 0, card: 0, other: 0, total: 0 },
-  );
+  // TRANSFER agrupado por cuenta — Parte A ya exige bankAccountId para todo
+  // TRANSFER nuevo; un tender viejo/huérfano sin cuenta (dato histórico
+  // previo al fix) cae en `other` en vez de perderse o inventar una cuenta.
+  const inAccountByAccountId = new Map<string, number>();
+  let pendingSettlementTotal = 0;
+  let otherTotal = 0;
+  for (const t of tenderRows) {
+    const amount = Number(t.amount);
+    if (t.method === PaymentMethod.TRANSFER && t.bankAccountId) {
+      inAccountByAccountId.set(t.bankAccountId, round2((inAccountByAccountId.get(t.bankAccountId) ?? 0) + amount));
+    } else if (t.method === PaymentMethod.CARD) {
+      pendingSettlementTotal = round2(pendingSettlementTotal + amount);
+    } else if (t.method !== PaymentMethod.CASH) {
+      otherTotal = round2(otherTotal + amount);
+    }
+    // CASH no participa acá — vive en money.physical, ya neteado en snapshot.expectedCash.
+  }
+
+  const transferAccountIds = [...inAccountByAccountId.keys()];
+  const transferAccounts = transferAccountIds.length > 0
+    ? await tx.treasuryAccount.findMany({
+        where: { id: { in: transferAccountIds } },
+        select: { id: true, bankName: true, accountAlias: true, accountNumber: true },
+      })
+    : [];
+  const accountById = new Map(transferAccounts.map((a) => [a.id, a]));
+
+  const byAccount = [...inAccountByAccountId.entries()]
+    .map(([accountId, amount]) => {
+      const account = accountById.get(accountId);
+      const accountNumber = account?.accountNumber ?? "";
+      return {
+        accountId,
+        bankName: account?.bankName ?? "—",
+        accountAlias: account?.accountAlias ?? "—",
+        last4: accountNumber.length <= 4 ? accountNumber : accountNumber.slice(-4),
+        amount,
+      };
+    })
+    .sort((a, b) => b.amount - a.amount);
 
   const cashFundAmount = Number(branch.cashFundAmount ?? 0);
   const availableToMove = Math.max(0, round2(snapshot.expectedCash - cashFundAmount));
@@ -771,9 +817,12 @@ export async function getCashSessionDestinationSummaryTx(tx: Prisma.TransactionC
       openedAt: session.openedAt,
       expectedCashAmount: Number(session.expectedCashAmount ?? 0),
     },
-    collectedThisSession,
-    cashFundAmount,
-    availableToMove,
+    money: {
+      physical: { inDrawer: round2(snapshot.expectedCash), cashFund: cashFundAmount, availableToMove },
+      inAccount: { total: round2(byAccount.reduce((s, a) => s + a.amount, 0)), byAccount },
+      pendingSettlement: { total: pendingSettlementTotal },
+      other: { total: otherTotal },
+    },
     movements: movementEntries.map((e) => ({
       id: e.id,
       type: e.entryType as "HANDOVER" | "DEPOSIT_DISPATCH",

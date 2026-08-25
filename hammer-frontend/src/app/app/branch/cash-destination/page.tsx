@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { HandCoins, Landmark, Moon, Lock, ChevronRight, ChevronDown, AlertTriangle, X, Check, Wallet } from "lucide-react";
+import { HandCoins, Landmark, Moon, Lock, Clock, ChevronRight, ChevronDown, AlertTriangle, X, Check, Wallet } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
@@ -20,14 +20,18 @@ import toast from "react-hot-toast";
  * a esa decisión se elimina de la pantalla.
  */
 
-type CollectedThisSession = { cash: number; transfer: number; card: number; other: number; total: number };
 type Movement = { id: string; type: "HANDOVER" | "DEPOSIT_DISPATCH"; amount: number; carrierName: string; bankName: string | null; occurredAt: string };
 type Postponement = { id: string; amount: number; reason: string | null; postponedUntil: string; createdAt: string };
+type BankAccountBreakdown = { accountId: string; bankName: string; accountAlias: string; last4: string; amount: number };
 type CashDestinationSummary = {
   session: { id: string; openedAt: string; expectedCashAmount: number };
-  collectedThisSession: CollectedThisSession;
-  cashFundAmount: number;
-  availableToMove: number;
+  /** Parte C — los tres estados del dinero, mismo vocabulario que Tesorería de Master. */
+  money: {
+    physical: { inDrawer: number; cashFund: number; availableToMove: number };
+    inAccount: { total: number; byAccount: BankAccountBreakdown[] };
+    pendingSettlement: { total: number };
+    other: { total: number };
+  };
   movements: Movement[];
   postponements: Postponement[];
   consecutivePostponements: number;
@@ -98,11 +102,11 @@ export default function CashDestinationPage() {
     return <p className="text-[var(--color-danger-600)]">No tienes una sucursal asignada.</p>;
   }
 
-  const noCashAtAll = summary ? summary.collectedThisSession.cash <= 0.01 : false;
-  const noSurplus = summary ? summary.availableToMove <= 0.01 : false;
+  const noCashAtAll = summary ? summary.money.physical.inDrawer <= 0.01 : false;
+  const noSurplus = summary ? summary.money.physical.availableToMove <= 0.01 : false;
   const noBankAccounts = bankAccounts.length === 0;
-  const cashInDrawer = summary ? round2(summary.availableToMove + summary.cashFundAmount) : 0;
-  const fundPct = summary && cashInDrawer > 0 ? Math.max(0, Math.min(100, (summary.cashFundAmount / cashInDrawer) * 100)) : 0;
+  const cashInDrawer = summary ? summary.money.physical.inDrawer : 0;
+  const fundPct = summary && cashInDrawer > 0 ? Math.max(0, Math.min(100, (summary.money.physical.cashFund / cashInDrawer) * 100)) : 0;
   const movePct = 100 - fundPct;
 
   const history = summary
@@ -140,20 +144,20 @@ export default function CashDestinationPage() {
           {/* B.2 · El número primero — sin tarjeta que lo envuelva */}
           <div className="px-1">
             <p className="text-sm font-medium text-[var(--color-text-muted)]">Podés mover ahora</p>
-            <p className="mt-1 text-[44px] font-medium leading-none tabular-nums text-[var(--color-success-700)]">{fmt(summary.availableToMove)}</p>
+            <p className="mt-1 text-[44px] font-medium leading-none tabular-nums text-[var(--color-success-700)]">{fmt(summary.money.physical.availableToMove)}</p>
             <p className="mt-2 text-sm text-[var(--color-text-muted)]">de los {fmt(cashInDrawer)} que hay en la gaveta</p>
 
             {/* B.3 · La barra del fondo de caja — el elemento que más importa */}
-            {summary.cashFundAmount > 0 && (
+            {summary.money.physical.cashFund > 0 && (
               <div className="mt-5">
                 <div className="flex h-[52px] w-full overflow-hidden rounded-xl border border-[var(--color-border)]">
                   <div className="flex min-w-0 flex-col justify-center overflow-hidden bg-[var(--color-surface-alt)] px-3" style={{ width: `${fundPct}%` }}>
                     <span className="truncate text-[0.625rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Fondo de caja</span>
-                    <span className="truncate text-xs font-bold tabular-nums text-[var(--color-text)]">{fmt(summary.cashFundAmount)}</span>
+                    <span className="truncate text-xs font-bold tabular-nums text-[var(--color-text)]">{fmt(summary.money.physical.cashFund)}</span>
                   </div>
                   <div className="flex min-w-0 flex-col justify-center overflow-hidden bg-[var(--color-success-100)] px-3" style={{ width: `${movePct}%` }}>
                     <span className="truncate text-[0.625rem] font-semibold uppercase tracking-wide text-[var(--color-success-700)]">Para mover</span>
-                    <span className="truncate text-xs font-bold tabular-nums text-[var(--color-success-700)]">{fmt(summary.availableToMove)}</span>
+                    <span className="truncate text-xs font-bold tabular-nums text-[var(--color-success-700)]">{fmt(summary.money.physical.availableToMove)}</span>
                   </div>
                 </div>
                 <p className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-text-soft)]">
@@ -167,13 +171,13 @@ export default function CashDestinationPage() {
           {/* B.4 · Tres filas — o el estado vacío que corresponda (B.7) */}
           <div>
             <h2 className="mb-2 px-1 text-[15px] font-medium text-[var(--color-text)]">
-              {noSurplus ? "Nada para mover todavía" : `¿Qué hacés con los ${fmt(summary.availableToMove)}?`}
+              {noSurplus ? "Nada para mover todavía" : `¿Qué hacés con los ${fmt(summary.money.physical.availableToMove)}?`}
             </h2>
             {noSurplus ? (
               <p className="px-1 text-sm text-[var(--color-text-muted)]">
                 {noCashAtAll
                   ? "Todavía no se ha cobrado efectivo en esta caja."
-                  : `Todo el efectivo en gaveta es el fondo de caja (${fmt(summary.cashFundAmount)}). No hay excedente para mover.`}
+                  : `Todo el efectivo en gaveta es el fondo de caja (${fmt(summary.money.physical.cashFund)}). No hay excedente para mover.`}
               </p>
             ) : (
               <div className="space-y-2">
@@ -200,6 +204,53 @@ export default function CashDestinationPage() {
               </div>
             )}
           </div>
+
+          {/* Parte D · Sección 2 — dinero que no pasa por la gaveta: ya está
+              registrado, no es una decisión. Filas planas, sin borde de
+              tarjeta ni chevron — esto no se toca. */}
+          {(summary.money.inAccount.total > 0.01 || summary.money.pendingSettlement.total > 0.01) && (
+            <div className="space-y-4 border-t border-[var(--color-border)] px-1 pt-5">
+              <div>
+                <h2 className="text-[15px] font-medium text-[var(--color-text)]">Dinero que no pasa por la gaveta</h2>
+                <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">Esto ya está registrado. No tenés que hacer nada.</p>
+              </div>
+
+              {summary.money.inAccount.total > 0.01 && (
+                <div className="flex items-start gap-3">
+                  <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-soft)]" aria-hidden="true" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-sm text-[var(--color-text-muted)]">En cuenta</span>
+                      <span className="text-[20px] font-medium leading-none tabular-nums text-[var(--color-text-muted)]">{fmt(summary.money.inAccount.total)}</span>
+                    </div>
+                    <div className="mt-1.5 space-y-0.5">
+                      {summary.money.inAccount.byAccount.slice(0, 3).map((a) => (
+                        <p key={a.accountId} className="text-[13px] text-[var(--color-text-soft)]">
+                          Banco {a.bankName} ****{a.last4} · {fmt(a.amount)}
+                        </p>
+                      ))}
+                      {summary.money.inAccount.byAccount.length > 3 && (
+                        <p className="text-[13px] text-[var(--color-text-soft)]">y {summary.money.inAccount.byAccount.length - 3} cuentas más</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {summary.money.pendingSettlement.total > 0.01 && (
+                <div className="flex items-start gap-3">
+                  <Clock className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-text-soft)]" aria-hidden="true" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-sm text-[var(--color-text-muted)]">Por liquidar</span>
+                      <span className="text-[20px] font-medium leading-none tabular-nums text-[var(--color-text-muted)]">{fmt(summary.money.pendingSettlement.total)}</span>
+                    </div>
+                    <p className="mt-1.5 text-[13px] text-[var(--color-text-soft)]">Pagos con tarjeta. El banco los deposita en 1-2 días.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* B.6 · Historial al pie */}
           <Card className="p-4">
@@ -244,19 +295,12 @@ export default function CashDestinationPage() {
             )}
           </Card>
 
-          {/* B.1 · Tarjeta y transferencia — nota al pie, no la casilla que ocupaba un tercio de la pantalla */}
-          {(summary.collectedThisSession.card > 0.01 || summary.collectedThisSession.transfer > 0.01) && (
-            <p className="px-1 text-center text-xs text-[var(--color-text-soft)]">
-              Cobrado con tarjeta y transferencia: {fmt(summary.collectedThisSession.card + summary.collectedThisSession.transfer)} — ese dinero va solo al banco, no pasa por la gaveta.
-            </p>
-          )}
-
           {activeSheet === "HANDOVER" && (
             <SendCashSheet
               mode="HANDOVER"
               branchId={branchId}
               cashSessionId={cashSessionId}
-              availableToMove={summary.availableToMove}
+              availableToMove={summary.money.physical.availableToMove}
               bankAccounts={bankAccounts}
               onClose={() => setActiveSheet(null)}
               onDone={() => { setActiveSheet(null); void load(); }}
@@ -267,7 +311,7 @@ export default function CashDestinationPage() {
               mode="DISPATCH"
               branchId={branchId}
               cashSessionId={cashSessionId}
-              availableToMove={summary.availableToMove}
+              availableToMove={summary.money.physical.availableToMove}
               bankAccounts={bankAccounts}
               onClose={() => setActiveSheet(null)}
               onDone={() => { setActiveSheet(null); void load(); }}
@@ -276,7 +320,7 @@ export default function CashDestinationPage() {
           {activeSheet === "POSTPONE" && (
             <PostponeSheet
               cashSessionId={cashSessionId}
-              availableToMove={summary.availableToMove}
+              availableToMove={summary.money.physical.availableToMove}
               consecutivePostponements={summary.consecutivePostponements}
               policy={summary.policy}
               onClose={() => setActiveSheet(null)}
@@ -287,10 +331,6 @@ export default function CashDestinationPage() {
       )}
     </section>
   );
-}
-
-function round2(v: number) {
-  return Math.round(v * 100) / 100;
 }
 
 function DecisionRow({ icon: Icon, title, subtitle, disabled, disabledReason, onClick }: {

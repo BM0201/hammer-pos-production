@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { z } from "zod";
+import { PaymentMethod } from "@prisma/client";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated } from "@/modules/auth/access";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -27,6 +28,10 @@ const offlineSyncSchema = z.object({
   notes: z.string().max(500).optional(),
   overrideReason: z.string().max(500).optional(),
   createdAt: z.string().datetime(),
+  // Offline es efectivo y nada más (B.1) — el dispositivo de hoy nunca manda
+  // esto, pero si algún día lo hace con otro valor, syncOfflineSale lo
+  // rechaza ruidoso (OFFLINE_SALE_CASH_ONLY) en vez de convertirlo en CASH.
+  method: z.nativeEnum(PaymentMethod).optional(),
 });
 
 export async function POST(request: Request) {
@@ -66,6 +71,7 @@ export async function POST(request: Request) {
       grandTotal: body.grandTotal,
       notes: body.notes,
       createdAt: body.createdAt,
+      method: body.method,
     });
 
     return ok(result);

@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import { Prisma, SaleOrderStatus, type OperationalDayLifecycle } from "@prisma/client";
+import { Prisma, PaymentMethod, SaleOrderStatus, type OperationalDayLifecycle } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { consumeSharedStockForSaleTx } from "@/modules/inventory/service";
 import { logAuditEvent } from "@/modules/audit/service";
@@ -9,6 +9,7 @@ import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-servi
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
 import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
+import { recordSaleTenderEntriesTx } from "@/modules/treasury/service";
 
 // Tolerancia de redondeo del lado del cliente (display) al validar el
 // grandTotal que manda el dispositivo offline contra el recalculado en el
@@ -47,6 +48,15 @@ export type OfflineSyncInput = {
   grandTotal: number;
   notes?: string;
   createdAt: string; // ISO — when the sale was made offline
+  /**
+   * Parte B.1 (prompt-tesoreria-dinero-digital.md): offline es efectivo y
+   * nada más — decisión explícita, no la ausencia accidental de un campo.
+   * El dispositivo offline de hoy nunca manda otro método (ni el queue del
+   * frontend lo captura), así que en la práctica esto siempre es CASH; el
+   * campo existe para que un método distinto falle ruidoso (OFFLINE_SALE_CASH_ONLY)
+   * en vez de convertirse en efectivo en silencio si algo cambia mañana.
+   */
+  method?: PaymentMethod;
 };
 
 function makeOrderNumber(branchCode: string) {
@@ -56,6 +66,12 @@ function makeOrderNumber(branchCode: string) {
 }
 
 export async function syncOfflineSale(input: OfflineSyncInput) {
+  // Parte B.1 — offline es efectivo y nada más. Falla ruidosa en vez de
+  // conversión silenciosa: convertir una transferencia real en efectivo
+  // corrompe el arqueo y no deja rastro.
+  const method = input.method ?? PaymentMethod.CASH;
+  if (method !== PaymentMethod.CASH) throw new Error("OFFLINE_SALE_CASH_ONLY");
+
   // ── 1. Validate cash session timing ────────────────────────────────────────
   const session = await prisma.cashSession.findUnique({
     where: { id: input.cashSessionId },
@@ -271,7 +287,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
         cashSessionId: input.cashSessionId,
         operationalDayId,
         receivedByUserId: input.actorUserId,
-        method: "CASH",
+        method,
         amount: totals.grandTotal,
         status: "POSTED",
         // paidAt = cuándo ocurrió realmente la venta offline; syncedAt = ahora.
@@ -280,20 +296,28 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
         syncedAt: now,
       },
     });
-    await tx.paymentTender.create({
+    const paymentTender = await tx.paymentTender.create({
       data: {
         paymentId: payment.id,
         operationalDayId,
-        method: "CASH",
+        method,
         amount: totals.grandTotal,
       },
     });
 
-    // Día ABIERTO: no hay ninguna razón para dejar expectedCashAmount stale —
-    // a diferencia del caso cerrado de abajo, acá nadie tiene que revisar nada
-    // primero. Sin esto, "Destino del efectivo" (cash-monitor.ts) podía mostrar
-    // efectivo cobrado y C$0.00 disponible al mismo tiempo.
+    // Día ABIERTO: no hay ninguna razón para dejar el libro mayor ni
+    // expectedCashAmount stale — a diferencia del caso cerrado de abajo, acá
+    // nadie tiene que revisar nada primero. Sin esto, "Destino del efectivo"
+    // (cash-monitor.ts) podía mostrar efectivo cobrado y C$0.00 disponible
+    // al mismo tiempo, y una venta offline por transferencia/tarjeta nunca
+    // aparecía en el libro mayor. occurredAt = saleTime (cuándo ocurrió la
+    // venta), no `now` (cuándo sincronizó) — el libro mayor registra hechos.
     if (!lateSyncIntoClosedDay) {
+      await recordSaleTenderEntriesTx(tx, {
+        tenders: [paymentTender],
+        occurredAt: saleTime,
+        createdByUserId: input.actorUserId,
+      });
       await syncCashSessionSnapshotTx(tx, input.cashSessionId);
     }
 

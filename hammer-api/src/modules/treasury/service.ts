@@ -491,6 +491,23 @@ export async function getTreasuryAccountLedger(accountId: string, range?: { from
 // ─── Enganche: venta con tender TRANSFER/CARD (§3, §8 paso 2) ─────────────
 
 /**
+ * Pura — a qué rama del libro mayor cae un tender de venta. Aislada para
+ * poder probar la DECISIÓN sin transacción: antes del fix, un TRANSFER sin
+ * bankAccountId no caía en NINGUNA rama reconocible (ni "tiene cuenta", ni
+ * "es tarjeta") — se comportaba indistinguible de CASH_OR_OTHER y
+ * desaparecía en silencio. TRANSFER_MISSING_ACCOUNT es la rama que ahora lo
+ * distingue.
+ */
+export function classifyTenderForLedger(tender: { method: string; bankAccountId?: string | null }):
+  "TRANSFER_WITH_ACCOUNT" | "TRANSFER_MISSING_ACCOUNT" | "CARD" | "CASH_OR_OTHER" {
+  if (tender.method === "TRANSFER") {
+    return tender.bankAccountId ? "TRANSFER_WITH_ACCOUNT" : "TRANSFER_MISSING_ACCOUNT";
+  }
+  if (tender.method === "CARD") return "CARD";
+  return "CASH_OR_OTHER";
+}
+
+/**
  * Se llama justo después de crear los PaymentTender de una venta
  * (payments/service.ts y sales/service.ts). Nunca bloquea la venta: si la
  * cuenta no existe o algo falla, se registra en auditoría y se sigue — el
@@ -509,9 +526,10 @@ export async function recordSaleTenderEntriesTx(
 ) {
   for (const tender of input.tenders) {
     try {
-      if (tender.method === "TRANSFER" && tender.bankAccountId) {
+      const branch = classifyTenderForLedger(tender);
+      if (branch === "TRANSFER_WITH_ACCOUNT") {
         await createTreasuryEntryTx(tx, {
-          accountId: tender.bankAccountId,
+          accountId: tender.bankAccountId!,
           direction: "IN",
           amount: Number(tender.amount),
           entryType: "SALE_TRANSFER",
@@ -521,7 +539,7 @@ export async function recordSaleTenderEntriesTx(
           paymentTenderId: tender.id,
           createdByUserId: input.createdByUserId,
         });
-      } else if (tender.method === "CARD") {
+      } else if (branch === "CARD") {
         const settlementAccount = await findOrCreateSettlementAccountTx(tx);
         await createTreasuryEntryTx(tx, {
           accountId: settlementAccount.id,
@@ -534,8 +552,23 @@ export async function recordSaleTenderEntriesTx(
           paymentTenderId: tender.id,
           createdByUserId: input.createdByUserId,
         });
+      } else if (branch === "TRANSFER_MISSING_ACCOUNT") {
+        // No debería pasar más (validador + servicio ya lo exigen — payments/
+        // validators.ts, payments/service.ts, sales/service.ts), pero un
+        // TRANSFER sin cuenta antes no entraba a NINGUNA rama de este if: no
+        // lanzaba, no llegaba al catch de abajo, desaparecía en silencio sin
+        // entrada en el libro mayor NI audit log. Esta rama es para datos
+        // históricos y para que un hueco futuro quede visible en vez de mudo.
+        await logAuditEvent({
+          actorUserId: input.createdByUserId,
+          module: "treasury",
+          action: "TREASURY_ENTRY_SKIPPED_NO_ACCOUNT",
+          entityType: "PaymentTender",
+          entityId: tender.id,
+          metadataJson: { method: tender.method, amount: Number(tender.amount) },
+        });
       }
-      // CASH: ninguna entrada — el efectivo vive en CashSession (§1/§3).
+      // CASH_OR_OTHER: ninguna entrada — el efectivo vive en CashSession (§1/§3).
     } catch (error) {
       await logAuditEvent({
         actorUserId: input.createdByUserId,

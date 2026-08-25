@@ -243,6 +243,9 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "PAYMENT_REFERENCE_REQUIRED") {
       return errJson("PAYMENT_REFERENCE_REQUIRED", "Se requiere numero de referencia para pagos con tarjeta o transferencia.", 400);
     }
+    if (error.message === "PAYMENT_BANK_ACCOUNT_REQUIRED") {
+      return errJson("PAYMENT_BANK_ACCOUNT_REQUIRED", "Elegí a qué cuenta entró la transferencia.", 400);
+    }
     if (error.message === "INVALID_TENDER_AMOUNT") {
       return errJson("INVALID_TENDER_AMOUNT", "El monto del pago debe ser mayor que cero.", 400);
     }
