@@ -19,12 +19,13 @@ import toast from "react-hot-toast";
  * (registra la decisión, no mueve nada — postponeCashDeposit).
  */
 
-type CollectedToday = { cash: number; transfer: number; card: number; other: number; total: number };
+type CollectedThisSession = { cash: number; transfer: number; card: number; other: number; total: number };
 type Movement = { id: string; type: "HANDOVER" | "DEPOSIT_DISPATCH"; amount: number; carrierName: string; occurredAt: string };
 type Postponement = { id: string; amount: number; reason: string | null; postponedUntil: string; createdAt: string };
 type CashDestinationSummary = {
   session: { id: string; openedAt: string; expectedCashAmount: number };
-  collectedToday: CollectedToday;
+  collectedThisSession: CollectedThisSession;
+  cashFundAmount: number;
   availableToMove: number;
   movements: Movement[];
   postponements: Postponement[];
@@ -117,15 +118,18 @@ export default function CashDestinationPage() {
           <Card className="p-4">
             <h2 className="mb-3 text-sm font-semibold text-[var(--color-text)]">Lo cobrado hoy</h2>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <MethodTile label="Efectivo" value={summary.collectedToday.cash} />
-              <MethodTile label="Tarjeta" value={summary.collectedToday.card} />
-              <MethodTile label="Transferencia" value={summary.collectedToday.transfer} />
-              <MethodTile label="Otros" value={summary.collectedToday.other} />
+              <MethodTile label="Efectivo" value={summary.collectedThisSession.cash} />
+              <MethodTile label="Tarjeta" value={summary.collectedThisSession.card} />
+              <MethodTile label="Transferencia" value={summary.collectedThisSession.transfer} />
+              <MethodTile label="Otros" value={summary.collectedThisSession.other} />
             </div>
             <div className="mt-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Disponible para mover</p>
               <p className="mt-1 text-2xl font-bold tabular-nums text-[var(--color-text)]">{fmt(summary.availableToMove)}</p>
               <p className="mt-1 text-xs text-[var(--color-text-soft)]">solo efectivo — tarjeta y transferencia ya están en Tesorería</p>
+              {summary.cashFundAmount > 0 && (
+                <p className="mt-1 text-xs text-[var(--color-text-soft)]">Fondo de caja {fmt(summary.cashFundAmount)} se queda en la gaveta</p>
+              )}
             </div>
           </Card>
 
@@ -155,9 +159,13 @@ export default function CashDestinationPage() {
                 onClick={() => setActiveSheet("POSTPONE")}
               />
             </div>
-            {summary.availableToMove <= 0.01 && (
-              <p className="mt-2 text-xs text-[var(--color-text-soft)]">No hay efectivo disponible para mover todavía.</p>
-            )}
+            {summary.collectedThisSession.cash <= 0.01 ? (
+              <p className="mt-2 text-xs text-[var(--color-text-soft)]">Todavía no se ha cobrado efectivo en esta caja.</p>
+            ) : summary.availableToMove <= 0.01 ? (
+              <p className="mt-2 text-xs text-[var(--color-text-soft)]">
+                Todo el efectivo en gaveta es el fondo de caja ({fmt(summary.cashFundAmount)}). No hay excedente para mover.
+              </p>
+            ) : null}
           </Card>
 
           {/* BLOQUE 3 · Movimientos de hoy */}

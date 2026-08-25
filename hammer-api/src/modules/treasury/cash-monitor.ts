@@ -1,11 +1,10 @@
 import { CashMovementType, CashSessionStatus, PaymentMethod, PaymentStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
-import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx, calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
 import { mean, stddev } from "@/modules/ai-insights/analyzer";
 import { createTreasuryEntryTx, findOrCreateCustodyAccountTx, getActiveRetainedCashExpenses } from "@/modules/treasury/service";
-import { nextBusinessDayFrom, businessDateFromNow } from "@/modules/operations/business-date";
-import { buildWeeklyMoneyBreakdown } from "@/modules/treasury/branch-money-summary";
+import { nextBusinessDayFrom } from "@/modules/operations/business-date";
 
 /**
  * prompt-indicador-efectivo-inteligente.md — indicador de efectivo en la
@@ -369,6 +368,28 @@ export async function getBranchCashPosition(branchId: string, now: Date = new Da
 /* ── §4 · Depositar / entregar sin cerrar la caja ─────────────────────── */
 
 /**
+ * Pura — qué posposiciones de una sesión quedaron superadas por un
+ * movimiento real, dado lo que queda en gaveta tras ese movimiento. Las
+ * MÁS RECIENTES primero (mismo orden que `activePostponementsDesc` debe
+ * traer ya aplicado). Aislada para poder probar la decisión de cancelación
+ * sin base de datos — mismo principio que computeAccountBalance/
+ * computeAmountToDeposit en este módulo.
+ */
+export function selectSupersededPostponements<T extends { amount: number }>(
+  activePostponementsDesc: readonly T[],
+  remainingExpectedCash: number,
+): T[] {
+  let postponedTotal = round2(activePostponementsDesc.reduce((sum, p) => sum + p.amount, 0));
+  const superseded: T[] = [];
+  for (const postponement of activePostponementsDesc) {
+    if (postponedTotal <= remainingExpectedCash + 0.01) break;
+    superseded.push(postponement);
+    postponedTotal = round2(postponedTotal - postponement.amount);
+  }
+  return superseded;
+}
+
+/**
  * "Enviar depósito" o "Entregar en persona" con la sesión ABIERTA (§4).
  * Crea el CashMovement BANK_DEPOSIT_OUT (el efectivo esperado baja, como
  * cualquier salida) y la entrada IN a la CUSTODY del destinatario, unidas
@@ -414,7 +435,7 @@ export async function sendCashOutToCustody(input: {
         createdByUserId: input.actorUserId,
       },
     });
-    await syncCashSessionSnapshotTx(tx, session.id);
+    const snapshot = await syncCashSessionSnapshotTx(tx, session.id);
     await tx.auditLog.create({
       data: {
         actorUserId: input.actorUserId,
@@ -426,6 +447,42 @@ export async function sendCashOutToCustody(input: {
         metadataJson: { cashSessionId: input.cashSessionId, type: CashMovementType.BANK_DEPOSIT_OUT, amount: input.amount, reason: reasonText },
       },
     });
+
+    // Posposición vs movimiento del mismo dinero: si lo que queda en gaveta
+    // tras ESTE movimiento ya no alcanza para cubrir lo pospuesto de esta
+    // sesión, esas posposiciones (las más recientes primero) quedaron
+    // superadas por un movimiento real. Cancelarlas es más honesto que
+    // dejarlas: el dinero efectivamente salió, y dejar el registro convierte
+    // el panel de Master en una mentira ("Pospuesto 1x" sobre plata que ya
+    // no está pospuesta). No se toca el corte de getBranchCashPosition acá
+    // — el DEPOSIT_DISPATCH/HANDOVER de arriba ya es la única TreasuryEntry
+    // que debe moverlo; cancelar una posposición no genera ninguna propia.
+    const activePostponements = await tx.cashDepositPostponement.findMany({
+      where: { cashSessionId: input.cashSessionId },
+      orderBy: { createdAt: "desc" },
+    });
+    const superseded = selectSupersededPostponements(
+      activePostponements.map((p) => ({ id: p.id, amount: Number(p.amount) })),
+      snapshot.expectedCash,
+    );
+    const supersededIds = superseded.map((p) => p.id);
+    if (supersededIds.length > 0) {
+      await tx.cashDepositPostponement.deleteMany({ where: { id: { in: supersededIds } } });
+      await logAuditEvent({
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "treasury",
+        action: "CASH_POSTPONEMENT_SUPERSEDED",
+        entityType: "CashMovement",
+        entityId: movement.id,
+        metadataJson: {
+          cashSessionId: input.cashSessionId,
+          supersededPostponementIds: supersededIds,
+          remainingExpectedCash: snapshot.expectedCash,
+          reason: "El efectivo pospuesto quedó superado por un movimiento real (entrega/depósito): ya no cabe en lo que queda en gaveta.",
+        },
+      });
+    }
 
     const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.carrierUserId, branchId: input.branchId });
     const entry = await createTreasuryEntryTx(tx, {
@@ -569,7 +626,8 @@ export async function postponeCashDeposit(input: {
 
 export type CashDestinationSummary = {
   session: { id: string; openedAt: Date; expectedCashAmount: number };
-  collectedToday: { cash: number; transfer: number; card: number; other: number; total: number };
+  collectedThisSession: { cash: number; transfer: number; card: number; other: number; total: number };
+  cashFundAmount: number;
   availableToMove: number;
   movements: Array<{ id: string; type: "HANDOVER" | "DEPOSIT_DISPATCH"; amount: number; carrierName: string; occurredAt: Date }>;
   postponements: Array<{ id: string; amount: number; reason: string | null; postponedUntil: Date; createdAt: Date }>;
@@ -582,26 +640,46 @@ export type CashDestinationSummary = {
  * El resumen del módulo "Destino del efectivo" — la caja de ESA sesión, no
  * la tesorería de la sucursal (CASHIER no tiene TREASURY_VIEW_BRANCH, y no
  * debería: este endpoint solo expone lo que esa sesión movió, no el resto
- * de la sucursal). collectedToday reusa buildWeeklyMoneyBreakdown
- * (branch-money-summary.ts) — mismo mapeo CASH/TRANSFER/CARD/other que ya
- * usa "Dinero de la semana", no un switch nuevo. availableToMove es SOLO
- * efectivo: tarjeta va a SETTLEMENT y transferencia entra directo al banco,
- * nunca pasan por la gaveta.
+ * de la sucursal).
+ *
+ * availableToMove sale del cálculo EN VIVO (calculateExpectedCashForSessionTx),
+ * nunca de session.expectedCashAmount — esa columna puede quedar stale
+ * (ver offline-sync.service.ts) y mostrar efectivo cobrado con C$0.00
+ * disponible al mismo tiempo era exactamente ese bug. session.expectedCashAmount
+ * SÍ viaja en la respuesta tal cual, como dato informativo para detectar la
+ * divergencia si vuelve a pasar.
+ *
+ * collectedThisSession es el total de la SESIÓN (nunca pasa por una ventana
+ * de fechas — sumar por método alcanza) — "cash" ahí es cobro bruto, no lo
+ * que queda disponible: availableToMove ya descuenta el fondo de caja
+ * (mismo criterio que decomposeRetainedAmount/computeAmountToDeposit — el
+ * fondo se queda en la gaveta para dar vuelto mañana) y los movimientos de
+ * hoy (BANK_DEPOSIT_OUT ya está neteado dentro del cálculo en vivo).
  */
 export async function getCashSessionDestinationSummary(cashSessionId: string): Promise<CashDestinationSummary> {
-  const session = await prisma.cashSession.findUniqueOrThrow({
+  return prisma.$transaction((tx) => getCashSessionDestinationSummaryTx(tx, cashSessionId));
+}
+
+/**
+ * El cuerpo transaccional de getCashSessionDestinationSummary (arriba),
+ * separado del wrapper para poder probarlo con un tx en memoria — mismo
+ * patrón que postponeCashDepositTx/depositBranchCashDirectTx.
+ */
+export async function getCashSessionDestinationSummaryTx(tx: Prisma.TransactionClient, cashSessionId: string): Promise<CashDestinationSummary> {
+  const session = await tx.cashSession.findUniqueOrThrow({
     where: { id: cashSessionId },
     include: { physicalCashBox: true },
   });
   const branchId = session.physicalCashBox.branchId;
-  const today = businessDateFromNow();
 
-  const [tenderRows, movementEntries, postponementRows, consecutivePostponements, policy] = await Promise.all([
-    prisma.paymentTender.findMany({
+  const [branch, snapshot, tenderRows, movementEntries, postponementRows, consecutivePostponements, policy] = await Promise.all([
+    tx.branch.findUniqueOrThrow({ where: { id: branchId }, select: { cashFundAmount: true } }),
+    calculateExpectedCashForSessionTx(tx, cashSessionId, session.openingAmount),
+    tx.paymentTender.findMany({
       where: { payment: { cashSessionId, status: PaymentStatus.POSTED } },
-      select: { method: true, amount: true, operationalDay: { select: { businessDate: true } } },
+      select: { method: true, amount: true },
     }),
-    prisma.treasuryEntry.findMany({
+    tx.treasuryEntry.findMany({
       where: { entryType: { in: ["HANDOVER", "DEPOSIT_DISPATCH"] }, cashMovement: { cashSessionId } },
       select: {
         id: true,
@@ -612,19 +690,31 @@ export async function getCashSessionDestinationSummary(cashSessionId: string): P
       },
       orderBy: { occurredAt: "asc" },
     }),
-    prisma.cashDepositPostponement.findMany({
+    tx.cashDepositPostponement.findMany({
       where: { cashSessionId },
       select: { id: true, amount: true, reason: true, postponedUntil: true, createdAt: true },
       orderBy: { createdAt: "asc" },
     }),
-    countConsecutivePostponements(branchId),
-    prisma.branchDepositPolicy.findUnique({ where: { branchId }, select: { maxDaysHolding: true } }),
+    countConsecutivePostponementsTx(tx, branchId),
+    tx.branchDepositPolicy.findUnique({ where: { branchId }, select: { maxDaysHolding: true } }),
   ]);
 
-  const { totals: collectedToday } = buildWeeklyMoneyBreakdown(
-    tenderRows.map((t) => ({ method: t.method, amount: Number(t.amount), businessDate: t.operationalDay?.businessDate ?? today })),
-    today,
+  const collectedThisSession = tenderRows.reduce(
+    (acc, t) => {
+      const amount = Number(t.amount);
+      const bucket: keyof typeof acc = t.method === PaymentMethod.CASH ? "cash"
+        : t.method === PaymentMethod.TRANSFER ? "transfer"
+        : t.method === PaymentMethod.CARD ? "card"
+        : "other"; // CREDIT y cualquier método futuro — nunca se descarta plata.
+      acc[bucket] = round2(acc[bucket] + amount);
+      acc.total = round2(acc.total + amount);
+      return acc;
+    },
+    { cash: 0, transfer: 0, card: 0, other: 0, total: 0 },
   );
+
+  const cashFundAmount = Number(branch.cashFundAmount ?? 0);
+  const availableToMove = Math.max(0, round2(snapshot.expectedCash - cashFundAmount));
 
   return {
     session: {
@@ -632,8 +722,9 @@ export async function getCashSessionDestinationSummary(cashSessionId: string): P
       openedAt: session.openedAt,
       expectedCashAmount: Number(session.expectedCashAmount ?? 0),
     },
-    collectedToday,
-    availableToMove: Number(session.expectedCashAmount ?? 0),
+    collectedThisSession,
+    cashFundAmount,
+    availableToMove,
     movements: movementEntries.map((e) => ({
       id: e.id,
       type: e.entryType as "HANDOVER" | "DEPOSIT_DISPATCH",

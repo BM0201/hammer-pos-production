@@ -1,5 +1,5 @@
 import { randomBytes } from "crypto";
-import { Prisma, SaleOrderStatus } from "@prisma/client";
+import { Prisma, SaleOrderStatus, type OperationalDayLifecycle } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { consumeSharedStockForSaleTx } from "@/modules/inventory/service";
 import { logAuditEvent } from "@/modules/audit/service";
@@ -8,11 +8,26 @@ import { getMaxDiscountPercentForRole, validateDiscountForRole } from "@/modules
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
+import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
 
 // Tolerancia de redondeo del lado del cliente (display) al validar el
 // grandTotal que manda el dispositivo offline contra el recalculado en el
 // servidor — un centavo, no más.
 const OFFLINE_SYNC_TOTAL_TOLERANCE = new Prisma.Decimal("0.01");
+
+/**
+ * Puro — si la venta offline aterriza en un día operativo que YA estaba
+ * esperando revisión (cerrado, no aprobado), la sincronización es tardía:
+ * no se toca el snapshot de caja en silencio, se marca para revisión y el
+ * Master la incorpora al aprobar (ver el bloque `if (lateSyncIntoClosedDay)`
+ * más abajo — esa decisión no se toca). Aislada para poder probar el límite
+ * sin base de datos; los efectos reales en DB (calculateExpectedCashForSessionTx,
+ * tx.cashSession.update) se prueban en integración/QA manual, mismo criterio
+ * que offline-sync-totals.test.ts ya documenta para este archivo.
+ */
+export function isLateSyncIntoClosedDay(operationalDayLifecycle: OperationalDayLifecycle | null | undefined): boolean {
+  return operationalDayLifecycle === "AWAITING_REVIEW";
+}
 
 export type OfflineSyncLine = {
   productId: string;
@@ -66,7 +81,7 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
     throw new Error("OFFLINE_SALE_DAY_APPROVED");
   }
   const operationalDayId = operationalDay?.id ?? null;
-  const lateSyncIntoClosedDay = operationalDay?.lifecycle === "AWAITING_REVIEW";
+  const lateSyncIntoClosedDay = isLateSyncIntoClosedDay(operationalDay?.lifecycle);
 
   // ── 2. Validate products ────────────────────────────────────────────────────
   const productIds = [...new Set(input.lines.map(l => l.productId))];
@@ -273,6 +288,14 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
         amount: totals.grandTotal,
       },
     });
+
+    // Día ABIERTO: no hay ninguna razón para dejar expectedCashAmount stale —
+    // a diferencia del caso cerrado de abajo, acá nadie tiene que revisar nada
+    // primero. Sin esto, "Destino del efectivo" (cash-monitor.ts) podía mostrar
+    // efectivo cobrado y C$0.00 disponible al mismo tiempo.
+    if (!lateSyncIntoClosedDay) {
+      await syncCashSessionSnapshotTx(tx, input.cashSessionId);
+    }
 
     // Sincronización tardía sobre un día ya CERRADO (no aprobado): NO se altera el
     // snapshot silenciosamente. Se marca para revisión; el recálculo en aprobación
