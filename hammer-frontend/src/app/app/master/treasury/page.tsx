@@ -1077,6 +1077,8 @@ function OpeningBalanceForm({ accountId, onSaved, onCancel }: { accountId: strin
 type CustodyRow = {
   account: { id: string; accountAlias: string; branch: { id: string; code: string; name: string } | null; holderUser: { id: string; fullName: string } | null };
   balance: TreasuryAccountBalance;
+  /** Cuenta declarada por el cajero al despachar (DEPOSIT_DISPATCH más reciente) — prefill de A.6. */
+  intendedBankAccountId: string | null;
 };
 
 /**
@@ -1144,7 +1146,7 @@ function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts:
 }
 
 function ConfirmDepositForm({ custody, bankAccounts, onClose, onConfirmed }: { custody: CustodyRow; bankAccounts: BankAccount[]; onClose: () => void; onConfirmed: () => void }) {
-  const [bankAccountId, setBankAccountId] = useState("");
+  const [bankAccountId, setBankAccountId] = useState(custody.intendedBankAccountId ?? "");
   const [amount, setAmount] = useState(custody.balance.balance.toFixed(2));
   const [referenceNumber, setReferenceNumber] = useState("");
   const [notes, setNotes] = useState("");

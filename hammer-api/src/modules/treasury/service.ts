@@ -135,6 +135,25 @@ export async function listBankAccounts(branchId?: string | null, forPayments = f
   });
 }
 
+/**
+ * Selector de cuenta destino para "Alguien lo lleva al banco hoy" (cajero,
+ * módulo Destino del efectivo). A diferencia de listBankAccounts, esto es
+ * deliberadamente angosto: SOLO cuentas BANK activas — nunca SETTLEMENT,
+ * SAFE ni CUSTODY (esas últimas expondrían en manos de quién anda el
+ * dinero de la sucursal a cualquiera con CASH_SESSION_OPERATE). Sin saldos:
+ * el cajero elige a dónde va el dinero, cuánto hay ahí no es asunto suyo.
+ *
+ * `db` inyectable (mismo patrón que findSafeAccountForBranch) para poder
+ * probar el filtro con un fake en memoria sin base de datos real.
+ */
+export async function listBankAccountsForCashier(branchId: string, db: Prisma.TransactionClient | typeof prisma = prisma) {
+  return db.treasuryAccount.findMany({
+    where: { isActive: true, type: "BANK", OR: [{ branchId }, { branchId: null }] },
+    select: { id: true, bankName: true, accountAlias: true, accountNumber: true, currencyCode: true },
+    orderBy: [{ bankName: "asc" }, { accountAlias: "asc" }],
+  });
+}
+
 // ─── El libro mayor (§2) — primitivas de escritura ────────────────────────
 
 type EntryLinkage = {
@@ -143,6 +162,8 @@ type EntryLinkage = {
   bankDepositId?: string | null;
   expensePaymentId?: string | null;
   cardId?: string | null;
+  /** Solo DEPOSIT_DISPATCH: a qué cuenta bancaria declaró ir este efectivo — intención, no el hecho (§A.1). */
+  intendedBankAccountId?: string | null;
 };
 
 type CreateEntryInput = EntryLinkage & {
@@ -185,6 +206,7 @@ export async function createTreasuryEntryTx(tx: Prisma.TransactionClient, input:
       bankDepositId: input.bankDepositId ?? null,
       expensePaymentId: input.expensePaymentId ?? null,
       cardId: input.cardId ?? null,
+      intendedBankAccountId: input.intendedBankAccountId ?? null,
       reference: input.reference ?? null,
       notes: input.notes ?? null,
       createdByUserId: input.createdByUserId,
@@ -553,6 +575,18 @@ export async function confirmBankDeposit(input: {
       throw new Error(`VALIDATION_ERROR: el monto confirmado (C$${input.amount}) supera lo que hay en custodia (C$${custodyBalance.balance})`);
     }
 
+    // La intención declarada por quien despachó (A.6) — resuelta acá, del
+    // lado servidor, no confiando en lo que mande el cliente: la última
+    // DEPOSIT_DISPATCH de esta custodia es el prefill que ya vio Master en
+    // pantalla. Si eligió otra cuenta, la plata puede haber terminado ahí
+    // por una razón real — no se bloquea, pero la diferencia queda anotada.
+    const latestDispatch = await tx.treasuryEntry.findFirst({
+      where: { accountId: input.custodyAccountId, entryType: "DEPOSIT_DISPATCH" },
+      orderBy: { occurredAt: "desc" },
+      select: { intendedBankAccountId: true },
+    });
+    const intendedBankAccountId = latestDispatch?.intendedBankAccountId ?? null;
+
     const deposit = await tx.bankDeposit.create({
       data: {
         bankAccountId: input.bankAccountId,
@@ -588,6 +622,8 @@ export async function confirmBankDeposit(input: {
       metadataJson: {
         custodyAccountId: input.custodyAccountId,
         bankAccountId: input.bankAccountId,
+        intendedBankAccountId,
+        bankAccountMismatch: intendedBankAccountId !== null && intendedBankAccountId !== input.bankAccountId,
         amountConfirmed: input.amount,
         custodyBalanceBefore: custodyBalance.balance,
         remainderInCustody: remainder,
@@ -737,13 +773,28 @@ export async function depositBranchCashDirect(input: DirectDepositInput) {
   return { deposit: result.deposit, transferId: result.transferId, custodyAccountId: result.custodyAccountId };
 }
 
-/** §6.1/Pantalla 4 — cuentas CUSTODY con saldo > 0: lo que hay "en tránsito" a la espera de que alguien lo confirme. */
+/**
+ * §6.1/Pantalla 4 — cuentas CUSTODY con saldo > 0: lo que hay "en tránsito"
+ * a la espera de que alguien lo confirme. intendedBankAccountId viene de la
+ * DEPOSIT_DISPATCH más reciente de cada custodia — el prefill de A.6 para
+ * el formulario de confirmación (Master ve qué cuenta declaró el cajero).
+ */
 export async function listCustodyAccountsWithBalance(branchId?: string | null) {
   const accounts = await prisma.treasuryAccount.findMany({
     where: { type: "CUSTODY", isActive: true, ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}) },
     include: { holderUser: { select: { id: true, fullName: true } }, branch: { select: { id: true, code: true, name: true } } },
   });
-  const withBalance = await Promise.all(accounts.map(async (account) => ({ account, balance: await getTreasuryAccountBalance(account.id) })));
+  const withBalance = await Promise.all(accounts.map(async (account) => {
+    const [balance, latestDispatch] = await Promise.all([
+      getTreasuryAccountBalance(account.id),
+      prisma.treasuryEntry.findFirst({
+        where: { accountId: account.id, entryType: "DEPOSIT_DISPATCH" },
+        orderBy: { occurredAt: "desc" },
+        select: { intendedBankAccountId: true },
+      }),
+    ]);
+    return { account, balance, intendedBankAccountId: latestDispatch?.intendedBankAccountId ?? null };
+  }));
   return withBalance.filter((row) => row.balance.balance > 0.01);
 }
 

@@ -89,7 +89,13 @@ export const sendCashOutSchema = z.object({
   amount: z.coerce.number().positive(),
   carrierUserId: z.string().cuid(),
   reason: z.enum(["DEPOSIT_DISPATCH", "HANDOVER"]),
-});
+  // Obligatoria en DEPOSIT_DISPATCH, ignorada en HANDOVER — entregar en
+  // persona no tiene cuenta destino, el dinero queda con esa persona.
+  bankAccountId: z.string().cuid().optional().nullable(),
+}).refine(
+  (v) => v.reason !== "DEPOSIT_DISPATCH" || !!v.bankAccountId,
+  { message: "Elegí la cuenta a la que va el depósito.", path: ["bankAccountId"] },
+);
 
 /**
  * "Dejar en caja hasta mañana" — registra una DECISIÓN, no un movimiento

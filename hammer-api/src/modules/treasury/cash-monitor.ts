@@ -389,6 +389,122 @@ export function selectSupersededPostponements<T extends { amount: number }>(
   return superseded;
 }
 
+type SendCashOutInput = {
+  cashSessionId: string;
+  branchId: string;
+  amount: number;
+  carrierUserId: string;
+  reason: "DEPOSIT_DISPATCH" | "HANDOVER";
+  bankAccountId?: string | null;
+  actorUserId: string;
+};
+
+/**
+ * El cuerpo transaccional de sendCashOutToCustody (abajo), separado del
+ * wrapper para poder probarlo con un tx en memoria — mismo patrón que
+ * postponeCashDepositTx/depositBranchCashDirectTx. Los logAuditEvent (usan
+ * el cliente global de Prisma, no `tx`) se movieron al wrapper; el
+ * tx.auditLog.create de CASH_MOVEMENT_CREATED se queda acá porque sí
+ * escribe contra `tx`.
+ */
+export async function sendCashOutToCustodyTx(tx: Prisma.TransactionClient, input: SendCashOutInput) {
+  // Mismo cuerpo que createCashMovement (cash-session/service.ts), pero
+  // reconstruido acá en vez de llamarlo: esa función abre SU PROPIA
+  // transacción, y el CashMovement (sale de la gaveta) y la entrada del
+  // libro mayor (entra a custodia) tienen que confirmarse juntos o
+  // ninguno — si no, hay una ventana donde la plata "desaparece" de la
+  // gaveta sin aparecer todavía en tesorería.
+  const session = await tx.cashSession.findUniqueOrThrow({
+    where: { id: input.cashSessionId },
+    include: { physicalCashBox: true },
+  });
+  if (session.status !== CashSessionStatus.OPEN) throw new Error("CASH_SESSION_NOT_OPEN");
+  if (!(await userCanOperateCashSessionTx(tx, { cashSessionId: input.cashSessionId, userId: input.actorUserId, branchId: session.physicalCashBox.branchId }))) {
+    throw new Error("CASH_SESSION_OPERATOR_REQUIRED");
+  }
+
+  // Validado en el servidor aunque el select del frontend ya filtre — un
+  // select filtrado es una comodidad para el usuario, no un control de
+  // seguridad, el payload se puede editar.
+  let intendedBankAccountId: string | null = null;
+  if (input.reason === "DEPOSIT_DISPATCH") {
+    if (!input.bankAccountId) throw new Error("VALIDATION_ERROR: elegí la cuenta destino del depósito");
+    const bank = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.bankAccountId } });
+    if (bank.type !== "BANK") throw new Error("VALIDATION_ERROR: la cuenta destino no es bancaria");
+    if (!bank.isActive) throw new Error("VALIDATION_ERROR: la cuenta destino está inactiva");
+    if (bank.branchId !== null && bank.branchId !== input.branchId) {
+      throw new Error("VALIDATION_ERROR: esa cuenta no pertenece a esta sucursal");
+    }
+    intendedBankAccountId = bank.id;
+  }
+
+  const reasonText = input.reason === "DEPOSIT_DISPATCH" ? "Enviado a depositar (sesión abierta)" : "Entregado en persona (sesión abierta)";
+  const movement = await tx.cashMovement.create({
+    data: {
+      cashSessionId: input.cashSessionId,
+      type: CashMovementType.BANK_DEPOSIT_OUT,
+      amount: input.amount,
+      reason: reasonText,
+      createdByUserId: input.actorUserId,
+    },
+  });
+  const snapshot = await syncCashSessionSnapshotTx(tx, session.id);
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: session.physicalCashBox.branchId,
+      module: "cash_session",
+      action: "CASH_MOVEMENT_CREATED",
+      entityType: "CashMovement",
+      entityId: movement.id,
+      metadataJson: { cashSessionId: input.cashSessionId, type: CashMovementType.BANK_DEPOSIT_OUT, amount: input.amount, reason: reasonText },
+    },
+  });
+
+  // Posposición vs movimiento del mismo dinero: si lo que queda en gaveta
+  // tras ESTE movimiento ya no alcanza para cubrir lo pospuesto de esta
+  // sesión, esas posposiciones (las más recientes primero) quedaron
+  // superadas por un movimiento real. Cancelarlas es más honesto que
+  // dejarlas: el dinero efectivamente salió, y dejar el registro convierte
+  // el panel de Master en una mentira ("Pospuesto 1x" sobre plata que ya
+  // no está pospuesta). No se toca el corte de getBranchCashPosition acá
+  // — el DEPOSIT_DISPATCH/HANDOVER de arriba ya es la única TreasuryEntry
+  // que debe moverlo; cancelar una posposición no genera ninguna propia.
+  const activePostponements = await tx.cashDepositPostponement.findMany({
+    where: { cashSessionId: input.cashSessionId },
+    orderBy: { createdAt: "desc" },
+  });
+  const superseded = selectSupersededPostponements(
+    activePostponements.map((p) => ({ id: p.id, amount: Number(p.amount) })),
+    snapshot.expectedCash,
+  );
+  const supersededIds = superseded.map((p) => p.id);
+  if (supersededIds.length > 0) {
+    await tx.cashDepositPostponement.deleteMany({ where: { id: { in: supersededIds } } });
+  }
+
+  const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.carrierUserId, branchId: input.branchId });
+  const entry = await createTreasuryEntryTx(tx, {
+    accountId: custody.id,
+    direction: "IN",
+    amount: input.amount,
+    entryType: input.reason,
+    counterpartyType: "EMPLOYEE",
+    cashMovementId: movement.id,
+    intendedBankAccountId,
+    createdByUserId: input.actorUserId,
+  });
+
+  return {
+    movement,
+    custodyAccountId: custody.id,
+    treasuryEntryId: entry.id,
+    intendedBankAccountId,
+    supersededPostponementIds: supersededIds,
+    remainingExpectedCash: snapshot.expectedCash,
+  };
+}
+
 /**
  * "Enviar depósito" o "Entregar en persona" con la sesión ABIERTA (§4).
  * Crea el CashMovement BANK_DEPOSIT_OUT (el efectivo esperado baja, como
@@ -399,114 +515,46 @@ export function selectSupersededPostponements<T extends { amount: number }>(
  * No cierra la sesión ni el ciclo — eso pasa cuando se confirma el depósito
  * (confirmBankDeposit, ya construido).
  */
-export async function sendCashOutToCustody(input: {
-  cashSessionId: string;
-  branchId: string;
-  amount: number;
-  carrierUserId: string;
-  reason: "DEPOSIT_DISPATCH" | "HANDOVER";
-  actorUserId: string;
-}) {
+export async function sendCashOutToCustody(input: SendCashOutInput) {
   if (input.amount <= 0) throw new Error("VALIDATION_ERROR: el monto debe ser mayor que 0");
 
-  return prisma.$transaction(async (tx) => {
-    // Mismo cuerpo que createCashMovement (cash-session/service.ts), pero
-    // reconstruido acá en vez de llamarlo: esa función abre SU PROPIA
-    // transacción, y el CashMovement (sale de la gaveta) y la entrada del
-    // libro mayor (entra a custodia) tienen que confirmarse juntos o
-    // ninguno — si no, hay una ventana donde la plata "desaparece" de la
-    // gaveta sin aparecer todavía en tesorería.
-    const session = await tx.cashSession.findUniqueOrThrow({
-      where: { id: input.cashSessionId },
-      include: { physicalCashBox: true },
-    });
-    if (session.status !== CashSessionStatus.OPEN) throw new Error("CASH_SESSION_NOT_OPEN");
-    if (!(await userCanOperateCashSessionTx(tx, { cashSessionId: input.cashSessionId, userId: input.actorUserId, branchId: session.physicalCashBox.branchId }))) {
-      throw new Error("CASH_SESSION_OPERATOR_REQUIRED");
-    }
+  const result = await prisma.$transaction((tx) => sendCashOutToCustodyTx(tx, input));
 
-    const reasonText = input.reason === "DEPOSIT_DISPATCH" ? "Enviado a depositar (sesión abierta)" : "Entregado en persona (sesión abierta)";
-    const movement = await tx.cashMovement.create({
-      data: {
-        cashSessionId: input.cashSessionId,
-        type: CashMovementType.BANK_DEPOSIT_OUT,
-        amount: input.amount,
-        reason: reasonText,
-        createdByUserId: input.actorUserId,
-      },
-    });
-    const snapshot = await syncCashSessionSnapshotTx(tx, session.id);
-    await tx.auditLog.create({
-      data: {
-        actorUserId: input.actorUserId,
-        branchId: session.physicalCashBox.branchId,
-        module: "cash_session",
-        action: "CASH_MOVEMENT_CREATED",
-        entityType: "CashMovement",
-        entityId: movement.id,
-        metadataJson: { cashSessionId: input.cashSessionId, type: CashMovementType.BANK_DEPOSIT_OUT, amount: input.amount, reason: reasonText },
-      },
-    });
-
-    // Posposición vs movimiento del mismo dinero: si lo que queda en gaveta
-    // tras ESTE movimiento ya no alcanza para cubrir lo pospuesto de esta
-    // sesión, esas posposiciones (las más recientes primero) quedaron
-    // superadas por un movimiento real. Cancelarlas es más honesto que
-    // dejarlas: el dinero efectivamente salió, y dejar el registro convierte
-    // el panel de Master en una mentira ("Pospuesto 1x" sobre plata que ya
-    // no está pospuesta). No se toca el corte de getBranchCashPosition acá
-    // — el DEPOSIT_DISPATCH/HANDOVER de arriba ya es la única TreasuryEntry
-    // que debe moverlo; cancelar una posposición no genera ninguna propia.
-    const activePostponements = await tx.cashDepositPostponement.findMany({
-      where: { cashSessionId: input.cashSessionId },
-      orderBy: { createdAt: "desc" },
-    });
-    const superseded = selectSupersededPostponements(
-      activePostponements.map((p) => ({ id: p.id, amount: Number(p.amount) })),
-      snapshot.expectedCash,
-    );
-    const supersededIds = superseded.map((p) => p.id);
-    if (supersededIds.length > 0) {
-      await tx.cashDepositPostponement.deleteMany({ where: { id: { in: supersededIds } } });
-      await logAuditEvent({
-        actorUserId: input.actorUserId,
-        branchId: input.branchId,
-        module: "treasury",
-        action: "CASH_POSTPONEMENT_SUPERSEDED",
-        entityType: "CashMovement",
-        entityId: movement.id,
-        metadataJson: {
-          cashSessionId: input.cashSessionId,
-          supersededPostponementIds: supersededIds,
-          remainingExpectedCash: snapshot.expectedCash,
-          reason: "El efectivo pospuesto quedó superado por un movimiento real (entrega/depósito): ya no cabe en lo que queda en gaveta.",
-        },
-      });
-    }
-
-    const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.carrierUserId, branchId: input.branchId });
-    const entry = await createTreasuryEntryTx(tx, {
-      accountId: custody.id,
-      direction: "IN",
-      amount: input.amount,
-      entryType: input.reason,
-      counterpartyType: "EMPLOYEE",
-      cashMovementId: movement.id,
-      createdByUserId: input.actorUserId,
-    });
-
+  if (result.supersededPostponementIds.length > 0) {
     await logAuditEvent({
       actorUserId: input.actorUserId,
       branchId: input.branchId,
       module: "treasury",
-      action: "CASH_SENT_MID_SESSION",
+      action: "CASH_POSTPONEMENT_SUPERSEDED",
       entityType: "CashMovement",
-      entityId: movement.id,
-      metadataJson: { cashSessionId: input.cashSessionId, amount: input.amount, carrierUserId: input.carrierUserId, reason: input.reason, treasuryEntryId: entry.id },
+      entityId: result.movement.id,
+      metadataJson: {
+        cashSessionId: input.cashSessionId,
+        supersededPostponementIds: result.supersededPostponementIds,
+        remainingExpectedCash: result.remainingExpectedCash,
+        reason: "El efectivo pospuesto quedó superado por un movimiento real (entrega/depósito): ya no cabe en lo que queda en gaveta.",
+      },
     });
+  }
 
-    return { movement, custodyAccountId: custody.id, treasuryEntryId: entry.id };
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: input.branchId,
+    module: "treasury",
+    action: "CASH_SENT_MID_SESSION",
+    entityType: "CashMovement",
+    entityId: result.movement.id,
+    metadataJson: {
+      cashSessionId: input.cashSessionId,
+      amount: input.amount,
+      carrierUserId: input.carrierUserId,
+      reason: input.reason,
+      intendedBankAccountId: result.intendedBankAccountId,
+      treasuryEntryId: result.treasuryEntryId,
+    },
   });
+
+  return { movement: result.movement, custodyAccountId: result.custodyAccountId, treasuryEntryId: result.treasuryEntryId };
 }
 
 /**
@@ -629,7 +677,7 @@ export type CashDestinationSummary = {
   collectedThisSession: { cash: number; transfer: number; card: number; other: number; total: number };
   cashFundAmount: number;
   availableToMove: number;
-  movements: Array<{ id: string; type: "HANDOVER" | "DEPOSIT_DISPATCH"; amount: number; carrierName: string; occurredAt: Date }>;
+  movements: Array<{ id: string; type: "HANDOVER" | "DEPOSIT_DISPATCH"; amount: number; carrierName: string; bankName: string | null; occurredAt: Date }>;
   postponements: Array<{ id: string; amount: number; reason: string | null; postponedUntil: Date; createdAt: Date }>;
   consecutivePostponements: number;
   policy: { maxDaysHolding: number } | null;
@@ -687,6 +735,7 @@ export async function getCashSessionDestinationSummaryTx(tx: Prisma.TransactionC
         entryType: true,
         occurredAt: true,
         account: { select: { accountAlias: true, holderUser: { select: { fullName: true } } } },
+        intendedBankAccount: { select: { bankName: true } },
       },
       orderBy: { occurredAt: "asc" },
     }),
@@ -730,6 +779,7 @@ export async function getCashSessionDestinationSummaryTx(tx: Prisma.TransactionC
       type: e.entryType as "HANDOVER" | "DEPOSIT_DISPATCH",
       amount: round2(Number(e.amount)),
       carrierName: e.account.holderUser?.fullName ?? e.account.accountAlias,
+      bankName: e.intendedBankAccount?.bankName ?? null,
       occurredAt: e.occurredAt,
     })),
     postponements: postponementRows.map((p) => ({

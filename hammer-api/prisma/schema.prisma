@@ -3490,7 +3490,10 @@ model TreasuryAccount {
   receivedTenders         PaymentTender[]
   deposits                BankDeposit[]
   cashDestinationDeposits CashDestinationDeclaration[]
-  entries                 TreasuryEntry[]
+  entries                 TreasuryEntry[]              @relation("TreasuryEntryAccount")
+  /// Entradas DEPOSIT_DISPATCH que declararon ESTA cuenta como intención de
+  /// depósito (todavía no confirmado) — ver TreasuryEntry.intendedBankAccountId.
+  intendedForEntries      TreasuryEntry[]              @relation("TreasuryEntryIntendedBank")
   cards                   TreasuryCard[]
 
   @@index([branchId, isActive])
@@ -3700,7 +3703,14 @@ model TreasuryEntry {
   notes           String?
   createdByUserId String
 
-  account       TreasuryAccount @relation(fields: [accountId], references: [id])
+  /// Solo en entradas DEPOSIT_DISPATCH: a qué cuenta bancaria va dirigido
+  /// el efectivo que salió hacia custodia. El depósito todavía NO ocurrió
+  /// — esto es la intención declarada, no el hecho. Cuando Master confirma
+  /// (confirmBankDeposit) sirve de prefill y de contraste.
+  intendedBankAccountId String?
+
+  account       TreasuryAccount  @relation("TreasuryEntryAccount", fields: [accountId], references: [id])
+  intendedBankAccount TreasuryAccount? @relation("TreasuryEntryIntendedBank", fields: [intendedBankAccountId], references: [id])
   cashMovement  CashMovement?   @relation(fields: [cashMovementId], references: [id])
   paymentTender PaymentTender?  @relation(fields: [paymentTenderId], references: [id])
   bankDeposit   BankDeposit?    @relation(fields: [bankDepositId], references: [id])
@@ -3711,6 +3721,7 @@ model TreasuryEntry {
   @@index([transferId])
   @@index([entryType, occurredAt])
   @@index([cardId])
+  @@index([intendedBankAccountId])
 }
 
 /// Cada cuenta tiene su moneda y las entradas se guardan sin convertir — la
