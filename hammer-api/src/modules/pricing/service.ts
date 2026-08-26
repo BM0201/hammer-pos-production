@@ -623,11 +623,125 @@ export function assertPriceApplicable(input: {
   return warnings;
 }
 
-export async function applySuggestedPrice(input: ApplyPricingInput & { actorUserId: string }) {
+export type ApplyPriceBranchResult = {
+  branchId: string;
+  previousPrice: number | null;
+  newPrice: number;
+  applied: boolean;
+  error?: string;
+  /** El margen que ESTE precio produce con el costo y la política de ESTA sucursal — nunca el de la sucursal donde se calculó (§2.2). */
+  marginPercent: number | null;
+  minMarginPercent: number | null;
+  belowMinMargin: boolean;
+};
+
+/**
+ * Fase 2 — a qué sucursales aplica según applyScope. ALL_BRANCHES solo
+ * activas: aplicar un precio a una sucursal deshabilitada no tiene efecto
+ * de venta y ensucia el audit log con ruido. `db` genérico (mismo patrón
+ * que listBranchPeopleForCashHandover/getLastDepositCutoff) para poder
+ * probarla con un db en memoria.
+ */
+export async function resolveTargetBranchIds(db: Prisma.TransactionClient | typeof prisma, input: ApplyPricingInput): Promise<string[]> {
+  if (input.applyScope === "BRANCH") return [input.branchId!];
+  if (input.applyScope === "SELECTED_BRANCHES") return input.branchIds!;
+  const branches = await db.branch.findMany({ where: { isActive: true }, select: { id: true } });
+  return branches.map((b) => b.id);
+}
+
+/**
+ * El bucle "aplicar en cada sucursal, que una falla no tumbe las demás",
+ * extraído con `applyOneBranch` inyectable para poder probar la
+ * ORQUESTACIÓN (aislamiento por sucursal, applied vs failed) sin abrir
+ * transacciones reales — mismo principio de extracción que el resto de
+ * este módulo.
+ */
+export async function applyPriceAcrossBranches(
+  branchIds: string[],
+  suggestedPrice: number,
+  applyOneBranch: (branchId: string) => Promise<{ previousPrice: number | null; newPrice: number; marginPercent: number | null; minMarginPercent: number | null }>,
+): Promise<{ results: ApplyPriceBranchResult[] }> {
+  const results: ApplyPriceBranchResult[] = [];
+  for (const branchId of branchIds) {
+    try {
+      // Una transacción POR SUCURSAL — que una falle no tumba las demás.
+      const r = await applyOneBranch(branchId);
+      results.push({
+        branchId,
+        previousPrice: r.previousPrice,
+        newPrice: r.newPrice,
+        applied: true,
+        marginPercent: r.marginPercent,
+        minMarginPercent: r.minMarginPercent,
+        belowMinMargin: r.marginPercent !== null && r.minMarginPercent !== null && r.marginPercent < r.minMarginPercent,
+      });
+    } catch (error) {
+      results.push({
+        branchId,
+        previousPrice: null,
+        newPrice: suggestedPrice,
+        applied: false,
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+        marginPercent: null,
+        minMarginPercent: null,
+        belowMinMargin: false,
+      });
+    }
+  }
+  return { results };
+}
+
+/**
+ * "aplicar un precio a varias sucursales" (Fase 2). CUIDADO: el
+ * suggestedPrice viene calculado con los gastos/unidades de UNA sucursal —
+ * aplicar el mismo número a las demás no recalcula un precio propio para
+ * cada una (el motor de cálculo no se toca), pero SÍ reporta, por
+ * sucursal, el margen real que ese número produce con SU costo y SU
+ * política — nunca bloquea a las que quedan bajo su mínimo, solo las
+ * marca para que la interfaz las muestre en ámbar.
+ */
+async function marginForAppliedPrice(branchId: string, productId: string, suggestedPrice: number): Promise<{ marginPercent: number | null; minMarginPercent: number | null }> {
+  try {
+    const [effective, policy] = await Promise.all([
+      getEffectiveProductPricing(prisma, { branchId, productId }),
+      resolvePolicyForProduct({ branchId, productId }),
+    ]);
+    const cost = effective.effectiveCost === null ? null : Number(effective.effectiveCost);
+    const minMarginPercent = Number(policy.categoryPolicy.minMarginPercent);
+    const marginPercent = cost !== null && suggestedPrice > 0 ? ((suggestedPrice - cost) / suggestedPrice) * 100 : null;
+    return { marginPercent, minMarginPercent };
+  } catch {
+    // Sin costo/política resoluble para esa sucursal, el margen informativo
+    // queda en null — no impide aplicar (ni, en dryRun, previsualizar).
+    return { marginPercent: null, minMarginPercent: null };
+  }
+}
+
+export async function applySuggestedPrice(input: ApplyPricingInput & { actorUserId: string }): Promise<{ results: ApplyPriceBranchResult[] }> {
   const warnings = assertPriceApplicable(input);
-  const branchId = input.branchId!;
-  const result = await prisma.$transaction((tx) => applySuggestedPriceTx(tx, input, branchId, warnings));
-  return result;
+  const branchIds = await resolveTargetBranchIds(prisma, input);
+
+  return applyPriceAcrossBranches(branchIds, input.suggestedPrice, async (branchId) => {
+    // dryRun (§2.3) — la previsualización antes de un apply irreversible en
+    // la práctica: mismo cálculo de margen, sin escribir nada.
+    if (input.dryRun) {
+      const existing = await prisma.branchProductSetting.findUnique({
+        where: { branchId_productId: { branchId, productId: input.productId } },
+        select: { branchPrice: true },
+      });
+      const { marginPercent, minMarginPercent } = await marginForAppliedPrice(branchId, input.productId, input.suggestedPrice);
+      return {
+        previousPrice: existing?.branchPrice ? Number(existing.branchPrice) : null,
+        newPrice: input.suggestedPrice,
+        marginPercent,
+        minMarginPercent,
+      };
+    }
+
+    const applyResult = await prisma.$transaction((tx) => applySuggestedPriceTx(tx, input, branchId, warnings));
+    const { marginPercent, minMarginPercent } = await marginForAppliedPrice(branchId, input.productId, input.suggestedPrice);
+    return { previousPrice: applyResult.previousPrice, newPrice: applyResult.newPrice, marginPercent, minMarginPercent };
+  });
 }
 
 /**

@@ -31,6 +31,7 @@ import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import {
   type Branch,
+  type ApplyPreviewRow,
   type Expense,
   type ExpenseSummary,
   type AllBranchesSummary,
@@ -129,6 +130,13 @@ export function ExpenseManager({
   const [useCategoryPolicy, setUseCategoryPolicy] = useState(false);
   const [useCommercialIntelligence, setUseCommercialIntelligence] = useState(false);
   const [commercialAlerts, setCommercialAlerts] = useState<CommercialAlert[]>([]);
+
+  /* Fase 2 (prompt-motor-precios-lote-herencia-gobierno.md) — alcance de "aplicar precio" */
+  const [applyScope, setApplyScope] = useState<"BRANCH" | "SELECTED_BRANCHES" | "ALL_BRANCHES">("BRANCH");
+  const [selectedApplyBranchIds, setSelectedApplyBranchIds] = useState<string[]>([]);
+  const [applyPreview, setApplyPreview] = useState<ApplyPreviewRow[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [categoryPolicies, setCategoryPolicies] = useState<CategoryPolicyRow[]>([]);
   const [policyDrafts, setPolicyDrafts] = useState<Record<string, CategoryPolicyRow>>({});
   const [advancedCalc, setAdvancedCalc] = useState({
@@ -499,49 +507,90 @@ export function ExpenseManager({
     loadCategoryPolicies();
   };
 
-  const handleApplySuggestedPrice = async () => {
+  /** Cuerpo compartido por preview (dryRun) y aplicación real — mismo alcance, mismo precio, difiere solo dryRun (§2.2/§2.3). */
+  function buildApplyPricePayload(dryRun: boolean) {
+    if (!calcResult || !productContext) return null;
+    return {
+      productId: productContext.productId,
+      applyScope,
+      branchId: applyScope === "BRANCH" ? selectedBranchId : undefined,
+      branchIds: applyScope === "SELECTED_BRANCHES" ? selectedApplyBranchIds : undefined,
+      suggestedPrice: calcResult.suggestedPrice,
+      minPrice: calcResult.minPrice,
+      maxPrice: calcResult.maxPrice,
+      totalInternalCost: calcResult.totalInternalCost,
+      effectiveCost: productContext.effectiveCost,
+      marginPercent: calcResult.marginPercent,
+      grossMarginPercent: calcResult.grossMarginPercent,
+      markupPercent: calcResult.markupPercent,
+      roundingRule: calcResult.roundingRule,
+      reason: "Aplicado desde calculadora de precios",
+      calculationSnapshot: calcResult,
+      dryRun,
+    };
+  }
+
+  /** §2.3 — antes de confirmar, tabla de previsualización: aplicar precios en lote es irreversible en la práctica. */
+  const handlePreviewApply = async () => {
     if (!calcResult || !productContext) return;
     if (calcResult.canApplyPrice === false || calcResult.marketConflict?.hasConflict) {
       showToast("warning", "Corrige costos, ambito de prorrateo o precio maximo de mercado antes de aplicar.");
       return;
     }
-    const previousPrice = productContext.branchPrice ?? 0;
-    const diff = calcResult.suggestedPrice - previousPrice;
-    const target = `la sucursal ${selectedBranch?.name ?? ""}`;
-    const ok = confirm(
-      `Vas a cambiar el precio de venta de este producto. Esta accion afectara el precio usado por el POS.\n\nProducto: ${productContext.sku} - ${productContext.name}\nDestino: ${target}\nPrecio anterior: ${productContext.branchPrice === null ? "Sin precio asignado" : formatC(previousPrice)}\nPrecio nuevo: ${formatC(calcResult.suggestedPrice)}\nDiferencia: ${formatC(diff)}\nMargen estimado: ${calcResult.grossMarginPercent.toFixed(1)}%\n\n${calcResult.warnings.join("\n")}`,
-    );
-    if (!ok) return;
+    if (applyScope === "SELECTED_BRANCHES" && selectedApplyBranchIds.length === 0) {
+      showToast("warning", "Elegí al menos una sucursal.");
+      return;
+    }
 
+    const payload = buildApplyPricePayload(true);
+    if (!payload) return;
+    setPreviewLoading(true);
+    setApplyPreview(null);
     try {
       const res = await apiFetch("/api/pricing/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: productContext.productId,
-          branchId: selectedBranchId,
-          applyScope: "BRANCH",
-          suggestedPrice: calcResult.suggestedPrice,
-          minPrice: calcResult.minPrice,
-          maxPrice: calcResult.maxPrice,
-          totalInternalCost: calcResult.totalInternalCost,
-          effectiveCost: productContext.effectiveCost,
-          marginPercent: calcResult.marginPercent,
-          grossMarginPercent: calcResult.grossMarginPercent,
-          markupPercent: calcResult.markupPercent,
-          roundingRule: calcResult.roundingRule,
-          reason: "Aplicado desde calculadora de precios",
-          calculationSnapshot: calcResult,
-        }),
+        body: JSON.stringify(payload),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo previsualizar la aplicación");
+      const data = unwrapApiData(raw) as { results: Omit<ApplyPreviewRow, "branchName">[] };
+      setApplyPreview(data.results.map((r) => ({ ...r, branchName: branches.find((b) => b.id === r.branchId)?.name ?? r.branchId })));
+    } catch (e) {
+      showToast("error", e instanceof Error ? e.message : "No se pudo previsualizar la aplicación");
+      console.error(e);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleConfirmApply = async () => {
+    const payload = buildApplyPricePayload(false);
+    if (!payload) return;
+    setApplying(true);
+    try {
+      const res = await apiFetch("/api/pricing/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar el precio");
-      unwrapApiData(raw);
-      showToast("success", `Precio aplicado en ${selectedBranch?.name ?? "la sucursal"}.`);
+      const data = unwrapApiData(raw) as { results: Array<{ branchId: string; applied: boolean }> };
+      const appliedCount = data.results.filter((r) => r.applied).length;
+      const failedCount = data.results.length - appliedCount;
+      if (failedCount === 0) {
+        showToast("success", data.results.length === 1 ? `Precio aplicado en ${selectedBranch?.name ?? "la sucursal"}.` : `Precio aplicado en ${appliedCount} sucursal(es).`);
+      } else {
+        showToast("warning", `${appliedCount} aplicado(s), ${failedCount} con error.`);
+      }
+      setApplyPreview(null);
       await handleLoadProductContext();
     } catch (e) {
       showToast("error", e instanceof Error ? e.message : "No se pudo aplicar el precio");
       console.error(e);
+    } finally {
+      setApplying(false);
     }
   };
 
@@ -1861,9 +1910,45 @@ export function ExpenseManager({
                       )}
 
                       {productContext ? (
-                        <div className="mt-5 w-full max-w-xs space-y-2">
-                          <Button className="w-full disabled:cursor-not-allowed disabled:opacity-50" variant="success" disabled={cannotApplyPrice} onClick={() => handleApplySuggestedPrice()}>
-                            Aplicar a sucursal
+                        <div className="mt-5 w-full max-w-xs space-y-2 text-left">
+                          {/* Fase 2 — alcance: una sucursal, varias elegidas, o todas las activas */}
+                          <div className="flex rounded-lg border border-slate-300 p-0.5 text-xs dark:border-slate-700">
+                            {([
+                              { value: "BRANCH" as const, label: "Esta sucursal" },
+                              { value: "SELECTED_BRANCHES" as const, label: "Elegir sucursales" },
+                              { value: "ALL_BRANCHES" as const, label: "Todas" },
+                            ]).map((opt) => (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => { setApplyScope(opt.value); setApplyPreview(null); }}
+                                className={`flex-1 rounded-md px-2 py-1 font-medium transition-colors ${applyScope === opt.value ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-muted)]"}`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {applyScope === "SELECTED_BRANCHES" && (
+                            <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+                              {branches.map((b) => (
+                                <label key={b.id} className="flex items-center gap-2 text-xs text-[var(--color-text)]">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedApplyBranchIds.includes(b.id)}
+                                    onChange={(e) => {
+                                      setSelectedApplyBranchIds((prev) => (e.target.checked ? [...prev, b.id] : prev.filter((id) => id !== b.id)));
+                                      setApplyPreview(null);
+                                    }}
+                                  />
+                                  {b.name}
+                                </label>
+                              ))}
+                            </div>
+                          )}
+
+                          <Button className="w-full disabled:cursor-not-allowed disabled:opacity-50" variant="success" disabled={cannotApplyPrice} loading={previewLoading} onClick={() => void handlePreviewApply()}>
+                            {applyScope === "BRANCH" ? "Aplicar a sucursal" : "Previsualizar aplicación"}
                           </Button>
                           {cannotApplyPrice && (
                             <p className="text-xs text-red-700">
@@ -1882,6 +1967,59 @@ export function ExpenseManager({
               </div>
             );
           })()}
+
+          {/* §2.3 — previsualización antes de confirmar: aplicar precios en lote es irreversible en la práctica */}
+          {applyPreview && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+              <div className="w-full max-w-lg space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-[var(--color-text)]">Confirmar cambio de precio</h3>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setApplyPreview(null)} disabled={applying}>Cerrar</Button>
+                </div>
+                <div className="max-h-72 overflow-y-auto rounded-lg border border-[var(--color-border)]">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] text-left text-[var(--color-text-muted)]">
+                        <th className="px-2 py-1.5">Sucursal</th>
+                        <th className="px-2 py-1.5 text-right">Precio actual</th>
+                        <th className="px-2 py-1.5 text-right">Precio nuevo</th>
+                        <th className="px-2 py-1.5 text-right">Margen resultante</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {applyPreview.map((row) => (
+                        <tr key={row.branchId} className="border-b border-[var(--color-border)] last:border-0">
+                          <td className="px-2 py-1.5 text-[var(--color-text)]">{row.branchName}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums">{row.previousPrice === null ? "Sin precio" : formatC(row.previousPrice)}</td>
+                          <td className="px-2 py-1.5 text-right font-medium tabular-nums text-[var(--color-success-700)]">{formatC(row.newPrice)}</td>
+                          <td className={`px-2 py-1.5 text-right tabular-nums ${row.belowMinMargin ? "font-semibold text-[var(--color-warning-700)]" : ""}`}>
+                            {row.marginPercent === null ? "—" : `${row.marginPercent.toFixed(1)}%`}
+                            {row.belowMinMargin && row.minMarginPercent !== null && (
+                              <span className="ml-1 inline-flex items-center gap-0.5 text-[var(--color-warning-700)]" title={`Bajo el mínimo de política (${row.minMarginPercent.toFixed(1)}%)`}>
+                                <AlertTriangle className="h-3 w-3" />
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {applyPreview.some((r) => r.belowMinMargin) && (
+                  <p className="flex items-start gap-1.5 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>Al menos una sucursal queda con margen bajo su política mínima. No se bloquea — puede ser una decisión comercial deliberada — pero revisá antes de confirmar.</span>
+                  </p>
+                )}
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="ghost" onClick={() => setApplyPreview(null)} disabled={applying}>Cancelar</Button>
+                  <Button type="button" variant="success" loading={applying} onClick={() => void handleConfirmApply()}>
+                    Confirmar {applyPreview.length > 1 ? `(${applyPreview.length} sucursales)` : ""}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── Fórmula de cálculo — Rediseño colapsable ── */}
           <Card className="p-5">

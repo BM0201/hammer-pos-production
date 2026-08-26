@@ -150,10 +150,18 @@ export const bootstrapCategoryPoliciesSchema = z.object({
   branchId: z.string().cuid(),
 });
 
+/**
+ * Fase 2 (prompt-motor-precios-lote-herencia-gobierno.md) — applyScope pasa
+ * de un único valor posible ("BRANCH") a tres: aplicar a una sucursal, a
+ * varias elegidas, o a todas las activas. branchIds solo aplica a
+ * SELECTED_BRANCHES; ALL_BRANCHES no necesita ninguno de los dos (la
+ * lista de sucursales activas se resuelve en el servicio).
+ */
 export const applyPricingSchema = z.object({
   productId: z.string().cuid(),
   branchId: z.string().cuid().optional(),
-  applyScope: z.literal("BRANCH"),
+  applyScope: z.enum(["BRANCH", "SELECTED_BRANCHES", "ALL_BRANCHES"]),
+  branchIds: z.array(z.string().cuid()).min(1).optional(),
   suggestedPrice: nonNegativeNumericInput.refine((value) => value > 0, "El precio sugerido debe ser mayor que 0"),
   minPrice: nonNegativeNumericInput.optional(),
   maxPrice: nonNegativeNumericInput.nullable().optional(),
@@ -167,9 +175,17 @@ export const applyPricingSchema = z.object({
   roundingRule: z.string().max(50).optional(),
   reason: z.string().max(500).optional(),
   calculationSnapshot: z.unknown().optional(),
+  /** true = no escribe nada, solo devuelve el margen que ESE precio produciría por sucursal — la previsualización de §2.3 antes de confirmar un apply irreversible en la práctica. */
+  dryRun: z.boolean().optional(),
 }).superRefine((value, ctx) => {
   if (value.applyScope === "BRANCH" && !value.branchId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["branchId"], message: "branchId es obligatorio para aplicar precio por sucursal" });
+  }
+  if (value.applyScope === "SELECTED_BRANCHES" && (!value.branchIds || value.branchIds.length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["branchIds"], message: "Elegí al menos una sucursal" });
+  }
+  if (value.applyScope === "ALL_BRANCHES" && (value.branchId || (value.branchIds && value.branchIds.length > 0))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["applyScope"], message: "ALL_BRANCHES no lleva branchId ni branchIds — aplica a todas las sucursales activas" });
   }
   if (value.minPrice !== undefined && value.suggestedPrice < value.minPrice) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["suggestedPrice"], message: "El precio sugerido no puede ser menor que el precio minimo" });

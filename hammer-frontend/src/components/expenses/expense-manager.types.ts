@@ -8,6 +8,19 @@
 
 export type Branch = { id: string; code: string; name: string };
 
+/** Fase 2 (prompt-motor-precios-lote-herencia-gobierno.md) — una fila de /api/pricing/apply (dryRun o real), enriquecida con branchName para la tabla de previsualización. */
+export type ApplyPreviewRow = {
+  branchId: string;
+  branchName: string;
+  previousPrice: number | null;
+  newPrice: number;
+  applied: boolean;
+  error?: string;
+  marginPercent: number | null;
+  minMarginPercent: number | null;
+  belowMinMargin: boolean;
+};
+
 export type Expense = {
   id: string;
   branchId: string;
