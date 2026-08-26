@@ -92,6 +92,10 @@ export const sendCashOutSchema = z.object({
   // Obligatoria en DEPOSIT_DISPATCH, ignorada en HANDOVER — entregar en
   // persona no tiene cuenta destino, el dinero queda con esa persona.
   bankAccountId: z.string().cuid().optional().nullable(),
+  // Solo aplica cuando el portador es el propio cajero (HANDOVER de
+  // "yo se lo llevo a alguien") — el servicio conoce al actor y decide si
+  // es obligatorio; el schema no lo sabe (A.3).
+  recipientUserId: z.string().cuid().optional().nullable(),
 }).refine(
   (v) => v.reason !== "DEPOSIT_DISPATCH" || !!v.bankAccountId,
   { message: "Elegí la cuenta a la que va el depósito.", path: ["bankAccountId"] },

@@ -396,6 +396,8 @@ type SendCashOutInput = {
   carrierUserId: string;
   reason: "DEPOSIT_DISPATCH" | "HANDOVER";
   bankAccountId?: string | null;
+  /** Solo cuando carrierUserId === actorUserId en un HANDOVER — a quién se lo va a entregar. */
+  recipientUserId?: string | null;
   actorUserId: string;
 };
 
@@ -436,6 +438,20 @@ export async function sendCashOutToCustodyTx(tx: Prisma.TransactionClient, input
       throw new Error("VALIDATION_ERROR: esa cuenta no pertenece a esta sucursal");
     }
     intendedBankAccountId = bank.id;
+  }
+
+  // "Autodespacho": el propio cajero es el portador — el único camino donde
+  // alguien saca efectivo de la gaveta sin una segunda persona presente. No
+  // se bloquea ni pide aprobación (pasa todos los días, de verdad); lo que
+  // hace falta es que quede marcado (§A.3).
+  const isSelfCarry = input.carrierUserId === input.actorUserId;
+  let intendedRecipientUserId: string | null = null;
+  if (input.reason === "HANDOVER" && isSelfCarry) {
+    if (!input.recipientUserId) throw new Error("VALIDATION_ERROR: elegí a quién se lo vas a entregar");
+    if (input.recipientUserId === input.actorUserId) throw new Error("VALIDATION_ERROR: no podés entregarte el dinero a vos mismo");
+    const recipient = await tx.user.findUniqueOrThrow({ where: { id: input.recipientUserId }, select: { id: true, isActive: true } });
+    if (!recipient.isActive) throw new Error("VALIDATION_ERROR: esa persona está inactiva");
+    intendedRecipientUserId = recipient.id;
   }
 
   const reasonText = input.reason === "DEPOSIT_DISPATCH" ? "Enviado a depositar (sesión abierta)" : "Entregado en persona (sesión abierta)";
@@ -492,6 +508,7 @@ export async function sendCashOutToCustodyTx(tx: Prisma.TransactionClient, input
     counterpartyType: "EMPLOYEE",
     cashMovementId: movement.id,
     intendedBankAccountId,
+    intendedRecipientUserId,
     createdByUserId: input.actorUserId,
   });
 
@@ -500,6 +517,8 @@ export async function sendCashOutToCustodyTx(tx: Prisma.TransactionClient, input
     custodyAccountId: custody.id,
     treasuryEntryId: entry.id,
     intendedBankAccountId,
+    intendedRecipientUserId,
+    isSelfCarry,
     supersededPostponementIds: supersededIds,
     remainingExpectedCash: snapshot.expectedCash,
   };
@@ -551,6 +570,8 @@ export async function sendCashOutToCustody(input: SendCashOutInput) {
       reason: input.reason,
       intendedBankAccountId: result.intendedBankAccountId,
       treasuryEntryId: result.treasuryEntryId,
+      selfDispatch: result.isSelfCarry,
+      intendedRecipientUserId: result.intendedRecipientUserId,
     },
   });
 
@@ -694,7 +715,19 @@ export type CashDestinationSummary = {
     /** CREDIT y cualquier método futuro. */
     other: { total: number };
   };
-  movements: Array<{ id: string; type: "HANDOVER" | "DEPOSIT_DISPATCH"; amount: number; carrierName: string; bankName: string | null; occurredAt: Date }>;
+  movements: Array<{
+    id: string;
+    type: "HANDOVER" | "DEPOSIT_DISPATCH";
+    amount: number;
+    /** Quién sacó el efectivo de la gaveta — se compara contra el usuario de sesión para distinguir autodespacho (§D.5). */
+    carrierUserId: string;
+    carrierName: string;
+    bankName: string | null;
+    bankLast4: string | null;
+    intendedRecipientUserId: string | null;
+    intendedRecipientName: string | null;
+    occurredAt: Date;
+  }>;
   postponements: Array<{ id: string; amount: number; reason: string | null; postponedUntil: Date; createdAt: Date }>;
   consecutivePostponements: number;
   policy: { maxDaysHolding: number } | null;
@@ -753,8 +786,10 @@ export async function getCashSessionDestinationSummaryTx(tx: Prisma.TransactionC
         amount: true,
         entryType: true,
         occurredAt: true,
-        account: { select: { accountAlias: true, holderUser: { select: { fullName: true } } } },
-        intendedBankAccount: { select: { bankName: true } },
+        account: { select: { accountAlias: true, holderUserId: true, holderUser: { select: { fullName: true } } } },
+        intendedBankAccount: { select: { bankName: true, accountNumber: true } },
+        intendedRecipient: { select: { fullName: true } },
+        intendedRecipientUserId: true,
       },
       orderBy: { occurredAt: "asc" },
     }),
@@ -827,8 +862,14 @@ export async function getCashSessionDestinationSummaryTx(tx: Prisma.TransactionC
       id: e.id,
       type: e.entryType as "HANDOVER" | "DEPOSIT_DISPATCH",
       amount: round2(Number(e.amount)),
+      carrierUserId: e.account.holderUserId ?? "",
       carrierName: e.account.holderUser?.fullName ?? e.account.accountAlias,
       bankName: e.intendedBankAccount?.bankName ?? null,
+      bankLast4: e.intendedBankAccount?.accountNumber
+        ? (e.intendedBankAccount.accountNumber.length <= 4 ? e.intendedBankAccount.accountNumber : e.intendedBankAccount.accountNumber.slice(-4))
+        : null,
+      intendedRecipientUserId: e.intendedRecipientUserId,
+      intendedRecipientName: e.intendedRecipient?.fullName ?? null,
       occurredAt: e.occurredAt,
     })),
     postponements: postponementRows.map((p) => ({

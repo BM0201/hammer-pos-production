@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { Prisma, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory } from "@prisma/client";
+import { Prisma, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory, type RoleCode } from "@prisma/client";
 import { decomposeRetainedAmount, computeExposureAlert, type ExposureAlertThreshold } from "@/modules/treasury/decomposition";
 import { computeOutstandingAwaitingDeposit, countBusinessDaysBetween } from "@/modules/treasury/exposure";
 import { getBranchCashPosition } from "@/modules/treasury/cash-monitor";
@@ -164,6 +164,8 @@ type EntryLinkage = {
   cardId?: string | null;
   /** Solo DEPOSIT_DISPATCH: a qué cuenta bancaria declaró ir este efectivo — intención, no el hecho (§A.1). */
   intendedBankAccountId?: string | null;
+  /** Solo HANDOVER con el cajero como portador: a quién declaró entregárselo — intención, no el hecho. */
+  intendedRecipientUserId?: string | null;
 };
 
 type CreateEntryInput = EntryLinkage & {
@@ -207,6 +209,7 @@ export async function createTreasuryEntryTx(tx: Prisma.TransactionClient, input:
       expensePaymentId: input.expensePaymentId ?? null,
       cardId: input.cardId ?? null,
       intendedBankAccountId: input.intendedBankAccountId ?? null,
+      intendedRecipientUserId: input.intendedRecipientUserId ?? null,
       reference: input.reference ?? null,
       notes: input.notes ?? null,
       createdByUserId: input.createdByUserId,
@@ -1158,6 +1161,69 @@ export async function listActiveBranchMembers(branchId: string) {
     orderBy: { user: { fullName: "asc" } },
   });
   return roles.map((r) => r.user);
+}
+
+const ROLE_CODE_LABELS: Record<RoleCode, string> = {
+  SYSTEM_ADMIN: "Administrador del sistema",
+  OWNER: "Dueño",
+  MASTER: "Master",
+  BRANCH_ADMIN: "Administradora de sucursal",
+  SALES: "Ventas",
+  CASHIER: "Cajero",
+  WAREHOUSE: "Despacho / Bodega",
+  ACCOUNTANT: "Contador",
+};
+
+export type BranchPerson = { id: string; fullName: string; roleLabel: string };
+
+/**
+ * Personas seleccionables para "a quién se lo entrego/llevo" en Destino del
+ * efectivo (§A.4). listActiveBranchMembers (arriba) solo mira UserBranchRole
+ * — Master, si no tiene membresía de sucursal, queda afuera, y "yo se lo
+ * llevo a alguien" existe justamente para poder entregarle a Master. Une
+ * ambas fuentes: membresía de sucursal + globalRole MASTER/OWNER (tengan o
+ * no membresía), dedupe por id, con el rol de sucursal ganando sobre el
+ * globalRole cuando una persona tiene ambos (más específico a esta
+ * sucursal). Excluye siempre al propio actor — ninguna de las cuatro
+ * variantes necesita elegirse a sí misma de una lista.
+ *
+ * `db` genérico (tx o el prisma global — mismo patrón que
+ * getLastDepositCutoff en cash-monitor.ts) para poder probar la unión sin
+ * base de datos real; no necesita estar dentro de una transacción, es de
+ * solo lectura.
+ */
+export async function listBranchPeopleForCashHandover(db: Prisma.TransactionClient | typeof prisma, branchId: string, excludeUserId: string): Promise<BranchPerson[]> {
+  const [branchRoles, globalLeads] = await Promise.all([
+    db.userBranchRole.findMany({
+      where: { branchId, isActive: true, user: { isActive: true, id: { not: excludeUserId } } },
+      select: { roleCode: true, user: { select: { id: true, fullName: true } } },
+    }),
+    db.user.findMany({
+      where: { isActive: true, id: { not: excludeUserId }, globalRole: { in: ["MASTER", "OWNER"] } },
+      select: { id: true, fullName: true, globalRole: true },
+    }),
+  ]);
+
+  const byId = new Map<string, BranchPerson & { isLead: boolean }>();
+  for (const lead of globalLeads) {
+    byId.set(lead.id, { id: lead.id, fullName: lead.fullName, roleLabel: ROLE_CODE_LABELS[lead.globalRole as RoleCode], isLead: true });
+  }
+  for (const row of branchRoles) {
+    // El rol de sucursal es más específico — pisa el globalRole si la
+    // persona también es Master/Owner, sin perder que sigue siendo "lead"
+    // para el orden.
+    const existing = byId.get(row.user.id);
+    byId.set(row.user.id, {
+      id: row.user.id,
+      fullName: row.user.fullName,
+      roleLabel: ROLE_CODE_LABELS[row.roleCode],
+      isLead: existing?.isLead ?? false,
+    });
+  }
+
+  return [...byId.values()]
+    .sort((a, b) => (a.isLead !== b.isLead ? (a.isLead ? -1 : 1) : a.fullName.localeCompare(b.fullName, "es")))
+    .map(({ id, fullName, roleLabel }) => ({ id, fullName, roleLabel }));
 }
 
 

@@ -42,6 +42,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       carrierUserId: parsed.data.carrierUserId,
       reason: parsed.data.reason,
       bankAccountId: parsed.data.bankAccountId,
+      recipientUserId: parsed.data.recipientUserId,
       actorUserId: session.userId,
     });
     return ok(result);

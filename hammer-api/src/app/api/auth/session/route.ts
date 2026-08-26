@@ -17,13 +17,15 @@ export async function GET(request: Request) {
     // per-user preference yet (FIX 5, prompt-destello-modo-claro.md).
     let mustChangePassword = false;
     let themePreference: "light" | "dark" | null = null;
+    let fullName: string | null = null;
     try {
       const user = await prisma.user.findUnique({
         where: { id: session.userId },
-        select: { mustChangePassword: true, themePreference: true },
+        select: { mustChangePassword: true, themePreference: true, fullName: true },
       });
       mustChangePassword = user?.mustChangePassword ?? false;
       themePreference = user?.themePreference === "light" || user?.themePreference === "dark" ? user.themePreference : null;
+      fullName = user?.fullName ?? null;
     } catch {
       // If DB is unavailable degrade gracefully
     }
@@ -46,6 +48,7 @@ export async function GET(request: Request) {
       user: {
         userId: session.userId,
         username: session.username,
+        fullName,
         globalRoles: session.globalRoles,
         branchMemberships: session.branchMemberships,
         primaryBranchId: session.primaryBranchId,

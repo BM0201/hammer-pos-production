@@ -159,6 +159,7 @@ const USER_ACTIVITY_RELATIONS = [
   "createdReplenishmentDrafts",
   "approvedReplenishmentDrafts",
   "cashDepositPostponements",
+  "intendedCashHandovers",
 ] as const satisfies readonly (keyof Prisma.UserCountOutputTypeSelect)[];
 
 function buildActivityCountSelect(): Prisma.UserCountOutputTypeSelect {

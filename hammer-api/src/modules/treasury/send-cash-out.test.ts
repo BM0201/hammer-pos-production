@@ -240,3 +240,75 @@ test("Prueba 7 — DEPOSIT_DISPATCH exitoso: la TreasuryEntry queda con intended
   // efectivamente sale de sendCashOutToCustodyTx.
   assert.ok(result.intendedBankAccountId, "el wrapper tiene con qué poblar metadataJson.intendedBankAccountId");
 });
+
+// ─── Pruebas 8-13: receptor declarado en autodespacho (§A.3, prompt-destino-
+// efectivo-rediseno.md) — el único camino donde alguien saca efectivo de la
+// gaveta sin una segunda persona presente. No se bloquea ni pide aprobación
+// (pasa todos los días); lo que hace falta es que quede marcado.
+
+const RECIPIENT: FakeUser = { id: "user-recipient", globalRole: null, isActive: true, fullName: "María Receptora" };
+const INACTIVE_RECIPIENT: FakeUser = { id: "user-inactive-recipient", globalRole: null, isActive: false, fullName: "Persona Inactiva" };
+
+test("Prueba 8 — HANDOVER con carrier === actor y sin recipientUserId es rechazado", async () => {
+  const { tx } = createFakeTx({ sessions: [SESSION], users: [ACTOR], operators: [OPERATOR], tenders: TENDERS });
+  await assert.rejects(
+    () => sendCashOutToCustodyTx(tx, { cashSessionId: "session-1", branchId: BRANCH, amount: 500, carrierUserId: "user-1", reason: "HANDOVER", actorUserId: "user-1" }),
+    /elegí a quién se lo vas a entregar/,
+  );
+});
+
+test("Prueba 9 — HANDOVER con carrier === actor y recipientUserId === actor es rechazado (no podés entregarte el dinero a vos mismo)", async () => {
+  const { tx } = createFakeTx({ sessions: [SESSION], users: [ACTOR], operators: [OPERATOR], tenders: TENDERS });
+  await assert.rejects(
+    () => sendCashOutToCustodyTx(tx, { cashSessionId: "session-1", branchId: BRANCH, amount: 500, carrierUserId: "user-1", reason: "HANDOVER", recipientUserId: "user-1", actorUserId: "user-1" }),
+    /no podés entregarte el dinero a vos mismo/,
+  );
+});
+
+test("Prueba 10 (LA QUE IMPORTA) — HANDOVER con carrier === actor y receptor válido: la TreasuryEntry queda con intendedRecipientUserId poblado e isSelfCarry en true", async () => {
+  const { tx, treasuryEntries } = createFakeTx({ sessions: [SESSION], users: [ACTOR, RECIPIENT], operators: [OPERATOR], tenders: TENDERS });
+  const result = await sendCashOutToCustodyTx(tx, {
+    cashSessionId: "session-1", branchId: BRANCH, amount: 500, carrierUserId: "user-1", reason: "HANDOVER", recipientUserId: "user-recipient", actorUserId: "user-1",
+  });
+  assert.equal(result.isSelfCarry, true);
+  assert.equal(result.intendedRecipientUserId, "user-recipient");
+  assert.equal(treasuryEntries[0].intendedRecipientUserId, "user-recipient", "el campo nuevo queda poblado en la fila real");
+  // sendCashOutToCustody (wrapper, no probado acá por abrir su propia
+  // transacción) arma metadataJson.selfDispatch/intendedRecipientUserId con
+  // exactamente result.isSelfCarry/result.intendedRecipientUserId — mismo
+  // límite documentado en la Prueba 7.
+});
+
+test("Prueba 11 — HANDOVER con carrier !== actor: recipientUserId se ignora (isSelfCarry false, sin intendedRecipientUserId), la custodia queda a nombre del portador", async () => {
+  const { tx, accounts } = createFakeTx({ sessions: [SESSION], users: [ACTOR, CARRIER, RECIPIENT], operators: [OPERATOR], tenders: TENDERS });
+  const result = await sendCashOutToCustodyTx(tx, {
+    cashSessionId: "session-1", branchId: BRANCH, amount: 500, carrierUserId: "user-carrier", reason: "HANDOVER",
+    // recipientUserId llega en el payload (el frontend nunca lo manda para
+    // esta variante, pero el servicio no puede confiar en eso) — tiene que
+    // ser ignorado, no colarse como si el actor lo hubiese declarado.
+    recipientUserId: "user-recipient", actorUserId: "user-1",
+  });
+  assert.equal(result.isSelfCarry, false);
+  assert.equal(result.intendedRecipientUserId, null);
+  const custody = accounts.get(result.custodyAccountId) as FakeAccount;
+  assert.equal(custody.holderUserId, "user-carrier", "la custodia es del portador, no del actor ni del receptor ignorado");
+});
+
+test("Prueba 12 — DEPOSIT_DISPATCH con carrier === actor: isSelfCarry en true e intendedBankAccountId poblado (la validación de receptor no aplica, solo es HANDOVER)", async () => {
+  const bank: FakeAccount = { id: "acct-bank-lafise-2", type: "BANK", isActive: true, branchId: BRANCH, currencyCode: "NIO", bankName: "LAFISE", accountAlias: "Cuenta corriente", accountNumber: "5556667778" };
+  const { tx } = createFakeTx({ sessions: [SESSION], users: [ACTOR], operators: [OPERATOR], accounts: [bank], tenders: TENDERS });
+  const result = await sendCashOutToCustodyTx(tx, {
+    cashSessionId: "session-1", branchId: BRANCH, amount: 500, carrierUserId: "user-1", reason: "DEPOSIT_DISPATCH", bankAccountId: "acct-bank-lafise-2", actorUserId: "user-1",
+  });
+  assert.equal(result.isSelfCarry, true);
+  assert.equal(result.intendedBankAccountId, "acct-bank-lafise-2");
+  assert.equal(result.intendedRecipientUserId, null, "DEPOSIT_DISPATCH nunca declara receptor, va a una cuenta");
+});
+
+test("Prueba 13 — receptor inactivo es rechazado", async () => {
+  const { tx } = createFakeTx({ sessions: [SESSION], users: [ACTOR, INACTIVE_RECIPIENT], operators: [OPERATOR], tenders: TENDERS });
+  await assert.rejects(
+    () => sendCashOutToCustodyTx(tx, { cashSessionId: "session-1", branchId: BRANCH, amount: 500, carrierUserId: "user-1", reason: "HANDOVER", recipientUserId: "user-inactive-recipient", actorUserId: "user-1" }),
+    /esa persona está inactiva/,
+  );
+});
