@@ -1215,6 +1215,14 @@ model BranchProductSetting {
   branchPrice           Decimal?
   minPrice              Decimal?
   wholesalePrice        Decimal?
+  /// String libre, sin enum de Prisma — valores en uso hoy por el código:
+  /// "CALCULATED" (pricing/service.ts applySuggestedPrice — viene del motor
+  /// con snapshot completo), "MANUAL" (catalog-inventory/service.ts —
+  /// editor inline de sucursal), "PRODUCTION_BATCH" (production/service.ts),
+  /// "TIMBER_TRIP" (timber/service.ts). No confundir con
+  /// EffectivePricing.priceSource (catalog/effective-pricing.ts), que es un
+  /// valor CALCULADO en memoria (BRANCH/STANDARD/MISSING/FUSION_DERIVED),
+  /// no esta columna.
   priceSource           String?
   marginPercent         Decimal?
   lastPriceUpdateAt     DateTime?

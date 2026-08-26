@@ -605,61 +605,95 @@ export async function applySuggestedPrice(input: ApplyPricingInput & { actorUser
     warnings.push("El precio sugerido supera el precio maximo de mercado indicado.");
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const branchId = input.branchId!;
-    const newPrice = new Prisma.Decimal(input.suggestedPrice);
+  const branchId = input.branchId!;
+  const result = await prisma.$transaction((tx) => applySuggestedPriceTx(tx, input, branchId, warnings));
+  return result;
+}
 
-    const existing = await tx.branchProductSetting.findUnique({
-      where: { branchId_productId: { branchId, productId: input.productId } },
-      select: { branchPrice: true },
-    });
-    const previousPrice = existing?.branchPrice ?? null;
-    await tx.branchProductSetting.upsert({
-      where: { branchId_productId: { branchId, productId: input.productId } },
-      create: { branchId, productId: input.productId, branchPrice: newPrice },
-      update: { branchPrice: newPrice },
-    });
-    const priceSourceAfter: "BRANCH" = "BRANCH";
+/**
+ * El cuerpo transaccional de applySuggestedPrice, separado del wrapper para
+ * poder probarlo con un tx en memoria (mismo patrón que
+ * sendCashOutToCustodyTx/postponeCashDepositTx) y para que la Fase 2
+ * (aplicar a varias sucursales) pueda llamarlo una vez POR SUCURSAL dentro
+ * de su propia transacción. Las validaciones de bloqueo (cannotApply) viven
+ * en el wrapper porque no tocan `tx`.
+ */
+export async function applySuggestedPriceTx(
+  tx: Prisma.TransactionClient,
+  input: ApplyPricingInput & { actorUserId: string },
+  branchId: string,
+  warnings: string[],
+) {
+  const newPrice = new Prisma.Decimal(input.suggestedPrice);
 
-    await tx.auditLog.create({
-      data: {
-        actorUserId: input.actorUserId,
-        branchId: input.applyScope === "BRANCH" ? input.branchId : undefined,
-        module: "pricing",
-        action: "PRICE_APPLIED",
-        entityType: "Product",
-        entityId: input.productId,
-        metadataJson: {
-          productId: input.productId,
-          branchId: input.branchId ?? null,
-          applyScope: input.applyScope,
-          previousPrice: previousPrice?.toString() ?? null,
-          newPrice: newPrice.toString(),
-          minPrice: input.minPrice ?? null,
-          maxPrice: input.maxPrice ?? null,
-          totalInternalCost: input.totalInternalCost ?? null,
-          effectiveCost: input.effectiveCost ?? null,
-          marginPercent: input.marginPercent ?? null,
-          grossMarginPercent: input.grossMarginPercent ?? null,
-          markupPercent: input.markupPercent ?? null,
-          roundingRule: input.roundingRule ?? null,
-          reason: input.reason ?? null,
-          warnings,
-          calculationSnapshot: input.calculationSnapshot ?? null,
-        } as Prisma.InputJsonValue,
-      },
-    });
-
-    return {
+  const existing = await tx.branchProductSetting.findUnique({
+    where: { branchId_productId: { branchId, productId: input.productId } },
+    select: { branchPrice: true },
+  });
+  const previousPrice = existing?.branchPrice ?? null;
+  // Fase 0 (prompt-motor-precios-lote-herencia-gobierno.md) — este camino
+  // viene del motor con snapshot completo, así que se distingue con
+  // "CALCULATED" del editor manual inline (catalog-inventory/service.ts,
+  // que escribe "MANUAL"). Sin lastPriceUpdateAt/priceUpdatedByUserId acá,
+  // la Fase 1 no puede detectar "el costo cambió y el precio no" — es la
+  // señal más valiosa de la bandeja de precios.
+  await tx.branchProductSetting.upsert({
+    where: { branchId_productId: { branchId, productId: input.productId } },
+    create: {
+      branchId,
       productId: input.productId,
-      branchId: input.branchId,
-      applyScope: input.applyScope,
-      previousPrice: previousPrice === null ? null : Number(previousPrice),
-      newPrice: Number(newPrice),
-      priceSourceAfter,
-      warnings,
-    };
+      branchPrice: newPrice,
+      priceSource: "CALCULATED",
+      marginPercent: input.marginPercent ?? null,
+      lastPriceUpdateAt: new Date(),
+      priceUpdatedByUserId: input.actorUserId,
+    },
+    update: {
+      branchPrice: newPrice,
+      priceSource: "CALCULATED",
+      marginPercent: input.marginPercent ?? null,
+      lastPriceUpdateAt: new Date(),
+      priceUpdatedByUserId: input.actorUserId,
+    },
+  });
+  const priceSourceAfter: "BRANCH" = "BRANCH";
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId,
+      module: "pricing",
+      action: "PRICE_APPLIED",
+      entityType: "Product",
+      entityId: input.productId,
+      metadataJson: {
+        productId: input.productId,
+        branchId,
+        applyScope: input.applyScope,
+        previousPrice: previousPrice?.toString() ?? null,
+        newPrice: newPrice.toString(),
+        minPrice: input.minPrice ?? null,
+        maxPrice: input.maxPrice ?? null,
+        totalInternalCost: input.totalInternalCost ?? null,
+        effectiveCost: input.effectiveCost ?? null,
+        marginPercent: input.marginPercent ?? null,
+        grossMarginPercent: input.grossMarginPercent ?? null,
+        markupPercent: input.markupPercent ?? null,
+        roundingRule: input.roundingRule ?? null,
+        reason: input.reason ?? null,
+        warnings,
+        calculationSnapshot: input.calculationSnapshot ?? null,
+      } as Prisma.InputJsonValue,
+    },
   });
 
-  return result;
+  return {
+    productId: input.productId,
+    branchId,
+    applyScope: input.applyScope,
+    previousPrice: previousPrice === null ? null : Number(previousPrice),
+    newPrice: Number(newPrice),
+    priceSourceAfter,
+    warnings,
+  };
 }
