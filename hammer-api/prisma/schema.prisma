@@ -1227,6 +1227,12 @@ model BranchProductSetting {
   marginPercent         Decimal?
   lastPriceUpdateAt     DateTime?
   priceUpdatedByUserId  String?
+  /// Por qué esta sucursal no sigue el precio general. Se llena al fijar
+  /// un branchPrice; al volver a seguir el general, branchPrice y este
+  /// campo vuelven a null juntos (Fase 3, prompt-motor-precios-lote-
+  /// herencia-gobierno.md).
+  priceExceptionReason  String?
+  priceExceptionAt      DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 

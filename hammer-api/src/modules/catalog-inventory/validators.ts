@@ -24,6 +24,8 @@ export const updateBranchProductSettingSchema = z.object({
    * un miembro derivado que se desvía del precio implícito de fusión más
    * allá del umbral (FUSION_PRICE_OVERRIDE_THRESHOLD). */
   overridePriceConfirmed: z.boolean().optional(),
+  /** Fase 3 (prompt-motor-precios-lote-herencia-gobierno.md) — motivo de la excepción, opcional acá (la pantalla de la ficha del producto lo exige obligatorio con su propia validación). */
+  priceExceptionReason: z.string().max(500).optional().nullable(),
 }).refine((data) => Object.keys(data).some((key) => !["branchId", "productId"].includes(key)), {
   message: "Debes enviar al menos un campo configurable.",
 });

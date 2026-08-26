@@ -24,8 +24,12 @@ import {
   ChevronUp,
   AlertTriangle,
 } from "lucide-react";
+import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty, fmtDateTime } from "@/lib/format";
 
 /* ── Types ── */
@@ -326,53 +330,55 @@ export function Product360({ productId }: { productId: string }) {
 
       {/* ═══ PRICING TAB ═══ */}
       {tab === "pricing" && (
-        <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-          <div className="hm-card-header-amber px-5 py-3 flex items-center gap-2">
-            <DollarSign className="h-5 w-5" />
-            <h2 className="font-semibold">Precios y Costos por Sucursal</h2>
-          </div>
-          {product.branchProductSettings.length === 0 ? (
-            <div className="p-8 text-center">
-              <DollarSign className="h-10 w-10 mx-auto mb-3 text-[var(--color-text-muted)]" />
-              <p className="text-sm font-medium text-[var(--color-text-secondary)]">Sin configuración de precios por sucursal</p>
+        <div className="space-y-4">
+          <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
+            <div className="hm-card-header-amber px-5 py-3 flex items-center gap-2">
+              <DollarSign className="h-5 w-5" />
+              <h2 className="font-semibold">Disponibilidad y Costo por Sucursal</h2>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="hm-table">
-                <thead>
-                  <tr>
-                    <th>Sucursal</th>
-                    <th className="text-center">Disponible</th>
-                    <th className="text-right">Costo Sucursal</th>
-                    <th className="text-right">Precio Sucursal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {product.branchProductSettings.map((s) => (
-                    <tr key={s.id}>
-                      <td>
-                        <span className="inline-flex items-center gap-2">
-                          <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--color-master-50)] text-[var(--color-master-700)] text-xs font-bold">
-                            {s.branch.code}
-                          </span>
-                          <span className="font-medium text-[var(--color-text)]">{s.branch.name}</span>
-                        </span>
-                      </td>
-                      <td className="text-center">
-                        {s.isAvailable ? (
-                          <Badge variant="success">Sí</Badge>
-                        ) : (
-                          <Badge variant="danger">No</Badge>
-                        )}
-                      </td>
-                      <td className="text-right font-mono">{s.branchCost ? money(s.branchCost) : <span className="text-[var(--color-text-muted)]">Base</span>}</td>
-                      <td className="text-right font-mono">{s.branchPrice ? money(s.branchPrice) : <span className="text-[var(--color-text-muted)]">Base</span>}</td>
+            {product.branchProductSettings.length === 0 ? (
+              <div className="p-8 text-center">
+                <DollarSign className="h-10 w-10 mx-auto mb-3 text-[var(--color-text-muted)]" />
+                <p className="text-sm font-medium text-[var(--color-text-secondary)]">Sin configuración de precios por sucursal</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="hm-table">
+                  <thead>
+                    <tr>
+                      <th>Sucursal</th>
+                      <th className="text-center">Disponible</th>
+                      <th className="text-right">Costo Sucursal</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {product.branchProductSettings.map((s) => (
+                      <tr key={s.id}>
+                        <td>
+                          <span className="inline-flex items-center gap-2">
+                            <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--color-master-50)] text-[var(--color-master-700)] text-xs font-bold">
+                              {s.branch.code}
+                            </span>
+                            <span className="font-medium text-[var(--color-text)]">{s.branch.name}</span>
+                          </span>
+                        </td>
+                        <td className="text-center">
+                          {s.isAvailable ? (
+                            <Badge variant="success">Sí</Badge>
+                          ) : (
+                            <Badge variant="danger">No</Badge>
+                          )}
+                        </td>
+                        <td className="text-right font-mono">{s.branchCost ? money(s.branchCost) : <span className="text-[var(--color-text-muted)]">Base</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <BranchPricingBlock productId={product.id} standardSalePriceFallback={product.standardSalePrice} />
         </div>
       )}
 
@@ -462,6 +468,167 @@ export function Product360({ productId }: { productId: string }) {
         </div>
       )}
     </section>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* ── Precio por sucursal (Fase 3, prompt-motor-precios-lote-herencia-gobierno.md) ── */
+/* La herencia YA existe (effective-pricing.ts) — esto es lo que faltaba:   */
+/* que "sigue el general" vs "excepción declarada" sea visible y reversible. */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+type BranchPricingRow = {
+  branchId: string;
+  branchName: string;
+  followsStandard: boolean;
+  effectivePrice: number | null;
+  priceExceptionReason: string | null;
+  priceExceptionAt: string | null;
+  effectiveCost: number | null;
+  marginPercent: number | null;
+};
+type BranchPricingStatus = { standardSalePrice: number | null; branches: BranchPricingRow[] };
+
+function BranchPricingBlock({ productId, standardSalePriceFallback }: { productId: string; standardSalePriceFallback: string }) {
+  const [data, setData] = useState<BranchPricingStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [exceptionFormBranchId, setExceptionFormBranchId] = useState<string | null>(null);
+  const [priceInput, setPriceInput] = useState("");
+  const [reasonInput, setReasonInput] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/api/master/pricing/product/${productId}/branches`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar el precio por sucursal.");
+      setData(unwrapApiData(raw) as BranchPricingStatus);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo cargar el precio por sucursal.");
+    } finally {
+      setLoading(false);
+    }
+  }, [productId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function followStandard(branchId: string) {
+    try {
+      const res = await apiFetch("/api/master/pricing/follow-standard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId, branchIds: [branchId] }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo volver al precio general.");
+      toast.success("Vuelve a seguir el precio general.");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo volver al precio general.");
+    }
+  }
+
+  async function submitException(branchId: string) {
+    const price = Number(priceInput);
+    if (!price || price <= 0) { toast.error("El precio debe ser mayor que 0."); return; }
+    if (reasonInput.trim().length < 3) { toast.error("El motivo debe tener al menos 3 caracteres."); return; }
+
+    setSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/master/pricing/product/${productId}/branches/${branchId}/set-price`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price, reason: reasonInput.trim() }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo fijar la excepción.");
+      toast.success("Excepción de precio fijada.");
+      setExceptionFormBranchId(null);
+      setPriceInput("");
+      setReasonInput("");
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo fijar la excepción.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-[var(--color-border-strong)] p-8 text-center shadow-sm">
+        <p className="text-sm text-[var(--color-text-muted)] animate-pulse">Cargando precio por sucursal…</p>
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const standardPrice = data.standardSalePrice ?? Number(standardSalePriceFallback);
+  const followingCount = data.branches.filter((b) => b.followsStandard).length;
+
+  return (
+    <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
+      <div className="hm-card-header-amber px-5 py-3">
+        <div className="flex items-center gap-2">
+          <DollarSign className="h-5 w-5" />
+          <h2 className="font-semibold">Precio por sucursal</h2>
+        </div>
+        <p className="mt-1 text-sm">
+          Precio general: <strong>{money(standardPrice)}</strong> · {followingCount} de {data.branches.length} sucursales lo siguen
+        </p>
+      </div>
+
+      <div className="divide-y divide-[var(--color-border)]">
+        {data.branches.map((b) => (
+          <div key={b.branchId} className="px-5 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-3">
+                <span className="min-w-[9rem] font-medium text-[var(--color-text)]">{b.branchName}</span>
+                {b.followsStandard ? (
+                  <Badge variant="neutral">Sigue el general</Badge>
+                ) : (
+                  <Badge variant="warning">Excepción</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-4 text-sm">
+                <span className="font-mono font-semibold text-[var(--color-text)]">{b.effectivePrice === null ? "—" : money(b.effectivePrice)}</span>
+                <span className="text-[var(--color-text-muted)]">margen {b.marginPercent === null ? "—" : `${b.marginPercent.toFixed(0)}%`}</span>
+                {b.followsStandard ? (
+                  <Button size="sm" variant="secondary" onClick={() => { setExceptionFormBranchId(b.branchId); setPriceInput(""); setReasonInput(""); }}>
+                    Fijar excepción
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="ghost" onClick={() => void followStandard(b.branchId)}>
+                    Volver al general
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {!b.followsStandard && b.priceExceptionReason && (
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                &ldquo;{b.priceExceptionReason}&rdquo; · desde {b.priceExceptionAt ? fmtDateTime(b.priceExceptionAt) : "—"}
+              </p>
+            )}
+
+            {exceptionFormBranchId === b.branchId && (
+              <div className="mt-3 flex flex-wrap items-end gap-2 rounded-lg bg-[var(--color-surface-alt)] p-3">
+                <label className="text-xs font-semibold text-[var(--color-text-muted)]">
+                  Precio
+                  <Input type="number" step="0.01" min="0.01" value={priceInput} onChange={(e) => setPriceInput(e.target.value)} className="mt-1 w-32" />
+                </label>
+                <label className="flex-1 text-xs font-semibold text-[var(--color-text-muted)]">
+                  Motivo (mínimo 3 caracteres) — obligatorio
+                  <Input value={reasonInput} onChange={(e) => setReasonInput(e.target.value)} placeholder="Flete, acuerdo local, competencia…" className="mt-1" />
+                </label>
+                <Button size="sm" variant="success" loading={submitting} onClick={() => void submitException(b.branchId)}>Guardar</Button>
+                <Button size="sm" variant="ghost" onClick={() => setExceptionFormBranchId(null)} disabled={submitting}>Cancelar</Button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

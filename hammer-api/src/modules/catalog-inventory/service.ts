@@ -577,6 +577,13 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
     priceSource: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : "MANUAL",
     lastPriceUpdateAt: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : new Date(),
     priceUpdatedByUserId: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : actorUserId,
+    // Fase 3 (prompt-motor-precios-lote-herencia-gobierno.md) — branchPrice
+    // y priceException* viajan juntos: al fijar un precio de sucursal con
+    // motivo (pantalla nueva de la ficha del producto), queda declarado;
+    // al limpiar branchPrice a null por este mismo camino, la excepción se
+    // limpia también, nunca queda un motivo huérfano sin precio.
+    priceExceptionReason: input.branchPrice === undefined ? undefined : input.branchPrice === null ? null : (input.priceExceptionReason ?? undefined),
+    priceExceptionAt: input.branchPrice === undefined ? undefined : input.branchPrice === null ? null : (input.priceExceptionReason ? new Date() : undefined),
   };
 
   const setting = await prisma.branchProductSetting.upsert({
