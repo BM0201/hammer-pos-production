@@ -567,7 +567,23 @@ export async function getProductPricingContext(input: { productId: string; branc
   };
 }
 
-export async function applySuggestedPrice(input: ApplyPricingInput & { actorUserId: string }) {
+/**
+ * Pura (sin DB) — valida que el precio se pueda aplicar (bloqueo por precio
+ * bajo el costo interno / conflicto de mercado) y devuelve los warnings no
+ * bloqueantes. Aislada para que la Fase 1 (aplicar desde la bandeja, en
+ * lote — pricing/tray-service.ts) reuse EXACTAMENTE el mismo guard que el
+ * apply individual: el bloqueo existe por una razón y aplicar en lote no lo
+ * suspende.
+ */
+export function assertPriceApplicable(input: {
+  suggestedPrice: number;
+  minPrice?: number;
+  maxPrice?: number | null;
+  totalInternalCost?: number;
+  canApplyPrice?: boolean;
+  applyBlockReason?: string | null;
+  calculationSnapshot?: unknown;
+}): string[] {
   const warnings: string[] = [];
   const snapshot = input.calculationSnapshot;
   const snapshotRecord = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
@@ -604,7 +620,11 @@ export async function applySuggestedPrice(input: ApplyPricingInput & { actorUser
   if (input.maxPrice !== undefined && input.maxPrice !== null && input.suggestedPrice > input.maxPrice) {
     warnings.push("El precio sugerido supera el precio maximo de mercado indicado.");
   }
+  return warnings;
+}
 
+export async function applySuggestedPrice(input: ApplyPricingInput & { actorUserId: string }) {
+  const warnings = assertPriceApplicable(input);
   const branchId = input.branchId!;
   const result = await prisma.$transaction((tx) => applySuggestedPriceTx(tx, input, branchId, warnings));
   return result;

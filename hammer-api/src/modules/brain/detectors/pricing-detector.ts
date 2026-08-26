@@ -18,6 +18,20 @@ function marginPct(price: number, cost: number) {
   return ((price - cost) / price) * 100;
 }
 
+/**
+ * 1.2 (prompt-motor-precios-lote-herencia-gobierno.md) — pura, sin DB:
+ * aislada para poder probar la condición de "costo se movió, precio no" sin
+ * base de datos, mismo principio que isLateSyncIntoClosedDay/
+ * classifyTenderForLedger en otros módulos. Solo aplica a settings con un
+ * branchPrice fijado — sin eso no hay "última vez que alguien fijó el
+ * precio de esta sucursal" que comparar.
+ */
+export function isPriceStaleAgainstCost(input: { branchPrice: number | null; costUpdatedAt: Date | null; lastPriceUpdateAt: Date | null }): boolean {
+  if (input.branchPrice === null) return false;
+  if (!input.costUpdatedAt) return false;
+  return input.lastPriceUpdateAt === null || input.costUpdatedAt > input.lastPriceUpdateAt;
+}
+
 export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
 
@@ -44,7 +58,7 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
       },
       include: {
         branch: { select: { id: true, code: true, name: true } },
-        product: { select: { id: true, sku: true, name: true, standardSalePrice: true } },
+        product: { select: { id: true, sku: true, name: true, standardSalePrice: true, costUpdatedAt: true } },
       },
       take: 1000,
     }),
@@ -62,6 +76,7 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     resolvePolicyForProductBatch(pairs),
     buildCommercialIntelligenceBatch(pairs),
   ]);
+  const balanceByKey = new Map(balances.map((b) => [`${b.branchId}:${b.productId}`, b]));
 
   for (const balance of balances) {
     const key = `${balance.branchId}:${balance.productId}`;
@@ -140,6 +155,11 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
           commercialClass: commercial.combinedClass,
           riskLevel: commercial.riskLevel,
           marginPct: margin.toFixed(1),
+          // Alias — mismo nombre que usa COST_CHANGED_PRICE_STALE (§1.2),
+          // para que la bandeja de precios (§1.3) lea un shape uniforme sin
+          // ramificar por tipo de decisión.
+          marginActual: Number(margin.toFixed(1)),
+          marginObjetivo: policy.categoryPolicy.targetMarginPercent,
           stock: stockQty,
           priceSimulation,
           commercialActions: commercial.recommendedActions,
@@ -223,11 +243,45 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
   }
 
   for (const setting of branchSettings) {
-    const effective = pricingByKey.get(`${setting.branchId}:${setting.productId}`);
+    const key = `${setting.branchId}:${setting.productId}`;
+    const effective = pricingByKey.get(key);
     if (!effective) continue;
     const price = n(effective.effectivePrice);
     const cost = effective.effectiveCost === null ? n(setting.branchCost) : n(effective.effectiveCost);
     if (cost > 0 && price > 0 && cost >= price) {
+      const policy = policyByKey.get(key);
+      const commercial = commercialByKey.get(key);
+      const stockQty = n(balanceByKey.get(key)?.quantityOnHand);
+      // 1.1 (prompt-motor-precios-lote-herencia-gobierno.md) — la bandeja
+      // de precios necesita un suggestedPrice para poder aplicar esta
+      // decisión con el mismo botón/código que REVIEW_PRICE_BELOW_COST.
+      // Sin política/inteligencia comercial resuelta para el par, queda sin
+      // proposedActionJson: informativa, no aplicable desde la bandeja.
+      let proposedActionJson: Prisma.InputJsonValue | undefined;
+      let suggestedPriceForBranchCost: number | null = null;
+      if (policy && commercial) {
+        const suggestion = calculatePricingSuggestion({
+          mode: "ADVANCED",
+          baseCost: cost,
+          includeTaxInCost: false,
+          monthlyOperatingExpenses: policy.categoryPolicy.monthlyExpenseAllocation,
+          categoryMonthlyUnits: policy.categoryPolicy.estimatedMonthlyUnits,
+          estimatedMonthlyUnits: policy.categoryPolicy.estimatedMonthlyUnits,
+          expenseAllocationScope: "CATEGORY",
+          marginPercent: commercial.recommendedMarginPercent,
+          minProfitAmount: commercial.recommendedMinProfitAmount,
+          roundingRule: policy.categoryPolicy.roundingRule as any,
+        });
+        suggestedPriceForBranchCost = suggestion.suggestedPrice;
+        proposedActionJson = {
+          productId: setting.productId,
+          branchId: setting.branchId,
+          currentPrice: price,
+          suggestedPrice: suggestion.suggestedPrice,
+          reason: "PRICE_BELOW_EFFECTIVE_COST",
+          calculationSnapshot: suggestion,
+        };
+      }
       decisions.push({
         category: "PRICING",
         severity: cost > price ? "CRITICAL" : "HIGH",
@@ -237,13 +291,117 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
         branchId: setting.branchId,
         productId: setting.productId,
         confidenceScore: 0.9,
+        impactAmount: stockQty * Math.max(0, cost - price),
         riskScore: riskScoreFor(cost > price ? "CRITICAL" : "HIGH", 0.9),
         proposedActionType: "REVIEW_BRANCH_COST_PRICE",
-        evidenceJson: { effectiveCost: cost, effectivePrice: price, priceSource: effective.priceSource, costSource: effective.costSource },
+        proposedActionJson,
+        evidenceJson: {
+          effectiveCost: cost,
+          effectivePrice: price,
+          priceSource: effective.priceSource,
+          costSource: effective.costSource,
+          suggestedPrice: suggestedPriceForBranchCost,
+          stockAtRisk: stockQty,
+          marginActual: Number(marginPct(price, cost).toFixed(1)),
+          marginObjetivo: policy?.categoryPolicy.targetMarginPercent ?? null,
+        },
         sourceJson: { detector: "pricing-detector" },
         fingerprintParts: ["pricing", "branch-cost-above-price", setting.branchId, setting.productId],
       });
     }
+  }
+
+  // 1.2 (prompt-motor-precios-lote-herencia-gobierno.md) — la señal que
+  // evita que un producto se venda meses al precio viejo después de una
+  // compra que subió el costo: el costo se movió DESPUÉS de la última vez
+  // que alguien fijó el precio de esta sucursal, o nunca se registró cuándo
+  // se fijó pero sí hay un branchPrice puesto (mismo "ciego" que reporta el
+  // script de la Fase 0).
+  for (const setting of branchSettings) {
+    const costUpdatedAt = setting.product.costUpdatedAt;
+    if (!costUpdatedAt) continue;
+    const branchPrice = setting.branchPrice === null ? null : n(setting.branchPrice);
+    if (!isPriceStaleAgainstCost({ branchPrice, costUpdatedAt, lastPriceUpdateAt: setting.lastPriceUpdateAt })) continue;
+
+    const key = `${setting.branchId}:${setting.productId}`;
+    const effective = pricingByKey.get(key);
+    const policy = policyByKey.get(key);
+    const commercial = commercialByKey.get(key);
+    if (!effective || !policy || !commercial) continue;
+    const cost = effective.effectiveCost === null ? n(setting.branchCost) : n(effective.effectiveCost);
+    const price = n(effective.effectivePrice);
+    if (cost <= 0 || price <= 0) continue;
+
+    const currentMargin = marginPct(price, cost);
+    const minMargin = policy.categoryPolicy.minMarginPercent;
+    const targetMargin = policy.categoryPolicy.targetMarginPercent;
+    // No hay snapshot histórico del costo al momento en que se fijó el
+    // precio, así que "el costo subió" se aproxima con el síntoma que sí es
+    // verificable hoy: el margen efectivo actual ya cayó bajo el mínimo de
+    // la política de categoría.
+    const severity = currentMargin < minMargin ? "HIGH" : "MEDIUM";
+
+    const suggestion = calculatePricingSuggestion({
+      mode: "ADVANCED",
+      baseCost: cost,
+      includeTaxInCost: false,
+      monthlyOperatingExpenses: policy.categoryPolicy.monthlyExpenseAllocation,
+      categoryMonthlyUnits: policy.categoryPolicy.estimatedMonthlyUnits,
+      estimatedMonthlyUnits: policy.categoryPolicy.estimatedMonthlyUnits,
+      expenseAllocationScope: "CATEGORY",
+      marginPercent: commercial.recommendedMarginPercent,
+      minProfitAmount: commercial.recommendedMinProfitAmount,
+      roundingRule: policy.categoryPolicy.roundingRule as any,
+    });
+    const suggestedPrice = suggestion.suggestedPrice;
+    const stockQty = n(balanceByKey.get(key)?.quantityOnHand);
+    // impactAmount en córdobas: la brecha de margen (esperado − actual, en
+    // puntos porcentuales) convertida a córdobas por unidad al precio
+    // actual, multiplicada por el stock en riesgo — mismo principio de
+    // "stock x pérdida unitaria en córdobas" que el resto del detector.
+    const marginGapPercent = Math.max(0, targetMargin - currentMargin);
+    const unitImpact = price * (marginGapPercent / 100);
+
+    decisions.push({
+      category: "PRICING",
+      severity,
+      title: `Costo actualizado, precio sin tocar: ${setting.product.sku} - ${setting.product.name}`,
+      description: `${setting.branch.code}: el costo cambió el ${costUpdatedAt.toISOString().slice(0, 10)}${setting.lastPriceUpdateAt ? `, después de la última actualización de precio (${setting.lastPriceUpdateAt.toISOString().slice(0, 10)})` : " y este precio nunca registró cuándo se fijó"}. Margen efectivo hoy: ${currentMargin.toFixed(1)}%.`,
+      recommendation: "Recalcular el precio con el costo actual y aplicar la sugerencia.",
+      branchId: setting.branchId,
+      productId: setting.productId,
+      confidenceScore: 0.8,
+      impactAmount: stockQty * unitImpact,
+      riskScore: riskScoreFor(severity, 0.8),
+      proposedActionType: "COST_CHANGED_PRICE_STALE",
+      proposedActionJson: {
+        productId: setting.productId,
+        branchId: setting.branchId,
+        currentPrice: price,
+        suggestedPrice,
+        reason: "COST_CHANGED_PRICE_STALE",
+        calculationSnapshot: suggestion,
+      },
+      evidenceJson: {
+        price,
+        effectivePrice: price,
+        effectiveCost: cost,
+        cost,
+        currentPrice: price,
+        suggestedPrice,
+        costUpdatedAt: costUpdatedAt.toISOString(),
+        lastPriceUpdateAt: setting.lastPriceUpdateAt ? setting.lastPriceUpdateAt.toISOString() : null,
+        marginActual: Number(currentMargin.toFixed(1)),
+        marginObjetivo: targetMargin,
+        policyMinMarginPercent: minMargin,
+        priceSource: effective.priceSource,
+        costSource: effective.costSource,
+        commercialClass: commercial.combinedClass,
+        stockAtRisk: stockQty,
+      },
+      sourceJson: { detector: "pricing-detector" },
+      fingerprintParts: ["pricing", "cost-stale", setting.branchId, setting.productId],
+    });
   }
 
   const suspiciousCalculations = await prisma.productPricing.findMany({

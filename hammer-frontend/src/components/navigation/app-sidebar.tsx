@@ -51,6 +51,7 @@ import {
   ReceiptText,
   Camera,
   PiggyBank,
+  DollarSign,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -81,6 +82,7 @@ const MASTER_NAV: NavSection[] = [
     title: "COMERCIAL",
     items: [
       { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart, capabilities: [CAPABILITIES.MASTER_SALES_VIEW] },
+      { href: "/app/master/pricing", label: "Precios", icon: DollarSign, capabilities: [CAPABILITIES.PRICING_VIEW] },
       { href: "/app/master/discounts", label: "Descuentos", icon: Tag, capabilities: [CAPABILITIES.PRICING_VIEW, CAPABILITIES.PRICING_EDIT_GLOBAL] },
     ],
   },

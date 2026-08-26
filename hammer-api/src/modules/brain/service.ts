@@ -413,7 +413,7 @@ export async function getBrainDecision(id: string) {
   });
 }
 
-async function writeActionLog(input: {
+export async function writeActionLog(input: {
   decisionId: string;
   actorUserId?: string | null;
   action: string;
