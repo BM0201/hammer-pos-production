@@ -69,12 +69,17 @@ test("M.5 /app/master/expenses redirige a /app/master/finance", () => {
   assert.ok(c.includes("/app/master/finance"), "destino correcto");
 });
 
-// ── M.7 / M.8: Gastos y Precios reutilizados dentro de Finanzas ──────────────
-test("M.7/M.8 Finanzas reutiliza ExpenseManager para gastos y precios (sin duplicar)", () => {
+// ── M.7 / M.8: Gastos y Fletes reutilizados dentro de Finanzas ───────────────
+// Actualizado en prompt-mudanza-zona-precios.md Fase 3: Precios y márgenes ya
+// no viven en Finanzas — se mudaron a la zona Precios (/app/master/pricing).
+test("M.7/M.8 Finanzas reutiliza ExpenseManager para gastos y fletes, sin precios (mudados a /app/master/pricing)", () => {
   const mgr = read("components/finance/finance-accounting-manager.tsx");
   assert.ok(mgr.includes("ExpenseManager"), "reutiliza ExpenseManager");
   assert.ok(mgr.includes('forcedTab="expenses"'), "tab de gastos");
-  assert.ok(mgr.includes('forcedTab="pricing"'), "tab de precios");
+  assert.ok(mgr.includes('forcedTab="freight"'), "tab de fletes");
+  assert.ok(!mgr.includes('forcedTab="pricing"'), "ya no debe quedar el tab de precios");
+  assert.ok(!mgr.includes('forcedTab="policies"'), "ya no debe quedar el tab de políticas");
+  assert.ok(mgr.includes("/app/master/pricing"), "debe enlazar a la zona Precios");
 });
 
 // ── M.9: Planilla solo con permiso ───────────────────────────────────────────

@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import type { Route } from "next";
 import {
   Plus,
   Trash2,
   DollarSign,
   PieChart,
-  Calculator,
   Building2,
-  Settings,
   TrendingUp,
   AlertTriangle,
   ChevronDown,
@@ -39,19 +39,16 @@ import {
   CATEGORIES,
   FREIGHT_STATUS_LABELS,
 } from "@/components/expenses/expense-manager.types";
-import { PricingCalculatorPanel } from "@/components/pricing/pricing-calculator-panel";
-import { CategoryPoliciesPanel } from "@/components/pricing/category-policies-panel";
 
 /**
  * TODO(finance-extract): la lógica de este componente se reutiliza dentro de
  * Finanzas & Contabilidad (FinanceAccountingManager) vía `forcedTab` + `hideTabBar`,
  * para servir un solo tab a la vez (Gastos, Fletes) sin duplicar código.
  *
- * Fase 1 (prompt-mudanza-zona-precios.md) — Precios y Políticas por categoría
- * se movieron a components/pricing/*-panel.tsx (mudanza, no reescritura: el
- * comportamiento de esos dos tabs es idéntico, solo cambió dónde vive el
- * código y de dónde saca sus datos — ya no comparten `selectedBranchId` ni
- * el resto del estado de Gastos).
+ * Fase 3 (prompt-mudanza-zona-precios.md) — Precios y Políticas por categoría
+ * ya NO se muestran acá: viven en la zona Precios (/app/master/pricing), que
+ * ya no comparte estado con Gastos. Fueron mudadas en la Fase 1 a
+ * components/pricing/*-panel.tsx antes de retirar estas dos pestañas.
  */
 
 /** Historial por categoría del presupuesto inteligente (GET /api/finance/expense-history). */
@@ -401,11 +398,9 @@ export function ExpenseManager({
       {/* ── Tabs ── (ocultas cuando Finanzas controla el tab) */}
       {!hideTabBar && (
       <div className="flex gap-1 bg-[var(--color-surface-raised)] rounded-lg p-1 overflow-x-auto">
-        {(["expenses", "pricing", "policies", "freight"] as const).map((tab) => {
+        {(["expenses", "freight"] as const).map((tab) => {
           const labels = {
             expenses: { label: "Gastos Operativos", icon: DollarSign },
-            pricing: { label: "Precios", icon: Calculator },
-            policies: { label: "Politicas por categoria", icon: Settings },
             freight: { label: "Flete interno", icon: TrendingUp },
           };
           const { label, icon: Icon } = labels[tab];
@@ -425,6 +420,19 @@ export function ExpenseManager({
           );
         })}
       </div>
+      )}
+
+      {/* Fase 3.4 (prompt-mudanza-zona-precios.md) — aviso de mudanza, temporal
+          (tres meses desde 2026-08-27, después se saca). Sin esto, la primera
+          reacción de quien usaba Precios/Políticas acá es que se rompió algo. */}
+      {activeTab === "expenses" && (
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Precios y Políticas por categoría se movieron a{" "}
+          <Link href={"/app/master/pricing" as Route} className="font-medium text-[var(--color-info-700)] hover:underline">
+            Precios
+          </Link>
+          .
+        </p>
       )}
 
       {loading && (
@@ -581,13 +589,6 @@ export function ExpenseManager({
               </div>
             </Card>
           )}
-        </div>
-      )}
-
-      {/* En modo consolidado, los tabs que editan por sucursal piden elegir una. */}
-      {isAllBranches && !loading && (activeTab === "pricing" || activeTab === "policies") && (
-        <div className="hm-alert hm-alert-info text-xs">
-          Esta sección trabaja sobre una sucursal específica — selecciónala en el filtro de arriba.
         </div>
       )}
 
@@ -867,21 +868,6 @@ export function ExpenseManager({
             </div>
           )}
         </div>
-      )}
-
-      {/* ══════════════════════════════════════════════════════════ */}
-      {/* TAB: PRECIOS — Fase 1 (prompt-mudanza-zona-precios.md): mudado a  */}
-      {/* components/pricing/pricing-calculator-panel.tsx, sin cambiar     */}
-      {/* comportamiento. Ya no comparte selectedBranchId ni el resto del  */}
-      {/* estado con Gastos — recibe branchId por props.                  */}
-      {/* ══════════════════════════════════════════════════════════ */}
-      {activeTab === "pricing" && selectedBranchId && !isAllBranches && !loading && (
-        <PricingCalculatorPanel branchId={selectedBranchId} onSaved={loadBranchData} />
-      )}
-
-      {/* Fase 1 (prompt-mudanza-zona-precios.md) — mudado a components/pricing/category-policies-panel.tsx. */}
-      {activeTab === "policies" && selectedBranchId && !isAllBranches && !loading && (
-        <CategoryPoliciesPanel branchId={selectedBranchId} />
       )}
 
       {activeTab === "freight" && !loading && (

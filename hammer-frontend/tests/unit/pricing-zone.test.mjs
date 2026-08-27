@@ -58,8 +58,10 @@ test("ExpenseManager ya no define el estado de calculadora/config que se mudó (
   assert.ok(!c.includes("useState<SuggestedPriceResult"), "calcResult ya no vive en ExpenseManager");
   assert.ok(!c.includes("[configForm, setConfigForm]"), "configForm ya no vive en ExpenseManager");
   assert.ok(!c.includes("[advancedCalc, setAdvancedCalc]"), "advancedCalc ya no vive en ExpenseManager");
-  assert.ok(c.includes("PricingCalculatorPanel"), "ExpenseManager sigue mostrando el tab de precios, pero vía el panel mudado");
-  assert.ok(c.includes("CategoryPoliciesPanel"), "ExpenseManager sigue mostrando el tab de políticas, pero vía el panel mudado");
+  // Fase 3: ya no se muestran acá en absoluto (ni siquiera vía los paneles
+  // mudados) — el tab de precios/políticas se retiró de Gastos por completo.
+  assert.ok(!c.includes("PricingCalculatorPanel"), "el tab de precios ya no se renderiza en ExpenseManager");
+  assert.ok(!c.includes("CategoryPoliciesPanel"), "el tab de políticas ya no se renderiza en ExpenseManager");
 });
 
 // ── Fase 2: zona Precios ──────────────────────────────────────────────────────
@@ -106,4 +108,55 @@ test("Test 6: la zona Precios lee productId/branchId de la URL y la calculadora 
   const calc = read("components/pricing/pricing-calculator-panel.tsx");
   assert.ok(calc.includes("initialProductId"), "la calculadora acepta initialProductId por props");
   assert.ok(calc.includes("void handleLoadProductContext(initialProductId)"), "precarga el contexto del producto al montar");
+});
+
+// ── Fase 3: sacar de donde ya no corresponde ──────────────────────────────────
+
+// Test 1 (prompt): ExpenseManagerTab ya no acepta "pricing" ni "policies" (tipo).
+test("Test 1: ExpenseManagerTab ya no acepta \"pricing\" ni \"policies\"", () => {
+  const t = read("components/expenses/expense-manager.types.ts");
+  assert.ok(t.includes('export type ExpenseManagerTab = "expenses" | "freight";'), "el tipo debe quedar reducido a expenses | freight");
+});
+
+// Test 2 (prompt): ExpenseManager con forcedTab="expenses" renderiza gastos igual que antes.
+test("Test 2: ExpenseManager con forcedTab=\"expenses\" sigue renderizando Gastos Operativos igual que antes", () => {
+  const c = read("components/expenses/expense-manager.tsx");
+  assert.ok(c.includes("Registrar Gasto Operativo"), "el formulario de gastos sigue intacto");
+  assert.ok(c.includes('activeTab === "expenses"'), "el tab de gastos sigue condicionado igual");
+});
+
+// Test 3 (prompt): ExpenseManager con forcedTab="freight" renderiza flete igual que antes.
+test("Test 3: ExpenseManager con forcedTab=\"freight\" sigue renderizando Flete interno igual que antes — NO se tocó (nadie pidió moverlo)", () => {
+  const c = read("components/expenses/expense-manager.tsx");
+  assert.ok(c.includes('activeTab === "freight"'), "el tab de flete sigue condicionado igual");
+  assert.ok(c.includes("Configurar ruta") && c.includes("Configurar camion") && c.includes("Crear viaje de flete interno"), "el contenido de flete sigue completo");
+});
+
+test("Fase 3.1: ExpenseManager ya no importa ni renderiza los paneles de precios/políticas — ya viven solo en la zona Precios", () => {
+  const c = read("components/expenses/expense-manager.tsx");
+  assert.ok(!c.includes("PricingCalculatorPanel"), "no debe importar PricingCalculatorPanel");
+  assert.ok(!c.includes("CategoryPoliciesPanel"), "no debe importar CategoryPoliciesPanel");
+  assert.ok(!c.includes('"pricing"') && !c.includes('"policies"'), "no debe quedar ninguna referencia a los tabs retirados");
+});
+
+test("Fase 3.2: FinanceAccountingManager ya no ofrece precios ni políticas por categoría", () => {
+  const mgr = read("components/finance/finance-accounting-manager.tsx");
+  assert.ok(!mgr.includes('"pricing"') || mgr.includes("RETIRED_TAB_TO_PRICING_ZONE"), "\"pricing\" solo puede aparecer en el mapa de redirección de tabs retirados");
+  assert.ok(!/type FinanceTabKey = .*\"pricing\"/.test(mgr), "pricing ya no es un FinanceTabKey válido");
+  assert.ok(!/type FinanceTabKey = .*\"config\"/.test(mgr), "config ya no es un FinanceTabKey válido");
+});
+
+test("Fase 3.3: FinanceAccountingManager redirige los tabs retirados (?tab=pricing, ?tab=config, ?tab=policies) a la zona Precios", () => {
+  const mgr = read("components/finance/finance-accounting-manager.tsx");
+  assert.ok(mgr.includes("RETIRED_TAB_TO_PRICING_ZONE"), "debe existir el mapa de redirección");
+  assert.ok(mgr.includes("router.replace(`/app/master/pricing?tab=${zoneTab}`"), "debe redirigir a la zona Precios con la pestaña equivalente");
+});
+
+test("Fase 3.4: hay un aviso de mudanza (con enlace a Precios) tanto en Gastos como en Finanzas", () => {
+  const expenseMgr = read("components/expenses/expense-manager.tsx");
+  const financeMgr = read("components/finance/finance-accounting-manager.tsx");
+  for (const [name, content] of [["ExpenseManager", expenseMgr], ["FinanceAccountingManager", financeMgr]]) {
+    assert.ok(content.includes("se movieron a"), `${name} debe avisar que Precios/Políticas se movieron`);
+    assert.ok(content.includes('href={"/app/master/pricing"'), `${name} debe enlazar a la zona Precios`);
+  }
 });

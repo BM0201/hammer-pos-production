@@ -1,5 +1,9 @@
 /**
- * Tipos y constantes del módulo de Gastos/Precios/Fletes/Configuración.
+ * Tipos y constantes de Gastos/Fletes (expense-manager.tsx) y de los tipos de
+ * Precios que sus paneles mudados (components/pricing/*-panel.tsx) siguen
+ * necesitando — quedaron acá en la Fase 1 (prompt-mudanza-zona-precios.md)
+ * para no volver a duplicar definiciones; Precios ya no comparte lógica ni
+ * estado con Gastos, solo estos tipos.
  *
  * Extraídos de expense-manager.tsx (parte del refactor TODO(finance-extract)):
  * separar las definiciones puras del componente reduce el monolito y permite
@@ -246,7 +250,14 @@ export type InternalFreightTrip = {
   }>;
 };
 
-export type ExpenseManagerTab = "expenses" | "pricing" | "policies" | "freight";
+/**
+ * Fase 3 (prompt-mudanza-zona-precios.md) — "pricing" y "policies" salieron
+ * de acá: viven en la zona Precios (/app/master/pricing), que ya no comparte
+ * estado con Gastos. Flete interno se queda: es costo de transporte que
+ * alimenta el costo puesto, pero también es un gasto operativo, y moverlo es
+ * una decisión aparte que nadie pidió.
+ */
+export type ExpenseManagerTab = "expenses" | "freight";
 
 /* ── Constants ── */
 

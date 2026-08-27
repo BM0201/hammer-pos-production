@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import type { Route } from "next";
 import {
-  LayoutDashboard, Receipt, Calculator, Users, Truck, BarChart3, Settings, ArrowRight, Info, Landmark,
+  LayoutDashboard, Receipt, Users, Truck, BarChart3, ArrowRight, Info, Landmark,
 } from "lucide-react";
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
@@ -18,16 +18,31 @@ import { BanksTreasuryPanel } from "@/components/finance/banks-treasury-panel";
  * Finanzas & Contabilidad — contenedor principal.
  *
  * Reúne, en un solo lugar, lo que antes estaba disperso: proyección comercial
- * (antes en Inventario), gastos operativos, precios/márgenes, planilla, fletes y
- * reportes. Reutiliza ExpenseManager (gastos/precios/fletes/config) y EmployeeManager
- * (planilla) sin duplicar lógica.
+ * (antes en Inventario), gastos operativos, planilla, fletes y reportes.
+ * Reutiliza ExpenseManager (gastos/fletes) y EmployeeManager (planilla) sin
+ * duplicar lógica. Precios y márgenes se mudaron a la zona Precios
+ * (/app/master/pricing) en la Fase 3 (prompt-mudanza-zona-precios.md) — ya
+ * no es contabilidad, es una decisión comercial sobre el producto.
  *
  * TODO(finance-extract): mover progresivamente la lógica de ExpenseManager a
- * components/finance/{operating-expenses,pricing-margins,freight-costs}-panel.tsx.
+ * components/finance/{operating-expenses,freight-costs}-panel.tsx.
  * Planilla ya vive en payroll-finance-panel.tsx (Planilla V2).
  */
 
-type FinanceTabKey = "summary" | "expenses" | "pricing" | "payroll" | "freight" | "banks" | "reports" | "config";
+type FinanceTabKey = "summary" | "expenses" | "payroll" | "freight" | "banks" | "reports";
+
+/**
+ * Fase 3.3 (prompt-mudanza-zona-precios.md) — enlaces viejos a las pestañas
+ * retiradas ("pricing" = calculadora, "config" = políticas por categoría, y
+ * "policies" por si algún enlace la usó con ese nombre) redirigen a la zona
+ * Precios con la pestaña equivalente, en vez de caer en blanco o en Resumen
+ * sin explicación.
+ */
+const RETIRED_TAB_TO_PRICING_ZONE: Record<string, string> = {
+  pricing: "calculator",
+  config: "policies",
+  policies: "policies",
+};
 
 export function FinanceAccountingManager() {
   const sessionState = useSession();
@@ -37,17 +52,23 @@ export function FinanceAccountingManager() {
   const canManageTreasury = Boolean(session && canInAnyAssignedBranch(session, CAPABILITIES.TREASURY_MANAGE));
 
   const searchParams = useSearchParams();
+  const router = useRouter();
   // Los cortes quincenales viven DENTRO de Planilla (tab "Cortes Quincenales"
   // del panel): el tab "biweekly" de Finanzas duplicaba ese flujo de pago.
   // Los enlaces viejos ?tab=biweekly caen en Planilla.
   const rawTab = searchParams.get("tab") ?? "summary";
+
+  useEffect(() => {
+    const zoneTab = RETIRED_TAB_TO_PRICING_ZONE[rawTab];
+    if (zoneTab) router.replace(`/app/master/pricing?tab=${zoneTab}` as Parameters<typeof router.replace>[0]);
+  }, [rawTab, router]);
+
   const requestedTab = (rawTab === "biweekly" ? "payroll" : rawTab) as FinanceTabKey;
 
   const tabs = useMemo(() => {
     const base: Array<{ key: FinanceTabKey; label: string; icon: React.ElementType }> = [
       { key: "summary", label: "Resumen", icon: LayoutDashboard },
       { key: "expenses", label: "Gastos operativos", icon: Receipt },
-      { key: "pricing", label: "Precios y márgenes", icon: Calculator },
     ];
     if (canViewPayroll) {
       base.push({ key: "payroll", label: "Planilla", icon: Users });
@@ -56,16 +77,12 @@ export function FinanceAccountingManager() {
     if (canManageTreasury) {
       base.push({ key: "banks", label: "Bancos y efectivo", icon: Landmark });
     }
-    base.push(
-      { key: "reports", label: "Reportes", icon: BarChart3 },
-      { key: "config", label: "Configuración", icon: Settings },
-    );
+    base.push({ key: "reports", label: "Reportes", icon: BarChart3 });
     return base;
   }, [canViewPayroll, canManageTreasury]);
 
   const initialTab: FinanceTabKey = tabs.some((t) => t.key === requestedTab) ? requestedTab : "summary";
   const [activeTab, setActiveTab] = useState<FinanceTabKey>(initialTab);
-  const router = useRouter();
   const pathname = usePathname();
 
   // Sincroniza tab ↔ URL en ambas direcciones: cambiar de tab actualiza ?tab=
@@ -102,15 +119,23 @@ export function FinanceAccountingManager() {
         ))}
       </div>
 
+      {/* Fase 3.4 (prompt-mudanza-zona-precios.md) — aviso de mudanza, temporal
+          (tres meses desde 2026-08-27, después se saca). */}
+      <p className="text-xs text-[var(--color-text-muted)]">
+        Precios y Políticas por categoría se movieron a{" "}
+        <Link href={"/app/master/pricing" as Route} className="font-medium text-[var(--color-info-700)] hover:underline">
+          Precios
+        </Link>
+        .
+      </p>
+
       {/* Contenido por tab */}
       {activeTab === "summary" && <FinanceSummaryPanel />}
 
-      {/* Gastos operativos / Precios / Fletes / Config reutilizan ExpenseManager
-          (un tab a la vez vía forcedTab; la barra interna se oculta). */}
+      {/* Gastos operativos / Fletes reutilizan ExpenseManager (un tab a la vez
+          vía forcedTab; la barra interna se oculta). */}
       {activeTab === "expenses" && <ExpenseManager forcedTab="expenses" hideTabBar />}
-      {activeTab === "pricing" && <ExpenseManager forcedTab="pricing" hideTabBar />}
       {activeTab === "freight" && <ExpenseManager forcedTab="freight" hideTabBar />}
-      {activeTab === "config" && <ExpenseManager forcedTab="policies" hideTabBar />}
 
       {/* Planilla V2: el banner informativo (ahora descartable), el hero de costo
           y la tabla viven dentro del panel; los tabs Calcular Nómina / Préstamos /
