@@ -191,6 +191,15 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     // Fase 4 (prompt-motor-precios-lote-herencia-gobierno.md) — la sucursal
     // ajusta libre DENTRO de la banda de su categoría; lo que se pasa sale
     // a aprobación (no lo bloquea esta capability, lo decide el servicio).
+    //
+    // Parte C (prompt-huecos-fase1-fase3-despliegue.md) — IMPLICACIÓN DE
+    // DIVULGACIÓN: esto también da acceso a costo efectivo y margen
+    // resultante de la sucursal (GET /api/branch/pricing/product-context) —
+    // no se puede mostrar dónde cae un precio dentro de la banda sin
+    // mostrar el costo contra el que se mide. Mismo comentario en el
+    // backend (hammer-api/src/modules/rbac/policies.ts) con el detalle de
+    // qué expone exactamente ese endpoint y la alternativa si este acceso
+    // deja de ser deseable.
     CAPABILITIES.PRICING_EDIT_BRANCH,
     CAPABILITIES.BRANCH_DASHBOARD_VIEW,
     CAPABILITIES.BRANCH_CATALOG_VIEW,

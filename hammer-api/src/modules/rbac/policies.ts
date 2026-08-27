@@ -193,6 +193,21 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     // Fase 4 (prompt-motor-precios-lote-herencia-gobierno.md) — la sucursal
     // ajusta libre DENTRO de la banda de su categoría; lo que se pasa sale
     // a aprobación (no lo bloquea esta capability, lo decide el servicio).
+    //
+    // Parte C (prompt-huecos-fase1-fase3-despliegue.md) — IMPLICACIÓN DE
+    // DIVULGACIÓN: otorgar esto también da acceso a costo efectivo y margen
+    // resultante de ESA sucursal, vía GET /api/branch/pricing/product-context
+    // (branch-band-service.ts::getBranchPricingContextForProduct) — no se
+    // puede mostrar dónde cae un precio dentro de la banda sin mostrar el
+    // costo contra el que se mide. Ese endpoint está auditado y acotado a
+    // precio efectivo/costo efectivo/margen resultante/límites de la
+    // política de categoría de ESE producto en ESA sucursal — nunca costos
+    // de otras sucursales, márgenes agregados a nivel global, ni historial
+    // de ProductPricing. Si el acceso a costo por BRANCH_ADMIN deja de ser
+    // deseable, la alternativa es hacer que ese endpoint devuelva solo la
+    // posición relativa ("dentro de la banda" / "por debajo del mínimo")
+    // sin cifras — revisar ANTES de tocar esto de nuevo, revertir un
+    // permiso después de que alguien ya vio los números no deshace nada.
     CAPABILITIES.PRICING_EDIT_BRANCH,
     CAPABILITIES.WAREHOUSE_VIEW,
     CAPABILITIES.DISPATCH_MARK,
