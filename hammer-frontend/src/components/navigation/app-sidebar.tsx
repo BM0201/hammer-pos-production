@@ -52,6 +52,7 @@ import {
   Camera,
   PiggyBank,
   DollarSign,
+  Calculator,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -82,7 +83,6 @@ const MASTER_NAV: NavSection[] = [
     title: "COMERCIAL",
     items: [
       { href: "/app/master/sales/orders", label: "Órdenes", icon: ShoppingCart, capabilities: [CAPABILITIES.MASTER_SALES_VIEW] },
-      { href: "/app/master/pricing", label: "Precios", icon: DollarSign, capabilities: [CAPABILITIES.PRICING_VIEW] },
       { href: "/app/master/discounts", label: "Descuentos", icon: Tag, capabilities: [CAPABILITIES.PRICING_VIEW, CAPABILITIES.PRICING_EDIT_GLOBAL] },
     ],
   },
@@ -90,6 +90,14 @@ const MASTER_NAV: NavSection[] = [
     title: "INVENTARIO & ABASTECIMIENTO",
     items: [
       { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE, CAPABILITIES.INVENTORY_VIEW] },
+      // Fase 2.3 (prompt-mudanza-zona-precios.md) — junto a Catálogo e Inventario,
+      // no junto a Finanzas: precios es una decisión comercial sobre el producto,
+      // no contabilidad. Dos capabilities por diseño (decisión previa del mismo
+      // prompt): PRICING_VIEW (Contador) y FINANCE_VIEW_PRICING (Admin de
+      // Sucursal) llegaban hoy a la calculadora por caminos distintos — Admin de
+      // Sucursal tiene FINANCE_VIEW_PRICING pero NO PRICING_VIEW, así que
+      // gatear solo con PRICING_VIEW le habría quitado un acceso que ya tenía.
+      { href: "/app/master/pricing", label: "Precios", icon: Calculator, capabilities: [CAPABILITIES.PRICING_VIEW, CAPABILITIES.FINANCE_VIEW_PRICING] },
       { href: "/app/master/purchase-orders", label: "Pedidos de Compra", icon: ClipboardPlus, capabilities: [CAPABILITIES.PURCHASES_VIEW] },
       { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight, capabilities: [CAPABILITIES.TRANSFERS_VIEW] },
       { href: "/app/master/production", label: "Producción de Materiales", icon: Factory, capabilities: [CAPABILITIES.PRODUCTION_DASHBOARD_VIEW] },

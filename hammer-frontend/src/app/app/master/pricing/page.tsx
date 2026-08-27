@@ -2,18 +2,129 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PricingCalculatorPanel } from "@/components/pricing/pricing-calculator-panel";
+import { CategoryPoliciesPanel } from "@/components/pricing/category-policies-panel";
+import { PricingConfigPanel } from "@/components/pricing/pricing-config-panel";
 import toast from "react-hot-toast";
 
 /**
- * Fase 1 (prompt-motor-precios-lote-herencia-gobierno.md) — bandeja de
- * revisión de precios. Lee /api/master/pricing/tray, que ya trae la
- * detección hecha por Brain (pricing-detector.ts) con el precio sugerido
- * adentro. Esta pantalla es la que faltaba, no un motor nuevo.
+ * Zona Precios (prompt-mudanza-zona-precios.md, Fase 2) — cuatro pestañas:
+ * Bandeja (la cola de revisión de la Fase 1 del ciclo anterior, ahora
+ * default), Calculadora, Políticas y Configuración — las tres últimas
+ * mudadas de Gastos/Finanzas en la Fase 1 de este mismo prompt. Un único
+ * selector de sucursal en el encabezado, compartido por las cuatro; la
+ * Bandeja funciona con "todas" (value=""), las otras tres son por sucursal
+ * por definición y piden elegir una.
  */
+
+type ZoneTab = "tray" | "calculator" | "policies" | "config";
+const ZONE_TABS: Array<{ key: ZoneTab; label: string; icon: typeof Inbox }> = [
+  { key: "tray", label: "Bandeja", icon: Inbox },
+  { key: "calculator", label: "Calculadora", icon: Calculator },
+  { key: "policies", label: "Políticas", icon: SlidersHorizontal },
+  { key: "config", label: "Configuración", icon: Settings },
+];
+
+type Branch = { id: string; code: string; name: string };
+
+export default function PricingZonePage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const rawTab = searchParams.get("tab") ?? "tray";
+  const activeTab: ZoneTab = (ZONE_TABS.some((t) => t.key === rawTab) ? rawTab : "tray") as ZoneTab;
+
+  // Fase 4.1 (prompt-mudanza-zona-precios.md) — el enlace desde la ficha de
+  // producto llega con branchId propio (?tab=calculator&productId=...&branchId=...);
+  // se usa como valor inicial del selector de la zona, no como un estado aparte.
+  const [branchId, setBranchId] = useState(searchParams.get("branchId") ?? "");
+  const initialProductId = searchParams.get("productId") ?? undefined;
+  const [branches, setBranches] = useState<Branch[]>([]);
+
+  useEffect(() => {
+    apiFetch("/api/branches").then((r) => (r.ok ? r.json() : null)).then((raw) => { if (raw) setBranches(unwrapApiData(raw) as Branch[]); }).catch(() => {});
+  }, []);
+
+  function selectTab(tab: ZoneTab) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (tab === "tray") params.delete("tab"); else params.set("tab", tab);
+    router.replace(`${pathname}${params.size ? `?${params}` : ""}` as Parameters<typeof router.replace>[0], { scroll: false });
+  }
+
+  function selectBranch(nextBranchId: string) {
+    setBranchId(nextBranchId);
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextBranchId) params.set("branchId", nextBranchId); else params.delete("branchId");
+    // productId solo tenía sentido con el branchId que llegó del enlace de origen.
+    params.delete("productId");
+    router.replace(`${pathname}${params.size ? `?${params}` : ""}` as Parameters<typeof router.replace>[0], { scroll: false });
+  }
+
+  const needsBranch = activeTab !== "tray";
+
+  return (
+    <section className="space-y-6 pb-24">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Precios</h1>
+        <div className="flex items-center gap-2">
+          <Building2 className="h-4 w-4 text-[var(--color-text-muted)]" />
+          <select className="hm-input w-auto" value={branchId} onChange={(e) => selectBranch(e.target.value)}>
+            <option value="">Todas las sucursales</option>
+            {branches.map((b) => <option key={b.id} value={b.id}>{b.code} · {b.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="flex gap-1 bg-[var(--color-surface-raised)] rounded-lg p-1 overflow-x-auto">
+        {ZONE_TABS.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => selectTab(key)}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-md text-sm font-medium transition-all whitespace-nowrap
+              ${activeTab === key
+                ? "bg-[var(--color-surface)] text-[var(--color-text)] shadow-sm"
+                : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"}`}
+          >
+            <Icon className="h-4 w-4" />
+            <span className="hidden sm:inline">{label}</span>
+          </button>
+        ))}
+      </div>
+
+      {needsBranch && !branchId ? (
+        <Card className="p-10 text-center">
+          <Building2 className="mx-auto mb-3 h-8 w-8 text-[var(--color-text-soft)]" aria-hidden="true" />
+          <p className="text-sm font-medium text-[var(--color-text)]">Elegí una sucursal para continuar</p>
+          <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+            {ZONE_TABS.find((t) => t.key === activeTab)?.label} trabaja sobre una sucursal específica — seleccionala arriba.
+          </p>
+        </Card>
+      ) : (
+        <>
+          {activeTab === "tray" && <PricingTrayTab branchId={branchId} />}
+          {activeTab === "calculator" && <PricingCalculatorPanel branchId={branchId} initialProductId={initialProductId} />}
+          {activeTab === "policies" && <CategoryPoliciesPanel branchId={branchId} />}
+          {activeTab === "config" && <PricingConfigPanel branchId={branchId} />}
+        </>
+      )}
+    </section>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* ── TAB: BANDEJA ── */
+/* Fase 1 (prompt-motor-precios-lote-herencia-gobierno.md) — bandeja de       */
+/* revisión de precios. Lee /api/master/pricing/tray, que ya trae la         */
+/* detección hecha por Brain (pricing-detector.ts) con el precio sugerido    */
+/* adentro. Ahora vive como pestaña de la zona Precios (Fase 2, prompt-      */
+/* mudanza-zona-precios.md) — branchId llega del selector de la zona.        */
+/* ═══════════════════════════════════════════════════════════════════════════ */
 
 type Reason = "BELOW_COST" | "MARGIN_POLICY" | "COST_STALE";
 
@@ -46,7 +157,6 @@ type TrayResult = {
   totals: { count: number; impactTotal: number; byReason: Record<Reason, number>; costDoubtfulCount: number };
 };
 
-type Branch = { id: string; code: string; name: string };
 type Category = { id: string; name: string };
 type ApplyResponse = {
   applied: Array<{ decisionId: string; branchId: string; productId: string; previousPrice: number | null; newPrice: number }>;
@@ -69,12 +179,10 @@ function severityDot(severity: string) {
   return "bg-[var(--color-text-soft)]";
 }
 
-export default function PricingTrayPage() {
+function PricingTrayTab({ branchId }: { branchId: string }) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<TrayResult | null>(null);
-  const [branches, setBranches] = useState<Branch[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [branchFilter, setBranchFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [reasonFilter, setReasonFilter] = useState<Reason | "">("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -87,7 +195,7 @@ export default function PricingTrayPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (branchFilter) params.set("branchId", branchFilter);
+      if (branchId) params.set("branchId", branchId);
       if (categoryFilter) params.set("categoryId", categoryFilter);
       if (reasonFilter) params.set("reason", reasonFilter);
       const res = await apiFetch(`/api/master/pricing/tray?${params.toString()}`);
@@ -100,12 +208,11 @@ export default function PricingTrayPage() {
     } finally {
       setLoading(false);
     }
-  }, [branchFilter, categoryFilter, reasonFilter]);
+  }, [branchId, categoryFilter, reasonFilter]);
 
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
-    apiFetch("/api/branches").then((r) => (r.ok ? r.json() : null)).then((raw) => { if (raw) setBranches(unwrapApiData(raw) as Branch[]); }).catch(() => {});
     apiFetch("/api/catalog/categories").then((r) => (r.ok ? r.json() : null)).then((raw) => { if (raw) setCategories(unwrapApiData(raw) as Category[]); }).catch(() => {});
   }, []);
 
@@ -173,13 +280,12 @@ export default function PricingTrayPage() {
   }
 
   return (
-    <section className="space-y-6 pb-24">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-[var(--color-text)]">Precios</h1>
           {data && (
             <>
-              <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+              <p className="text-sm text-[var(--color-text-muted)]">
                 {data.totals.count === 0
                   ? "Nada necesita revisión ahora mismo."
                   : <>
@@ -201,10 +307,6 @@ export default function PricingTrayPage() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <select className="hm-input w-auto" value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
-          <option value="">Todas las sucursales</option>
-          {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-        </select>
         <select className="hm-input w-auto" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
           <option value="">Todas las categorías</option>
           {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -318,7 +420,7 @@ export default function PricingTrayPage() {
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -353,13 +455,14 @@ function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
           )}
         </td>
         <td className="px-3 py-2.5">
-          <span className="flex items-center gap-1.5">
+          {/* Fase 4.2 (prompt-mudanza-zona-precios.md) — la bandeja enlaza a la ficha del producto en Catálogo (los dos sentidos, junto con 4.1). */}
+          <Link href={`/app/master/catalog-inventory/products/${row.productId}`} className="flex items-center gap-1.5 group">
             <span className={["h-2 w-2 shrink-0 rounded-full", severityDot(row.severity)].join(" ")} aria-hidden="true" />
             <span className="min-w-0">
-              <span className="block truncate font-medium text-[var(--color-text)]">{row.productName}</span>
+              <span className="block truncate font-medium text-[var(--color-text)] group-hover:underline">{row.productName}</span>
               <span className="block text-xs text-[var(--color-text-soft)]">{row.productSku}</span>
             </span>
-          </span>
+          </Link>
         </td>
         <td className="px-3 py-2.5 text-[var(--color-text-muted)]">{row.branchName}</td>
         <td className="px-3 py-2.5 text-right tabular-nums">
