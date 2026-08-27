@@ -84,7 +84,10 @@ test("Test 5: con sucursal en \"todas\" (branchId vacío), Calculadora/Política
 
 test("Fase 2.2: el selector de sucursal es único en el encabezado de la zona (no uno por pestaña)", () => {
   const p = read("app/app/master/pricing/page.tsx");
-  const selectorMatches = p.match(/<select className="hm-input w-auto" value=\{branchId\}/g) ?? [];
+  // Parte B.1 (prompt-zona-precios-consolidacion.md) le cambió el className
+  // (el ancho pasó al contenedor) — el id="pricing-zone-branch" es lo que
+  // identifica de forma estable a ESTE select entre los tres de la página.
+  const selectorMatches = p.match(/<select id="pricing-zone-branch" className="hm-input" value=\{branchId\}/g) ?? [];
   assert.equal(selectorMatches.length, 1, "debe haber un solo selector de sucursal a nivel de zona");
 });
 

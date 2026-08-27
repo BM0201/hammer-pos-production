@@ -72,12 +72,18 @@ export default function PricingZonePage() {
     <section className="space-y-6 pb-24">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Precios</h1>
-        <div className="flex items-center gap-2">
-          <Building2 className="h-4 w-4 text-[var(--color-text-muted)]" />
-          <select className="hm-input w-auto" value={branchId} onChange={(e) => selectBranch(e.target.value)}>
-            <option value="">Todas las sucursales</option>
-            {branches.map((b) => <option key={b.id} value={b.id}>{b.code} · {b.name}</option>)}
-          </select>
+        <div className="flex items-end gap-2">
+          <Building2 className="mb-2.5 h-4 w-4 text-[var(--color-text-muted)]" />
+          {/* Parte B.1/B.2 (prompt-zona-precios-consolidacion.md) — .hm-input es
+              width:100% (globals.css) y le gana a w-auto; el ancho va en el
+              contenedor, no en el select. Etiqueta real (label htmlFor), no un <p>. */}
+          <div className="w-[220px]">
+            <label htmlFor="pricing-zone-branch" className="mb-1 block text-xs text-[var(--color-text-muted)]">Sucursal</label>
+            <select id="pricing-zone-branch" className="hm-input" value={branchId} onChange={(e) => selectBranch(e.target.value)}>
+              <option value="">Todas las sucursales</option>
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.code} · {b.name}</option>)}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -107,7 +113,14 @@ export default function PricingZonePage() {
         </Card>
       ) : (
         <>
-          {activeTab === "tray" && <PricingTrayTab branchId={branchId} />}
+          {activeTab === "tray" && (
+            <PricingTrayTab
+              branchId={branchId}
+              branchName={branches.find((b) => b.id === branchId)?.name}
+              onClearBranch={() => selectBranch("")}
+              onGoToCalculator={() => selectTab("calculator")}
+            />
+          )}
           {activeTab === "calculator" && <PricingCalculatorPanel branchId={branchId} initialProductId={initialProductId} />}
           {activeTab === "policies" && <CategoryPoliciesPanel branchId={branchId} />}
           {activeTab === "config" && <PricingConfigPanel branchId={branchId} />}
@@ -152,9 +165,12 @@ type TrayRow = {
   evidence: Record<string, unknown>;
 };
 
+type TrayTotals = { count: number; impactTotal: number; byReason: Record<Reason, number>; costDoubtfulCount: number };
 type TrayResult = {
   rows: TrayRow[];
-  totals: { count: number; impactTotal: number; byReason: Record<Reason, number>; costDoubtfulCount: number };
+  totals: TrayTotals;
+  /** Parte A (prompt-zona-precios-consolidacion.md) — el mismo cálculo, sin los filtros del usuario. */
+  unfilteredTotals: TrayTotals;
 };
 
 type Category = { id: string; name: string };
@@ -169,6 +185,13 @@ const REASON_GROUPS: Array<{ key: Reason; title: string; badge: string; icon: ty
   { key: "COST_STALE", title: "El costo cambió y el precio no", badge: "", icon: Clock3 },
 ];
 
+/** Parte C.1 (prompt-zona-precios-consolidacion.md) — predicado para "Ningún producto ... tiene {motivo}"; distinto de REASON_GROUPS.title, que es un encabezado de sección, no una frase que sigue a "tiene". */
+const REASON_PREDICATE: Record<Reason, string> = {
+  BELOW_COST: "precio bajo el costo",
+  MARGIN_POLICY: "margen bajo la política",
+  COST_STALE: "el costo cambiado y el precio sin actualizar",
+};
+
 const fmt = (v: number | null) => (v === null ? "—" : `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const fmtPct = (v: number | null) => (v === null ? "—" : `${v.toFixed(1)}%`);
 const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("es-NI", { day: "2-digit", month: "short", year: "numeric" }) : "nunca");
@@ -179,7 +202,19 @@ function severityDot(severity: string) {
   return "bg-[var(--color-text-soft)]";
 }
 
-function PricingTrayTab({ branchId }: { branchId: string }) {
+function PricingTrayTab({
+  branchId,
+  branchName,
+  onClearBranch,
+  onGoToCalculator,
+}: {
+  branchId: string;
+  branchName?: string;
+  /** Limpia el filtro de sucursal — vive en el estado del padre (Zona Precios), compartido por las cuatro pestañas. */
+  onClearBranch: () => void;
+  /** Parte C.2 (prompt-zona-precios-consolidacion.md) — "Calcular un precio" cambia de pestaña en el padre. */
+  onGoToCalculator: () => void;
+}) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<TrayResult | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -190,6 +225,16 @@ function PricingTrayTab({ branchId }: { branchId: string }) {
   const [confirming, setConfirming] = useState(false);
   const [applying, setApplying] = useState(false);
   const [lastApplyResult, setLastApplyResult] = useState<ApplyResponse | null>(null);
+
+  // Parte A.2/B.3 (prompt-zona-precios-consolidacion.md) — la sucursal (estado
+  // del padre) cuenta como filtro igual que categoría/motivo: es exactamente
+  // lo que produce el bug de la captura (Masaya + Arena + Margen bajo la política).
+  const hasFilters = !!branchId || !!categoryFilter || !!reasonFilter;
+  const clearFilters = () => {
+    onClearBranch();
+    setCategoryFilter("");
+    setReasonFilter("");
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -285,19 +330,42 @@ function PricingTrayTab({ branchId }: { branchId: string }) {
         <div>
           {data && (
             <>
+              {/* Parte A.2 (prompt-zona-precios-consolidacion.md) — tres estados
+                  distintos, no uno: "nada necesita revisión" solo es cierto cuando
+                  unfilteredTotals.count es 0. Con filtros puestos y cero resultados
+                  visibles, el catálogo puede seguir teniendo trabajo pendiente en
+                  otro lado — es exactamente el bug de la captura. */}
               <p className="text-sm text-[var(--color-text-muted)]">
-                {data.totals.count === 0
-                  ? "Nada necesita revisión ahora mismo."
-                  : <>
-                      <span className="font-semibold text-[var(--color-text)]">{data.totals.count}</span> producto{data.totals.count === 1 ? "" : "s"} necesita{data.totals.count === 1 ? "" : "n"} revisión ·{" "}
-                      <span className="font-semibold text-[var(--color-danger-600)]">{fmt(data.totals.impactTotal)}</span> en riesgo
-                    </>}
+                {data.unfilteredTotals.count === 0 ? (
+                  "Nada necesita revisión ahora mismo."
+                ) : data.totals.count === 0 ? (
+                  <>
+                    Mostrando <span className="font-semibold text-[var(--color-text)]">0</span> de{" "}
+                    <span className="font-semibold text-[var(--color-text)]">{data.unfilteredTotals.count}</span> productos que necesitan revisión ·{" "}
+                    <span className="font-semibold text-[var(--color-danger-600)]">{fmt(data.unfilteredTotals.impactTotal)}</span> en riesgo en total
+                  </>
+                ) : !hasFilters ? (
+                  <>
+                    <span className="font-semibold text-[var(--color-text)]">{data.totals.count}</span> producto{data.totals.count === 1 ? "" : "s"} necesita{data.totals.count === 1 ? "" : "n"} revisión ·{" "}
+                    <span className="font-semibold text-[var(--color-danger-600)]">{fmt(data.totals.impactTotal)}</span> en riesgo
+                  </>
+                ) : (
+                  <>
+                    Mostrando <span className="font-semibold text-[var(--color-text)]">{data.totals.count}</span> de{" "}
+                    <span className="font-semibold text-[var(--color-text)]">{data.unfilteredTotals.count}</span> ·{" "}
+                    <span className="font-semibold text-[var(--color-danger-600)]">{fmt(data.totals.impactTotal)}</span> de {fmt(data.unfilteredTotals.impactTotal)} en riesgo
+                  </>
+                )}
               </p>
-              {/* A.4 — un total contaminado por un costo mal tecleado es peor que no tener total */}
-              {data.totals.costDoubtfulCount > 0 && (
+              {/* A.4 — un total contaminado por un costo mal tecleado es peor que no
+                  tener total. El aviso usa el conteo del alcance visible, no el
+                  global — salvo que esté filtrado, ahí dice "n de global" (A.2). */}
+              {data.unfilteredTotals.costDoubtfulCount > 0 && (
                 <p className="mt-0.5 flex items-center gap-1 text-xs text-[var(--color-warning-700)]">
                   <SearchX className="h-3.5 w-3.5" aria-hidden="true" />
-                  {data.totals.costDoubtfulCount} producto{data.totals.costDoubtfulCount === 1 ? "" : "s"} con costo dudoso, sin cuantificar
+                  {hasFilters
+                    ? `${data.totals.costDoubtfulCount} de ${data.unfilteredTotals.costDoubtfulCount} con costo dudoso, sin cuantificar`
+                    : `${data.unfilteredTotals.costDoubtfulCount} producto${data.unfilteredTotals.costDoubtfulCount === 1 ? "" : "s"} con costo dudoso, sin cuantificar`}
                 </p>
               )}
             </>
@@ -306,23 +374,47 @@ function PricingTrayTab({ branchId }: { branchId: string }) {
         <Button type="button" variant="ghost" size="sm" onClick={() => void load()} disabled={loading} icon={<RefreshCcw className="h-4 w-4" />}>Actualizar</Button>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <select className="hm-input w-auto" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-          <option value="">Todas las categorías</option>
-          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <select className="hm-input w-auto" value={reasonFilter} onChange={(e) => setReasonFilter(e.target.value as Reason | "")}>
-          <option value="">Todos los motivos</option>
-          {REASON_GROUPS.map((g) => <option key={g.key} value={g.key}>{g.title}</option>)}
-        </select>
+      {/* Parte B (prompt-zona-precios-consolidacion.md) — el ancho va en el
+          contenedor (no en el select, que .hm-input fuerza a 100%), y cada
+          uno tiene su <label htmlFor> real. La sucursal ya se elige en el
+          encabezado de la zona (compartida por las cuatro pestañas); acá
+          solo categoría y motivo, que son propios de la bandeja. */}
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="w-[200px]">
+          <label htmlFor="pricing-tray-category" className="mb-1 block text-xs text-[var(--color-text-muted)]">Categoría</label>
+          <select id="pricing-tray-category" className="hm-input" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+            <option value="">Todas las categorías</option>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div className="w-[220px]">
+          <label htmlFor="pricing-tray-reason" className="mb-1 block text-xs text-[var(--color-text-muted)]">Motivo</label>
+          <select id="pricing-tray-reason" className="hm-input" value={reasonFilter} onChange={(e) => setReasonFilter(e.target.value as Reason | "")}>
+            <option value="">Todos los motivos</option>
+            {REASON_GROUPS.map((g) => <option key={g.key} value={g.key}>{g.title}</option>)}
+          </select>
+        </div>
+        {/* Parte B.3 — sin esto, quien filtró antes vuelve a la pantalla, ve el
+            estado vacío y concluye que no hay trabajo (junto con el bug A, es
+            la causa real de la captura: filtro invisible + mensaje global
+            equivocado). */}
+        {hasFilters && (
+          <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>Quitar filtros</Button>
+        )}
       </div>
 
       {loading ? (
         <p className="py-12 text-center text-sm text-[var(--color-text-muted)] animate-pulse">Cargando…</p>
       ) : !data || data.totals.count === 0 ? (
-        <Card className="p-8 text-center">
-          <p className="text-sm text-[var(--color-text-muted)]">No hay precios pendientes de revisión con estos filtros.</p>
-        </Card>
+        <EmptyTrayState
+          hasFilters={hasFilters}
+          branchName={branchName}
+          categoryName={categories.find((c) => c.id === categoryFilter)?.name}
+          reasonFilter={reasonFilter}
+          unfilteredCount={data?.unfilteredTotals.count ?? 0}
+          onClearFilters={clearFilters}
+          onGoToCalculator={onGoToCalculator}
+        />
       ) : (
         <div className="space-y-6">
           {REASON_GROUPS.map((group) => {
@@ -381,6 +473,43 @@ function PricingTrayTab({ branchId }: { branchId: string }) {
         </div>
       )}
 
+      {/* Parte C.3 (prompt-zona-precios-consolidacion.md) — chips con el
+          conteo SIN FILTRAR por motivo, más el de costo dudoso. Es
+          navegación, no adorno: con la bandeja vacía por filtros, esta fila
+          es lo único accionable de la pantalla. Cada chip limpia sucursal y
+          categoría (lo que suele vaciar la vista) y aplica ese motivo. */}
+      {!loading && data && data.unfilteredTotals.count > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] pt-4">
+          <span className="text-xs text-[var(--color-text-muted)]">Ver por motivo:</span>
+          {REASON_GROUPS.map((group) => (
+            <button
+              key={group.key}
+              type="button"
+              onClick={() => { onClearBranch(); setCategoryFilter(""); setReasonFilter(group.key); }}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                reasonFilter === group.key
+                  ? "border-[var(--color-pay)] bg-[var(--color-pay)]/10 text-[var(--color-pay)]"
+                  : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]"
+              }`}
+            >
+              <group.icon className="h-3 w-3" aria-hidden="true" />
+              {group.title} ({data.unfilteredTotals.byReason[group.key]})
+            </button>
+          ))}
+          {data.unfilteredTotals.costDoubtfulCount > 0 && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-1 text-xs font-medium text-[var(--color-warning-700)] hover:bg-[var(--color-warning-100)]"
+              title="Sin un filtro propio — limpia los filtros para verlos entre sus motivos"
+            >
+              <SearchX className="h-3 w-3" aria-hidden="true" />
+              Costo dudoso ({data.unfilteredTotals.costDoubtfulCount})
+            </button>
+          )}
+        </div>
+      )}
+
       {lastApplyResult && lastApplyResult.failed.length > 0 && (
         <Card className="border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-4">
           <h3 className="mb-2 text-sm font-semibold text-[var(--color-danger-700)]">{lastApplyResult.failed.length} no se pudieron aplicar</h3>
@@ -421,6 +550,69 @@ function PricingTrayTab({ branchId }: { branchId: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* ── Estado vacío (Parte C, prompt-zona-precios-consolidacion.md) ── */
+/* Antes era una tarjeta con una frase y ningún camino de salida. Ahora       */
+/* nombra la causa (qué filtros produjeron el vacío) y ofrece dos salidas —   */
+/* o, si el catálogo de verdad está sano, lo confirma en vez de sonar vacío.  */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+function EmptyTrayState({
+  hasFilters,
+  branchName,
+  categoryName,
+  reasonFilter,
+  unfilteredCount,
+  onClearFilters,
+  onGoToCalculator,
+}: {
+  hasFilters: boolean;
+  branchName?: string;
+  categoryName?: string;
+  reasonFilter: Reason | "";
+  unfilteredCount: number;
+  onClearFilters: () => void;
+  onGoToCalculator: () => void;
+}) {
+  // C.2 — catálogo sano de verdad: no hay "Ver los N" porque no hay ningún N.
+  if (unfilteredCount === 0) {
+    return (
+      <Card className="p-8 text-center">
+        <p className="text-sm font-medium text-[var(--color-text)]">Todo el catálogo está al día.</p>
+        <p className="mt-1 text-sm text-[var(--color-text-muted)]">No hay precios pendientes de revisión en ninguna sucursal.</p>
+        <Button type="button" variant="secondary" size="sm" className="mt-4" onClick={onGoToCalculator}>Calcular un precio</Button>
+      </Card>
+    );
+  }
+
+  // C.1 — nombrar la causa: qué combinación de filtros produjo el vacío.
+  let causeText = "No hay precios pendientes de revisión.";
+  if (hasFilters) {
+    const scopeBits: string[] = [];
+    if (categoryName) scopeBits.push(`de ${categoryName}`);
+    if (branchName) scopeBits.push(`en ${branchName}`);
+    const scope = scopeBits.length > 0 ? ` ${scopeBits.join(" ")}` : "";
+    const ending = reasonFilter ? `tiene ${REASON_PREDICATE[reasonFilter]}` : "necesita revisión";
+    causeText = `Ningún producto${scope} ${ending}.`;
+  }
+
+  return (
+    <Card className="p-8 text-center">
+      <p className="text-sm font-medium text-[var(--color-text)]">{causeText}</p>
+      {hasFilters && (
+        <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+          Hay <strong className="text-[var(--color-text)]">{unfilteredCount}</strong> producto{unfilteredCount === 1 ? "" : "s"} que sí necesita{unfilteredCount === 1 ? "" : "n"} revisión en otras sucursales o categorías.
+        </p>
+      )}
+      <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+        {hasFilters && (
+          <Button type="button" variant="primary" size="sm" onClick={onClearFilters}>Ver los {unfilteredCount}</Button>
+        )}
+        <Button type="button" variant="secondary" size="sm" onClick={onGoToCalculator}>Calcular un precio</Button>
+      </div>
+    </Card>
   );
 }
 
