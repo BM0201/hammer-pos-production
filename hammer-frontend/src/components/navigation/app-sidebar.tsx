@@ -250,6 +250,10 @@ function buildNavSections(
   if (hasAny(CAPABILITIES.TREASURY_VIEW_BRANCH) && canInAnyAssignedBranch(session, CAPABILITIES.TREASURY_VIEW_BRANCH)) {
     operationItems.push({ href: "/app/branch/money-week", label: "Dinero de la semana", icon: PiggyBank });
   }
+  // Fase 4 (prompt-motor-precios-lote-herencia-gobierno.md) — ajustar precio dentro de la banda de su categoría.
+  if (hasAny(CAPABILITIES.PRICING_EDIT_BRANCH) && canInAnyAssignedBranch(session, CAPABILITIES.PRICING_EDIT_BRANCH)) {
+    operationItems.push({ href: "/app/branch/pricing", label: "Precios", icon: DollarSign });
+  }
   if (hasAny(CAPABILITIES.CASH_PAYMENTS_VIEW, CAPABILITIES.CASH_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.CASH_PAYMENTS_VIEW)) {
     operationItems.push({ href: "/app/branch/cashier/payments", label: "Cobros", icon: CreditCard });
   }

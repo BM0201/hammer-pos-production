@@ -17,6 +17,7 @@ import {
 import { markOrderDispatched } from "@/modules/dispatch/service";
 import { createInventoryMovement, listInventoryBalances, resolveStockAdjustmentMovement } from "@/modules/inventory/service";
 import { executeApprovedRetainedCashExpense } from "@/modules/treasury/service";
+import { applyApprovedPriceOverride } from "@/modules/pricing/branch-band-service";
 
 // Auditoría 2026-07-22, hallazgos C2+C3: la cola genérica solo actualizaba
 // ApprovalRequest.status — nunca ejecutaba la acción real (ajuste de
@@ -203,6 +204,36 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             entityType: "ApprovalRequest",
             entityId: approval.id,
             metadataJson: {
+              reason: executionError instanceof Error ? executionError.message : "UNKNOWN",
+            },
+          });
+          throw executionError;
+        }
+      }
+    } else if (approval.referenceType === "PRICE_OVERRIDE") {
+      // Fase 4 (prompt-motor-precios-lote-herencia-gobierno.md) — aprobar
+      // ejecuta el precio pedido; rechazar deja el precio como estaba (la
+      // solicitud nunca tocó nada hasta este momento).
+      const resolved = await approvalService.resolveRequest({
+        requestId: id,
+        actorUserId: session.userId,
+        decision: parsed.data.decision,
+        resolutionNotes: parsed.data.resolutionNotes,
+      });
+      data = resolved;
+      if (parsed.data.decision === "APPROVE") {
+        try {
+          await applyApprovedPriceOverride({ payloadJson: approval.payloadJson, actorUserId: session.userId, requestId: id });
+        } catch (executionError) {
+          await logAuditEvent({
+            actorUserId: session.userId,
+            branchId: approval.branchId,
+            module: "approvals",
+            action: "PRICE_OVERRIDE_EXECUTION_FAILED",
+            entityType: "ApprovalRequest",
+            entityId: approval.id,
+            metadataJson: {
+              productId: approval.referenceId,
               reason: executionError instanceof Error ? executionError.message : "UNKNOWN",
             },
           });

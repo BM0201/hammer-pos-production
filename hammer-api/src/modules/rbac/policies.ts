@@ -190,6 +190,10 @@ const ROLE_CAPABILITIES: Record<RoleCode, Capability[]> = {
     CAPABILITIES.FINANCE_VIEW,
     CAPABILITIES.FINANCE_VIEW_PRICING,
     CAPABILITIES.FINANCE_MANAGE_EXPENSES,
+    // Fase 4 (prompt-motor-precios-lote-herencia-gobierno.md) — la sucursal
+    // ajusta libre DENTRO de la banda de su categoría; lo que se pasa sale
+    // a aprobación (no lo bloquea esta capability, lo decide el servicio).
+    CAPABILITIES.PRICING_EDIT_BRANCH,
     CAPABILITIES.WAREHOUSE_VIEW,
     CAPABILITIES.DISPATCH_MARK,
     CAPABILITIES.INVENTORY_VIEW,
