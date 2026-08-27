@@ -152,6 +152,29 @@ test("Fase 3.3: FinanceAccountingManager redirige los tabs retirados (?tab=prici
   assert.ok(mgr.includes("router.replace(`/app/master/pricing?tab=${zoneTab}`"), "debe redirigir a la zona Precios con la pestaña equivalente");
 });
 
+// ── Fase 4: enlazar, no duplicar ──────────────────────────────────────────────
+
+test("Fase 4.1: el editor de precio por sucursal en Catálogo (product-360) enlaza a la Calculadora con productId y branchId precargados", () => {
+  const c = read("components/catalog-inventory/product-360.tsx");
+  assert.ok(c.includes("Calcular precio con costos y margen"), "debe existir el enlace");
+  assert.ok(c.includes("/app/master/pricing?tab=calculator&productId=${productId}&branchId=${b.branchId}"), "debe apuntar a la calculadora con productId/branchId de esa fila");
+});
+
+test("Fase 4.2: cada fila de la bandeja enlaza a la ficha del producto en Catálogo", () => {
+  const p = read("app/app/master/pricing/page.tsx");
+  const productLinkMatches = p.match(/href=\{`\/app\/master\/catalog-inventory\/products\/\$\{row\.productId\}`\}/g) ?? [];
+  // Debe haber al menos dos: el enlace de toda fila (RowGroup) y el de "Revisar el costo primero" (costLooksWrong).
+  assert.ok(productLinkMatches.length >= 2, "toda fila debe enlazar al producto, no solo las de costo dudoso");
+});
+
+test("Fase 4.3: docs/PUERTAS-DE-PRECIO.md documenta quién escribe branchPrice, con los caminos reales verificados", () => {
+  const abs = join(SRC, "..", "..", "docs", "PUERTAS-DE-PRECIO.md");
+  assert.ok(existsSync(abs), "docs/PUERTAS-DE-PRECIO.md debe existir");
+  const doc = readFileSync(abs, "utf8");
+  assert.ok(doc.includes("setBranchPriceTx"), "debe nombrar el escritor único");
+  assert.ok(doc.includes("setBranchPriceInBand") && doc.includes("applyApprovedPriceOverride"), "debe documentar los dos caminos que NO pasan por setBranchPriceTx (hueco real verificado)");
+});
+
 test("Fase 3.4: hay un aviso de mudanza (con enlace a Precios) tanto en Gastos como en Finanzas", () => {
   const expenseMgr = read("components/expenses/expense-manager.tsx");
   const financeMgr = read("components/finance/finance-accounting-manager.tsx");

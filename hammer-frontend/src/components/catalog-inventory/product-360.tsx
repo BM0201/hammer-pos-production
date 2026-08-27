@@ -23,6 +23,7 @@ import {
   ChevronDown,
   ChevronUp,
   AlertTriangle,
+  Calculator,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
@@ -597,6 +598,17 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
               <div className="flex items-center gap-4 text-sm">
                 <span className="font-mono font-semibold text-[var(--color-text)]">{b.effectivePrice === null ? "—" : money(b.effectivePrice)}</span>
                 <span className="text-[var(--color-text-muted)]">margen {b.marginPercent === null ? "—" : `${b.marginPercent.toFixed(0)}%`}</span>
+                {/* Fase 4.1 (prompt-mudanza-zona-precios.md) — el editor de acá se queda
+                    (editar el precio mientras se mira el producto es correcto); este
+                    enlace abre la Calculadora de la zona Precios con el producto y la
+                    sucursal ya cargados, para quien quiera partir de costos y margen. */}
+                <Link
+                  href={`/app/master/pricing?tab=calculator&productId=${productId}&branchId=${b.branchId}` as Route}
+                  className="flex items-center gap-1 text-xs font-medium text-[var(--color-info-700)] hover:underline"
+                >
+                  <Calculator className="h-3 w-3" aria-hidden="true" />
+                  Calcular precio con costos y margen
+                </Link>
                 {b.followsStandard ? (
                   <Button size="sm" variant="secondary" onClick={() => { setExceptionFormBranchId(b.branchId); setPriceInput(""); setReasonInput(""); }}>
                     Fijar excepción
