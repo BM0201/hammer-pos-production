@@ -32,6 +32,27 @@ export function isPriceStaleAgainstCost(input: { branchPrice: number | null; cos
   return input.lastPriceUpdateAt === null || input.costUpdatedAt > input.lastPriceUpdateAt;
 }
 
+export type BranchCostReferenceCheck = {
+  referenceCost: number | null;
+  referenceSource: "averageCost" | "lastPurchaseCost" | null;
+  costLooksWrong: boolean;
+};
+
+/**
+ * A.1 (prompt-huecos-fase1-fase3-despliegue.md) — pura, sin DB: aislada
+ * para poder probar el umbral (2×, deliberadamente grueso — atrapa errores
+ * de tecleo de un orden de magnitud, no costos levemente altos) sin base
+ * de datos. Sin costo de referencia, costLooksWrong queda en false: sin
+ * base de comparación no se puede afirmar que esté mal.
+ */
+export function evaluateBranchCostAgainstReference(input: { branchCost: number; averageCost: number | null; lastPurchaseCost: number | null }): BranchCostReferenceCheck {
+  const referenceCost = input.averageCost ?? input.lastPurchaseCost ?? null;
+  const referenceSource: "averageCost" | "lastPurchaseCost" | null =
+    input.averageCost !== null ? "averageCost" : input.lastPurchaseCost !== null ? "lastPurchaseCost" : null;
+  const costLooksWrong = referenceCost !== null && referenceCost > 0 && input.branchCost > referenceCost * 2;
+  return { referenceCost, referenceSource, costLooksWrong };
+}
+
 export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
 
@@ -58,7 +79,7 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
       },
       include: {
         branch: { select: { id: true, code: true, name: true } },
-        product: { select: { id: true, sku: true, name: true, standardSalePrice: true, costUpdatedAt: true } },
+        product: { select: { id: true, sku: true, name: true, standardSalePrice: true, costUpdatedAt: true, averageCost: true, lastPurchaseCost: true } },
       },
       take: 1000,
     }),
@@ -252,6 +273,22 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
       const policy = policyByKey.get(key);
       const commercial = commercialByKey.get(key);
       const stockQty = n(balanceByKey.get(key)?.quantityOnHand);
+
+      // A.1 (prompt-huecos-fase1-fase3-despliegue.md) — "actualizar precio
+      // O REVISAR COSTO de sucursal": la causa más común de branchCost >=
+      // price no es un producto mal preciado, es un costo mal tecleado (un
+      // punto decimal corrido). El motor calcula fielmente un precio
+      // sugerido absurdo sobre esa basura, y esa fila sube al tope de una
+      // bandeja ordenada por impacto — a un checkbox de aplicarse. El
+      // umbral 2× es deliberadamente grueso: busca errores de un orden de
+      // magnitud, no costos levemente altos.
+      const branchCostNum = n(setting.branchCost);
+      const { referenceCost, referenceSource, costLooksWrong } = evaluateBranchCostAgainstReference({
+        branchCost: branchCostNum,
+        averageCost: setting.product.averageCost === null ? null : n(setting.product.averageCost),
+        lastPurchaseCost: setting.product.lastPurchaseCost === null ? null : n(setting.product.lastPurchaseCost),
+      });
+
       // 1.1 (prompt-motor-precios-lote-herencia-gobierno.md) — la bandeja
       // de precios necesita un suggestedPrice para poder aplicar esta
       // decisión con el mismo botón/código que REVIEW_PRICE_BELOW_COST.
@@ -304,6 +341,12 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
           stockAtRisk: stockQty,
           marginActual: Number(marginPct(price, cost).toFixed(1)),
           marginObjetivo: policy?.categoryPolicy.targetMarginPercent ?? null,
+          // A.1 — costo sospechoso: branchCost es un override manual, sin la
+          // trazabilidad a compras que sí tiene effectiveCost.
+          branchCost: branchCostNum,
+          referenceCost,
+          costLooksWrong,
+          referenceSource,
         },
         sourceJson: { detector: "pricing-detector" },
         fingerprintParts: ["pricing", "branch-cost-above-price", setting.branchId, setting.productId],

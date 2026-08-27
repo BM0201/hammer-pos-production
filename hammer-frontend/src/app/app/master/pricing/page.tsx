@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3 } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,12 +35,15 @@ type TrayRow = {
   impactAmount: number;
   lastPriceUpdateAt: string | null;
   applicable: boolean;
+  /** Parte A (prompt-huecos-fase1-fase3-despliegue.md) — branchCost más de 2× el costo de referencia: probable error de tecleo, no un producto mal preciado. */
+  costLooksWrong: boolean;
+  referenceCost: number | null;
   evidence: Record<string, unknown>;
 };
 
 type TrayResult = {
   rows: TrayRow[];
-  totals: { count: number; impactTotal: number; byReason: Record<Reason, number> };
+  totals: { count: number; impactTotal: number; byReason: Record<Reason, number>; costDoubtfulCount: number };
 };
 
 type Branch = { id: string; code: string; name: string };
@@ -174,14 +178,23 @@ export default function PricingTrayPage() {
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-text)]">Precios</h1>
           {data && (
-            <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-              {data.totals.count === 0
-                ? "Nada necesita revisión ahora mismo."
-                : <>
-                    <span className="font-semibold text-[var(--color-text)]">{data.totals.count}</span> producto{data.totals.count === 1 ? "" : "s"} necesita{data.totals.count === 1 ? "" : "n"} revisión ·{" "}
-                    <span className="font-semibold text-[var(--color-danger-600)]">{fmt(data.totals.impactTotal)}</span> en riesgo
-                  </>}
-            </p>
+            <>
+              <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+                {data.totals.count === 0
+                  ? "Nada necesita revisión ahora mismo."
+                  : <>
+                      <span className="font-semibold text-[var(--color-text)]">{data.totals.count}</span> producto{data.totals.count === 1 ? "" : "s"} necesita{data.totals.count === 1 ? "" : "n"} revisión ·{" "}
+                      <span className="font-semibold text-[var(--color-danger-600)]">{fmt(data.totals.impactTotal)}</span> en riesgo
+                    </>}
+              </p>
+              {/* A.4 — un total contaminado por un costo mal tecleado es peor que no tener total */}
+              {data.totals.costDoubtfulCount > 0 && (
+                <p className="mt-0.5 flex items-center gap-1 text-xs text-[var(--color-warning-700)]">
+                  <SearchX className="h-3.5 w-3.5" aria-hidden="true" />
+                  {data.totals.costDoubtfulCount} producto{data.totals.costDoubtfulCount === 1 ? "" : "s"} con costo dudoso, sin cuantificar
+                </p>
+              )}
+            </>
           )}
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={() => void load()} disabled={loading} icon={<RefreshCcw className="h-4 w-4" />}>Actualizar</Button>
@@ -326,14 +339,18 @@ function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
     <>
       <tr className={["border-b border-[var(--color-border)] last:border-0", !row.applicable ? "opacity-60" : ""].join(" ")}>
         <td className="px-3 py-2.5">
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={onToggleSelect}
-            disabled={!row.applicable}
-            title={row.applicable ? undefined : "Esta decisión no tiene un precio sugerido listo para aplicar"}
-            className="h-4 w-4 rounded border-[var(--color-border-strong)]"
-          />
+          {row.costLooksWrong ? (
+            <AlertTriangle className="h-4 w-4 text-[var(--color-warning-600)]" aria-hidden="true" />
+          ) : (
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggleSelect}
+              disabled={!row.applicable}
+              title={row.applicable ? undefined : "Esta decisión no tiene un precio sugerido listo para aplicar"}
+              className="h-4 w-4 rounded border-[var(--color-border-strong)]"
+            />
+          )}
         </td>
         <td className="px-3 py-2.5">
           <span className="flex items-center gap-1.5">
@@ -345,18 +362,42 @@ function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
           </span>
         </td>
         <td className="px-3 py-2.5 text-[var(--color-text-muted)]">{row.branchName}</td>
-        <td className="px-3 py-2.5 text-right tabular-nums">{fmt(row.effectiveCost)}</td>
+        <td className="px-3 py-2.5 text-right tabular-nums">
+          {row.costLooksWrong ? <span className="font-semibold text-[var(--color-warning-700)]">{fmt(row.effectiveCost)}</span> : fmt(row.effectiveCost)}
+        </td>
         <td className="px-3 py-2.5 text-right tabular-nums">{fmt(row.currentPrice)}</td>
         <td className="px-3 py-2.5 text-right tabular-nums">{fmtPct(row.marginActual)}</td>
-        <td className="px-3 py-2.5 text-right font-medium tabular-nums text-[var(--color-success-700)]">{fmt(row.suggestedPrice)}</td>
+        {/* A.2 — el precio sugerido sigue visible, en gris: si el costo resulta ser correcto, quien lo revise lo necesita. */}
+        <td className={["px-3 py-2.5 text-right font-medium tabular-nums", row.costLooksWrong ? "text-[var(--color-text-soft)]" : "text-[var(--color-success-700)]"].join(" ")}>
+          {fmt(row.suggestedPrice)}
+        </td>
         <td className="px-3 py-2.5 text-right tabular-nums">{fmtPct(row.marginObjetivo)}</td>
-        <td className="px-3 py-2.5 text-right font-medium tabular-nums text-[var(--color-danger-600)]">{fmt(row.impactAmount)}</td>
+        <td className="px-3 py-2.5 text-right font-medium tabular-nums text-[var(--color-danger-600)]">
+          {row.costLooksWrong ? <span className="font-normal text-[var(--color-text-soft)]">sin cuantificar</span> : fmt(row.impactAmount)}
+        </td>
         <td className="px-3 py-2.5">
           <button type="button" onClick={onToggleExpand} className="text-[var(--color-text-soft)]" aria-label="Ver detalle">
             {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </button>
         </td>
       </tr>
+
+      {/* A.2 — costo sospechoso: sin checkbox, con la comparación contra el costo de referencia y un enlace al editor en vez de aplicar a ciegas. */}
+      {row.costLooksWrong && (
+        <tr className="border-b border-[var(--color-border)] bg-[var(--color-warning-50)] last:border-0">
+          <td />
+          <td colSpan={9} className="px-3 py-2">
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--color-warning-700)]">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>Costo de sucursal {fmt(row.effectiveCost)} · promedio del producto {fmt(row.referenceCost)}.</span>
+              <Link href={`/app/master/catalog-inventory/products/${row.productId}`} className="font-semibold underline underline-offset-2">
+                Revisar el costo primero
+              </Link>
+            </p>
+          </td>
+        </tr>
+      )}
+
       {expanded && (
         <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] last:border-0">
           <td />
@@ -367,7 +408,7 @@ function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
               <span>Origen del costo: <strong className="text-[var(--color-text)]">{costSource ?? "—"}</strong></span>
               <span>Origen del precio: <strong className="text-[var(--color-text)]">{priceSource ?? "—"}</strong></span>
               <span>Último precio fijado: <strong className="text-[var(--color-text)]">{fmtDate(row.lastPriceUpdateAt)}</strong></span>
-              {!row.applicable && (
+              {!row.applicable && !row.costLooksWrong && (
                 <span className="col-span-2 flex items-center gap-1 text-[var(--color-warning-700)] sm:col-span-4">
                   <AlertTriangle className="h-3.5 w-3.5" /> Sin precio sugerido calculado — no se puede aplicar desde acá todavía.
                 </span>

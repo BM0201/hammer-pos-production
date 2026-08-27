@@ -58,8 +58,11 @@ export type PricingTrayRow = {
   stockAtRisk: number | null;
   impactAmount: number;
   lastPriceUpdateAt: string | null;
-  /** false cuando la decisión no trae un suggestedPrice aplicable (p.ej. REVIEW_BRANCH_COST_PRICE sin política resuelta) — la pantalla no debe dejarla seleccionar. */
+  /** false cuando la decisión no trae un suggestedPrice aplicable (p.ej. REVIEW_BRANCH_COST_PRICE sin política resuelta), o cuando costLooksWrong — la pantalla no debe dejarla seleccionar. */
   applicable: boolean;
+  /** Parte A (prompt-huecos-fase1-fase3-despliegue.md) — branchCost más de 2× el costo de referencia del producto: probablemente un error de tecleo, no un producto mal preciado. El precio sugerido se calculó sobre ese costo y hereda el error. */
+  costLooksWrong: boolean;
+  referenceCost: number | null;
   /** evidenceJson tal cual lo dejó el detector — para la fila expandible (§1.5). No se recalcula nada, es lectura directa de lo que Brain ya evaluó. */
   evidence: Record<string, unknown>;
 };
@@ -70,8 +73,30 @@ export type PricingTrayResult = {
     count: number;
     impactTotal: number;
     byReason: Record<PricingTrayReason, number>;
+    /** Parte A.4 — cuántas filas quedaron fuera de impactTotal por costo dudoso: un total contaminado por un error de tecleo es peor que no tener total. */
+    costDoubtfulCount: number;
   };
 };
+
+/**
+ * Pura (sin DB) — separada para poder probar que el total en riesgo
+ * excluye impactAmount de las filas con costo dudoso sin base de datos
+ * (A.4): ese monto se calculó con el costo inflado, y un total
+ * contaminado es peor que no tener total.
+ */
+export function computeTrayTotals(rows: PricingTrayRow[]): PricingTrayResult["totals"] {
+  const trustworthyRows = rows.filter((r) => !r.costLooksWrong);
+  return {
+    count: rows.length,
+    impactTotal: trustworthyRows.reduce((sum, r) => sum + r.impactAmount, 0),
+    byReason: {
+      BELOW_COST: rows.filter((r) => r.reason === "BELOW_COST").length,
+      MARGIN_POLICY: rows.filter((r) => r.reason === "MARGIN_POLICY").length,
+      COST_STALE: rows.filter((r) => r.reason === "COST_STALE").length,
+    },
+    costDoubtfulCount: rows.filter((r) => r.costLooksWrong).length,
+  };
+}
 
 /**
  * §1.3 — GET /api/master/pricing/tray. Consulta BrainDecision directamente,
@@ -120,6 +145,7 @@ export async function getPricingTray(filters: {
     const evidence = (d.evidenceJson ?? {}) as Record<string, unknown>;
     const proposed = (d.proposedActionJson ?? null) as Record<string, unknown> | null;
     const rawLastUpdate = lastUpdateByKey.get(`${d.branchId}:${d.productId}`);
+    const costLooksWrong = evidence.costLooksWrong === true;
     return {
       decisionId: d.id,
       severity: d.severity,
@@ -137,22 +163,16 @@ export async function getPricingTray(filters: {
       stockAtRisk: num(evidence.stockAtRisk ?? evidence.stock),
       impactAmount: num(d.impactAmount) ?? 0,
       lastPriceUpdateAt: rawLastUpdate ? rawLastUpdate.toISOString() : null,
-      applicable: proposed !== null && typeof proposed.suggestedPrice === "number",
+      // A.2 — sacar el checkbox cuando el costo se ve mal: el precio
+      // sugerido se calculó sobre ese costo y hereda el error.
+      applicable: proposed !== null && typeof proposed.suggestedPrice === "number" && !costLooksWrong,
+      costLooksWrong,
+      referenceCost: num(evidence.referenceCost),
       evidence,
     };
   });
 
-  const totals = {
-    count: rows.length,
-    impactTotal: rows.reduce((sum, r) => sum + r.impactAmount, 0),
-    byReason: {
-      BELOW_COST: rows.filter((r) => r.reason === "BELOW_COST").length,
-      MARGIN_POLICY: rows.filter((r) => r.reason === "MARGIN_POLICY").length,
-      COST_STALE: rows.filter((r) => r.reason === "COST_STALE").length,
-    } as Record<PricingTrayReason, number>,
-  };
-
-  return { rows, totals };
+  return { rows, totals: computeTrayTotals(rows) };
 }
 
 export type ApplyTrayResult = {
@@ -161,10 +181,83 @@ export type ApplyTrayResult = {
 };
 
 /**
+ * El cuerpo transaccional de UNA decisión, separado del bucle para poder
+ * probarlo con un tx en memoria — mismo patrón que
+ * applySuggestedPriceTx/clearBranchPriceExceptionTx. A.3: sacar el
+ * checkbox es comodidad, no control — el payload se puede editar y este
+ * endpoint escribe precios de venta, así que costLooksWrong se rechaza
+ * ACÁ también, sin escribir nada, antes de tocar applySuggestedPriceTx.
+ */
+export async function applyOneTrayDecisionTx(
+  tx: Prisma.TransactionClient,
+  decisionId: string,
+  input: { reason?: string; actorUserId: string },
+): Promise<{ branchId: string; productId: string; previousPrice: number | null; newPrice: number }> {
+  const decision = await tx.brainDecision.findUniqueOrThrow({ where: { id: decisionId } });
+  if (decision.category !== "PRICING") throw new Error("DECISION_NOT_PRICING");
+  if (decision.status !== "OPEN") throw new Error("DECISION_NOT_OPEN");
+
+  const evidence = decision.evidenceJson as Record<string, unknown> | null;
+  if (evidence?.costLooksWrong === true) throw new Error("COST_REQUIRES_REVIEW");
+
+  const proposed = decision.proposedActionJson as Record<string, unknown> | null;
+  if (
+    !proposed
+    || typeof proposed.suggestedPrice !== "number"
+    || typeof proposed.productId !== "string"
+    || typeof proposed.branchId !== "string"
+  ) {
+    throw new Error("DECISION_MISSING_SUGGESTED_PRICE");
+  }
+
+  const snapshot = (proposed.calculationSnapshot ?? undefined) as Record<string, unknown> | undefined;
+  const numField = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+  const applyInput = {
+    productId: proposed.productId,
+    branchId: proposed.branchId,
+    applyScope: "BRANCH" as const,
+    suggestedPrice: proposed.suggestedPrice,
+    minPrice: numField(snapshot?.minPrice),
+    maxPrice: numField(snapshot?.maxPrice) ?? null,
+    totalInternalCost: numField(snapshot?.totalInternalCost),
+    effectiveCost: numField(snapshot?.effectiveCost) ?? null,
+    marginPercent: numField(snapshot?.marginPercent),
+    grossMarginPercent: numField(snapshot?.grossMarginPercent),
+    markupPercent: numField(snapshot?.markupPercent),
+    roundingRule: typeof snapshot?.roundingRule === "string" ? snapshot.roundingRule : undefined,
+    reason: input.reason ?? "Aplicado desde la bandeja de precios",
+    calculationSnapshot: snapshot,
+  };
+
+  // NO saltear la validación — el bloqueo por precio bajo el costo
+  // interno existe por una razón y aplicar en lote no lo suspende.
+  const warnings = assertPriceApplicable(applyInput);
+
+  const applyResult = await applySuggestedPriceTx(
+    tx,
+    { ...applyInput, actorUserId: input.actorUserId },
+    proposed.branchId,
+    warnings,
+  );
+
+  await tx.brainDecision.update({
+    where: { id: decisionId },
+    data: {
+      status: "EXECUTED",
+      resolvedAt: new Date(),
+      resolvedByUserId: input.actorUserId,
+      executedEntityType: "Product",
+      executedEntityId: proposed.productId,
+      actionResultJson: applyResult as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return { branchId: proposed.branchId, productId: proposed.productId, previousPrice: applyResult.previousPrice, newPrice: applyResult.newPrice };
+}
+
+/**
  * §1.4 — POST /api/master/pricing/tray/apply. Cada decisión en SU PROPIA
  * transacción — si el producto 7 falla, los primeros 6 quedan aplicados.
- * assertPriceApplicable corre para cada una: el bloqueo por precio bajo el
- * costo interno sigue activo, aplicar en lote no lo suspende.
  */
 export async function applyPricingTraySelection(input: { decisionIds: string[]; reason?: string; actorUserId: string }): Promise<ApplyTrayResult> {
   const applied: ApplyTrayResult["applied"] = [];
@@ -172,65 +265,7 @@ export async function applyPricingTraySelection(input: { decisionIds: string[]; 
 
   for (const decisionId of input.decisionIds) {
     try {
-      const result = await prisma.$transaction(async (tx) => {
-        const decision = await tx.brainDecision.findUniqueOrThrow({ where: { id: decisionId } });
-        if (decision.category !== "PRICING") throw new Error("DECISION_NOT_PRICING");
-        if (decision.status !== "OPEN") throw new Error("DECISION_NOT_OPEN");
-
-        const proposed = decision.proposedActionJson as Record<string, unknown> | null;
-        if (
-          !proposed
-          || typeof proposed.suggestedPrice !== "number"
-          || typeof proposed.productId !== "string"
-          || typeof proposed.branchId !== "string"
-        ) {
-          throw new Error("DECISION_MISSING_SUGGESTED_PRICE");
-        }
-
-        const snapshot = (proposed.calculationSnapshot ?? undefined) as Record<string, unknown> | undefined;
-        const numField = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
-        const applyInput = {
-          productId: proposed.productId,
-          branchId: proposed.branchId,
-          applyScope: "BRANCH" as const,
-          suggestedPrice: proposed.suggestedPrice,
-          minPrice: numField(snapshot?.minPrice),
-          maxPrice: numField(snapshot?.maxPrice) ?? null,
-          totalInternalCost: numField(snapshot?.totalInternalCost),
-          effectiveCost: numField(snapshot?.effectiveCost) ?? null,
-          marginPercent: numField(snapshot?.marginPercent),
-          grossMarginPercent: numField(snapshot?.grossMarginPercent),
-          markupPercent: numField(snapshot?.markupPercent),
-          roundingRule: typeof snapshot?.roundingRule === "string" ? snapshot.roundingRule : undefined,
-          reason: input.reason ?? "Aplicado desde la bandeja de precios",
-          calculationSnapshot: snapshot,
-        };
-
-        // NO saltear la validación — el bloqueo por precio bajo el costo
-        // interno existe por una razón y aplicar en lote no lo suspende.
-        const warnings = assertPriceApplicable(applyInput);
-
-        const applyResult = await applySuggestedPriceTx(
-          tx,
-          { ...applyInput, actorUserId: input.actorUserId },
-          proposed.branchId,
-          warnings,
-        );
-
-        await tx.brainDecision.update({
-          where: { id: decisionId },
-          data: {
-            status: "EXECUTED",
-            resolvedAt: new Date(),
-            resolvedByUserId: input.actorUserId,
-            executedEntityType: "Product",
-            executedEntityId: proposed.productId,
-            actionResultJson: applyResult as unknown as Prisma.InputJsonValue,
-          },
-        });
-
-        return { branchId: proposed.branchId, productId: proposed.productId, previousPrice: applyResult.previousPrice, newPrice: applyResult.newPrice };
-      });
+      const result = await prisma.$transaction((tx) => applyOneTrayDecisionTx(tx, decisionId, input));
 
       await writeActionLog({
         decisionId,
