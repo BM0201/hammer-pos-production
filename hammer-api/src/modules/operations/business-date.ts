@@ -87,16 +87,22 @@ export function businessDateWeekRange(businessDate: Date): { weekStart: Date; we
 }
 
 /**
- * El siguiente día hábil (lunes-viernes, sin feriados — mismo criterio que
- * countBusinessDaysBetween en treasury/exposure.ts) después del día de
- * negocio de `now`, como businessDate (medianoche UTC anclada a
- * America/Managua). Nunca +24h fijas: un viernes "mañana" es lunes, y esta
- * función existe justo para que ningún caller tenga que acordarse de eso.
+ * El siguiente día de negocio CALENDARIO después del día de negocio de
+ * `now`, como businessDate (medianoche UTC anclada a America/Managua).
+ * Fase A (prompt-corregir-siguiente-dia-y-desplegar.md) — antes usaba el
+ * criterio lunes-viernes de countBusinessDaysBetween (treasury/exposure.ts),
+ * que mide días con el banco abierto para una métrica de antigüedad de
+ * exposición financiera, no una primitiva de calendario operativo. El resto
+ * del sistema modela la semana operativa en SIETE días (businessDateWeekRange,
+ * buildWeeklyMoneyBreakdown) — Branch no tiene columna de días de operación,
+ * lo único que sabe si una sucursal operó un día es la existencia de una
+ * fila OperationalDay. Con el criterio viejo, una posposición declarada el
+ * viernes prometía "hasta el lunes" mientras la sucursal vendía sábado y
+ * domingo — es el único texto que el cajero lee y acepta antes de confirmar.
+ * Si más adelante hace falta precisión real (sucursales que sí cierran
+ * ciertos días), la fuente es OperationalDay, no una regla de día de semana.
  */
 export function nextBusinessDayFrom(now: Date = new Date()): Date {
-  let cursor = businessDateFromNow(now);
-  do {
-    cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
-  } while (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6);
-  return cursor;
+  const cursor = businessDateFromNow(now);
+  return new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
 }
