@@ -67,15 +67,26 @@ export type PricingTrayRow = {
   evidence: Record<string, unknown>;
 };
 
+export type PricingTrayTotals = {
+  count: number;
+  impactTotal: number;
+  byReason: Record<PricingTrayReason, number>;
+  /** Parte A.4 — cuántas filas quedaron fuera de impactTotal por costo dudoso: un total contaminado por un error de tecleo es peor que no tener total. */
+  costDoubtfulCount: number;
+};
+
 export type PricingTrayResult = {
   rows: PricingTrayRow[];
-  totals: {
-    count: number;
-    impactTotal: number;
-    byReason: Record<PricingTrayReason, number>;
-    /** Parte A.4 — cuántas filas quedaron fuera de impactTotal por costo dudoso: un total contaminado por un error de tecleo es peor que no tener total. */
-    costDoubtfulCount: number;
-  };
+  totals: PricingTrayTotals;
+  /**
+   * Parte A (prompt-zona-precios-consolidacion.md) — el mismo cálculo que
+   * `totals`, pero sobre TODAS las decisiones abiertas, sin los filtros del
+   * usuario (branchId/categoryId/reason/severity). Sin esto, "totals" con
+   * filtros puestos y cero resultados no se puede distinguir de "no hay
+   * nada que revisar en ningún lado" — son afirmaciones distintas y la
+   * pantalla las confundía.
+   */
+  unfilteredTotals: PricingTrayTotals;
 };
 
 /**
@@ -83,8 +94,12 @@ export type PricingTrayResult = {
  * excluye impactAmount de las filas con costo dudoso sin base de datos
  * (A.4): ese monto se calculó con el costo inflado, y un total
  * contaminado es peor que no tener total.
+ *
+ * Recibe solo los tres campos que necesita (no PricingTrayRow completo) para
+ * poder reusarla también sobre la consulta liviana sin joins de
+ * unfilteredTotals (A.1), que no arma filas completas.
  */
-export function computeTrayTotals(rows: PricingTrayRow[]): PricingTrayResult["totals"] {
+export function computeTrayTotals(rows: Array<Pick<PricingTrayRow, "reason" | "impactAmount" | "costLooksWrong">>): PricingTrayTotals {
   const trustworthyRows = rows.filter((r) => !r.costLooksWrong);
   return {
     count: rows.length,
@@ -102,16 +117,23 @@ export function computeTrayTotals(rows: PricingTrayRow[]): PricingTrayResult["to
  * §1.3 — GET /api/master/pricing/tray. Consulta BrainDecision directamente,
  * ordenada por priorityScore desc y después impactAmount desc — la cola de
  * revisión que Brain ya calculó, no una nueva.
+ *
+ * `db` es inyectable (mismo patrón que getExpenseSummaryByBranch en
+ * pricing/service.ts) para poder probar el filtrado y unfilteredTotals con
+ * un fake en memoria, sin base de datos real.
  */
-export async function getPricingTray(filters: {
-  branchId?: string;
-  categoryId?: string;
-  reason?: PricingTrayReason;
-  severity?: string;
-}): Promise<PricingTrayResult> {
+export async function getPricingTray(
+  filters: {
+    branchId?: string;
+    categoryId?: string;
+    reason?: PricingTrayReason;
+    severity?: string;
+  },
+  db: typeof prisma = prisma,
+): Promise<PricingTrayResult> {
   const typeFilter = filters.reason ? REASON_TO_TYPES[filters.reason] : APPLICABLE_TYPES;
 
-  const decisions = await prisma.brainDecision.findMany({
+  const decisions = await db.brainDecision.findMany({
     where: {
       category: "PRICING",
       status: "OPEN",
@@ -134,7 +156,7 @@ export async function getPricingTray(filters: {
   // evidenceJson (su shape no es idéntica entre los cuatro tipos).
   const pairs = withTarget.map((d) => ({ branchId: d.branchId!, productId: d.productId! }));
   const settings = pairs.length > 0
-    ? await prisma.branchProductSetting.findMany({
+    ? await db.branchProductSetting.findMany({
         where: { OR: pairs.map((p) => ({ branchId: p.branchId, productId: p.productId })) },
         select: { branchId: true, productId: true, lastPriceUpdateAt: true },
       })
@@ -172,7 +194,31 @@ export async function getPricingTray(filters: {
     };
   });
 
-  return { rows, totals: computeTrayTotals(rows) };
+  // A.1 — totales SIN los filtros del usuario: consulta APARTE y barata, sin
+  // joins (nada de include de branch/product, sin el take:500 de arriba —
+  // ese límite es para lo que se muestra, no para contar). Deliberadamente
+  // NO uso groupBy (aunque sea más barato) porque necesito excluir el
+  // impactAmount de las decisiones con costo dudoso del impactTotal — mismo
+  // criterio que `totals` (A.4) — y esa exclusión vive en evidenceJson, que
+  // un groupBy no puede filtrar de forma portable entre motores. Un solo
+  // findMany con select mínimo sigue siendo barato: no hay joins.
+  const allOpenForTotals = await db.brainDecision.findMany({
+    where: {
+      category: "PRICING",
+      status: "OPEN",
+      proposedActionType: { in: [...APPLICABLE_TYPES] },
+    },
+    select: { proposedActionType: true, impactAmount: true, evidenceJson: true },
+  });
+  const unfilteredTotals = computeTrayTotals(
+    allOpenForTotals.map((d) => ({
+      reason: reasonForType(d.proposedActionType),
+      impactAmount: num(d.impactAmount) ?? 0,
+      costLooksWrong: (d.evidenceJson as Record<string, unknown> | null)?.costLooksWrong === true,
+    })),
+  );
+
+  return { rows, totals: computeTrayTotals(rows), unfilteredTotals };
 }
 
 export type ApplyTrayResult = {
