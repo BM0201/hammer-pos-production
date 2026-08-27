@@ -99,6 +99,9 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "FUSION_COST_WRITE_NOT_ALLOWED") {
       return errJson("FUSION_COST_WRITE_NOT_ALLOWED", "Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", 409);
     }
+    if (error.message === "PRICE_EXCEPTION_REASON_REQUIRED") {
+      return errJson("PRICE_EXCEPTION_REASON_REQUIRED", "Escribí el motivo de este precio de sucursal (mínimo 3 caracteres).", 400);
+    }
     if (error.message.startsWith("FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED:")) {
       return errJson("FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED", error.message.replace(/^FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED:\s?/, ""), 409);
     }

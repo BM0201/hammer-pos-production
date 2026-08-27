@@ -485,6 +485,8 @@ type BranchPricingRow = {
   priceExceptionAt: string | null;
   effectiveCost: number | null;
   marginPercent: number | null;
+  /** B.3 (prompt-huecos-fase1-fase3-despliegue.md) — branchPrice de un camino de antes de este fix, sin motivo. No se inventa uno: se marca para que Master lo agregue o vuelva al general. */
+  hasUnexplainedException: boolean;
 };
 type BranchPricingStatus = { standardSalePrice: number | null; branches: BranchPricingRow[] };
 
@@ -586,6 +588,8 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
                 <span className="min-w-[9rem] font-medium text-[var(--color-text)]">{b.branchName}</span>
                 {b.followsStandard ? (
                   <Badge variant="neutral">Sigue el general</Badge>
+                ) : b.hasUnexplainedException ? (
+                  <Badge variant="danger">Excepción sin motivo registrado</Badge>
                 ) : (
                   <Badge variant="warning">Excepción</Badge>
                 )}
@@ -597,6 +601,15 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
                   <Button size="sm" variant="secondary" onClick={() => { setExceptionFormBranchId(b.branchId); setPriceInput(""); setReasonInput(""); }}>
                     Fijar excepción
                   </Button>
+                ) : b.hasUnexplainedException ? (
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => { setExceptionFormBranchId(b.branchId); setPriceInput(b.effectivePrice !== null ? String(b.effectivePrice) : ""); setReasonInput(""); }}>
+                      Agregar motivo
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => void followStandard(b.branchId)}>
+                      Volver al general
+                    </Button>
+                  </div>
                 ) : (
                   <Button size="sm" variant="ghost" onClick={() => void followStandard(b.branchId)}>
                     Volver al general
@@ -608,6 +621,12 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
             {!b.followsStandard && b.priceExceptionReason && (
               <p className="mt-1 text-xs text-[var(--color-text-muted)]">
                 &ldquo;{b.priceExceptionReason}&rdquo; · desde {b.priceExceptionAt ? fmtDateTime(b.priceExceptionAt) : "—"}
+              </p>
+            )}
+            {b.hasUnexplainedException && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-[var(--color-danger-600)]">
+                <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                Este precio se fijó antes de que el motivo fuera obligatorio. No se sabe si fue deliberado.
               </p>
             )}
 

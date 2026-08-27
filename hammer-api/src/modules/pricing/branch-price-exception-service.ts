@@ -22,12 +22,72 @@ export type BranchPriceExceptionResult = {
 };
 
 /**
+ * Parte B (prompt-huecos-fase1-fase3-despliegue.md) — el único escritor de
+ * branchPrice. Antes de este helper, upsertBranchProductSetting
+ * (catalog-inventory/service.ts) escribía branchPrice/priceSource/
+ * lastPriceUpdateAt/priceUpdatedByUserId pero NUNCA priceExceptionReason
+ * ni priceExceptionAt — quien fijara un precio desde la pantalla de
+ * catálogo creaba exactamente la divergencia silenciosa que la Fase 3
+ * existe para eliminar. Los TRES caminos que escriben branchPrice (este
+ * endpoint, applySuggestedPriceTx, upsertBranchProductSetting) llaman a
+ * este helper — no hay un cuarto lugar donde branchPrice y las columnas de
+ * excepción puedan desincronizarse.
+ *
+ * branchPrice != null exige exceptionReason (>= 3 caracteres) — sin
+ * motivo, en seis meses nadie sabe si esa excepción sigue teniendo
+ * sentido. branchPrice == null (volver a seguir el precio general) limpia
+ * las dos columnas de excepción junto con el precio, en el mismo golpe.
+ * Solo escribe las columnas de precio/excepción — minStock, isAvailable,
+ * marginPercent, etc. son responsabilidad de cada llamador, en la MISMA
+ * transacción, si hacen falta.
+ */
+export async function setBranchPriceTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    branchId: string;
+    productId: string;
+    branchPrice: Prisma.Decimal | null;
+    exceptionReason: string | null;
+    priceSource: "MANUAL" | "CALCULATED";
+    actorUserId: string;
+  },
+): Promise<{ previousPrice: Prisma.Decimal | null; setting: { branchPrice: Prisma.Decimal | null } }> {
+  const reason = input.exceptionReason?.trim() ?? "";
+  if (input.branchPrice !== null && reason.length < MIN_REASON_LENGTH) {
+    throw new Error("PRICE_EXCEPTION_REASON_REQUIRED");
+  }
+
+  const existing = await tx.branchProductSetting.findUnique({
+    where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+    select: { branchPrice: true },
+  });
+  const previousPrice = existing?.branchPrice ?? null;
+  const now = new Date();
+
+  const data = {
+    branchPrice: input.branchPrice,
+    priceSource: input.priceSource,
+    lastPriceUpdateAt: now,
+    priceUpdatedByUserId: input.actorUserId,
+    priceExceptionReason: input.branchPrice !== null ? reason : null,
+    priceExceptionAt: input.branchPrice !== null ? now : null,
+  };
+
+  const setting = await tx.branchProductSetting.upsert({
+    where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+    create: { branchId: input.branchId, productId: input.productId, ...data },
+    update: data,
+  });
+
+  return { previousPrice, setting };
+}
+
+/**
  * §3.5 — fijar un precio de sucursal DECLARADO, con motivo obligatorio.
  * Distinto del camino de applySuggestedPrice/tray (motor de cálculo,
  * aplicación en lote): esto es una excepción puntual que alguien está
  * declarando a mano desde la ficha del producto, y tiene que quedar dicho
- * por qué — "sin motivo, en seis meses nadie sabe si esa excepción sigue
- * teniendo sentido".
+ * por qué.
  */
 export async function setBranchPriceException(input: {
   productId: string;
@@ -46,34 +106,14 @@ export async function setBranchPriceException(input: {
   assertPriceNotBelowCost({ price: input.price, cost: pricing.effectiveCost === null ? null : Number(pricing.effectiveCost) });
 
   const result = await prisma.$transaction(async (tx) => {
-    const existing = await tx.branchProductSetting.findUnique({
-      where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
-      select: { branchPrice: true },
-    });
-    const previousPrice = existing?.branchPrice ?? null;
     const newPrice = new Prisma.Decimal(input.price);
-    const now = new Date();
-
-    await tx.branchProductSetting.upsert({
-      where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
-      create: {
-        branchId: input.branchId,
-        productId: input.productId,
-        branchPrice: newPrice,
-        priceSource: "MANUAL",
-        lastPriceUpdateAt: now,
-        priceUpdatedByUserId: input.actorUserId,
-        priceExceptionReason: reason,
-        priceExceptionAt: now,
-      },
-      update: {
-        branchPrice: newPrice,
-        priceSource: "MANUAL",
-        lastPriceUpdateAt: now,
-        priceUpdatedByUserId: input.actorUserId,
-        priceExceptionReason: reason,
-        priceExceptionAt: now,
-      },
+    const { previousPrice } = await setBranchPriceTx(tx, {
+      branchId: input.branchId,
+      productId: input.productId,
+      branchPrice: newPrice,
+      exceptionReason: reason,
+      priceSource: "MANUAL",
+      actorUserId: input.actorUserId,
     });
 
     await tx.auditLog.create({
@@ -172,6 +212,8 @@ export type ProductBranchPricingStatusRow = {
   priceExceptionAt: string | null;
   effectiveCost: number | null;
   marginPercent: number | null;
+  /** B.3 (prompt-huecos-fase1-fase3-despliegue.md) — branchPrice fijado por un camino de antes de este fix (editor de catálogo sin motivo obligatorio): no se inventa un motivo, se marca para que Master lo agregue o limpie con follow-standard. */
+  hasUnexplainedException: boolean;
 };
 
 /**
@@ -205,15 +247,17 @@ export async function getProductBranchPricingStatus(productId: string): Promise<
       const price = effective.effectivePrice === null ? null : Number(effective.effectivePrice);
       const marginPercent = cost !== null && price !== null && price > 0 ? ((price - cost) / price) * 100 : null;
 
+      const followsStandard = setting?.branchPrice === null || setting?.branchPrice === undefined;
       return {
         branchId: branch.id,
         branchName: branch.name,
-        followsStandard: setting?.branchPrice === null || setting?.branchPrice === undefined,
+        followsStandard,
         effectivePrice: price,
         priceExceptionReason: setting?.priceExceptionReason ?? null,
         priceExceptionAt: setting?.priceExceptionAt ? setting.priceExceptionAt.toISOString() : null,
         effectiveCost: cost,
         marginPercent,
+        hasUnexplainedException: !followsStandard && !setting?.priceExceptionReason,
       };
     }),
   );

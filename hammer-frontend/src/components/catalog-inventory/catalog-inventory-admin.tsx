@@ -491,7 +491,7 @@ export function CatalogInventoryAdmin() {
     await load();
   }
 
-  async function updateBranchPrice(product: ProductRow, branch: Branch, field: "branchPrice", value: string) {
+  async function updateBranchPrice(product: ProductRow, branch: Branch, field: "branchPrice", value: string, reason?: string) {
     const numeric = value.trim() === "" ? null : Number(value);
     if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
       toast.error("No se permiten costos o precios negativos.");
@@ -500,7 +500,10 @@ export function CatalogInventoryAdmin() {
     const response = await apiFetch("/api/master/catalog-inventory", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ branchId: branch.id, productId: product.id, [field]: numeric }),
+      // Parte B (prompt-huecos-fase1-fase3-despliegue.md) — priceExceptionReason
+      // viaja junto con branchPrice: setBranchPriceTx exige motivo cuando se
+      // fija un precio (numeric !== null); al limpiarlo a null no hace falta.
+      body: JSON.stringify({ branchId: branch.id, productId: product.id, [field]: numeric, priceExceptionReason: numeric !== null ? reason : undefined }),
     });
     if (!response.ok) {
       const raw = await response.json().catch(() => null);
@@ -3125,7 +3128,8 @@ function MovementsPanel({
    Pre-populates inputs with current branchProductSettings,
    uses controlled state, shows save button per cell, toast.
    ═══════════════════════════════════════════════════════════ */
-type PricingDraft = Record<string, Record<string, { price: string; dirty: boolean }>>;
+/** Parte B (prompt-huecos-fase1-fase3-despliegue.md) — reason: visible y obligatorio (≥3 caracteres) solo mientras la celda está dirty, cierra el hueco de "excepción sin motivo" que este editor creaba. */
+type PricingDraft = Record<string, Record<string, { price: string; dirty: boolean; reason: string }>>;
 
 function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingDraft {
   const draft: PricingDraft = {};
@@ -3137,6 +3141,7 @@ function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingD
       draft[product.id][branch.id] = {
         price: setting?.branchPrice ?? "",
         dirty: false,
+        reason: "",
       };
     }
   }
@@ -3164,7 +3169,7 @@ function PricingPanel({
   onlyMissing: boolean;
   onToggleOnlyMissing: () => void;
   onSelectBranch: (branchId: string) => void;
-  onSave: (product: ProductRow, branch: Branch, field: "branchPrice", value: string) => Promise<void>;
+  onSave: (product: ProductRow, branch: Branch, field: "branchPrice", value: string, reason?: string) => Promise<void>;
   onSaveGlobalCost?: (product: ProductRow, value: string) => Promise<void>;
   onToggleBranchAssignment?: (product: ProductRow, branchId: string, isAvailable: boolean) => Promise<void>;
 }) {
@@ -3249,20 +3254,38 @@ function PricingPanel({
     }));
   }
 
+  function updateReason(productId: string, branchId: string, value: string) {
+    setDraft((prev) => ({
+      ...prev,
+      [productId]: {
+        ...prev[productId],
+        [branchId]: { ...prev[productId][branchId], reason: value },
+      },
+    }));
+  }
+
   async function saveCell(product: ProductRow, branch: Branch, field: "price") {
     const cell = draft[product.id]?.[branch.id];
     if (!cell) return;
+    // Parte B.2 — obligatorio, mínimo 3 caracteres, solo cuando se está
+    // FIJANDO un precio (no al limpiarlo a vacío = volver a seguir el
+    // general, que no exige motivo). Validación del lado del cliente — el
+    // servidor (setBranchPriceTx) la exige igual, el payload se puede editar.
+    if (cell.price.trim() !== "" && cell.reason.trim().length < 3) {
+      toast.error("Escribí el motivo de este precio (mínimo 3 caracteres).");
+      return;
+    }
     const apiField = "branchPrice";
     const key = `${product.id}-${branch.id}-${field}`;
     setSavingKey(key);
     try {
-      await onSave(product, branch, apiField, cell[field]);
+      await onSave(product, branch, apiField, cell[field], cell.reason.trim());
       // Mark cell as no longer dirty after successful save (optimistic)
       setDraft((prev) => ({
         ...prev,
         [product.id]: {
           ...prev[product.id],
-          [branch.id]: { ...prev[product.id][branch.id], dirty: false },
+          [branch.id]: { ...prev[product.id][branch.id], dirty: false, reason: "" },
         },
       }));
     } finally {
@@ -3279,7 +3302,11 @@ function PricingPanel({
       if (!cell?.dirty) continue;
       const origSetting = product.branchProductSettings.find((s) => s.branchId === branch.id);
       if (cell.price !== (origSetting?.branchPrice ?? "")) {
-        await onSave(product, branch, "branchPrice", cell.price);
+        if (cell.price.trim() !== "" && cell.reason.trim().length < 3) {
+          toast.error(`Escribí el motivo del precio de ${branch.code} (mínimo 3 caracteres).`);
+          continue;
+        }
+        await onSave(product, branch, "branchPrice", cell.price, cell.reason.trim());
         saved++;
       }
     }
@@ -3288,7 +3315,7 @@ function PricingPanel({
       setDraft((prev) => {
         const updated = { ...prev[product.id] };
         for (const branch of pricingBranches) {
-          if (updated[branch.id]) updated[branch.id] = { ...updated[branch.id], dirty: false };
+          if (updated[branch.id]) updated[branch.id] = { ...updated[branch.id], dirty: false, reason: "" };
         }
         return { ...prev, [product.id]: updated };
       });
@@ -3464,6 +3491,15 @@ function PricingPanel({
                         {savingKey === priceKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                       </button>
                     </div>
+                    {/* Parte B.2 — motivo obligatorio, visible solo mientras se escribe un precio distinto del actual. */}
+                    {cell.dirty && (
+                      <Input
+                        className="mt-1 h-6 text-[0.6875rem]"
+                        placeholder="Motivo del precio (mínimo 3 caracteres)…"
+                        value={cell.reason}
+                        onChange={(e) => updateReason(p.id, activeBranch.id, e.target.value)}
+                      />
+                    )}
                     <div className={`mt-1 text-[0.6875rem] ${isMissing ? "font-semibold text-[var(--color-danger-600)]" : "text-[var(--color-text-muted)]"}`}>
                       {isMissing ? "⚠ Falta precio en esta sucursal" : "Precio asignado en esta sucursal"}
                     </div>

@@ -4,6 +4,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { formatDualStock } from "@/modules/inventory/unit-conversion";
 import { getEffectiveProductPricing, FUSION_PRICE_OVERRIDE_THRESHOLD, relativeDeviation } from "@/modules/catalog/effective-pricing";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { setBranchPriceTx } from "@/modules/pricing/branch-price-exception-service";
 import { buildProductSearchWhere, rankProductMatches } from "@/modules/catalog/product-search";
 import type { CatalogInventoryQuery, UpdateBranchProductSettingInput, MassDeleteProductsInput } from "./validators";
 
@@ -532,6 +533,66 @@ export async function getCatalogInventoryProduct(productId: string) {
   return { product, auditLogs };
 }
 
+/**
+ * El cuerpo transaccional de upsertBranchProductSetting, separado del
+ * wrapper para poder probarlo con un tx en memoria (mismo patrón que
+ * applySuggestedPriceTx/setBranchPriceTx) — el wrapper hace los guards que
+ * SÍ necesitan el cliente global de Prisma (existencia de branch/product,
+ * assertPriceNotBelowCost, desvío de fusión) antes de abrir la transacción.
+ *
+ * Parte B (prompt-huecos-fase1-fase3-despliegue.md) — branchPrice pasa
+ * SIEMPRE por setBranchPriceTx: es el único escritor. branchPrice != null
+ * exige motivo (>= 3 caracteres) — el modal de catálogo lo pide cuando el
+ * usuario escribe un precio de sucursal distinto del actual; sin eso, este
+ * camino creaba exactamente la divergencia silenciosa (branchPrice con
+ * priceExceptionReason en null) que la Fase 3 existe para eliminar.
+ * minPrice/wholesalePrice SIN branchPrice siguen disparando el bookkeeping
+ * de "se tocó un precio" (priceSource/lastPriceUpdateAt/priceUpdatedByUserId)
+ * como antes — eso no es competencia de setBranchPriceTx, que solo
+ * administra branchPrice y su excepción.
+ */
+export async function upsertBranchProductSettingTx(tx: Prisma.TransactionClient, input: UpdateBranchProductSettingInput, actorUserId: string) {
+  const touchesPriceBookkeeping = input.branchPrice !== undefined || input.minPrice !== undefined || input.wholesalePrice !== undefined;
+  const otherFieldsData = {
+    isAvailable: input.isAvailable,
+    minStock: input.minStock === undefined ? undefined : input.minStock === null ? null : new Prisma.Decimal(input.minStock),
+    maxStock: input.maxStock === undefined ? undefined : input.maxStock === null ? null : new Prisma.Decimal(input.maxStock),
+    reorderPoint: input.reorderPoint === undefined ? undefined : input.reorderPoint === null ? null : new Prisma.Decimal(input.reorderPoint),
+    minPrice: input.minPrice === undefined ? undefined : input.minPrice === null ? null : new Prisma.Decimal(input.minPrice),
+    wholesalePrice: input.wholesalePrice === undefined ? undefined : input.wholesalePrice === null ? null : new Prisma.Decimal(input.wholesalePrice),
+    marginPercent: input.marginPercent === undefined ? undefined : input.marginPercent === null ? null : new Prisma.Decimal(input.marginPercent),
+  };
+
+  if (input.branchPrice !== undefined) {
+    await setBranchPriceTx(tx, {
+      branchId: input.branchId,
+      productId: input.productId,
+      branchPrice: input.branchPrice === null ? null : new Prisma.Decimal(input.branchPrice),
+      exceptionReason: input.priceExceptionReason ?? null,
+      priceSource: "MANUAL",
+      actorUserId,
+    });
+    return tx.branchProductSetting.update({
+      where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+      data: otherFieldsData,
+    });
+  }
+
+  // branchPrice no se toca — sin cambios respecto al comportamiento
+  // previo: minPrice/wholesalePrice solos también bumpean el bookkeeping.
+  const data = {
+    ...otherFieldsData,
+    priceSource: touchesPriceBookkeeping ? "MANUAL" : undefined,
+    lastPriceUpdateAt: touchesPriceBookkeeping ? new Date() : undefined,
+    priceUpdatedByUserId: touchesPriceBookkeeping ? actorUserId : undefined,
+  };
+  return tx.branchProductSetting.upsert({
+    where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+    create: { branchId: input.branchId, productId: input.productId, ...data },
+    update: data,
+  });
+}
+
 export async function upsertBranchProductSetting(input: UpdateBranchProductSettingInput, actorUserId: string) {
   const [branch, product] = await Promise.all([
     prisma.branch.findUnique({ where: { id: input.branchId }, select: { id: true } }),
@@ -565,32 +626,7 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
     }
   }
 
-  const data = {
-    isAvailable: input.isAvailable,
-    minStock: input.minStock === undefined ? undefined : input.minStock === null ? null : new Prisma.Decimal(input.minStock),
-    maxStock: input.maxStock === undefined ? undefined : input.maxStock === null ? null : new Prisma.Decimal(input.maxStock),
-    reorderPoint: input.reorderPoint === undefined ? undefined : input.reorderPoint === null ? null : new Prisma.Decimal(input.reorderPoint),
-    branchPrice: input.branchPrice === undefined ? undefined : input.branchPrice === null ? null : new Prisma.Decimal(input.branchPrice),
-    minPrice: input.minPrice === undefined ? undefined : input.minPrice === null ? null : new Prisma.Decimal(input.minPrice),
-    wholesalePrice: input.wholesalePrice === undefined ? undefined : input.wholesalePrice === null ? null : new Prisma.Decimal(input.wholesalePrice),
-    marginPercent: input.marginPercent === undefined ? undefined : input.marginPercent === null ? null : new Prisma.Decimal(input.marginPercent),
-    priceSource: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : "MANUAL",
-    lastPriceUpdateAt: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : new Date(),
-    priceUpdatedByUserId: input.branchPrice === undefined && input.minPrice === undefined && input.wholesalePrice === undefined ? undefined : actorUserId,
-    // Fase 3 (prompt-motor-precios-lote-herencia-gobierno.md) — branchPrice
-    // y priceException* viajan juntos: al fijar un precio de sucursal con
-    // motivo (pantalla nueva de la ficha del producto), queda declarado;
-    // al limpiar branchPrice a null por este mismo camino, la excepción se
-    // limpia también, nunca queda un motivo huérfano sin precio.
-    priceExceptionReason: input.branchPrice === undefined ? undefined : input.branchPrice === null ? null : (input.priceExceptionReason ?? undefined),
-    priceExceptionAt: input.branchPrice === undefined ? undefined : input.branchPrice === null ? null : (input.priceExceptionReason ? new Date() : undefined),
-  };
-
-  const setting = await prisma.branchProductSetting.upsert({
-    where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
-    create: { branchId: input.branchId, productId: input.productId, ...data },
-    update: data,
-  });
+  const setting = await prisma.$transaction((tx) => upsertBranchProductSettingTx(tx, input, actorUserId));
 
   await logAuditEvent({
     actorUserId,
@@ -607,6 +643,7 @@ export async function upsertBranchProductSetting(input: UpdateBranchProductSetti
       minPrice: input.minPrice ?? null,
       wholesalePrice: input.wholesalePrice ?? null,
       marginPercent: input.marginPercent ?? null,
+      priceExceptionReason: input.branchPrice ? (input.priceExceptionReason ?? null) : null,
     },
   });
 

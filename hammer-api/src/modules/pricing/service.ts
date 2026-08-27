@@ -7,6 +7,7 @@ import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing"
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { getActiveCashSession, syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
+import { setBranchPriceTx } from "@/modules/pricing/branch-price-exception-service";
 
 /* ══════════════════════════════════════════════════════
  *  OPERATING EXPENSES
@@ -760,35 +761,28 @@ export async function applySuggestedPriceTx(
 ) {
   const newPrice = new Prisma.Decimal(input.suggestedPrice);
 
-  const existing = await tx.branchProductSetting.findUnique({
-    where: { branchId_productId: { branchId, productId: input.productId } },
-    select: { branchPrice: true },
+  // Parte B (prompt-huecos-fase1-fase3-despliegue.md) — el único escritor
+  // de branchPrice; branchPrice != null exige un motivo, así que este
+  // camino (que trae snapshot completo y ya deja rastro en el audit log de
+  // abajo) usa el `reason` que applyPricingSchema ya acepta, o "Precio
+  // calculado" por defecto. "CALCULATED" lo distingue del editor manual
+  // inline (catalog-inventory/service.ts, que escribe "MANUAL"). Sin
+  // lastPriceUpdateAt/priceUpdatedByUserId, la Fase 1 no puede detectar
+  // "el costo cambió y el precio no" — es la señal más valiosa de la
+  // bandeja de precios.
+  const { previousPrice } = await setBranchPriceTx(tx, {
+    branchId,
+    productId: input.productId,
+    branchPrice: newPrice,
+    exceptionReason: input.reason?.trim() || "Precio calculado",
+    priceSource: "CALCULATED",
+    actorUserId: input.actorUserId,
   });
-  const previousPrice = existing?.branchPrice ?? null;
-  // Fase 0 (prompt-motor-precios-lote-herencia-gobierno.md) — este camino
-  // viene del motor con snapshot completo, así que se distingue con
-  // "CALCULATED" del editor manual inline (catalog-inventory/service.ts,
-  // que escribe "MANUAL"). Sin lastPriceUpdateAt/priceUpdatedByUserId acá,
-  // la Fase 1 no puede detectar "el costo cambió y el precio no" — es la
-  // señal más valiosa de la bandeja de precios.
-  await tx.branchProductSetting.upsert({
+  // marginPercent es responsabilidad de este llamador, no de setBranchPriceTx
+  // (que solo toca precio/excepción) — mismo valor que escribía antes.
+  await tx.branchProductSetting.update({
     where: { branchId_productId: { branchId, productId: input.productId } },
-    create: {
-      branchId,
-      productId: input.productId,
-      branchPrice: newPrice,
-      priceSource: "CALCULATED",
-      marginPercent: input.marginPercent ?? null,
-      lastPriceUpdateAt: new Date(),
-      priceUpdatedByUserId: input.actorUserId,
-    },
-    update: {
-      branchPrice: newPrice,
-      priceSource: "CALCULATED",
-      marginPercent: input.marginPercent ?? null,
-      lastPriceUpdateAt: new Date(),
-      priceUpdatedByUserId: input.actorUserId,
-    },
+    data: { marginPercent: input.marginPercent ?? null },
   });
   const priceSourceAfter: "BRANCH" = "BRANCH";
 

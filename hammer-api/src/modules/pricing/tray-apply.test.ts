@@ -59,6 +59,14 @@ function createFakeTx(opts: { decisions?: FakeDecision[]; settings?: FakeSetting
         settings.set(key, data as FakeSetting & Record<string, unknown>);
         return data;
       },
+      update: async ({ where, data }: { where: { branchId_productId: { branchId: string; productId: string } }; data: Record<string, unknown> }) => {
+        const key = `${where.branchId_productId.branchId}:${where.branchId_productId.productId}`;
+        const existing = settings.get(key);
+        if (!existing) throw new Error(`setting ${key} no encontrado`);
+        const updated = { ...existing, ...data };
+        settings.set(key, updated as FakeSetting & Record<string, unknown>);
+        return updated;
+      },
     },
     auditLog: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
