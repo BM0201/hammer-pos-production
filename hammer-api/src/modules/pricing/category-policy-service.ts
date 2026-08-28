@@ -176,6 +176,7 @@ export async function resolvePolicyForProduct(input: { branchId: string; product
  */
 export async function resolvePolicyForProductBatch(
   items: Array<{ branchId: string; productId: string }>,
+  db: typeof prisma = prisma,
 ): Promise<Map<string, { categoryId: string; categoryName: string; categoryPolicy: CategoryPricingPolicyDto }>> {
   const result = new Map<string, { categoryId: string; categoryName: string; categoryPolicy: CategoryPricingPolicyDto }>();
   if (items.length === 0) return result;
@@ -183,14 +184,14 @@ export async function resolvePolicyForProductBatch(
   const productIds = [...new Set(items.map((item) => item.productId))];
   const branchIds = [...new Set(items.map((item) => item.branchId))];
 
-  const products = await prisma.product.findMany({
+  const products = await db.product.findMany({
     where: { id: { in: productIds } },
     select: { id: true, categoryId: true, category: { select: { code: true, name: true } } },
   });
   const productById = new Map(products.map((product) => [product.id, product]));
   const categoryIds = [...new Set(products.map((product) => product.categoryId))];
 
-  const policies = await prisma.branchCategoryPricingPolicy.findMany({
+  const policies = await db.branchCategoryPricingPolicy.findMany({
     where: { branchId: { in: branchIds }, categoryId: { in: categoryIds } },
     include: { category: { select: { code: true, name: true } } },
   });

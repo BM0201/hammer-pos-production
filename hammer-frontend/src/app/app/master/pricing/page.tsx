@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2, ReceiptText, Search } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,18 +13,19 @@ import { PricingConfigPanel } from "@/components/pricing/pricing-config-panel";
 import toast from "react-hot-toast";
 
 /**
- * Zona Precios (prompt-mudanza-zona-precios.md, Fase 2) — cuatro pestañas:
- * Bandeja (la cola de revisión de la Fase 1 del ciclo anterior, ahora
- * default), Calculadora, Políticas y Configuración — las tres últimas
- * mudadas de Gastos/Finanzas en la Fase 1 de este mismo prompt. Un único
- * selector de sucursal en el encabezado, compartido por las cuatro; la
- * Bandeja funciona con "todas" (value=""), las otras tres son por sucursal
- * por definición y piden elegir una.
+ * Zona Precios (prompt-mudanza-zona-precios.md, Fase 2) — cinco pestañas:
+ * Bandeja (la cola de revisión, default) · Precios vigentes (Parte C,
+ * prompt-precios-vigentes-catalogo.md — lo que HAY, después de lo que está
+ * MAL) · Calculadora · Políticas · Configuración. Un único selector de
+ * sucursal en el encabezado, compartido por las cinco; la Bandeja funciona
+ * con "todas" (value=""), las otras cuatro son por sucursal por definición
+ * y piden elegir una.
  */
 
-type ZoneTab = "tray" | "calculator" | "policies" | "config";
+type ZoneTab = "tray" | "current" | "calculator" | "policies" | "config";
 const ZONE_TABS: Array<{ key: ZoneTab; label: string; icon: typeof Inbox }> = [
   { key: "tray", label: "Bandeja", icon: Inbox },
+  { key: "current", label: "Precios vigentes", icon: ReceiptText },
   { key: "calculator", label: "Calculadora", icon: Calculator },
   { key: "policies", label: "Políticas", icon: SlidersHorizontal },
   { key: "config", label: "Configuración", icon: Settings },
@@ -64,6 +65,18 @@ export default function PricingZonePage() {
     // productId solo tenía sentido con el branchId que llegó del enlace de origen.
     params.delete("productId");
     router.replace(`${pathname}${params.size ? `?${params}` : ""}` as Parameters<typeof router.replace>[0], { scroll: false });
+  }
+
+  // C.5 (prompt-precios-vigentes-catalogo.md) — una fila de Precios vigentes
+  // abre la Calculadora con ese producto y la sucursal actual precargados.
+  // Es el puente entre ver y actuar; sin esto la vista es un reporte, no
+  // una herramienta.
+  function openCalculatorFor(productId: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", "calculator");
+    params.set("productId", productId);
+    if (branchId) params.set("branchId", branchId);
+    router.replace(`${pathname}?${params}` as Parameters<typeof router.replace>[0], { scroll: false });
   }
 
   const needsBranch = activeTab !== "tray";
@@ -120,6 +133,9 @@ export default function PricingZonePage() {
               onClearBranch={() => selectBranch("")}
               onGoToCalculator={() => selectTab("calculator")}
             />
+          )}
+          {activeTab === "current" && (
+            <CurrentPricesTab branchId={branchId} onOpenCalculator={openCalculatorFor} />
           )}
           {activeTab === "calculator" && <PricingCalculatorPanel branchId={branchId} initialProductId={initialProductId} />}
           {activeTab === "policies" && <CategoryPoliciesPanel branchId={branchId} />}
@@ -713,5 +729,316 @@ function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
         </tr>
       )}
     </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* ── TAB: PRECIOS VIGENTES (prompt-precios-vigentes-catalogo.md, Parte C) ── */
+/* Bandeja = lo que está mal. Precios vigentes = lo que hay. USA los mismos  */
+/* números que resuelve el backend (effective-pricing.ts + resolveCatalog-  */
+/* DisplayCost) — acá solo se muestran, no se recalculan.                   */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+type CurrentPriceSource = "BRANCH" | "STANDARD" | "FUSION_DERIVED" | "MISSING";
+
+type CurrentPriceRow = {
+  productId: string;
+  sku: string;
+  name: string;
+  categoryName: string;
+  effectiveCost: number;
+  effectivePrice: number | null;
+  priceSource: CurrentPriceSource;
+  standardPrice: number;
+  marginPercent: number | null;
+  minMarginPercent: number;
+  belowPolicy: boolean;
+  priceExceptionReason: string | null;
+  priceExceptionAt: string | null;
+  lastPriceUpdateAt: string | null;
+  stockOnHand: number;
+  canonicalProductLabel: string | null;
+};
+
+type CurrentPricesTotals = {
+  total: number;
+  byPriceSource: Record<CurrentPriceSource, number>;
+  belowPolicyCount: number;
+  missingCostCount: number;
+};
+
+type CurrentPricesResponse = {
+  rows: CurrentPriceRow[];
+  totals: CurrentPricesTotals;
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+};
+
+type CurrentPricesSort = "name" | "marginAsc" | "price" | "lastUpdate";
+
+const PRICE_SOURCE_BADGE: Record<CurrentPriceSource, { label: string; className: string }> = {
+  BRANCH: { label: "Propio", className: "bg-[var(--color-info-50)] text-[var(--color-info-700)] border-[var(--color-info-200)]" },
+  STANDARD: { label: "General", className: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)] border-[var(--color-border)]" },
+  FUSION_DERIVED: { label: "Derivado", className: "bg-[var(--color-master-50)] text-[var(--color-master-700)] border-[var(--color-master-200)]" },
+  MISSING: { label: "Sin precio", className: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)] border-[var(--color-danger-200)]" },
+};
+
+const PRICE_SOURCE_CHIP_LABEL: Record<CurrentPriceSource, string> = {
+  BRANCH: "con precio propio",
+  STANDARD: "siguen el general",
+  FUSION_DERIVED: "derivados",
+  MISSING: "sin precio",
+};
+
+function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; onOpenCalculator: (productId: string) => void }) {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<CurrentPricesResponse | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [priceSourceFilter, setPriceSourceFilter] = useState<CurrentPriceSource | "">("");
+  const [sort, setSort] = useState<CurrentPricesSort>("name");
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQ(q), 350);
+    return () => clearTimeout(timer);
+  }, [q]);
+
+  // Los filtros (menos la sucursal, que es contexto obligatorio, no un
+  // filtro que se pueda "quitar") vuelven a la página 1 al cambiar.
+  useEffect(() => { setPage(1); }, [categoryFilter, debouncedQ, priceSourceFilter]);
+
+  const hasFilters = !!categoryFilter || !!debouncedQ || !!priceSourceFilter;
+
+  const load = useCallback(async () => {
+    if (!branchId) return;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("branchId", branchId);
+      if (categoryFilter) params.set("categoryId", categoryFilter);
+      if (debouncedQ) params.set("q", debouncedQ);
+      if (priceSourceFilter) params.set("priceSource", priceSourceFilter);
+      if (sort !== "name") params.set("sort", sort);
+      params.set("page", String(page));
+      const res = await apiFetch(`/api/master/pricing/current?${params.toString()}`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudieron cargar los precios vigentes.");
+      setData(unwrapApiData(raw) as CurrentPricesResponse);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudieron cargar los precios vigentes.");
+    } finally {
+      setLoading(false);
+    }
+  }, [branchId, categoryFilter, debouncedQ, priceSourceFilter, sort, page]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    apiFetch("/api/catalog/categories").then((r) => (r.ok ? r.json() : null)).then((raw) => { if (raw) setCategories(unwrapApiData(raw) as Category[]); }).catch(() => {});
+  }, []);
+
+  function clearFilters() {
+    setCategoryFilter("");
+    setQ("");
+    setDebouncedQ("");
+    setPriceSourceFilter("");
+  }
+
+  function toggleSourceChip(source: CurrentPriceSource) {
+    setPriceSourceFilter((prev) => (prev === source ? "" : source));
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* C.4 — encabezado con el desglose por origen, en chips que filtran */}
+      {data && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-[var(--color-text-muted)]">
+            <strong className="font-semibold text-[var(--color-text)]">{data.totals.total}</strong> producto{data.totals.total === 1 ? "" : "s"}
+          </span>
+          {(["BRANCH", "STANDARD", "FUSION_DERIVED", "MISSING"] as const).map((source) => (
+            <button
+              key={source}
+              type="button"
+              onClick={() => toggleSourceChip(source)}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                priceSourceFilter === source
+                  ? "border-[var(--color-pay)] bg-[var(--color-pay)]/10 text-[var(--color-pay)]"
+                  : source === "MISSING" && data.totals.byPriceSource.MISSING > 0
+                    ? "border-[var(--color-danger-200)] bg-[var(--color-danger-50)] text-[var(--color-danger-700)]"
+                    : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]"
+              }`}
+            >
+              {data.totals.byPriceSource[source]} {PRICE_SOURCE_CHIP_LABEL[source]}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* C.3 — filtros: categoría, búsqueda, origen del precio (la sucursal ya se eligió en el encabezado de la zona) */}
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="w-[200px]">
+          <label htmlFor="current-prices-category" className="mb-1 block text-xs text-[var(--color-text-muted)]">Categoría</label>
+          <select id="current-prices-category" className="hm-input" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+            <option value="">Todas las categorías</option>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div className="w-[240px]">
+          <label htmlFor="current-prices-search" className="mb-1 block text-xs text-[var(--color-text-muted)]">Buscar</label>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-text-soft)]" aria-hidden="true" />
+            <input
+              id="current-prices-search"
+              className="hm-input pl-8"
+              placeholder="SKU o nombre"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="w-[180px]">
+          <label htmlFor="current-prices-sort" className="mb-1 block text-xs text-[var(--color-text-muted)]">Ordenar por</label>
+          <select id="current-prices-sort" className="hm-input" value={sort} onChange={(e) => setSort(e.target.value as CurrentPricesSort)}>
+            <option value="name">Nombre</option>
+            <option value="marginAsc">Margen (peor primero)</option>
+            <option value="price">Precio</option>
+            <option value="lastUpdate">Última actualización</option>
+          </select>
+        </div>
+        {hasFilters && (
+          <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>Quitar filtros</Button>
+        )}
+      </div>
+
+      {loading ? (
+        <p className="py-12 text-center text-sm text-[var(--color-text-muted)] animate-pulse">Cargando…</p>
+      ) : !data || data.pagination.total === 0 ? (
+        <CurrentPricesEmptyState
+          hasFilters={hasFilters}
+          categoryName={categories.find((c) => c.id === categoryFilter)?.name}
+          q={debouncedQ}
+          priceSourceFilter={priceSourceFilter}
+          totalInBranch={data?.totals.total ?? 0}
+          onClearFilters={clearFilters}
+        />
+      ) : (
+        <Card className="overflow-hidden p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[var(--color-border)] text-left text-xs text-[var(--color-text-muted)]">
+                  <th className="px-3 py-2">Producto</th>
+                  <th className="px-3 py-2">Categoría</th>
+                  <th className="px-3 py-2 text-right">Costo</th>
+                  <th className="px-3 py-2 text-right">Precio</th>
+                  <th className="px-3 py-2">Origen</th>
+                  <th className="px-3 py-2 text-right">Margen</th>
+                  <th className="px-3 py-2 text-right">Stock</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.map((row) => {
+                  const badge = PRICE_SOURCE_BADGE[row.priceSource];
+                  const badgeTitle = row.priceSource === "BRANCH"
+                    ? (row.priceExceptionReason ?? undefined)
+                    : row.priceSource === "FUSION_DERIVED"
+                      ? (row.canonicalProductLabel ? `Deriva de ${row.canonicalProductLabel}` : undefined)
+                      : undefined;
+                  return (
+                    <tr
+                      key={row.productId}
+                      className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-alt)]"
+                      onClick={() => onOpenCalculator(row.productId)}
+                      title="Abrir en la calculadora"
+                    >
+                      <td className="px-3 py-2.5">
+                        <span className="block truncate font-medium text-[var(--color-text)]">{row.name}</span>
+                        <span className="block text-xs text-[var(--color-text-soft)]">{row.sku}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-[var(--color-text-muted)]">{row.categoryName}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{row.effectiveCost > 0 ? fmt(row.effectiveCost) : <span className="text-[var(--color-text-soft)]">—</span>}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{row.effectivePrice !== null ? fmt(row.effectivePrice) : <span className="text-[var(--color-text-soft)]">—</span>}</td>
+                      <td className="px-3 py-2.5">
+                        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${badge.className}`} title={badgeTitle}>
+                          {badge.label}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        {row.marginPercent === null ? (
+                          <span className="text-[var(--color-text-soft)]">—</span>
+                        ) : row.belowPolicy ? (
+                          // Nunca solo color — el número y el mínimo de referencia van al lado, para quien no distingue tonos.
+                          <span className="inline-flex items-center gap-1 font-semibold text-[var(--color-warning-700)]">
+                            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                            {fmtPct(row.marginPercent)} <span className="font-normal text-[var(--color-text-soft)]">(mín. {fmtPct(row.minMarginPercent)})</span>
+                          </span>
+                        ) : (
+                          fmtPct(row.marginPercent)
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{row.stockOnHand}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {data.pagination.totalPages > 1 && (
+            <div className="flex items-center justify-between border-t border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
+              <span>Página {data.pagination.page} de {data.pagination.totalPages} · {data.pagination.total} resultado{data.pagination.total === 1 ? "" : "s"}</span>
+              <div className="flex gap-2">
+                <Button type="button" variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Anterior</Button>
+                <Button type="button" variant="ghost" size="sm" disabled={page >= data.pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Siguiente</Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/** C.6 — mismo criterio que la bandeja: nunca afirmar que no hay productos cuando lo que pasa es que el filtro no matchea. */
+function CurrentPricesEmptyState({
+  hasFilters,
+  categoryName,
+  q,
+  priceSourceFilter,
+  totalInBranch,
+  onClearFilters,
+}: {
+  hasFilters: boolean;
+  categoryName?: string;
+  q: string;
+  priceSourceFilter: CurrentPriceSource | "";
+  totalInBranch: number;
+  onClearFilters: () => void;
+}) {
+  if (!hasFilters) {
+    return (
+      <Card className="p-8 text-center">
+        <p className="text-sm text-[var(--color-text-muted)]">Esta sucursal no tiene productos activos para mostrar.</p>
+      </Card>
+    );
+  }
+
+  const bits: string[] = [];
+  if (categoryName) bits.push(`de ${categoryName}`);
+  if (q) bits.push(`que coincidan con "${q}"`);
+  if (priceSourceFilter) bits.push(`con origen "${PRICE_SOURCE_BADGE[priceSourceFilter].label}"`);
+
+  return (
+    <Card className="p-8 text-center">
+      <p className="text-sm font-medium text-[var(--color-text)]">Ningún producto {bits.join(" ")}.</p>
+      {totalInBranch > 0 && (
+        <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+          Hay <strong className="text-[var(--color-text)]">{totalInBranch}</strong> producto{totalInBranch === 1 ? "" : "s"} en esta sucursal con otros filtros.
+        </p>
+      )}
+      <Button type="button" variant="primary" size="sm" className="mt-4" onClick={onClearFilters}>Quitar filtros</Button>
+    </Card>
   );
 }
