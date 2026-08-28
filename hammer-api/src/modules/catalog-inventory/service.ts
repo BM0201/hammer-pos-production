@@ -16,6 +16,23 @@ function decimalToNumber(value: Prisma.Decimal | number | string | null | undefi
 }
 
 /**
+ * Parte A (prompt-precios-vigentes-catalogo.md) — pura, exportada para test.
+ * "Sin precio de verdad" es ni el general (standardSalePrice) ni el de
+ * ninguna sucursal. Antes era `branchSettings.every((s) => branchPrice <= 0)`:
+ * Array.every sobre un arreglo VACÍO da true, así que un producto sin
+ * ninguna fila BranchProductSetting — el caso normal de un producto que
+ * sigue el precio general en todas las sucursales — quedaba marcado "sin
+ * precio", y la condición nunca miraba standardSalePrice, que es justo lo
+ * que effective-pricing.ts resuelve como STANDARD cuando no hay branchPrice.
+ * Mismo error conceptual que se corrigió en la Fase 3 para las excepciones
+ * de precio: "sigue el general" no es "no tiene precio".
+ */
+export function computeHasNoPrice(standardSalePrice: number, branchPrices: number[]): boolean {
+  const hasAnyBranchPrice = branchPrices.some((price) => price > 0);
+  return standardSalePrice <= 0 && !hasAnyBranchPrice;
+}
+
+/**
  * Costo a MOSTRAR en el catálogo ("precios y costos"), coherente con el motor
  * de venta (modules/catalog/effective-pricing.ts → resolveCostChain).
  *
@@ -66,6 +83,100 @@ type CatalogStockConversion = {
   canonicalProductId: string;
   isCanonical: boolean;
 };
+
+/**
+ * Parte B (prompt-precios-vigentes-catalogo.md) — el mismo costo que
+ * getCatalogInventoryCenter muestra (resolveCatalogDisplayCost, fusión-aware:
+ * un miembro DERIVADO deriva SIEMPRE del canónico × factor), extraído para
+ * reusarlo en pricing/current-prices-service.ts sin escribir una tercera
+ * resolución de costo — los dos números tienen que coincidir. Con branchId
+ * FIJO (a diferencia de getCatalogInventoryCenter, que también soporta "todas
+ * las sucursales") no hace falta agregar entre sucursales: el balance de ESA
+ * sucursal es directo.
+ */
+export async function resolveCatalogDisplayCostBatch(
+  productIds: string[],
+  branchId: string,
+  db: typeof prisma = prisma,
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (productIds.length === 0) return result;
+
+  const stockGroupMembers = await db.productStockGroupMember.findMany({
+    where: { productId: { in: productIds }, isActive: true, stockGroup: { isActive: true } },
+    include: {
+      stockGroup: {
+        include: {
+          products: {
+            where: { isActive: true },
+            select: { productId: true, isCanonical: true, conversionFactor: true },
+            orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
+          },
+        },
+      },
+    },
+  });
+  const conversionByProductId = new Map<string, { canonicalProductId: string; isCanonical: boolean; conversionFactor: Prisma.Decimal }>();
+  for (const member of stockGroupMembers) {
+    const canonical = member.stockGroup.products.find((item) => item.isCanonical)
+      ?? member.stockGroup.products.find((item) => new Prisma.Decimal(item.conversionFactor).eq(1))
+      ?? member;
+    conversionByProductId.set(member.productId, {
+      canonicalProductId: canonical.productId,
+      isCanonical: member.isCanonical,
+      conversionFactor: member.conversionFactor,
+    });
+  }
+
+  const inventoryProductIds = Array.from(new Set(productIds.map((id) => conversionByProductId.get(id)?.canonicalProductId ?? id)));
+  const allRelevantProductIds = Array.from(new Set([...productIds, ...inventoryProductIds]));
+
+  const [products, balances] = await Promise.all([
+    db.product.findMany({
+      where: { id: { in: allRelevantProductIds } },
+      select: { id: true, averageCost: true, globalCost: true, lastPurchaseCost: true },
+    }),
+    db.inventoryBalance.findMany({
+      where: { productId: { in: inventoryProductIds }, branchId },
+      select: { productId: true, weightedAverageCost: true },
+    }),
+  ]);
+  const productById = new Map(products.map((p) => [p.id, p]));
+  const wacByProductId = new Map(balances.map((b) => [b.productId, b.weightedAverageCost]));
+
+  for (const productId of productIds) {
+    const conversion = conversionByProductId.get(productId) ?? null;
+    const inventoryProductId = conversion?.canonicalProductId ?? productId;
+    const isDerivedFusionMember = Boolean(conversion && !conversion.isCanonical);
+    const derivedFactor = conversion ? Number(conversion.conversionFactor) : 1;
+    const wacDecimal = wacByProductId.get(inventoryProductId) ?? null;
+    const wacNum = wacDecimal !== null ? Number(wacDecimal) : null;
+
+    const cost = isDerivedFusionMember
+      ? (() => {
+          const canonicalProduct = productById.get(inventoryProductId);
+          const canonicalCost = canonicalProduct
+            ? decimalToNumber(canonicalProduct.averageCost ?? canonicalProduct.globalCost ?? canonicalProduct.lastPurchaseCost)
+            : 0;
+          return resolveCatalogDisplayCost({
+            wac: wacNum,
+            averageCost: canonicalCost,
+            globalCost: undefined,
+            lastPurchaseCost: undefined,
+            factor: derivedFactor,
+          });
+        })()
+      : resolveCatalogDisplayCost({
+          wac: wacNum,
+          averageCost: productById.get(productId)?.averageCost,
+          globalCost: productById.get(productId)?.globalCost,
+          lastPurchaseCost: productById.get(productId)?.lastPurchaseCost,
+        });
+    result.set(productId, cost);
+  }
+
+  return result;
+}
 
 function productWhere(params: Partial<CatalogInventoryQuery>): Prisma.ProductWhereInput {
   return {
@@ -140,7 +251,13 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       hasZeroStock: totalStock === 0,
       hasNegativeStock: productBalances.some((row: any) => decimalToNumber(row.quantityOnHand) < 0),
       hasNoCost: productCost <= 0,
-      hasNoPrice: branchSettings.every((setting: any) => decimalToNumber(setting.branchPrice) <= 0),
+      hasNoPrice: computeHasNoPrice(
+        decimalToNumber(product.standardSalePrice),
+        branchSettings.map((setting: any) => decimalToNumber(setting.branchPrice)),
+      ),
+      // NO implica falta de precio — sigue el general, que es un estado
+      // válido y esperado. Es "sin excepción propia en ESTA sucursal", no
+      // "sin precio". Distinto de hasNoPrice de arriba a propósito.
       hasNoBranchPrice: params.branchId
         ? !branchSettings.some((setting: any) => setting.branchId === params.branchId && decimalToNumber(setting.branchPrice) > 0)
         : undefined,
