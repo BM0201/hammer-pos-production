@@ -636,12 +636,35 @@ export async function updateProduct(productId: string, input: {
 
   // Auditoría 2026-07-22 (ALTO Catálogo): bloqueo de precio bajo costo,
   // ausente hasta ahora en la edición de producto global.
+  //
+  // "revisa todo completo" (bug reportado dos veces, captura de Precios y
+  // costos) — este chequeo comparaba el costo nuevo contra standardSalePrice,
+  // el precio GENERAL del producto. Verificado en todo el frontend: NO
+  // existe ningún editor de standardSalePrice para un producto ya creado —
+  // se fija una sola vez, en el formulario "Crear producto", y nunca más.
+  // Cuando se edita SOLO el costo de compra (el único camino real que toca
+  // este código), el bloqueo era un callejón sin salida: "corrige el costo
+  // y el precio juntos" (el propósito original de este guard, ver arriba)
+  // es imposible de cumplir para un precio que no tiene dónde corregirse.
+  //
+  // El riesgo que prevenía — una sucursal SIN precio propio vendiendo bajo
+  // costo por el respaldo a standardSalePrice (STANDARD en effective-
+  // pricing.ts) — sigue visible, no silenciado: son exactamente los badges
+  // "Precio bajo costo" / margen en rojo que ya muestran Precios y costos,
+  // Precios vigentes y la bandeja. Mismo criterio que "margen bajo la
+  // política de categoría": se avisa, no se bloquea sin salida — la
+  // diferencia con el resto de los casos de este guard (edición conjunta,
+  // precio de sucursal, importación) es que ESOS sí tienen con qué
+  // corregirse en el acto; este no.
   if (input.standardSalePrice !== undefined || input.globalCost !== undefined) {
     const nextPrice = input.standardSalePrice !== undefined ? input.standardSalePrice : Number(previous.standardSalePrice);
     const nextCost = input.globalCost !== undefined
       ? input.globalCost
       : (previous.globalCost === null ? null : Number(previous.globalCost));
-    assertPriceNotBelowCost({ price: nextPrice, cost: nextCost });
+    const editingCostAlone = input.standardSalePrice === undefined && input.globalCost !== undefined;
+    if (!editingCostAlone) {
+      assertPriceNotBelowCost({ price: nextPrice, cost: nextCost });
+    }
   }
 
   let nextCategory: { id: string; name: string; isActive: boolean } | null = null;

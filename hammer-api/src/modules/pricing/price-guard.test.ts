@@ -72,3 +72,22 @@ test("canónico (isCanonical=true): permite cargar costo — es la base legítim
 test("producto sin fusión (conversion=null): permite cargar costo con normalidad", () => {
   assert.doesNotThrow(() => assertNotFusionMemberCostWrite(null));
 });
+
+/**
+ * "revisa todo completo" (segundo reporte del mismo bug, captura de Precios
+ * y costos) — caso RESIDUAL que precio<=0 no cubre: standardSalePrice es un
+ * valor real pero desactualizado (no 0), y no tiene ningún editor en toda
+ * la aplicación para un producto ya creado. assertPriceNotBelowCost en sí
+ * sigue bloqueando cuando SE LE PIDE (es correcta y útil en los otros 6
+ * llamadores, donde el precio en conflicto SÍ se puede corregir en el
+ * mismo cambio) — lo que cambió es que updateProduct (catalog/service.ts)
+ * ya no la llama cuando lo único que se edita es el costo de compra. Ver
+ * ese archivo para la lógica completa (no testeable acá sin base de datos:
+ * updateProduct llama a prisma directamente).
+ */
+test("el guard sigue bloqueando cuando SÍ se lo llama con un precio real y desactualizado (esto no cambió — lo que cambió es que updateProduct dejó de llamarlo en el caso 'solo costo')", () => {
+  assert.throws(
+    () => assertPriceNotBelowCost({ price: 50, cost: 55 }),
+    /BELOW_COST_NOT_ALLOWED/,
+  );
+});
