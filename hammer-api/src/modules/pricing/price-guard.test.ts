@@ -31,6 +31,23 @@ test("costo cero: no bloquea (evita falsos positivos de productos con costo 0 en
   assert.doesNotThrow(() => assertPriceNotBelowCost({ price: 50, cost: 0 }));
 });
 
+/**
+ * Bug reportado (captura de Precios y costos, RIV): un producto que vive de
+ * precios por sucursal tiene standardSalePrice=0 (nunca configurado — el
+ * precio real está en BranchProductSetting.branchPrice, que este guard no
+ * ve). Al editar SOLO el costo de compra (globalCost) desde updateProduct,
+ * `assertPriceNotBelowCost({ price: 0, cost: <cualquier costo positivo> })`
+ * bloqueaba SIEMPRE — 0 < cualquier costo positivo. Mismo criterio que
+ * "costo cero" de arriba, aplicado al otro operando.
+ */
+test("precio cero: no bloquea (producto que vive de precio por sucursal — standardSalePrice nunca configurado, no un precio real de C$0)", () => {
+  assert.doesNotThrow(() => assertPriceNotBelowCost({ price: 0, cost: 55 }));
+});
+
+test("precio negativo: tampoco bloquea — mismo criterio que precio 0, no hay con qué comparar", () => {
+  assert.doesNotThrow(() => assertPriceNotBelowCost({ price: -1, cost: 55 }));
+});
+
 test("sin precio en el cambio (undefined): no bloquea — este cambio no toca el precio", () => {
   assert.doesNotThrow(() => assertPriceNotBelowCost({ price: undefined, cost: 100 }));
 });

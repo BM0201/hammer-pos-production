@@ -15,6 +15,20 @@ export function assertPriceNotBelowCost(input: {
   cost: number | null | undefined;
 }): void {
   if (input.price === null || input.price === undefined) return;
+  // Bug reportado (prompt: "revisa este bug eliminalo", captura de Precios y
+  // costos) — precio 0 no es un precio real fijado a propósito, es "nadie lo
+  // puso" (mismo criterio ya aplicado a `cost` dos líneas abajo, y a
+  // computeHasNoPrice en catalog-inventory/service.ts). Sin esto, CUALQUIER
+  // producto que vive de precios por sucursal (standardSalePrice jamás
+  // configurado, efectivamente 0 — el caso normal, no la excepción) bloqueaba
+  // TODO intento de fijar un costo de compra positivo desde updateProduct:
+  // `0 < costo` siempre da true, así que 0 nunca superaba el early-return de
+  // `cost` y el guard reventaba comparando contra un precio que ni existe ni
+  // es el que realmente se cobra (ese vive en BranchProductSetting.branchPrice,
+  // que este guard no ve). El mismo criterio evita el falso positivo simétrico
+  // en la importación Excel (fila con precio 0 = "sin precio general", no
+  // "vender gratis").
+  if (input.price <= 0) return;
   if (input.cost === null || input.cost === undefined || input.cost <= 0) return;
   if (input.price < input.cost) {
     const error = new Error("BELOW_COST_NOT_ALLOWED");
