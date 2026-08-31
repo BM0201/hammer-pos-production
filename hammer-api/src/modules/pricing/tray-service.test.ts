@@ -146,3 +146,53 @@ test("totals (filtrado) sigue reflejando solo lo que matchea — no cambió con 
   assert.equal(result.totals.count, 2, "d2 y d4 son de León");
   assert.equal(result.rows.every((r) => r.branchId === LEON.id), true);
 });
+
+/**
+ * docs/AUDITORIA-MOTOR-PRECIOS-COSTOS.md, hallazgo #2 — REVIEW_FUSION_UNSELLABLE
+ * (checkStockGroupPricingHealth vía pricing-detector.ts) antes quedaba
+ * invisible en la Bandeja: APPLICABLE_TYPES no lo incluía. Fixture propia
+ * (no la compartida de arriba) para no tener que reajustar los conteos de
+ * las pruebas 1-4, que ya fijan un total de 4 decisiones como referencia.
+ */
+const GRANZA = { id: "branch-granza", name: "Granza" };
+
+function fixtureWithFusionDecision(): FakeDecision[] {
+  return [
+    {
+      id: "d5", category: "PRICING", status: "OPEN", proposedActionType: "REVIEW_FUSION_UNSELLABLE",
+      severity: "HIGH", branchId: GRANZA.id, productId: "product-hierro", impactAmount: 0, priorityScore: 8,
+      // checkStockGroupPricingHealth nunca calcula un suggestedPrice — por
+      // eso proposedActionJson es null, y la fila debe salir applicable:false.
+      evidenceJson: { effectivePrice: 1650, effectiveCost: 2234.89, stockGroupId: "group-hierro", stockGroupCode: "HIERRO-1-4" },
+      proposedActionJson: null,
+      branch: GRANZA, product: { id: "product-hierro", sku: "SKU-HIERRO", name: "Hierro de 1/4 5.5mm", categoryId: CAT_ARENA },
+    },
+  ];
+}
+
+test("Finding #2 — REVIEW_FUSION_UNSELLABLE aparece en la Bandeja (antes: invisible, fuera de APPLICABLE_TYPES)", async () => {
+  const db = makeFakeDb(fixtureWithFusionDecision());
+  const result = await getPricingTray({}, db);
+
+  assert.equal(result.rows.length, 1, "antes de este fix, APPLICABLE_TYPES no incluía REVIEW_FUSION_UNSELLABLE y esta fila no aparecía");
+  const row = result.rows[0];
+  assert.equal(row.reason, "BELOW_COST", "mismo síntoma que REVIEW_PRICE_BELOW_COST — precio efectivo bajo el costo efectivo");
+  assert.equal(row.currentPrice, 1650, "lee evidence.effectivePrice como fallback de currentPrice");
+  assert.equal(row.effectiveCost, 2234.89);
+  assert.equal(row.applicable, false, "checkStockGroupPricingHealth no calcula un precio sugerido — se ve pero no se aplica con un clic");
+  assert.equal(row.costLooksWrong, false, "no es el mismo síntoma que costLooksWrong — no confundir los dos íconos de advertencia");
+});
+
+test("Finding #2 — filtrar por reason: BELOW_COST incluye REVIEW_FUSION_UNSELLABLE junto con los otros dos tipos", async () => {
+  const db = makeFakeDb(fixtureWithFusionDecision());
+  const result = await getPricingTray({ reason: "BELOW_COST" }, db);
+  assert.equal(result.rows.length, 1);
+});
+
+test("Finding #2 — filtrar por reason: MARGIN_POLICY o COST_STALE NO incluye REVIEW_FUSION_UNSELLABLE", async () => {
+  const db = makeFakeDb(fixtureWithFusionDecision());
+  const marginResult = await getPricingTray({ reason: "MARGIN_POLICY" }, db);
+  const staleResult = await getPricingTray({ reason: "COST_STALE" }, db);
+  assert.equal(marginResult.rows.length, 0);
+  assert.equal(staleResult.rows.length, 0);
+});

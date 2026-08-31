@@ -32,6 +32,16 @@ export type FusionPricingIssue = {
   detail: string;
   expected: string;
   actual: string;
+  /**
+   * docs/AUDITORIA-MOTOR-PRECIOS-COSTOS.md, hallazgo #2 — solo poblados
+   * para UNSELLABLE (único kind con un precio/costo limpio de un solo
+   * producto; los demás kinds mezclan varios productId o no tienen un par
+   * precio/costo comparable). pricing-detector.ts los copia a evidenceJson
+   * para que tray-service.ts pueda armar una fila de Bandeja sin volver a
+   * consultar precio/costo.
+   */
+  effectivePrice?: number;
+  effectiveCost?: number;
 };
 
 export type FusionPricingHealthResult = {
@@ -126,6 +136,8 @@ export async function checkStockGroupPricingHealth(
           detail: "precio efectivo < costo efectivo — el guard BELOW_COST_NOT_ALLOWED va a bloquear la venta en el mostrador",
           expected: `precio >= ${pricing.effectiveCost.toString()}`,
           actual: pricing.effectivePrice.toString(),
+          effectivePrice: pricing.effectivePrice.toNumber(),
+          effectiveCost: pricing.effectiveCost.toNumber(),
         });
       }
 

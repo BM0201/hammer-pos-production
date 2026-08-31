@@ -176,6 +176,39 @@ test("Prueba 7 (doc): precio C$1.00 y costo efectivo C$55 → UNSELLABLE (el gua
   assert.ok(issue, "debe reportar UNSELLABLE — el mismo caso que hoy ya bloquea el 409 en el mostrador");
 });
 
+/**
+ * docs/AUDITORIA-MOTOR-PRECIOS-COSTOS.md, hallazgo #2 — UNSELLABLE
+ * necesita effectivePrice/effectiveCost NUMÉRICOS en el issue (no solo en
+ * los strings de detail/expected/actual) para que pricing-detector.ts
+ * pueda copiarlos a evidenceJson y tray-service.ts arme una fila de
+ * Bandeja sin volver a consultar precio/costo. Antes de este fix el issue
+ * no traía estos campos — la Bandeja no tenía de dónde leerlos.
+ */
+test("Finding #2 — UNSELLABLE trae effectivePrice/effectiveCost numéricos en el issue", async () => {
+  const db = createArenaFakeDb({
+    products: { [CANONICAL_ID]: { globalCost: new Prisma.Decimal(55) } },
+    settings: [{ productId: CANONICAL_ID, branchPrice: new Prisma.Decimal(1) }],
+    canonicalBalance: { quantityOnHand: 10, weightedAverageCost: 55 },
+  });
+  const result = await checkStockGroupPricingHealth(db, { stockGroupId: STOCK_GROUP_ID, branchIds: [BRANCH_ID] });
+  const issue = result.issues.find((i) => i.kind === "UNSELLABLE" && i.productId === CANONICAL_ID);
+  assert.ok(issue);
+  assert.equal(issue!.effectivePrice, 1);
+  assert.equal(issue!.effectiveCost, 55);
+});
+
+test("Finding #2 — PLACEHOLDER_COST (otro kind) NO trae effectivePrice/effectiveCost — solo UNSELLABLE los popula", async () => {
+  const db = createArenaFakeDb({
+    products: { [CANONICAL_ID]: { globalCost: new Prisma.Decimal(1) } },
+    canonicalBalance: { quantityOnHand: 126.5, weightedAverageCost: 0 },
+  });
+  const result = await checkStockGroupPricingHealth(db, { stockGroupId: STOCK_GROUP_ID, branchIds: [BRANCH_ID] });
+  const issue = result.issues.find((i) => i.kind === "PLACEHOLDER_COST" && i.productId === CANONICAL_ID);
+  assert.ok(issue);
+  assert.equal(issue!.effectivePrice, undefined);
+  assert.equal(issue!.effectiveCost, undefined);
+});
+
 test("margen absurdamente alto (costo de relleno) → MARGIN_OUTLIER, el caso de las latas al 97.14%", async () => {
   const db = createArenaFakeDb({
     products: { [CANONICAL_ID]: { globalCost: new Prisma.Decimal(1) } },

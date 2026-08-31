@@ -13,23 +13,39 @@ import { assertPriceApplicable, applySuggestedPriceTx } from "@/modules/pricing/
  * el resto de las decisiones PRICING (spread entre sucursales, CZ con
  * stock, fusiones, etc.) son informativas en Brain y no tienen lugar en
  * esta bandeja, que existe para decisiones con un botón "aplicar".
+ *
+ * docs/AUDITORIA-MOTOR-PRECIOS-COSTOS.md, hallazgo #2 — excepción a lo de
+ * arriba: REVIEW_FUSION_UNSELLABLE (precio efectivo < costo efectivo en un
+ * miembro de fusión, exactamente el guard BELOW_COST_NOT_ALLOWED que
+ * bloquea la venta en el mostrador) SÍ entra acá, porque el síntoma es
+ * IDÉNTICO a REVIEW_PRICE_BELOW_COST — un producto invendible hoy — y
+ * antes de este fix Brain lo detectaba pero quedaba invisible: no
+ * generaba proposedActionJson (checkStockGroupPricingHealth resuelve el
+ * precio/costo por fusión, no calcula un precio sugerido), así que en la
+ * bandeja aparece como fila informativa, checkbox deshabilitado, mismo
+ * tratamiento que costLooksWrong — visible para que alguien lo revise, no
+ * aplicable con un clic porque no hay un precio sugerido que aplicar. Los
+ * otros cuatro FusionPricingIssueKind (MARGIN_OUTLIER, PLACEHOLDER_COST,
+ * COST_BASIS_CONFLICT, PRICE_BASIS_CONFLICT) quedan fuera deliberadamente:
+ * no tienen un precio/costo de un solo producto que esta fila sepa
+ * mostrar (COST/PRICE_BASIS_CONFLICT implican varios productId a la vez).
  */
-const APPLICABLE_TYPES = ["REVIEW_PRICE_BELOW_COST", "REVIEW_PRICE_MARGIN_POLICY", "REVIEW_BRANCH_COST_PRICE", "COST_CHANGED_PRICE_STALE"] as const;
+const APPLICABLE_TYPES = ["REVIEW_PRICE_BELOW_COST", "REVIEW_PRICE_MARGIN_POLICY", "REVIEW_BRANCH_COST_PRICE", "COST_CHANGED_PRICE_STALE", "REVIEW_FUSION_UNSELLABLE"] as const;
 
 export type PricingTrayReason = "BELOW_COST" | "MARGIN_POLICY" | "COST_STALE";
 
 const REASON_TO_TYPES: Record<PricingTrayReason, readonly string[]> = {
-  // REVIEW_PRICE_BELOW_COST y REVIEW_BRANCH_COST_PRICE son el mismo
-  // síntoma ("el precio ya no cubre el costo") detectado por dos caminos
-  // distintos del detector — misma sección "Vendiendo bajo el costo" en la
-  // pantalla (§1.5).
-  BELOW_COST: ["REVIEW_PRICE_BELOW_COST", "REVIEW_BRANCH_COST_PRICE"],
+  // REVIEW_PRICE_BELOW_COST, REVIEW_BRANCH_COST_PRICE y REVIEW_FUSION_UNSELLABLE
+  // son el mismo síntoma ("el precio ya no cubre el costo") detectado por
+  // tres caminos distintos del detector — misma sección "Vendiendo bajo el
+  // costo" en la pantalla (§1.5).
+  BELOW_COST: ["REVIEW_PRICE_BELOW_COST", "REVIEW_BRANCH_COST_PRICE", "REVIEW_FUSION_UNSELLABLE"],
   MARGIN_POLICY: ["REVIEW_PRICE_MARGIN_POLICY"],
   COST_STALE: ["COST_CHANGED_PRICE_STALE"],
 };
 
 function reasonForType(type: string | null): PricingTrayReason {
-  if (type === "REVIEW_PRICE_BELOW_COST" || type === "REVIEW_BRANCH_COST_PRICE") return "BELOW_COST";
+  if (type === "REVIEW_PRICE_BELOW_COST" || type === "REVIEW_BRANCH_COST_PRICE" || type === "REVIEW_FUSION_UNSELLABLE") return "BELOW_COST";
   if (type === "REVIEW_PRICE_MARGIN_POLICY") return "MARGIN_POLICY";
   return "COST_STALE";
 }
