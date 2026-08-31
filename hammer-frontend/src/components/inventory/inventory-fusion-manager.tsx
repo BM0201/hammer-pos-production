@@ -136,15 +136,38 @@ type FusionMemberRowProps = {
   onMarkBase: () => void;
   onTogglePackage: () => void;
   onRemove?: () => void;
+  /**
+   * "eso no debe inferir bajo ningun aspecto nada de lo relacionado con el
+   * motor" — el nombre (Catálogo) y la unidad/factor (esta fusión) son y
+   * siguen siendo dos campos independientes, sin ningún camino donde uno
+   * cambie al otro; lo que estaba mal era tener que ir a DOS pantallas
+   * distintas para corregir una sola presentación mal cargada (el caso
+   * real: "220 Paladas" con factor equivocado). Opcional porque el
+   * asistente de creación reutiliza esta misma fila para productos que ya
+   * existen en el catálogo — ahí renombrar no es parte del flujo.
+   */
+  onNameChange?: (value: string) => void;
 };
 
 function FusionMemberRow({
   sku, name, saleUnit, conversionFactor, isCanonical, isPackagePresentation, canonicalSaleUnit,
-  onUnitChange, onFactorChange, onMarkBase, onTogglePackage, onRemove,
+  onUnitChange, onFactorChange, onMarkBase, onTogglePackage, onRemove, onNameChange,
 }: FusionMemberRowProps) {
   return (
     <div className="flex flex-wrap items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2">
-      <b className="flex-1 text-[12.5px]">{sku} — {name}</b>
+      {onNameChange ? (
+        <label className="flex flex-1 items-center gap-1.5 text-[12.5px]">
+          <span className="font-mono text-[11px] text-[var(--color-text-muted)]">{sku}</span>
+          <input
+            value={name}
+            onChange={(e) => onNameChange(e.target.value)}
+            title="Nombre del producto — mismo campo que Catálogo, editable acá para no tener que ir a otra pantalla"
+            className="min-w-0 flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-0.5 font-semibold"
+          />
+        </label>
+      ) : (
+        <b className="flex-1 text-[12.5px]">{sku} — {name}</b>
+      )}
 
       <label className="flex items-center gap-1 text-[11.5px] text-[var(--color-text-muted)]">
         Se vende por
@@ -939,6 +962,9 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
   function updateFactor(productId: string, value: number) {
     setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, conversionFactor: value } : m)));
   }
+  function updateName(productId: string, value: string) {
+    setMembers((prev) => prev.map((m) => (m.productId === productId ? { ...m, name: value } : m)));
+  }
   function markAsBase(productId: string) {
     // Mismo criterio que en la creación: cambiar la base invalida los
     // factores de los demás — se ponen en 0 en vez de arrastrar equivalencias
@@ -969,8 +995,39 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
       else showToast("error", "Cada presentación necesita un factor de conversión mayor que 0.");
       return;
     }
+    // El nombre (Catálogo, Product.name) y la unidad/factor de venta (esta
+    // fusión, ProductStockGroupMember) son y siguen siendo dos campos
+    // independientes — no hay ningún camino donde uno alimente al otro, y
+    // no se agrega ninguno acá. Lo que se corrige es tener que ir a DOS
+    // pantallas distintas para arreglar UNA presentación mal cargada (el
+    // caso real: "220 Paladas" con el nombre y el factor equivocados a la
+    // vez) — cada campo se guarda con su propio endpoint, sin mezclarse.
+    const renamed = members.filter((m) => m.name.trim() !== (group.members.find((gm) => gm.productId === m.productId)?.productName ?? ""));
+    if (renamed.some((m) => !m.name.trim())) {
+      showToast("error", "El nombre de un producto no puede quedar vacío.");
+      return;
+    }
     setSaving(true);
     try {
+      if (renamed.length > 0) {
+        const renameResults = await Promise.all(renamed.map(async (m) => {
+          const res = await apiFetch(`/api/catalog/products/${m.productId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: m.name.trim() }),
+          });
+          if (res.ok) return { sku: m.sku, ok: true as const };
+          const raw = await readJson(res).catch(() => null);
+          return { sku: m.sku, ok: false as const, message: raw?.error?.message ?? "No se pudo renombrar." };
+        }));
+        const renameFailures = renameResults.filter((r): r is { sku: string; ok: false; message: string } => !r.ok);
+        if (renameFailures.length > 0) {
+          // No corta acá: un nombre que falló no debe bloquear corregir la
+          // unidad/factor de las demás presentaciones — son independientes.
+          showToast("error", `No se pudo renombrar ${renameFailures.map((r) => r.sku).join(", ")}: ${renameFailures[0].message}`);
+        }
+      }
+
       const res = await apiFetch(`/api/inventory/stock-groups/${group.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -999,7 +1056,7 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
     <ModalShell title={`Editar presentaciones — ${group.name}`} onClose={onClose} wide>
       <div className="space-y-4">
         <p className="text-[12.5px] text-[var(--color-text-muted)]">
-          Corregí la unidad de venta y el factor de cada presentación. No agrega ni quita productos de la fusión.
+          Corregí el nombre, la unidad de venta y el factor de cada presentación. No agrega ni quita productos de la fusión.
         </p>
         <div className="space-y-2">
           {members.map((m) => (
@@ -1016,6 +1073,7 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
               onFactorChange={(value) => updateFactor(m.productId, value)}
               onMarkBase={() => markAsBase(m.productId)}
               onTogglePackage={() => togglePackage(m.productId)}
+              onNameChange={(value) => updateName(m.productId, value)}
             />
           ))}
           <datalist id="presentation-units">
