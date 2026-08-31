@@ -29,6 +29,14 @@ function createFakeTx(initial: { standardSalePrice: number | null; branchCost: n
         return product;
       },
     },
+    // "revisa todo... para evitar bugs" — applyProductionCostsTx ahora
+    // resuelve la conversión de fusión de finishedProductId antes de
+    // escribir el costo (resolveGlobalCostWriteTarget). El producto de
+    // este test no está en ninguna fusión — null, el mismo caso que ya
+    // maneja getProductStockConversion cuando findFirst no encuentra membresía.
+    productStockGroupMember: {
+      findFirst: async () => null,
+    },
     branchProductSetting: {
       findUnique: async () => branchSetting,
       upsert: async (args: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
@@ -176,6 +184,84 @@ test("resolveProductionPricing: KEEP_CURRENT conserva el precio actual sin impor
   });
   assert.equal(nextPrice.toNumber(), 20);
   assert.equal(priceApprovalRequired, false);
+});
+
+/**
+ * "revisa todo... para evitar bugs" — applyProductionCostsTx escribía
+ * branchCost SIEMPRE en finishedProductId, incluso cuando ese producto es
+ * un miembro DERIVADO de una fusión — resolveEffectivePricing ignora el
+ * branchCost propio de un derivado (solo lee el del canónico), así que el
+ * costo de un lote de producción quedaba en una fila que el motor de
+ * precios nunca lee. Este test prueba el redirect: el costo termina en el
+ * canónico, convertido por el factor — nunca en el derivado — y el precio
+ * (standardSalePrice/branchPrice) se queda en finishedProductId, sin tocar.
+ */
+const CANONICAL_ID = "prod-cemento-saco";
+const DERIVED_ID = "prod-cemento-pallet"; // 1 pallet = 40 sacos
+
+function createFakeTxWithFusion(input: { derivedInitial: { standardSalePrice: number | null; branchCost: number | null; branchPrice: number | null }; conversionFactor: number }) {
+  const base = createFakeTx(input.derivedInitial);
+  const canonicalSetting: { branchCost: Prisma.Decimal | null; branchPrice: Prisma.Decimal | null } = { branchCost: null, branchPrice: null };
+  const tx = base.tx as unknown as {
+    branchProductSetting: { upsert: (args: { where: { branchId_productId: { productId: string } }; create: Record<string, unknown>; update: Record<string, unknown> }) => Promise<unknown> };
+    productStockGroupMember: { findFirst: () => Promise<unknown> };
+  };
+  tx.productStockGroupMember.findFirst = async () => ({
+    stockGroupId: "sg-cemento",
+    isActive: true,
+    isCanonical: false,
+    conversionFactor: new Prisma.Decimal(input.conversionFactor),
+    saleUnit: "PALLET",
+    isPackagePresentation: false,
+    stockGroup: {
+      isActive: true,
+      code: "CEMENTO-GRP",
+      name: "Cemento",
+      baseUnit: "SACO",
+      packageUnit: null,
+      conversionFactorToBase: null,
+      tracksPackages: false,
+      approximateFactor: false,
+      minimumClosedPackageReserve: new Prisma.Decimal(1),
+      autoOpenForUnitSale: true,
+      products: [
+        { productId: CANONICAL_ID, isCanonical: true, conversionFactor: new Prisma.Decimal(1) },
+        { productId: DERIVED_ID, isCanonical: false, conversionFactor: new Prisma.Decimal(input.conversionFactor) },
+      ],
+    },
+  });
+  const originalUpsert = tx.branchProductSetting.upsert.bind(tx.branchProductSetting);
+  tx.branchProductSetting.upsert = async (args) => {
+    if (args.where.branchId_productId.productId === CANONICAL_ID) {
+      const data = (canonicalSetting.branchCost === null ? args.create : args.update) as { branchCost: Prisma.Decimal };
+      canonicalSetting.branchCost = data.branchCost;
+      return canonicalSetting;
+    }
+    return originalUpsert(args);
+  };
+  return { ...base, getCanonicalSetting: () => canonicalSetting };
+}
+
+test("Prueba LA QUE IMPORTA — producto terminado derivado de una fusión: el costo del lote va al canónico, convertido por el factor, no al derivado", async () => {
+  const { tx, getBranchSetting, getCanonicalSetting, getProduct } = createFakeTxWithFusion({
+    derivedInitial: { standardSalePrice: 12, branchCost: 10.7, branchPrice: 12 },
+    conversionFactor: 40,
+  });
+
+  await applyProductionCostsTx(tx, {
+    actorUserId: "user-1",
+    branchId: BRANCH_ID,
+    finishedProductId: DERIVED_ID,
+    unitCostSaleUnit: new Prisma.Decimal(400), // costo del PALLET completo
+    pricePolicy: "KEEP_CURRENT",
+    targetMarginPct: new Prisma.Decimal(0.3),
+    roundingMultiple: new Prisma.Decimal(1),
+    priceApprovalDeltaPct: new Prisma.Decimal(0.15),
+  });
+
+  assert.equal(getCanonicalSetting().branchCost?.toNumber(), 10, "400 / 40 = 10 — el costo real por saco, en el canónico");
+  assert.equal(getBranchSetting()?.branchCost?.toNumber() ?? null, 10.7, "el derivado NUNCA guarda su propio costo — sigue con el valor viejo, no 400");
+  assert.equal(getProduct().standardSalePrice?.toNumber(), 12, "el precio de venta se queda en el producto terminado (derivado), sin redirigirse — KEEP_CURRENT, sin tocar");
 });
 
 test("resolveProductionPricing: sin precio actual (producto nuevo) nunca requiere aprobación", () => {

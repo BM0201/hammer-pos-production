@@ -52,6 +52,14 @@ function createTimberFakeTx(initial: { baseCost: number; sellingPrice: number; s
         return timberProduct;
       },
     },
+    // "revisa todo... para evitar bugs" — applyTimberCostsTx ahora resuelve
+    // la conversión de fusión de input.productId antes de escribir el
+    // costo (resolveGlobalCostWriteTarget). El producto de este test no
+    // está en ninguna fusión — null, el mismo caso que ya maneja
+    // getProductStockConversion cuando findFirst no encuentra membresía.
+    productStockGroupMember: {
+      findFirst: async () => null,
+    },
     branchProductSetting: {
       findUnique: async () => branchSetting,
       upsert: async (args: { create: Record<string, unknown>; update: Record<string, unknown> }) => {
@@ -188,4 +196,67 @@ test("Test de inyeccion — producto nuevo (sin BranchProductSetting previo) cre
 
   assert.equal(getBranchSetting()?.branchCost?.toNumber(), 320);
   assert.equal(getBranchSetting()?.branchPrice?.toNumber(), 640.8);
+});
+
+/**
+ * "revisa todo... para evitar bugs" — applyTimberCostsTx escribía
+ * branchCost SIEMPRE en input.productId, incluso si ese producto de
+ * madera es un miembro DERIVADO de una fusión (nada lo impide) —
+ * resolveEffectivePricing ignora el branchCost propio de un derivado. El
+ * precio (standardSalePrice/branchPrice) se queda siempre en
+ * input.productId — los precios de venta por presentación son
+ * individuales, nunca se redirigen.
+ */
+const TIMBER_CANONICAL_ID = "prod-tabla-1x12";
+const TIMBER_DERIVED_ID = "prod-tabla-1x12-atado"; // 1 atado = 10 tablas
+
+test("Prueba LA QUE IMPORTA — producto de madera derivado de una fusión: el costo va al canónico, convertido por el factor", async () => {
+  const { tx, getBranchSetting, getProduct } = createTimberFakeTx({
+    baseCost: 320, sellingPrice: 640.8, standardSalePrice: 640.8, branchCost: 320, branchPrice: 640.8,
+  });
+  const canonicalSetting: { branchCost: Prisma.Decimal | null } = { branchCost: null };
+  const fakeTx = tx as unknown as {
+    branchProductSetting: { upsert: (args: { where: { branchId_productId: { productId: string } }; create: Record<string, unknown>; update: Record<string, unknown> }) => Promise<unknown> };
+    productStockGroupMember: { findFirst: () => Promise<unknown> };
+  };
+  fakeTx.productStockGroupMember.findFirst = async () => ({
+    stockGroupId: "sg-tabla", isActive: true, isCanonical: false, conversionFactor: new Prisma.Decimal(10), saleUnit: "ATADO", isPackagePresentation: false,
+    stockGroup: {
+      isActive: true, code: "TABLA-GRP", name: "Tabla 1x12", baseUnit: "TABLA", packageUnit: null, conversionFactorToBase: null,
+      tracksPackages: false, approximateFactor: false, minimumClosedPackageReserve: new Prisma.Decimal(1), autoOpenForUnitSale: true,
+      products: [
+        { productId: TIMBER_CANONICAL_ID, isCanonical: true, conversionFactor: new Prisma.Decimal(1) },
+        { productId: TIMBER_DERIVED_ID, isCanonical: false, conversionFactor: new Prisma.Decimal(10) },
+      ],
+    },
+  });
+  const originalUpsert = fakeTx.branchProductSetting.upsert.bind(fakeTx.branchProductSetting);
+  fakeTx.branchProductSetting.upsert = async (args) => {
+    if (args.where.branchId_productId.productId === TIMBER_CANONICAL_ID) {
+      const data = (canonicalSetting.branchCost === null ? args.create : args.update) as { branchCost: Prisma.Decimal };
+      canonicalSetting.branchCost = data.branchCost;
+      return canonicalSetting;
+    }
+    return originalUpsert(args);
+  };
+
+  await applyTimberCostsTx(tx, {
+    actorUserId: "user-1",
+    branchId: BRANCH_ID,
+    productId: TIMBER_DERIVED_ID,
+    timberProductId: TIMBER_PRODUCT_ID,
+    priceGroup: "TABLA",
+    boardFeet: 16,
+    pricePerInch: 8.9,
+    varaLength: 6,
+    costPerPiece: 3000, // costo del ATADO completo (10 tablas)
+    recalculatedSellingPrice: 5000,
+    pricePolicy: "COST_ONLY",
+    targetMarginPercent: 0.4,
+    targetMarginRoundingMultiple: 1,
+  });
+
+  assert.equal(canonicalSetting.branchCost?.toNumber(), 300, "3000 / 10 = 300 — el costo real por tabla, en el canónico");
+  assert.equal(getBranchSetting()?.branchCost?.toNumber() ?? null, 320, "el derivado NUNCA guarda su propio costo — sigue con el valor viejo, no 3000");
+  assert.equal(getProduct().standardSalePrice.toNumber(), 640.8, "el precio de venta se queda en el producto (derivado) — COST_ONLY, sin tocar");
 });

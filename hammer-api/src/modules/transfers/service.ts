@@ -8,6 +8,7 @@ import {
   convertSaleQtyToBaseQty,
   getSharedInventoryBalance,
 } from "@/modules/inventory/unit-conversion";
+import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 
 function generateTransferNumber(): string {
   const ts = Date.now().toString(36).toUpperCase();
@@ -306,12 +307,24 @@ export async function receiveTransfer(id: string, userId: string, input: Receive
       });
 
       if (input.updateBranchCost) {
-        const branchCost = shared.conversion
+        const branchCostForLine = shared.conversion
           ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: movementResult.balance.weightedAverageCost, conversionFactor: shared.conversion.conversionFactor })
           : movementResult.balance.weightedAverageCost;
+        // "revisa todo... para evitar bugs" — el número de arriba ya está
+        // bien calculado (WAC del canónico convertido a la unidad de
+        // line.productId), pero se guardaba SIEMPRE en line.productId. Si
+        // line.productId es un miembro DERIVADO, resolveEffectivePricing
+        // ignora su branchCost propio — dato fantasma. Mismo redirect que
+        // updateProduct (catalog/service.ts) usa para globalCost.
+        const costTarget = resolveGlobalCostWriteTarget({
+          requestedProductId: line.productId,
+          enteredCost: branchCostForLine.toNumber(),
+          conversion: shared.conversion,
+        });
+        const branchCost = new Prisma.Decimal(costTarget.costForTarget);
         await tx.branchProductSetting.upsert({
-          where: { branchId_productId: { branchId: transfer.toBranchId, productId: line.productId } },
-          create: { branchId: transfer.toBranchId, productId: line.productId, branchCost },
+          where: { branchId_productId: { branchId: transfer.toBranchId, productId: costTarget.targetProductId } },
+          create: { branchId: transfer.toBranchId, productId: costTarget.targetProductId, branchCost },
           update: { branchCost },
         });
       }

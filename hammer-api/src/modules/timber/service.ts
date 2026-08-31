@@ -24,7 +24,9 @@ import { Decimal } from "@prisma/client/runtime/library";
 import { createHash } from "crypto";
 import { parseWoodDimensions } from "@/modules/catalog/sku-generator";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
+import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import type { Prisma, TimberTripLine } from "@prisma/client";
 
 /** Default category used when auto-creating timber products on inventory injection. */
@@ -221,25 +223,46 @@ export async function applyTimberCostsTx(
     data: { standardSalePrice: new Decimal(sellingPrice) },
   });
 
+  // "revisa todo... para evitar bugs" — si input.productId es un miembro
+  // DERIVADO de una fusión (un producto de madera podría estarlo, nada lo
+  // impide), branchCost quedaba guardado en una fila que
+  // resolveEffectivePricing ignora (solo lee la del canónico) — dato
+  // fantasma. El precio SÍ se queda en input.productId siempre (los
+  // precios de venta por presentación son individuales, nunca se
+  // redirigen) — mismo criterio que el resto del motor.
+  const timberConversion = await getProductStockConversion(tx, input.productId);
+  const timberCostTarget = resolveGlobalCostWriteTarget({
+    requestedProductId: input.productId,
+    enteredCost: input.costPerPiece,
+    conversion: timberConversion,
+  });
   await tx.branchProductSetting.upsert({
     where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
     create: {
       branchId: input.branchId,
       productId: input.productId,
-      branchCost: new Decimal(input.costPerPiece),
       branchPrice: new Decimal(sellingPrice),
       priceSource: "TIMBER_TRIP",
       lastPriceUpdateAt: new Date(),
       priceUpdatedByUserId: input.actorUserId,
+      ...(timberCostTarget.redirected ? {} : { branchCost: new Decimal(timberCostTarget.costForTarget) }),
     },
     update: {
-      branchCost: new Decimal(input.costPerPiece),
       branchPrice: new Decimal(sellingPrice),
       priceSource: "TIMBER_TRIP",
       lastPriceUpdateAt: new Date(),
       priceUpdatedByUserId: input.actorUserId,
+      ...(timberCostTarget.redirected ? {} : { branchCost: new Decimal(timberCostTarget.costForTarget) }),
     },
   });
+  if (timberCostTarget.redirected) {
+    const canonicalBranchCost = new Decimal(timberCostTarget.costForTarget);
+    await tx.branchProductSetting.upsert({
+      where: { branchId_productId: { branchId: input.branchId, productId: timberCostTarget.targetProductId } },
+      create: { branchId: input.branchId, productId: timberCostTarget.targetProductId, branchCost: canonicalBranchCost },
+      update: { branchCost: canonicalBranchCost },
+    });
+  }
 
   const after: TimberCostInjectionSnapshot = {
     baseCost: input.costPerPiece,

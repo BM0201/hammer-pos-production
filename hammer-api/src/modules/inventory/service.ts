@@ -15,7 +15,7 @@ import {
   getSharedInventoryBalance,
   resolveInventoryProductForMovement,
 } from "@/modules/inventory/unit-conversion";
-import { branchProductScopeFilter, excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
+import { branchProductScopeFilter, excludeDerivedStockGroupMembers, resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
 import { getProductionReservedBaseQtyTx } from "@/modules/production/reservations";
 
@@ -1757,14 +1757,30 @@ async function createOpeningBalanceTx(
     }
 
     if (input.costMode === "SET_BRANCH_COST") {
+      // "revisa todo... para evitar bugs" — este upsert escribía siempre
+      // sobre input.productId, mientras el stock/WAC de arriba en esta
+      // misma función SÍ redirige a shared.inventoryProductId (el
+      // canónico) cuando corresponde. Para un miembro DERIVADO de una
+      // fusión, resolveEffectivePricing IGNORA su branchCost propio —
+      // solo lee el del canónico — así que este costo quedaba guardado
+      // en una fila que el motor de precios nunca lee: dato fantasma, sin
+      // efecto real, exactamente la clase de bug que esta sesión viene
+      // cerrando (piedrín, arena). Mismo redirect que ya usa updateProduct
+      // (catalog/service.ts) para globalCost, acá aplicado a branchCost.
+      const costTarget = resolveGlobalCostWriteTarget({
+        requestedProductId: input.productId,
+        enteredCost: unitCost.toNumber(),
+        conversion,
+      });
+      const branchCostForTarget = new Prisma.Decimal(costTarget.costForTarget);
       await tx.branchProductSetting.upsert({
-        where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+        where: { branchId_productId: { branchId: input.branchId, productId: costTarget.targetProductId } },
         create: {
           branchId: input.branchId,
-          productId: input.productId,
-          branchCost: unitCost,
+          productId: costTarget.targetProductId,
+          branchCost: branchCostForTarget,
         },
-        update: { branchCost: unitCost },
+        update: { branchCost: branchCostForTarget },
       });
     }
 

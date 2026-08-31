@@ -10,6 +10,7 @@ import {
   getSharedInventoryBalance,
 } from "@/modules/inventory/unit-conversion";
 import { buildProductSearchWhere } from "@/modules/catalog/product-search";
+import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { calculateBatchCosts, calculateTargetMarginPrice, computeBatchCostSummary } from "./calculations";
 import { reserveBatchInputsTx, releaseBatchInputsTx, getProductionReservedBaseQtyTx, type ReservationResult } from "./reservations";
 import type {
@@ -677,27 +678,47 @@ export async function applyProductionCostsTx(
     });
   }
 
+  // "revisa todo... para evitar bugs" — si el producto terminado es un
+  // miembro DERIVADO de una fusión, escribir branchCost en su propia fila
+  // quedaba ignorado (resolveEffectivePricing solo lee la del canónico)
+  // — dato fantasma. El precio SÍ se queda siempre en finishedProductId
+  // (los precios de venta por presentación son individuales).
+  const finishedConversion = await getProductStockConversion(tx, input.finishedProductId);
+  const costTarget = resolveGlobalCostWriteTarget({
+    requestedProductId: input.finishedProductId,
+    enteredCost: input.unitCostSaleUnit.toNumber(),
+    conversion: finishedConversion,
+  });
+  const branchCostForTarget = new Prisma.Decimal(costTarget.costForTarget);
+
   await tx.branchProductSetting.upsert({
     where: { branchId_productId: { branchId: input.branchId, productId: input.finishedProductId } },
     create: {
       branchId: input.branchId,
       productId: input.finishedProductId,
-      branchCost: input.unitCostSaleUnit,
       branchPrice: nextPrice,
       priceSource: "PRODUCTION_BATCH",
       lastPriceUpdateAt: new Date(),
       priceUpdatedByUserId: input.actorUserId,
+      ...(costTarget.redirected ? {} : { branchCost: branchCostForTarget }),
     },
     update: priceApprovalRequired
-      ? { branchCost: input.unitCostSaleUnit }
+      ? (costTarget.redirected ? {} : { branchCost: branchCostForTarget })
       : {
-          branchCost: input.unitCostSaleUnit,
-          branchPrice: nextPrice,
           priceSource: "PRODUCTION_BATCH",
           lastPriceUpdateAt: new Date(),
           priceUpdatedByUserId: input.actorUserId,
+          branchPrice: nextPrice,
+          ...(costTarget.redirected ? {} : { branchCost: branchCostForTarget }),
         },
   });
+  if (costTarget.redirected) {
+    await tx.branchProductSetting.upsert({
+      where: { branchId_productId: { branchId: input.branchId, productId: costTarget.targetProductId } },
+      create: { branchId: input.branchId, productId: costTarget.targetProductId, branchCost: branchCostForTarget },
+      update: { branchCost: branchCostForTarget },
+    });
+  }
 
   const after: ProductionCostInjectionSnapshot = {
     unitCost: input.unitCostSaleUnit.toNumber(),

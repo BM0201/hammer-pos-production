@@ -1,6 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
+import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
+import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
 
 type AllocationMethod = "BY_VALUE" | "BY_QUANTITY" | "MANUAL";
 
@@ -316,15 +318,29 @@ export async function applyInternalFreightTrip(id: string, actorUserId?: string)
       const baseCost = Number(line.lineValue) / quantity;
       const newBranchCost = baseCost + Number(line.allocatedFreightPerUnit);
 
+      // "revisa todo... para evitar bugs" — si line.productId es un
+      // miembro DERIVADO de una fusión, branchCost quedaba guardado en su
+      // propia fila, que resolveEffectivePricing ignora (solo lee la del
+      // canónico) — dato fantasma, el flete nunca llegaba a afectar el
+      // costo real. newBranchCost (sin convertir) se sigue usando abajo
+      // para el registro informativo de ProductPricing — eso describe
+      // esta presentación puntual, no se redirige.
+      const freightConversion = await getProductStockConversion(tx, line.productId);
+      const freightCostTarget = resolveGlobalCostWriteTarget({
+        requestedProductId: line.productId,
+        enteredCost: newBranchCost,
+        conversion: freightConversion,
+      });
+      const freightBranchCost = decimal(freightCostTarget.costForTarget);
       await tx.branchProductSetting.upsert({
-        where: { branchId_productId: { branchId: destinationBranchId, productId: line.productId } },
+        where: { branchId_productId: { branchId: destinationBranchId, productId: freightCostTarget.targetProductId } },
         create: {
           branchId: destinationBranchId,
-          productId: line.productId,
-          branchCost: decimal(newBranchCost),
+          productId: freightCostTarget.targetProductId,
+          branchCost: freightBranchCost,
         },
         update: {
-          branchCost: decimal(newBranchCost),
+          branchCost: freightBranchCost,
         },
       });
 
