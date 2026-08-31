@@ -7,6 +7,7 @@ import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { assertPriceNotBelowCost, assertNotFusionMemberCostWrite } from "@/modules/pricing/price-guard";
 import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
+import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
 
 export const INVENTORY_IMPORT_BATCH_STATUS = {
   UPLOADED: "UPLOADED",
@@ -1011,10 +1012,53 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
             // pisaría en silencio otra vez, igual que updateProduct. El
             // precio SÍ se permite (es un override legítimo, §2.2).
             if (unitCost !== null) {
+              let conversion: Awaited<ReturnType<typeof getProductStockConversion>> = null;
               try {
-                assertNotFusionMemberCostWrite(await getProductStockConversion(tx, product.id));
+                conversion = await getProductStockConversion(tx, product.id);
+                assertNotFusionMemberCostWrite(conversion);
               } catch {
                 throw new ImportLineExecutionError("Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", line.id, line.rowNumber);
+              }
+
+              // docs/AUDITORIA-MOTOR-PRECIOS-COSTOS.md, hallazgo #4 — mismo
+              // guard que updateProduct (catalog/service.ts), acá era el
+              // tercer camino sin cubrir: un producto que a veces se compra
+              // suelto y a veces en bulto puede llegar en una fila de Excel
+              // con el costo del BULTO tecleado en la columna de costo por
+              // unidad de una fila que apunta al CANÓNICO — corrompe el
+              // costo derivado de todo el grupo igual que si se hubiera
+              // tecleado en la pantalla. Sin columna de "reintentar con
+              // costo alto" en el Excel (prioridad baja del hallazgo): si el
+              // costo del bulto es de verdad correcto, se corrige y se
+              // reimporta la fila, o se carga desde Precios y costos (que
+              // sí tiene el reintento).
+              if (conversion?.isCanonical) {
+                const siblings = await tx.productStockGroupMember.findMany({
+                  where: { stockGroupId: conversion.stockGroupId, isActive: true, isCanonical: false },
+                  select: { conversionFactor: true },
+                });
+                const packageFactor = maxPackageFactorForSanityCheck(siblings.map((s) => s.conversionFactor));
+                if (packageFactor) {
+                  const wacAgg = await tx.inventoryBalance.aggregate({
+                    where: { productId: product.id },
+                    _max: { weightedAverageCost: true },
+                  });
+                  const referenceWac = wacAgg._max.weightedAverageCost;
+                  if (referenceWac) {
+                    try {
+                      detectPackageCostAsUnitCost({
+                        inbound: true,
+                        baseMovementUnitCost: new Prisma.Decimal(unitCost),
+                        existingWac: referenceWac,
+                        packageFactor,
+                        allowHighUnitCost: false,
+                      });
+                    } catch (err) {
+                      const message = err instanceof Error ? err.message : "El costo parece ser el del paquete completo, no el de una sola unidad.";
+                      throw new ImportLineExecutionError(message, line.id, line.rowNumber);
+                    }
+                  }
+                }
               }
             }
             const pricing = await getEffectiveProductPricing(tx, { branchId: line.targetBranchId, productId: product.id });
