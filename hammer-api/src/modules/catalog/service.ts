@@ -605,6 +605,45 @@ export async function createProduct(input: {
   return product;
 }
 
+/**
+ * prompt-precios-costos-una-sola-fuente.md — pura, sin DB: aislada para
+ * poder probar el sync sin base de datos, mismo principio que
+ * decidePriceBandPath/isPriceStaleAgainstCost en otros módulos.
+ *
+ * "el margen no cuadra" — resolveCatalogDisplayCost (catalog-inventory/
+ * service.ts) Y resolveCostChain (catalog/effective-pricing.ts) priorizan
+ * averageCost SOBRE globalCost cuando averageCost no es null.
+ * updateGlobalProductCostForReceiptTx (purchase-orders/service.ts, recibir
+ * una orden de compra) SIEMPRE escribe los dos campos al mismo valor — su
+ * propio test (global-cost-update.test.ts) lo deja explícito: "un solo
+ * precio de compra para toda la empresa". Esta función existía en
+ * updateProduct escribiendo SOLO globalCost: para cualquier producto que
+ * alguna vez recibió una compra (averageCost ya no es null), la edición
+ * manual de "Costo de compra" quedaba tapada para siempre por el
+ * averageCost viejo — se guarda bien, el input muestra el valor nuevo, pero
+ * el costo efectivo en TODAS las pantallas (Precios y costos, POS, Brain,
+ * la Bandeja) seguía calculando con el costo de la última compra real.
+ */
+export function buildGlobalCostUpdateFields(input: { globalCost: number | null | undefined; actorUserId: string; now: Date }): {
+  globalCost: Prisma.Decimal | null | undefined;
+  averageCost: Prisma.Decimal | null | undefined;
+  costUpdatedAt: Date | undefined;
+  costUpdatedByUserId: string | undefined;
+  costSource: "GLOBAL" | null | undefined;
+} {
+  if (input.globalCost === undefined) {
+    return { globalCost: undefined, averageCost: undefined, costUpdatedAt: undefined, costUpdatedByUserId: undefined, costSource: undefined };
+  }
+  const decimalValue = input.globalCost === null ? null : new Prisma.Decimal(input.globalCost);
+  return {
+    globalCost: decimalValue,
+    averageCost: decimalValue,
+    costUpdatedAt: input.now,
+    costUpdatedByUserId: input.actorUserId,
+    costSource: decimalValue === null ? null : "GLOBAL",
+  };
+}
+
 export async function updateProduct(productId: string, input: {
   sku?: string;
   skuUpdateMode?: "KEEP_CURRENT" | "USE_SUGGESTED";
@@ -727,6 +766,8 @@ export async function updateProduct(productId: string, input: {
     nextSku = normalizedSku;
   }
 
+  const globalCostFields = buildGlobalCostUpdateFields({ globalCost: input.globalCost, actorUserId: input.actorUserId, now: new Date() });
+
   const product = await prisma.product.update({
     where: { id: productId },
     data: {
@@ -739,10 +780,7 @@ export async function updateProduct(productId: string, input: {
       allowsFraction: input.allowsFraction,
       standardSalePrice: input.standardSalePrice !== undefined ? new Prisma.Decimal(input.standardSalePrice) : undefined,
       isActive: input.isActive,
-      globalCost: input.globalCost !== undefined ? (input.globalCost === null ? null : new Prisma.Decimal(input.globalCost)) : undefined,
-      costUpdatedAt: input.globalCost !== undefined ? new Date() : undefined,
-      costUpdatedByUserId: input.globalCost !== undefined ? input.actorUserId : undefined,
-      costSource: input.globalCost !== undefined ? (input.globalCost === null ? null : "GLOBAL") : undefined,
+      ...globalCostFields,
     },
   });
 
