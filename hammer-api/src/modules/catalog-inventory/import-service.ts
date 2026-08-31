@@ -5,9 +5,10 @@ import { readCsvContent, readExcelBase64 } from "@/modules/import-excel/excel-re
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { assertPriceNotBelowCost, assertNotFusionMemberCostWrite } from "@/modules/pricing/price-guard";
+import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
+import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 
 export const INVENTORY_IMPORT_BATCH_STATUS = {
   UPLOADED: "UPLOADED",
@@ -1007,17 +1008,27 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
           }
 
           if ((importType === "BRANCH_PRICES_COSTS" || importType === "GLOBAL_PRICES_COSTS") && line.targetBranchId && (unitCost !== null || standardSalePrice !== null)) {
-            // prompt-costos-precios-fusion.md §2.1: el costo de un miembro
-            // DERIVADO de una fusión vive en el canónico — cargarlo acá lo
-            // pisaría en silencio otra vez, igual que updateProduct. El
-            // precio SÍ se permite (es un override legítimo, §2.2).
+            // "el ultimo costo que se meta es el que gana en las
+            // fusiones... con las derivadas y la factorización equivalente
+            // al producto se ajuste" (mismo cambio que updateProduct,
+            // catalog/service.ts) — el costo de un miembro DERIVADO de una
+            // fusión sigue viviendo SOLO en el canónico
+            // (prompt-costos-precios-fusion.md §2.1, sigue prohibido
+            // pisarlo en silencio), pero una fila de Excel para ese
+            // derivado YA NO se rechaza: se redirige, convertida por el
+            // factor de la fusión, al branchCost del canónico en la MISMA
+            // sucursal. El precio sigue siendo del producto de la fila (es
+            // un override legítimo, §2.2) — nunca se redirige.
+            let costTargetProductId = product.id;
+            let costForTarget = unitCost;
             if (unitCost !== null) {
-              let conversion: Awaited<ReturnType<typeof getProductStockConversion>> = null;
+              const conversion = await getProductStockConversion(tx, product.id);
               try {
-                conversion = await getProductStockConversion(tx, product.id);
-                assertNotFusionMemberCostWrite(conversion);
+                const resolved = resolveGlobalCostWriteTarget({ requestedProductId: product.id, enteredCost: unitCost, conversion });
+                costTargetProductId = resolved.targetProductId;
+                costForTarget = resolved.costForTarget;
               } catch {
-                throw new ImportLineExecutionError("Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", line.id, line.rowNumber);
+                throw new ImportLineExecutionError("El factor de conversión de esta presentación no es válido.", line.id, line.rowNumber);
               }
 
               // docs/AUDITORIA-MOTOR-PRECIOS-COSTOS.md, hallazgo #4 — mismo
@@ -1027,11 +1038,14 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
               // con el costo del BULTO tecleado en la columna de costo por
               // unidad de una fila que apunta al CANÓNICO — corrompe el
               // costo derivado de todo el grupo igual que si se hubiera
-              // tecleado en la pantalla. Sin columna de "reintentar con
-              // costo alto" en el Excel (prioridad baja del hallazgo): si el
-              // costo del bulto es de verdad correcto, se corrige y se
-              // reimporta la fila, o se carga desde Precios y costos (que
-              // sí tiene el reintento).
+              // tecleado en la pantalla. Solo aplica al canónico directo —
+              // igual que en updateProduct, redirigir desde un derivado no
+              // tiene esa ambigüedad: se sabe con certeza qué presentación
+              // se tecleó, la conversión es exacta por el factor ya
+              // validado. Sin columna de "reintentar con costo alto" en el
+              // Excel (prioridad baja del hallazgo): si el costo del bulto
+              // es de verdad correcto, se corrige y se reimporta la fila, o
+              // se carga desde Precios y costos (que sí tiene el reintento).
               if (conversion?.isCanonical) {
                 const siblings = await tx.productStockGroupMember.findMany({
                   where: { stockGroupId: conversion.stockGroupId, isActive: true, isCanonical: false },
@@ -1063,19 +1077,49 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
             }
             const pricing = await getEffectiveProductPricing(tx, { branchId: line.targetBranchId, productId: product.id });
             const nextPrice = standardSalePrice ?? (pricing.branchPrice === null ? null : Number(pricing.branchPrice));
+            // La comparación precio-vs-costo se queda en la unidad TAL
+            // CUAL se tecleó (unitCost, sin convertir) — comparar un precio
+            // por quintal contra un costo por varilla sería mezclar
+            // unidades, no lo que este guard quiere atrapar.
             const nextCost = unitCost ?? (pricing.effectiveCost === null ? null : Number(pricing.effectiveCost));
             try {
               assertPriceNotBelowCost({ price: nextPrice, cost: nextCost });
             } catch {
               throw new ImportLineExecutionError("Precio menor al costo.", line.id, line.rowNumber);
             }
-            await upsertBranchSettingTx(tx, {
-              branchId: line.targetBranchId,
-              productId: product.id,
-              branchCost: unitCost,
-              branchPrice: standardSalePrice,
-              actorUserId: input.actorUserId,
-            });
+            if (costTargetProductId === product.id) {
+              // Sin redirección — un solo upsert, comportamiento de
+              // siempre: costo y precio del mismo producto, misma fila.
+              await upsertBranchSettingTx(tx, {
+                branchId: line.targetBranchId,
+                productId: product.id,
+                branchCost: unitCost,
+                branchPrice: standardSalePrice,
+                actorUserId: input.actorUserId,
+              });
+            } else {
+              // Redirigido — el precio (si vino) queda en el producto de
+              // la fila (§2.2, override legítimo); el costo (siempre
+              // presente acá, es lo que disparó la redirección) va al
+              // canónico, ya convertido por el factor — dos filas
+              // distintas de BranchProductSetting, cada una con lo suyo.
+              if (standardSalePrice !== null) {
+                await upsertBranchSettingTx(tx, {
+                  branchId: line.targetBranchId,
+                  productId: product.id,
+                  branchCost: null,
+                  branchPrice: standardSalePrice,
+                  actorUserId: input.actorUserId,
+                });
+              }
+              await upsertBranchSettingTx(tx, {
+                branchId: line.targetBranchId,
+                productId: costTargetProductId,
+                branchCost: costForTarget,
+                branchPrice: null,
+                actorUserId: input.actorUserId,
+              });
+            }
             if (unitCost !== null) result.costUpdates += 1;
             if (standardSalePrice !== null) result.priceUpdates += 1;
           }

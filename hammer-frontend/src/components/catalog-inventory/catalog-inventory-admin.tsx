@@ -3264,6 +3264,24 @@ function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingD
   return draft;
 }
 
+/**
+ * "el ultimo costo que se meta es el que gana en las fusiones... con las
+ * derivadas y la factorización equivalente al producto se ajuste" — el
+ * costo de compra de un miembro DERIVADO ahora se edita en su propia fila
+ * (el backend redirige y convierte al canónico, ver resolveGlobalCostWriteTarget
+ * en catalog/service.ts) — este es el valor que se pre-carga en ese input:
+ * el costo efectivo YA convertido a la unidad de ESTA presentación
+ * (row.effectiveCost), no product.globalCost (que para un derivado
+ * siempre es null — nunca guarda su propio costo, esa regla no cambió).
+ */
+function globalCostServerValue(product: ProductRow, activeBranch: Branch | undefined): string {
+  if (product.stockConversion && !product.stockConversion.isCanonical && activeBranch) {
+    const row = buildBranchPricingCostRow(product, activeBranch);
+    return row.effectiveCost != null ? String(row.effectiveCost) : "";
+  }
+  return product.globalCost != null ? String(product.globalCost) : "";
+}
+
 function PricingPanel({
   branches,
   products,
@@ -3292,9 +3310,6 @@ function PricingPanel({
   const [draft, setDraft] = useState<PricingDraft>(() => buildPricingDraft(products, branches));
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [assigningKey, setAssigningKey] = useState<string | null>(null);
-  const [globalCostDraft, setGlobalCostDraft] = useState<Record<string, string>>(() =>
-    Object.fromEntries(products.map((p) => [p.id, p.globalCost != null ? String(p.globalCost) : ""]))
-  );
   const [comparisonMode, setComparisonMode] = useState(false);
   const [productFilter, setProductFilter] = useState("");
   const productsRef = useRef(products);
@@ -3303,6 +3318,12 @@ function PricingPanel({
     [branches, selectedBranchId],
   );
   const pricingBranches = useMemo(() => activeBranch ? [activeBranch] : [], [activeBranch]);
+  // activeBranch tiene que existir ANTES de este estado — para un miembro
+  // derivado, el valor inicial sale de globalCostServerValue (el costo
+  // efectivo YA convertido a su unidad), que necesita la sucursal activa.
+  const [globalCostDraft, setGlobalCostDraft] = useState<Record<string, string>>(() =>
+    Object.fromEntries(products.map((p) => [p.id, globalCostServerValue(p, activeBranch)]))
+  );
 
   // If no branch is selected yet, the panel displays branches[0] locally but the
   // parent never fetched data scoped to it — kpis.missingPriceCount would then
@@ -3329,9 +3350,17 @@ function PricingPanel({
   // reportó el usuario. Ahora se fusiona: se toman los valores del servidor
   // pero se conservan las celdas de precio marcadas dirty y los costos que el
   // usuario cambió y todavía no guardó.
+  //
+  // También re-sincroniza cuando cambia la sucursal activa SIN una recarga
+  // nueva de products (branchEffectivePricing ya trae todas las sucursales
+  // en la misma carga) — si no, el costo pre-cargado de un derivado
+  // (globalCostServerValue, branch-aware) quedaría mostrando la sucursal
+  // anterior hasta la próxima recarga real.
+  const activeBranchIdRef = useRef(activeBranch?.id);
   useEffect(() => {
-    if (productsRef.current !== products) {
+    if (productsRef.current !== products || activeBranchIdRef.current !== activeBranch?.id) {
       productsRef.current = products;
+      activeBranchIdRef.current = activeBranch?.id;
       const serverDraft = buildPricingDraft(products, branches);
       setDraft((prev) => {
         for (const product of products) {
@@ -3348,7 +3377,7 @@ function PricingPanel({
       setGlobalCostDraft((prev) => {
         const next: Record<string, string> = {};
         for (const product of products) {
-          const serverValue = product.globalCost != null ? String(product.globalCost) : "";
+          const serverValue = globalCostServerValue(product, activeBranch);
           const prevValue = prev[product.id];
           // El usuario tecleó algo distinto al valor del servidor y aún no lo
           // guardó → se conserva su edición en curso; si coincide, se toma el
@@ -3358,7 +3387,7 @@ function PricingPanel({
         return next;
       });
     }
-  }, [products, branches]);
+  }, [products, branches, activeBranch]);
 
   function updateCell(productId: string, branchId: string, field: "price", value: string) {
     setDraft((prev) => ({
@@ -3560,31 +3589,31 @@ function PricingPanel({
                     ))}
                   </td>
                   <td className="py-1.5">
-                    {/* Miembro DERIVADO de una fusión: el costo NO se edita acá.
-                        En una fusión hay UN material físico → UN solo costo, el
-                        de la unidad base; el del derivado se calcula solo (base
-                        × factor). Dejar el campo editable hacía que el usuario
-                        tecleara un costo que el sistema ignora al vender y que
-                        "se reseteaba solo" tras recargar — el bug reportado.
-                        Se muestra el costo derivado en solo lectura y se guía a
-                        editar la unidad base. */}
-                    {p.stockConversion && !p.stockConversion.isCanonical ? (
-                      <div className="flex flex-col gap-0.5">
-                        <span className="font-mono text-xs">{formatMoneyOrNd(row.effectiveCost)}</span>
-                        <span className="text-[0.6rem] text-[var(--color-text-muted)]">
-                          {row.costExplanation} · edítalo en la unidad base
-                        </span>
-                      </div>
-                    ) : onSaveGlobalCost ? (
+                    {/* "el ultimo costo que se meta es el que gana en las
+                        fusiones... con las derivadas y la factorización
+                        equivalente al producto se ajuste" — un miembro
+                        DERIVADO de una fusión ahora SÍ se edita acá: el
+                        backend (resolveGlobalCostWriteTarget, catalog/
+                        service.ts) convierte lo que se escriba por el
+                        factor de esta fusión y lo aplica al canónico — la
+                        única fuente real de costo sigue siendo esa, nunca
+                        el derivado, eso no cambió. Antes esto era de solo
+                        lectura y mandaba a editar la unidad base a mano
+                        (la conversión que el usuario tenía que hacer en la
+                        cabeza y a veces salía mal — el origen real de los
+                        datos de piedrín/arena mal cargados). */}
+                    {onSaveGlobalCost ? (
                       <div className="flex flex-col gap-0.5">
                         <div className="flex items-center gap-1">
                           <Input
-                            className={`h-7 text-xs flex-1 ${globalCostDraft[p.id] !== (p.globalCost != null ? String(p.globalCost) : "") ? "ring-2 ring-amber-300/60" : ""}`}
+                            className={`h-7 text-xs flex-1 ${globalCostDraft[p.id] !== globalCostServerValue(p, activeBranch) ? "ring-2 ring-amber-300/60" : ""}`}
                             type="number" min="0" step="0.01"
                             placeholder="Sin costo de compra"
                             value={globalCostDraft[p.id] ?? ""}
                             onChange={(e) => setGlobalCostDraft((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                            title="Costo de compra — aplica a todas las sucursales sin override"
+                            title={p.stockConversion && !p.stockConversion.isCanonical
+                              ? `Costo de esta presentación (${p.stockConversion.saleUnit || "unidad"}) — se convierte automáticamente al producto canónico`
+                              : "Costo de compra — aplica a todas las sucursales sin override"}
                           />
                           <button type="button" title="Guardar costo de compra"
                             className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === `${p.id}-global-cost` ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm"}`}
@@ -3601,9 +3630,13 @@ function PricingPanel({
                             no necesariamente con lo que muestra el input de
                             arriba: si esta sucursal tiene un costo propio
                             (branchCost) o un WAC real, esos ganan sobre el
-                            costo de compra general recién editado. */}
+                            costo de compra general recién editado. Para un
+                            derivado, aclara además que se convierte, no que
+                            se guarda tal cual. */}
                         <span className="text-[0.6rem] text-[var(--color-text-muted)]">
-                          Margen calculado con: {formatMoneyOrNd(row.effectiveCost)} ({row.costExplanation})
+                          {p.stockConversion && !p.stockConversion.isCanonical
+                            ? `${row.costExplanation} · se convierte al producto canónico (${p.stockConversion.baseUnit} × ${Number(p.stockConversion.conversionFactor)})`
+                            : `Margen calculado con: ${formatMoneyOrNd(row.effectiveCost)} (${row.costExplanation})`}
                         </span>
                       </div>
                     ) : (

@@ -6,7 +6,7 @@ import { resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pr
 import { formatDualStock, convertBaseQtyToSaleQty, convertBaseUnitCostToSaleUnitCost, getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import type { ProductStockConversion } from "@/modules/inventory/unit-conversion";
 import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
-import { assertPriceNotBelowCost, assertNotFusionMemberCostWrite } from "@/modules/pricing/price-guard";
+import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
 
 type CatalogProductWithBranchPricing = {
@@ -644,6 +644,43 @@ export function buildGlobalCostUpdateFields(input: { globalCost: number | null |
   };
 }
 
+/**
+ * "el ultimo costo que se meta es el que gana en las fusiones... con las
+ * derivadas y la factorización equivalente al producto se ajuste" — entrar
+ * el costo por CUALQUIER presentación de una fusión (no solo la canónica),
+ * y que el factor YA VALIDADO de esa fusión lo convierta, en vez de
+ * bloquear con FUSION_COST_WRITE_NOT_ALLOWED y obligar a hacer la división
+ * a mano en otra pantalla — exactamente el tipo de conversión manual que
+ * originó buena parte de los datos mal cargados de esta sesión (piedrín,
+ * arena: alguien sabe el costo del quintal/metro, no el de la varilla/lata
+ * suelta, y tiene que convertir en la cabeza antes de poder escribirlo).
+ *
+ * Pura, sin DB — aislada para probar la conversión exacta sin base de
+ * datos, mismo principio que buildGlobalCostUpdateFields. Sigue habiendo
+ * UNA sola fuente de verdad — el canónico — y un derivado SIGUE sin
+ * guardar nunca un costo propio: "1 quintal = 780, 1 quintal = 30
+ * varillas" redirige a escribir 26 en la varilla (canónico), no 780 en el
+ * quintal. Esto NO es "el último que se guarda gana tal cual" (eso
+ * reabriría el desfase 18.6× de arena: un valor sin convertir pisando el
+ * WAC real) — es "el último que se guarda, convertido por el factor
+ * conocido, es la fuente" — el canónico sigue siendo el único lugar donde
+ * el costo realmente vive.
+ */
+export function resolveGlobalCostWriteTarget(input: {
+  requestedProductId: string;
+  enteredCost: number;
+  conversion: { isCanonical: boolean; canonicalProductId: string; conversionFactor: Prisma.Decimal | number } | null | undefined;
+}): { targetProductId: string; costForTarget: number; redirected: boolean } {
+  if (!input.conversion || input.conversion.isCanonical) {
+    return { targetProductId: input.requestedProductId, costForTarget: input.enteredCost, redirected: false };
+  }
+  const factor = Number(input.conversion.conversionFactor);
+  if (!Number.isFinite(factor) || factor <= 0) {
+    throw new Error("VALIDATION_ERROR: El factor de conversión de esta presentación no es válido.");
+  }
+  return { targetProductId: input.conversion.canonicalProductId, costForTarget: input.enteredCost / factor, redirected: true };
+}
+
 export async function updateProduct(productId: string, input: {
   sku?: string;
   skuUpdateMode?: "KEEP_CURRENT" | "USE_SUGGESTED";
@@ -666,14 +703,24 @@ export async function updateProduct(productId: string, input: {
   });
   if (!previous) throw new Error("NOT_FOUND");
 
-  // prompt-costos-precios-fusion.md §2.1: el costo de un miembro DERIVADO de
-  // una fusión vive en el canónico, no en el miembro. Cargarlo acá lo
-  // volvería a pisar en silencio (el bug de fondo: la LATA DE ARENA con
-  // globalCost=1.00 tapando el WAC real del canónico). Se rechaza con
-  // mensaje, no se permite "por si acaso" — igual en import-service.ts.
+  // "el ultimo costo que se meta es el que gana en las fusiones... con las
+  // derivadas y la factorización equivalente al producto se ajuste" — el
+  // costo de un miembro DERIVADO de una fusión sigue viviendo SOLO en el
+  // canónico (prompt-costos-precios-fusion.md §2.1 — el bug de fondo era la
+  // LATA DE ARENA con globalCost=1.00 tapando el WAC real del canónico, y
+  // eso sigue exactamente igual de prohibido), pero ya no se rechaza el
+  // pedido sin más: se REDIRIGE, convertido por el factor de esta fusión —
+  // ya validado al crear/editar la fusión, no algo que se inventa acá — al
+  // canónico. resolveGlobalCostWriteTarget decide a dónde y con qué valor.
+  let costRedirect: { targetProductId: string; costForTarget: number } | null = null;
   if (input.globalCost !== undefined && input.globalCost !== null) {
     const conversion = await getProductStockConversion(prisma, productId);
-    assertNotFusionMemberCostWrite(conversion);
+    const resolved = resolveGlobalCostWriteTarget({
+      requestedProductId: productId,
+      enteredCost: input.globalCost,
+      conversion,
+    });
+    if (resolved.redirected) costRedirect = { targetProductId: resolved.targetProductId, costForTarget: resolved.costForTarget };
 
     // "asegura el motor de mejor manera" — un producto que a veces se
     // compra suelto y a veces en bulto (HIERRO: a veces varilla, a veces
@@ -686,7 +733,11 @@ export async function updateProduct(productId: string, input: {
     // costo directo sin pasar por un movimiento. Solo aplica al canónico
     // de un grupo con presentaciones de escala real (factor >= 4, mismo
     // umbral que el guard de movimientos) — un producto suelto o sin
-    // fusión no tiene con qué confundirse.
+    // fusión no tiene con qué confundirse. NO aplica cuando se redirige
+    // desde un derivado: ahí no hay ambigüedad que atrapar — se sabe con
+    // certeza qué presentación se tecleó, la conversión es exacta por el
+    // factor ya validado, no una sospecha sobre un campo único que podría
+    // significar dos cosas distintas.
     if (conversion?.isCanonical) {
       const siblings = await prisma.productStockGroupMember.findMany({
         where: { stockGroupId: conversion.stockGroupId, isActive: true, isCanonical: false },
@@ -766,22 +817,42 @@ export async function updateProduct(productId: string, input: {
     nextSku = normalizedSku;
   }
 
-  const globalCostFields = buildGlobalCostUpdateFields({ globalCost: input.globalCost, actorUserId: input.actorUserId, now: new Date() });
+  const now = new Date();
+  // El costo del producto SOLICITADO solo se toca cuando NO hay
+  // redirección (producto suelto, o el propio canónico) — un derivado
+  // sigue sin guardar jamás un costo propio, la regla de siempre.
+  const globalCostFields = costRedirect
+    ? { globalCost: undefined, averageCost: undefined, costUpdatedAt: undefined, costUpdatedByUserId: undefined, costSource: undefined }
+    : buildGlobalCostUpdateFields({ globalCost: input.globalCost, actorUserId: input.actorUserId, now });
 
-  const product = await prisma.product.update({
-    where: { id: productId },
-    data: {
-      sku: nextSku,
-      barcode: input.barcode,
-      name: input.name?.trim(),
-      description: input.description,
-      categoryId: input.categoryId,
-      unit: input.unit?.trim(),
-      allowsFraction: input.allowsFraction,
-      standardSalePrice: input.standardSalePrice !== undefined ? new Prisma.Decimal(input.standardSalePrice) : undefined,
-      isActive: input.isActive,
-      ...globalCostFields,
-    },
+  // Las dos escrituras (el producto solicitado, y — si hubo redirección —
+  // el canónico) van en la MISMA transacción: si la segunda falla, la
+  // primera no debe quedar aplicada sola con un costo a medio redirigir.
+  const { product, canonicalCostUpdate } = await prisma.$transaction(async (tx) => {
+    const updated = await tx.product.update({
+      where: { id: productId },
+      data: {
+        sku: nextSku,
+        barcode: input.barcode,
+        name: input.name?.trim(),
+        description: input.description,
+        categoryId: input.categoryId,
+        unit: input.unit?.trim(),
+        allowsFraction: input.allowsFraction,
+        standardSalePrice: input.standardSalePrice !== undefined ? new Prisma.Decimal(input.standardSalePrice) : undefined,
+        isActive: input.isActive,
+        ...globalCostFields,
+      },
+    });
+
+    let canonicalCostUpdate: { productId: string; sku: string; newCost: number } | null = null;
+    if (costRedirect) {
+      const canonicalFields = buildGlobalCostUpdateFields({ globalCost: costRedirect.costForTarget, actorUserId: input.actorUserId, now });
+      const canonicalProduct = await tx.product.update({ where: { id: costRedirect.targetProductId }, data: canonicalFields, select: { id: true, sku: true } });
+      canonicalCostUpdate = { productId: canonicalProduct.id, sku: canonicalProduct.sku, newCost: costRedirect.costForTarget };
+    }
+
+    return { product: updated, canonicalCostUpdate };
   });
 
   await logAuditEvent({
@@ -807,8 +878,36 @@ export async function updateProduct(productId: string, input: {
       skuChanged: previous.sku !== product.sku,
       categoryChanged: previous.categoryId !== product.categoryId,
       skuUpdateMode: input.skuUpdateMode ?? "KEEP_CURRENT",
+      ...(canonicalCostUpdate ? {
+        costEnteredViaDerivedPresentation: true,
+        canonicalProductId: canonicalCostUpdate.productId,
+        canonicalSku: canonicalCostUpdate.sku,
+        enteredCost: input.globalCost,
+        canonicalCostApplied: canonicalCostUpdate.newCost,
+      } : {}),
     },
   });
+
+  // Trazabilidad del lado del canónico también — quien revise SU auditoría
+  // (no la del derivado por el que se entró el dato) tiene que poder ver
+  // de dónde vino el cambio, igual que ya hace updateGlobalProductCostForReceiptTx
+  // para las recepciones de compra.
+  if (canonicalCostUpdate) {
+    await logAuditEvent({
+      actorUserId: input.actorUserId,
+      module: "catalog",
+      action: "PRODUCT_GLOBAL_COST_UPDATED",
+      entityType: "Product",
+      entityId: canonicalCostUpdate.productId,
+      metadataJson: {
+        newGlobalCost: canonicalCostUpdate.newCost,
+        source: "DERIVED_PRESENTATION_COST_ENTRY",
+        enteredViaProductId: product.id,
+        enteredViaSku: product.sku,
+        enteredCost: input.globalCost,
+      },
+    });
+  }
 
   return product;
 }
