@@ -8,25 +8,31 @@ import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money } from "@/lib/format";
 import { Boxes, ExternalLink, Info, Loader2, Save, Search } from "lucide-react";
 
 /**
  * "Ese apartado de Fusiones, es para poner el precio, no es otra pestaña
  * para crear" — a diferencia de Fusión de Inventario (crear fusiones,
  * editar presentaciones/factores, desfusionar, reparar — eso sigue en su
- * propia pantalla, enlazada desde acá), este panel hace UNA sola cosa:
- * poner el costo global de cada presentación de cada fusión.
+ * propia pantalla, enlazada desde acá), este panel hace dos cosas: poner
+ * el costo global Y el precio general de cada presentación de cada fusión.
  *
  * "una nueva linea que sea costo global de fusiones, para que se entienda
- * y no exista problemas con el WAC, basandose solo en eso" — el número
- * que se muestra y edita acá es SIEMPRE globalCost (del canónico para
- * TODAS las presentaciones, derivadas incluidas: canonicalGlobalCost ×
- * factor) — nunca WAC, nunca averageCost, nunca branchCost. Es la misma
- * regla que ya usa el guardado (resolveGlobalCostWriteTarget, catalog/
- * service.ts) mirada desde la lectura (computeFusionMemberGlobalCost,
- * stock-group-crud.ts) — una sola fuente, sin la cascada que confundió
- * los casos de piedrín y arena.
+ * y no exista problemas con el WAC, basandose solo en eso" — el costo que
+ * se muestra y edita acá es SIEMPRE globalCost (del canónico para TODAS
+ * las presentaciones, derivadas incluidas: canonicalGlobalCost × factor)
+ * — nunca WAC, nunca averageCost, nunca branchCost.
+ *
+ * "no trae el precio de venta como deberia ser... el precio de venta se
+ * debe ajustar y poder editarse desde ahi" — el precio general tiene
+ * EXACTAMENTE la misma regla que el costo: resolveEffectivePricing nunca
+ * lee el standardSalePrice propio de un derivado, su precio implícito es
+ * SIEMPRE canonicalStandardSalePrice × factor. Antes se mostraba (y no se
+ * podía editar) el campo propio del derivado — un número fantasma que el
+ * motor de venta ignora, y que producía márgenes sin sentido. Esto NO es
+ * el precio por sucursal (branchPrice, que sigue siendo individual por
+ * presentación, sin redirigirse — eso se edita en Precios y costos) — es
+ * el precio GENERAL, la misma clase de campo que el costo global.
  */
 
 type FusionPricingMember = {
@@ -39,7 +45,7 @@ type FusionPricingMember = {
   isCanonical: boolean;
   isPackagePresentation?: boolean;
   globalCost: number | null;
-  standardSalePrice: number;
+  standardSalePrice: number | null;
   marginPercent: number | null;
 };
 
@@ -62,11 +68,16 @@ function marginBadgeVariant(value: number | null) {
   return "success" as const;
 }
 
+function serverValueFor(value: number | null): string {
+  return value != null ? String(value) : "";
+}
+
 export function FusionPricingPanel() {
   const [groups, setGroups] = useState<FusionPricingGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [costDraft, setCostDraft] = useState<Record<string, string>>({});
+  const [priceDraft, setPriceDraft] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -75,21 +86,23 @@ export function FusionPricingPanel() {
       const raw = await readJson(res);
       const list: FusionPricingGroup[] = unwrapApiData(raw) ?? [];
       setGroups(Array.isArray(list) ? list : []);
-      setDraft((prev) => {
+      const mergeDraft = (prev: Record<string, string>, pick: (m: FusionPricingMember) => number | null) => {
         const next = { ...prev };
         for (const group of list) {
           for (const member of group.members) {
             // Se conserva lo que el usuario está tecleando y todavía no
             // guardó; si coincide con el servidor, se toma el del servidor
             // (ya actualizado) — mismo criterio que Precios y costos.
-            const serverValue = member.globalCost != null ? String(member.globalCost) : "";
+            const serverValue = serverValueFor(pick(member));
             if (next[member.productId] === undefined || next[member.productId] === serverValue) {
               next[member.productId] = serverValue;
             }
           }
         }
         return next;
-      });
+      };
+      setCostDraft((prev) => mergeDraft(prev, (m) => m.globalCost));
+      setPriceDraft((prev) => mergeDraft(prev, (m) => m.standardSalePrice));
     } catch {
       showToast("error", "No se pudieron cargar las fusiones.");
     } finally {
@@ -107,36 +120,38 @@ export function FusionPricingPanel() {
     );
   }, [groups, search]);
 
-  async function saveCost(member: FusionPricingMember, value: string, allowHighUnitCost = false) {
+  async function saveField(member: FusionPricingMember, field: "globalCost" | "standardSalePrice", value: string, allowHighUnitCost = false) {
     const numeric = value.trim() === "" ? null : Number(value);
+    const label = field === "globalCost" ? "costo" : "precio";
     if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
-      showToast("error", "El costo no puede ser negativo.");
+      showToast("error", `El ${label} no puede ser negativo.`);
       return;
     }
-    const key = member.productId;
+    const key = `${member.productId}-${field}`;
     setSavingKey(key);
     try {
       const res = await apiFetch(`/api/catalog/products/${member.productId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ globalCost: numeric, allowHighUnitCost: allowHighUnitCost || undefined }),
+        body: JSON.stringify({ [field]: numeric, allowHighUnitCost: allowHighUnitCost || undefined }),
       });
       if (!res.ok) {
         const raw = await readJson(res);
-        // "el ultimo costo que se meta es el que gana en las fusiones...
-        // con las derivadas y la factorización equivalente al producto se
-        // ajuste" — el backend (resolveGlobalCostWriteTarget) ya convierte
-        // y redirige al canónico solo; acá no hace falta saber si `member`
-        // es derivado o no, se manda tal cual se escribió en SU fila.
-        if (raw?.error?.code === "SUSPECTED_PACKAGE_COST_AS_UNIT_COST") {
+        // "el ultimo costo/precio que se meta es el que gana en las
+        // fusiones... con las derivadas y la factorización equivalente al
+        // producto se ajuste" — el backend (resolveGlobalCostWriteTarget)
+        // ya convierte y redirige al canónico solo; acá no hace falta
+        // saber si `member` es derivado o no, se manda tal cual se
+        // escribió en SU fila.
+        if (field === "globalCost" && raw?.error?.code === "SUSPECTED_PACKAGE_COST_AS_UNIT_COST") {
           const confirmed = window.confirm(`${raw.error.message}\n\n¿Confirmás que el costo es correcto tal cual lo escribiste?`);
-          if (confirmed) { await saveCost(member, value, true); return; }
+          if (confirmed) { await saveField(member, field, value, true); return; }
           return;
         }
-        showToast("error", raw?.error?.message ?? "No se pudo guardar el costo.");
+        showToast("error", raw?.error?.message ?? `No se pudo guardar el ${label}.`);
         return;
       }
-      showToast("success", `Costo global actualizado para ${member.sku}${!member.isCanonical ? " (aplicado al producto canónico)" : ""}.`);
+      showToast("success", `${field === "globalCost" ? "Costo global" : "Precio general"} actualizado para ${member.sku}${!member.isCanonical ? " (aplicado al producto canónico)" : ""}.`);
       await load();
     } catch {
       showToast("error", "Error de red al guardar.");
@@ -149,8 +164,8 @@ export function FusionPricingPanel() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <div>
-          <h1 className="text-lg font-bold tracking-tight text-[var(--color-text)]">Fusiones — costo global</h1>
-          <p className="text-sm text-[var(--color-text-muted)]">Poné el costo de compra de cada presentación. Se calcula solo con el costo global del canónico y el factor de la fusión — nunca con el WAC.</p>
+          <h1 className="text-lg font-bold tracking-tight text-[var(--color-text)]">Fusiones — costo y precio general</h1>
+          <p className="text-sm text-[var(--color-text-muted)]">Poné el costo de compra y el precio general de cada presentación. Los dos se calculan solo con el valor del canónico y el factor de la fusión — nunca con el WAC.</p>
         </div>
         <span className="flex-1" />
         <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-soft)]">
@@ -173,10 +188,11 @@ export function FusionPricingPanel() {
       <div className="flex items-start gap-2 rounded-lg border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3 py-2 text-xs text-[var(--color-info-700)]">
         <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
         <p>
-          El costo de una presentación derivada (ej. quintal, metro) SIEMPRE sale del costo global del producto canónico
-          (ej. varilla, lata) multiplicado por el factor de la fusión — nunca se guarda un costo propio en el derivado.
-          Poné el costo en cualquier fila y se ajusta solo: si editás el derivado, el sistema convierte y aplica el
-          resultado al canónico automáticamente.
+          El costo y el precio general de una presentación derivada (ej. quintal, metro) SIEMPRE salen del costo/precio
+          global del producto canónico (ej. varilla, lata) multiplicados por el factor de la fusión — nunca se guarda un
+          valor propio en el derivado. Poné el número en cualquier fila y se ajusta solo: si editás el derivado, el
+          sistema convierte y aplica el resultado al canónico automáticamente. Esto es el precio GENERAL — el precio por
+          sucursal (con excepción propia) sigue siendo individual y se edita en Precios y costos.
         </p>
       </div>
 
@@ -213,10 +229,16 @@ export function FusionPricingPanel() {
                   </thead>
                   <tbody>
                     {group.members.map((member) => {
-                      const cell = draft[member.productId] ?? "";
-                      const serverValue = member.globalCost != null ? String(member.globalCost) : "";
-                      const dirty = cell !== serverValue;
-                      const key = member.productId;
+                      const costCell = costDraft[member.productId] ?? "";
+                      const costServerValue = serverValueFor(member.globalCost);
+                      const costDirty = costCell !== costServerValue;
+                      const costKey = `${member.productId}-globalCost`;
+
+                      const priceCell = priceDraft[member.productId] ?? "";
+                      const priceServerValue = serverValueFor(member.standardSalePrice);
+                      const priceDirty = priceCell !== priceServerValue;
+                      const priceKey = `${member.productId}-standardSalePrice`;
+
                       return (
                         <tr key={member.id}>
                           <td>
@@ -232,23 +254,41 @@ export function FusionPricingPanel() {
                           <td className="py-1.5">
                             <div className="flex items-center justify-end gap-1">
                               <Input
-                                className={`h-7 w-28 text-xs text-right ${dirty ? "ring-2 ring-amber-300/60" : ""}`}
+                                className={`h-7 w-28 text-xs text-right ${costDirty ? "ring-2 ring-amber-300/60" : ""}`}
                                 type="number" min="0" step="0.01"
                                 placeholder="Sin costo"
-                                value={cell}
-                                onChange={(e) => setDraft((prev) => ({ ...prev, [member.productId]: e.target.value }))}
+                                value={costCell}
+                                onChange={(e) => setCostDraft((prev) => ({ ...prev, [member.productId]: e.target.value }))}
                                 title={member.isCanonical ? "Costo global — aplica a todas las sucursales" : `Costo en ${member.saleUnit.toLowerCase()} — se convierte automáticamente al canónico`}
                               />
                               <button type="button" title="Guardar costo global"
-                                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === key ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm"}`}
-                                disabled={savingKey === key}
-                                onClick={() => saveCost(member, cell)}
+                                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === costKey ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm"}`}
+                                disabled={savingKey === costKey}
+                                onClick={() => saveField(member, "globalCost", costCell)}
                               >
-                                {savingKey === key ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                {savingKey === costKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                               </button>
                             </div>
                           </td>
-                          <td className="r text-xs tabular-nums">{money(member.standardSalePrice)}</td>
+                          <td className="py-1.5">
+                            <div className="flex items-center justify-end gap-1">
+                              <Input
+                                className={`h-7 w-28 text-xs text-right ${priceDirty ? "ring-2 ring-amber-300/60" : ""}`}
+                                type="number" min="0" step="0.01"
+                                placeholder="Sin precio"
+                                value={priceCell}
+                                onChange={(e) => setPriceDraft((prev) => ({ ...prev, [member.productId]: e.target.value }))}
+                                title={member.isCanonical ? "Precio general — aplica a todas las sucursales sin excepción propia" : `Precio en ${member.saleUnit.toLowerCase()} — se convierte automáticamente al canónico`}
+                              />
+                              <button type="button" title="Guardar precio general"
+                                className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === priceKey ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700 shadow-sm"}`}
+                                disabled={savingKey === priceKey}
+                                onClick={() => saveField(member, "standardSalePrice", priceCell)}
+                              >
+                                {savingKey === priceKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                              </button>
+                            </div>
+                          </td>
                           <td className="r"><Badge variant={marginBadgeVariant(member.marginPercent)}>{member.marginPercent === null ? "N/D" : `${member.marginPercent.toFixed(1)}%`}</Badge></td>
                         </tr>
                       );

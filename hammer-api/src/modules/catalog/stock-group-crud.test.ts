@@ -62,3 +62,33 @@ test("caso real de arena: LATA (canónico) × 25 = METRO → 48 × 25 = 1200", (
   const result = computeFusionMemberGlobalCost({ isCanonical: false, ownGlobalCost: null, canonicalGlobalCost: 48, conversionFactor: 25 });
   assert.equal(result, 1200);
 });
+
+/**
+ * "no trae el precio de venta como deberia ser... no hace los ajustes que
+ * corresponde" (captura real: grupo ARENA, LATA con standardSalePrice
+ * 1.00, METRO GRANDE mostrando "Precio general: C$1.00" también, margen
+ * -58081.8%) — resolveEffectivePricing (effective-pricing.ts) NUNCA lee
+ * el standardSalePrice propio de un derivado: su precio implícito es
+ * SIEMPRE canonicalStandardSalePrice × factor (impliedFusionPrice), la
+ * MISMA regla que el costo. computeFusionMemberGlobalCost es genérica —
+ * no sabe si el número que recibe es costo o precio — así que listStockGroups
+ * la reusa tal cual para standardSalePrice, en vez de leer el campo propio
+ * de cada miembro (lo que producía el "C$1.00" fantasma en la captura).
+ */
+test("Prueba LA QUE IMPORTA (el caso real de la captura) — el precio implícito de un derivado es canonicalStandardSalePrice × factor, igual que el costo, no su propio campo", () => {
+  // LATA con standardSalePrice=1.00 (el placeholder real de la captura),
+  // METRO GRANDE con factor 40 → precio implícito 40, no el "1.00" que
+  // mostraba antes (el campo propio del derivado, fantasma para el motor).
+  const impliedPrice = computeFusionMemberGlobalCost({
+    isCanonical: false,
+    ownGlobalCost: 1, // standardSalePrice propio del derivado — se ignora, igual que su costo propio
+    canonicalGlobalCost: 1, // standardSalePrice del canónico (LATA) — el placeholder real reportado
+    conversionFactor: 40,
+  });
+  assert.equal(impliedPrice, 40, "el margen que se calcule con esto va a seguir siendo malo (LATA a C$1 es un placeholder real, no un bug) pero al menos matemáticamente correcto — antes ni siquiera hacía la multiplicación");
+});
+
+test("el canónico SÍ usa su propio standardSalePrice — es el que define el precio implícito de todo el grupo", () => {
+  const price = computeFusionMemberGlobalCost({ isCanonical: true, ownGlobalCost: 35, canonicalGlobalCost: 35, conversionFactor: 1 });
+  assert.equal(price, 35);
+});

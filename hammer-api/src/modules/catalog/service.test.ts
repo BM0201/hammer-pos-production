@@ -122,3 +122,22 @@ test("NO es 'el último valor tal cual gana' — reabriría el desfase 18.6× de
   assert.equal(result.costForTarget, 48);
   assert.notEqual(result.costForTarget, 1200, "el valor crudo nunca debe terminar pisando el costo del canónico sin convertir");
 });
+
+/**
+ * "no trae el precio de venta como deberia ser... el precio de venta se
+ * debe ajustar y poder editarse desde ahi" — updateProduct reusa
+ * resolveGlobalCostWriteTarget (la MISMA función, sin cambios) para
+ * redirigir standardSalePrice de un derivado al canónico, exactamente
+ * igual que ya hace con globalCost — la función no sabe ni le importa si
+ * el número es costo o precio, es la misma matemática de fusión.
+ */
+test("resolveGlobalCostWriteTarget reusado para PRECIO: 1 metro grande = 40 lata, escribir 40 en el metro redirige a escribir 1 en la lata (canónico)", () => {
+  const result = resolveGlobalCostWriteTarget({
+    requestedProductId: "prod-metro-grande",
+    enteredCost: 40,
+    conversion: { isCanonical: false, canonicalProductId: "prod-lata", conversionFactor: 40 },
+  });
+  assert.equal(result.redirected, true);
+  assert.equal(result.targetProductId, "prod-lata");
+  assert.equal(result.costForTarget, 1);
+});

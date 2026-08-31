@@ -862,6 +862,17 @@ export async function listStockGroups() {
   const globalCostByProductId = new Map(
     groups.flatMap((group) => group.products.map((m) => [m.productId, m.product.globalCost !== null ? Number(m.product.globalCost) : null] as const)),
   );
+  // "no trae el precio de venta como deberia ser" — resolveEffectivePricing
+  // (effective-pricing.ts) NUNCA lee standardSalePrice de un miembro
+  // DERIVADO: su precio implícito sale de canonicalStandardSalePrice ×
+  // factor (impliedFusionPrice) — exactamente la misma regla que el
+  // costo. El campo propio de un derivado (lo que se veía acá antes, un
+  // "C$1.00" que no significa nada) es tan fantasma como su globalCost
+  // propio — computeFusionMemberGlobalCost es genérica (no le importa si
+  // el número es costo o precio), se reusa tal cual.
+  const standardSalePriceByProductId = new Map(
+    groups.flatMap((group) => group.products.map((m) => [m.productId, Number(m.product.standardSalePrice)] as const)),
+  );
 
   return groups.map((group) => ({
     health: healthByGroupId.get(group.id) ?? { stockGroupId: group.id, stockGroupCode: group.code, healthy: true, issues: [] },
@@ -961,6 +972,7 @@ export async function listStockGroups() {
     members: (() => {
       const canonicalProductId = group.products.find((member) => member.isCanonical)?.productId ?? null;
       const canonicalGlobalCost = canonicalProductId ? globalCostByProductId.get(canonicalProductId) ?? null : null;
+      const canonicalStandardSalePrice = canonicalProductId ? standardSalePriceByProductId.get(canonicalProductId) ?? null : null;
       return group.products.map((m) => {
         const globalCost = computeFusionMemberGlobalCost({
           isCanonical: m.isCanonical,
@@ -968,7 +980,17 @@ export async function listStockGroups() {
           canonicalGlobalCost,
           conversionFactor: Number(m.conversionFactor),
         });
-        const standardSalePrice = Number(m.product.standardSalePrice);
+        // El precio implícito de un derivado (sin override de branchPrice,
+        // que acá no aplica — esto es la sucursal-agnóstica) es SIEMPRE
+        // canonicalStandardSalePrice × factor (resolveEffectivePricing,
+        // effective-pricing.ts) — su propio standardSalePrice, igual que
+        // su propio globalCost, no significa nada para el motor de venta.
+        const standardSalePrice = computeFusionMemberGlobalCost({
+          isCanonical: m.isCanonical,
+          ownGlobalCost: standardSalePriceByProductId.get(m.productId) ?? null,
+          canonicalGlobalCost: canonicalStandardSalePrice,
+          conversionFactor: Number(m.conversionFactor),
+        });
         return {
           id: m.id,
           productId: m.productId,
@@ -980,7 +1002,7 @@ export async function listStockGroups() {
           isPackagePresentation: m.isPackagePresentation,
           globalCost,
           standardSalePrice,
-          marginPercent: globalCost !== null && globalCost > 0 && standardSalePrice > 0
+          marginPercent: globalCost !== null && globalCost > 0 && standardSalePrice !== null && standardSalePrice > 0
             ? ((standardSalePrice - globalCost) / standardSalePrice) * 100
             : null,
         };

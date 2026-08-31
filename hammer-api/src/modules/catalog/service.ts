@@ -713,8 +713,31 @@ export async function updateProduct(productId: string, input: {
   // ya validado al crear/editar la fusión, no algo que se inventa acá — al
   // canónico. resolveGlobalCostWriteTarget decide a dónde y con qué valor.
   let costRedirect: { targetProductId: string; costForTarget: number } | null = null;
+  let priceRedirect: { targetProductId: string; priceForTarget: number } | null = null;
+  const needsConversionLookup = (input.globalCost !== undefined && input.globalCost !== null) || input.standardSalePrice !== undefined;
+  const conversion = needsConversionLookup ? await getProductStockConversion(prisma, productId) : null;
+
+  // "no trae el precio de venta como deberia ser... el precio de venta se
+  // debe ajustar y poder editarse desde ahi" (apartado Fusiones) —
+  // resolveEffectivePricing NUNCA lee el standardSalePrice propio de un
+  // miembro DERIVADO: su precio implícito sale de
+  // canonicalStandardSalePrice × factor (impliedFusionPrice) — el mismo
+  // patrón exacto que el costo, así que se redirige igual, reusando la
+  // MISMA función (resolveGlobalCostWriteTarget no le importa si el
+  // número es costo o precio, es la misma matemática). Esto NO toca
+  // branchPrice (la excepción por sucursal, que sigue siendo individual
+  // por presentación, sin redirigirse — regla ya establecida) — es
+  // específicamente Product.standardSalePrice, el precio GENERAL.
+  if (input.standardSalePrice !== undefined) {
+    const resolved = resolveGlobalCostWriteTarget({
+      requestedProductId: productId,
+      enteredCost: input.standardSalePrice,
+      conversion,
+    });
+    if (resolved.redirected) priceRedirect = { targetProductId: resolved.targetProductId, priceForTarget: resolved.costForTarget };
+  }
+
   if (input.globalCost !== undefined && input.globalCost !== null) {
-    const conversion = await getProductStockConversion(prisma, productId);
     const resolved = resolveGlobalCostWriteTarget({
       requestedProductId: productId,
       enteredCost: input.globalCost,
@@ -818,17 +841,24 @@ export async function updateProduct(productId: string, input: {
   }
 
   const now = new Date();
-  // El costo del producto SOLICITADO solo se toca cuando NO hay
+  // El costo/precio del producto SOLICITADO solo se tocan cuando NO hay
   // redirección (producto suelto, o el propio canónico) — un derivado
-  // sigue sin guardar jamás un costo propio, la regla de siempre.
+  // sigue sin guardar jamás su propio costo NI su propio precio general,
+  // la misma regla aplicada a los dos campos.
   const globalCostFields = costRedirect
     ? { globalCost: undefined, averageCost: undefined, costUpdatedAt: undefined, costUpdatedByUserId: undefined, costSource: undefined }
     : buildGlobalCostUpdateFields({ globalCost: input.globalCost, actorUserId: input.actorUserId, now });
+  const standardSalePriceForRequested = priceRedirect || input.standardSalePrice === undefined
+    ? undefined
+    : new Prisma.Decimal(input.standardSalePrice);
 
-  // Las dos escrituras (el producto solicitado, y — si hubo redirección —
-  // el canónico) van en la MISMA transacción: si la segunda falla, la
-  // primera no debe quedar aplicada sola con un costo a medio redirigir.
-  const { product, canonicalCostUpdate } = await prisma.$transaction(async (tx) => {
+  // Las escrituras (el producto solicitado, y — si hubo redirección de
+  // costo y/o precio — el canónico) van en la MISMA transacción: si la
+  // del canónico falla, la del producto solicitado no debe quedar
+  // aplicada sola con un valor a medio redirigir. Costo y precio, si
+  // ambos redirigen, SIEMPRE apuntan al mismo canónico (es la misma
+  // fusión) — se combinan en una sola escritura, no dos.
+  const { product, canonicalUpdate } = await prisma.$transaction(async (tx) => {
     const updated = await tx.product.update({
       where: { id: productId },
       data: {
@@ -839,20 +869,33 @@ export async function updateProduct(productId: string, input: {
         categoryId: input.categoryId,
         unit: input.unit?.trim(),
         allowsFraction: input.allowsFraction,
-        standardSalePrice: input.standardSalePrice !== undefined ? new Prisma.Decimal(input.standardSalePrice) : undefined,
+        standardSalePrice: standardSalePriceForRequested,
         isActive: input.isActive,
         ...globalCostFields,
       },
     });
 
-    let canonicalCostUpdate: { productId: string; sku: string; newCost: number } | null = null;
-    if (costRedirect) {
-      const canonicalFields = buildGlobalCostUpdateFields({ globalCost: costRedirect.costForTarget, actorUserId: input.actorUserId, now });
-      const canonicalProduct = await tx.product.update({ where: { id: costRedirect.targetProductId }, data: canonicalFields, select: { id: true, sku: true } });
-      canonicalCostUpdate = { productId: canonicalProduct.id, sku: canonicalProduct.sku, newCost: costRedirect.costForTarget };
+    let canonicalUpdate: { productId: string; sku: string; newCost: number | null; newPrice: number | null } | null = null;
+    if (costRedirect || priceRedirect) {
+      const targetProductId = (costRedirect ?? priceRedirect)!.targetProductId;
+      const canonicalCostFields = costRedirect
+        ? buildGlobalCostUpdateFields({ globalCost: costRedirect.costForTarget, actorUserId: input.actorUserId, now })
+        : {};
+      const canonicalPriceFields = priceRedirect ? { standardSalePrice: new Prisma.Decimal(priceRedirect.priceForTarget) } : {};
+      const canonicalProduct = await tx.product.update({
+        where: { id: targetProductId },
+        data: { ...canonicalCostFields, ...canonicalPriceFields },
+        select: { id: true, sku: true },
+      });
+      canonicalUpdate = {
+        productId: canonicalProduct.id,
+        sku: canonicalProduct.sku,
+        newCost: costRedirect?.costForTarget ?? null,
+        newPrice: priceRedirect?.priceForTarget ?? null,
+      };
     }
 
-    return { product: updated, canonicalCostUpdate };
+    return { product: updated, canonicalUpdate };
   });
 
   await logAuditEvent({
@@ -878,12 +921,14 @@ export async function updateProduct(productId: string, input: {
       skuChanged: previous.sku !== product.sku,
       categoryChanged: previous.categoryId !== product.categoryId,
       skuUpdateMode: input.skuUpdateMode ?? "KEEP_CURRENT",
-      ...(canonicalCostUpdate ? {
-        costEnteredViaDerivedPresentation: true,
-        canonicalProductId: canonicalCostUpdate.productId,
-        canonicalSku: canonicalCostUpdate.sku,
+      ...(canonicalUpdate ? {
+        costOrPriceEnteredViaDerivedPresentation: true,
+        canonicalProductId: canonicalUpdate.productId,
+        canonicalSku: canonicalUpdate.sku,
         enteredCost: input.globalCost,
-        canonicalCostApplied: canonicalCostUpdate.newCost,
+        canonicalCostApplied: canonicalUpdate.newCost,
+        enteredPrice: input.standardSalePrice,
+        canonicalPriceApplied: canonicalUpdate.newPrice,
       } : {}),
     },
   });
@@ -892,19 +937,21 @@ export async function updateProduct(productId: string, input: {
   // (no la del derivado por el que se entró el dato) tiene que poder ver
   // de dónde vino el cambio, igual que ya hace updateGlobalProductCostForReceiptTx
   // para las recepciones de compra.
-  if (canonicalCostUpdate) {
+  if (canonicalUpdate) {
     await logAuditEvent({
       actorUserId: input.actorUserId,
       module: "catalog",
       action: "PRODUCT_GLOBAL_COST_UPDATED",
       entityType: "Product",
-      entityId: canonicalCostUpdate.productId,
+      entityId: canonicalUpdate.productId,
       metadataJson: {
-        newGlobalCost: canonicalCostUpdate.newCost,
-        source: "DERIVED_PRESENTATION_COST_ENTRY",
+        newGlobalCost: canonicalUpdate.newCost,
+        newStandardSalePrice: canonicalUpdate.newPrice,
+        source: "DERIVED_PRESENTATION_COST_OR_PRICE_ENTRY",
         enteredViaProductId: product.id,
         enteredViaSku: product.sku,
         enteredCost: input.globalCost,
+        enteredPrice: input.standardSalePrice,
       },
     });
   }
