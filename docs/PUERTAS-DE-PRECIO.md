@@ -22,39 +22,44 @@ cuando `branchPrice != null`. Es la garantía de que "sigue el general" vs
 "excepción declarada" no diverjan en silencio (prompt-motor-precios-lote-
 herencia-gobierno.md, Fase 3).
 
-## Dos caminos MÁS que existen y NO pasan por ahí — hueco real, verificado al escribir esta nota
+## Dos caminos MÁS que existían y NO pasaban por ahí — [Cerrado, commit `4388eb5`]
 
 Verificado en el código actual (2026-08-27, rama `Hammer-V1`, sobre el commit
-`207356d`) — **no es hipotético, ya está en producción**:
+`207356d`) — **no era hipotético, estaba en producción**. Cerrado el
+2026-08-31 (`docs/AUDITORIA-MOTOR-PRECIOS-COSTOS.md`, hallazgo #3):
 
 4. **`setBranchPriceInBand`** (`branch-band-service.ts`, camino `IN_BAND`) —
    el ajuste que hace el Admin de Sucursal dentro de la banda de su
    categoría (`POST /api/branch/pricing/set-price`, Fase 4 de
-   prompt-motor-precios-lote-herencia-gobierno.md). Escribe `branchPrice` /
+   prompt-motor-precios-lote-herencia-gobierno.md). Escribía `branchPrice` /
    `priceSource` / `lastPriceUpdateAt` / `priceUpdatedByUserId` /
    `marginPercent` con un `tx.branchProductSetting.upsert` propio —
-   **nunca toca `priceExceptionReason` ni `priceExceptionAt`**.
+   **nunca tocaba `priceExceptionReason` ni `priceExceptionAt`**.
 5. **`applyApprovedPriceOverride`** (mismo archivo) — ejecuta el precio
    pedido cuando Master aprueba una solicitud `PRICE_OVERRIDE`. Mismo
    patrón: upsert propio, sin las columnas de excepción.
 
-**Consecuencia concreta:** un precio fijado por cualquiera de estos dos
-caminos queda con `branchPrice != null` y `priceExceptionReason = null` —
-exactamente el estado que `BranchPricingBlock` (`product-360.tsx`) marca
-como "Excepción sin motivo registrado" (`hasUnexplainedException: true`).
-Es la misma divergencia silenciosa que la Fase 3 de
-prompt-motor-precios-lote-herencia-gobierno.md dice haber eliminado
-(ver el comentario de cabecera de `setBranchPriceTx`, que afirma "los TRES
-caminos que escriben branchPrice... no hay un cuarto lugar donde puedan
-desincronizarse" — afirmación cierta cuando se escribió, ya no cierta desde
-que la Fase 4 del mismo prompt agregó estos dos sin pasar por acá).
+**Consecuencia concreta (ya no vigente):** un precio fijado por cualquiera
+de estos dos caminos quedaba con `branchPrice != null` y
+`priceExceptionReason = null` — exactamente el estado que
+`BranchPricingBlock` (`product-360.tsx`) marca como "Excepción sin motivo
+registrado" (`hasUnexplainedException: true`). Era la misma divergencia
+silenciosa que la Fase 3 de prompt-motor-precios-lote-herencia-gobierno.md
+decía haber eliminado.
 
-**No se corrigió en este ciclo** — `prompt-mudanza-zona-precios.md` es una
-mudanza de UI (dónde vive la calculadora, la bandeja y las políticas), no
-una corrección del motor de precios; tocar `branch-band-service.ts` es una
-decisión aparte que nadie pidió acá. Queda anotado para que quien lo
-corrija sepa exactamente los dos puntos a tocar (hacer que ambos caminos
-pasen por `setBranchPriceTx`, con un motivo por defecto tipo "Ajuste dentro
-de banda" / "Aprobado por Master" para el `exceptionReason` obligatorio), y
-para que nadie vuelva a escribir "los tres caminos pasan por
-setBranchPriceTx" sin haber visto esta nota primero.
+**Cómo quedó cerrado:** ambos caminos ahora llaman a `setBranchPriceTx`.
+`setBranchPriceInBand` usa el motivo del cajero si vino, o
+`"Ajuste dentro de la banda de la categoría"` por defecto (el flujo no pide
+motivo obligatorio — es un ajuste cotidiano). `applyApprovedPriceOverride`
+lee el motivo que viajó en `payloadJson` desde que se pidió la excepción
+(agregado ahí mismo para que sobreviva hasta la ejecución), con
+`"Precio bajo el margen mínimo de la categoría (aprobado)"` como respaldo
+para solicitudes viejas sin ese campo. Los cuerpos transaccionales se
+extrajeron a `setBranchPriceInBandTx`/`applyApprovedPriceOverrideTx` (mismo
+patrón que `upsertBranchProductSettingTx`) para poder probarlos con un `tx`
+en memoria — `branch-band.test.ts` confirma que las columnas de excepción
+sí quedan escritas.
+
+Ahora son **cinco** los caminos que pasan por `setBranchPriceTx` — el
+comentario de cabecera de `setBranchPriceTx` se actualizó en el mismo
+cierre para reflejarlo.

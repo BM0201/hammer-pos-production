@@ -28,10 +28,13 @@ export type BranchPriceExceptionResult = {
  * lastPriceUpdateAt/priceUpdatedByUserId pero NUNCA priceExceptionReason
  * ni priceExceptionAt — quien fijara un precio desde la pantalla de
  * catálogo creaba exactamente la divergencia silenciosa que la Fase 3
- * existe para eliminar. Los TRES caminos que escriben branchPrice (este
- * endpoint, applySuggestedPriceTx, upsertBranchProductSetting) llaman a
- * este helper — no hay un cuarto lugar donde branchPrice y las columnas de
- * excepción puedan desincronizarse.
+ * existe para eliminar. docs/PUERTAS-DE-PRECIO.md registra los caminos que
+ * llaman a este helper — hoy son CINCO (este endpoint, applySuggestedPriceTx,
+ * upsertBranchProductSetting, y desde el hallazgo #3 de
+ * docs/AUDITORIA-MOTOR-PRECIOS-COSTOS.md también setBranchPriceInBandTx y
+ * applyApprovedPriceOverrideTx en branch-band-service.ts) — no debería
+ * haber un lugar donde branchPrice y las columnas de excepción puedan
+ * desincronizarse sin pasar por acá.
  *
  * branchPrice != null exige exceptionReason (>= 3 caracteres) — sin
  * motivo, en seis meses nadie sabe si esa excepción sigue teniendo

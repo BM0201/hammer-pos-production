@@ -15,9 +15,10 @@ la mayoría tiene su propio test con datos reales de producción. Reescribir
 significa volver a aprender, a los golpes, todo lo que ya está aprendido y
 escrito en estos comentarios y tests.
 
-Se encontraron **2 huecos reales, verificados, no corregidos en este
-ciclo** (sección "Hallazgos"). Ninguno de los dos justifica una
-reescritura — los dos son extensiones puntuales de guards que ya existen.
+Se encontraron **4 huecos reales, verificados** (sección "Hallazgos", el
+punto 1 ya venía cerrado de un ciclo anterior). Ninguno justificaba una
+reescritura — los 4 son extensiones puntuales de guards que ya existen, y
+los 4 quedaron cerrados en el ciclo siguiente a esta auditoría.
 
 ---
 
@@ -117,11 +118,16 @@ anterior) — sigue vigente, re-verificado hoy:
 - **3 caminos declarados** (Bandeja, Calculadora, editor de catálogo) pasan
   por `setBranchPriceTx` — el único que escribe `branchPrice` JUNTO con
   `priceExceptionReason`/`priceExceptionAt` de forma consistente.
-- **2 caminos NO pasan por ahí**: `setBranchPriceInBand` (ajuste de Admin
+- **2 caminos NO pasaban por ahí**: `setBranchPriceInBand` (ajuste de Admin
   de Sucursal dentro de banda) y `applyApprovedPriceOverride` (ejecución
   de aprobación de Master) — cada uno con su propio `upsert` directo,
-  sin las columnas de excepción. **Este hueco sigue abierto** — no se
-  tocó hoy, sigue siendo cierto lo que dice ese documento.
+  sin las columnas de excepción. **[Cerrado, commit `4388eb5`]** — ambos
+  caminos ahora pasan por `setBranchPriceTx`; sus cuerpos transaccionales
+  se extrajeron a `setBranchPriceInBandTx`/`applyApprovedPriceOverrideTx`
+  (mismo patrón que `upsertBranchProductSettingTx`) para poder probar con
+  un `tx` en memoria que `priceExceptionReason`/`priceExceptionAt` sí
+  quedan escritos. `docs/PUERTAS-DE-PRECIO.md` queda desactualizado por
+  este cierre — pendiente de una pasada rápida para reflejarlo.
 
 ## 6. Detección automática — hallazgo nuevo
 
@@ -147,14 +153,23 @@ anterior) — sigue vigente, re-verificado hoy:
 de HIERRO DE 1/4** (precio 1650 < costo efectivo 2,234.89 → `UNSELLABLE`
 de manual). Se verificó que el detector SÍ corre — pero:
 
-**Hallazgo:** los tipos que genera `checkStockGroupPricingHealth`
-(`REVIEW_FUSION_UNSELLABLE`, `REVIEW_FUSION_MARGIN_OUTLIER`, etc.) **no
-están en la lista `APPLICABLE_TYPES` de `tray-service.ts`** — la Bandeja
-de la zona Precios. Existen como decisión de Brain (visibles en Centro de
-Decisiones) pero nunca llegan a la Bandeja, que es la pantalla que Master
-realmente revisa para precios. Es plausible que el caso de HIERRO haya
-estado detectado por Brain todo este tiempo, sin que nadie lo viera en el
-lugar donde se espera verlo.
+**Hallazgo [Cerrado, commit `2aec606`]:** los tipos que genera
+`checkStockGroupPricingHealth` (`REVIEW_FUSION_UNSELLABLE`,
+`REVIEW_FUSION_MARGIN_OUTLIER`, etc.) no estaban en la lista
+`APPLICABLE_TYPES` de `tray-service.ts` — la Bandeja de la zona Precios.
+Existían como decisión de Brain (visibles en Centro de Decisiones) pero
+nunca llegaban a la Bandeja, que es la pantalla que Master realmente
+revisa para precios. Es plausible que el caso de HIERRO haya estado
+detectado por Brain todo este tiempo, sin que nadie lo viera en el lugar
+donde se espera verlo. Se agregó SOLO `REVIEW_FUSION_UNSELLABLE` (mismo
+síntoma que `REVIEW_PRICE_BELOW_COST`, con un precio/costo de un solo
+producto limpio) — los otros cuatro `FusionPricingIssueKind` quedan fuera
+a propósito: no tienen un precio/costo de un solo producto que una fila
+de la Bandeja sepa mostrar (`COST_BASIS_CONFLICT`/`PRICE_BASIS_CONFLICT`
+implican varios `productId` a la vez). Como `checkStockGroupPricingHealth`
+nunca calcula un precio sugerido, estas filas entran como informativas
+(`applicable: false`, mismo tratamiento visual que `costLooksWrong`) — se
+ven, no se aplican con un clic.
 
 ## 7. El motor de cálculo (`calculator.ts`) — verificado matemáticamente
 
@@ -182,34 +197,40 @@ Sin hallazgos — esta pieza está sólida.
 - **Compras** (`purchase-orders/service.ts`): pasa por
   `createInventoryMovementTx`, que SÍ tiene `detectPackageCostAsUnitCost`.
   Protegida.
-- **Importación Excel** (`catalog-inventory/import-service.ts`): tiene
-  `assertPriceNotBelowCost` y `assertNotFusionMemberCostWrite`, pero
-  **NO llama a `detectPackageCostAsUnitCost`**. Una fila de Excel con el
-  costo del bulto en la columna de costo del canónico pasaría sin aviso.
-  No se tocó hoy (fuera del alcance "sin lógica nueva"), queda anotado.
+- **Importación Excel** (`catalog-inventory/import-service.ts`): tenía
+  `assertPriceNotBelowCost` y `assertNotFusionMemberCostWrite`, pero no
+  llamaba a `detectPackageCostAsUnitCost`. Una fila de Excel con el costo
+  del bulto en la columna de costo del canónico pasaría sin aviso.
+  **[Cerrado, commit `726ccef`]** — mismo guard, mismo umbral (factor≥4),
+  cableado en el mismo bloque que ya resolvía `assertNotFusionMemberCostWrite`,
+  solo para el CANÓNICO. Sin columna de "reintentar con costo alto" en el
+  Excel (a diferencia de `updateProduct`) — si el costo del bulto es
+  correcto, se corrige la celda y se reimporta, o se carga desde Precios y
+  costos, que sí tiene el reintento.
 
 ---
 
-## Hallazgos — priorizados, NO corregidos en este ciclo
+## Hallazgos — priorizados
 
-1. **[Cerrado hoy, commit `654f9ec`]** `detectPackageCostAsUnitCost` no
+1. **[Cerrado, commit `654f9ec`]** `detectPackageCostAsUnitCost` no
    protegía la edición directa de "Costo de compra" — la puerta por la
    que casi seguro entró el HIERRO DE 1/4 de la captura.
-2. **[Abierto, prioridad alta]** Los issues de `checkStockGroupPricingHealth`
+2. **[Cerrado, commit `2aec606`]** Los issues de `checkStockGroupPricingHealth`
    (fusión: UNSELLABLE, MARGIN_OUTLIER, PLACEHOLDER_COST,
-   COST_BASIS_CONFLICT, PRICE_BASIS_CONFLICT) no llegan a la Bandeja —
-   solo a Centro de Decisiones. Agregar sus `proposedActionType` a
-   `APPLICABLE_TYPES` (con su propio `reason`/grupo, ya que no todos
-   traen `suggestedPrice` aplicable en un clic) haría visible en la
-   Bandeja exactamente el tipo de problema que esta conversación empezó
-   destapando.
-3. **[Abierto, ya documentado en `docs/PUERTAS-DE-PRECIO.md`]**
-   `setBranchPriceInBand` / `applyApprovedPriceOverride` siguen sin pasar
-   por `setBranchPriceTx` — precios fijados por esos dos caminos quedan
-   sin `priceExceptionReason`.
-4. **[Abierto, prioridad baja]** La importación Excel no tiene el guard
-   de "costo de paquete tecleado como costo de unidad" — mismo hueco que
-   el punto 1, pero para importación masiva en vez de edición manual.
+   COST_BASIS_CONFLICT, PRICE_BASIS_CONFLICT) no llegaban a la Bandeja —
+   solo a Centro de Decisiones. Se agregó `REVIEW_FUSION_UNSELLABLE` a
+   `APPLICABLE_TYPES` (bucket `BELOW_COST`, informativa/no aplicable con
+   un clic) — ver §6.
+3. **[Cerrado, commit `4388eb5`]** `setBranchPriceInBand` /
+   `applyApprovedPriceOverride` ya pasan por `setBranchPriceTx` —
+   `docs/PUERTAS-DE-PRECIO.md` documentaba este hueco, pendiente de una
+   pasada rápida para reflejar el cierre.
+4. **[Cerrado, commit `726ccef`]** La importación Excel ya tiene el guard
+   de "costo de paquete tecleado como costo de unidad" en el canónico —
+   mismo guard que el punto 1, cableado también en importación masiva.
 
-Ninguno de estos 4 puntos se implementó en este ciclo — es auditoría, no
-ejecución, tal como se pidió.
+Los 4 puntos quedaron implementados y verificados (tsc limpio, suite
+completa sin regresiones — la única falla es la preexistente de
+`fusion-composition.test.ts`, sin relación con ninguno de estos cambios)
+en el ciclo posterior a esta auditoría, a pedido explícito: "Mejor esos
+bugs que estan busca repararlos y ejecutarlos bien".
