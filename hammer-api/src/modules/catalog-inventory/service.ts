@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { formatDualStock } from "@/modules/inventory/unit-conversion";
-import { getEffectiveProductPricing, FUSION_PRICE_OVERRIDE_THRESHOLD, relativeDeviation } from "@/modules/catalog/effective-pricing";
+import { getEffectiveProductPricing, getEffectiveProductPricingBatch, FUSION_PRICE_OVERRIDE_THRESHOLD, relativeDeviation } from "@/modules/catalog/effective-pricing";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { setBranchPriceTx } from "@/modules/pricing/branch-price-exception-service";
 import { buildProductSearchWhere, rankProductMatches } from "@/modules/catalog/product-search";
@@ -85,14 +85,22 @@ type CatalogStockConversion = {
 };
 
 /**
- * Parte B (prompt-precios-vigentes-catalogo.md) — el mismo costo que
- * getCatalogInventoryCenter muestra (resolveCatalogDisplayCost, fusión-aware:
- * un miembro DERIVADO deriva SIEMPRE del canónico × factor), extraído para
- * reusarlo en pricing/current-prices-service.ts sin escribir una tercera
- * resolución de costo — los dos números tienen que coincidir. Con branchId
- * FIJO (a diferencia de getCatalogInventoryCenter, que también soporta "todas
- * las sucursales") no hace falta agregar entre sucursales: el balance de ESA
- * sucursal es directo.
+ * El mismo costo de RED que getCatalogInventoryCenter muestra
+ * (resolveCatalogDisplayCost, fusión-aware: un miembro DERIVADO deriva
+ * SIEMPRE del canónico × factor), en versión batch con branchId FIJO (a
+ * diferencia de getCatalogInventoryCenter, que también soporta "todas las
+ * sucursales", así que no hace falta agregar entre sucursales: el balance
+ * de ESA sucursal es directo).
+ *
+ * prompt-precios-costos-una-sola-fuente.md — pricing/current-prices-service.ts
+ * la usaba para el costo de "Precios vigentes"; se cambió a
+ * getEffectiveProductPricingBatch (branchCost-aware) porque esta versión,
+ * al no mirar branchCost, mostraba el costo de red aunque la sucursal
+ * tuviera su propio costo cargado — la misma clase de divergencia
+ * reportada en "Precios y costos". Queda acá, probada
+ * (catalog-display-cost.test.ts) y sin más llamadores hoy, como la
+ * resolución de "costo de red" para quien la necesite — no confundir con
+ * el costo POR SUCURSAL que usa el resto del motor de precios.
  */
 export async function resolveCatalogDisplayCostBatch(
   productIds: string[],
@@ -455,9 +463,39 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     }
   }
 
+  /* ── Costo y precio EFECTIVOS por sucursal — el mismo motor que usa la venta ──
+     prompt-precios-costos-una-sola-fuente.md — "Precios y costos" calculaba
+     el margen con baseCost (resolveCatalogDisplayCost: costo de RED, sin
+     branchCost) mientras mostraba branchCost/branchPrice de la sucursal en
+     la misma fila — dos costos distintos en una fila. getEffectiveProductPricingBatch
+     (catalog/effective-pricing.ts) YA es la resolución única que usa el
+     motor de venta, Brain y la Bandeja (branchCost > WAC > averageCost >
+     globalCost > lastPurchaseCost, fusión-aware); no se reimplementa acá,
+     se reusa — para que "una sola resolución de costo efectivo, compartida
+     por todas las pantallas" sea cierto de verdad y no una cuarta cascada
+     nueva. branchEffectivePricing cubre TODAS las sucursales activas (no
+     solo params.branchId) porque la Vista comparativa de Precios y costos
+     necesita el costo/precio efectivo de cada una a la vez. */
+  const branchPricingItems = filteredProducts.flatMap((product) => branches.map((branch) => ({ branchId: branch.id, productId: product.id })));
+  const branchPricingByKey = await getEffectiveProductPricingBatch(prisma, branchPricingItems);
+
   filteredProducts = filteredProducts.map((product) => {
     const conversion = conversionByProductId.get(product.id) ?? null;
     const inventoryProductId = conversion?.canonicalProductId ?? product.id;
+    const branchEffectivePricing = branches.map((branch) => {
+      const pricing = branchPricingByKey.get(`${branch.id}:${product.id}`);
+      return {
+        branchId: branch.id,
+        effectiveCost: pricing?.effectiveCost != null ? Number(pricing.effectiveCost) : null,
+        costSource: pricing?.costSource ?? "NONE",
+        effectivePrice: pricing?.effectivePrice != null ? Number(pricing.effectivePrice) : null,
+        priceSource: pricing?.priceSource ?? "MISSING",
+        branchCost: pricing?.branchCost != null ? Number(pricing.branchCost) : null,
+        branchPrice: pricing?.branchPrice != null ? Number(pricing.branchPrice) : null,
+        isFusionMember: pricing?.isFusionMember ?? false,
+        sellability: pricing?.sellability ?? "NO_COST",
+      };
+    });
     const sharedBalances = branches.map((branch) => {
       const balance = sharedBalanceByBranchProduct.get(`${branch.id}:${inventoryProductId}`);
       return {
@@ -554,6 +592,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
         isCanonical: conversion.isCanonical,
       } : null,
       sharedStock,
+      branchEffectivePricing,
       allSharedInventoryBalances: sharedBalances.map((balance) => ({
         branchId: balance.branchId,
         inventoryProductId: balance.inventoryProductId,

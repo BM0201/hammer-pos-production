@@ -81,6 +81,24 @@ type ProductRow = {
     looseUnitQuantity?: string | null;
     weightedAverageCost: string | null;
   }>;
+  /**
+   * prompt-precios-costos-una-sola-fuente.md — el mismo motor que usa la
+   * venta (branchCost > WAC > averageCost > globalCost > lastPurchaseCost,
+   * fusión-aware), UNA fila por sucursal activa. buildBranchPricingCostRow
+   * lo usa en vez de recalcular con baseCost (costo de RED, sin branchCost)
+   * como hacía antes — la causa real del margen que no cuadraba.
+   */
+  branchEffectivePricing?: Array<{
+    branchId: string;
+    effectiveCost: number | null;
+    costSource: "BRANCH" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
+    effectivePrice: number | null;
+    priceSource: "BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED";
+    branchCost: number | null;
+    branchPrice: number | null;
+    isFusionMember: boolean;
+    sellability: "OK" | "BELOW_COST" | "NO_COST";
+  }>;
 };
 type Movement = {
   id: string;
@@ -246,18 +264,31 @@ type BranchPricingCostRow = {
   referencePrice: number;
   branchPrice: number | null;
   effectivePrice: number | null;
-  priceSource: "BRANCH" | "MISSING";
+  priceSource: "BRANCH" | "STANDARD" | "MISSING" | "FUSION_DERIVED";
   baseWeightedAverageCost: number | null;
   weightedAverageCost: number | null;
   branchCost: number | null;
   effectiveCost: number | null;
-  costSource: "GLOBAL" | "NONE";
+  costSource: "BRANCH" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
+  /** prompt-precios-costos-una-sola-fuente.md B.3 — de dónde sale el costo con el que se calculó el margen, para que un margen que no cuadra se explique en la fila en vez de en una investigación aparte. */
+  costExplanation: string;
   effectiveMarginPercent: number | null;
   isConvertibleStock: boolean;
   baseUnit?: string | null;
   conversionFactor?: number | null;
   warnings: string[];
 };
+
+function costSourceLabel(source: BranchPricingCostRow["costSource"], branchCode: string): string {
+  switch (source) {
+    case "BRANCH": return `Costo cargado en ${branchCode}`;
+    case "WAC_ESTIMATE": return `Promedio de compras en ${branchCode}`;
+    case "GLOBAL_AVERAGE": return "Promedio general del producto";
+    case "GLOBAL": return "Costo de compra general";
+    case "LAST_PURCHASE": return "Última compra registrada";
+    default: return "Sin costo";
+  }
+}
 
 type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "transfers" | "reorder" | "audit";
 
@@ -314,10 +345,20 @@ function marginBadgeVariant(value: number | null) {
 
 function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchPricingCostRow {
   const setting = product.branchProductSettings.find((item) => item.branchId === branch.id);
+  // prompt-precios-costos-una-sola-fuente.md — antes effectiveCost salía de
+  // product.baseCost (costo de RED: WAC > averageCost > globalCost >
+  // lastPurchaseCost, SIN branchCost) mientras esta misma fila mostraba
+  // branchCost de la sucursal — dos costos distintos en una fila, el bug
+  // real detrás de un margen que no cuadraba con lo que se veía en
+  // pantalla. entry es el mismo motor que resuelve precio/costo efectivo
+  // para la venta (branchCost > WAC > averageCost > globalCost >
+  // lastPurchaseCost, fusión-aware) — branchEffectivePricing lo trae
+  // calculado desde el backend (getEffectiveProductPricingBatch), no se
+  // reimplementa acá.
+  const entry = product.branchEffectivePricing?.find((item) => item.branchId === branch.id) ?? null;
   const branchPrice = numberOrNull(setting?.branchPrice);
   const branchCost = numberOrNull(setting?.branchCost);
   const referencePrice = Number(product.basePrice) || 0;
-  const effectivePrice = branchPrice;
   const sharedWac = numberOrNull(product.allSharedInventoryBalances?.find((item) => item.branchId === branch.id)?.weightedAverageCost);
   const directWac = numberOrNull(product.inventoryBalances.find((item) => item.branchId === branch.id)?.weightedAverageCost);
   const baseWeightedAverageCost = sharedWac ?? directWac;
@@ -325,25 +366,46 @@ function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchP
   const weightedAverageCost = baseWeightedAverageCost === null
     ? null
     : baseWeightedAverageCost * (product.stockConversion ? conversionFactor : 1);
-  const effectiveCost = numberOrNull(product.baseCost);
+
+  const effectiveCost = entry?.effectiveCost ?? null;
+  const costSource = entry?.costSource ?? "NONE";
+  const costExplanation = entry?.isFusionMember && product.stockConversion
+    ? `Derivado de ${product.stockConversion.baseUnit} × ${Number(product.stockConversion.conversionFactor)}`
+    : costSourceLabel(costSource, branch.code);
+  // Respaldo defensivo si branchEffectivePricing no vino (dato viejo en
+  // caché, o algún llamador que todavía no lo pide) — mismo fallback a
+  // standardSalePrice que ya hace el motor de venta (effective-pricing.ts),
+  // para no volver a colapsar en "N/D" un producto que sí se vende al
+  // precio general.
+  const effectivePrice = entry?.effectivePrice ?? branchPrice ?? (referencePrice > 0 ? referencePrice : null);
+  const priceSource: BranchPricingCostRow["priceSource"] = entry?.priceSource
+    ?? (branchPrice !== null ? "BRANCH" : referencePrice > 0 ? "STANDARD" : "MISSING");
   const effectiveMarginPercent = effectivePrice !== null && effectivePrice > 0 && effectiveCost !== null && effectiveCost > 0
     ? ((effectivePrice - effectiveCost) / effectivePrice) * 100
     : null;
+
   const warnings: string[] = [];
-  if (effectivePrice === null) warnings.push("Sin precio en esta sucursal");
+  // "Sin precio en esta sucursal" es sobre branchPrice (la excepción propia
+  // de ESTA sucursal), no sobre effectivePrice — "sigue el precio general"
+  // es un estado válido, no "sin precio" (mismo criterio que hasNoBranchPrice
+  // en catalog-inventory/service.ts). Antes era equivalente por accidente
+  // (effectivePrice ERA branchPrice a secas); ahora que effectivePrice cae a
+  // STANDARD, hay que decidirlo explícito para no perder el aviso.
+  if (branchPrice === null) warnings.push("Sin precio en esta sucursal");
   if (effectiveCost === null) warnings.push("No se puede calcular margen sin costo efectivo.");
-  if (effectiveCost !== null && effectivePrice !== null && effectivePrice < effectiveCost) warnings.push("Precio bajo costo.");
+  if (entry?.sellability === "BELOW_COST") warnings.push("Precio bajo costo.");
 
   return {
     referencePrice,
     branchPrice,
     effectivePrice,
-    priceSource: branchPrice !== null ? "BRANCH" : "MISSING",
+    priceSource,
     baseWeightedAverageCost,
     weightedAverageCost,
     branchCost,
     effectiveCost,
-    costSource: effectiveCost !== null ? "GLOBAL" : "NONE",
+    costSource,
+    costExplanation,
     effectiveMarginPercent,
     isConvertibleStock: Boolean(product.stockConversion),
     baseUnit: product.stockConversion?.baseUnit ?? null,
@@ -491,7 +553,7 @@ export function CatalogInventoryAdmin() {
     await load();
   }
 
-  async function updateBranchPrice(product: ProductRow, branch: Branch, field: "branchPrice", value: string, reason?: string) {
+  async function updateBranchPrice(product: ProductRow, branch: Branch, field: "branchPrice", value: string, reason?: string, overridePriceConfirmed = false) {
     const numeric = value.trim() === "" ? null : Number(value);
     if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
       toast.error("No se permiten costos o precios negativos.");
@@ -503,10 +565,41 @@ export function CatalogInventoryAdmin() {
       // Parte B (prompt-huecos-fase1-fase3-despliegue.md) — priceExceptionReason
       // viaja junto con branchPrice: setBranchPriceTx exige motivo cuando se
       // fija un precio (numeric !== null); al limpiarlo a null no hace falta.
-      body: JSON.stringify({ branchId: branch.id, productId: product.id, [field]: numeric, priceExceptionReason: numeric !== null ? reason : undefined }),
+      body: JSON.stringify({ branchId: branch.id, productId: product.id, [field]: numeric, priceExceptionReason: numeric !== null ? reason : undefined, overridePriceConfirmed: overridePriceConfirmed || undefined }),
     });
     if (!response.ok) {
       const raw = await response.json().catch(() => null);
+      // Parte C (prompt-precios-costos-una-sola-fuente.md) — un 409 es una
+      // pregunta del servidor, no un error genérico: cada uno de estos
+      // guards existe por una razón concreta y distinta, y quien lo ve
+      // necesita saber CUÁL para poder actuar, no solo que "algo falló".
+      if (raw?.error?.code === "BELOW_COST_NOT_ALLOWED") {
+        // El costo/fuente ya están en el cliente (buildBranchPricingCostRow,
+        // el mismo motor que acaba de calcular el margen de esta fila) — no
+        // hace falta que el backend los mande de vuelta en el error.
+        const row = buildBranchPricingCostRow(product, branch);
+        toast.error(
+          row.effectiveCost !== null
+            ? `El costo vigente es ${money(row.effectiveCost)} (${row.costExplanation}). Corregí el costo o subí el precio.`
+            : (raw?.error?.message ?? "El precio no puede ser menor al costo."),
+          { duration: 8000 },
+        );
+        return;
+      }
+      if (raw?.error?.code === "FUSION_COST_WRITE_NOT_ALLOWED") {
+        toast.error("Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", { duration: 8000 });
+        return;
+      }
+      // prompt-costos-precios-fusion.md §2.2 — el override sigue permitido
+      // (vender por metro más barato que por lata suelta es legítimo), solo
+      // deja de ser invisible: se confirma explícito antes de guardarlo.
+      if (raw?.error?.code === "FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED" && !overridePriceConfirmed) {
+        const confirmed = window.confirm(`${raw.error.message}\n\n¿Confirmás que el precio es correcto tal cual lo escribiste?`);
+        if (confirmed) {
+          await updateBranchPrice(product, branch, field, value, reason, true);
+        }
+        return;
+      }
       toast.error(raw?.error?.message ?? "No se pudo guardar la configuracion por sucursal.");
       return;
     }
@@ -539,6 +632,15 @@ export function CatalogInventoryAdmin() {
           await updateGlobalCost(product, value, true);
           return;
         }
+        return;
+      }
+      // Parte C — este producto es un miembro DERIVADO de una fusión (el
+      // costo se edita en el canónico); la UI ya oculta este input para
+      // derivados, así que en la práctica esto solo puede pasar por una
+      // fusión creada/cambiada en el momento entre que se cargó la fila y
+      // se guardó — un mensaje claro en vez de uno genérico igual ayuda.
+      if (raw?.error?.code === "FUSION_COST_WRITE_NOT_ALLOWED") {
+        toast.error("Esta presentación es un miembro derivado de una fusión: el costo se carga en el producto canónico, no aquí.", { duration: 8000 });
         return;
       }
       toast.error(raw?.error?.message ?? "No se pudo guardar el costo universal.");
@@ -3404,8 +3506,8 @@ function PricingPanel({
                     const row = buildBranchPricingCostRow(product, branch);
                     return (
                       <td key={branch.id} className="text-xs">
-                        <div>Precio: {formatMoneyOrNd(row.effectivePrice)} ({row.priceSource === "BRANCH" ? "Sucursal" : "Sin precio"})</div>
-                        <div>Costo de compra: {formatMoneyOrNd(row.effectiveCost)}</div>
+                        <div>Precio: {formatMoneyOrNd(row.effectivePrice)} ({row.priceSource === "BRANCH" ? "Sucursal" : row.priceSource === "STANDARD" ? "Precio general" : row.priceSource === "FUSION_DERIVED" ? "Derivado de fusión" : "Sin precio"})</div>
+                        <div>Costo de compra: {formatMoneyOrNd(row.effectiveCost)} <span className="text-[var(--color-text-muted)]">· {row.costExplanation}</span></div>
                         <div>Margen: {formatMarginOrNd(row.effectiveMarginPercent)}</div>
                       </td>
                     );
@@ -3436,7 +3538,11 @@ function PricingPanel({
               const cell = draft[p.id]?.[activeBranch.id] ?? { price: "", dirty: false };
               const priceKey = `${p.id}-${activeBranch.id}-price`;
               const hasDirty = Boolean(cell.dirty);
-              const isMissing = row.effectivePrice === null;
+              // Sobre branchPrice (la excepción propia de esta sucursal), no
+              // effectivePrice — "sigue el precio general" ya NO es "sin
+              // precio" acá (B.2), sigue siendo un estado que esta tabla
+              // quiere que alguien revise y decida si declarar una excepción.
+              const isMissing = row.branchPrice === null;
               const actionVariant = isMissing ? "danger" : hasDirty ? "success" : "ghost";
               const actionLabel = isMissing ? "Asignar" : hasDirty ? "Guardar cambios" : "Guardado";
               return (
@@ -3466,31 +3572,46 @@ function PricingPanel({
                       <div className="flex flex-col gap-0.5">
                         <span className="font-mono text-xs">{formatMoneyOrNd(row.effectiveCost)}</span>
                         <span className="text-[0.6rem] text-[var(--color-text-muted)]">
-                          Derivado de {p.stockConversion.baseUnit} × {Number(p.stockConversion.conversionFactor)} · edítalo en la unidad base
+                          {row.costExplanation} · edítalo en la unidad base
                         </span>
                       </div>
                     ) : onSaveGlobalCost ? (
-                      <div className="flex items-center gap-1">
-                        <Input
-                          className={`h-7 text-xs flex-1 ${globalCostDraft[p.id] !== (p.globalCost != null ? String(p.globalCost) : "") ? "ring-2 ring-amber-300/60" : ""}`}
-                          type="number" min="0" step="0.01"
-                          placeholder="Sin costo de compra"
-                          value={globalCostDraft[p.id] ?? ""}
-                          onChange={(e) => setGlobalCostDraft((prev) => ({ ...prev, [p.id]: e.target.value }))}
-                          title="Costo de compra — aplica a todas las sucursales sin override"
-                        />
-                        <button type="button" title="Guardar costo de compra"
-                          className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === `${p.id}-global-cost` ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm"}`}
-                          disabled={savingKey === `${p.id}-global-cost`}
-                          onClick={async () => {
-                            setSavingKey(`${p.id}-global-cost`);
-                            try { await onSaveGlobalCost(p, globalCostDraft[p.id] ?? ""); } finally { setSavingKey(null); }
-                          }}
-                        >
-                          {savingKey === `${p.id}-global-cost` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                        </button>
+                      <div className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-1">
+                          <Input
+                            className={`h-7 text-xs flex-1 ${globalCostDraft[p.id] !== (p.globalCost != null ? String(p.globalCost) : "") ? "ring-2 ring-amber-300/60" : ""}`}
+                            type="number" min="0" step="0.01"
+                            placeholder="Sin costo de compra"
+                            value={globalCostDraft[p.id] ?? ""}
+                            onChange={(e) => setGlobalCostDraft((prev) => ({ ...prev, [p.id]: e.target.value }))}
+                            title="Costo de compra — aplica a todas las sucursales sin override"
+                          />
+                          <button type="button" title="Guardar costo de compra"
+                            className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === `${p.id}-global-cost` ? "bg-gray-400" : "bg-emerald-600 hover:bg-emerald-700 shadow-sm"}`}
+                            disabled={savingKey === `${p.id}-global-cost`}
+                            onClick={async () => {
+                              setSavingKey(`${p.id}-global-cost`);
+                              try { await onSaveGlobalCost(p, globalCostDraft[p.id] ?? ""); } finally { setSavingKey(null); }
+                            }}
+                          >
+                            {savingKey === `${p.id}-global-cost` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                          </button>
+                        </div>
+                        {/* B.3 — el margen de al lado se calculó con este costo,
+                            no necesariamente con lo que muestra el input de
+                            arriba: si esta sucursal tiene un costo propio
+                            (branchCost) o un WAC real, esos ganan sobre el
+                            costo de compra general recién editado. */}
+                        <span className="text-[0.6rem] text-[var(--color-text-muted)]">
+                          Margen calculado con: {formatMoneyOrNd(row.effectiveCost)} ({row.costExplanation})
+                        </span>
                       </div>
-                    ) : formatMoneyOrNd(row.effectiveCost)}
+                    ) : (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-mono text-xs">{formatMoneyOrNd(row.effectiveCost)}</span>
+                        <span className="text-[0.6rem] text-[var(--color-text-muted)]">{row.costExplanation}</span>
+                      </div>
+                    )}
                   </td>
                   <td className="py-2">
                     <div className="flex items-center gap-1">
