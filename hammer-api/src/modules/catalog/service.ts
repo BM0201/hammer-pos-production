@@ -5,6 +5,7 @@ import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku
 import { resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
 import { formatDualStock, convertBaseQtyToSaleQty, convertBaseUnitCostToSaleUnitCost, getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import type { ProductStockConversion } from "@/modules/inventory/unit-conversion";
+import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
 import { assertPriceNotBelowCost, assertNotFusionMemberCostWrite } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
 
@@ -617,6 +618,7 @@ export async function updateProduct(productId: string, input: {
   standardSalePrice?: number;
   isActive?: boolean;
   globalCost?: number | null;
+  allowHighUnitCost?: boolean;
   actorUserId: string;
 }) {
   const previous = await prisma.product.findUnique({
@@ -631,7 +633,44 @@ export async function updateProduct(productId: string, input: {
   // globalCost=1.00 tapando el WAC real del canónico). Se rechaza con
   // mensaje, no se permite "por si acaso" — igual en import-service.ts.
   if (input.globalCost !== undefined && input.globalCost !== null) {
-    assertNotFusionMemberCostWrite(await getProductStockConversion(prisma, productId));
+    const conversion = await getProductStockConversion(prisma, productId);
+    assertNotFusionMemberCostWrite(conversion);
+
+    // "asegura el motor de mejor manera" — un producto que a veces se
+    // compra suelto y a veces en bulto (HIERRO: a veces varilla, a veces
+    // tercio de 30) puede terminar con el costo del BULTO tecleado a mano
+    // en el campo de costo del CANÓNICO (por unidad base) — exactamente la
+    // confusión que corrompe el costo derivado de todo el grupo, porque
+    // TODOS los derivados calculan desde acá. wac.ts ya tiene este guard
+    // (detectPackageCostAsUnitCost) para movimientos de inventario
+    // (compras, ajustes) — nunca corría en esta pantalla, que edita el
+    // costo directo sin pasar por un movimiento. Solo aplica al canónico
+    // de un grupo con presentaciones de escala real (factor >= 4, mismo
+    // umbral que el guard de movimientos) — un producto suelto o sin
+    // fusión no tiene con qué confundirse.
+    if (conversion?.isCanonical) {
+      const siblings = await prisma.productStockGroupMember.findMany({
+        where: { stockGroupId: conversion.stockGroupId, isActive: true, isCanonical: false },
+        select: { conversionFactor: true },
+      });
+      const packageFactor = maxPackageFactorForSanityCheck(siblings.map((s) => s.conversionFactor));
+      if (packageFactor) {
+        const wacAgg = await prisma.inventoryBalance.aggregate({
+          where: { productId },
+          _max: { weightedAverageCost: true },
+        });
+        const referenceWac = wacAgg._max.weightedAverageCost;
+        if (referenceWac) {
+          detectPackageCostAsUnitCost({
+            inbound: true,
+            baseMovementUnitCost: new Prisma.Decimal(input.globalCost),
+            existingWac: referenceWac,
+            packageFactor,
+            allowHighUnitCost: input.allowHighUnitCost,
+          });
+        }
+      }
+    }
   }
 
   // Auditoría 2026-07-22 (ALTO Catálogo): bloqueo de precio bajo costo,

@@ -5,6 +5,7 @@ import { updateProductSchema } from "@/modules/catalog/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, fail } from "@/lib/api/response";
+import { WacValidationError } from "@/modules/inventory/wac";
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -22,6 +23,14 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const product = await updateProduct(id, { ...parsed.data, actorUserId: session.userId });
     return ok(product);
   } catch (error) {
+    // "asegura el motor de mejor manera" — mismo patrón que
+    // /api/inventory/movements (WacValidationError), pero con su propio
+    // `code` (no el genérico VALIDATION_ERROR) para que el frontend pueda
+    // distinguir esta sospecha específica y ofrecer el reintento con
+    // allowHighUnitCost.
+    if (error instanceof WacValidationError) {
+      return fail(error.code, error.message, 422);
+    }
     return toHttpErrorResponse(error);
   }
 }

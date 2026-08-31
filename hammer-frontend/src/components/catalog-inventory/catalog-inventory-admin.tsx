@@ -514,7 +514,7 @@ export function CatalogInventoryAdmin() {
     await load();
   }
 
-  async function updateGlobalCost(product: ProductRow, value: string) {
+  async function updateGlobalCost(product: ProductRow, value: string, allowHighUnitCost = false) {
     const numeric = value.trim() === "" ? null : Number(value);
     if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
       toast.error("El costo universal no puede ser negativo.");
@@ -523,10 +523,24 @@ export function CatalogInventoryAdmin() {
     const response = await apiFetch(`/api/catalog/products/${product.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ globalCost: numeric }),
+      body: JSON.stringify({ globalCost: numeric, allowHighUnitCost: allowHighUnitCost || undefined }),
     });
     if (!response.ok) {
       const raw = await response.json().catch(() => null);
+      // "asegura el motor de mejor manera" — este producto tiene una
+      // presentación en bulto (fusión), y el costo nuevo se parece al
+      // costo del BULTO completo, no al de la unidad base. Sin este
+      // reintento, un costo alto legítimo (el bulto de verdad subió de
+      // precio) quedaría bloqueado sin salida — mismo error que ya
+      // arreglamos para standardSalePrice, no lo repetimos acá.
+      if (raw?.error?.code === "SUSPECTED_PACKAGE_COST_AS_UNIT_COST") {
+        const confirmed = window.confirm(`${raw.error.message}\n\n¿Confirmás que el costo es correcto tal cual lo escribiste?`);
+        if (confirmed) {
+          await updateGlobalCost(product, value, true);
+          return;
+        }
+        return;
+      }
       toast.error(raw?.error?.message ?? "No se pudo guardar el costo universal.");
       return;
     }

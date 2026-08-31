@@ -112,6 +112,23 @@ export function detectPackageCostAsUnitCost(input: {
   }
 }
 
+/**
+ * "asegura el motor de mejor manera" (catalog/service.ts → updateProduct)
+ * — el mismo guard de arriba, aplicado a la edición directa del costo del
+ * CANÓNICO (Precios y costos), no solo a movimientos de inventario. Pura
+ * — separada para poder probarla sin base de datos: decide con qué factor
+ * comparar (el mayor entre los miembros DERIVADOS activos del grupo) y si
+ * siquiera vale la pena chequear (MIN_FACTOR=4, igual que arriba — una
+ * presentación suelta de factor 2-3 no tiene con qué confundirse).
+ */
+export function maxPackageFactorForSanityCheck(siblingFactors: Prisma.Decimal[]): Prisma.Decimal | null {
+  const max = siblingFactors.reduce(
+    (best, factor) => (factor.gt(best) ? factor : best),
+    new Prisma.Decimal(1),
+  );
+  return max.gte(4) ? max : null;
+}
+
 /* ────────────────────────────────────────────────────────────────
  * Core WAC recalculation with validations
  * ──────────────────────────────────────────────────────────────── */

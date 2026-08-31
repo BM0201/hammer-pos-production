@@ -38,4 +38,9 @@ export const updateProductSchema = z.object({
   standardSalePrice: z.coerce.number().positive().optional(),
   isActive: z.boolean().optional(),
   globalCost: z.coerce.number().nonnegative().optional().nullable(),
+  // "asegura el motor de mejor manera" — igual que en movimientos de
+  // inventario (createInventoryMovementSchema), el override explícito para
+  // cuando SUSPECTED_PACKAGE_COST_AS_UNIT_COST dispara pero el costo alto
+  // es correcto de verdad.
+  allowHighUnitCost: z.boolean().optional(),
 });
