@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/prisma";
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
-import { resolveCatalogDisplayCostBatch } from "@/modules/catalog-inventory/service";
 import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
 import { getProductStockConversionsBatch } from "@/modules/inventory/unit-conversion";
 import { buildProductSearchWhere, rankProductMatches } from "@/modules/catalog/product-search";
@@ -8,12 +7,19 @@ import type { Prisma } from "@prisma/client";
 
 /**
  * Parte B (prompt-precios-vigentes-catalogo.md) — la vista de precios
- * vigentes por sucursal. USA effective-pricing.ts (precio — el mismo que
- * cobra el POS) y resolveCatalogDisplayCost (costo — el mismo que muestra
- * el catálogo) vía sus versiones batch; NO escribe una tercera resolución
- * de ninguno de los dos. branchId es obligatorio a propósito: un precio
- * efectivo sin sucursal no existe, y una tabla que promedia sucursales
- * miente.
+ * vigentes por sucursal. USA effective-pricing.ts (precio Y costo — el
+ * mismo motor que cobra el POS), no una segunda resolución.
+ *
+ * prompt-precios-costos-una-sola-fuente.md — hasta acá el costo salía de
+ * resolveCatalogDisplayCostBatch (costo de RED: WAC > averageCost >
+ * globalCost > lastPurchaseCost, SIN branchCost) mientras el precio ya
+ * venía de getEffectiveProductPricingBatch (branchCost > WAC > averageCost
+ * > globalCost > lastPurchaseCost) — la misma clase de divergencia que
+ * "Precios y costos" (catalog-inventory-admin.tsx), solo que acá pasaba
+ * inadvertida porque "Precios vigentes" es de solo lectura. pricingByKey
+ * YA trae effectiveCost/costSource resueltos con branchCost incluido —
+ * no hacía falta una consulta aparte, solo faltaba usarla para el costo
+ * también, no solo para el precio.
  */
 
 export type CurrentPriceSource = "BRANCH" | "STANDARD" | "FUSION_DERIVED" | "MISSING";
@@ -62,7 +68,7 @@ const EMPTY_TOTALS: CurrentPricesTotals = {
 
 /**
  * `db` es inyectable (mismo patrón que getPricingTray en tray-service.ts)
- * para poder probarlo con un fake en memoria. resolveCatalogDisplayCostBatch
+ * para poder probarlo con un fake en memoria. getEffectiveProductPricingBatch
  * y resolvePolicyForProductBatch también lo reciben — sin eso, esta función
  * no sería testeable sin base de datos real.
  */
@@ -99,9 +105,8 @@ export async function getCurrentPrices(
   const productIds = products.map((p) => p.id);
   const pairs = productIds.map((productId) => ({ branchId: filters.branchId, productId }));
 
-  const [pricingByKey, costByProductId, policyByKey, conversionByProductId, settings, balances] = await Promise.all([
+  const [pricingByKey, policyByKey, conversionByProductId, settings, balances] = await Promise.all([
     getEffectiveProductPricingBatch(db, pairs),
-    resolveCatalogDisplayCostBatch(productIds, filters.branchId, db),
     resolvePolicyForProductBatch(pairs, db),
     // C.2 — "Derivado, con el producto canónico en tooltip": mismo lookup
     // fusión-aware ya probado (usado también por getEffectiveProductPricingBatch
@@ -115,9 +120,10 @@ export async function getCurrentPrices(
     // del canónico de fusión, a diferencia del costo) — simplificación
     // deliberada: un miembro derivado sin balance propio muestra 0 acá,
     // aunque tenga stock convertible vía el canónico. El costo SÍ usa la
-    // resolución fusión-aware completa (resolveCatalogDisplayCostBatch)
-    // porque ahí está la garantía de que coincida con el catálogo/POS;
-    // stockOnHand es informativo, no una tercera resolución de inventario.
+    // resolución fusión-aware completa (getEffectiveProductPricingBatch,
+    // vía pricing.effectiveCost más abajo) porque ahí está la garantía de
+    // que coincida con el catálogo/POS; stockOnHand es informativo, no una
+    // segunda resolución de inventario.
     db.inventoryBalance.findMany({
       where: { branchId: filters.branchId, productId: { in: productIds } },
       select: { productId: true, quantityOnHand: true },
@@ -141,7 +147,7 @@ export async function getCurrentPrices(
   const rows: CurrentPriceRow[] = products.map((product) => {
     const key = `${filters.branchId}:${product.id}`;
     const pricing = pricingByKey.get(key);
-    const cost = costByProductId.get(product.id) ?? 0;
+    const cost = pricing?.effectiveCost !== null && pricing?.effectiveCost !== undefined ? Number(pricing.effectiveCost) : 0;
     const rawPriceNum = pricing?.effectivePrice !== null && pricing?.effectivePrice !== undefined ? Number(pricing.effectivePrice) : 0;
     // effective-pricing.ts ya no produce "MISSING" (standardSalePrice es
     // NOT NULL) — pero standardSalePrice SÍ puede ser 0 (nadie le puso
