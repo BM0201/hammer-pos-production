@@ -7,10 +7,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   AlertTriangle, BarChart3, Boxes, Building2, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
-  CheckCircle2, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Package, Pencil,
+  CheckCircle2, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Merge, Package, Pencil,
   Plus, RefreshCcw, Save, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
 } from "lucide-react";
+import { InventoryFusionManager } from "@/components/inventory/inventory-fusion-manager";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -290,7 +291,7 @@ function costSourceLabel(source: BranchPricingCostRow["costSource"], branchCode:
   }
 }
 
-type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "transfers" | "reorder" | "audit";
+type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "fusion" | "transfers" | "reorder" | "audit";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "summary", label: "Resumen", icon: BarChart3 },
@@ -300,6 +301,14 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "stock", label: "Existencias", icon: Boxes },
   { id: "movements", label: "Movimientos / Kardex", icon: History },
   { id: "pricing", label: "Precios y costos", icon: TrendingUp },
+  // "creando un apartado dentro de ese mismo lado donde esten las
+  // fusiones" — antes vivía en /app/master/inventory-fusion, una pantalla
+  // aparte sin relación visible con Precios y costos, aunque el costo de
+  // un producto derivado DEPENDE de cómo está armada su fusión (factor,
+  // unidad). Ahora las dos viven en el mismo módulo, una al lado de la
+  // otra — corregir el factor de una presentación y corregir el costo que
+  // se calcula con ese factor son la misma tarea, no dos pantallas.
+  { id: "fusion", label: "Fusiones", icon: Merge },
   { id: "transfers", label: "Transferencias", icon: Shuffle },
   { id: "reorder", label: "Reposicion", icon: Settings2 },
   { id: "audit", label: "Auditoria", icon: BarChart3 },
@@ -1460,6 +1469,10 @@ export function CatalogInventoryAdmin() {
           {data.pagination && <PaginationBar pagination={data.pagination} onPageChange={setPage} />}
         </>
       ) : null}
+      {/* InventoryFusionManager es autónomo (carga sus propios grupos vía
+          /api/inventory/stock-groups) — no depende de `data`, se monta y
+          desmonta igual que cualquier otro tab de este módulo. */}
+      {tab === "fusion" ? <InventoryFusionManager /> : null}
       {data && tab === "transfers" ? <TransfersPanel branches={data.branches} /> : null}
       {data && tab === "reorder" ? <ReplenishmentPanel branches={data.branches} selectedBranchId={branchId} /> : null}
       {data && tab === "audit" ? <AuditPanel logs={data.auditLogs} /> : null}

@@ -46,7 +46,6 @@ import {
   Factory,
   History,
   LogOut,
-  Merge,
   ScrollText,
   ReceiptText,
   Camera,
@@ -102,7 +101,9 @@ const MASTER_NAV: NavSection[] = [
       { href: "/app/master/replenishment", label: "Reposición", icon: ArrowLeftRight, capabilities: [CAPABILITIES.TRANSFERS_VIEW] },
       { href: "/app/master/production", label: "Producción de Materiales", icon: Factory, capabilities: [CAPABILITIES.PRODUCTION_DASHBOARD_VIEW] },
       { href: "/app/master/timber", label: "Madera", icon: TreePine },
-      { href: "/app/master/inventory-fusion", label: "Fusión de Inventario", icon: Merge, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE] },
+      // "Fusión de Inventario" se unificó en Catálogo e Inventario → pestaña
+      // Fusiones (ver /app/master/inventory-fusion, ahora un redirect) — sin
+      // entrada propia acá, mismo criterio que Gastos→Finanzas.
     ],
   },
   {
