@@ -58,7 +58,6 @@ test("ninguna página redirige a su propia ruta (sin bucles)", () => {
     "app/app/master/employees/page.tsx",
     "app/app/master/catalog/products/page.tsx",
     "app/app/master/expenses/page.tsx",
-    "app/app/master/inventory-fusion/page.tsx",
   ];
   for (const rel of pages) {
     const c = read(rel);

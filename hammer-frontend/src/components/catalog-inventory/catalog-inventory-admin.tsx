@@ -11,7 +11,7 @@ import {
   Plus, RefreshCcw, Save, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
 } from "lucide-react";
-import { InventoryFusionManager } from "@/components/inventory/inventory-fusion-manager";
+import { FusionPricingPanel } from "@/components/catalog-inventory/fusion-pricing-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -301,13 +301,12 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "stock", label: "Existencias", icon: Boxes },
   { id: "movements", label: "Movimientos / Kardex", icon: History },
   { id: "pricing", label: "Precios y costos", icon: TrendingUp },
-  // "creando un apartado dentro de ese mismo lado donde esten las
-  // fusiones" — antes vivía en /app/master/inventory-fusion, una pantalla
-  // aparte sin relación visible con Precios y costos, aunque el costo de
-  // un producto derivado DEPENDE de cómo está armada su fusión (factor,
-  // unidad). Ahora las dos viven en el mismo módulo, una al lado de la
-  // otra — corregir el factor de una presentación y corregir el costo que
-  // se calcula con ese factor son la misma tarea, no dos pantallas.
+  // "Ese apartado de Fusiones, es para poner el precio, no es otra
+  // pestaña para crear" — a diferencia de Fusión de Inventario (crear
+  // fusiones, editar presentaciones/factores — sigue en su propia
+  // pantalla, enlazada desde acá), esta pestaña hace UNA sola cosa: poner
+  // el costo global de cada presentación (FusionPricingPanel), sin WAC de
+  // por medio, para que corregir ese número no exija saltar de pantalla.
   { id: "fusion", label: "Fusiones", icon: Merge },
   { id: "transfers", label: "Transferencias", icon: Shuffle },
   { id: "reorder", label: "Reposicion", icon: Settings2 },
@@ -1469,10 +1468,13 @@ export function CatalogInventoryAdmin() {
           {data.pagination && <PaginationBar pagination={data.pagination} onPageChange={setPage} />}
         </>
       ) : null}
-      {/* InventoryFusionManager es autónomo (carga sus propios grupos vía
-          /api/inventory/stock-groups) — no depende de `data`, se monta y
-          desmonta igual que cualquier otro tab de este módulo. */}
-      {tab === "fusion" ? <InventoryFusionManager /> : null}
+      {/* "Ese apartado de Fusiones, es para poner el precio, no es otra
+          pestaña para crear" — FusionPricingPanel es autónomo (carga sus
+          propios grupos vía /api/inventory/stock-groups) y hace SOLO eso:
+          poner el costo global de cada presentación. Crear fusiones o
+          editar su estructura sigue en Fusión de Inventario, enlazada
+          desde el propio panel — no se movió acá. */}
+      {tab === "fusion" ? <FusionPricingPanel /> : null}
       {data && tab === "transfers" ? <TransfersPanel branches={data.branches} /> : null}
       {data && tab === "reorder" ? <ReplenishmentPanel branches={data.branches} selectedBranchId={branchId} /> : null}
       {data && tab === "audit" ? <AuditPanel logs={data.auditLogs} /> : null}

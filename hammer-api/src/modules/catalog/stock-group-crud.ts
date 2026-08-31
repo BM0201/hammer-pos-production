@@ -780,6 +780,28 @@ export async function assertProductsAvailable(
 
 // ─── CRUD operations ──────────────────────────────────────────────────────────
 
+/**
+ * "es para poner el precio" — el costo de compra que se MUESTRA por
+ * presentación en el apartado Fusiones (Catálogo e Inventario), fuera de
+ * cualquier sucursal (Costo de compra es network-wide, "el mismo para
+ * todas las sucursales" — mismo criterio que Precios y costos). Pura, sin
+ * DB: aislada para probar la lectura sin base de datos, mismo principio
+ * que resolveGlobalCostWriteTarget (catalog/service.ts), su contraparte
+ * de ESCRITURA — no reimplementa esa lógica, es la misma regla mirada
+ * desde el otro lado: el canónico manda su propio costo, un derivado
+ * SIEMPRE deriva canonicalGlobalCost × factor, nunca guarda el suyo.
+ */
+export function computeFusionMemberGlobalCost(input: {
+  isCanonical: boolean;
+  ownGlobalCost: number | null;
+  canonicalGlobalCost: number | null;
+  conversionFactor: number;
+}): number | null {
+  if (input.isCanonical) return input.ownGlobalCost;
+  if (input.canonicalGlobalCost === null) return null;
+  return input.canonicalGlobalCost * input.conversionFactor;
+}
+
 export async function listStockGroups() {
   const [groups, branches] = await Promise.all([
     prisma.productStockGroup.findMany({
@@ -789,7 +811,7 @@ export async function listStockGroups() {
         products: {
           where: { isActive: true },
           include: {
-            product: { select: { id: true, sku: true, name: true, unit: true } },
+            product: { select: { id: true, sku: true, name: true, unit: true, globalCost: true, standardSalePrice: true } },
           },
           orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
         },
@@ -827,6 +849,18 @@ export async function listStockGroups() {
     await Promise.all(
       groups.map(async (group) => [group.id, await checkStockGroupHealth(prisma, { stockGroupId: group.id })] as const),
     ),
+  );
+
+  // "es para poner el precio" (apartado Fusiones, prompt-fusiones-pestana-precio.md
+  // o equivalente) — costo de compra por presentación, NETWORK-WIDE (sin
+  // sucursal — mismo criterio que Precios y costos: "el costo de compra es
+  // el mismo para todas las sucursales"). Para el canónico es su propio
+  // globalCost; un derivado SIGUE sin guardar costo propio, siempre
+  // canonicalGlobalCost × factor — la misma regla de siempre, solo que acá
+  // se calcula para MOSTRAR, no para escribir (eso lo sigue haciendo
+  // resolveGlobalCostWriteTarget, catalog/service.ts).
+  const globalCostByProductId = new Map(
+    groups.flatMap((group) => group.products.map((m) => [m.productId, m.product.globalCost !== null ? Number(m.product.globalCost) : null] as const)),
   );
 
   return groups.map((group) => ({
@@ -924,16 +958,34 @@ export async function listStockGroups() {
     autoOpenForUnitSale: group.autoOpenForUnitSale,
     isActive: group.isActive,
     category: group.category,
-    members: group.products.map((m) => ({
-      id: m.id,
-      productId: m.productId,
-      sku: m.product.sku,
-      productName: m.product.name,
-      saleUnit: m.saleUnit,
-      conversionFactor: Number(m.conversionFactor),
-      isCanonical: m.isCanonical,
-      isPackagePresentation: m.isPackagePresentation,
-    })),
+    members: (() => {
+      const canonicalProductId = group.products.find((member) => member.isCanonical)?.productId ?? null;
+      const canonicalGlobalCost = canonicalProductId ? globalCostByProductId.get(canonicalProductId) ?? null : null;
+      return group.products.map((m) => {
+        const globalCost = computeFusionMemberGlobalCost({
+          isCanonical: m.isCanonical,
+          ownGlobalCost: globalCostByProductId.get(m.productId) ?? null,
+          canonicalGlobalCost,
+          conversionFactor: Number(m.conversionFactor),
+        });
+        const standardSalePrice = Number(m.product.standardSalePrice);
+        return {
+          id: m.id,
+          productId: m.productId,
+          sku: m.product.sku,
+          productName: m.product.name,
+          saleUnit: m.saleUnit,
+          conversionFactor: Number(m.conversionFactor),
+          isCanonical: m.isCanonical,
+          isPackagePresentation: m.isPackagePresentation,
+          globalCost,
+          standardSalePrice,
+          marginPercent: globalCost !== null && globalCost > 0 && standardSalePrice > 0
+            ? ((standardSalePrice - globalCost) / standardSalePrice) * 100
+            : null,
+        };
+      });
+    })(),
   }));
 }
 

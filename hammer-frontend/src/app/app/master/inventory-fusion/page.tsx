@@ -1,12 +1,19 @@
-import { redirect } from "next/navigation";
+"use client";
+
+import { InventoryFusionManager } from "@/components/inventory/inventory-fusion-manager";
 
 /**
- * Compatibilidad: "Fusión de Inventario" se unificó en "Catálogo e
- * Inventario" (pestaña Fusiones) — el costo de un miembro derivado
- * depende de cómo está armada su fusión, así que ahora viven en el mismo
- * módulo en vez de en pantallas separadas. Esta ruta queda como redirect
- * permanente para no romper enlaces guardados.
+ * "Ese apartado de Fusiones, es para poner el precio, no es otra pestaña
+ * para crear" — la pestaña "Fusiones" dentro de Catálogo e Inventario
+ * (FusionPricingPanel) hace solo eso: poner el costo global de cada
+ * presentación. Crear fusiones nuevas, editar presentaciones/factores,
+ * desfusionar o reparar sigue viviendo acá, en su propia pantalla —
+ * enlazada desde el panel de precios, no un redirect.
  */
-export default function InventoryFusionRedirectPage() {
-  redirect("/app/master/catalog-inventory?tab=fusion");
+export default function InventoryFusionPage() {
+  return (
+    <section className="space-y-6 animate-fade-in-up">
+      <InventoryFusionManager />
+    </section>
+  );
 }
