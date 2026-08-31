@@ -4,6 +4,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { setBranchPriceTx } from "@/modules/pricing/branch-price-exception-service";
 import { approvalService } from "@/modules/approvals/service";
 
 /**
@@ -73,6 +74,65 @@ export type SetPriceInBandResult =
   | { path: "APPROVAL_REQUESTED"; applied: false; marginPercent: number; minMarginPercent: number; requestId: string; requestCreated: boolean };
 
 /**
+ * Cuerpo transaccional del camino IN_BAND, extraído para poder probarlo con
+ * un tx falso (mismo patrón que upsertBranchProductSettingTx en
+ * catalog-inventory/service.ts — set-branch-price.test.ts, Pruebas 9-10).
+ * docs/PUERTAS-DE-PRECIO.md (hallazgo cerrado hoy) — este era uno de los
+ * DOS caminos que escribían branchPrice con un upsert propio, sin pasar
+ * por setBranchPriceTx: quedaba sin priceExceptionReason/priceExceptionAt,
+ * exactamente la "excepción sin motivo registrado" que product-360 marca
+ * en rojo. Sin motivo explícito del cajero acá (este flujo no lo pide — es
+ * un ajuste cotidiano dentro de la banda, no se le va a exigir un
+ * formulario extra), se usa uno generado que dice la verdad: es un ajuste
+ * dentro de banda, no un misterio.
+ */
+export async function setBranchPriceInBandTx(
+  tx: Prisma.TransactionClient,
+  input: { branchId: string; productId: string; price: number; marginPercent: number; minMarginPercent: number; reason?: string; actorUserId: string },
+): Promise<{ previousPrice: number | null; newPrice: number }> {
+  const newPrice = new Prisma.Decimal(input.price);
+  const marginDecimal = new Prisma.Decimal(input.marginPercent);
+
+  const { previousPrice } = await setBranchPriceTx(tx, {
+    branchId: input.branchId,
+    productId: input.productId,
+    branchPrice: newPrice,
+    exceptionReason: input.reason?.trim() || "Ajuste dentro de la banda de la categoría",
+    priceSource: "MANUAL",
+    actorUserId: input.actorUserId,
+  });
+  // marginPercent es responsabilidad de este llamador, no de
+  // setBranchPriceTx (que solo toca precio/excepción) — mismo patrón que
+  // applySuggestedPriceTx en pricing/service.ts.
+  await tx.branchProductSetting.update({
+    where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+    data: { marginPercent: marginDecimal },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "pricing",
+      action: "PRICE_SET_IN_BAND",
+      entityType: "Product",
+      entityId: input.productId,
+      metadataJson: {
+        productId: input.productId,
+        branchId: input.branchId,
+        previousPrice: previousPrice?.toString() ?? null,
+        newPrice: newPrice.toString(),
+        marginPercent: input.marginPercent,
+        minMarginPercent: input.minMarginPercent,
+        reason: input.reason ?? null,
+      } as Prisma.InputJsonValue,
+    },
+  });
+
+  return { previousPrice: previousPrice === null ? null : Number(previousPrice), newPrice: Number(newPrice) };
+}
+
+/**
  * §4.2 — POST /api/branch/pricing/set-price. margen >= minMarginPercent →
  * aplica directo, audit PRICE_SET_IN_BAND. margen < minMarginPercent → NO
  * aplica, crea solicitud de aprobación con el módulo que ya existe, audit
@@ -102,44 +162,17 @@ export async function setBranchPriceInBand(input: {
     // activo aunque el precio esté dentro de la banda de margen.
     assertPriceNotBelowCost({ price: input.price, cost });
 
-    const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.branchProductSetting.findUnique({
-        where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
-        select: { branchPrice: true },
-      });
-      const previousPrice = existing?.branchPrice ?? null;
-      const newPrice = new Prisma.Decimal(input.price);
-      const now = new Date();
-      const marginDecimal = new Prisma.Decimal(marginPercent);
-
-      await tx.branchProductSetting.upsert({
-        where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
-        create: { branchId: input.branchId, productId: input.productId, branchPrice: newPrice, priceSource: "MANUAL", lastPriceUpdateAt: now, priceUpdatedByUserId: input.actorUserId, marginPercent: marginDecimal },
-        update: { branchPrice: newPrice, priceSource: "MANUAL", lastPriceUpdateAt: now, priceUpdatedByUserId: input.actorUserId, marginPercent: marginDecimal },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          actorUserId: input.actorUserId,
-          branchId: input.branchId,
-          module: "pricing",
-          action: "PRICE_SET_IN_BAND",
-          entityType: "Product",
-          entityId: input.productId,
-          metadataJson: {
-            productId: input.productId,
-            branchId: input.branchId,
-            previousPrice: previousPrice?.toString() ?? null,
-            newPrice: newPrice.toString(),
-            marginPercent,
-            minMarginPercent,
-            reason: input.reason ?? null,
-          } as Prisma.InputJsonValue,
-        },
-      });
-
-      return { previousPrice: previousPrice === null ? null : Number(previousPrice), newPrice: Number(newPrice) };
-    });
+    const result = await prisma.$transaction((tx) =>
+      setBranchPriceInBandTx(tx, {
+        branchId: input.branchId,
+        productId: input.productId,
+        price: input.price,
+        marginPercent,
+        minMarginPercent,
+        reason: input.reason,
+        actorUserId: input.actorUserId,
+      }),
+    );
 
     return { path: "IN_BAND", applied: true, marginPercent, minMarginPercent, ...result };
   }
@@ -169,6 +202,11 @@ export async function setBranchPriceInBand(input: {
       marginPercent,
       minMarginPercent,
       effectiveCost: cost,
+      // Viaja en el payload (no solo en el campo `reason` de la solicitud)
+      // para que applyApprovedPriceOverride, que solo recibe el payload al
+      // ejecutar, pueda pasárselo a setBranchPriceTx — sin esto, el motivo
+      // que el cajero SÍ dio al pedir la excepción se perdía al aplicarla.
+      reason: input.reason?.trim() || "Precio bajo el margen mínimo de la categoría",
     },
   });
 
@@ -203,6 +241,16 @@ export async function applyApprovedPriceOverride(input: { payloadJson: unknown; 
   const productId = payload.productId;
   const branchId = payload.branchId;
   const price = payload.price;
+  // El segundo de los DOS caminos que escribían branchPrice por fuera de
+  // setBranchPriceTx (docs/PUERTAS-DE-PRECIO.md). El motivo que el cajero
+  // dio al PEDIR la excepción viaja en el payload (ver setBranchPriceInBand
+  // más arriba); si por algún motivo faltara (solicitudes viejas, de antes
+  // de este fix), se usa el mismo genérico de reserva — Master ya aprobó
+  // esta solicitud con ESE motivo visible en la cola, así que no es un
+  // misterio nuevo, solo no viajaba hasta acá.
+  const reason = typeof payload.reason === "string" && payload.reason.trim().length >= 3
+    ? payload.reason.trim()
+    : "Precio bajo el margen mínimo de la categoría (aprobado)";
 
   // Re-chequea el piso de costo al momento de aprobar, no solo al pedir —
   // el costo pudo haber cambiado en el tiempo que la solicitud esperó.
@@ -210,24 +258,38 @@ export async function applyApprovedPriceOverride(input: { payloadJson: unknown; 
   const cost = pricing.effectiveCost === null ? null : Number(pricing.effectiveCost);
   assertPriceNotBelowCost({ price, cost });
 
-  await prisma.$transaction(async (tx) => {
-    const newPrice = new Prisma.Decimal(price);
-    const now = new Date();
-    await tx.branchProductSetting.upsert({
-      where: { branchId_productId: { branchId, productId } },
-      create: { branchId, productId, branchPrice: newPrice, priceSource: "MANUAL", lastPriceUpdateAt: now, priceUpdatedByUserId: input.actorUserId },
-      update: { branchPrice: newPrice, priceSource: "MANUAL", lastPriceUpdateAt: now, priceUpdatedByUserId: input.actorUserId },
-    });
-    await tx.auditLog.create({
-      data: {
-        actorUserId: input.actorUserId,
-        branchId,
-        module: "pricing",
-        action: "PRICE_APPROVAL_APPLIED",
-        entityType: "Product",
-        entityId: productId,
-        metadataJson: { requestId: input.requestId, newPrice: newPrice.toString() } as Prisma.InputJsonValue,
-      },
-    });
+  await prisma.$transaction((tx) =>
+    applyApprovedPriceOverrideTx(tx, { branchId, productId, price, reason, actorUserId: input.actorUserId, requestId: input.requestId }),
+  );
+}
+
+/**
+ * Cuerpo transaccional de la aprobación, extraído por el mismo motivo que
+ * setBranchPriceInBandTx — probar sin DB que ahora pasa por setBranchPriceTx
+ * (antes: upsert propio, sin priceExceptionReason/priceExceptionAt).
+ */
+export async function applyApprovedPriceOverrideTx(
+  tx: Prisma.TransactionClient,
+  input: { branchId: string; productId: string; price: number; reason: string; actorUserId: string; requestId: string },
+): Promise<void> {
+  const newPrice = new Prisma.Decimal(input.price);
+  await setBranchPriceTx(tx, {
+    branchId: input.branchId,
+    productId: input.productId,
+    branchPrice: newPrice,
+    exceptionReason: input.reason,
+    priceSource: "MANUAL",
+    actorUserId: input.actorUserId,
+  });
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: input.branchId,
+      module: "pricing",
+      action: "PRICE_APPROVAL_APPLIED",
+      entityType: "Product",
+      entityId: input.productId,
+      metadataJson: { requestId: input.requestId, newPrice: newPrice.toString() } as Prisma.InputJsonValue,
+    },
   });
 }
