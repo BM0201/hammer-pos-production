@@ -2404,6 +2404,15 @@ type OpeningLine = {
   cantidad: string;
   costo: string;
   precioVenta: string;
+  /**
+   * "que el WAC deje de moverse sin que nadie lo decida" (Parte C.2) — el
+   * costo promedio efectivo ANTES de cargar esta línea (el mismo motor que
+   * ya usa Precios y costos: branchCost > WAC > averageCost > globalCost),
+   * capturado al agregar el producto. Si `costo` termina distinto de este
+   * valor, esta línea va a REEMPLAZAR el costo promedio, no solo cargar
+   * existencias — se compara contra esto, no se reinventa.
+   */
+  baselineCost: number | null;
 };
 
 function OpeningBalanceModal({
@@ -2496,6 +2505,7 @@ function OpeningBalanceModal({
         cantidad: "1",
         costo: pricing?.effectiveCost != null ? String(pricing.effectiveCost) : "",
         precioVenta: pricing?.effectivePrice != null ? String(pricing.effectivePrice) : "",
+        baselineCost: pricing?.effectiveCost ?? null,
       };
       return [...prev, newLine];
     });
@@ -2521,7 +2531,14 @@ function OpeningBalanceModal({
     const margin = costo != null && costo > 0 && precio != null && precio > 0 ? ((precio - costo) / precio) * 100 : null;
     const priceBelowCost = costo != null && precio != null && precio > 0 && precio < costo;
     const validQuantity = Number.isFinite(cantidad) && cantidad > 0;
-    return { cantidad, costo, precio, enteredBase, finalBase, deltaBase, margin, priceBelowCost, validQuantity };
+    // Parte C.2 — esta línea va a REEMPLAZAR el costo promedio (costMode
+    // SET_WAC se dispara con cualquier costo > 0) si lo que se tecleó
+    // difiere de lo que ya regía antes de agregarla. Con baselineCost null
+    // (producto sin costo previo) cualquier costo > 0 SÍ cambia el
+    // promedio (de nada a algo), así que también cuenta.
+    const willChangeWac = costo != null && costo > 0
+      && (line.baselineCost == null || Math.abs(costo - line.baselineCost) > 0.01);
+    return { cantidad, costo, precio, enteredBase, finalBase, deltaBase, margin, priceBelowCost, validQuantity, willChangeWac };
   }
 
   const summary = useMemo(() => {
@@ -2530,6 +2547,7 @@ function OpeningBalanceModal({
     let withoutPrice = 0;
     let belowCost = 0;
     let invalidQty = 0;
+    let wacChanges = 0;
     for (const line of lines) {
       const c = computeLine(line);
       totalValue += c.finalBase * (c.costo ?? 0);
@@ -2537,8 +2555,9 @@ function OpeningBalanceModal({
       if (c.precio == null || c.precio <= 0) withoutPrice += 1;
       if (c.priceBelowCost) belowCost += 1;
       if (!c.validQuantity) invalidQty += 1;
+      if (c.willChangeWac) wacChanges += 1;
     }
-    return { totalProducts: lines.length, totalValue, withoutCost, withoutPrice, belowCost, invalidQty };
+    return { totalProducts: lines.length, totalValue, withoutCost, withoutPrice, belowCost, invalidQty, wacChanges };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lines, mode]);
 
@@ -2771,6 +2790,13 @@ function OpeningBalanceModal({
                       </td>
                       <td>
                         <Input type="number" min="0" step="0.01" className="w-28" value={line.costo} onChange={(e) => updateLine(line.productId, { costo: e.target.value })} placeholder="Sin cambio" />
+                        {c.willChangeWac && (
+                          <div className="mt-1 text-[10.5px] leading-tight text-[var(--color-warning-700)] w-28">
+                            {line.baselineCost != null
+                              ? <>Cambia costo prom.: {money(line.baselineCost)} → {money(c.costo as number)}</>
+                              : <>Fija el costo prom. en {money(c.costo as number)}</>}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <Input type="number" min="0" step="0.01" className="w-28" value={line.precioVenta} onChange={(e) => updateLine(line.productId, { precioVenta: e.target.value })} placeholder="Sin cambio" />
@@ -2807,6 +2833,27 @@ function OpeningBalanceModal({
           {summary.belowCost > 0 ? (
             <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3 text-xs text-[var(--color-danger-700)]">
               Hay productos con precio por debajo del costo. Se pedira confirmacion explicita antes de guardar.
+            </div>
+          ) : null}
+          {/* Parte C.3 — "que el WAC deje de moverse sin que nadie lo decida":
+              una planilla de varias filas con costo cargado reescribe el costo
+              promedio de cada una. Antes de confirmar, se ve exactamente
+              cuáles y el antes/después de cada una — no una cifra ciega. */}
+          {summary.wacChanges > 0 ? (
+            <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 text-xs text-[var(--color-warning-800)]">
+              <p className="font-semibold mb-1.5">
+                {summary.wacChanges} {summary.wacChanges === 1 ? "línea va" : "líneas van"} a modificar el costo promedio de ese producto (no solo cargar existencias):
+              </p>
+              <ul className="space-y-0.5 max-h-32 overflow-y-auto">
+                {lines.filter((line) => computeLine(line).willChangeWac).map((line) => {
+                  const c = computeLine(line);
+                  return (
+                    <li key={line.productId} className="font-mono">
+                      {line.sku} — {line.name}: {line.baselineCost != null ? money(line.baselineCost) : "sin costo"} → {money(c.costo as number)}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           ) : null}
         </div>

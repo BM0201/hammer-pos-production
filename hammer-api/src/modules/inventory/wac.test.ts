@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
-import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck, WacValidationError } from "@/modules/inventory/wac";
+import {
+  detectExcessiveWacJump,
+  detectPackageCostAsUnitCost,
+  detectSuspectedPackageCostOnFirstEntry,
+  maxPackageFactorForSanityCheck,
+  WacValidationError,
+} from "@/modules/inventory/wac";
 
 function d(n: number) {
   return new Prisma.Decimal(n);
@@ -72,6 +78,107 @@ test("HIERRO: con allowHighUnitCost=true, el costo del bulto se acepta — el re
     baseMovementUnitCost: d(2234.89),
     existingWac: d(74.5),
     packageFactor: packageFactor!,
+    allowHighUnitCost: true,
+  }));
+});
+
+/**
+ * "que el WAC deje de moverse sin que nadie lo decida... un tope al salto
+ * del WAC" — detectExcessiveWacJump, PARTE B. Independiente de qué camino
+ * causó el salto (compra, ajuste, saldo inicial): protege contra el mismo
+ * error de siempre visto desde el ángulo del RESULTADO (cuánto se movió el
+ * WAC), no de la causa.
+ */
+test("1. currentWac 18.55, newWac 30 (+62%) → EXCESSIVE_WAC_JUMP", () => {
+  assert.throws(
+    () => detectExcessiveWacJump({ currentWac: d(18.55), newWac: d(30), currentQty: d(100) }),
+    (error: unknown) => error instanceof WacValidationError && error.code === "EXCESSIVE_WAC_JUMP",
+  );
+});
+
+test("2. currentWac 18.55, newWac 25 (+35%) → pasa (dentro del +50% holgado)", () => {
+  assert.doesNotThrow(() => detectExcessiveWacJump({ currentWac: d(18.55), newWac: d(25), currentQty: d(100) }));
+});
+
+test("3. currentQty 0 → pasa siempre, sin importar el salto (sin inventario previo no hay contra qué comparar)", () => {
+  assert.doesNotThrow(() => detectExcessiveWacJump({ currentWac: d(18.55), newWac: d(999), currentQty: d(0) }));
+});
+
+test("4. allowLargeWacJump true → pasa siempre, el reintento explícito existe para esto", () => {
+  assert.doesNotThrow(() => detectExcessiveWacJump({ currentWac: d(18.55), newWac: d(999), currentQty: d(100), allowLargeWacJump: true }));
+});
+
+test("5. currentWac 1.50 (relleno, bajo el FLOOR de 2) → pasa, lo cubre el guard de primera entrada (Parte D)", () => {
+  assert.doesNotThrow(() => detectExcessiveWacJump({ currentWac: d(1.5), newWac: d(999), currentQty: d(100) }));
+});
+
+/**
+ * "Cuando no haya WAC previo pero el producto SÍ pertenezca a un grupo de
+ * fusión, usá como referencia el precio de venta" — detectSuspectedPackageCostOnFirstEntry,
+ * PARTE D. El caso real reportado: METRO DE ARENA sin WAC previo, alguien
+ * carga el costo del PAQUETE (LATA) completo como si fuera el costo por
+ * unidad — nadie compra a C$470/unidad algo que se vende a C$35/unidad.
+ */
+test("6. Primera entrada, sin WAC previo, costo 470 contra precio de venta 35 del canónico → SUSPECTED_PACKAGE_COST_AS_UNIT_COST", () => {
+  assert.throws(
+    () => detectSuspectedPackageCostOnFirstEntry({
+      inbound: true,
+      hasExistingWacReference: false,
+      baseMovementUnitCost: d(470),
+      canonicalStandardSalePrice: d(35),
+      packageFactor: d(40),
+    }),
+    (error: unknown) => error instanceof WacValidationError && error.code === "SUSPECTED_PACKAGE_COST_AS_UNIT_COST",
+  );
+});
+
+test("detectSuspectedPackageCostOnFirstEntry: costo por unidad por debajo del precio de venta → pasa (lo normal)", () => {
+  assert.doesNotThrow(() => detectSuspectedPackageCostOnFirstEntry({
+    inbound: true,
+    hasExistingWacReference: false,
+    baseMovementUnitCost: d(18.55),
+    canonicalStandardSalePrice: d(35),
+    packageFactor: d(40),
+  }));
+});
+
+test("detectSuspectedPackageCostOnFirstEntry: ya hay WAC de referencia real → no actúa, ese caso es de detectPackageCostAsUnitCost, no de este", () => {
+  assert.doesNotThrow(() => detectSuspectedPackageCostOnFirstEntry({
+    inbound: true,
+    hasExistingWacReference: true,
+    baseMovementUnitCost: d(470),
+    canonicalStandardSalePrice: d(35),
+    packageFactor: d(40),
+  }));
+});
+
+test("detectSuspectedPackageCostOnFirstEntry: sin precio de venta cargado en el canónico (null) → no hay con qué comparar, pasa", () => {
+  assert.doesNotThrow(() => detectSuspectedPackageCostOnFirstEntry({
+    inbound: true,
+    hasExistingWacReference: false,
+    baseMovementUnitCost: d(470),
+    canonicalStandardSalePrice: null,
+    packageFactor: d(40),
+  }));
+});
+
+test("detectSuspectedPackageCostOnFirstEntry: presentación suelta (factor 2, bajo MIN_FACTOR) → no dispara, mismo umbral que el guard hermano", () => {
+  assert.doesNotThrow(() => detectSuspectedPackageCostOnFirstEntry({
+    inbound: true,
+    hasExistingWacReference: false,
+    baseMovementUnitCost: d(470),
+    canonicalStandardSalePrice: d(35),
+    packageFactor: d(2),
+  }));
+});
+
+test("detectSuspectedPackageCostOnFirstEntry: allowHighUnitCost=true → pasa, el reintento explícito existe para esto", () => {
+  assert.doesNotThrow(() => detectSuspectedPackageCostOnFirstEntry({
+    inbound: true,
+    hasExistingWacReference: false,
+    baseMovementUnitCost: d(470),
+    canonicalStandardSalePrice: d(35),
+    packageFactor: d(40),
     allowHighUnitCost: true,
   }));
 });

@@ -28,6 +28,23 @@ export function toHttpErrorResponse(error: unknown) {
     if (code === "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK") {
       return errJson(code, error.message, 400);
     }
+    // "un 409 es una pregunta, no un error" — el WAC resultante se disparó
+    // muy por encima del actual (detectExcessiveWacJump, wac.ts). No es un
+    // payload inválido (400): es una operación válida que necesita
+    // confirmación explícita del usuario (reintentar con allowLargeWacJump),
+    // el mismo patrón que FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED abajo.
+    if (code === "EXCESSIVE_WAC_JUMP") {
+      return errJson(code, error.message, 409);
+    }
+    // Cualquier otro WacValidationError sin mapeo específico (p.ej.
+    // SUSPECTED_PACKAGE_COST_AS_UNIT_COST lanzado desde createOpeningBalance,
+    // que no tiene su propio catch como /api/inventory/movements) — 422 en
+    // vez de caer al 500 mudo del fallback final. Mismo patrón que ya usan
+    // /api/inventory/movements y /api/catalog/products/[id] con sus propios
+    // catches; esto cubre a quien no tiene uno.
+    if (error.name === "WacValidationError") {
+      return errJson(code, error.message, 422);
+    }
   }
 
   if (error instanceof MissingDatabaseUrlError || isDatabaseConnectionError(error)) {

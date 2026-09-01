@@ -2,7 +2,14 @@ import { InventoryMovementType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
-import { detectPackageCostAsUnitCost, isInboundMovement, recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
+import {
+  detectExcessiveWacJump,
+  detectPackageCostAsUnitCost,
+  detectSuspectedPackageCostOnFirstEntry,
+  isInboundMovement,
+  recalculateWeightedAverage,
+  WacValidationError,
+} from "@/modules/inventory/wac";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
 import {
   convertBaseQtyToSaleQty,
@@ -238,6 +245,15 @@ type InventoryMovementInput = {
    * confirma que el costo ingresado es correcto (no es el costo del paquete).
    */
   allowHighUnitCost?: boolean;
+  /**
+   * Autoriza explícitamente un salto grande del WAC en un solo movimiento,
+   * saltando el guard EXCESSIVE_WAC_JUMP. Úsese sólo cuando el usuario
+   * confirma que el costo ingresado es correcto (no es una unidad de medida
+   * equivocada). Queda registrado en auditoría (WAC_LARGE_JUMP_AUTHORIZED)
+   * — un salto grande autorizado es legítimo; uno que nadie pueda rastrear
+   * después, no.
+   */
+  allowLargeWacJump?: boolean;
 };
 
 type ConsumeSharedStockForSaleInput = {
@@ -451,6 +467,8 @@ type OpeningBalanceInput = {
   priceMode: "SET_BRANCH_PRICE" | "SET_GLOBAL_PRICE" | "NO_PRICE_CHANGE";
   reason: string;
   notes?: string | null;
+  /** Autoriza un salto grande del WAC (Parte B) cuando costMode=SET_WAC. */
+  allowLargeWacJump?: boolean;
 };
 
 type OpeningBalanceTxOptions = {
@@ -575,6 +593,29 @@ export async function createInventoryMovementTx(
     allowHighUnitCost: input.allowHighUnitCost,
   });
 
+  // ── Guard anti "costo de paquete", pero para la PRIMERA entrada (Parte D) ──
+  // detectPackageCostAsUnitCost no puede actuar sin un WAC de referencia
+  // real (existingWac<=2 → relleno o producto recién creado, su propio
+  // FLOOR) — ese hueco es justo el de un saldo inicial. Cuando el producto
+  // pertenece a un grupo de fusión, se usa el precio de venta del
+  // canónico como referencia en su lugar: nadie compra por unidad más
+  // caro de lo que vende. Solo se consulta el precio cuando hace falta
+  // (no en cada movimiento) para no sumar una query al camino caliente.
+  if (inbound && !input.allowHighUnitCost && balance.weightedAverageCost.lte(2) && packageFactor.gte(4) && resolved.conversion) {
+    const canonicalProduct = await tx.product.findUnique({
+      where: { id: resolved.conversion.canonicalProductId },
+      select: { standardSalePrice: true },
+    });
+    detectSuspectedPackageCostOnFirstEntry({
+      inbound,
+      hasExistingWacReference: false,
+      baseMovementUnitCost,
+      canonicalStandardSalePrice: canonicalProduct?.standardSalePrice ?? null,
+      packageFactor,
+      allowHighUnitCost: input.allowHighUnitCost,
+    });
+  }
+
   // ── BASE_AUTO: si faltan sueltas para una salida, abrir paquetes cerrados
   // DENTRO de esta misma transacción antes del movimiento principal.
   // Generaliza la lógica que antes vivía solo en consumeSharedStockForSaleTx.
@@ -693,6 +734,38 @@ export async function createInventoryMovementTx(
         movementUnitCost: baseMovementUnitCost,
         inbound,
       });
+
+  // ── Tope al salto del WAC en un solo movimiento (Parte B) ──────────────
+  // Independiente de qué camino causó el salto (compra, ajuste, saldo
+  // inicial): si el WAC resultante se dispara muy por encima del actual,
+  // se bloquea salvo autorización explícita (allowLargeWacJump).
+  detectExcessiveWacJump({
+    currentWac: balance.weightedAverageCost,
+    newWac: next.newWac,
+    currentQty: balance.quantityOnHand,
+    allowLargeWacJump: input.allowLargeWacJump,
+  });
+
+  // Para auditoría (B.3): distingue "allowLargeWacJump venía en true pero
+  // el salto ni siquiera era grande" de "el override efectivamente evitó
+  // el guard" — solo lo segundo se audita como autorización real. Reutiliza
+  // el mismo guard puro sin el override, solo para diagnosticar.
+  let wacJumpAuthorized = false;
+  if (input.allowLargeWacJump) {
+    try {
+      detectExcessiveWacJump({
+        currentWac: balance.weightedAverageCost,
+        newWac: next.newWac,
+        currentQty: balance.quantityOnHand,
+      });
+    } catch (error) {
+      if (error instanceof WacValidationError && error.code === "EXCESSIVE_WAC_JUMP") {
+        wacJumpAuthorized = true;
+      } else {
+        throw error;
+      }
+    }
+  }
 
   let closedPackageBefore: Prisma.Decimal | null = null;
   let closedPackageAfter: Prisma.Decimal | null = null;
@@ -817,6 +890,38 @@ export async function createInventoryMovementTx(
       },
     },
   });
+
+  // Auditoría siempre (Parte B.3): un salto grande del WAC autorizado con
+  // allowLargeWacJump es legítimo — pero uno que nadie pueda rastrear
+  // después, no. Entrada separada de INVENTORY_MOVEMENT_CREATE de arriba
+  // para que se pueda buscar/filtrar específicamente por esta acción.
+  if (wacJumpAuthorized) {
+    const wacBefore = balance.weightedAverageCost;
+    const wacAfter = next.newWac;
+    const deltaPercent = wacBefore.gt(0) ? wacAfter.sub(wacBefore).div(wacBefore).mul(100) : null;
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "inventory",
+        action: "WAC_LARGE_JUMP_AUTHORIZED",
+        entityType: "InventoryMovement",
+        entityId: movement.id,
+        metadataJson: {
+          productId: inventoryProductId,
+          originalProductId: input.productId,
+          branchId: input.branchId,
+          wacBefore: wacBefore.toString(),
+          wacAfter: wacAfter.toString(),
+          deltaPercent: deltaPercent?.toString() ?? null,
+          authorizedBy: input.actorUserId,
+          movementId: movement.id,
+          referenceType: input.referenceType,
+          referenceId: input.referenceId,
+        },
+      },
+    });
+  }
 
   // Fusión de Inventario v2, Fase 1.5 — verificador de salud permanente:
   // chequeo BARATO (solo balances actuales) tras cada movimiento de un grupo
@@ -1551,7 +1656,7 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
   });
 }
 
-async function createOpeningBalanceTx(
+export async function createOpeningBalanceTx(
   tx: Prisma.TransactionClient,
   input: OpeningBalanceInput,
   options: OpeningBalanceTxOptions = {},
@@ -1643,6 +1748,7 @@ async function createOpeningBalanceTx(
         referenceType,
         referenceId,
         notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
+        allowLargeWacJump: input.allowLargeWacJump,
       });
     } else {
       const inventoryProductId = shared.inventoryProductId;
@@ -1928,6 +2034,7 @@ export async function createOpeningBalanceBulk(input: {
     salePrice?: number | null;
     priceMode: "SET_BRANCH_PRICE" | "SET_GLOBAL_PRICE" | "NO_PRICE_CHANGE";
     notes?: string | null;
+    allowLargeWacJump?: boolean;
   }>;
 }) {
   const batchReference = `OPENING-BULK-${Date.now()}`;
@@ -1950,6 +2057,7 @@ export async function createOpeningBalanceBulk(input: {
         priceMode: line.priceMode,
         reason: input.reason,
         notes: [line.notes, input.notes].filter(Boolean).join(" - ") || null,
+        allowLargeWacJump: line.allowLargeWacJump,
       }, {
         referenceType: "OPENING_BALANCE_BULK",
         referenceId: `${batchReference}-${index + 1}`,

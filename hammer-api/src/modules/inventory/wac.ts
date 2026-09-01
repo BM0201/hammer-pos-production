@@ -113,6 +113,93 @@ export function detectPackageCostAsUnitCost(input: {
 }
 
 /**
+ * "que el WAC deje de moverse sin que nadie lo decida... un tope al salto
+ * del WAC" — protección independiente de CUÁL camino causó el salto
+ * (compra, ajuste, saldo inicial): si el WAC resultante de un solo
+ * movimiento se dispara muy por encima del WAC actual, es casi siempre el
+ * mismo error de siempre (costo de paquete tecleado como costo de unidad,
+ * o unidad de medida equivocada) — no una subida de precio real, por
+ * fuerte que sea. +50% es deliberadamente holgado: deja pasar alzas
+ * reales, incluidas fuertes, y atrapa solo lo que no se explica de otra
+ * forma. Si en la práctica resulta muy estrecho, se sube el umbral — pero
+ * que sea una decisión explícita, no la ausencia de un límite.
+ *
+ * Sin inventario previo (currentQty=0) o con un WAC de relleno
+ * (currentWac<=2, el mismo FLOOR que detectPackageCostAsUnitCost) no hay
+ * contra qué comparar un salto — ese hueco es el que cubre el guard de
+ * primera entrada más abajo (detectSuspectedPackageCostOnFirstEntry),
+ * usando el precio de venta como referencia en su lugar.
+ */
+export function detectExcessiveWacJump(input: {
+  currentWac: Prisma.Decimal;
+  newWac: Prisma.Decimal;
+  currentQty: Prisma.Decimal;
+  allowLargeWacJump?: boolean;
+}): void {
+  if (input.allowLargeWacJump) return;
+
+  const FLOOR = new Prisma.Decimal(2);
+  if (input.currentQty.lte(0) || input.currentWac.lte(FLOOR)) return;
+
+  const JUMP_RATIO = new Prisma.Decimal("1.5"); // +50%
+  const threshold = input.currentWac.mul(JUMP_RATIO);
+  if (input.newWac.gt(threshold)) {
+    const deltaPercent = input.newWac.sub(input.currentWac).div(input.currentWac).mul(100);
+    throw new WacValidationError(
+      "EXCESSIVE_WAC_JUMP",
+      `El costo promedio de este producto pasaría de C$${input.currentWac.toFixed(2)} a C$${input.newWac.toFixed(2)} ` +
+        `(+${deltaPercent.toFixed(1)}%) en un solo movimiento. Revise si el costo ingresado es por unidad o por el ` +
+        `paquete completo. Si el aumento es correcto, reintente autorizando el salto (allowLargeWacJump).`,
+    );
+  }
+}
+
+/**
+ * Parte D — extiende la sospecha de "costo de paquete como costo de
+ * unidad" a la PRIMERA entrada de un producto, el hueco que
+ * detectPackageCostAsUnitCost declara explícitamente que no puede cubrir
+ * (sin WAC de referencia, no hay contra qué comparar). Un saldo inicial
+ * ES, por definición, la primera entrada — y es justo ahí donde el error
+ * más caro pasa desapercibido: nadie lo compara contra nada porque el
+ * sistema tampoco tiene con qué compararlo.
+ *
+ * Referencia alternativa: el precio de venta del canónico. Nadie compra
+ * por unidad más caro de lo que vende por unidad — no es una regla
+ * perfecta (hay productos que se venden bajo costo a propósito) pero
+ * convierte un error silencioso en una pregunta. Mismo código que el
+ * guard hermano (SUSPECTED_PACKAGE_COST_AS_UNIT_COST) y mismo escape
+ * (allowHighUnitCost) — es la misma sospecha, solo con otra referencia.
+ */
+export function detectSuspectedPackageCostOnFirstEntry(input: {
+  inbound: boolean;
+  hasExistingWacReference: boolean;
+  baseMovementUnitCost: Prisma.Decimal;
+  canonicalStandardSalePrice: Prisma.Decimal | null;
+  packageFactor: Prisma.Decimal;
+  allowHighUnitCost?: boolean;
+}): void {
+  if (input.allowHighUnitCost) return;
+  if (!input.inbound) return;
+  if (input.hasExistingWacReference) return; // ese caso ya lo cubre detectPackageCostAsUnitCost
+  if (input.canonicalStandardSalePrice === null) return;
+
+  const MIN_FACTOR = new Prisma.Decimal(4);
+  if (input.packageFactor.lt(MIN_FACTOR)) return;
+  if (input.canonicalStandardSalePrice.lte(0)) return;
+
+  if (input.baseMovementUnitCost.gt(input.canonicalStandardSalePrice)) {
+    throw new WacValidationError(
+      "SUSPECTED_PACKAGE_COST_AS_UNIT_COST",
+      `El costo por unidad ingresado (C$${input.baseMovementUnitCost.toFixed(2)}) es MAYOR que el precio de venta ` +
+        `por unidad de este producto (C$${input.canonicalStandardSalePrice.toFixed(2)}). Nadie compra por unidad más ` +
+        `caro de lo que vende — esto suele significar que se tecleó el costo del PAQUETE completo (este producto ` +
+        `trae ${input.packageFactor.toFixed(0)} unidades por paquete). Si de verdad es el costo correcto (venta bajo ` +
+        `costo intencional), reintente autorizando costo alto (allowHighUnitCost).`,
+    );
+  }
+}
+
+/**
  * "asegura el motor de mejor manera" (catalog/service.ts → updateProduct)
  * — el mismo guard de arriba, aplicado a la edición directa del costo del
  * CANÓNICO (Precios y costos), no solo a movimientos de inventario. Pura

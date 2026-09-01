@@ -28,6 +28,8 @@ export const createInventoryMovementSchema = z
     referenceType: z.string().min(1).max(64),
     referenceId: z.string().min(1).max(64),
     notes: z.string().max(500).optional().nullable(),
+    allowHighUnitCost: z.boolean().optional(),
+    allowLargeWacJump: z.boolean().optional(),
   })
   .refine(
     (data) => {
@@ -77,11 +79,19 @@ export const openingBalanceSchema = z.object({
   unit: z.string().min(1).max(32).optional(),
   stockMode: z.enum(["SET_PHYSICAL_STOCK", "ADD_TO_STOCK"]).default("SET_PHYSICAL_STOCK"),
   unitCost: z.coerce.number().nonnegative("El costo inicial no puede ser negativo.").optional().nullable(),
-  costMode: z.enum(["SET_WAC", "SET_BRANCH_COST", "QUANTITY_ONLY"]).default("SET_WAC"),
+  // "que el WAC deje de moverse sin que nadie lo decida" (Parte C.1) — el
+  // default de esta pantalla ERA SET_WAC: cargar existencias, la operación
+  // más común del sistema, reescribía el costo promedio sin que nadie lo
+  // pidiera. QUANTITY_ONLY como default: cargar stock ya no toca ningún
+  // costo salvo que se elija explícitamente. Único caller real
+  // (opening-balance/bulk desde catalog-inventory-admin.tsx) ya manda
+  // costMode explícito en cada línea — este cambio no le afecta.
+  costMode: z.enum(["SET_WAC", "SET_BRANCH_COST", "QUANTITY_ONLY"]).default("QUANTITY_ONLY"),
   salePrice: z.coerce.number().nonnegative("El precio inicial no puede ser negativo.").optional().nullable(),
   priceMode: z.enum(["SET_BRANCH_PRICE", "SET_GLOBAL_PRICE", "NO_PRICE_CHANGE"]).default("SET_BRANCH_PRICE"),
   reason: z.string().min(5, "El motivo es obligatorio.").max(300),
   notes: z.string().max(500).optional().nullable(),
+  allowLargeWacJump: z.boolean().optional(),
 }).superRefine((data, ctx) => {
   if ((data.costMode === "SET_WAC" || data.costMode === "SET_BRANCH_COST") && (!data.unitCost || data.unitCost <= 0)) {
     ctx.addIssue({
@@ -104,7 +114,12 @@ const openingBalanceBulkLineSchema = z.object({
   quantity: z.coerce.number().positive("La cantidad debe ser mayor que cero."),
   unit: z.string().min(1).max(32).optional(),
   unitCost: z.coerce.number().nonnegative("El costo inicial no puede ser negativo.").optional().nullable(),
-  costMode: z.enum(["SET_WAC", "SET_BRANCH_COST", "QUANTITY_ONLY"]).default("SET_WAC"),
+  // Mismo cambio de default que openingBalanceSchema arriba — ver ese
+  // comentario. La carga masiva es donde el riesgo es peor: una planilla
+  // de 300 filas con el default equivocado reescribía 300 costos de una
+  // vez.
+  costMode: z.enum(["SET_WAC", "SET_BRANCH_COST", "QUANTITY_ONLY"]).default("QUANTITY_ONLY"),
+  allowLargeWacJump: z.boolean().optional(),
   salePrice: z.coerce.number().nonnegative("El precio inicial no puede ser negativo.").optional().nullable(),
   priceMode: z.enum(["SET_BRANCH_PRICE", "SET_GLOBAL_PRICE", "NO_PRICE_CHANGE"]).default("SET_BRANCH_PRICE"),
   notes: z.string().max(500).optional().nullable(),

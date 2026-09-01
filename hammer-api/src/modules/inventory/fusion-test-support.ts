@@ -92,6 +92,15 @@ export function createFusionFakeTx(config: FusionWorldConfig) {
     .sort((a, b) => (b.isCanonical ? 1 : 0) - (a.isCanonical ? 1 : 0) || Number(a.conversionFactor) - Number(b.conversionFactor));
 
   const tx = {
+    // Parte D (WAC): createInventoryMovementTx consulta el precio de venta
+    // del canónico SOLO en la primera entrada de un producto sin WAC de
+    // referencia (weightedAverageCost<=2) — devolver null es el mismo "no
+    // hay con qué comparar" que produce un canónico real sin precio
+    // cargado; detectSuspectedPackageCostOnFirstEntry ya maneja ese caso
+    // sin lanzar.
+    product: {
+      findUnique: async () => null,
+    },
     productStockGroupMember: {
       findFirst: async (args: { where: Record<string, unknown> }) => {
         const where = args.where as { productId?: string; stockGroupId?: string; isActive?: boolean; isPackagePresentation?: boolean };

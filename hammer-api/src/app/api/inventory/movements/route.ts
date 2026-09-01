@@ -169,6 +169,8 @@ export async function POST(request: Request) {
       referenceType: parsed.data.referenceType,
       referenceId: parsed.data.referenceId,
       notes: parsed.data.notes,
+      allowHighUnitCost: parsed.data.allowHighUnitCost,
+      allowLargeWacJump: parsed.data.allowLargeWacJump,
     });
 
     // ── After PURCHASE_IN: calculate suggested price automatically ──
@@ -199,7 +201,13 @@ export async function POST(request: Request) {
 
     return created({ result, suggestedPricing });
   } catch (error) {
-    // Surface WAC validation errors as 422 with structured details
+    // EXCESSIVE_WAC_JUMP es una pregunta, no un error de payload — 409 con
+    // el mismo código para que el frontend pueda ofrecer reintentar con
+    // allowLargeWacJump, distinto del resto de guards de WAC (422 genérico).
+    if (error instanceof Error && error.name === "WacValidationError" && "code" in error && (error as { code: string }).code === "EXCESSIVE_WAC_JUMP") {
+      return fail("EXCESSIVE_WAC_JUMP", error.message, 409);
+    }
+    // Surface other WAC validation errors as 422 with structured details
     if (error instanceof Error && error.name === "WacValidationError") {
       return fail("VALIDATION_ERROR", error.message, 422);
     }
