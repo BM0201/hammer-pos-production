@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
 import { canonicalizePresentationUnit, findUnitCollisions } from "@/modules/catalog/presentation-units";
+import { resolveCatalogDisplayCost } from "@/modules/catalog-inventory/service";
 
 export type StockGroupMemberInput = {
   productId: string;
@@ -802,6 +803,21 @@ export function computeFusionMemberGlobalCost(input: {
   return input.canonicalGlobalCost * input.conversionFactor;
 }
 
+/**
+ * "las cosas no se ejecutan bien... revisa completo todo" — el WAC de red
+ * que Fusiones usa para el costo REAL (effectiveCost) es un promedio
+ * ponderado por cantidad entre TODAS las sucursales (Fusiones no tiene
+ * selector de sucursal) — mismo criterio que enrichProduct en
+ * catalog-inventory/service.ts. Pura, sin DB: aislada para probar el
+ * cálculo sin base de datos.
+ */
+export function aggregateWeightedAverageCost(balances: Array<{ quantityOnHand: number; weightedAverageCost: number }>): number | null {
+  const qty = balances.reduce((sum, b) => sum + b.quantityOnHand, 0);
+  if (qty <= 0) return null;
+  const value = balances.reduce((sum, b) => sum + b.quantityOnHand * b.weightedAverageCost, 0);
+  return value / qty;
+}
+
 export async function listStockGroups() {
   const [groups, branches] = await Promise.all([
     prisma.productStockGroup.findMany({
@@ -811,7 +827,7 @@ export async function listStockGroups() {
         products: {
           where: { isActive: true },
           include: {
-            product: { select: { id: true, sku: true, name: true, unit: true, globalCost: true, standardSalePrice: true } },
+            product: { select: { id: true, sku: true, name: true, unit: true, globalCost: true, standardSalePrice: true, averageCost: true, lastPurchaseCost: true } },
           },
           orderBy: [{ isCanonical: "desc" }, { conversionFactor: "asc" }],
         },
@@ -838,12 +854,31 @@ export async function listStockGroups() {
             quantityOnHand: true,
             closedPackageQuantity: true,
             looseUnitQuantity: true,
+            weightedAverageCost: true,
           },
         })
       : [];
   const balanceByBranchProduct = new Map(
     balances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]),
   );
+  // "las cosas no se ejecutan bien... revisa completo todo" — "Precios y
+  // costos" (branchEffectivePricing, getEffectiveProductPricingBatch) usa
+  // resolveCostChain, que prioriza el WAC real de compras SOBRE globalCost
+  // (decisión histórica ya establecida — "el WAC real siempre gana sobre
+  // el relleno"). "Fusiones" mostraba costo/margen basados SOLO en
+  // globalCost, ignorando el WAC — dos pantallas, dos costos y dos
+  // márgenes DISTINTOS para el mismo producto (un margen sano acá,
+  // "Precio bajo costo" allá). Acá se agrega el WAC de red (ponderado por
+  // cantidad entre TODAS las sucursales — Fusiones no tiene selector de
+  // sucursal, mismo criterio que resolveCatalogDisplayCost en
+  // catalog-inventory/service.ts) para poder mostrar el costo REAL, no
+  // uno que el resto del sistema ignora en cuanto hay compras reales.
+  const wacByProductId = new Map<string, number>();
+  for (const productId of canonicalProductIds) {
+    const rows = balances.filter((b) => b.productId === productId);
+    const aggregated = aggregateWeightedAverageCost(rows.map((b) => ({ quantityOnHand: Number(b.quantityOnHand), weightedAverageCost: Number(b.weightedAverageCost) })));
+    if (aggregated !== null) wacByProductId.set(productId, aggregated);
+  }
 
   const healthByGroupId = new Map(
     await Promise.all(
@@ -970,9 +1005,11 @@ export async function listStockGroups() {
     isActive: group.isActive,
     category: group.category,
     members: (() => {
-      const canonicalProductId = group.products.find((member) => member.isCanonical)?.productId ?? null;
+      const canonicalMember = group.products.find((member) => member.isCanonical) ?? null;
+      const canonicalProductId = canonicalMember?.productId ?? null;
       const canonicalGlobalCost = canonicalProductId ? globalCostByProductId.get(canonicalProductId) ?? null : null;
       const canonicalStandardSalePrice = canonicalProductId ? standardSalePriceByProductId.get(canonicalProductId) ?? null : null;
+      const canonicalWac = canonicalProductId ? wacByProductId.get(canonicalProductId) ?? null : null;
       return group.products.map((m) => {
         const globalCost = computeFusionMemberGlobalCost({
           isCanonical: m.isCanonical,
@@ -980,6 +1017,29 @@ export async function listStockGroups() {
           canonicalGlobalCost,
           conversionFactor: Number(m.conversionFactor),
         });
+        // "las cosas no se ejecutan bien... revisa completo todo" — el
+        // costo REAL que gobierna la venta (Precios y costos, Brain, POS
+        // vía resolveCostChain/getEffectiveProductPricingBatch) prioriza
+        // el WAC de compras reales SOBRE globalCost — no es un bug, es la
+        // misma decisión histórica de siempre ("el WAC real gana sobre el
+        // relleno"). Mostrar acá un margen basado SOLO en globalCost,
+        // ignorando que el WAC ya lo superó, es mostrar un margen que
+        // contradice la realidad — exactamente lo reportado (20.5% acá,
+        // -14.2% real en Precios y costos, para el mismo producto).
+        // resolveCatalogDisplayCost (catalog-inventory/service.ts) es la
+        // MISMA resolución de "costo de red" que ya usa el catálogo, no
+        // una cuarta cascada — se reusa tal cual, con el WAC agregado
+        // entre TODAS las sucursales (Fusiones no elige una sola).
+        const effectiveCostRaw = canonicalMember
+          ? resolveCatalogDisplayCost({
+              wac: canonicalWac,
+              averageCost: canonicalMember.product.averageCost,
+              globalCost: canonicalMember.product.globalCost,
+              lastPurchaseCost: canonicalMember.product.lastPurchaseCost,
+              factor: Number(m.conversionFactor),
+            })
+          : 0;
+        const effectiveCost = effectiveCostRaw > 0 ? effectiveCostRaw : null;
         // El precio implícito de un derivado (sin override de branchPrice,
         // que acá no aplica — esto es la sucursal-agnóstica) es SIEMPRE
         // canonicalStandardSalePrice × factor (resolveEffectivePricing,
@@ -1001,9 +1061,14 @@ export async function listStockGroups() {
           isCanonical: m.isCanonical,
           isPackagePresentation: m.isPackagePresentation,
           globalCost,
+          effectiveCost,
           standardSalePrice,
-          marginPercent: globalCost !== null && globalCost > 0 && standardSalePrice !== null && standardSalePrice > 0
-            ? ((standardSalePrice - globalCost) / standardSalePrice) * 100
+          // El margen se calcula con effectiveCost (el costo REAL que usa
+          // el resto del motor), no con globalCost — así el margen que
+          // muestra Fusiones nunca contradice al que muestra Precios y
+          // costos/Brain/POS para el mismo producto.
+          marginPercent: effectiveCost !== null && effectiveCost > 0 && standardSalePrice !== null && standardSalePrice > 0
+            ? ((standardSalePrice - effectiveCost) / standardSalePrice) * 100
             : null,
         };
       });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { computeFusionMemberGlobalCost } from "@/modules/catalog/stock-group-crud";
+import { computeFusionMemberGlobalCost, aggregateWeightedAverageCost } from "@/modules/catalog/stock-group-crud";
+import { resolveCatalogDisplayCost } from "@/modules/catalog-inventory/service";
 
 /**
  * "es para poner el precio... una nueva linea que sea costo global de
@@ -91,4 +92,47 @@ test("Prueba LA QUE IMPORTA (el caso real de la captura) — el precio implícit
 test("el canónico SÍ usa su propio standardSalePrice — es el que define el precio implícito de todo el grupo", () => {
   const price = computeFusionMemberGlobalCost({ isCanonical: true, ownGlobalCost: 35, canonicalGlobalCost: 35, conversionFactor: 1 });
   assert.equal(price, 35);
+});
+
+/**
+ * "las cosas no se ejecutan bien... revisa completo todo" — captura real:
+ * grupo ARENA, "Precios y costos" (RIV) mostraba Costo de compra 742.14 y
+ * margen -14.2% ("Precio bajo costo"), mientras "Fusiones" mostraba Costo
+ * global 470 y margen +20.5% para el MISMO producto (METRO DE ARENA 100P
+ * GRANDES) — dos costos y dos márgenes contradictorios. La causa:
+ * resolveCostChain (Precios y costos, Brain, POS) prioriza el WAC real de
+ * compras SOBRE globalCost — decisión histórica ya establecida ("el WAC
+ * real gana sobre el relleno") — pero Fusiones calculaba el margen SOLO
+ * con globalCost, ignorando que el WAC ya lo había superado.
+ * aggregateWeightedAverageCost es la pieza nueva: el WAC de red (todas
+ * las sucursales, ponderado por cantidad) que ahora alimenta
+ * effectiveCost — el número real con el que Fusiones calcula el margen.
+ */
+test("aggregateWeightedAverageCost: promedio ponderado por cantidad entre sucursales — no un promedio simple", () => {
+  const result = aggregateWeightedAverageCost([
+    { quantityOnHand: 100, weightedAverageCost: 10 },
+    { quantityOnHand: 300, weightedAverageCost: 20 },
+  ]);
+  // (100×10 + 300×20) / 400 = 7000/400 = 17.5 — no (10+20)/2=15
+  assert.equal(result, 17.5);
+});
+
+test("aggregateWeightedAverageCost: sin ninguna existencia (cantidad total 0) → null, no NaN ni cero", () => {
+  assert.equal(aggregateWeightedAverageCost([]), null);
+  assert.equal(aggregateWeightedAverageCost([{ quantityOnHand: 0, weightedAverageCost: 50 }]), null);
+});
+
+test("Prueba LA QUE IMPORTA (el caso real de la captura) — resolveCatalogDisplayCost (el motor real) da un costo distinto y MAYOR que globalCost cuando hay WAC real de compras", () => {
+  // LATA con globalCost=11.75 (lo que se editó en Fusiones) pero un WAC
+  // real de compras de 18.55/lata (mayor — compras recientes más caras) —
+  // el mismo escenario reportado: 18.55 × 40 ≈ 742, no 11.75 × 40 = 470.
+  const effectiveCost = resolveCatalogDisplayCost({
+    wac: 18.55,
+    averageCost: 11.75,
+    globalCost: 11.75,
+    lastPurchaseCost: 11.75,
+    factor: 40,
+  });
+  assert.ok(Math.abs(effectiveCost - 742) < 1, `el WAC real (18.55) debe ganar sobre globalCost (11.75) — dio ${effectiveCost}`);
+  assert.notEqual(effectiveCost, 11.75 * 40, "si esto diera 470, Fusiones seguiría mostrando el margen falso reportado");
 });

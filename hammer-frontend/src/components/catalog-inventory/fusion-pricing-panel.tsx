@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { Boxes, ExternalLink, Info, Loader2, Save, Search } from "lucide-react";
+import { money } from "@/lib/format";
+import { AlertTriangle, Boxes, ExternalLink, Info, Loader2, Save, Search } from "lucide-react";
 
 /**
  * "Ese apartado de Fusiones, es para poner el precio, no es otra pestaña
@@ -18,21 +19,29 @@ import { Boxes, ExternalLink, Info, Loader2, Save, Search } from "lucide-react";
  * el costo global Y el precio general de cada presentación de cada fusión.
  *
  * "una nueva linea que sea costo global de fusiones, para que se entienda
- * y no exista problemas con el WAC, basandose solo en eso" — el costo que
- * se muestra y edita acá es SIEMPRE globalCost (del canónico para TODAS
- * las presentaciones, derivadas incluidas: canonicalGlobalCost × factor)
- * — nunca WAC, nunca averageCost, nunca branchCost.
+ * y no exista problemas con el WAC, basandose solo en eso" — globalCost
+ * (lo que se EDITA acá) sigue siendo siempre del canónico × factor, nunca
+ * WAC/averageCost/branchCost directamente.
+ *
+ * "las cosas no se ejecutan bien... revisa completo todo" — Precios y
+ * costos (y el resto del motor: Brain, POS) usa resolveCostChain, que
+ * prioriza el WAC real de compras SOBRE globalCost (decisión histórica:
+ * "el WAC real gana sobre el relleno") — mostrar acá un margen calculado
+ * SOLO con globalCost, ignorando que el WAC ya lo superó, mostraba un
+ * margen que contradecía la realidad (sano acá, "Precio bajo costo" en
+ * Precios y costos, para el MISMO producto). effectiveCost es ese costo
+ * real (resolveCatalogDisplayCost, WAC agregado de toda la red — Fusiones
+ * no tiene selector de sucursal) — el margen se calcula con ESE, y se
+ * avisa explícito cuando difiere del globalCost editable.
  *
  * "no trae el precio de venta como deberia ser... el precio de venta se
  * debe ajustar y poder editarse desde ahi" — el precio general tiene
  * EXACTAMENTE la misma regla que el costo: resolveEffectivePricing nunca
  * lee el standardSalePrice propio de un derivado, su precio implícito es
- * SIEMPRE canonicalStandardSalePrice × factor. Antes se mostraba (y no se
- * podía editar) el campo propio del derivado — un número fantasma que el
- * motor de venta ignora, y que producía márgenes sin sentido. Esto NO es
- * el precio por sucursal (branchPrice, que sigue siendo individual por
- * presentación, sin redirigirse — eso se edita en Precios y costos) — es
- * el precio GENERAL, la misma clase de campo que el costo global.
+ * SIEMPRE canonicalStandardSalePrice × factor. Esto NO es el precio por
+ * sucursal (branchPrice, que sigue siendo individual por presentación,
+ * sin redirigirse — eso se edita en Precios y costos) — es el precio
+ * GENERAL, la misma clase de campo que el costo global.
  */
 
 type FusionPricingMember = {
@@ -45,6 +54,8 @@ type FusionPricingMember = {
   isCanonical: boolean;
   isPackagePresentation?: boolean;
   globalCost: number | null;
+  /** Costo REAL que usa el resto del motor (WAC de compras si existe, si no cae a globalCost) — el margen se calcula con este, no con globalCost. */
+  effectiveCost: number | null;
   standardSalePrice: number | null;
   marginPercent: number | null;
 };
@@ -192,7 +203,9 @@ export function FusionPricingPanel() {
           global del producto canónico (ej. varilla, lata) multiplicados por el factor de la fusión — nunca se guarda un
           valor propio en el derivado. Poné el número en cualquier fila y se ajusta solo: si editás el derivado, el
           sistema convierte y aplica el resultado al canónico automáticamente. Esto es el precio GENERAL — el precio por
-          sucursal (con excepción propia) sigue siendo individual y se edita en Precios y costos.
+          sucursal (con excepción propia) sigue siendo individual y se edita en Precios y costos. El margen se calcula
+          con el costo REAL (WAC de compras, si existe) — si el costo global de arriba no coincide con ese número, la
+          fila lo avisa: el WAC de compras reales manda sobre el costo global tecleado, igual que en el resto del sistema.
         </p>
       </div>
 
@@ -239,6 +252,14 @@ export function FusionPricingPanel() {
                       const priceDirty = priceCell !== priceServerValue;
                       const priceKey = `${member.productId}-standardSalePrice`;
 
+                      // El WAC de compras reales puede superar a globalCost
+                      // (resolveCostChain, el mismo motor que Precios y
+                      // costos/Brain/POS) — cuando eso pasa, editar el
+                      // costo global de acá NO alcanza para cambiar el
+                      // margen real, y hay que decirlo explícito.
+                      const costDivergent = member.effectiveCost !== null
+                        && (member.globalCost === null || Math.abs(member.effectiveCost - member.globalCost) > 0.01);
+
                       return (
                         <tr key={member.id}>
                           <td>
@@ -269,6 +290,12 @@ export function FusionPricingPanel() {
                                 {savingKey === costKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                               </button>
                             </div>
+                            {costDivergent && (
+                              <div className="mt-1 flex items-center justify-end gap-1 text-right text-[10.5px] text-[var(--color-warning-700)]">
+                                <AlertTriangle className="h-3 w-3 shrink-0" />
+                                <span>Costo real: {money(member.effectiveCost as number)} (WAC de compras) — el margen se calculó con este, no con el de arriba.</span>
+                              </div>
+                            )}
                           </td>
                           <td className="py-1.5">
                             <div className="flex items-center justify-end gap-1">
