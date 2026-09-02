@@ -14,55 +14,6 @@ function toNumber(value: { toNumber: () => number } | null | undefined): number 
   return value ? value.toNumber() : 0;
 }
 
-export async function getMasterDashboardSummary() {
-  const [branches, pendingOrders, pendingApprovals, pendingDispatch] = await Promise.all([
-    prisma.branch.findMany({ where: { isActive: true }, select: { id: true, code: true, name: true }, orderBy: { code: "asc" } }),
-    prisma.saleOrder.groupBy({
-      by: ["branchId"],
-      where: { status: SaleOrderStatus.PENDING_PAYMENT },
-      _count: { _all: true },
-    }),
-    prisma.approvalRequest.groupBy({
-      by: ["branchId"],
-      where: { status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] } },
-      _count: { _all: true },
-    }),
-    prisma.saleOrder.groupBy({
-      by: ["branchId"],
-      where: { status: SaleOrderStatus.DISPATCH_PENDING },
-      _count: { _all: true },
-    }),
-  ]);
-  const salesSummaries = await Promise.all(branches.map((branch) => getBranchSalesRealtimeSummary(branch.id)));
-
-  const byBranch = branches.map((branch) => {
-    const today = salesSummaries.find((item) => item.branchId === branch.id);
-    const pending = pendingOrders.find((item) => item.branchId === branch.id);
-    const approvals = pendingApprovals.find((item) => item.branchId === branch.id);
-    const dispatch = pendingDispatch.find((item) => item.branchId === branch.id);
-    return {
-      branchId: branch.id,
-      branchCode: branch.code,
-      branchName: branch.name,
-      salesToday: today?.paidSalesTotal ?? 0,
-      pendingOrders: pending?._count._all ?? 0,
-      pendingApprovals: approvals?._count._all ?? 0,
-      pendingDispatch: dispatch?._count._all ?? 0,
-    };
-  });
-
-  const totalPendingApprovals = byBranch.reduce((acc, item) => acc + item.pendingApprovals, 0);
-  const totalPendingDispatch = byBranch.reduce((acc, item) => acc + item.pendingDispatch, 0);
-  const totalPendingOrders = byBranch.reduce((acc, item) => acc + item.pendingOrders, 0);
-
-  const alerts: string[] = [];
-  if (totalPendingApprovals > 0) alerts.push(`Hay ${totalPendingApprovals} solicitudes de aprobación pendientes.`);
-  if (totalPendingDispatch > 0) alerts.push(`Hay ${totalPendingDispatch} órdenes pendientes de despacho.`);
-  if (totalPendingOrders > 0) alerts.push(`Hay ${totalPendingOrders} órdenes pendientes de cobro o despacho.`);
-
-  return { byBranch, alerts };
-}
-
 export async function getBranchAdminDashboardSummary(branchIds: string[]) {
   const [salesSummaries, pendingPayments, pendingDispatches, pendingApprovals, criticalInventory, pendingTransports] = await Promise.all([
     Promise.all(branchIds.map((branchId) => getBranchSalesRealtimeSummary(branchId))),
