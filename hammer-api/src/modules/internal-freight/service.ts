@@ -292,12 +292,6 @@ export async function listInternalFreightTrips() {
   });
 }
 
-export async function getInternalFreightTrip(id: string) {
-  const trip = await prisma.internalFreightTrip.findUnique({ where: { id }, include: internalFreightTripInclude });
-  if (!trip) throw new Error("INTERNAL_FREIGHT_TRIP_NOT_FOUND");
-  return trip;
-}
-
 export async function applyInternalFreightTrip(id: string, actorUserId?: string) {
   const trip = await prisma.internalFreightTrip.findUnique({
     where: { id },

@@ -1,5 +1,5 @@
 import type { SessionPayload } from "@/types/auth";
-import { hasBranchAccess, isMaster, isOwner, isSystemAdmin, isFinanceUser } from "@/modules/rbac/guards";
+import { hasBranchAccess, isMaster, isSystemAdmin, isFinanceUser } from "@/modules/rbac/guards";
 
 export function assertAuthenticated(session: SessionPayload | null): asserts session is SessionPayload {
   if (!session) {
@@ -31,12 +31,6 @@ export function assertMaster(session: SessionPayload): void {
 export function assertFinanceAccess(session: SessionPayload): void {
   if (!isFinanceUser(session)) {
     throw new Error("FORBIDDEN_FINANCE_ONLY");
-  }
-}
-
-export function assertOwner(session: SessionPayload): void {
-  if (!isOwner(session)) {
-    throw new Error("FORBIDDEN_OWNER_ONLY");
   }
 }
 

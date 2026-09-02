@@ -148,13 +148,3 @@ export async function bulkUpdateBranchModuleConfigs(input: {
   }
   return results;
 }
-
-/**
- * Determines the workflow description for a branch config.
- */
-export function describeWorkflow(enableCashier: boolean, enableDispatch: boolean): string {
-  if (enableCashier && enableDispatch) return "Hibrido: Venta directa o Venta -> Caja -> Despacho";
-  if (enableCashier && !enableDispatch) return "Sin despacho: Venta -> Caja -> Entregado";
-  if (!enableCashier && enableDispatch) return "Sin caja: Venta+Cobro -> Despacho";
-  return "Directo: Venta+Cobro+Entrega";
-}

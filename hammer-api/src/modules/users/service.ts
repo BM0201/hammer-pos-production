@@ -256,14 +256,6 @@ export async function hardDeleteUser(userId: string, actorUserId: string) {
   return { deleted: true, id: userId };
 }
 
-export async function listActiveBranches() {
-  return prisma.branch.findMany({
-    where: { isActive: true },
-    orderBy: { code: "asc" },
-    select: { id: true, code: true, name: true },
-  });
-}
-
 export async function listBranchesForMembershipManagement() {
   const branches = await prisma.branch.findMany({
     orderBy: [{ isActive: "desc" }, { code: "asc" }],

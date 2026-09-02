@@ -153,31 +153,3 @@ export async function calculateDynamicPrice(
     daysInStock,
   };
 }
-
-/**
- * Get dynamic prices for multiple products with filters.
- */
-export async function getBulkDynamicPrices(filters?: {
-  branchId?: string;
-  abcClass?: string;
-  xyzClass?: string;
-  minRotation?: number;
-  maxDaysInStock?: number;
-  take?: number;
-}) {
-  const where: Record<string, unknown> = { isActive: true };
-  if (filters?.abcClass) where.abcClassification = filters.abcClass;
-  if (filters?.xyzClass) where.xyzClassification = filters.xyzClass;
-  if (filters?.minRotation !== undefined) where.rotationIndex = { gte: filters.minRotation };
-  if (filters?.maxDaysInStock !== undefined) where.daysInStock = { lte: filters.maxDaysInStock };
-
-  const take = Math.min(Math.max(filters?.take ?? 100, 1), 200);
-  const products = await prisma.product.findMany({
-    where,
-    select: { id: true },
-    take,
-  });
-
-  const resolved = await Promise.all(products.map((p) => calculateDynamicPrice(p.id, filters?.branchId)));
-  return resolved.filter((result): result is DynamicPriceResult => result !== null);
-}

@@ -423,15 +423,6 @@ export function applyRunningBalance<T extends { direction: "IN" | "OUT"; amount:
   });
 }
 
-/** Lista de cuentas + su saldo real (libro mayor), para la pantalla de Tesorería. */
-export async function listBankAccountsWithBalances(branchId?: string | null) {
-  const accounts = await listBankAccounts(branchId);
-  return Promise.all(accounts.map(async (account) => ({
-    ...account,
-    balance: await getTreasuryAccountBalance(account.id),
-  })));
-}
-
 /**
  * §6.1 — la posición total, agrupada por tipo de cuenta y moneda (nunca
  * sumada entre monedas sin decir a qué tasa). "En sucursales" (gavetas +

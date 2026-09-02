@@ -25,13 +25,6 @@ export function stddev(values: number[]): number {
   return Math.sqrt(variance);
 }
 
-export function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
-
 export function percentile(values: number[], p: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -90,22 +83,7 @@ export function trendDirection(slope: number, avgValue: number): "creciente" | "
   return slope > 0 ? "creciente" : "decreciente";
 }
 
-/** Coefficient of Variation */
-export function coefficientOfVariation(values: number[]): number {
-  const m = mean(values);
-  if (m === 0) return 0;
-  return stddev(values) / m;
-}
-
 // ─── Date Helpers ────────────────────────────────────────────────
-
-export function dayBounds(date: Date): { start: Date; end: Date } {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return { start, end };
-}
 
 export function daysAgo(n: number): Date {
   const d = new Date();
@@ -125,11 +103,6 @@ export function hourLabel(h: number): string {
 // ─── Severity / Impact Helpers ───────────────────────────────────
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
-
-export function severityScore(s: Severity): number {
-  const map: Record<Severity, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
-  return map[s];
-}
 
 // ─── Shared Types ────────────────────────────────────────────────
 

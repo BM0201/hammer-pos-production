@@ -152,4 +152,3 @@ export type UpdateBatchInput = z.infer<typeof updateBatchSchema>;
 export type CompleteBatchInput = z.infer<typeof completeBatchSchema>;
 export type CalculateCostInput = z.infer<typeof calculateCostSchema>;
 export type ReverseBatchInput = z.infer<typeof reverseBatchSchema>;
-export type InjectionPreviewInput = z.infer<typeof injectionPreviewSchema>;

@@ -191,15 +191,6 @@ export function resolveTransportCustomerName(customer: { displayName?: string | 
   return "Cliente sin registrar";
 }
 
-export async function countPendingTransports(branchIds: string[]) {
-  return prisma.transportService.count({
-    where: {
-      branchId: { in: branchIds },
-      status: { in: [TransportServiceStatus.PENDING, TransportServiceStatus.IN_TRANSIT] },
-    },
-  });
-}
-
 export async function listPendingTransports(branchIds: string[]) {
   return prisma.transportService.findMany({
     where: {

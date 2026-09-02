@@ -16,8 +16,6 @@ export type ApiError = {
   error: ApiErrorBody;
 };
 
-export type ApiResponse<T> = ApiSuccess<T> | ApiError;
-
 export function ok<T>(data: T, status = 200): NextResponse<ApiSuccess<T>> {
   return NextResponse.json({ ok: true, data }, { status });
 }

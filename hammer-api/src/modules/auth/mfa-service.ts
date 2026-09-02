@@ -67,13 +67,6 @@ export async function consumeMfaPendingToken(
   return row.userId;
 }
 
-/** Limpieza periódica de tokens expirados. */
-export async function cleanupExpiredMfaTokens(): Promise<void> {
-  await prisma.mfaPendingToken.deleteMany({
-    where: { expiresAt: { lt: new Date() } },
-  });
-}
-
 // ─── MFA Setup ───────────────────────────────────────────────────────────────
 
 /**

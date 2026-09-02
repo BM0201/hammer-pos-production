@@ -994,10 +994,6 @@ async function recalculateCustomerCreditScoreTx(tx: Prisma.TransactionClient, cu
   });
 }
 
-export async function recalculateCustomerCreditScore(customerId: string) {
-  return prisma.$transaction((tx) => recalculateCustomerCreditScoreTx(tx, customerId));
-}
-
 // Bug 3 (auditoría ventas/pagos/POS): take fijo sin forma de pedir la página
 // siguiente. Mismo patrón que clampInventoryMovementPagination en
 // inventory/service.ts (page -> skip), manteniendo el take de 100 que ya

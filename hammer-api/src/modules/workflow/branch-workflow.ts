@@ -8,9 +8,6 @@
  */
 
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
-import type { SessionPayload } from "@/types/auth";
-import { canUseBranchCapability } from "@/modules/rbac/effective-permissions";
-import type { Capability } from "@/modules/rbac/policies";
 
 export const WORKFLOW_ACTIONS = {
   CREATE_DRAFT_ORDER: "CREATE_DRAFT_ORDER",
@@ -133,24 +130,4 @@ export async function assertBranchWorkflowAction(
       // Always allowed
       break;
   }
-}
-
-/**
- * Combined guard: check both workflow action AND RBAC capability.
- */
-export async function requireBranchWorkflowCapability(
-  session: SessionPayload | null,
-  branchId: string,
-  action: WorkflowAction,
-  capability: Capability,
-): Promise<void> {
-  if (!session) throw new Error("UNAUTHENTICATED");
-
-  // First check capability (RBAC)
-  if (!canUseBranchCapability(session, branchId, capability)) {
-    throw new Error("FORBIDDEN_CAPABILITY");
-  }
-
-  // Then check workflow action (module config)
-  await assertBranchWorkflowAction(branchId, action);
 }
