@@ -625,34 +625,6 @@ export function applyStockGroupRepair(input: {
   return prisma.$transaction((tx) => applyStockGroupRepairTx(tx, input));
 }
 
-/**
- * Consolidación ADITIVA: para grupos donde cada miembro representa stock físico
- * SEPARADO que debe sumarse (no equivalencias). Suma `quantityOnHand * factor` de
- * todos los miembros y lo escribe en el canónico.
- *
- * NO usar para hierro/quintal/varilla — ahí use
- * `reinterpretEquivalentStockGroupTx` (equivalent-stock-migration.ts), que no
- * suma automáticamente y detecta doble conteo.
- */
-export function consolidateAdditiveStockGroupTx(
-  tx: Prisma.TransactionClient,
-  input: RebuildStockGroupBalancesInput,
-): Promise<BranchRebuildResult[]> {
-  return rebuildStockGroupBalancesTx(tx, input);
-}
-
-/**
- * Consolidación de EMPAQUE cerrado/suelto (clavos/cajas): mantiene
- * closedPackageQuantity y looseUnitQuantity sobre el canónico. Requiere
- * tracksPackages=true en el grupo.
- */
-export function rebuildPackageStockGroupTx(
-  tx: Prisma.TransactionClient,
-  input: RebuildStockGroupBalancesInput,
-): Promise<BranchRebuildResult[]> {
-  return rebuildStockGroupBalancesTx(tx, input);
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export function slugifyCode(name: string) {

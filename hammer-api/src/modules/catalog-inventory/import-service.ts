@@ -193,14 +193,6 @@ function toCsvValue(value: unknown) {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-export function buildImportErrorsCsv(lines: Array<{ rowNumber: number; sku: string; name: string; targetBranchCode: string | null; messages: string[]; executionMessage?: string | null }>) {
-  const rows: Array<Array<string | number>> = [["fila", "sku", "producto", "sucursal", "errores"]];
-  for (const line of lines) {
-    rows.push([line.rowNumber, line.sku, line.name, line.targetBranchCode ?? "", [...line.messages, line.executionMessage].filter(Boolean).join(" | ")]);
-  }
-  return rows.map((row) => row.map(toCsvValue).join(",")).join("\n");
-}
-
 export function buildImportPreviewCsv(items: UnifiedImportItem[]) {
   const rows: Array<Array<string | number>> = [["fila", "sku", "producto", "accion", "sucursal", "cantidad", "costo", "precio", "estado", "mensajes"]];
   for (const item of items) {

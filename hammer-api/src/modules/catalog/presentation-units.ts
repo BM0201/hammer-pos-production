@@ -25,12 +25,6 @@ export function canonicalizePresentationUnit(value: string): string {
   return normalizePresentationUnit(value);
 }
 
-/** Unidades sugeridas en el asistente. Solo sugerencias — el usuario escribe la que quiera. */
-export const COMMON_PRESENTATION_UNITS = [
-  "UNIDAD", "LATA", "PALADA", "METRO", "METRO CUBICO", "CAMION", "VIAJE",
-  "QUINTAL", "VARILLA", "KILO", "LIBRA", "SACO", "BOLSA", "CAJA", "GALON", "LITRO",
-] as const;
-
 export type UnitCollision = {
   unit: string;
   productIds: string[];

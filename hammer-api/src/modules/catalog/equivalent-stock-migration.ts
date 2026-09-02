@@ -500,12 +500,6 @@ export async function applyEquivalentStockGroupMigrationTx(
   return results;
 }
 
-/**
- * Alias semántico (tarea B): "reinterpretar" un grupo de equivalencia
- * (hierro/quintal/varilla) sin sumar automáticamente.
- */
-export const reinterpretEquivalentStockGroupTx = applyEquivalentStockGroupMigrationTx;
-
 // ─── Envoltorios con transacción propia (para rutas API) ──────────────────────
 
 export function previewEquivalentStockGroupMigration(stockGroupId: string) {
