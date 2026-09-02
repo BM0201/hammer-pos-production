@@ -8,19 +8,6 @@ import { z } from "zod";
  * BUG FIX: Added max cost validation.
  */
 
-export const timberDimensionsSchema = z.object({
-  thickness: z.number().int().positive("El grosor debe ser mayor a 0").max(24, "Grosor máximo: 24 pulgadas"),
-  width: z.number().int().positive("El ancho debe ser mayor a 0").max(48, "Ancho máximo: 48 pulgadas"),
-  length: z.number().int().positive("El largo debe ser mayor a 0").max(40, "Largo máximo: 40 pies"),
-});
-
-export const timberPricingSchema = z.object({
-  costPerFoot: z.number().positive("Costo por pie debe ser mayor a 0").max(10000).optional(),
-  pricePerInchTabla: z.number().nonnegative("Precio tabla debe ser ≥ 0").max(10000).optional(),
-  pricePerInchTablilla: z.number().nonnegative("Precio tablilla debe ser ≥ 0").max(10000).optional(),
-  pricePerInchCuadro: z.number().nonnegative("Precio cuadro debe ser ≥ 0").max(10000).optional(),
-});
-
 export const createTimberProductSchema = z.object({
   name: z.string().min(1, "Nombre es requerido").max(200),
   sku: z.string().min(1).max(50).optional(),
@@ -135,9 +122,6 @@ export const updateTimberPricingConfigSchema = z.object({
 
 export type CreateTimberProductInput = z.infer<typeof createTimberProductSchema>;
 export type UpdateTimberProductInput = z.infer<typeof updateTimberProductSchema>;
-export type CalculateTimberInput = z.infer<typeof calculateTimberSchema>;
-export type TimberTripExpensesInput = z.infer<typeof timberTripExpensesSchema>;
-export type TimberPricePolicy = z.infer<typeof timberPricePolicySchema>;
 export type CreateTimberTripInput = z.infer<typeof createTimberTripSchema>;
 export type UpdateTimberTripInput = z.infer<typeof updateTimberTripSchema>;
 export type UpdateTimberPricingConfigInput = z.infer<typeof updateTimberPricingConfigSchema>;
