@@ -104,18 +104,4 @@ export function getRoleColor(roleCode: string): RoleColorConfig {
   return ROLE_COLORS[roleCode] ?? DEFAULT_ROLE_COLOR;
 }
 
-/** Get Tailwind-compatible inline styles for a role's accent color */
-export function getRoleAccentStyles(roleCode: string) {
-  const cfg = getRoleColor(roleCode);
-  return {
-    bg50: `var(--color-${cfg.cssPrefix}-50)`,
-    bg100: `var(--color-${cfg.cssPrefix}-100)`,
-    bg200: `var(--color-${cfg.cssPrefix}-200)`,
-    text400: `var(--color-${cfg.cssPrefix}-400)`,
-    text600: `var(--color-${cfg.cssPrefix}-600)`,
-    text700: `var(--color-${cfg.cssPrefix}-700)`,
-    border100: `var(--color-${cfg.cssPrefix}-100)`,
-  };
-}
-
 export { ROLE_COLORS };

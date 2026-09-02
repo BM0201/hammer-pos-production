@@ -97,17 +97,6 @@ export function mapPosErrorToSpanish(input: {
   return fallback ?? "No se pudo completar la operación. Intenta nuevamente.";
 }
 
-export type DispatchVisualStatus =
-  | "PENDING"
-  | "ASSIGNED"
-  | "IN_TRANSIT"
-  | "DELIVERED"
-  | "CANCELLED"
-  | "FAILED"
-  | "IN_PROGRESS"
-  | "DISPATCHED"
-  | "DISPATCH_PENDING";
-
 const DISPATCH_STATUS_LABELS_ES: Record<string, string> = {
   PENDING: "Pendiente",
   ASSIGNED: "Asignado",

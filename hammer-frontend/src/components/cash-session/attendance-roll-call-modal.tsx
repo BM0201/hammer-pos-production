@@ -12,8 +12,6 @@ import { apiFetch } from "@/lib/client/api";
  * después desde RRHH › Asistencia. Solo aparece una vez al día por sucursal.
  */
 
-export type RollCallStatus = "PRESENT" | "UNJUSTIFIED" | "JUSTIFIED";
-
 type RosterEmployee = { id: string; fullName: string; position: string };
 
 type RollCallData = {
