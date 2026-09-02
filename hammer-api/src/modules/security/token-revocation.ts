@@ -71,15 +71,3 @@ export async function revokeAllUserSessions(userId: string, reason: string): Pro
     },
   });
 }
-
-// Cleanup expired revocations
-export async function cleanupExpiredRevocations(): Promise<void> {
-  if (!isDatabaseConfigured()) {
-    logRuntimeEnvWarnings();
-    return;
-  }
-
-  await prisma.revokedSession.deleteMany({
-    where: { expiresAt: { lt: new Date() } },
-  });
-}

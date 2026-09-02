@@ -88,10 +88,3 @@ export async function requireCsrf(request: Request, session: SessionPayload | nu
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
-
-// Cleanup expired tokens
-export async function cleanupExpiredCsrfTokens(): Promise<void> {
-  await prisma.csrfToken.deleteMany({
-    where: { expiresAt: { lt: new Date() } },
-  });
-}

@@ -157,15 +157,3 @@ export async function recordLoginAttempt(
     });
   }
 }
-
-/**
- * Limpieza periódica de intentos antiguos (llamar desde cron).
- * Delegada a la política central (90 días — modules/retention/policy.ts), la
- * misma que aplica /api/cron/cleanup, para que no existan dos umbrales.
- */
-export async function cleanupOldAttempts(): Promise<void> {
-  const { LOGIN_ATTEMPT_RETENTION_DAYS, retentionCutoff } = await import("@/modules/retention/policy");
-  await prisma.loginAttempt.deleteMany({
-    where: { attemptedAt: { lt: retentionCutoff(LOGIN_ATTEMPT_RETENTION_DAYS) } },
-  });
-}
