@@ -13,24 +13,7 @@ export const EXPENSE_CATEGORIES = [
   "OTHER",
 ] as const;
 
-export const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
-  PAYROLL: "Personal / Nómina",
-  UTILITIES: "Servicios (Agua, Luz, Internet)",
-  RENT: "Renta / Alquiler",
-  FOOD: "Alimentación",
-  MAINTENANCE: "Mantenimiento",
-  TRANSPORT: "Transporte",
-  MARKETING: "Publicidad / Marketing",
-  TAXES: "Impuestos (Alcaldía / DGI)",
-  OTHER: "Otros",
-};
-
 export const PRORATION_METHODS = ["BY_QUANTITY", "BY_VALUE"] as const;
-
-export const PRORATION_METHOD_LABELS: Record<string, string> = {
-  BY_QUANTITY: "Por Cantidad (unidades)",
-  BY_VALUE: "Por Valor (C$)",
-};
 
 export const PRICING_MODES = ["SIMPLE", "ADVANCED"] as const;
 export const EXPENSE_ALLOCATION_SCOPES = ["BRANCH", "CATEGORY", "PRODUCT", "MANUAL"] as const;
@@ -198,7 +181,5 @@ export const applyPricingSchema = z.object({
 export type CreateExpenseInput = z.infer<typeof createExpenseSchema>;
 export type UpdateExpenseInput = z.infer<typeof updateExpenseSchema>;
 export type UpsertPricingConfigInput = z.infer<typeof upsertPricingConfigSchema>;
-export type SuggestedPriceQuery = z.infer<typeof suggestedPriceQuerySchema>;
-export type PricingSuggestionPayload = z.infer<typeof pricingSuggestionPayloadSchema>;
 export type ApplyPricingInput = z.infer<typeof applyPricingSchema>;
 export type UpsertCategoryPricingPolicyInput = z.infer<typeof upsertCategoryPricingPolicySchema>;

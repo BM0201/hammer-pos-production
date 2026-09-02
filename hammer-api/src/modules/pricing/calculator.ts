@@ -417,17 +417,3 @@ export function calculateSuggestedPrice(input: SuggestedPriceInput): SuggestedPr
     prorateMethod: "BY_QUANTITY",
   });
 }
-
-export function calculateSuggestedPriceSimple(input: {
-  purchaseCostPerUnit: number;
-  totalMonthlyExpenses: number;
-  estimatedMonthlyUnits: number;
-  desiredMarginPercent: number;
-}): SuggestedPriceResult {
-  return calculateSuggestedPrice({
-    purchaseCostPerUnit: new Prisma.Decimal(input.purchaseCostPerUnit),
-    totalMonthlyExpenses: new Prisma.Decimal(input.totalMonthlyExpenses),
-    estimatedMonthlyUnits: new Prisma.Decimal(input.estimatedMonthlyUnits),
-    desiredMarginPercent: new Prisma.Decimal(input.desiredMarginPercent),
-  });
-}

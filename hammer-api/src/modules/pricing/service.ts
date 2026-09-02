@@ -531,14 +531,6 @@ export async function calculatePricingSuggestionForBranch(params: PricingSuggest
   };
 }
 
-export async function getProductPricingHistory(productId: string, branchId: string, limit = 20) {
-  return prisma.productPricing.findMany({
-    where: { productId, branchId },
-    orderBy: { calculatedAt: "desc" },
-    take: limit,
-  });
-}
-
 export async function getProductPricingContext(input: { productId: string; branchId: string }) {
   const product = await prisma.product.findUniqueOrThrow({
     where: { id: input.productId },
