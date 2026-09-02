@@ -1,0 +1,281 @@
+Unused files (3)
+src/modules/brain/prediction/demand-forecast.ts   
+src/modules/brain/prediction/reorder-simulation.ts
+src/modules/operations/schedule-info.ts           
+Unused dependencies (1)
+@neondatabase/serverless  package.json:34:6
+Unused exports (194)
+median                                   function  src/modules/ai-insights/analyzer.ts:28:17                         
+percentile                               function  src/modules/ai-insights/analyzer.ts:35:17                         
+coefficientOfVariation                   function  src/modules/ai-insights/analyzer.ts:94:17                         
+dayBounds                                function  src/modules/ai-insights/analyzer.ts:102:17                        
+severityScore                            function  src/modules/ai-insights/analyzer.ts:129:17                        
+getFullInsights                          function  src/modules/ai-insights/service.ts:114:23                         
+invalidateInsightsCache                  function  src/modules/ai-insights/service.ts:140:17                         
+getBulkDynamicPrices                     function  src/modules/analytics/dynamic-pricing.ts:160:23                   
+assertOwner                              function  src/modules/auth/access.ts:37:17                                  
+getEffectivePermissionsForUser           function  src/modules/auth/effective-permissions.ts:55:23                   
+cleanupExpiredMfaTokens                  function  src/modules/auth/mfa-service.ts:71:23                             
+PASSWORD_MIN_LENGTH                                src/modules/auth/password-policy.ts:1:14                          
+resolvePresenceStatus                    function  src/modules/auth/presence-service.ts:17:17                        
+hasProductionPermission                  function  src/modules/auth/production-guard.ts:55:23                        
+clampScore                               function  src/modules/brain/scoring.ts:22:17                                
+impactScoreFor                           function  src/modules/brain/scoring.ts:32:17                                
+urgencyScoreFor                          function  src/modules/brain/scoring.ts:42:17                                
+describeWorkflow                         function  src/modules/branch-config/service.ts:155:17                       
+generateCameraCredentialsKey             function  src/modules/cameras/credentials-crypto.ts:45:17                   
+NOTIFICATION_STABILIZATION_WINDOW_MS               src/modules/cameras/notification-window.ts:11:14                  
+AGENT_STALE_AFTER_MS                               src/modules/cameras/service.ts:13:14                              
+NOTIFICATION_STABILIZATION_WINDOW_MS               src/modules/cameras/service.ts:14:14                              
+decryptCameraCredentialsFor              function  src/modules/cameras/service.ts:47:17                              
+recomputeCameraHealthSnapshot            function  src/modules/cameras/service.ts:314:23                             
+stopCashClosureScheduler                 function  src/modules/cash-closure/scheduler.ts:59:17                       
+executeAutoClosure                       function  src/modules/cash-closure/service.ts:96:23                         
+recordEmergencySale                      function  src/modules/cash-closure/service.ts:216:23                        
+CASH_AUTO_CLOSE_SETTING_KEY                        src/modules/cash-session/auto-close-config.ts:14:14               
+CASH_OUTFLOW_TYPES                                 src/modules/cash-session/expected-cash.ts:23:14                   
+INVENTORY_IMPORT_BATCH_STATUS                      src/modules/catalog-inventory/import-service.ts:13:14             
+INVENTORY_IMPORT_LINE_STATUS                       src/modules/catalog-inventory/import-service.ts:23:14             
+buildImportErrorsCsv                     function  src/modules/catalog-inventory/import-service.ts:196:17            
+buildImportPreviewCsv                    function  src/modules/catalog-inventory/import-service.ts:204:17            
+generateSmartCategoryCode                function  src/modules/catalog-inventory/import-service.ts:279:17            
+resolveCatalogDisplayCostBatch           function  src/modules/catalog-inventory/service.ts:105:23                   
+CONFLICT_WARNING                                   src/modules/catalog/equivalent-stock-migration.ts:34:14           
+resolveNewCanonicalBaseQtyNumber         function  src/modules/catalog/equivalent-stock-migration.ts:72:17           
+previewEquivalentStockGroupMigrationTx   function  src/modules/catalog/equivalent-stock-migration.ts:197:23          
+applyEquivalentStockGroupMigrationTx     function  src/modules/catalog/equivalent-stock-migration.ts:321:23          
+reinterpretEquivalentStockGroupTx                  src/modules/catalog/equivalent-stock-migration.ts:507:14          
+FUSION_BASIS_CONFLICT_TOLERANCE                    src/modules/catalog/fusion-pricing-health.ts:18:14                
+MARGIN_OUTLIER_HIGH_THRESHOLD                      src/modules/catalog/fusion-pricing-health.ts:20:14                
+COMMON_PRESENTATION_UNITS                          src/modules/catalog/presentation-units.ts:29:14                   
+derivedStockGroupMemberFilter            function  src/modules/catalog/service.ts:440:17                             
+shouldAutoGenerateSku                    function  src/modules/catalog/sku-generator.ts:24:17                        
+detectCategoryCode                       function  src/modules/catalog/sku-generator.ts:125:17                       
+detectFamilyCode                         function  src/modules/catalog/sku-generator.ts:137:17                       
+detectVariant                            function  src/modules/catalog/sku-generator.ts:188:17                       
+buildSkuBase                             function  src/modules/catalog/sku-generator.ts:233:17                       
+buildSkuFromBase                         function  src/modules/catalog/sku-generator.ts:242:17                       
+nextSequenceFromSkus                     function  src/modules/catalog/sku-generator.ts:247:17                       
+calcBaseConsolidation                    function  src/modules/catalog/stock-group-crud.ts:79:17                     
+calcTracksPackagesConsolidation          function  src/modules/catalog/stock-group-crud.ts:117:17                    
+rebuildStockGroupBalancesTx              function  src/modules/catalog/stock-group-crud.ts:221:23                    
+consolidateAdditiveStockGroupTx          function  src/modules/catalog/stock-group-crud.ts:637:17                    
+rebuildPackageStockGroupTx               function  src/modules/catalog/stock-group-crud.ts:649:17                    
+slugifyCode                              function  src/modules/catalog/stock-group-crud.ts:658:17                    
+validatePackageSettings                  function  src/modules/catalog/stock-group-crud.ts:716:17                    
+assertProductsAvailable                  function  src/modules/catalog/stock-group-crud.ts:753:23                    
+generateDeliveryOrderNumber              function  src/modules/documents/document-service.ts:16:23                   
+OUTLIER_MIN_SAMPLE                                 src/modules/finance/expense-intelligence.ts:99:14                 
+OUTLIER_TYPICAL_FACTOR                             src/modules/finance/expense-intelligence.ts:101:14                
+readExcelBuffer                          function  src/modules/import-excel/excel-reader.ts:29:23                    
+parseImportPayload                       function  src/modules/import-excel/service.ts:217:23                        
+getInternalFreightTrip                   function  src/modules/internal-freight/service.ts:295:23                    
+resolveReplenishmentParams               function  src/modules/inventory/replenishment-params-service.ts:98:23       
+getInboundTransferQuantities             function  src/modules/inventory/replenishment-params-service.ts:172:23      
+listInventoryMovements                   function  src/modules/inventory/service.ts:196:23                           
+InventoryStockError                      class     src/modules/inventory/service.ts:295:14                           
+movementSaleUnitCostFromBaseWac          function  src/modules/inventory/service.ts:974:17                           
+validateMovementInputs                   function  src/modules/inventory/wac.ts:33:17                                
+OPERATIONAL_DAY_APPROVE_SETTING_KEY                src/modules/operations/approve-policy-config.ts:6:14              
+DEFAULT_APPROVAL_POLICY                            src/modules/operations/approve-policy-config.ts:15:14             
+normalizeApprovalPolicy                  function  src/modules/operations/approve-policy-config.ts:35:17             
+updateApprovalPolicy                     function  src/modules/operations/approve-policy-config.ts:60:23             
+OPERATIONAL_DAY_AUTO_SETTING_KEY                   src/modules/operations/auto-day-config.ts:3:14                    
+DEFAULT_OPERATIONAL_DAY_AUTO_CONFIG                src/modules/operations/auto-day-config.ts:21:14                   
+normalizeOperationalDayAutoConfig        function  src/modules/operations/auto-day-config.ts:37:17                   
+omitUndefinedFields                      function  src/modules/operations/auto-day-config.ts:83:17                   
+DEFAULT_BUSINESS_DAY_ENDS_AT_HOURS                 src/modules/operations/business-date.ts:5:14                      
+CASH_TOLERANCE_SETTING_KEY                         src/modules/operations/cash-tolerance-config.ts:12:14             
+deriveOperationalDayState                function  src/modules/operations/day-summary.ts:655:17                      
+ABSENCE_KINDS                                      src/modules/payroll/employee-absences-service.ts:13:14            
+ROLL_CALL_REVIEW_STATUSES                          src/modules/payroll/employee-absences-service.ts:225:14           
+VACATION_ENTRY_KINDS                               src/modules/payroll/employee-vacation-service.ts:12:14            
+calculateProratedSalary                  function  src/modules/payroll/payroll-calculator.ts:43:23                   
+getActiveEmployees                       function  src/modules/payroll/payroll-calculator.ts:233:23                  
+payDisbursementsForPeriod                function  src/modules/payroll/payroll-disbursement-service.ts:122:23        
+INSS_INTEGRAL_LABORAL                              src/modules/payroll/payroll-nicaragua.ts:25:14                    
+INSS_INTEGRAL_PATRONAL_LT50                        src/modules/payroll/payroll-nicaragua.ts:26:14                    
+INSS_INTEGRAL_PATRONAL_GTE50                       src/modules/payroll/payroll-nicaragua.ts:27:14                    
+INSS_IVM_RP_LABORAL                                src/modules/payroll/payroll-nicaragua.ts:28:14                    
+INSS_IVM_RP_PATRONAL_LT50                          src/modules/payroll/payroll-nicaragua.ts:29:14                    
+INSS_IVM_RP_PATRONAL_GTE50                         src/modules/payroll/payroll-nicaragua.ts:30:14                    
+INATEC_RATE                                        src/modules/payroll/payroll-nicaragua.ts:33:14                    
+INSS_EMPLOYER_SIZE_THRESHOLD                       src/modules/payroll/payroll-nicaragua.ts:36:14                    
+AGUINALDO_MONTHLY_RATE                             src/modules/payroll/payroll-nicaragua.ts:66:14                    
+VACACIONES_MONTHLY_RATE                            src/modules/payroll/payroll-nicaragua.ts:68:14                    
+INDEMNIZACION_MAX_MONTHS                           src/modules/payroll/prestaciones-sociales.ts:66:14                
+INDEMNIZACION_EXTRA_EXEMPT_CAP                     src/modules/payroll/prestaciones-sociales.ts:68:14                
+INDEMNIZACION_EXCESS_RETENTION_RATE                src/modules/payroll/prestaciones-sociales.ts:70:14                
+VACATION_DAYS_PER_MONTH                            src/modules/payroll/prestaciones-sociales.ts:164:14               
+applyRounding                            function  src/modules/pricing/calculator.ts:169:17                          
+calculateSuggestedPriceSimple            function  src/modules/pricing/calculator.ts:421:17                          
+getCategoryPricingPolicy                 function  src/modules/pricing/category-policy-service.ts:80:23              
+buildCommercialWarnings                  function  src/modules/pricing/commercial-intelligence.ts:122:17             
+getMonthlyExpensesByBranch               function  src/modules/pricing/service.ts:199:23                             
+getProductPricingHistory                 function  src/modules/pricing/service.ts:534:23                             
+EXPENSE_CATEGORY_LABELS                            src/modules/pricing/validators.ts:16:14                           
+PRORATION_METHODS                                  src/modules/pricing/validators.ts:28:14                           
+PRORATION_METHOD_LABELS                            src/modules/pricing/validators.ts:30:14                           
+PRICING_MODES                                      src/modules/pricing/validators.ts:35:14                           
+EXPENSE_ALLOCATION_SCOPES                          src/modules/pricing/validators.ts:36:14                           
+ROUNDING_RULES                                     src/modules/pricing/validators.ts:37:14                           
+STOCK_POLICIES                                     src/modules/pricing/validators.ts:38:14                           
+PRICE_MODES                                        src/modules/pricing/validators.ts:39:14                           
+suggestedPriceQuerySchema                          src/modules/pricing/validators.ts:78:14                           
+normalizePrinterMode                     function  src/modules/print/validation.ts:6:17                              
+normalizePaperWidth                      function  src/modules/print/validation.ts:12:17                             
+evaluateRecipeAvailability               function  src/modules/production/production-recommendation-service.ts:123:23
+getProductionPricingConfig               function  src/modules/production/service.ts:44:23                           
+buildProductionInjectionPreview          function  src/modules/production/service.ts:781:23                          
+recipeTypeSchema                                   src/modules/production/validators.ts:12:14                        
+recipeFamilySchema                                 src/modules/production/validators.ts:21:14                        
+overheadModeSchema                                 src/modules/production/validators.ts:34:14                        
+pricePolicySchema                                  src/modules/production/validators.ts:37:14                        
+isBranchRoleEnabled                      function  src/modules/rbac/effective-permissions.ts:49:23                   
+isAccountant                             function  src/modules/rbac/guards.ts:30:17                                  
+hasPermission                            function  src/modules/rbac/guards.ts:71:17                                  
+hasCapability                            function  src/modules/rbac/guards.ts:75:17                                  
+hasCapabilityInBranch                    function  src/modules/rbac/guards.ts:79:17                                  
+hasAnyAssignedBranch                     function  src/modules/rbac/guards.ts:99:17                                  
+PERMISSIONS                                        src/modules/rbac/permissions.ts:3:14                              
+isMasterRole                             function  src/modules/rbac/role-routing.ts:21:17                            
+dismissAlert                             function  src/modules/reorder/service.ts:212:23                             
+evaluateReorderNeeds                     function  src/modules/reorder/service.ts:256:23                             
+convertBatchToPurchaseOrder              function  src/modules/reorder/service.ts:766:23                             
+convertBatchToTransfer                   function  src/modules/reorder/service.ts:850:23                             
+REORDER_ALERT_TYPES                                src/modules/reorder/validators.ts:5:14                            
+REORDER_ALERT_STATUSES                             src/modules/reorder/validators.ts:6:14                            
+ALERT_TYPE_LABELS                                  src/modules/reorder/validators.ts:13:14                           
+ALERT_STATUS_LABELS                                src/modules/reorder/validators.ts:19:14                           
+evaluateParamsSchema                               src/modules/reorder/validators.ts:50:14                           
+alertFilterSchema                                  src/modules/reorder/validators.ts:56:14                           
+csvReportResponse                        function  src/modules/reports/http.ts:83:17                                 
+REPORT_DEFINITIONS                                 src/modules/reports/report-definitions.ts:90:14                   
+recalculateCustomerCreditScore           function  src/modules/sales-returns/service.ts:997:23                       
+saleReturnItemInputSchema                          src/modules/sales-returns/validators.ts:12:14                     
+CASH_REFUND_HANDLING_VALUES                        src/modules/sales/cancellation-cash-policy.ts:29:14               
+canOverrideBelowCost                     function  src/modules/sales/discount-policy.ts:69:17                        
+getAllBranchesSalesRealtimeSummaryBatch  function  src/modules/sales/realtime-sales-summary.ts:268:23                
+isSaleOrderCancellable                   function  src/modules/sales/service.ts:1054:17                              
+generateCsrfToken                        function  src/modules/security/csrf.ts:30:17                                
+validateCsrfToken                        function  src/modules/security/csrf.ts:49:23                                
+cleanupExpiredCsrfTokens                 function  src/modules/security/csrf.ts:93:23                                
+cleanupOldAttempts                       function  src/modules/security/rate-limiter.ts:166:23                       
+assertSystemAdmin                        function  src/modules/security/rbac-helpers.ts:42:17                        
+assertOwnerOrSystemAdmin                 function  src/modules/security/rbac-helpers.ts:48:17                        
+getAllowedBranchIds                      function  src/modules/security/rbac-helpers.ts:70:17                        
+canAccessBranch                          function  src/modules/security/rbac-helpers.ts:94:17                        
+isPrivilegedGlobal                                 src/modules/security/rbac-helpers.ts:101:10                       
+cleanupExpiredRevocations                function  src/modules/security/token-revocation.ts:76:23                    
+moneySchema                                        src/modules/shared/validators.ts:15:14                            
+positiveIntSchema                                  src/modules/shared/validators.ts:38:14                            
+VARA_LENGTH_MAP                                    src/modules/timber/calculator.ts:32:14                            
+LENGTHS_THAT_FORCE_CUADRO                          src/modules/timber/calculator.ts:40:14                            
+DEFAULT_COST_PER_FOOT                              src/modules/timber/calculator.ts:43:14                            
+DEFAULT_PRICE_PER_INCH_TABLA                       src/modules/timber/calculator.ts:44:14                            
+DEFAULT_PRICE_PER_INCH_TABLILLA                    src/modules/timber/calculator.ts:45:14                            
+DEFAULT_PRICE_PER_INCH_CUADRO                      src/modules/timber/calculator.ts:46:14                            
+DEFAULT_TABLA_WIDTHS                               src/modules/timber/calculator.ts:224:14                           
+DEFAULT_TABLILLA_WIDTHS                            src/modules/timber/calculator.ts:225:14                           
+getPricePerInch                          function  src/modules/timber/calculator.ts:270:17                           
+calculateBoardFeet                       function  src/modules/timber/calculator.ts:285:17                           
+calculateDistribution                    function  src/modules/timber/calculator.ts:514:17                           
+roundUpToMultiple                        function  src/modules/timber/calculator.ts:546:17                           
+STANDARD_MEASURES                                  src/modules/timber/calculator.ts:575:14                           
+TIMBER_CONSTANTS                                   src/modules/timber/calculator.ts:648:14                           
+timberDimensionsSchema                             src/modules/timber/validators.ts:11:14                            
+timberPricingSchema                                src/modules/timber/validators.ts:17:14                            
+timberTripLineSchema                               src/modules/timber/validators.ts:56:14                            
+timberTripExpensesSchema                           src/modules/timber/validators.ts:66:14                            
+timberPricePolicySchema                            src/modules/timber/validators.ts:74:14                            
+cubicationRowSchema                                src/modules/timber/validators.ts:115:14                           
+countPendingTransports                   function  src/modules/transport/service.ts:194:23                           
+getWeekdayCashHistory                    function  src/modules/treasury/cash-monitor.ts:194:23                       
+findOrCreateSettlementAccountTx          function  src/modules/treasury/service.ts:327:23                            
+findSafeAccountForBranch                 function  src/modules/treasury/service.ts:351:23                            
+getTreasuryAccountBalanceTx              function  src/modules/treasury/service.ts:384:23                            
+listBankAccountsWithBalances             function  src/modules/treasury/service.ts:427:23                            
+getUserActivityCount                     function  src/modules/users/service.ts:176:23                               
+listActiveBranches                       function  src/modules/users/service.ts:259:23                               
+membershipSchema                                   src/modules/users/validators.ts:3:14                              
+requireBranchWorkflowCapability          function  src/modules/workflow/branch-workflow.ts:141:23                    
+Unused exported types (75)
+ApiErrorBody                   type       src/lib/api/response.ts:8:13                              
+ApiResponse                    type       src/lib/api/response.ts:19:13                             
+EnvIssue                       type       src/lib/env.ts:67:13                                      
+InsightBase                    interface  src/modules/ai-insights/analyzer.ts:136:18                
+ApprovalDomainType             type       src/modules/approvals/types.ts:4:13                       
+ApprovalDecision               type       src/modules/approvals/types.ts:5:13                       
+BrainScanMode                  type       src/modules/brain/types.ts:8:13                           
+CameraReportSource             type       src/modules/cameras/branch-situation.ts:18:13             
+UnifiedImportType              type       src/modules/catalog-inventory/import-service.ts:32:13     
+BranchMigrationPreview         type       src/modules/catalog/equivalent-stock-migration.ts:121:13  
+FusionPricingIssue             type       src/modules/catalog/fusion-pricing-health.ts:27:13        
+WizardBranchPreview            type       src/modules/catalog/fusion-wizard-service.ts:33:13        
+RebuildMode                    type       src/modules/catalog/stock-group-crud.ts:43:13             
+StockGroupRepairPreviewBranch  type       src/modules/catalog/stock-group-crud.ts:429:13            
+UnmergeBranchPreview           type       src/modules/catalog/stock-group-crud.ts:1290:13           
+StockGroupHealthIssue          type       src/modules/catalog/stock-group-health.ts:21:13           
+DocumentLineItem               type       src/modules/documents/types.ts:6:13                       
+ManualInvoiceData              type       src/modules/documents/types.ts:39:13                      
+FinanceTrendPoint              type       src/modules/finance/service.ts:478:13                     
+FinanceSummaryQuery            type       src/modules/finance/validators.ts:9:13                    
+FinanceTrendQuery              type       src/modules/finance/validators.ts:17:13                   
+ImportDestinationMode          type       src/modules/import-excel/service.ts:35:13                 
+DraftSummary                   type       src/modules/inventory/replenishment-draft-service.ts:22:13
+SourceOption                   type       src/modules/inventory/replenishment-service.ts:21:13      
+ReplenishmentRecommendation    type       src/modules/inventory/replenishment-service.ts:30:13      
+TransferOpportunity            type       src/modules/inventory/replenishment-service.ts:70:13      
+TimberLowStockItem             type       src/modules/inventory/replenishment-service.ts:297:13     
+ReplenishmentSeverity          type       src/modules/inventory/replenishment-service.ts:599:13     
+ReplenishmentSourceType        type       src/modules/inventory/replenishment-service.ts:600:13     
+ReplenishmentSignalSource      type       src/modules/inventory/replenishment-service.ts:602:13     
+TimberReplenishmentItem        type       src/modules/inventory/replenishment-service.ts:857:13     
+MovementComposition            type       src/modules/inventory/service.ts:225:13                   
+WacHistoryRow                  type       src/modules/inventory/wac-history.ts:74:13                
+OperationalDayDerivedState     type       src/modules/operations/day-summary.ts:652:13              
+ForceCleanupActions            type       src/modules/operations/force-cleanup-service.ts:30:13     
+ForceCleanupDiagnosis          type       src/modules/operations/force-cleanup-service.ts:44:13     
+RollCallReviewStatus           type       src/modules/payroll/employee-absences-service.ts:226:13   
+SettlementKind                 type       src/modules/payroll/employee-settlement-service.ts:24:13  
+TerminationCausal              type       src/modules/payroll/employee-settlement-service.ts:34:13  
+PaydayAdjustedReason           type       src/modules/payroll/payday-calendar.ts:25:13              
+PricingMode                    type       src/modules/pricing/calculator.ts:3:13                    
+ProrateMethod                  type       src/modules/pricing/calculator.ts:4:13                    
+ExpenseAllocationScope         type       src/modules/pricing/calculator.ts:5:13                    
+OperatingExpenseSource         type       src/modules/pricing/calculator.ts:6:13                    
+RoundingRule                   type       src/modules/pricing/calculator.ts:12:13                   
+AbcClass                       type       src/modules/pricing/commercial-intelligence.ts:7:15       
+XyzClass                       type       src/modules/pricing/commercial-intelligence.ts:7:25       
+CombinedAbcXyzClass            type       src/modules/pricing/commercial-intelligence.ts:7:35       
+CommercialStockPolicy          type       src/modules/pricing/commercial-intelligence.ts:9:13       
+CommercialAlert                type       src/modules/pricing/commercial-intelligence.ts:51:13      
+CurrentPriceRow                type       src/modules/pricing/current-prices-service.ts:27:13       
+CurrentPricesTotals            type       src/modules/pricing/current-prices-service.ts:47:13       
+SuggestedPriceQuery            type       src/modules/pricing/validators.ts:201:13                  
+PricingSuggestionPayload       type       src/modules/pricing/validators.ts:202:13                  
+InjectionPreviewInput          type       src/modules/production/validators.ts:155:13               
+ReportType                     type       src/modules/reports/report-definitions.ts:13:13           
+ReportOrientation              type       src/modules/reports/report-definitions.ts:14:13           
+ReportColumnType               type       src/modules/reports/report-definitions.ts:15:13           
+ReportTotalDefinition          type       src/modules/reports/report-definitions.ts:36:13           
+SalesByDayRow                  type       src/modules/reports/sales-analytics.ts:40:13              
+SweepRuleResult                type       src/modules/retention/service.ts:30:13                    
+OfflineSyncLine                type       src/modules/sales/offline-sync.service.ts:33:13           
+TimberTripLineResult           interface  src/modules/timber/calculator.ts:95:18                    
+TimberMarginAlerts             interface  src/modules/timber/calculator.ts:111:18                   
+TimberTripTotals               interface  src/modules/timber/calculator.ts:121:18                   
+TimberTripExpenses             interface  src/modules/timber/calculator.ts:138:18                   
+ReconciliationStatus           type       src/modules/timber/calculator.ts:146:13                   
+TimberDistribution             interface  src/modules/timber/calculator.ts:181:18                   
+TimberType                     type       src/modules/timber/calculator.ts:645:13                   
+TimberInjectionLinePreview     type       src/modules/timber/service.ts:927:13                      
+CalculateTimberInput           type       src/modules/timber/validators.ts:138:13                   
+TimberTripExpensesInput        type       src/modules/timber/validators.ts:139:13                   
+TimberPricePolicy              type       src/modules/timber/validators.ts:140:13                   
+InTransitEntry                 type       src/modules/treasury/branch-money-summary.ts:89:13        
+ModuleFlags                    type       src/types/auth.ts:8:13                                    
+Duplicate exports (1)
+applyEquivalentStockGroupMigrationTx|reinterpretEquivalentStockGroup…  src/modules/catalog/equivalent-stock-migration.ts
+Configuration hints (1)
+.prisma    knip.json  Compiled extension excluded by project (imports not followed)

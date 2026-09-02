@@ -1,0 +1,9 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/app/**/{page,layout,route,loading,error,not-found}.tsx",
+    "next.config.ts",
+    "middleware.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx}"]
+}

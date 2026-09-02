@@ -1,0 +1,54 @@
+Unused devDependencies (2)
+eslint-config-next  package.json:37:6
+tailwindcss         package.json:39:6
+Unlisted dependencies (1)
+@eslint/eslintrc  eslint.config.mjs:1:28
+Unused exports (24)
+MODULE_LABEL                         src/components/audit/audit-descriptors.ts:48:14         
+isAutoExecutable           function  src/components/brain/decision-action-buttons.tsx:16:17  
+monthsBetween              function  src/components/finance/payroll-calc.ts:70:17            
+monthsOfService            function  src/components/finance/payroll-calc.ts:85:17            
+indemnizacionAccrualRate   function  src/components/finance/payroll-calc.ts:90:17            
+indemnizacionAccruedTotal  function  src/components/finance/payroll-calc.ts:97:17            
+aguinaldoPeriodStart       function  src/components/finance/payroll-calc.ts:126:17           
+aguinaldoPaymentDeadline   function  src/components/finance/payroll-calc.ts:132:17           
+aguinaldoAccrued           function  src/components/finance/payroll-calc.ts:137:17           
+VACATION_DAYS_PER_MONTH              src/components/finance/payroll-calc.ts:147:14           
+vacationPeriodsToDate      function  src/components/finance/payroll-calc.ts:167:17           
+currentVacationPeriod      function  src/components/finance/payroll-calc.ts:185:17           
+vacationDaysAccrued        function  src/components/finance/payroll-calc.ts:191:17           
+vacationPayout             function  src/components/finance/payroll-calc.ts:196:17           
+segmentLabels              function  src/components/finance/payroll-composition-bar.tsx:23:17
+CardHeader                 function  src/components/ui/card.tsx:22:17                        
+CardFooter                 function  src/components/ui/card.tsx:26:17                        
+normalizePresentationUnit  function  src/lib/inventory/presentation-units.ts:10:17           
+getRoleAccentStyles        function  src/lib/role-colors.ts:108:17                           
+ROLE_COLORS                          src/lib/role-colors.ts:121:10                           
+can                        function  src/modules/rbac/policies.ts:338:17                     
+colors                               src/styles/design-system.ts:6:14                        
+spacing                              src/styles/design-system.ts:58:14                       
+typography                           src/styles/design-system.ts:67:14                       
+Unused exported types (19)
+AuditActor              type  src/components/audit/audit-descriptors.ts:10:13                  
+AuditBranch             type  src/components/audit/audit-descriptors.ts:11:13                  
+HeadlineSegment         type  src/components/audit/audit-descriptors.ts:27:13                  
+BrainDecisionOutcome    type  src/components/brain/decision-card.tsx:11:13                     
+RollCallStatus          type  src/components/cash-session/attendance-roll-call-modal.tsx:15:13 
+CommercialIntelligence  type  src/components/expenses/expense-manager.types.ts:96:13           
+BenefitAccrualMode      type  src/components/finance/payroll-calc.ts:16:13                     
+VacationPeriod          type  src/components/finance/payroll-calc.ts:149:13                    
+ChecklistItem           type  src/components/operations/operational-day-checklist.tsx:7:13     
+DrawerEmployee          type  src/components/payroll/employee-profile-drawer.tsx:39:13         
+BelowCostConfirmState   type  src/components/pos/components/below-cost-override-dialog.tsx:9:13
+ApiSuccess              type  src/lib/client/api.ts:51:13                                      
+ApiErrorBody            type  src/lib/client/api.ts:56:13                                      
+ApiError                type  src/lib/client/api.ts:62:13                                      
+DispatchVisualStatus    type  src/lib/pos-ui.ts:100:13                                         
+RoleColorKey            type  src/lib/role-colors.ts:18:13                                     
+BranchMembership        type  src/types/auth.ts:13:13                                          
+ModuleFlags             type  src/types/auth.ts:18:13                                          
+SessionBranch           type  src/types/auth.ts:34:13                                          
+Configuration hints (3)
+next.config.ts    knip.json  Remove redundant entry pattern                               
+middleware.ts     knip.json  Remove redundant entry pattern                               
+.css              knip.json  Compiled extension excluded by project (imports not followed)
