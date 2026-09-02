@@ -897,14 +897,11 @@ export async function listStockGroups() {
   const globalCostByProductId = new Map(
     groups.flatMap((group) => group.products.map((m) => [m.productId, m.product.globalCost !== null ? Number(m.product.globalCost) : null] as const)),
   );
-  // "no trae el precio de venta como deberia ser" — resolveEffectivePricing
-  // (effective-pricing.ts) NUNCA lee standardSalePrice de un miembro
-  // DERIVADO: su precio implícito sale de canonicalStandardSalePrice ×
-  // factor (impliedFusionPrice) — exactamente la misma regla que el
-  // costo. El campo propio de un derivado (lo que se veía acá antes, un
-  // "C$1.00" que no significa nada) es tan fantasma como su globalCost
-  // propio — computeFusionMemberGlobalCost es genérica (no le importa si
-  // el número es costo o precio), se reusa tal cual.
+  // "el precio de venta no se mueva solo" (catalog/service.ts, Parte A) —
+  // a diferencia del costo (arriba), el standardSalePrice de cada miembro
+  // ahora se lee TAL CUAL — updateProduct ya no lo redirige al canónico,
+  // así que el campo propio dejó de ser fantasma: es la decisión real de
+  // esa presentación.
   const standardSalePriceByProductId = new Map(
     groups.flatMap((group) => group.products.map((m) => [m.productId, Number(m.product.standardSalePrice)] as const)),
   );
@@ -1008,7 +1005,6 @@ export async function listStockGroups() {
       const canonicalMember = group.products.find((member) => member.isCanonical) ?? null;
       const canonicalProductId = canonicalMember?.productId ?? null;
       const canonicalGlobalCost = canonicalProductId ? globalCostByProductId.get(canonicalProductId) ?? null : null;
-      const canonicalStandardSalePrice = canonicalProductId ? standardSalePriceByProductId.get(canonicalProductId) ?? null : null;
       const canonicalWac = canonicalProductId ? wacByProductId.get(canonicalProductId) ?? null : null;
       return group.products.map((m) => {
         const globalCost = computeFusionMemberGlobalCost({
@@ -1040,17 +1036,20 @@ export async function listStockGroups() {
             })
           : 0;
         const effectiveCost = effectiveCostRaw > 0 ? effectiveCostRaw : null;
-        // El precio implícito de un derivado (sin override de branchPrice,
-        // que acá no aplica — esto es la sucursal-agnóstica) es SIEMPRE
-        // canonicalStandardSalePrice × factor (resolveEffectivePricing,
-        // effective-pricing.ts) — su propio standardSalePrice, igual que
-        // su propio globalCost, no significa nada para el motor de venta.
-        const standardSalePrice = computeFusionMemberGlobalCost({
-          isCanonical: m.isCanonical,
-          ownGlobalCost: standardSalePriceByProductId.get(m.productId) ?? null,
-          canonicalGlobalCost: canonicalStandardSalePrice,
-          conversionFactor: Number(m.conversionFactor),
-        });
+        // "el precio de venta no se mueva solo... el PRECIO es una
+        // decisión comercial POR PRESENTACIÓN" (catalog/service.ts, Parte
+        // A/C) — a diferencia del costo (un hecho físico compartido, que
+        // SÍ sigue derivándose del canónico arriba), el precio de cada
+        // presentación YA NO se deriva de nada: es su propio
+        // standardSalePrice, escrito directo por updateProduct (sin
+        // redirect) y leído directo acá (sin computeFusionMemberGlobalCost
+        // — esa función es para lo que SÍ se deriva del canónico × factor,
+        // y el precio dejó de serlo). Antes de esto, Fusiones mostraba el
+        // precio IMPLÍCITO aunque el usuario ya hubiera guardado un precio
+        // propio distinto para esa presentación — la misma contradicción
+        // entre pantallas que 03b87aa cerró para el margen, del lado de la
+        // escritura.
+        const standardSalePrice = standardSalePriceByProductId.get(m.productId) ?? null;
         return {
           id: m.id,
           productId: m.productId,

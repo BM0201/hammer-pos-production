@@ -43,4 +43,8 @@ export const updateProductSchema = z.object({
   // cuando SUSPECTED_PACKAGE_COST_AS_UNIT_COST dispara pero el costo alto
   // es correcto de verdad.
   allowHighUnitCost: z.boolean().optional(),
+  // "el precio de venta no se mueva solo" — confirma explícitamente un
+  // standardSalePrice que se desvía >15% del precio implícito de fusión
+  // (PRICE_DEVIATES_FROM_FUSION), mismo patrón que allowHighUnitCost.
+  overridePriceConfirmed: z.boolean().optional(),
 });

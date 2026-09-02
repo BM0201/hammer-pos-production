@@ -348,7 +348,17 @@ function resolveEffectivePricing(input: {
     const canonicalPriceBase = input.fusion.canonicalBranchPrice ?? input.fusion.canonicalStandardSalePrice;
     const impliedFusionPrice = canonicalPriceBase.mul(input.fusion.conversionFactor);
     const isFusionPriceOverride = input.branchPrice !== null;
-    const effectivePrice = isFusionPriceOverride ? input.branchPrice : impliedFusionPrice;
+    // "el precio de venta no se mueva solo... el PRECIO es una decisión
+    // comercial POR PRESENTACIÓN" — antes, sin branchPrice, esto SIEMPRE
+    // caía a impliedFusionPrice: el standardSalePrice propio del derivado
+    // (input.standardSalePrice, ya devuelto abajo pero nunca leído acá)
+    // era un campo fantasma que el motor ignoraba, aunque updateProduct ya
+    // no lo redirija al canónico (catalog/service.ts, Parte A). Ahora que
+    // esa escritura es real, la lectura tiene que coincidir: el precio
+    // propio de la presentación gana sobre el implícito — impliedFusionPrice
+    // sigue calculado y expuesto (UI, el aviso de desvío de Parte A.2), solo
+    // deja de ser el valor efectivo por defecto.
+    const effectivePrice = isFusionPriceOverride ? input.branchPrice : input.standardSalePrice;
 
     return {
       productId: input.productId,

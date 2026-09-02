@@ -122,6 +122,14 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message.startsWith("FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED:")) {
       return errJson("FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED", error.message.replace(/^FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED:\s?/, ""), 409);
     }
+    // "el precio de venta no se mueva solo" (catalog/service.ts, Parte A.2) —
+    // mismo patrón que el guard hermano de arriba: un aviso, no un bloqueo.
+    // Vender más barato por volumen es legítimo; que pase sin que nadie se
+    // entere, no. 409 para que la interfaz ofrezca confirmar y reintentar
+    // con overridePriceConfirmed.
+    if (error.message.startsWith("PRICE_DEVIATES_FROM_FUSION:")) {
+      return errJson("PRICE_DEVIATES_FROM_FUSION", error.message.replace(/^PRICE_DEVIATES_FROM_FUSION:\s?/, ""), 409);
+    }
 
     // Stock errors
     if (error.message === "INSUFFICIENT_STOCK" || error.message === "INSUFFICIENT_STOCK_AT_PAYMENT") {

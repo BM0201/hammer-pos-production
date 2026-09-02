@@ -8,6 +8,58 @@ import type { ProductStockConversion } from "@/modules/inventory/unit-conversion
 import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
+import { resolveCatalogDisplayCost } from "@/modules/catalog-inventory/service";
+import { aggregateWeightedAverageCost } from "@/modules/catalog/stock-group-crud";
+
+/**
+ * "el precio de venta no se mueva solo" — umbral de desvío contra el precio
+ * IMPLÍCITO de fusión (canónico × factor) para la edición de standardSalePrice
+ * (Parte A.2). Deliberadamente MÁS estrecho que FUSION_PRICE_OVERRIDE_THRESHOLD
+ * (20%, effective-pricing.ts — branchPrice por sucursal, un ajuste puntual):
+ * standardSalePrice es el precio GENERAL de la presentación, la decisión de
+ * fondo, no una excepción local — un desvío de esa magnitud merece confirmarse
+ * con un umbral más bajo. Mismo patrón y mecanismo (throw con mensaje que
+ * incluye la cifra, flag de confirmación) que ya usa branchPrice — no un
+ * mecanismo nuevo.
+ */
+export const PRODUCT_PRICE_DEVIATION_THRESHOLD = 0.15;
+
+/**
+ * Pura, sin DB — aislada para poder probar el cálculo de desvío y el
+ * mensaje (incluida la Parte A.3, la pérdida por unidad) sin base de
+ * datos, mismo principio que detectExcessiveWacJump (inventory/wac.ts).
+ * Decide SI hay que avisar y CON QUÉ mensaje — updateProduct sigue siendo
+ * quien resuelve los datos (canónico, WAC) y decide throw vs continuar.
+ */
+export function evaluatePriceDeviationFromFusion(input: {
+  enteredPrice: number;
+  canonicalStandardSalePrice: number;
+  conversionFactor: number;
+  /** Costo efectivo de ESTA presentación (network-wide, WAC-aware, ya factor-escalado) — null si no se puede calcular. */
+  effectiveCost: number | null;
+  confirmed?: boolean;
+}): { deviates: boolean; impliedPrice: number; deviationPercent: number | null; message: string | null } {
+  const impliedPrice = input.canonicalStandardSalePrice * input.conversionFactor;
+  const deviation = impliedPrice > 0 ? Math.abs(input.enteredPrice - impliedPrice) / impliedPrice : null;
+  const deviates = deviation !== null && deviation > PRODUCT_PRICE_DEVIATION_THRESHOLD && !input.confirmed;
+
+  if (!deviates) {
+    return { deviates: false, impliedPrice, deviationPercent: deviation !== null ? deviation * 100 : null, message: null };
+  }
+
+  const pct = Math.round(deviation! * 100);
+  let message = `PRICE_DEVIATES_FROM_FUSION: El precio implícito de esta presentación (canónico × factor) es ${impliedPrice.toFixed(2)}; ` +
+    `estás guardando ${input.enteredPrice.toFixed(2)}, un ${pct}% de desvío. Confirma si es intencional.`;
+
+  // A.3 — si además el precio tecleado queda bajo el costo efectivo, el
+  // mensaje lo dice con el monto por unidad, no solo el porcentaje.
+  if (input.effectiveCost !== null && input.enteredPrice < input.effectiveCost) {
+    const loss = input.effectiveCost - input.enteredPrice;
+    message += ` A C$${input.enteredPrice.toFixed(2)} perdés C$${loss.toFixed(2)} en cada unidad (costo C$${input.effectiveCost.toFixed(2)}).`;
+  }
+
+  return { deviates: true, impliedPrice, deviationPercent: deviation! * 100, message };
+}
 
 type CatalogProductWithBranchPricing = {
   id: string;
@@ -695,6 +747,8 @@ export async function updateProduct(productId: string, input: {
   isActive?: boolean;
   globalCost?: number | null;
   allowHighUnitCost?: boolean;
+  /** Confirma explícitamente un standardSalePrice que se desvía >15% del precio implícito de fusión (Parte A.2) — mismo patrón que overridePriceConfirmed para branchPrice. */
+  overridePriceConfirmed?: boolean;
   actorUserId: string;
 }) {
   const previous = await prisma.product.findUnique({
@@ -713,28 +767,53 @@ export async function updateProduct(productId: string, input: {
   // ya validado al crear/editar la fusión, no algo que se inventa acá — al
   // canónico. resolveGlobalCostWriteTarget decide a dónde y con qué valor.
   let costRedirect: { targetProductId: string; costForTarget: number } | null = null;
-  let priceRedirect: { targetProductId: string; priceForTarget: number } | null = null;
   const needsConversionLookup = (input.globalCost !== undefined && input.globalCost !== null) || input.standardSalePrice !== undefined;
   const conversion = needsConversionLookup ? await getProductStockConversion(prisma, productId) : null;
 
-  // "no trae el precio de venta como deberia ser... el precio de venta se
-  // debe ajustar y poder editarse desde ahi" (apartado Fusiones) —
-  // resolveEffectivePricing NUNCA lee el standardSalePrice propio de un
-  // miembro DERIVADO: su precio implícito sale de
-  // canonicalStandardSalePrice × factor (impliedFusionPrice) — el mismo
-  // patrón exacto que el costo, así que se redirige igual, reusando la
-  // MISMA función (resolveGlobalCostWriteTarget no le importa si el
-  // número es costo o precio, es la misma matemática). Esto NO toca
-  // branchPrice (la excepción por sucursal, que sigue siendo individual
-  // por presentación, sin redirigirse — regla ya establecida) — es
-  // específicamente Product.standardSalePrice, el precio GENERAL.
-  if (input.standardSalePrice !== undefined) {
-    const resolved = resolveGlobalCostWriteTarget({
-      requestedProductId: productId,
-      enteredCost: input.standardSalePrice,
-      conversion,
+  // "que el WAC deje de moverse sin que nadie lo decida" ya distinguió costo
+  // (un hecho físico, uno por grupo) de WAC. Esta vuelta distingue costo de
+  // PRECIO: el costo de un derivado SIGUE redirigiéndose al canónico (abajo,
+  // sin tocar) porque hay UN material físico y UN costo real. El precio es
+  // una decisión comercial POR PRESENTACIÓN — vender el metro más barato por
+  // lata que la lata suelta es descuento por volumen legítimo, no un error a
+  // corregir empujándolo a todo el grupo. standardSalePrice de un derivado
+  // se escribe SIEMPRE en el producto solicitado, nunca se redirige.
+  //
+  // Lo que SÍ se hace es avisar (no bloquear) cuando el precio tecleado se
+  // desvía mucho del implícito (canónico × factor) — para que la decisión
+  // sea visible, no silenciosa. Mismo mecanismo que branchPrice
+  // (FUSION_PRICE_OVERRIDE_CONFIRMATION_REQUIRED, catalog-inventory/service.ts),
+  // reusado acá con su propio umbral y su propio flag de confirmación.
+  if (input.standardSalePrice !== undefined && conversion && !conversion.isCanonical && !input.overridePriceConfirmed) {
+    const canonicalProduct = await prisma.product.findUnique({
+      where: { id: conversion.canonicalProductId },
+      select: { sku: true, standardSalePrice: true, globalCost: true, averageCost: true, lastPurchaseCost: true },
     });
-    if (resolved.redirected) priceRedirect = { targetProductId: resolved.targetProductId, priceForTarget: resolved.costForTarget };
+    if (canonicalProduct) {
+      const factor = Number(conversion.conversionFactor);
+      const balances = await prisma.inventoryBalance.findMany({
+        where: { productId: conversion.canonicalProductId },
+        select: { quantityOnHand: true, weightedAverageCost: true },
+      });
+      const canonicalWac = aggregateWeightedAverageCost(
+        balances.map((b) => ({ quantityOnHand: Number(b.quantityOnHand), weightedAverageCost: Number(b.weightedAverageCost) })),
+      );
+      const effectiveCostRaw = resolveCatalogDisplayCost({
+        wac: canonicalWac,
+        averageCost: canonicalProduct.averageCost,
+        globalCost: canonicalProduct.globalCost,
+        lastPurchaseCost: canonicalProduct.lastPurchaseCost,
+        factor,
+      });
+      const deviationCheck = evaluatePriceDeviationFromFusion({
+        enteredPrice: input.standardSalePrice,
+        canonicalStandardSalePrice: Number(canonicalProduct.standardSalePrice),
+        conversionFactor: factor,
+        effectiveCost: effectiveCostRaw > 0 ? effectiveCostRaw : null,
+        confirmed: input.overridePriceConfirmed,
+      });
+      if (deviationCheck.deviates) throw new Error(deviationCheck.message!);
+    }
   }
 
   if (input.globalCost !== undefined && input.globalCost !== null) {
@@ -841,23 +920,22 @@ export async function updateProduct(productId: string, input: {
   }
 
   const now = new Date();
-  // El costo/precio del producto SOLICITADO solo se tocan cuando NO hay
-  // redirección (producto suelto, o el propio canónico) — un derivado
-  // sigue sin guardar jamás su propio costo NI su propio precio general,
-  // la misma regla aplicada a los dos campos.
+  // El costo del producto SOLICITADO solo se toca cuando NO hay redirección
+  // (producto suelto, o el propio canónico) — un derivado sigue sin guardar
+  // jamás su propio costo: hay UN material físico, UN costo real. El PRECIO
+  // ya no sigue esta regla (Parte A) — standardSalePrice se escribe SIEMPRE
+  // en el producto solicitado, sea canónico o derivado: es una decisión
+  // comercial por presentación, no un hecho físico compartido.
   const globalCostFields = costRedirect
     ? { globalCost: undefined, averageCost: undefined, costUpdatedAt: undefined, costUpdatedByUserId: undefined, costSource: undefined }
     : buildGlobalCostUpdateFields({ globalCost: input.globalCost, actorUserId: input.actorUserId, now });
-  const standardSalePriceForRequested = priceRedirect || input.standardSalePrice === undefined
+  const standardSalePriceForRequested = input.standardSalePrice === undefined
     ? undefined
     : new Prisma.Decimal(input.standardSalePrice);
 
-  // Las escrituras (el producto solicitado, y — si hubo redirección de
-  // costo y/o precio — el canónico) van en la MISMA transacción: si la
-  // del canónico falla, la del producto solicitado no debe quedar
-  // aplicada sola con un valor a medio redirigir. Costo y precio, si
-  // ambos redirigen, SIEMPRE apuntan al mismo canónico (es la misma
-  // fusión) — se combinan en una sola escritura, no dos.
+  // La escritura al canónico (SOLO si hubo redirección de costo) va en la
+  // MISMA transacción que la del producto solicitado: si una falla, la otra
+  // no debe quedar aplicada sola con un valor a medio redirigir.
   const { product, canonicalUpdate } = await prisma.$transaction(async (tx) => {
     const updated = await tx.product.update({
       where: { id: productId },
@@ -875,23 +953,18 @@ export async function updateProduct(productId: string, input: {
       },
     });
 
-    let canonicalUpdate: { productId: string; sku: string; newCost: number | null; newPrice: number | null } | null = null;
-    if (costRedirect || priceRedirect) {
-      const targetProductId = (costRedirect ?? priceRedirect)!.targetProductId;
-      const canonicalCostFields = costRedirect
-        ? buildGlobalCostUpdateFields({ globalCost: costRedirect.costForTarget, actorUserId: input.actorUserId, now })
-        : {};
-      const canonicalPriceFields = priceRedirect ? { standardSalePrice: new Prisma.Decimal(priceRedirect.priceForTarget) } : {};
+    let canonicalUpdate: { productId: string; sku: string; newCost: number } | null = null;
+    if (costRedirect) {
+      const canonicalCostFields = buildGlobalCostUpdateFields({ globalCost: costRedirect.costForTarget, actorUserId: input.actorUserId, now });
       const canonicalProduct = await tx.product.update({
-        where: { id: targetProductId },
-        data: { ...canonicalCostFields, ...canonicalPriceFields },
+        where: { id: costRedirect.targetProductId },
+        data: canonicalCostFields,
         select: { id: true, sku: true },
       });
       canonicalUpdate = {
         productId: canonicalProduct.id,
         sku: canonicalProduct.sku,
-        newCost: costRedirect?.costForTarget ?? null,
-        newPrice: priceRedirect?.priceForTarget ?? null,
+        newCost: costRedirect.costForTarget,
       };
     }
 
@@ -922,13 +995,11 @@ export async function updateProduct(productId: string, input: {
       categoryChanged: previous.categoryId !== product.categoryId,
       skuUpdateMode: input.skuUpdateMode ?? "KEEP_CURRENT",
       ...(canonicalUpdate ? {
-        costOrPriceEnteredViaDerivedPresentation: true,
+        costEnteredViaDerivedPresentation: true,
         canonicalProductId: canonicalUpdate.productId,
         canonicalSku: canonicalUpdate.sku,
         enteredCost: input.globalCost,
         canonicalCostApplied: canonicalUpdate.newCost,
-        enteredPrice: input.standardSalePrice,
-        canonicalPriceApplied: canonicalUpdate.newPrice,
       } : {}),
     },
   });
@@ -936,7 +1007,8 @@ export async function updateProduct(productId: string, input: {
   // Trazabilidad del lado del canónico también — quien revise SU auditoría
   // (no la del derivado por el que se entró el dato) tiene que poder ver
   // de dónde vino el cambio, igual que ya hace updateGlobalProductCostForReceiptTx
-  // para las recepciones de compra.
+  // para las recepciones de compra. Solo costo: el precio (Parte A) ya no
+  // se redirige, así que el canónico nunca cambia de precio por esta vía.
   if (canonicalUpdate) {
     await logAuditEvent({
       actorUserId: input.actorUserId,
@@ -946,12 +1018,33 @@ export async function updateProduct(productId: string, input: {
       entityId: canonicalUpdate.productId,
       metadataJson: {
         newGlobalCost: canonicalUpdate.newCost,
-        newStandardSalePrice: canonicalUpdate.newPrice,
-        source: "DERIVED_PRESENTATION_COST_OR_PRICE_ENTRY",
+        source: "DERIVED_PRESENTATION_COST_ENTRY",
         enteredViaProductId: product.id,
         enteredViaSku: product.sku,
         enteredCost: input.globalCost,
-        enteredPrice: input.standardSalePrice,
+      },
+    });
+  }
+
+  // Parte B.1 — "ninguna escritura de precio queda sin rastro". Toda
+  // escritura de standardSalePrice, sin excepción, deja PRODUCT_PRICE_CHANGED
+  // con el antes/después, quién, y el origen (esta función sirve tanto a
+  // Precios y costos como al panel de Fusiones, de ahí la distinción).
+  if (input.standardSalePrice !== undefined && Number(previous.standardSalePrice) !== input.standardSalePrice) {
+    await logAuditEvent({
+      actorUserId: input.actorUserId,
+      module: "catalog",
+      action: "PRODUCT_PRICE_CHANGED",
+      entityType: "Product",
+      entityId: product.id,
+      metadataJson: {
+        productId: product.id,
+        sku: product.sku,
+        previousPrice: Number(previous.standardSalePrice),
+        newPrice: input.standardSalePrice,
+        field: "standardSalePrice",
+        origin: conversion && !conversion.isCanonical ? "fusion" : "catalogo",
+        deviationConfirmed: Boolean(input.overridePriceConfirmed),
       },
     });
   }

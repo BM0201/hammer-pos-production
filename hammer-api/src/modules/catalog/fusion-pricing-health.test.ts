@@ -223,8 +223,17 @@ test("margen absurdamente alto (costo de relleno) → MARGIN_OUTLIER, el caso de
 });
 
 test("fusión sana (sin overrides, costo real, margen razonable) → healthy=true, sin issues", async () => {
+  // Parte C (catalog/service.ts) — resolveEffectivePricing ya no ignora el
+  // standardSalePrice propio de un derivado: el default compartido de la
+  // fixture (30, pensado para el canónico) ya no puede servir sin más para
+  // METRO_A/METRO_B — antes se ignoraba y cada uno derivaba su precio de
+  // 30×factor; ahora hay que dárselo explícito para que este escenario
+  // siga siendo el mismo "todo sano" que probaba antes.
   const db = createArenaFakeDb({
-    products: {},
+    products: {
+      [METRO_A_ID]: { standardSalePrice: new Prisma.Decimal(750) }, // 30 (canónico) × 25 — el mismo implícito de siempre
+      [METRO_B_ID]: { standardSalePrice: new Prisma.Decimal(1650) }, // 30 × 55
+    },
     canonicalBalance: { quantityOnHand: 100, weightedAverageCost: 18.55 },
   });
   const result = await checkStockGroupPricingHealth(db, { stockGroupId: STOCK_GROUP_ID, branchIds: [BRANCH_ID] });

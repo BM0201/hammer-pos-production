@@ -102,7 +102,12 @@ function baseFixtures() {
     // P-canonical — la LATA de arena (fusión).
     { id: "p-canonical", sku: "SKU-LATA", name: "Arena (lata)", standardSalePrice: d(50), categoryId: CAT_ARENA, isActive: true, averageCost: null, globalCost: null, lastPurchaseCost: null, category: { code: "ARE", name: "Arena" } },
     // P4 — el METRO derivado de la fusión (factor 25 respecto de la lata).
-    { id: "p4", sku: "SKU-METRO", name: "Arena (metro)", standardSalePrice: d(0), categoryId: CAT_ARENA, isActive: true, averageCost: d(999) /* debe ignorarse — la fusión usa el canónico */, globalCost: null, lastPurchaseCost: null, category: { code: "ARE", name: "Arena" } },
+    // standardSalePrice=1250 (50 × 25, el mismo implícito de siempre): Parte
+    // C (catalog/service.ts) hizo que resolveEffectivePricing YA NO ignore
+    // este campo para un derivado — dejarlo en 0 (como antes de esa parte,
+    // cuando era un campo fantasma seguro) ahora produce un precio real de
+    // 0, que current-prices-service.ts clasifica como MISSING de verdad.
+    { id: "p4", sku: "SKU-METRO", name: "Arena (metro)", standardSalePrice: d(1250), categoryId: CAT_ARENA, isActive: true, averageCost: d(999) /* debe ignorarse — la fusión usa el canónico */, globalCost: null, lastPurchaseCost: null, category: { code: "ARE", name: "Arena" } },
     // P5 — costo de RED (averageCost) 100, pero ESTA sucursal declaró su
     // propio branchCost (60, un flete/proveedor distinto). El caso real
     // reportado (LATA en Rivas): el costo de red no es el que aplica acá.

@@ -34,14 +34,20 @@ import { AlertTriangle, Boxes, ExternalLink, Info, Loader2, Save, Search } from 
  * no tiene selector de sucursal) — el margen se calcula con ESE, y se
  * avisa explícito cuando difiere del globalCost editable.
  *
- * "no trae el precio de venta como deberia ser... el precio de venta se
- * debe ajustar y poder editarse desde ahi" — el precio general tiene
- * EXACTAMENTE la misma regla que el costo: resolveEffectivePricing nunca
- * lee el standardSalePrice propio de un derivado, su precio implícito es
- * SIEMPRE canonicalStandardSalePrice × factor. Esto NO es el precio por
- * sucursal (branchPrice, que sigue siendo individual por presentación,
- * sin redirigirse — eso se edita en Precios y costos) — es el precio
- * GENERAL, la misma clase de campo que el costo global.
+ * "el precio de venta no se mueva solo. Ninguna escritura de precio puede
+ * propagarse a otros productos sin que alguien lo confirme" — REVERTIDO
+ * respecto de la versión anterior de este panel: el precio general YA NO
+ * sigue la misma regla que el costo. El costo es un hecho físico
+ * compartido (un solo material, un solo costo real) y redirigirlo al
+ * canónico es correcto. El precio es una decisión comercial POR
+ * PRESENTACIÓN — vender el metro más barato por lata que la lata suelta
+ * es descuento por volumen normal, no un error a corregir empujándolo a
+ * todo el grupo. Cada fila edita y guarda SU PROPIO standardSalePrice,
+ * sin tocar el de ninguna otra presentación de la fusión. Si el precio
+ * tecleado se desvía mucho del implícito (canónico × factor), el backend
+ * avisa (PRICE_DEVIATES_FROM_FUSION, 409) y pide confirmar — no bloquea.
+ * Esto sigue sin ser el precio por sucursal (branchPrice, individual y
+ * sin redirigirse, se edita en Precios y costos).
  */
 
 type FusionPricingMember = {
@@ -131,7 +137,7 @@ export function FusionPricingPanel() {
     );
   }, [groups, search]);
 
-  async function saveField(member: FusionPricingMember, field: "globalCost" | "standardSalePrice", value: string, allowHighUnitCost = false) {
+  async function saveField(member: FusionPricingMember, field: "globalCost" | "standardSalePrice", value: string, allowHighUnitCost = false, overridePriceConfirmed = false) {
     const numeric = value.trim() === "" ? null : Number(value);
     const label = field === "globalCost" ? "costo" : "precio";
     if (numeric !== null && (!Number.isFinite(numeric) || numeric < 0)) {
@@ -144,7 +150,11 @@ export function FusionPricingPanel() {
       const res = await apiFetch(`/api/catalog/products/${member.productId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: numeric, allowHighUnitCost: allowHighUnitCost || undefined }),
+        body: JSON.stringify({
+          [field]: numeric,
+          allowHighUnitCost: allowHighUnitCost || undefined,
+          overridePriceConfirmed: overridePriceConfirmed || undefined,
+        }),
       });
       if (!res.ok) {
         const raw = await readJson(res);
@@ -159,10 +169,20 @@ export function FusionPricingPanel() {
           if (confirmed) { await saveField(member, field, value, true); return; }
           return;
         }
+        // Parte A.2 — el precio se desvía >15% del implícito de fusión: un
+        // aviso, no un bloqueo. Vender más barato por volumen es legítimo.
+        if (field === "standardSalePrice" && raw?.error?.code === "PRICE_DEVIATES_FROM_FUSION") {
+          const confirmed = window.confirm(`${raw.error.message}\n\n¿Confirmás que este precio es intencional?`);
+          if (confirmed) { await saveField(member, field, value, false, true); return; }
+          return;
+        }
         showToast("error", raw?.error?.message ?? `No se pudo guardar el ${label}.`);
         return;
       }
-      showToast("success", `${field === "globalCost" ? "Costo global" : "Precio general"} actualizado para ${member.sku}${!member.isCanonical ? " (aplicado al producto canónico)" : ""}.`);
+      // El costo SÍ se redirige al canónico cuando `member` es derivado
+      // (un hecho físico compartido); el precio YA NO (Parte A) — cada
+      // fila guarda su propio standardSalePrice, sin tocar a nadie más.
+      showToast("success", `${field === "globalCost" ? "Costo global" : "Precio"} actualizado para ${member.sku}${field === "globalCost" && !member.isCanonical ? " (aplicado al producto canónico)" : ""}.`);
       await load();
     } catch {
       showToast("error", "Error de red al guardar.");
@@ -176,7 +196,7 @@ export function FusionPricingPanel() {
       <div className="flex flex-wrap items-center gap-3">
         <div>
           <h1 className="text-lg font-bold tracking-tight text-[var(--color-text)]">Fusiones — costo y precio general</h1>
-          <p className="text-sm text-[var(--color-text-muted)]">Poné el costo de compra y el precio general de cada presentación. Los dos se calculan solo con el valor del canónico y el factor de la fusión — nunca con el WAC.</p>
+          <p className="text-sm text-[var(--color-text-muted)]">Poné el costo de compra (compartido por toda la fusión) y el precio de venta de cada presentación (independiente por presentación).</p>
         </div>
         <span className="flex-1" />
         <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-soft)]">
@@ -199,13 +219,14 @@ export function FusionPricingPanel() {
       <div className="flex items-start gap-2 rounded-lg border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3 py-2 text-xs text-[var(--color-info-700)]">
         <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
         <p>
-          El costo y el precio general de una presentación derivada (ej. quintal, metro) SIEMPRE salen del costo/precio
-          global del producto canónico (ej. varilla, lata) multiplicados por el factor de la fusión — nunca se guarda un
-          valor propio en el derivado. Poné el número en cualquier fila y se ajusta solo: si editás el derivado, el
-          sistema convierte y aplica el resultado al canónico automáticamente. Esto es el precio GENERAL — el precio por
-          sucursal (con excepción propia) sigue siendo individual y se edita en Precios y costos. El margen se calcula
-          con el costo REAL (WAC de compras, si existe) — si el costo global de arriba no coincide con ese número, la
-          fila lo avisa: el WAC de compras reales manda sobre el costo global tecleado, igual que en el resto del sistema.
+          El <strong>costo</strong> de una presentación derivada (ej. quintal, metro) SIEMPRE sale del costo del
+          canónico (ej. varilla, lata) multiplicado por el factor — es un solo material, un solo costo real. Poné el
+          número en cualquier fila y se convierte y aplica al canónico automáticamente. El <strong>precio</strong> es
+          distinto: cada presentación tiene el suyo propio, independiente de las demás — vender el metro más barato
+          por lata que la lata suelta es normal. Si te desviás mucho del precio implícito (canónico × factor) te lo
+          va a preguntar antes de guardar. Esto es el precio GENERAL — el precio por sucursal (con excepción propia)
+          sigue siendo individual y se edita en Precios y costos. El margen se calcula con el costo REAL (WAC de
+          compras, si existe) — si el costo global de arriba no coincide con ese número, la fila lo avisa.
         </p>
       </div>
 
@@ -305,7 +326,7 @@ export function FusionPricingPanel() {
                                 placeholder="Sin precio"
                                 value={priceCell}
                                 onChange={(e) => setPriceDraft((prev) => ({ ...prev, [member.productId]: e.target.value }))}
-                                title={member.isCanonical ? "Precio general — aplica a todas las sucursales sin excepción propia" : `Precio en ${member.saleUnit.toLowerCase()} — se convierte automáticamente al canónico`}
+                                title={`Precio en ${member.saleUnit.toLowerCase()} — propio de esta presentación, no se comparte con otras del grupo`}
                               />
                               <button type="button" title="Guardar precio general"
                                 className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white transition-all disabled:opacity-50 ${savingKey === priceKey ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700 shadow-sm"}`}

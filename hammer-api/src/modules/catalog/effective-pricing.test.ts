@@ -247,22 +247,50 @@ test("resolveFusionMemberCost: null cuando el canónico no tiene costo resuelto"
   assert.equal(resolveFusionMemberCost(null, d(25)!), null);
 });
 
-test("Prueba 5 (doc): precio de una presentación sin override → sale de precioBase(canónico) × factor", () => {
+/**
+ * "el precio de venta no se mueva solo... el PRECIO es una decisión
+ * comercial POR PRESENTACIÓN" (catalog/service.ts, Parte A/C) — ANTES,
+ * sin branchPrice, esto caía SIEMPRE a impliedFusionPrice (precioBase del
+ * canónico × factor): el standardSalePrice propio del derivado era un
+ * campo fantasma, exactamente el bug del otro lado que 03b87aa cerró para
+ * el margen de Fusiones. Ahora que updateProduct escribe ese campo de
+ * verdad (ya no lo redirige al canónico), la lectura tiene que coincidir:
+ * el precio PROPIO gana — 650, no el implícito (750 = 30 × 25).
+ * impliedFusionPrice se sigue calculando y exponiendo (lo usa el aviso de
+ * desvío de Parte A.2), solo deja de ser el valor efectivo por defecto.
+ */
+test("Prueba 5 (reescrita, Parte C): precio propio de una presentación (sin branchPrice) → sale de SU standardSalePrice, no del implícito", () => {
   const result = resolveEffectivePricingFromParts({
     productId: "prod-metro-arena",
-    standardSalePrice: d(650)!,
+    standardSalePrice: d(650)!, // el precio propio de este METRO, ya escribible directo (Parte A)
     globalCost: null,
     averageCost: null,
     lastPurchaseCost: null,
-    branchPrice: null, // sin override
+    branchPrice: null, // sin override de sucursal
     branchCost: null,
     weightedAverageCost: null,
     fusion: { ...FUSION_BASE, canonicalBranchPrice: null, canonicalStandardSalePrice: d(30)! },
   });
   assert.equal(result.isFusionPriceOverride, false);
-  assert.equal(result.impliedFusionPrice?.toNumber(), 750); // 30 × 25
-  assert.equal(result.effectivePrice?.toNumber(), 750);
+  assert.equal(result.impliedFusionPrice?.toNumber(), 750, "el implícito (30 × 25) se sigue calculando — lo usa el aviso de desvío");
+  assert.equal(result.effectivePrice?.toNumber(), 650, "pero el efectivo es el precio PROPIO de la presentación, no el implícito");
   assert.equal(result.priceSource, "FUSION_DERIVED");
+});
+
+test("precio propio IGUAL al implícito (caso típico: nunca se repreció desde que se creó) → sigue siendo 650=650, ningún cambio visible", () => {
+  const result = resolveEffectivePricingFromParts({
+    productId: "prod-metro-arena",
+    standardSalePrice: d(750)!,
+    globalCost: null,
+    averageCost: null,
+    lastPurchaseCost: null,
+    branchPrice: null,
+    branchCost: null,
+    weightedAverageCost: null,
+    fusion: { ...FUSION_BASE, canonicalBranchPrice: null, canonicalStandardSalePrice: d(30)! },
+  });
+  assert.equal(result.impliedFusionPrice?.toNumber(), 750);
+  assert.equal(result.effectivePrice?.toNumber(), 750);
 });
 
 test("precio de una presentación CON override → effectivePrice es el override, impliedFusionPrice queda disponible para comparar", () => {
