@@ -78,3 +78,97 @@ no se trunca`), de una fase anterior de esta misma rama de trabajo:
 Se anota acá en vez de omitirse en silencio, para que nadie vuelva a
 marcarlos como pendientes a partir de una versión vieja de este
 documento o de la memoria de una conversación anterior.
+
+---
+
+## Pendientes de la limpieza de código muerto (knip, 2026-09-02)
+
+Estos ítems salieron del barrido de código muerto con knip
+([docs/CODIGO-MUERTO.md](CODIGO-MUERTO.md)) pero no son limpieza de
+código: son preguntas de producto/arquitectura que alguien con contexto
+de negocio tiene que responder. Ninguno se resolvió borrando código.
+
+### 4. Doble mecanismo de auto-cierre de caja
+
+`cash-closure/scheduler.ts` arranca un `setInterval` de 60s en memoria
+(vía `instrumentation.ts`) que hace lo mismo que el cron de Vercel cada
+10 min contra `/api/system/cron/operational-automation`. Ambos llaman a
+`autoCloseExpiredCashSessions`, que es idempotente, así que no hay bug —
+pero es un mecanismo duplicado. ¿Vale la pena simplificar a uno solo (el
+cron, que ya corre en el entorno serverless de todos modos) y retirar el
+scheduler en memoria?
+
+### 5. Rutas de cron sin cron configurado
+
+`/api/system/cron/cash-auto-close` y
+`/api/system/cron/operational-day-sweep` existen, tienen guards y lógica
+real, pero no están en `vercel.json`. ¿Se supone que alguna corre
+externamente (otro proveedor de cron, un webhook manual) o son
+predecesoras de `operational-automation` que quedaron sin retirar?
+
+### 6. ¿Brain reemplazó a `ai-insights`, o quedó abandonado?
+
+5 rutas funcionales bajo `/api/ai-insights/*` sin ningún consumidor en el
+frontend; `/app/master/ai-insights` es un redirect puro a
+`/app/master/brain`. Si Brain ya cubre esta detección de anomalías,
+`ai-insights` se puede borrar completo. Si no, es una feature a
+terminar de conectar.
+
+### 7. `cashier/v2` — asignar operadores adicionales a una sesión de caja
+
+`v2/cash-boxes` y `v2/cash-sessions/operators` (asignar/revocar un
+operador extra en una caja ya abierta) tienen backend completo
+(transacción + audit log) pero nunca tuvieron pantalla — ni en v1 ni en
+v2. ¿Se construye la UI, o se retira el backend?
+
+### 8. Devoluciones y anulaciones de venta sin formulario de solicitud
+
+Los árboles completos `/api/sales/returns/*` y
+`/api/sales/cancellations/*` (10 rutas: listar, solicitar, aprobar,
+ejecutar, rechazar) no tienen ningún punto de entrada en la UI para que
+un usuario solicite una devolución o anulación — la única superficie
+conectada es la cola genérica de aprobaciones (`approvals-queue.tsx`),
+que actúa sobre solicitudes ya existentes, no las crea. Esto significa
+que hoy, en la práctica, **nadie puede iniciar una devolución o
+anulación formal desde la aplicación** salvo que se haga por otra vía no
+identificada en este barrido. Dado que toca crédito de cliente y stock,
+es el hallazgo de mayor impacto de negocio de todo este documento —
+amerita confirmar con el dueño del producto si esto es un gap real o si
+existe un camino de creación que este análisis no vio.
+
+### 9. `/api/inventory/adjustments` — ajuste con aprobación, sin formulario
+
+Mismo patrón que el punto 8 pero en inventario: existe un camino de
+"ajustar a cantidad deseada, con aprobación si supera el umbral o falta
+capability", separado de `manual-adjustment` (el que sí tiene UI), sin
+ningún consumidor. ¿Cubre `manual-adjustment` todos los casos de uso
+reales, o hace falta este segundo camino para roles sin
+`INVENTORY_MOVEMENT_POST`?
+
+### 10. Configuración de nómina (INSS/IR) sin pantalla de edición
+
+`/api/payroll/rates` (GET config vigente + PATCH para editarla) no tiene
+consumidor — el frontend calcula con constantes locales en vez de leer
+esta config. Si el régimen INSS o el salario mínimo cambian (evento legal
+real en Nicaragua), hoy requeriría un deploy de código en vez de una
+edición desde Master. ¿Se construye la pantalla de configuración?
+
+### 11. `hasAnyAssignedBranch` (rbac/guards.ts) sin reemplazo verificado
+
+Knip lo marca sin uso, pero a diferencia de los otros 3 exports muertos
+de ese archivo, no se encontró qué lo reemplazó ni evidencia de que sea
+seguro borrarlo. Queda para revisar con más tiempo.
+
+### 12. Dependencias de hammer-frontend sin evaluar
+
+`docs/knip-baseline-frontend.txt` marca `eslint-config-next` y
+`tailwindcss` como devDependencies sin uso, y `@eslint/eslintrc` como
+dependencia no listada. No se tocó — es higiene de build/lint, fuera del
+alcance de este barrido de código muerto en `src/`.
+
+### 13. Parte D — sobre-exportación (cosmética, opcional)
+
+~197 símbolos en hammer-api y 35 en hammer-frontend están exportados sin
+necesidad (se usan solo dentro de su propio archivo). El arreglo es
+sacar la palabra `export`, sin borrar lógica — bajo riesgo, baja
+prioridad. No se ejecutó en esta pasada.
