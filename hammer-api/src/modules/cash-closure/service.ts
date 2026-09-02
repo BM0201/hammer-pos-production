@@ -91,36 +91,6 @@ export async function getTodayClosure(branchId: string): Promise<{
   };
 }
 
-/* ── Execute automatic closure for a single branch ── */
-
-export async function executeAutoClosure(branchId: string): Promise<{
-  branchId: string;
-  legacy: true;
-  source: "CashSessionAutoClose";
-  scanned: number;
-  autoClosed: number;
-  skipped: number;
-}> {
-  const result = await autoCloseExpiredCashSessions({ branchId });
-  const branchCandidates = result.candidates.filter((candidate) => candidate.branchId === branchId);
-  await logAuditEvent({
-    branchId,
-    module: "cash_closure",
-    action: "CASH_CLOSURE_LEGACY_ADAPTER_USED",
-    entityType: "CashClosure",
-    entityId: branchId,
-    metadataJson: { source: "CashSessionAutoClose", result },
-  });
-  return {
-    branchId,
-    legacy: true,
-    source: "CashSessionAutoClose",
-    scanned: branchCandidates.length,
-    autoClosed: branchCandidates.length,
-    skipped: result.skipped,
-  };
-}
-
 /* ── Execute automatic closure for ALL active branches ── */
 
 export async function executeAutoClosureForAllBranches(): Promise<{
@@ -209,81 +179,6 @@ export async function reopenCashClosure(input: {
   });
 
   return { closure: updated };
-}
-
-/* ── Record emergency sale and check if permanent close needed ── */
-
-export async function recordEmergencySale(branchId: string, saleOrderId: string, actorUserId: string): Promise<{
-  remainingSales: number;
-  permanentlyClosed: boolean;
-}> {
-  const today = getNicaraguaDate();
-
-  const closure = await prisma.cashClosure.findFirst({
-    where: { branchId, closureDate: today, isReopened: true, isPermanentlyClosed: false },
-  });
-
-  if (!closure) {
-    return { remainingSales: 0, permanentlyClosed: false };
-  }
-
-  // Auditoría 2026-07-22, hallazgo C9: el conteo se leía en JS
-  // (closure.emergencySalesCount + 1) y se escribía como literal — dos ventas
-  // de emergencia concurrentes podían leer el mismo valor y pisarse el
-  // incremento (lost update), dejando pasar más ventas que maxEmergencySales.
-  // {increment:1} es un UPDATE atómico a nivel de fila en Postgres: la
-  // segunda transacción concurrente espera el lock de fila y ve el valor ya
-  // incrementado, no el leído antes de la carrera. Todo el ciclo (contador +
-  // posible cierre permanente + bitácora) va en una sola transacción.
-  const result = await prisma.$transaction(async (tx) => {
-    const updated = await tx.cashClosure.update({
-      where: { id: closure.id },
-      data: { emergencySalesCount: { increment: 1 } },
-    });
-
-    const shouldPermanentlyClose = updated.emergencySalesCount >= updated.maxEmergencySales;
-    const finalClosure = shouldPermanentlyClose
-      ? await tx.cashClosure.update({
-          where: { id: closure.id },
-          data: { isPermanentlyClosed: true, closureType: "PERMANENT" },
-        })
-      : updated;
-
-    await tx.cashClosureLog.create({
-      data: {
-        cashClosureId: closure.id,
-        action: shouldPermanentlyClose ? "PERMANENT_CLOSE" : "EMERGENCY_SALE",
-        performedByUserId: actorUserId,
-        metadataJson: {
-          saleOrderId,
-          emergencySalesCount: finalClosure.emergencySalesCount,
-          maxEmergencySales: finalClosure.maxEmergencySales,
-        } as unknown as Prisma.JsonObject,
-      },
-    });
-
-    return { finalClosure, shouldPermanentlyClose };
-  });
-
-  await logAuditEvent({
-    actorUserId,
-    branchId,
-    module: "cash_closure",
-    action: "CASH_CLOSURE_LEGACY_ADAPTER_USED",
-    entityType: "CashClosure",
-    entityId: closure.id,
-    metadataJson: {
-      reason: "LEGACY_EMERGENCY_SALE_COUNTER_ONLY",
-      saleOrderId,
-      emergencySalesCount: result.finalClosure.emergencySalesCount,
-      wouldHavePermanentlyClosedLegacyClosure: result.shouldPermanentlyClose,
-    },
-  });
-
-  return {
-    remainingSales: Math.max(0, result.finalClosure.maxEmergencySales - result.finalClosure.emergencySalesCount),
-    permanentlyClosed: result.shouldPermanentlyClose,
-  };
 }
 
 /* ── Fetch closure reports for master dashboard ── */

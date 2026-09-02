@@ -56,11 +56,3 @@ export function startCashClosureScheduler(): void {
   }, 60_000);
 }
 
-export function stopCashClosureScheduler(): void {
-  if (schedulerInterval) {
-    clearInterval(schedulerInterval);
-    schedulerInterval = null;
-  }
-  globalThis.__hammerCashClosureSchedulerRunning = false;
-  console.log("[CashClosure Legacy Scheduler] Stopped");
-}
