@@ -38,6 +38,10 @@ const previewSchema = z.object({
   defaultCategoryId: z.string().cuid().optional(),
   defaultUnit: z.string().min(1).max(32).optional(),
   defaultStandardSalePrice: z.number().positive().optional(),
+  // Parte B.2 — "una planilla de inventario no debería reescribir precios
+  // de venta salvo que alguien lo pida explícitamente". Apagado por
+  // defecto; solo importa para CATALOG_WITH_INITIAL_STOCK.
+  updateSalePrices: z.boolean().default(false),
 }).refine((payload) => Boolean(payload.fileContent || payload.fileBase64), {
   message: "Debes enviar fileContent o fileBase64.",
   path: ["fileContent"],

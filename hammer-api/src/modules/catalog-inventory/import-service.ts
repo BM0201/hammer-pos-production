@@ -96,6 +96,14 @@ type PreviewInput = {
   defaultCategoryId?: string;
   defaultUnit?: string;
   defaultStandardSalePrice?: number;
+  /**
+   * "una planilla de inventario no debería reescribir precios de venta
+   * salvo que alguien lo pida explícitamente" (Parte B.2) — apagado por
+   * defecto. Gatea SOLO la escritura de standardSalePrice que CATALOG_WITH_INITIAL_STOCK
+   * hace como efecto colateral de cargar existencias; GLOBAL_PRICES_COSTS/
+   * BRANCH_PRICES_COSTS (imports dedicados de precio) no se gatean.
+   */
+  updateSalePrices?: boolean;
 };
 
 type ExecuteInput = {
@@ -368,10 +376,11 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
 
   const skuList = Array.from(new Set(skuByRowNumber.values())).filter(Boolean);
   const products = skuList.length > 0
-    ? await prisma.$queryRaw<Array<{ id: string; sku: string }>>`
-        SELECT id, sku FROM "Product" WHERE UPPER(sku) = ANY(ARRAY[${Prisma.join(skuList.map((s) => s.toUpperCase()))}])`
+    ? await prisma.$queryRaw<Array<{ id: string; sku: string; standardSalePrice: Prisma.Decimal }>>`
+        SELECT id, sku, "standardSalePrice" FROM "Product" WHERE UPPER(sku) = ANY(ARRAY[${Prisma.join(skuList.map((s) => s.toUpperCase()))}])`
     : [];
-  const existingSkus = new Set((products as Array<{ sku: string }>).map((product) => product.sku.toUpperCase()));
+  const existingSkus = new Set(products.map((product) => product.sku.toUpperCase()));
+  const currentPriceBySku = new Map(products.map((product) => [product.sku.toUpperCase(), Number(product.standardSalePrice)]));
 
   const resolveBranches = (row: RawRow) => {
     if (!needsBranch(importType)) return [null];
@@ -455,6 +464,22 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
     }
   }
 
+  // Parte B.2 — "el preview del lote tiene que mostrar 'N productos van a
+  // cambiar de precio' con la lista y el antes/después de cada uno".
+  // Solo aplica al efecto colateral de CATALOG_WITH_INITIAL_STOCK (una
+  // planilla de existencias que TAMBIÉN trae columna de precio) — los
+  // imports dedicados de precio no necesitan este aviso, es su función.
+  const priceChangesBySku = new Map<string, { sku: string; name: string; previousPrice: number; newPrice: number }>();
+  if (importType === "CATALOG_WITH_INITIAL_STOCK") {
+    for (const item of items) {
+      if (item.status !== "READY" || item.standardSalePrice === null || item.productStatus !== "EXISTING") continue;
+      const previousPrice = currentPriceBySku.get(item.sku.toUpperCase());
+      if (previousPrice === undefined || previousPrice === item.standardSalePrice) continue;
+      priceChangesBySku.set(item.sku.toUpperCase(), { sku: item.sku, name: item.name, previousPrice, newPrice: item.standardSalePrice });
+    }
+  }
+  const priceChanges = [...priceChangesBySku.values()];
+
   const summary = {
     parsedRows: rows.length,
     expandedRows: items.length,
@@ -465,6 +490,7 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
     ready: items.filter((item) => item.status === "READY").length,
     errors: items.filter((item) => item.status === "ERROR").length,
     status: INVENTORY_IMPORT_BATCH_STATUS.PREVIEWED,
+    priceChangeCount: priceChanges.length,
   };
   const previewCsv = buildImportPreviewCsv(items);
 
@@ -486,6 +512,7 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
       status: INVENTORY_IMPORT_BATCH_STATUS.PREVIEWED,
       createdByUserId: input.actorUserId,
       createMissingProducts: Boolean(input.createMissingProducts),
+      updateSalePrices: Boolean(input.updateSalePrices),
       defaultCategoryId: input.defaultCategoryId ?? null,
       defaultUnit: input.defaultUnit?.trim() || "UN",
       defaultStandardSalePrice: input.defaultStandardSalePrice === undefined ? null : new Prisma.Decimal(input.defaultStandardSalePrice),
@@ -529,6 +556,10 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
     items,
     summary,
     previewCsv,
+    // Parte B.2 — la lista con antes/después que el preview debe mostrar
+    // antes de que se marque la casilla "Actualizar también los precios
+    // de venta". Vacía siempre que importType no sea CATALOG_WITH_INITIAL_STOCK.
+    priceChanges,
   };
 }
 
@@ -546,7 +577,15 @@ async function upsertBranchSettingTx(tx: Prisma.TransactionClient, input: {
   branchCost: number | null;
   branchPrice: number | null;
   actorUserId: string;
+  batchId?: string;
 }) {
+  const existing = input.branchPrice !== null
+    ? await tx.branchProductSetting.findUnique({
+        where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
+        select: { branchPrice: true },
+      })
+    : null;
+
   const data = {
     branchCost: input.branchCost === null ? undefined : new Prisma.Decimal(input.branchCost),
     branchPrice: input.branchPrice === null ? undefined : new Prisma.Decimal(input.branchPrice),
@@ -567,6 +606,35 @@ async function upsertBranchSettingTx(tx: Prisma.TransactionClient, input: {
       metadataJson: { productId: input.productId, branchCost: input.branchCost, branchPrice: input.branchPrice },
     },
   });
+
+  // Parte B.1 — "ninguna escritura de precio queda sin rastro". Este
+  // helper escribe branchPrice DIRECTO (no pasa por setBranchPriceTx —
+  // el import Excel no pide el motivo de excepción que ese helper exige),
+  // así que audita acá mismo.
+  const previousBranchPrice = existing?.branchPrice === undefined || existing?.branchPrice === null ? null : Number(existing.branchPrice);
+  if (input.branchPrice !== null && previousBranchPrice !== input.branchPrice) {
+    const product = await tx.product.findUnique({ where: { id: input.productId }, select: { sku: true } });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "catalog-inventory",
+        action: "PRODUCT_PRICE_CHANGED",
+        entityType: "Product",
+        entityId: input.productId,
+        metadataJson: {
+          productId: input.productId,
+          sku: product?.sku ?? null,
+          branchId: input.branchId,
+          previousPrice: previousBranchPrice,
+          newPrice: input.branchPrice,
+          field: "branchPrice",
+          origin: "importacion_excel",
+          batchId: input.batchId ?? null,
+        },
+      },
+    });
+  }
 }
 
 async function productForLineTx(tx: Prisma.TransactionClient, line: {
@@ -942,7 +1010,8 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
           assertNonNegative(standardSalePrice, "Precio", line);
 
           const lineSku = normalizeManualSku(line.sku);
-          let product = lineSku ? await tx.product.findUnique({ where: { sku: lineSku }, select: { id: true, sku: true } }) : null;
+          const existingProduct = lineSku ? await tx.product.findUnique({ where: { sku: lineSku }, select: { id: true, sku: true, standardSalePrice: true } }) : null;
+          let product: { id: string; sku: string } | null = existingProduct;
           if (!product && batch.createMissingProducts) {
             product = await productForLineTx(tx, line, batch, input.actorUserId, result, {
               byCode: categoryByCode,
@@ -969,13 +1038,22 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
 
           if (importType === "CATALOG_WITH_INITIAL_STOCK") {
             const category = line.categoryCode ? (categoryByCode.get(line.categoryCode.toUpperCase()) ?? categoryByNameExec.get(line.categoryCode.toUpperCase())) : null;
+            // Parte B.2 — "una planilla de inventario no debería reescribir
+            // precios de venta salvo que alguien lo pida explícitamente".
+            // Esta es la escritura de precio que ocurre como EFECTO
+            // COLATERAL de cargar existencias (no un import dedicado de
+            // precios) — se aplica solo si la casilla del batch está
+            // encendida. Un producto NUEVO (existingProduct=null) siempre
+            // toma el precio de la fila — ahí no hay "sobreescribir", es su
+            // precio inicial.
+            const applyPrice = standardSalePrice !== null && (!existingProduct || batch.updateSalePrices);
             await tx.product.update({
               where: { id: product.id },
               data: {
                 name: line.name.trim() || undefined,
                 unit: line.unit?.trim() || undefined,
                 categoryId: category?.isActive ? category.id : undefined,
-                standardSalePrice: standardSalePrice === null ? undefined : new Prisma.Decimal(standardSalePrice),
+                standardSalePrice: applyPrice ? new Prisma.Decimal(standardSalePrice!) : undefined,
               },
             });
             await tx.auditLog.create({
@@ -989,7 +1067,32 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
               },
             });
             result.updatedProducts += 1;
-            if (standardSalePrice !== null) result.priceUpdates += 1;
+            if (applyPrice) {
+              result.priceUpdates += 1;
+              // Parte B.1 — "ninguna escritura de precio queda sin rastro".
+              const previousPrice = existingProduct ? Number(existingProduct.standardSalePrice) : null;
+              if (previousPrice !== standardSalePrice) {
+                await tx.auditLog.create({
+                  data: {
+                    actorUserId: input.actorUserId,
+                    module: "catalog",
+                    action: "PRODUCT_PRICE_CHANGED",
+                    entityType: "Product",
+                    entityId: product.id,
+                    metadataJson: {
+                      productId: product.id,
+                      sku: product.sku,
+                      previousPrice,
+                      newPrice: standardSalePrice,
+                      field: "standardSalePrice",
+                      origin: "importacion_excel",
+                      batchId: batch.id,
+                      rowNumber: line.rowNumber,
+                    },
+                  },
+                });
+              }
+            }
           }
 
           if ((importType === "GLOBAL_PRICES_COSTS" || importType === "BRANCH_PRICES_COSTS") && standardSalePrice !== null && !line.targetBranchId) {
@@ -1005,6 +1108,31 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
               },
             });
             result.priceUpdates += 1;
+            // Parte B.1 — este SÍ es un import dedicado de precio (su
+            // función es cambiarlo), pero igual queda rastro de quién y
+            // desde dónde, como cualquier otra escritura.
+            const previousPrice = existingProduct ? Number(existingProduct.standardSalePrice) : null;
+            if (previousPrice !== standardSalePrice) {
+              await tx.auditLog.create({
+                data: {
+                  actorUserId: input.actorUserId,
+                  module: "catalog",
+                  action: "PRODUCT_PRICE_CHANGED",
+                  entityType: "Product",
+                  entityId: product.id,
+                  metadataJson: {
+                    productId: product.id,
+                    sku: product.sku,
+                    previousPrice,
+                    newPrice: standardSalePrice,
+                    field: "standardSalePrice",
+                    origin: "importacion_excel",
+                    batchId: batch.id,
+                    rowNumber: line.rowNumber,
+                  },
+                },
+              });
+            }
           }
 
           if ((importType === "BRANCH_PRICES_COSTS" || importType === "GLOBAL_PRICES_COSTS") && line.targetBranchId && (unitCost !== null || standardSalePrice !== null)) {
@@ -1096,6 +1224,7 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
                 branchCost: unitCost,
                 branchPrice: standardSalePrice,
                 actorUserId: input.actorUserId,
+                batchId: batch.id,
               });
             } else {
               // Redirigido — el precio (si vino) queda en el producto de
@@ -1110,6 +1239,7 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
                   branchCost: null,
                   branchPrice: standardSalePrice,
                   actorUserId: input.actorUserId,
+                  batchId: batch.id,
                 });
               }
               await upsertBranchSettingTx(tx, {

@@ -1158,6 +1158,13 @@ model InventoryImportBatch {
   createdAt                DateTime  @default(now())
   executedAt               DateTime?
   createMissingProducts    Boolean   @default(false)
+  /// "una planilla de inventario no debería reescribir precios de venta
+  /// salvo que alguien lo pida explícitamente" (Parte B.2) — apagado por
+  /// defecto. Gatea SOLO la escritura de standardSalePrice que ocurre como
+  /// efecto colateral de un import de existencias (CATALOG_WITH_INITIAL_STOCK);
+  /// los imports dedicados de precio (GLOBAL_PRICES_COSTS/BRANCH_PRICES_COSTS)
+  /// no se gatean — ESA es su función.
+  updateSalePrices         Boolean   @default(false)
   defaultCategoryId        String?
   defaultUnit              String?
   defaultStandardSalePrice Decimal?

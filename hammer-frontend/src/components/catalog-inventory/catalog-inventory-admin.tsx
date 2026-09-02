@@ -1801,6 +1801,12 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [showAnalysisDialog, setShowAnalysisDialog] = useState(false);
+  // Parte B.2 — "una planilla de inventario no debería reescribir precios
+  // de venta salvo que alguien lo pida explícitamente". Apagada por
+  // defecto; solo aplica a CATALOG_WITH_INITIAL_INVENTORY (normaliza a
+  // CATALOG_WITH_INITIAL_STOCK en el backend).
+  const [updateSalePrices, setUpdateSalePrices] = useState(false);
+  const [priceChanges, setPriceChanges] = useState<Array<{ sku: string; name: string; previousPrice: number; newPrice: number }>>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isCatalogType = importType === "CATALOG_ONLY" || importType === "CATALOG_WITH_INITIAL_INVENTORY";
@@ -1815,6 +1821,7 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
     setErrorCsv("");
     setAnalysis(null);
     setShowAnalysisDialog(false);
+    setPriceChanges([]);
     setStep("config");
   }
 
@@ -1901,6 +1908,7 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
           defaultCategoryId: defaultCategoryId || undefined,
           defaultUnit: "UN",
           defaultStandardSalePrice: 1,
+          updateSalePrices,
           ...filePayload,
         }),
       });
@@ -1913,6 +1921,7 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
       setPreviewCsv(result.previewCsv ?? "");
       setErrorCsv("");
       setAnalysis(null);
+      setPriceChanges(result.priceChanges ?? []);
       setStep("preview");
       toast.success(`Preview generado — ${result.summary?.readyRows ?? result.summary?.ready ?? 0} filas listas`);
     } finally {
@@ -2096,6 +2105,28 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
             ) : null}
           </div>
 
+          {/* ── Parte B.2: "una planilla de inventario no debería reescribir
+              precios de venta salvo que alguien lo pida explícitamente" —
+              casilla separada, apagada por defecto. Solo aplica cuando el
+              archivo también trae columna de precio junto a la carga de
+              existencias (CATALOG_WITH_INITIAL_INVENTORY). ── */}
+          {importType === "CATALOG_WITH_INITIAL_INVENTORY" ? (
+            <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={updateSalePrices}
+                onChange={(e) => { setUpdateSalePrices(e.target.checked); resetState(); }}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-semibold text-amber-800">Actualizar también los precios de venta</span>
+                <span className="block text-amber-700 mt-0.5">
+                  Si tu archivo trae columna &quot;precio&quot; y NO marcas esto, solo se cargan existencias — los precios de venta existentes quedan intactos.
+                </span>
+              </span>
+            </label>
+          ) : null}
+
           {/* ── Advanced toggle ── */}
           <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
             <Settings2 className="h-3.5 w-3.5" /> Opciones avanzadas {showAdvanced ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
@@ -2109,6 +2140,22 @@ function UnifiedImportPanel({ branches, categories, onDone }: { branches: Branch
                 <span className="text-gray-500">• <strong>precio</strong> — precio de venta sugerido</span>
                 <span className="text-gray-500">• <strong>sucursal</strong> — código de sucursal (modo &quot;Desde archivo&quot;)</span>
               </div>
+            </div>
+          ) : null}
+
+          {/* ── Parte B.2: "el preview del lote tiene que mostrar 'N
+              productos van a cambiar de precio' con la lista y el
+              antes/después de cada uno" ── */}
+          {priceChanges.length > 0 ? (
+            <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+              <p className="text-xs font-bold text-amber-800 mb-1.5">
+                {priceChanges.length} producto{priceChanges.length !== 1 ? "s" : ""} van a cambiar de precio de venta:
+              </p>
+              <ul className="text-xs text-amber-700 space-y-0.5 max-h-32 overflow-y-auto font-mono">
+                {priceChanges.map((p) => (
+                  <li key={p.sku}>{p.sku} — {p.name}: {money(p.previousPrice)} → {money(p.newPrice)}</li>
+                ))}
+              </ul>
             </div>
           ) : null}
 
