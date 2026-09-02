@@ -17,7 +17,7 @@
  */
 
 import type { SessionPayload } from "@/types/auth";
-import { isPrivilegedGlobal, isMaster, isOwner, isSystemAdmin, isFinanceUser, hasBranchAccess } from "@/modules/rbac/guards";
+import { isMaster, isOwner, isFinanceUser, hasBranchAccess } from "@/modules/rbac/guards";
 
 // ── Assertion helpers (throw on failure) ──
 
@@ -39,60 +39,10 @@ export function assertFinanceAccess(session: SessionPayload): void {
   }
 }
 
-export function assertSystemAdmin(session: SessionPayload): void {
-  if (!isSystemAdmin(session)) {
-    throw new Error("FORBIDDEN_SYSTEM_ADMIN_ONLY");
-  }
-}
-
-export function assertOwnerOrSystemAdmin(session: SessionPayload): void {
-  if (!isOwner(session) && !isSystemAdmin(session)) {
-    throw new Error("FORBIDDEN_OWNER_OR_SYSTEM_ADMIN_ONLY");
-  }
-}
-
 export function assertBranchAccess(session: SessionPayload, branchId: string): void {
   if (!hasBranchAccess(session, branchId)) {
     throw new Error("FORBIDDEN_BRANCH");
   }
-}
-
-// ── Query helpers ──
-
-/**
- * Returns the set of branchIds the user is allowed to see/operate on.
- *
- * - Global roles → returns `requestedBranchId` wrapped in an array (or empty
- *   array meaning "no filter") so callers can do `where: { branchId: { in: ids } }`.
- * - Branch-scoped users → returns only their assigned branchIds, optionally
- *   filtered to `requestedBranchId` (throws if they don't have access).
- */
-export function getAllowedBranchIds(
-  session: SessionPayload,
-  requestedBranchId?: string | null,
-): string[] {
-  // Global roles have access to all branches
-  if (isPrivilegedGlobal(session)) {
-    return requestedBranchId ? [requestedBranchId] : []; // empty = no filter
-  }
-
-  const userBranchIds = session.branchMemberships.map((m) => m.branchId);
-
-  if (requestedBranchId) {
-    if (!userBranchIds.includes(requestedBranchId)) {
-      throw new Error("FORBIDDEN_BRANCH");
-    }
-    return [requestedBranchId];
-  }
-
-  return userBranchIds;
-}
-
-/**
- * Checks whether a user can access a specific branch (boolean, no throw).
- */
-export function canAccessBranch(session: SessionPayload, branchId: string): boolean {
-  return hasBranchAccess(session, branchId);
 }
 
 /**

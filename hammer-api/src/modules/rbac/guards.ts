@@ -1,8 +1,7 @@
 import type { RoleCode } from "@prisma/client";
 import type { Route } from "next";
 import type { SessionPayload } from "@/types/auth";
-import { getPermissionsForRole, type PermissionKey } from "@/modules/rbac/permissions";
-import { can, canInAnyAssignedBranch, type Capability } from "@/modules/rbac/policies";
+import { canInAnyAssignedBranch, type Capability } from "@/modules/rbac/policies";
 import { resolveRoleHome, isMasterOrAbove, isOwnerRole, isSystemAdminRole, isAccountantRole } from "@/modules/rbac/role-routing";
 import {
   canUseBranchCapability,
@@ -66,18 +65,6 @@ export function requireAnyBranchCapability(session: SessionPayload | null, capab
 
 export function getBranchIdsWithCapability(session: SessionPayload | null, capability: Capability): string[] {
   return getBranchIdsWithEffectiveCapability(session, capability);
-}
-
-export function hasPermission(roleCode: RoleCode, permission: PermissionKey): boolean {
-  return getPermissionsForRole(roleCode).includes(permission);
-}
-
-export function hasCapability(roleCode: RoleCode, capability: Capability): boolean {
-  return can(roleCode, capability);
-}
-
-export function hasCapabilityInBranch(session: SessionPayload | null, branchId: string, capability: Capability): boolean {
-  return canInBranch(session, branchId, capability);
 }
 
 export function hasCapabilityInAnyAssignedBranch(session: SessionPayload | null, capability: Capability): boolean {
