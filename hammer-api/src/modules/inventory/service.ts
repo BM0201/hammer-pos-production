@@ -1903,12 +1903,54 @@ export async function createOpeningBalanceTx(
         },
         update: { branchPrice: salePrice },
       });
+      // Parte B.1 — "ninguna escritura de precio queda sin rastro".
+      const previousBranchPrice = existingSetting?.branchPrice ?? null;
+      if (previousBranchPrice === null || !previousBranchPrice.eq(salePrice)) {
+        await tx.auditLog.create({
+          data: {
+            actorUserId: input.actorUserId,
+            branchId: input.branchId,
+            module: "inventory",
+            action: "PRODUCT_PRICE_CHANGED",
+            entityType: "Product",
+            entityId: input.productId,
+            metadataJson: {
+              productId: input.productId,
+              branchId: input.branchId,
+              previousPrice: previousBranchPrice === null ? null : Number(previousBranchPrice),
+              newPrice: Number(salePrice),
+              field: "branchPrice",
+              origin: "saldo_inicial",
+            },
+          },
+        });
+      }
     }
     if (input.priceMode === "SET_GLOBAL_PRICE" && salePrice) {
       await tx.product.update({
         where: { id: input.productId },
         data: { standardSalePrice: salePrice },
       });
+      // Parte B.1 — "ninguna escritura de precio queda sin rastro".
+      if (!product.standardSalePrice.eq(salePrice)) {
+        await tx.auditLog.create({
+          data: {
+            actorUserId: input.actorUserId,
+            branchId: input.branchId,
+            module: "inventory",
+            action: "PRODUCT_PRICE_CHANGED",
+            entityType: "Product",
+            entityId: input.productId,
+            metadataJson: {
+              productId: input.productId,
+              previousPrice: Number(product.standardSalePrice),
+              newPrice: Number(salePrice),
+              field: "standardSalePrice",
+              origin: "saldo_inicial",
+            },
+          },
+        });
+      }
     }
 
     const refreshedSetting = await tx.branchProductSetting.findUnique({

@@ -77,6 +77,12 @@ function createFakeTx(opts: { settings?: FakeSetting[] }) {
   const auditLogs: Record<string, unknown>[] = [];
 
   const tx = {
+    // Parte B.1 (prompt-precio-no-se-mueve-solo.md) — setBranchPriceTx
+    // ahora audita TODA escritura de branchPrice (PRODUCT_PRICE_CHANGED),
+    // que necesita el sku del producto.
+    product: {
+      findUnique: async () => ({ sku: "SKU-TEST" }),
+    },
     branchProductSetting: {
       findUnique: async ({ where }: { where: { branchId_productId: { branchId: string; productId: string } } }) => {
         const key = `${where.branchId_productId.branchId}:${where.branchId_productId.productId}`;
@@ -130,8 +136,12 @@ test("Finding #3 — setBranchPriceInBandTx escribe priceExceptionReason/priceEx
   assert.ok(row.priceExceptionReason, "antes del fix esto quedaba null — la divergencia silenciosa que product-360 marcaba en rojo");
   assert.ok(row.priceExceptionAt instanceof Date);
   assert.equal(result.newPrice, 150);
-  assert.equal(auditLogs.length, 1);
-  assert.equal((auditLogs[0] as { action: string }).action, "PRICE_SET_IN_BAND");
+  // Parte B.1 — setBranchPriceTx ahora también audita PRODUCT_PRICE_CHANGED
+  // (el rastro genérico de "ninguna escritura de precio queda sin rastro"),
+  // además de PRICE_SET_IN_BAND (el detalle propio de este flujo).
+  assert.equal(auditLogs.length, 2);
+  assert.equal((auditLogs[0] as { action: string }).action, "PRODUCT_PRICE_CHANGED");
+  assert.equal((auditLogs[1] as { action: string }).action, "PRICE_SET_IN_BAND");
 });
 
 test("Finding #3 — setBranchPriceInBandTx con reason explícito lo usa tal cual (no el genérico)", async () => {
@@ -165,6 +175,7 @@ test("Finding #3 — applyApprovedPriceOverrideTx escribe priceExceptionReason c
   assert.equal(row.branchPrice?.toString(), "90");
   assert.equal(row.priceExceptionReason, "Precio bajo el margen mínimo de la categoría", "antes del fix esto quedaba null pese a que Master ya había visto y aprobado este motivo en la cola");
   assert.ok(row.priceExceptionAt instanceof Date);
-  assert.equal(auditLogs.length, 1);
-  assert.equal((auditLogs[0] as { action: string }).action, "PRICE_APPROVAL_APPLIED");
+  assert.equal(auditLogs.length, 2);
+  assert.equal((auditLogs[0] as { action: string }).action, "PRODUCT_PRICE_CHANGED");
+  assert.equal((auditLogs[1] as { action: string }).action, "PRICE_APPROVAL_APPLIED");
 });

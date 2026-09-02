@@ -33,6 +33,11 @@ function createFakeTx(opts: { decisions?: FakeDecision[]; settings?: FakeSetting
   let seq = 0;
 
   const tx = {
+    // Parte B.1 (prompt-precio-no-se-mueve-solo.md) — setBranchPriceTx
+    // ahora audita TODA escritura de branchPrice (PRODUCT_PRICE_CHANGED).
+    product: {
+      findUnique: async () => ({ sku: "SKU-TEST" }),
+    },
     brainDecision: {
       findUniqueOrThrow: async ({ where }: { where: { id: string } }) => {
         const d = decisions.get(where.id);

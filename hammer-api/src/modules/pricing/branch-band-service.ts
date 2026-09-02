@@ -100,6 +100,7 @@ export async function setBranchPriceInBandTx(
     exceptionReason: input.reason?.trim() || "Ajuste dentro de la banda de la categoría",
     priceSource: "MANUAL",
     actorUserId: input.actorUserId,
+    origin: "calculadora",
   });
   // marginPercent es responsabilidad de este llamador, no de
   // setBranchPriceTx (que solo toca precio/excepción) — mismo patrón que
@@ -280,6 +281,7 @@ export async function applyApprovedPriceOverrideTx(
     exceptionReason: input.reason,
     priceSource: "MANUAL",
     actorUserId: input.actorUserId,
+    origin: "calculadora",
   });
   await tx.auditLog.create({
     data: {

@@ -28,6 +28,11 @@ function createFakeTx(opts: { settings?: FakeSetting[] }) {
   let seq = 0;
 
   const tx = {
+    // Parte B.1 (prompt-precio-no-se-mueve-solo.md) — setBranchPriceTx
+    // ahora audita TODA escritura de branchPrice (PRODUCT_PRICE_CHANGED).
+    product: {
+      findUnique: async () => ({ sku: "SKU-TEST" }),
+    },
     branchProductSetting: {
       findUnique: async ({ where }: { where: { branchId_productId: { branchId: string; productId: string } } }) => {
         const key = `${where.branchId_productId.branchId}:${where.branchId_productId.productId}`;
@@ -173,8 +178,15 @@ test("Prueba 4 — una entrada de auditoría por sucursal, cada una con su branc
     await applySuggestedPriceTx(tx, { productId: "product-1", applyScope: "ALL_BRANCHES", suggestedPrice: 150, actorUserId: ACTOR } as any, branchId, []);
   }
 
-  assert.equal(auditLogs.length, 3, "una entrada por sucursal, no una sola con todas adentro");
-  assert.deepEqual(auditLogs.map((a) => a.branchId), branchIds, "cada entrada trae SU branchId — es lo que permite responder 'por qué Rivas tiene este precio'");
+  // Parte B.1 — setBranchPriceTx ahora también deja PRODUCT_PRICE_CHANGED
+  // (el rastro genérico), además de PRICE_APPLIED (el detalle propio de
+  // este flujo) — dos entradas por sucursal, no una.
+  const priceApplied = auditLogs.filter((a) => a.action === "PRICE_APPLIED");
+  const priceChanged = auditLogs.filter((a) => a.action === "PRODUCT_PRICE_CHANGED");
+  assert.equal(auditLogs.length, 6);
+  assert.equal(priceApplied.length, 3, "una entrada PRICE_APPLIED por sucursal, no una sola con todas adentro");
+  assert.equal(priceChanged.length, 3, "y una PRODUCT_PRICE_CHANGED por sucursal, el rastro genérico");
+  assert.deepEqual(priceApplied.map((a) => a.branchId), branchIds, "cada entrada trae SU branchId — es lo que permite responder 'por qué Rivas tiene este precio'");
 });
 
 test("Prueba 5 — el bloqueo por precio bajo el costo interno sigue activo sin importar el alcance (aplicar en lote no lo suspende)", () => {

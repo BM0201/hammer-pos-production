@@ -44,6 +44,8 @@ export type BranchPriceExceptionResult = {
  * marginPercent, etc. son responsabilidad de cada llamador, en la MISMA
  * transacción, si hacen falta.
  */
+export type PriceChangeOrigin = "catalogo" | "fusion" | "importacion_excel" | "bandeja_precios" | "calculadora" | "saldo_inicial";
+
 export async function setBranchPriceTx(
   tx: Prisma.TransactionClient,
   input: {
@@ -53,6 +55,8 @@ export async function setBranchPriceTx(
     exceptionReason: string | null;
     priceSource: "MANUAL" | "CALCULATED";
     actorUserId: string;
+    /** Parte B.1 — "ninguna escritura de precio queda sin rastro". Único escritor de branchPrice: acá se audita TODA escritura, sin importar el llamador. */
+    origin: PriceChangeOrigin;
   },
 ): Promise<{ previousPrice: Prisma.Decimal | null; setting: { branchPrice: Prisma.Decimal | null } }> {
   const reason = input.exceptionReason?.trim() ?? "";
@@ -81,6 +85,31 @@ export async function setBranchPriceTx(
     create: { branchId: input.branchId, productId: input.productId, ...data },
     update: data,
   });
+
+  const previousNumber = previousPrice === null ? null : Number(previousPrice);
+  const newNumber = input.branchPrice === null ? null : Number(input.branchPrice);
+  if (previousNumber !== newNumber) {
+    const product = await tx.product.findUnique({ where: { id: input.productId }, select: { sku: true } });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: input.branchId,
+        module: "pricing",
+        action: "PRODUCT_PRICE_CHANGED",
+        entityType: "Product",
+        entityId: input.productId,
+        metadataJson: {
+          productId: input.productId,
+          sku: product?.sku ?? null,
+          branchId: input.branchId,
+          previousPrice: previousNumber,
+          newPrice: newNumber,
+          field: "branchPrice",
+          origin: input.origin,
+        },
+      },
+    });
+  }
 
   return { previousPrice, setting };
 }
@@ -117,6 +146,7 @@ export async function setBranchPriceException(input: {
       exceptionReason: reason,
       priceSource: "MANUAL",
       actorUserId: input.actorUserId,
+      origin: "bandeja_precios",
     });
 
     await tx.auditLog.create({

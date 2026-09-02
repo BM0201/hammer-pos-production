@@ -29,8 +29,20 @@ type FakeSetting = {
 
 function createFakeTx(opts: { settings?: FakeSetting[] }) {
   const settings = new Map((opts.settings ?? []).map((s) => [`${s.branchId}:${s.productId}`, s]));
+  const auditLogs: Array<Record<string, unknown>> = [];
 
   const tx = {
+    // Parte B.1 (prompt-precio-no-se-mueve-solo.md) — setBranchPriceTx
+    // ahora audita TODA escritura de branchPrice (PRODUCT_PRICE_CHANGED).
+    product: {
+      findUnique: async () => ({ sku: "SKU-TEST" }),
+    },
+    auditLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        auditLogs.push(data);
+        return data;
+      },
+    },
     branchProductSetting: {
       findUnique: async ({ where }: { where: { branchId_productId: { branchId: string; productId: string } } }) => {
         const key = `${where.branchId_productId.branchId}:${where.branchId_productId.productId}`;
@@ -55,7 +67,7 @@ function createFakeTx(opts: { settings?: FakeSetting[] }) {
     },
   };
 
-  return { tx: tx as unknown as Prisma.TransactionClient, settings };
+  return { tx: tx as unknown as Prisma.TransactionClient, settings, auditLogs };
 }
 
 const ACTOR = "user-1";
@@ -63,12 +75,12 @@ const ACTOR = "user-1";
 test("Prueba 6 — setBranchPriceTx con precio y sin motivo → throw", async () => {
   const { tx } = createFakeTx({});
   await assert.rejects(
-    () => setBranchPriceTx(tx, { branchId: "branch-1", productId: "product-1", branchPrice: new Prisma.Decimal(150), exceptionReason: null, priceSource: "MANUAL", actorUserId: ACTOR }),
+    () => setBranchPriceTx(tx, { branchId: "branch-1", productId: "product-1", branchPrice: new Prisma.Decimal(150), exceptionReason: null, priceSource: "MANUAL", actorUserId: ACTOR, origin: "catalogo" }),
     /PRICE_EXCEPTION_REASON_REQUIRED/,
   );
   // Motivo demasiado corto (menos de 3 caracteres) tampoco alcanza.
   await assert.rejects(
-    () => setBranchPriceTx(tx, { branchId: "branch-1", productId: "product-1", branchPrice: new Prisma.Decimal(150), exceptionReason: "ok", priceSource: "MANUAL", actorUserId: ACTOR }),
+    () => setBranchPriceTx(tx, { branchId: "branch-1", productId: "product-1", branchPrice: new Prisma.Decimal(150), exceptionReason: "ok", priceSource: "MANUAL", actorUserId: ACTOR, origin: "catalogo" }),
     /PRICE_EXCEPTION_REASON_REQUIRED/,
   );
 });
@@ -77,7 +89,7 @@ test("Prueba 7 — con precio y motivo → escribe reason, exceptionAt, lastPric
   const { tx, settings } = createFakeTx({});
   const before = new Date();
 
-  await setBranchPriceTx(tx, { branchId: "branch-1", productId: "product-1", branchPrice: new Prisma.Decimal(150), exceptionReason: "Flete", priceSource: "MANUAL", actorUserId: ACTOR });
+  await setBranchPriceTx(tx, { branchId: "branch-1", productId: "product-1", branchPrice: new Prisma.Decimal(150), exceptionReason: "Flete", priceSource: "MANUAL", actorUserId: ACTOR, origin: "catalogo" });
 
   const row = settings.get("branch-1:product-1")!;
   assert.equal(row.branchPrice?.toString(), "150");
@@ -93,7 +105,7 @@ test("Prueba 8 — con branchPrice null → limpia reason y exceptionAt junto co
     settings: [{ branchId: "branch-1", productId: "product-1", branchPrice: new Prisma.Decimal(480), priceExceptionReason: "Flete", priceExceptionAt: new Date("2026-03-12") }],
   });
 
-  await setBranchPriceTx(tx, { branchId: "branch-1", productId: "product-1", branchPrice: null, exceptionReason: null, priceSource: "MANUAL", actorUserId: ACTOR });
+  await setBranchPriceTx(tx, { branchId: "branch-1", productId: "product-1", branchPrice: null, exceptionReason: null, priceSource: "MANUAL", actorUserId: ACTOR, origin: "catalogo" });
 
   const row = settings.get("branch-1:product-1")!;
   assert.equal(row.branchPrice, null);

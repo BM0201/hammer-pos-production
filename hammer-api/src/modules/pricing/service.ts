@@ -777,6 +777,7 @@ export async function applySuggestedPriceTx(
     exceptionReason: input.reason?.trim() || "Precio calculado",
     priceSource: "CALCULATED",
     actorUserId: input.actorUserId,
+    origin: "calculadora",
   });
   // marginPercent es responsabilidad de este llamador, no de setBranchPriceTx
   // (que solo toca precio/excepción) — mismo valor que escribía antes.

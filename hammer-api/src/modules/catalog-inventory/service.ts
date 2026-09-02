@@ -727,6 +727,7 @@ export async function upsertBranchProductSettingTx(tx: Prisma.TransactionClient,
       exceptionReason: input.priceExceptionReason ?? null,
       priceSource: "MANUAL",
       actorUserId,
+      origin: "catalogo",
     });
     return tx.branchProductSetting.update({
       where: { branchId_productId: { branchId: input.branchId, productId: input.productId } },
