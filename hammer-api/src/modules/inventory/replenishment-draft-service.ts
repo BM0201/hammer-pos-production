@@ -17,29 +17,6 @@ const SIGNAL_SEVERITY_TO_CRITICALITY: Record<string, string> = {
   NO_DEMAND: "NORMAL",
 };
 
-/* ─── Types ─── */
-
-export type DraftSummary = {
-  id: string;
-  branchId: string;
-  branchName: string;
-  status: string;
-  includePreventive: boolean;
-  categoryId: string | null;
-  notes: string | null;
-  generatedAt: string;
-  createdAt: string;
-  approvedAt: string | null;
-  convertedAt: string | null;
-  createdBy: { id: string; fullName: string; username: string };
-  approvedBy: { id: string; fullName: string; username: string } | null;
-  itemCount: number;
-  criticalCount: number;
-  lowCount: number;
-  preventiveCount: number;
-  pendingCount: number;
-};
-
 type CreateDraftInput = {
   branchId: string;
   includePreventive: boolean;

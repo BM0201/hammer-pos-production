@@ -193,16 +193,6 @@ export async function listInventoryMovementsPaginated(params: InventoryMovementP
   };
 }
 
-export async function listInventoryMovements(params: { branchId: string; productId?: string; limit?: number }) {
-  const result = await listInventoryMovementsPaginated({
-    branchId: params.branchId,
-    productId: params.productId,
-    limit: params.limit ?? 25,
-    page: 1,
-  });
-  return result.rows;
-}
-
 /**
  * Fusión de Inventario v2, Fase 1.1 — declaración EXPLÍCITA de qué parte de
  * la composición cerrado/suelto mueve un movimiento, en vez de que

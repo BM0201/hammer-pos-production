@@ -95,11 +95,6 @@ export async function resolveReplenishmentParamsBatch(
   return result;
 }
 
-export async function resolveReplenishmentParams(branchId: string, productId: string): Promise<ReplenishmentParams> {
-  const map = await resolveReplenishmentParamsBatch(branchId, [productId]);
-  return map.get(productId) ?? AUTO_PARAMS;
-}
-
 /* ════════════════════════════════════════════════════════════════
  * Reposición v2 — "En camino" (Fase 1.2)
  *
