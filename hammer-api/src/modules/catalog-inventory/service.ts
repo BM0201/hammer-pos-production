@@ -217,31 +217,22 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     },
   } as const;
 
-  /* ── Helper to enrich a product row ── */
+  /* ── Helper to enrich a product row ──
+     costo/margen (baseCost, hasNoCost): docs/COSTO-UNA-FUENTE.md — resuelto
+     con branchPricingByKey (getEffectiveProductPricingBatch), la MISMA
+     fuente que branchEffectivePricing más abajo, en vez de una cascada
+     propia sin branchCost. branchPricingByKey y costBranchId se calculan
+     más abajo (antes de la primera llamada real a esta función) y se leen
+     acá por clausura — fusión-aware, no hace falta resolverlo dos veces
+     para los miembros derivados. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function enrichProduct(product: any, policyMap: Map<string, any>) {
     const productBalances: any[] = product.inventoryBalances;
     const totalStock = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand), 0);
     const totalValue = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.inventoryValue), 0);
     const branchesWithStock = productBalances.filter((row: any) => decimalToNumber(row.quantityOnHand) > 0).length;
-    // WAC propio (costo promedio ponderado) de este producto: por sucursal si se
-    // filtró una, o promedio ponderado por cantidad en toda la red. Se usa con
-    // prioridad sobre averageCost/globalCost/lastPurchaseCost para que el costo
-    // mostrado coincida con el de venta (ver resolveCatalogDisplayCost). Los
-    // miembros de fusión con `conversion` se recalculan más abajo desde el
-    // canónico; este bloque cubre los productos SIN fusión.
-    const wacQty = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand), 0);
-    const wacValue = productBalances.reduce(
-      (sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand) * decimalToNumber(row.weightedAverageCost),
-      0,
-    );
-    const ownWac = wacQty > 0 ? wacValue / wacQty : null;
-    const productCost = resolveCatalogDisplayCost({
-      wac: ownWac,
-      averageCost: product.averageCost,
-      globalCost: product.globalCost,
-      lastPurchaseCost: product.lastPurchaseCost,
-    });
+    const pricing = costBranchId ? branchPricingByKey.get(`${costBranchId}:${product.id}`) : undefined;
+    const productCost = pricing?.effectiveCost != null ? Number(pricing.effectiveCost) : 0;
     const critical = productBalances.some((row: any) => {
       const policy = policyMap.get(`${product.id}:${row.branchId}`);
       const rp = policy ? decimalToNumber(policy.reorderPoint) : CRITICAL_STOCK_FALLBACK;
@@ -362,6 +353,24 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     include: productInclude,
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
   });
+
+  /* ── Costo y precio EFECTIVOS por sucursal — el mismo motor que usa la venta ──
+     docs/COSTO-UNA-FUENTE.md — se calcula ACÁ, antes de enrichProduct, para
+     TODOS los productos que matchean el filtro (no solo la página actual):
+     tanto los KPIs (allMetricRows, sin paginar) como cada fila necesitan el
+     mismo costo efectivo, y antes se calculaban con dos cascadas distintas
+     (una para el KPI/columna, otra —correcta— para branchEffectivePricing).
+     getEffectiveProductPricingBatch (catalog/effective-pricing.ts) ya es
+     fusión-aware (branchCost > WAC > averageCost > globalCost >
+     lastPurchaseCost, canónico × factor para un derivado) — no se
+     reimplementa acá. Sucursal en contexto: params.branchId si viene, si no
+     la primera sucursal activa por código — NUNCA un promedio entre
+     sucursales (un costo promedio entre sucursales no es el costo de nada). */
+  const costBranchId = params.branchId ?? branches[0]?.id ?? null;
+  const allMetricProductIds = allMetricProducts.map((product) => product.id);
+  const branchPricingItems = allMetricProductIds.flatMap((productId) => branches.map((branch) => ({ branchId: branch.id, productId })));
+  const branchPricingByKey = await getEffectiveProductPricingBatch(prisma, branchPricingItems);
+
   const allMetricRows = allMetricProducts.map((product) => enrichProduct(product, policyByProductBranch));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -438,47 +447,12 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     : [];
   const sharedBalanceByBranchProduct = new Map(sharedInventoryBalances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]));
 
-  /* ── Costo base del canónico por fusión ──
-     En una fusión hay UN material físico → UNA base de costo: la del
-     canónico. El costo de un miembro DERIVADO se deriva SIEMPRE del canónico
-     × factor (ver modules/catalog/effective-pricing.ts → resolveFusionMemberCost).
-     Antes `baseCost` salía de los campos propios del miembro derivado
-     (averageCost/globalCost/lastPurchaseCost), que la fusión ignora: el
-     catálogo mostraba un costo distinto al que realmente se usa al vender
-     (ej. LATA con globalCost=1.00 mientras el METRO derivaba otro valor del
-     canónico), y cualquier costo tecleado en un miembro derivado "no pegaba".
-     Acá se resuelve el costo global del canónico y luego cada derivado lo
-     escala por su propio factor, quedando consistente con la venta. */
-  const canonicalCostByProductId = new Map<string, number>();
-  if (inventoryProductIds.length > 0) {
-    const canonicalProducts = await prisma.product.findMany({
-      where: { id: { in: inventoryProductIds } },
-      select: { id: true, averageCost: true, globalCost: true, lastPurchaseCost: true },
-    });
-    for (const canonicalProduct of canonicalProducts) {
-      canonicalCostByProductId.set(
-        canonicalProduct.id,
-        decimalToNumber(canonicalProduct.averageCost ?? canonicalProduct.globalCost ?? canonicalProduct.lastPurchaseCost),
-      );
-    }
-  }
-
-  /* ── Costo y precio EFECTIVOS por sucursal — el mismo motor que usa la venta ──
-     prompt-precios-costos-una-sola-fuente.md — "Precios y costos" calculaba
-     el margen con baseCost (resolveCatalogDisplayCost: costo de RED, sin
-     branchCost) mientras mostraba branchCost/branchPrice de la sucursal en
-     la misma fila — dos costos distintos en una fila. getEffectiveProductPricingBatch
-     (catalog/effective-pricing.ts) YA es la resolución única que usa el
-     motor de venta, Brain y la Bandeja (branchCost > WAC > averageCost >
-     globalCost > lastPurchaseCost, fusión-aware); no se reimplementa acá,
-     se reusa — para que "una sola resolución de costo efectivo, compartida
-     por todas las pantallas" sea cierto de verdad y no una cuarta cascada
-     nueva. branchEffectivePricing cubre TODAS las sucursales activas (no
-     solo params.branchId) porque la Vista comparativa de Precios y costos
-     necesita el costo/precio efectivo de cada una a la vez. */
-  const branchPricingItems = filteredProducts.flatMap((product) => branches.map((branch) => ({ branchId: branch.id, productId: product.id })));
-  const branchPricingByKey = await getEffectiveProductPricingBatch(prisma, branchPricingItems);
-
+  /* ── branchEffectivePricing (costo/precio efectivo por sucursal, TODAS
+     las sucursales activas — la Vista comparativa de Precios y costos
+     necesita cada una a la vez) — reusa branchPricingByKey, ya calculado
+     arriba (antes de enrichProduct) para docs/COSTO-UNA-FUENTE.md. No se
+     vuelve a pedir acá: filteredProducts es siempre un subconjunto de
+     allMetricProducts (mismo `where`, solo paginado distinto). */
   filteredProducts = filteredProducts.map((product) => {
     const conversion = conversionByProductId.get(product.id) ?? null;
     const inventoryProductId = conversion?.canonicalProductId ?? product.id;
@@ -520,32 +494,6 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     const displayedClosedPackageQty = selectedShared?.closedPackageQuantity ?? aggregateClosedPackageQty;
     const displayedLooseUnitQty = selectedShared?.looseUnitQuantity ?? aggregateLooseUnitQty;
     const displayedWac = selectedShared?.weightedAverageCost ?? (aggregateBaseQty.gt(0) ? aggregateInventoryValue.div(aggregateBaseQty) : null);
-    // Miembro DERIVADO de fusión: el costo sale del canónico × factor, no de
-    // sus propios campos (que la fusión ignora). El canónico y los productos
-    // sin fusión conservan su costo propio.
-    const isDerivedFusionMember = Boolean(conversion && !conversion.isCanonical);
-    const derivedFactor = conversion ? Number(conversion.conversionFactor) : 1;
-    // `displayedWac` es el WAC en unidad BASE: para un miembro derivado es el del
-    // canónico (inventoryProductId apunta al canónico), para el canónico/sin
-    // fusión es el suyo. Se prioriza sobre los campos de costo, igual que el
-    // motor de venta, para que el catálogo no muestre un costo distinto al real.
-    const displayedWacNum = displayedWac !== null ? Number(displayedWac) : null;
-    const productCost = isDerivedFusionMember
-      ? resolveCatalogDisplayCost({
-          // WAC del canónico (base) × factor, con el costo global del canónico
-          // como respaldo cuando aún no hay WAC.
-          wac: displayedWacNum,
-          averageCost: canonicalCostByProductId.get(inventoryProductId) ?? 0,
-          globalCost: undefined,
-          lastPurchaseCost: undefined,
-          factor: derivedFactor,
-        })
-      : resolveCatalogDisplayCost({
-          wac: displayedWacNum,
-          averageCost: product.averageCost,
-          globalCost: product.globalCost,
-          lastPurchaseCost: product.lastPurchaseCost,
-        });
     const sharedStock = conversion && displayedBaseQty
         ? formatDualStock({
             baseQuantity: displayedBaseQty,
@@ -564,13 +512,12 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     return {
       ...product,
       ...(conversion ? {
+        // baseCost/hasNoCost NO se recalculan acá — ya vienen correctos de
+        // enrichProduct (branchPricingByKey, fusión-aware) en el spread
+        // ...product de abajo. docs/COSTO-UNA-FUENTE.md.
         totalStock: Number(displayedBaseQty),
         branchesWithStock: sharedBalances.filter((balance) => decimalToNumber(balance.quantityOnHand) > 0).length,
         inventoryValue: Number(aggregateInventoryValue),
-        baseCost: productCost,
-        // El costo derivado del canónico también decide si el miembro figura
-        // como "sin costo": un derivado con canónico válido ya no se marca así.
-        hasNoCost: productCost <= 0,
         weightedAverageCostEstimate: displayedWac ? Number(displayedWac) : null,
         hasZeroStock: displayedBaseQty.eq(0),
         hasNegativeStock: displayedBaseQty.lt(0),
