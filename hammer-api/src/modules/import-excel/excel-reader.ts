@@ -23,15 +23,23 @@
 import ExcelJS from "exceljs";
 
 /**
- * Lee un buffer XLSX y retorna la primera hoja como string[][].
+ * Lee un buffer XLSX y retorna una hoja como string[][].
  * Fila 0 = encabezados, filas 1+ = datos.
+ *
+ * `sheetName`, si se da, busca esa hoja por nombre (case-insensitive) —
+ * ej. la hoja "Simple" de un archivo de cubicación de madera con varias
+ * hojas. Si no se da, o no se encuentra, cae a la primera hoja del libro
+ * (comportamiento previo, sin cambios para los llamadores existentes).
  */
-export async function readExcelBuffer(buffer: Buffer | Uint8Array): Promise<string[][]> {
+export async function readExcelBuffer(buffer: Buffer | Uint8Array, sheetName?: string): Promise<string[][]> {
   const workbook = new ExcelJS.Workbook();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await workbook.xlsx.load(buffer as any);
 
-  const worksheet = workbook.worksheets[0];
+  const bySheetName = sheetName
+    ? workbook.worksheets.find((sheet) => sheet.name.trim().toLowerCase() === sheetName.trim().toLowerCase())
+    : undefined;
+  const worksheet = bySheetName ?? workbook.worksheets[0];
   if (!worksheet || worksheet.rowCount === 0) {
     return [];
   }
@@ -60,9 +68,9 @@ export async function readExcelBuffer(buffer: Buffer | Uint8Array): Promise<stri
 /**
  * Lee un string Base64 de un archivo XLSX y retorna string[][].
  */
-export async function readExcelBase64(base64: string): Promise<string[][]> {
+export async function readExcelBase64(base64: string, sheetName?: string): Promise<string[][]> {
   const buffer = Buffer.from(base64, "base64");
-  return readExcelBuffer(buffer);
+  return readExcelBuffer(buffer, sheetName);
 }
 
 /**
