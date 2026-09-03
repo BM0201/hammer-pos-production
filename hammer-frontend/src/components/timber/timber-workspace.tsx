@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { Plus, Truck, Search, TreePine, X, Settings2 } from "lucide-react";
+import { Plus, Truck, Search, TreePine, X, Settings2, Upload, Loader2 } from "lucide-react";
 
 /* ─────────────────────────── Tipos ─────────────────────────── */
 
@@ -73,6 +73,21 @@ type InjectionPreviewLine = {
   sellingPrice: { before: number | null; after: number };
 };
 type InjectionPreview = { tripId: string; tripCode: string; pricePolicy: string; lines: InjectionPreviewLine[]; hash: string };
+
+/* prompt-timber-cubicacion-carga.md, Parte B — mismos campos que
+   TimberCubicationImportPreview (timber/service.ts), sin reimplementar
+   nada, solo el tipo del lado del cliente. */
+type CubicationImportRecognizedLine = {
+  thickness: number;
+  width: number;
+  length: number;
+  pieces: number;
+  calculatedFeet: number;
+  existingPieces: number | null;
+  action: "CREATE" | "UPDATE";
+};
+type CubicationImportUnrecognizedRow = { rowNumber: number; rawMedida: string; rawPiezas: string; reason: string };
+type CubicationImportPreview = { tripId: string; tripCode: string; recognized: CubicationImportRecognizedLine[]; unrecognized: CubicationImportUnrecognizedRow[] };
 
 /* ─────────────────────────── Helpers ─────────────────────────── */
 
@@ -414,6 +429,40 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
     setLines((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  // prompt-timber-cubicacion-carga.md, Parte B.3 — solo pide el preview
+  // al backend (POST .../cubication-import, sin escribir nada). El
+  // "existingPieces"/"action" del preview ya viene resuelto contra lo
+  // que el backend tiene guardado — no se recalcula acá.
+  async function fetchCubicationPreview(fileBase64: string): Promise<CubicationImportPreview> {
+    const res = await apiFetch(`/api/timber/trips/${tripId}/cubication-import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileBase64 }),
+    });
+    const raw = await readJson(res);
+    if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo leer el archivo de cubicación.");
+    return unwrapApiData(raw);
+  }
+
+  // Parte B.4 — "Aplicar" NO llama a un endpoint de escritura nuevo: edita
+  // `lines` en el cliente con el MISMO mecanismo que updateLinePieces/
+  // addMeasure ya usan, y el autosave con debounce (más abajo) lo guarda
+  // con el PUT .../trips/{id} de siempre. Medida que ya existía en el
+  // viaje → se REEMPLAZAN sus piezas por las del archivo (el usuario
+  // recuenta de cero, no está sumando a lo que ya había); medida nueva →
+  // se agrega.
+  function applyCubicationImport(recognized: CubicationImportRecognizedLine[]) {
+    setLines((prev) => {
+      const merged = [...prev];
+      for (const item of recognized) {
+        const idx = merged.findIndex((l) => l.thickness === item.thickness && l.width === item.width && l.length === item.length);
+        if (idx >= 0) merged[idx] = { ...merged[idx], pieces: item.pieces };
+        else merged.push({ thickness: item.thickness, width: item.width, length: item.length, pieces: item.pieces });
+      }
+      return merged;
+    });
+  }
+
   if (loading || !trip) {
     return <div className="p-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</div>;
   }
@@ -453,6 +502,7 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
           expenses={expenses} setExpenses={setExpenses}
           invoicedFeet={invoicedFeet} setInvoicedFeet={setInvoicedFeet}
           trip={trip} updateLinePieces={updateLinePieces} addMeasure={addMeasure} removeLine={removeLine}
+          fetchCubicationPreview={fetchCubicationPreview} applyCubicationImport={applyCubicationImport}
         />
       )}
       {step === 2 && <StepCostosPorMedida trip={trip} />}
@@ -475,10 +525,39 @@ function StepViajeYCubicacion(props: {
   updateLinePieces: (idx: number, pieces: number) => void;
   addMeasure: (m: TripLineDraft) => void;
   removeLine: (idx: number) => void;
+  fetchCubicationPreview: (fileBase64: string) => Promise<CubicationImportPreview>;
+  applyCubicationImport: (recognized: CubicationImportRecognizedLine[]) => void;
 }) {
-  const { lines, isEditable, costMode, setCostMode, costPerFoot, setCostPerFoot, woodTripTotalCost, setWoodTripTotalCost, expenses, setExpenses, invoicedFeet, setInvoicedFeet, trip, updateLinePieces, addMeasure, removeLine } = props;
+  const { lines, isEditable, costMode, setCostMode, costPerFoot, setCostPerFoot, woodTripTotalCost, setWoodTripTotalCost, expenses, setExpenses, invoicedFeet, setInvoicedFeet, trip, updateLinePieces, addMeasure, removeLine, fetchCubicationPreview, applyCubicationImport } = props;
   const totalFeet = n(trip.totalFeet);
   const reconciliation = trip.reconciliation;
+  const [cubicationPreview, setCubicationPreview] = useState<CubicationImportPreview | null>(null);
+  const [cubicationImportLoading, setCubicationImportLoading] = useState(false);
+  const cubicationFileInputRef = useRef<HTMLInputElement>(null);
+
+  async function onCubicationFileSelected(file: File | null) {
+    if (!file) return;
+    setCubicationImportLoading(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      let binary = "";
+      new Uint8Array(buffer).forEach((byte) => { binary += String.fromCharCode(byte); });
+      const preview = await fetchCubicationPreview(btoa(binary));
+      setCubicationPreview(preview);
+    } catch (error) {
+      showToast("error", error instanceof Error ? error.message : "No se pudo leer el archivo de cubicación.");
+    } finally {
+      setCubicationImportLoading(false);
+      if (cubicationFileInputRef.current) cubicationFileInputRef.current.value = "";
+    }
+  }
+
+  function confirmApplyCubicationImport() {
+    if (!cubicationPreview) return;
+    applyCubicationImport(cubicationPreview.recognized);
+    showToast("success", `${cubicationPreview.recognized.length} medida${cubicationPreview.recognized.length === 1 ? "" : "s"} aplicada${cubicationPreview.recognized.length === 1 ? "" : "s"} a la cubicación.`);
+    setCubicationPreview(null);
+  }
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
@@ -488,10 +567,26 @@ function StepViajeYCubicacion(props: {
           <span className="text-[11px] text-[var(--color-text-muted)]">{lines.length} medidas</span>
           <span className="flex-1" />
           {isEditable && (
-            <select onChange={(e) => { const m = STANDARD_MEASURES[Number(e.target.value)]; if (m) addMeasure(m); e.target.value = ""; }} value="" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[11.5px]">
-              <option value="">+ Agregar medida</option>
-              {STANDARD_MEASURES.map((m, i) => <option key={i} value={i}>{m.thickness}×{m.width}×{m.length}</option>)}
-            </select>
+            <>
+              <select onChange={(e) => { const m = STANDARD_MEASURES[Number(e.target.value)]; if (m) addMeasure(m); e.target.value = ""; }} value="" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[11.5px]">
+                <option value="">+ Agregar medida</option>
+                {STANDARD_MEASURES.map((m, i) => <option key={i} value={i}>{m.thickness}×{m.width}×{m.length}</option>)}
+              </select>
+              {/* prompt-timber-cubicacion-carga.md, Parte B — el usuario
+                  siempre recuenta a mano en su propia hoja de cubicación;
+                  esto evita re-teclear las ~50 medidas de un viaje una por
+                  una en la tabla de arriba. */}
+              <input ref={cubicationFileInputRef} type="file" accept=".xlsx" className="hidden" onChange={(e) => onCubicationFileSelected(e.target.files?.[0] ?? null)} />
+              <button
+                type="button"
+                disabled={cubicationImportLoading}
+                onClick={() => cubicationFileInputRef.current?.click()}
+                className="inline-flex items-center gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[11.5px] font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] disabled:opacity-60"
+              >
+                {cubicationImportLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                Cargar cubicación desde Excel
+              </button>
+            </>
           )}
         </div>
         <table className="hm-sheet-table">
@@ -521,6 +616,70 @@ function StepViajeYCubicacion(props: {
           </tfoot>
         </table>
       </Card>
+
+      {/* prompt-timber-cubicacion-carga.md, Parte B.3/B.4 — preview antes
+          de aplicar. No escribe nada hasta que el usuario confirma; el
+          autosave con debounce (arriba) guarda el resultado con el
+          mismo PUT de siempre en cuanto se aplica. */}
+      {cubicationPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-[var(--color-surface)] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
+              <div>
+                <h3 className="text-sm font-semibold">Cubicación cargada desde Excel</h3>
+                <p className="text-xs text-[var(--color-text-muted)]">Revisá antes de aplicar — nada se guarda todavía.</p>
+              </div>
+              <button type="button" onClick={() => setCubicationPreview(null)} className="rounded-lg p-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]"><X className="h-4 w-4" /></button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <div>
+                <b className="text-[12.5px]">{cubicationPreview.recognized.length} medida{cubicationPreview.recognized.length === 1 ? "" : "s"} reconocida{cubicationPreview.recognized.length === 1 ? "" : "s"}</b>
+                <table className="hm-sheet-table mt-2">
+                  <thead>
+                    <tr><th>Medida</th><th className="r">Piezas</th><th className="r">Pies calculados</th><th>Acción</th></tr>
+                  </thead>
+                  <tbody>
+                    {cubicationPreview.recognized.map((r, i) => (
+                      <tr key={i}>
+                        <td><b>{r.thickness}×{r.width}×{r.length}</b></td>
+                        <td className="hm-num">{r.pieces}</td>
+                        <td className="hm-num">{fmt(r.calculatedFeet, 3)}</td>
+                        <td>
+                          {r.action === "UPDATE" ? (
+                            <Badge variant="warning">Actualiza {r.existingPieces} → {r.pieces} pzas</Badge>
+                          ) : (
+                            <Badge variant="success">Nueva medida</Badge>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {cubicationPreview.recognized.length === 0 && (
+                      <tr><td colSpan={4} className="text-center text-[var(--color-text-muted)]">No se reconoció ninguna medida en el archivo.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {cubicationPreview.unrecognized.length > 0 && (
+                <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3">
+                  <b className="text-[12.5px] text-[var(--color-warning-800)]">{cubicationPreview.unrecognized.length} fila{cubicationPreview.unrecognized.length === 1 ? "" : "s"} no reconocida{cubicationPreview.unrecognized.length === 1 ? "" : "s"} — agregalas a mano si hace falta</b>
+                  <ul className="mt-1.5 space-y-1 text-[11.5px] text-[var(--color-warning-800)]">
+                    {cubicationPreview.unrecognized.map((u, i) => (
+                      <li key={i}>Fila {u.rowNumber}: “{u.rawMedida || "(vacío)"}” / “{u.rawPiezas || "(vacío)"}” — {u.reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] px-5 py-3">
+              <Button variant="ghost" onClick={() => setCubicationPreview(null)}>Cancelar</Button>
+              <Button variant="success" disabled={cubicationPreview.recognized.length === 0} onClick={confirmApplyCubicationImport}>Aplicar</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-3.5">
         <Card>
