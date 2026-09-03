@@ -950,6 +950,65 @@ export async function createInventoryMovement(input: InventoryMovementInput) {
 }
 
 /**
+ * prompt-kardex-ux-wac.md, Parte 2.2 — vista previa del WAC ANTES de
+ * enviar el movimiento: reusa recalculateWeightedAverage (wac.ts, sin
+ * tocar) sin escribir nada a la DB. Misma conversión sucursal→unidad
+ * base que createInventoryMovementTx (resolveInventoryProductForMovement
+ * + convertSaleQtyToBaseQty/convertSaleUnitCostToBaseUnitCost), para que
+ * el número que se muestra en el formulario sea EXACTAMENTE el que se
+ * aplicaría al guardar, no una aproximación aparte.
+ *
+ * No corre los guards de "costo de paquete tecleado como unitario"
+ * (detectPackageCostAsUnitCost) ni el tope de salto — esos siguen
+ * siendo la autoridad real al momento de guardar (Parte 2.3, con su
+ * propio reintento). Acá solo se calcula el número; si
+ * recalculateWeightedAverage no puede calcular (ej. costo cero mientras
+ * el usuario todavía está escribiendo), available=false en vez de
+ * tronar — es una vista previa best-effort, no una validación.
+ */
+export async function previewInventoryMovement(input: {
+  branchId: string;
+  productId: string;
+  movementType: InventoryMovementType;
+  quantity: number;
+  unitCost: number;
+}): Promise<
+  | { available: true; currentWac: number; newWac: number; percentChange: number | null; saleUnit: string | null; baseUnit: string | null; conversionFactor: number | null; baseUnitCost: number | null }
+  | { available: false; reason: string }
+> {
+  const { conversion, balance } = await getSharedInventoryBalance(prisma, { branchId: input.branchId, productId: input.productId });
+  const inbound = isInboundMovement(input.movementType);
+  const movementQty = new Prisma.Decimal(input.quantity);
+  const movementUnitCost = new Prisma.Decimal(input.unitCost);
+  const baseMovementQty = conversion
+    ? convertSaleQtyToBaseQty({ quantity: movementQty, conversionFactor: conversion.conversionFactor })
+    : movementQty;
+  const baseMovementUnitCost = conversion
+    ? convertSaleUnitCostToBaseUnitCost({ saleUnitCost: movementUnitCost, conversionFactor: conversion.conversionFactor })
+    : movementUnitCost;
+  const currentQty = balance?.quantityOnHand ?? new Prisma.Decimal(0);
+  const currentWac = balance?.weightedAverageCost ?? new Prisma.Decimal(0);
+
+  try {
+    const { newWac } = recalculateWeightedAverage({ currentQty, currentWac, movementQty: baseMovementQty, movementUnitCost: baseMovementUnitCost, inbound });
+    const percentChange = currentWac.gt(0) ? Number(newWac.sub(currentWac).div(currentWac).mul(100)) : null;
+    return {
+      available: true,
+      currentWac: Number(currentWac),
+      newWac: Number(newWac),
+      percentChange,
+      saleUnit: conversion?.saleUnit ?? null,
+      baseUnit: conversion?.baseUnit ?? null,
+      conversionFactor: conversion ? Number(conversion.conversionFactor) : null,
+      baseUnitCost: Number(baseMovementUnitCost),
+    };
+  } catch (error) {
+    const reason = error instanceof WacValidationError ? error.message : "No se pudo calcular la vista previa.";
+    return { available: false, reason };
+  }
+}
+
+/**
  * Converts the base-unit WAC (stored on the canonical product) to the sale-unit cost
  * expected by createInventoryMovementTx for a given product's conversion.
  *
