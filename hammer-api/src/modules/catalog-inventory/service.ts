@@ -32,6 +32,67 @@ export function computeHasNoPrice(standardSalePrice: number, branchPrices: numbe
   return standardSalePrice <= 0 && !hasAnyBranchPrice;
 }
 
+/**
+ * docs/COSTO-UNA-FUENTE.md, ciclo de blindaje — pura, exportada para
+ * test. Decide la sucursal de costo de toda la respuesta de
+ * getCatalogInventoryCenter: `requestedBranchId` si viene, si no NETWORK
+ * explícito (costBranchId null) — nunca `branches[0]`. Ese fallback era
+ * el mismo bug que la Parte A-C de este documento acababa de cerrar, en
+ * otra forma: un costo que no es el de ninguna sucursal real, mostrado
+ * sin que la respuesta lo dijera en ningún lado. Con branches vacío, cae
+ * a NETWORK igual (no hay nada de qué caer).
+ */
+export function resolveCostScope(
+  requestedBranchId: string | null | undefined,
+  branches: Array<{ id: string; name: string }>,
+): { costBranchId: string | null; costScope: "BRANCH" | "NETWORK"; costBranchName: string | null } {
+  const costBranchId = requestedBranchId ?? null;
+  const costScope: "BRANCH" | "NETWORK" = costBranchId ? "BRANCH" : "NETWORK";
+  const costBranchName = costBranchId ? branches.find((branch) => branch.id === costBranchId)?.name ?? null : null;
+  return { costBranchId, costScope, costBranchName };
+}
+
+/**
+ * docs/COSTO-UNA-FUENTE.md, ciclo de blindaje — pura, exportada para
+ * test. effectiveCost es null (NUNCA 0) sin costBranchId o sin pricing
+ * resuelto para este producto — cero es un costo válido (branchCost=0
+ * declarado a propósito), null es "no aplica sin sucursal"/"no se pudo
+ * calcular". hasNoCost es false (NUNCA true) sin costBranchId — "sin
+ * costo" no es una conclusión que se pueda sacar sin haber consultado
+ * ninguna sucursal.
+ */
+export function computeEffectiveCostFields(
+  costBranchId: string | null,
+  resolvedEffectiveCost: Prisma.Decimal | number | string | null | undefined,
+): { effectiveCost: number | null; hasNoCost: boolean } {
+  // Defensa en profundidad, no solo el llamador: si costBranchId es null,
+  // effectiveCost es null SIN IMPORTAR qué venga en resolvedEffectiveCost
+  // (aunque un llamador futuro pasara por error el costo de alguna
+  // sucursal igual). El bug de branches[0] era exactamente esto en otra
+  // forma — un costo real que se cuela sin que se haya pedido ninguna
+  // sucursal.
+  if (costBranchId === null) return { effectiveCost: null, hasNoCost: false };
+  const effectiveCost = resolvedEffectiveCost != null ? Number(resolvedEffectiveCost) : null;
+  const hasNoCost = effectiveCost === null || effectiveCost <= 0;
+  return { effectiveCost, hasNoCost };
+}
+
+/**
+ * docs/COSTO-UNA-FUENTE.md, ciclo de blindaje — pura, exportada para
+ * test. Stock (existencias) es un total de RED legítimo — sumar entre
+ * sucursales SÍ tiene sentido, a diferencia de un costo o un precio.
+ * Independiente de costBranchId/costScope a propósito: aunque nadie haya
+ * elegido sucursal, el stock total sigue siendo una respuesta honesta.
+ */
+export function computeStockSummary(
+  balances: Array<{ quantityOnHand: Prisma.Decimal | number | string; inventoryValue: Prisma.Decimal | number | string }>,
+): { totalStock: number; totalValue: number; branchesWithStock: number } {
+  const totalStock = balances.reduce((sum, row) => sum + decimalToNumber(row.quantityOnHand), 0);
+  const totalValue = balances.reduce((sum, row) => sum + decimalToNumber(row.inventoryValue), 0);
+  const branchesWithStock = balances.filter((row) => decimalToNumber(row.quantityOnHand) > 0).length;
+  return { totalStock, totalValue, branchesWithStock };
+}
+
 type CatalogStockConversion = {
   stockGroupId: string;
   stockGroupCode: string;
@@ -82,8 +143,9 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   } as const;
 
   /* ── Helper to enrich a product row ──
-     costo/margen (baseCost, hasNoCost): docs/COSTO-UNA-FUENTE.md — resuelto
-     con branchPricingByKey (getEffectiveProductPricingBatch), la MISMA
+     costo/margen (effectiveCost, hasNoCost — renombrado desde baseCost):
+     docs/COSTO-UNA-FUENTE.md — resuelto con branchPricingByKey
+     (getEffectiveProductPricingBatch), la MISMA
      fuente que branchEffectivePricing más abajo, en vez de una cascada
      propia sin branchCost. branchPricingByKey y costBranchId se calculan
      más abajo (antes de la primera llamada real a esta función) y se leen
@@ -92,11 +154,19 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function enrichProduct(product: any, policyMap: Map<string, any>) {
     const productBalances: any[] = product.inventoryBalances;
-    const totalStock = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.quantityOnHand), 0);
-    const totalValue = productBalances.reduce((sum: number, row: any) => sum + decimalToNumber(row.inventoryValue), 0);
-    const branchesWithStock = productBalances.filter((row: any) => decimalToNumber(row.quantityOnHand) > 0).length;
+    // Stock es un total de RED legítimo — sumar existencias entre
+    // sucursales sí tiene sentido, a diferencia de un costo o un precio.
+    // Se queda igual con o sin sucursal elegida (computeStockSummary,
+    // docs/COSTO-UNA-FUENTE.md, pura y probada aparte).
+    const { totalStock, totalValue, branchesWithStock } = computeStockSummary(productBalances);
     const pricing = costBranchId ? branchPricingByKey.get(`${costBranchId}:${product.id}`) : undefined;
-    const productCost = pricing?.effectiveCost != null ? Number(pricing.effectiveCost) : 0;
+    // effectiveCost/hasNoCost — resueltos por computeEffectiveCostFields
+    // (docs/COSTO-UNA-FUENTE.md, pura y probada aparte): null/false sin
+    // costBranchId, nunca 0/true por ausencia de sucursal. Antes esto
+    // caía a branches[0] y volvía 0 cuando ni siquiera había pricing — el
+    // mismo bug de fondo en dos formas distintas (un costo que no es el
+    // que el usuario cree que ve).
+    const { effectiveCost, hasNoCost } = computeEffectiveCostFields(costBranchId, pricing?.effectiveCost);
     const critical = productBalances.some((row: any) => {
       const policy = policyMap.get(`${product.id}:${row.branchId}`);
       const rp = policy ? decimalToNumber(policy.reorderPoint) : CRITICAL_STOCK_FALLBACK;
@@ -108,12 +178,19 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       totalStock,
       branchesWithStock,
       inventoryValue: totalValue,
-      baseCost: productCost,
+      // Renombrado desde baseCost (docs/COSTO-UNA-FUENTE.md) — "base" sonaba
+      // a "el costo real de base", cuando en realidad es EL costo efectivo
+      // de la sucursal en contexto (o null sin ninguna) — el mismo nombre
+      // que ya usa branchEffectivePricing[].effectiveCost, para que no
+      // convivan dos nombres para la misma idea en la misma respuesta.
+      effectiveCost,
       basePrice: decimalToNumber(product.standardSalePrice),
       isCriticalStock: critical,
       hasZeroStock: totalStock === 0,
       hasNegativeStock: productBalances.some((row: any) => decimalToNumber(row.quantityOnHand) < 0),
-      hasNoCost: productCost <= 0,
+      hasNoCost,
+      // hasNoPrice se queda igual con o sin sucursal — computeHasNoPrice ya
+      // mira standardSalePrice, que es general y no depende de sucursal.
       hasNoPrice: computeHasNoPrice(
         decimalToNumber(product.standardSalePrice),
         branchSettings.map((setting: any) => decimalToNumber(setting.branchPrice)),
@@ -227,10 +304,17 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
      getEffectiveProductPricingBatch (catalog/effective-pricing.ts) ya es
      fusión-aware (branchCost > WAC > averageCost > globalCost >
      lastPurchaseCost, canónico × factor para un derivado) — no se
-     reimplementa acá. Sucursal en contexto: params.branchId si viene, si no
-     la primera sucursal activa por código — NUNCA un promedio entre
-     sucursales (un costo promedio entre sucursales no es el costo de nada). */
-  const costBranchId = params.branchId ?? branches[0]?.id ?? null;
+     reimplementa acá.
+
+     Ciclo de blindaje (mismo doc) — SIN fallback a branches[0]: eso era el
+     mismo bug en otra forma, un costo que no es el de ninguna sucursal
+     real mostrado como si lo fuera, sin que la interfaz lo dijera en
+     ningún lado. costScope/costBranchId/costBranchName van explícitos en
+     la respuesta para que la interfaz pueda anunciar el alcance en vez de
+     mentirlo. Sin params.branchId, costBranchId es null (NETWORK) — NUNCA
+     un promedio entre sucursales (un costo promedio entre sucursales no
+     es el costo de nada). */
+  const { costBranchId, costScope, costBranchName } = resolveCostScope(params.branchId, branches);
   const allMetricProductIds = allMetricProducts.map((product) => product.id);
   const branchPricingItems = allMetricProductIds.flatMap((productId) => branches.map((branch) => ({ branchId: branch.id, productId })));
   const branchPricingByKey = await getEffectiveProductPricingBatch(prisma, branchPricingItems);
@@ -376,9 +460,10 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     return {
       ...product,
       ...(conversion ? {
-        // baseCost/hasNoCost NO se recalculan acá — ya vienen correctos de
-        // enrichProduct (branchPricingByKey, fusión-aware) en el spread
-        // ...product de abajo. docs/COSTO-UNA-FUENTE.md.
+        // effectiveCost/hasNoCost (renombrado desde baseCost) NO se
+        // recalculan acá — ya vienen correctos de enrichProduct
+        // (branchPricingByKey, fusión-aware) en el spread ...product de
+        // abajo. docs/COSTO-UNA-FUENTE.md.
         totalStock: Number(displayedBaseQty),
         branchesWithStock: sharedBalances.filter((balance) => decimalToNumber(balance.quantityOnHand) > 0).length,
         inventoryValue: Number(aggregateInventoryValue),
@@ -453,6 +538,16 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     branches,
     categories,
     kpis,
+    // docs/COSTO-UNA-FUENTE.md — anuncia explícito el alcance de
+    // effectiveCost/hasNoCost en products[]: "BRANCH" cuando hay una
+    // sucursal en contexto (costBranchId/costBranchName la identifican),
+    // "NETWORK" cuando no (costBranchId/costBranchName van null) — la
+    // interfaz usa esto para no mostrar un costo como si fuera "el" costo
+    // cuando en realidad es de una sucursal arbitraria, o para no mostrar
+    // nada donde no hay nada que mostrar.
+    costScope,
+    costBranchId,
+    costBranchName,
     products: rankedProducts,
     balances,
     movements,

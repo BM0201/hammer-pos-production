@@ -31,7 +31,9 @@ type ProductRow = {
   name: string;
   unit: string;
   isActive: boolean;
-  baseCost: number;
+  /** Renombrado desde baseCost (docs/COSTO-UNA-FUENTE.md) — null cuando
+   * costScope es "NETWORK" (sin sucursal elegida), nunca 0 de relleno. */
+  effectiveCost: number | null;
   globalCost?: number | null;
   basePrice: number;
   totalStock: number;
@@ -86,8 +88,9 @@ type ProductRow = {
    * prompt-precios-costos-una-sola-fuente.md — el mismo motor que usa la
    * venta (branchCost > WAC > averageCost > globalCost > lastPurchaseCost,
    * fusión-aware), UNA fila por sucursal activa. buildBranchPricingCostRow
-   * lo usa en vez de recalcular con baseCost (costo de RED, sin branchCost)
-   * como hacía antes — la causa real del margen que no cuadraba.
+   * lo usa en vez de recalcular con la cascada de costo de red (sin
+   * branchCost, borrada en docs/COSTO-UNA-FUENTE.md) como hacía antes —
+   * la causa real del margen que no cuadraba.
    */
   branchEffectivePricing?: Array<{
     branchId: string;
@@ -252,6 +255,17 @@ type CenterData = {
     productsWithoutPrice: number;
     missingPriceCount: number;
   };
+  /**
+   * docs/COSTO-UNA-FUENTE.md — alcance de effectiveCost/hasNoCost en
+   * products[]. "BRANCH": hay sucursal en contexto, costBranchId/
+   * costBranchName la identifican. "NETWORK": no hay ninguna elegida —
+   * effectiveCost/hasNoCost de cada fila no reflejan ninguna sucursal en
+   * particular (nunca un promedio), la interfaz debe anunciarlo, no
+   * mostrar un número como si fuera "el" costo.
+   */
+  costScope: "BRANCH" | "NETWORK";
+  costBranchId: string | null;
+  costBranchName: string | null;
   products: ProductRow[];
   balances: ProductRow["inventoryBalances"];
   movements: Movement[];
@@ -351,14 +365,47 @@ function marginBadgeVariant(value: number | null) {
   return "success" as const;
 }
 
+/**
+ * docs/COSTO-UNA-FUENTE.md, ciclo de blindaje, C.1 — "—" siempre que no
+ * hay un número real que mostrar, sea porque costScope es NETWORK (nadie
+ * eligió sucursal) o porque, con sucursal elegida, este producto
+ * específico no tiene costo/precio resuelto. A diferencia de
+ * formatMoneyOrNd/formatMarginOrNd (que muestran "N/D" en la tabla de
+ * Precios y costos), acá el guion es deliberado: "N/D" suena a error de
+ * datos, "—" es "no aplica sin sucursal" — la distinción que este ciclo
+ * existe para hacer explícita.
+ */
+function formatCostOrDash(value: number | null) {
+  return value === null ? "—" : money(value);
+}
+
+function formatMarginOrDash(value: number | null) {
+  return value === null ? "—" : `${value.toFixed(1)}%`;
+}
+
+/** Precio y margen efectivos de un producto para la sucursal en contexto
+ * (costScope=BRANCH) — deriva de branchEffectivePricing (ya calculado por
+ * el backend, getEffectiveProductPricingBatch), nunca recalculado acá.
+ * effectiveCost vive aparte, a nivel de fila (product.effectiveCost),
+ * para la misma sucursal. */
+function effectivePriceAndMargin(product: ProductRow, costBranchId: string | null): { price: number | null; margin: number | null } {
+  if (!costBranchId) return { price: null, margin: null };
+  const entry = product.branchEffectivePricing?.find((item) => item.branchId === costBranchId);
+  const price = entry?.effectivePrice ?? null;
+  const cost = product.effectiveCost;
+  const margin = cost !== null && cost > 0 && price !== null && price > 0 ? ((price - cost) / price) * 100 : null;
+  return { price, margin };
+}
+
 function buildBranchPricingCostRow(product: ProductRow, branch: Branch): BranchPricingCostRow {
   const setting = product.branchProductSettings.find((item) => item.branchId === branch.id);
   // prompt-precios-costos-una-sola-fuente.md — antes effectiveCost salía de
-  // product.baseCost (costo de RED: WAC > averageCost > globalCost >
-  // lastPurchaseCost, SIN branchCost) mientras esta misma fila mostraba
-  // branchCost de la sucursal — dos costos distintos en una fila, el bug
-  // real detrás de un margen que no cuadraba con lo que se veía en
-  // pantalla. entry es el mismo motor que resuelve precio/costo efectivo
+  // una cascada de costo de red (WAC > averageCost > globalCost >
+  // lastPurchaseCost, SIN branchCost, borrada en docs/COSTO-UNA-FUENTE.md)
+  // mientras esta misma fila mostraba branchCost de la sucursal — dos
+  // costos distintos en una fila, el bug real detrás de un margen que no
+  // cuadraba con lo que se veía en pantalla. entry es el mismo motor que
+  // resuelve precio/costo efectivo
   // para la venta (branchCost > WAC > averageCost > globalCost >
   // lastPurchaseCost, fusión-aware) — branchEffectivePricing lo trae
   // calculado desde el backend (getEffectiveProductPricingBatch), no se
@@ -937,6 +984,12 @@ export function CatalogInventoryAdmin() {
     }
   }
 
+  // docs/COSTO-UNA-FUENTE.md, C.3 — código de la sucursal en contexto de
+  // costo, para el encabezado "Costo · RIV" (data.costBranchName ya viene
+  // del backend, pero el código — más corto, el mismo criterio que
+  // "PRECIO DE VENTA · RIV" en Precios y costos — solo vive en branches[]).
+  const costBranchCode = data?.costBranchId ? data.branches.find((branch) => branch.id === data.costBranchId)?.code ?? null : null;
+
   const matrix = useMemo(() => {
     const branches = data?.branches ?? [];
     const tokens = tokenize(stockSearch);
@@ -1013,6 +1066,15 @@ export function CatalogInventoryAdmin() {
           </select>
         </div>
       </div>
+
+      {/* docs/COSTO-UNA-FUENTE.md, C.2 — una línea de texto, no una alerta
+          ámbar: sin sucursal elegida es el estado normal de esta vista, no
+          un error. */}
+      {data && data.costScope === "NETWORK" ? (
+        <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+          Mostrando existencias de todas las sucursales. Los costos y precios dependen de la sucursal — elegí una para verlos.
+        </p>
+      ) : null}
 
       {/* ── Tabs — subrayado ── */}
       <div className="overflow-x-auto" style={{ borderBottom: "0.5px solid var(--color-border)" }}>
@@ -1263,13 +1325,32 @@ export function CatalogInventoryAdmin() {
             <table className="hm-table min-w-[1100px] w-full">
               <thead>
                 <tr>
-                  <th>SKU</th><th>Producto</th><th>Categoria</th><th>Unidad principal</th><th>Stock resumen</th><th>Estado</th><th className="text-right">Acciones</th>
+                  <th>SKU</th><th>Producto</th><th>Categoria</th><th>Unidad principal</th><th>Stock resumen</th>
+                  {/* docs/COSTO-UNA-FUENTE.md, C.1/C.3 — con sucursal elegida, el
+                      encabezado la nombra (igual que "PRECIO DE VENTA · RIV" en
+                      Precios y costos); sin ninguna, un ícono con tooltip explica
+                      por qué la columna está vacía en vez de dejarlo sin decir. */}
+                  <th title={data.costScope === "NETWORK" ? "Elegí una sucursal para ver costos y precios" : undefined}>
+                    Costo{data.costScope === "BRANCH" && costBranchCode ? ` · ${costBranchCode}` : ""}
+                    {data.costScope === "NETWORK" ? (
+                      <Info className="ml-1 inline h-3 w-3 align-text-top" style={{ color: "var(--color-text-muted)" }} />
+                    ) : null}
+                  </th>
+                  <th title={data.costScope === "NETWORK" ? "Elegí una sucursal para ver costos y precios" : undefined}>
+                    Precio{data.costScope === "BRANCH" && costBranchCode ? ` · ${costBranchCode}` : ""}
+                    {data.costScope === "NETWORK" ? (
+                      <Info className="ml-1 inline h-3 w-3 align-text-top" style={{ color: "var(--color-text-muted)" }} />
+                    ) : null}
+                  </th>
+                  <th>Margen</th>
+                  <th>Estado</th><th className="text-right">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {data.products.map((product) => {
                   const isEditing = editingProductId === product.id;
                   const sharedStock = formatSharedStock(product);
+                  const { price: rowEffectivePrice, margin: rowMarginPercent } = effectivePriceAndMargin(product, data.costBranchId);
                   const categoryChanged = isEditing && editDraft.categoryId !== (product.category?.id ?? "");
                   return (
                   <tr key={product.id}>
@@ -1357,6 +1438,9 @@ export function CatalogInventoryAdmin() {
                         </div>
                       ) : null}
                     </td>
+                    <td className="font-mono text-xs">{formatCostOrDash(product.effectiveCost)}</td>
+                    <td className="font-mono text-xs">{formatCostOrDash(rowEffectivePrice)}</td>
+                    <td><Badge variant={marginBadgeVariant(rowMarginPercent)}>{formatMarginOrDash(rowMarginPercent)}</Badge></td>
                     <td><Badge variant={product.isActive ? "success" : "warning"}>{product.isActive ? "Activo" : "Inactivo"}</Badge></td>
                     <td>
                       <div className="flex justify-end gap-1.5">
@@ -1401,7 +1485,7 @@ export function CatalogInventoryAdmin() {
                   </tr>
                   );
                 })}
-                {data.products.length === 0 ? <tr><td colSpan={7} className="text-center py-6 text-[var(--color-text-muted)]">No hay productos que coincidan con los filtros.</td></tr> : null}
+                {data.products.length === 0 ? <tr><td colSpan={10} className="text-center py-6 text-[var(--color-text-muted)]">No hay productos que coincidan con los filtros.</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -3390,7 +3474,7 @@ function buildPricingDraft(products: ProductRow[], branches: Branch[]): PricingD
  * (row.effectiveCost), no product.globalCost (que para un derivado
  * siempre es null — nunca guarda su propio costo, esa regla no cambió).
  */
-function globalCostServerValue(product: ProductRow, activeBranch: Branch | undefined): string {
+function globalCostServerValue(product: ProductRow, activeBranch: Branch | null | undefined): string {
   if (product.stockConversion && !product.stockConversion.isCanonical && activeBranch) {
     const row = buildBranchPricingCostRow(product, activeBranch);
     return row.effectiveCost != null ? String(row.effectiveCost) : "";
@@ -3429,8 +3513,16 @@ function PricingPanel({
   const [comparisonMode, setComparisonMode] = useState(false);
   const [productFilter, setProductFilter] = useState("");
   const productsRef = useRef(products);
+  // docs/COSTO-UNA-FUENTE.md (C.4) — "Precios y costos" es por definición
+  // por sucursal (edita branchPrice/branchCost, campos que no existen sin
+  // una). Antes caía a branches[0] en silencio, tanto acá como en un
+  // useEffect que además reescribía el branchId COMPARTIDO con el resto
+  // de la pantalla (el mismo select de "Sucursal" de la barra de filtros
+  // controla este panel) — entrar a esta pestaña sin sucursal elegida
+  // mutaba la selección global sin que nadie lo pidiera. Ahora sin
+  // sucursal, activeBranch es null y el panel lo pide explícito.
   const activeBranch = useMemo(
-    () => branches.find((branch) => branch.id === selectedBranchId) ?? branches[0],
+    () => branches.find((branch) => branch.id === selectedBranchId) ?? null,
     [branches, selectedBranchId],
   );
   const pricingBranches = useMemo(() => activeBranch ? [activeBranch] : [], [activeBranch]);
@@ -3441,15 +3533,6 @@ function PricingPanel({
     Object.fromEntries(products.map((p) => [p.id, globalCostServerValue(p, activeBranch)]))
   );
 
-  // If no branch is selected yet, the panel displays branches[0] locally but the
-  // parent never fetched data scoped to it — kpis.missingPriceCount would then
-  // reflect the global (all-branches) count instead of this branch's. Sync back
-  // so the banner and the table always agree on which branch they describe.
-  useEffect(() => {
-    if (!selectedBranchId && branches[0]) {
-      onSelectBranch(branches[0].id);
-    }
-  }, [selectedBranchId, branches, onSelectBranch]);
   const filteredProducts = useMemo(() => products.filter((product) => {
     if (focusedProductId && product.id !== focusedProductId) return false;
     const tokens = tokenize(productFilter);
@@ -3632,6 +3715,7 @@ function PricingPanel({
       {/* Branch pricing filters */}
       <div className="grid gap-2 px-4 pt-3 md:grid-cols-[240px_1fr_auto_auto_auto]">
         <select className="hm-input" value={activeBranch?.id ?? ""} onChange={(event) => onSelectBranch(event.target.value)}>
+          <option value="">Elegí una sucursal</option>
           {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} - {branch.name}</option>)}
         </select>
         <Input value={productFilter} onChange={(event) => setProductFilter(event.target.value)} placeholder="Buscar producto, SKU o categoria" />
@@ -3639,6 +3723,14 @@ function PricingPanel({
         <Button variant={comparisonMode ? "secondary" : "ghost"} onClick={() => setComparisonMode((value) => !value)}>Vista comparativa</Button>
         <Button variant="ghost" onClick={() => setProductFilter("")}>Limpiar</Button>
       </div>
+      {/* C.4 — esta pantalla edita branchPrice/branchCost, campos que no
+          existen sin sucursal: a diferencia de Catálogo (que sí tiene
+          sentido en red), acá no hay nada que editar sin elegir una. */}
+      {!activeBranch ? (
+        <p className="px-4 py-8 text-center text-sm" style={{ color: "var(--color-text-muted)" }}>
+          Elegí una sucursal arriba para ver y editar precios y costos — esta vista es por sucursal.
+        </p>
+      ) : null}
       {comparisonMode ? (
         <div className="overflow-x-auto p-4">
           <table className="hm-table min-w-[900px] w-full">
@@ -3664,13 +3756,14 @@ function PricingPanel({
           </table>
         </div>
       ) : null}
+      {activeBranch ? (
       <div className="overflow-x-auto p-4">
         <table className="hm-table min-w-[900px] w-full">
           <thead>
             <tr>
               <th className="min-w-[220px]">Producto</th>
               <th title="Costo que aplica a todas las sucursales. Se puede sobreescribir por sucursal.">Costo de compra ↕</th>
-              <th>Precio de venta{activeBranch ? ` · ${activeBranch.code}` : ""}</th>
+              <th>Precio de venta · {activeBranch.code}</th>
               <th>Margen</th>
               <th title="Asignación manual: activa el producto en esta sucursal aunque no tenga stock ni historial">Asignado ★</th>
               <th className="min-w-[100px]">Acciones</th>
@@ -3827,6 +3920,7 @@ function PricingPanel({
           </tbody>
         </table>
       </div>
+      ) : null}
     </Card>
   );
 }
