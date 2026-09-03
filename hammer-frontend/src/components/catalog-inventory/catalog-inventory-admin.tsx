@@ -971,40 +971,47 @@ export function CatalogInventoryAdmin() {
         })()}
       </div>
 
-      {/* ── Barra de filtros ── */}
-      <div className="flex flex-wrap gap-2 items-center">
-        <div className="relative flex-1" style={{ minWidth: "180px" }}>
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
-          <input
-            className="hm-input h-10 w-full"
-            style={{ paddingLeft: "2rem" }}
-            placeholder="Buscar SKU o producto"
-            value={q}
-            onChange={(event) => { setQ(event.target.value); setPage(1); }}
-          />
+      {/* ── Barra de filtros ──
+          El mismo bug de layout que tenía la Bandeja de precios
+          (master/pricing/page.tsx): .hm-input declara width:100%
+          (globals.css:588) y el minWidth inline no limita nada cuando el
+          ancho ya es 100% — cada control ocupaba la fila entera y
+          flex-wrap los mandaba a línea propia. Solución copiada de ahí:
+          cada control en su propio contenedor con ancho fijo (no en el
+          input/select directo). Sin botón "Aplicar" — branchId y
+          categoryId ya disparan setPage(1) y el useEffect de load()
+          recarga solo (línea ~546); q ya tiene su propio debounce
+          (350ms, línea ~517). Un botón que a veces hacía falta y a veces
+          no enseñaba a desconfiar de los filtros. */}
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="w-[240px]">
+          <label htmlFor="cat-search" className="mb-1 block text-xs" style={{ color: "var(--color-text-muted)" }}>Buscar</label>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
+            <input
+              id="cat-search"
+              className="hm-input h-10 w-full"
+              style={{ paddingLeft: "2rem" }}
+              placeholder="Buscar SKU o producto"
+              value={q}
+              onChange={(event) => { setQ(event.target.value); setPage(1); }}
+            />
+          </div>
         </div>
-        <select className="hm-input h-10" style={{ minWidth: "160px" }} value={branchId} onChange={(event) => { setBranchId(event.target.value); setPage(1); }}>
-          <option value="">Todas las sucursales</option>
-          {data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
-        </select>
-        <select className="hm-input h-10" style={{ minWidth: "150px" }} value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
-          <option value="">Todas las categorias</option>
-          {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-        </select>
-        <button
-          type="button"
-          disabled={loading}
-          className="h-10 inline-flex items-center gap-2 rounded-lg px-4 text-sm font-medium whitespace-nowrap transition-opacity disabled:opacity-60"
-          style={{
-            background: "color-mix(in srgb, var(--color-master-600) 12%, transparent)",
-            color: "var(--color-master-700)",
-            border: "0.5px solid var(--color-master-600)",
-          }}
-          onClick={() => load().catch((e: Error) => toast.error(e.message))}
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          Aplicar
-        </button>
+        <div className="w-[190px]">
+          <label htmlFor="cat-branch" className="mb-1 block text-xs" style={{ color: "var(--color-text-muted)" }}>Sucursal</label>
+          <select id="cat-branch" className="hm-input h-10" value={branchId} onChange={(event) => { setBranchId(event.target.value); setPage(1); }}>
+            <option value="">Todas las sucursales</option>
+            {data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
+          </select>
+        </div>
+        <div className="w-[170px]">
+          <label htmlFor="cat-category" className="mb-1 block text-xs" style={{ color: "var(--color-text-muted)" }}>Categoría</label>
+          <select id="cat-category" className="hm-input h-10" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
+            <option value="">Todas las categorias</option>
+            {data?.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          </select>
+        </div>
       </div>
 
       {/* ── Tabs — subrayado ── */}
