@@ -99,10 +99,13 @@ test("B.1 (backend): GET /api/master/pricing/current existe, gateado por PRICING
   assert.ok(route.includes('if (!branchId)'), "branchId es obligatorio: sin sucursal no hay precio efectivo");
 });
 
-test("B.1 (backend): getCurrentPrices usa effective-pricing.ts y resolveCatalogDisplayCost — no una tercera resolución", () => {
+test("B.1 (backend): getCurrentPrices usa effective-pricing.ts para precio Y costo — no una tercera resolución", () => {
   const abs = resolve(__dirname, "..", "..", "..", "hammer-api", "src", "modules", "pricing", "current-prices-service.ts");
   assert.ok(existsSync(abs), "debe existir current-prices-service.ts");
   const service = readFileSync(abs, "utf8");
-  assert.ok(service.includes("getEffectiveProductPricingBatch"), "precio: effective-pricing.ts");
-  assert.ok(service.includes("resolveCatalogDisplayCostBatch"), "costo: resolveCatalogDisplayCost, misma cascada que el catálogo");
+  // docs/COSTO-UNA-FUENTE.md — resolveCatalogDisplayCostBatch (la cascada
+  // de costo de red, sin branchCost) se eliminó entera; getEffectiveProductPricingBatch
+  // ya resuelve precio Y costo (branchCost-aware) en una sola llamada.
+  assert.ok(service.includes("getEffectiveProductPricingBatch"), "precio y costo: effective-pricing.ts, una sola resolución");
+  assert.ok(!service.includes("resolveCatalogDisplayCost"), "la cascada vieja (sin branchCost) ya no debe existir en este archivo");
 });

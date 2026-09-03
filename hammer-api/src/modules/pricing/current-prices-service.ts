@@ -11,10 +11,10 @@ import type { Prisma } from "@prisma/client";
  * mismo motor que cobra el POS), no una segunda resolución.
  *
  * prompt-precios-costos-una-sola-fuente.md — hasta acá el costo salía de
- * resolveCatalogDisplayCostBatch (costo de RED: WAC > averageCost >
- * globalCost > lastPurchaseCost, SIN branchCost) mientras el precio ya
- * venía de getEffectiveProductPricingBatch (branchCost > WAC > averageCost
- * > globalCost > lastPurchaseCost) — la misma clase de divergencia que
+ * una segunda cascada de "costo de RED" (SIN branchCost, borrada entera
+ * en docs/COSTO-UNA-FUENTE.md) mientras el precio ya venía de
+ * getEffectiveProductPricingBatch (branchCost > WAC > averageCost >
+ * globalCost > lastPurchaseCost) — la misma clase de divergencia que
  * "Precios y costos" (catalog-inventory-admin.tsx), solo que acá pasaba
  * inadvertida porque "Precios vigentes" es de solo lectura. pricingByKey
  * YA trae effectiveCost/costSource resueltos con branchCost incluido —
