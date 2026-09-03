@@ -54,12 +54,38 @@ de resuelta. La solución real fue mover el cálculo de
 que matchean el filtro, no solo la página actual) y pasárselo como
 parámetro — un cambio que toca las dos líneas a la vez.
 
-## Parte C — verificación de terceras vías
+## Parte C — verificación de terceras vías (hecho)
 
-Tras B.1-B.5, la única multiplicación por `conversionFactor` sobre un
-costo en todo `hammer-api/src/modules/` es la de `resolveFusionMemberCost`
-mismo. Verificado con:
+Tras B.1-B.5:
 ```
 grep -rn "conversionFactor" src/modules --include="*.ts" | grep -iE "cost|precio|price" | grep -v ".test.ts"
 ```
-(resultado documentado en el commit de Parte C).
+Cada resultado clasificado:
+
+- `resolveFusionMemberCost` (definición y sus 2 llamadores,
+  `effective-pricing.ts`/`stock-group-crud.ts`) — la vía correcta.
+- `convertBaseUnitCostToSaleUnitCost`/`convertSaleUnitCostToBaseUnitCost`
+  (`inventory/unit-conversion.ts` y sus llamadores en `inventory/service.ts`,
+  `purchase-orders/service.ts`, `transfers/service.ts`,
+  `production/service.ts`, `effective-pricing.ts`, `catalog/service.ts`) —
+  NO son una cascada de costo de fusión: convierten el WAC de un producto
+  entre su unidad BASE y su unidad de VENTA (necesario antes de que ese
+  WAC entre a `resolveCostChain`), un problema distinto al de "derivar el
+  costo de un miembro derivado desde el canónico".
+- `impliedFusionPrice`/`impliedPrice` (`effective-pricing.ts:349`,
+  `catalog/service.ts:41`) — es PRECIO (`canonicalStandardSalePrice ×
+  factor`), no costo. El precio tiene su propio mecanismo, deliberadamente
+  separado del costo (una fusión comparte UN costo físico pero cada
+  presentación decide su propio precio — ver `catalog/service.ts`, "el
+  precio de venta no se mueva solo").
+- `computeFusionMemberGlobalCost` (`stock-group-crud.ts:775`) —
+  deliberadamente NO pasa por `resolveCostChain`: es la lectura CRUDA de
+  `globalCost` (lo que el usuario tecleó), usada en Fusiones solo para
+  compararla contra `effectiveCost` y avisar cuando divergen
+  (`member.costDivergent` en `fusion-pricing-panel.tsx`). Mostrar "lo que
+  tecleaste" junto a "lo que el sistema realmente usa" es el propósito de
+  esa pantalla, no una segunda resolución de costo efectivo compitiendo
+  con la primera.
+
+Ninguna tercera vía. `resolveCostChain` + `resolveFusionMemberCost` son
+la única resolución de costo efectivo del sistema.
