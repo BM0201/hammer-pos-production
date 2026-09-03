@@ -182,7 +182,16 @@ export function FusionPricingPanel() {
       // El costo SÍ se redirige al canónico cuando `member` es derivado
       // (un hecho físico compartido); el precio YA NO (Parte A) — cada
       // fila guarda su propio standardSalePrice, sin tocar a nadie más.
-      showToast("success", `${field === "globalCost" ? "Costo global" : "Precio"} actualizado para ${member.sku}${field === "globalCost" && !member.isCanonical ? " (aplicado al producto canónico)" : ""}.`);
+      // prompt-kardex-ux-wac.md, Parte 3 — el toast de éxito no aclaraba
+      // que esto es una referencia manual, no lo que alimenta el margen
+      // real (ese siempre usa el WAC de compras) — la confusión que este
+      // ciclo existe para cerrar en el momento mismo de guardar, no solo
+      // en el banner de arriba que nadie relee.
+      showToast(
+        "success",
+        `${field === "globalCost" ? "Costo global" : "Precio"} actualizado para ${member.sku}${field === "globalCost" && !member.isCanonical ? " (aplicado al producto canónico)" : ""}.`
+          + (field === "globalCost" ? " Es una referencia manual — el margen usa el WAC de compras real." : ""),
+      );
       await load();
     } catch {
       showToast("error", "Error de red al guardar.");
@@ -256,7 +265,7 @@ export function FusionPricingPanel() {
                     <tr>
                       <th>Presentación</th>
                       <th>Equivale a</th>
-                      <th className="r">Costo global</th>
+                      <th className="r" title="Referencia manual editable. El margen y las alertas de 'por debajo del costo' siempre usan el WAC de compras real, no este número — si no coinciden, la fila lo avisa abajo.">Costo global</th>
                       <th className="r">Precio general</th>
                       <th className="r">Margen</th>
                     </tr>
