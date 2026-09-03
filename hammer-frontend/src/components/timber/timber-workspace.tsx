@@ -90,17 +90,68 @@ async function readJson(res: Response) {
   return res.json().catch(() => ({}));
 }
 
+// prompt-timber-cubicacion-carga.md, Parte A — las 54 medidas reales de
+// la columna MEDIDA del Excel de cubicación del usuario (antes solo 10,
+// todas de 1"). Hardcodeada a propósito, no movida a TimberPricingConfig:
+// son medidas de aserradero estándar, prácticamente fijas — el atajo de
+// selección rápida no necesita ser editable sin redeploy; cualquier
+// medida fuera de esta lista siempre se puede agregar a mano en el
+// formulario de líneas, que no depende de esta constante.
 const STANDARD_MEASURES: TripLineDraft[] = [
   { thickness: 1, width: 12, length: 16, pieces: 0 },
   { thickness: 1, width: 12, length: 14, pieces: 0 },
   { thickness: 1, width: 12, length: 11, pieces: 0 },
+  { thickness: 1, width: 12, length: 8, pieces: 0 },
+  { thickness: 2, width: 12, length: 16, pieces: 0 },
+  { thickness: 2, width: 12, length: 14, pieces: 0 },
+  { thickness: 2, width: 12, length: 11, pieces: 0 },
+  { thickness: 2, width: 10, length: 16, pieces: 0 },
+  { thickness: 2, width: 10, length: 14, pieces: 0 },
+  { thickness: 2, width: 10, length: 11, pieces: 0 },
   { thickness: 1, width: 10, length: 16, pieces: 0 },
   { thickness: 1, width: 10, length: 14, pieces: 0 },
   { thickness: 1, width: 10, length: 11, pieces: 0 },
+  { thickness: 1, width: 10, length: 8, pieces: 0 },
   { thickness: 1, width: 8, length: 16, pieces: 0 },
   { thickness: 1, width: 8, length: 14, pieces: 0 },
+  { thickness: 1, width: 8, length: 11, pieces: 0 },
+  { thickness: 1, width: 8, length: 8, pieces: 0 },
   { thickness: 1, width: 6, length: 16, pieces: 0 },
   { thickness: 1, width: 6, length: 14, pieces: 0 },
+  { thickness: 1, width: 6, length: 11, pieces: 0 },
+  { thickness: 1, width: 6, length: 8, pieces: 0 },
+  { thickness: 2, width: 8, length: 16, pieces: 0 },
+  { thickness: 2, width: 8, length: 15, pieces: 0 },
+  { thickness: 2, width: 8, length: 14, pieces: 0 },
+  { thickness: 2, width: 6, length: 16, pieces: 0 },
+  { thickness: 2, width: 6, length: 14, pieces: 0 },
+  { thickness: 2, width: 6, length: 11, pieces: 0 },
+  { thickness: 2, width: 4, length: 16, pieces: 0 },
+  { thickness: 2, width: 4, length: 14, pieces: 0 },
+  { thickness: 2, width: 4, length: 11, pieces: 0 },
+  { thickness: 2, width: 4, length: 8, pieces: 0 },
+  { thickness: 2, width: 3, length: 16, pieces: 0 },
+  { thickness: 2, width: 3, length: 14, pieces: 0 },
+  { thickness: 2, width: 3, length: 11, pieces: 0 },
+  { thickness: 2, width: 3, length: 8, pieces: 0 },
+  { thickness: 2, width: 2, length: 16, pieces: 0 },
+  { thickness: 2, width: 2, length: 14, pieces: 0 },
+  { thickness: 2, width: 2, length: 11, pieces: 0 },
+  { thickness: 2, width: 2, length: 8, pieces: 0 },
+  { thickness: 1, width: 3, length: 16, pieces: 0 },
+  { thickness: 1, width: 3, length: 14, pieces: 0 },
+  { thickness: 1, width: 3, length: 11, pieces: 0 },
+  { thickness: 1, width: 3, length: 8, pieces: 0 },
+  { thickness: 1, width: 2, length: 16, pieces: 0 },
+  { thickness: 1, width: 2, length: 14, pieces: 0 },
+  { thickness: 1, width: 2, length: 11, pieces: 0 },
+  { thickness: 1, width: 2, length: 8, pieces: 0 },
+  { thickness: 1, width: 4, length: 16, pieces: 0 },
+  { thickness: 1, width: 4, length: 14, pieces: 0 },
+  { thickness: 1, width: 4, length: 11, pieces: 0 },
+  { thickness: 4, width: 4, length: 16, pieces: 0 },
+  { thickness: 4, width: 4, length: 14, pieces: 0 },
+  { thickness: 4, width: 4, length: 11, pieces: 0 },
 ];
 
 /* ─────────────────────────── Componente principal ─────────────────────────── */
