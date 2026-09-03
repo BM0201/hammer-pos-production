@@ -8,7 +8,6 @@ import type { ProductStockConversion } from "@/modules/inventory/unit-conversion
 import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
-import { resolveCatalogDisplayCost } from "@/modules/catalog-inventory/service";
 import { aggregateWeightedAverageCost } from "@/modules/catalog/stock-group-crud";
 
 /**
@@ -662,9 +661,9 @@ export async function createProduct(input: {
  * poder probar el sync sin base de datos, mismo principio que
  * decidePriceBandPath/isPriceStaleAgainstCost en otros módulos.
  *
- * "el margen no cuadra" — resolveCatalogDisplayCost (catalog-inventory/
- * service.ts) Y resolveCostChain (catalog/effective-pricing.ts) priorizan
- * averageCost SOBRE globalCost cuando averageCost no es null.
+ * "el margen no cuadra" — resolveCostChain (catalog/effective-pricing.ts,
+ * la única resolución de costo del sistema — docs/COSTO-UNA-FUENTE.md)
+ * prioriza averageCost SOBRE globalCost cuando averageCost no es null.
  * updateGlobalProductCostForReceiptTx (purchase-orders/service.ts, recibir
  * una orden de compra) SIEMPRE escribe los dos campos al mismo valor — su
  * propio test (global-cost-update.test.ts) lo deja explícito: "un solo
@@ -798,13 +797,35 @@ export async function updateProduct(productId: string, input: {
       const canonicalWac = aggregateWeightedAverageCost(
         balances.map((b) => ({ quantityOnHand: Number(b.quantityOnHand), weightedAverageCost: Number(b.weightedAverageCost) })),
       );
-      const effectiveCostRaw = resolveCatalogDisplayCost({
-        wac: canonicalWac,
-        averageCost: canonicalProduct.averageCost,
-        globalCost: canonicalProduct.globalCost,
-        lastPurchaseCost: canonicalProduct.lastPurchaseCost,
-        factor,
+      // docs/COSTO-UNA-FUENTE.md #6 — resolveEffectivePricingFromParts (la
+      // MISMA función que resuelve costo/precio efectivo en todo el motor,
+      // ya usada arriba en este archivo para mapSingleProductWithBranchInventory),
+      // no una cascada propia. Sin branchId: updateProduct edita
+      // standardSalePrice, el precio GENERAL de la presentación, no uno por
+      // sucursal — branchCost/branchPrice van en null a propósito, no una
+      // sucursal inventada. effectiveCost sale igual de
+      // resolveCostChain+resolveFusionMemberCost por dentro.
+      const effective = resolveEffectivePricingFromParts({
+        productId,
+        standardSalePrice: previous.standardSalePrice,
+        globalCost: null,
+        averageCost: null,
+        lastPurchaseCost: null,
+        branchPrice: null,
+        branchCost: null,
+        weightedAverageCost: null,
+        fusion: {
+          conversionFactor: conversion.conversionFactor,
+          canonicalBranchCost: null,
+          canonicalAverageCost: canonicalProduct.averageCost,
+          canonicalGlobalCost: canonicalProduct.globalCost,
+          canonicalLastPurchaseCost: canonicalProduct.lastPurchaseCost,
+          canonicalBaseWeightedAverageCost: canonicalWac !== null ? new Prisma.Decimal(canonicalWac) : null,
+          canonicalBranchPrice: null,
+          canonicalStandardSalePrice: canonicalProduct.standardSalePrice,
+        },
       });
+      const effectiveCostRaw = effective.effectiveCost !== null ? Number(effective.effectiveCost) : 0;
       const deviationCheck = evaluatePriceDeviationFromFusion({
         enteredPrice: input.standardSalePrice,
         canonicalStandardSalePrice: Number(canonicalProduct.standardSalePrice),

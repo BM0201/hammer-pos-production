@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
 import { canonicalizePresentationUnit, findUnitCollisions } from "@/modules/catalog/presentation-units";
-import { resolveCatalogDisplayCost } from "@/modules/catalog-inventory/service";
+import { resolveCostChain, resolveFusionMemberCost } from "@/modules/catalog/effective-pricing";
 
 export type StockGroupMemberInput = {
   productId: string;
@@ -994,20 +994,24 @@ export async function listStockGroups() {
         // ignorando que el WAC ya lo superó, es mostrar un margen que
         // contradice la realidad — exactamente lo reportado (20.5% acá,
         // -14.2% real en Precios y costos, para el mismo producto).
-        // resolveCatalogDisplayCost (catalog-inventory/service.ts) es la
-        // MISMA resolución de "costo de red" que ya usa el catálogo, no
-        // una cuarta cascada — se reusa tal cual, con el WAC agregado
-        // entre TODAS las sucursales (Fusiones no elige una sola).
-        const effectiveCostRaw = canonicalMember
-          ? resolveCatalogDisplayCost({
-              wac: canonicalWac,
+        // docs/COSTO-UNA-FUENTE.md #7 — resolveCostChain + resolveFusionMemberCost
+        // directo (los mismos dos primitivos que usa
+        // getEffectiveProductPricingBatch por dentro), no resolveCatalogDisplayCost
+        // (borrada). Sin branchId a propósito: Fusiones no tiene selector de
+        // sucursal, el WAC ya viene agregado entre TODAS las sucursales
+        // arriba (canonicalWac) — branchCost no aplica acá, no hay UNA
+        // sucursal a la que atribuírselo.
+        const canonicalCost = canonicalMember
+          ? resolveCostChain({
+              branchCost: null,
               averageCost: canonicalMember.product.averageCost,
               globalCost: canonicalMember.product.globalCost,
               lastPurchaseCost: canonicalMember.product.lastPurchaseCost,
-              factor: Number(m.conversionFactor),
-            })
-          : 0;
-        const effectiveCost = effectiveCostRaw > 0 ? effectiveCostRaw : null;
+              weightedAverageCost: canonicalWac !== null ? new Prisma.Decimal(canonicalWac) : null,
+            }).cost
+          : null;
+        const memberCost = canonicalCost !== null ? resolveFusionMemberCost(canonicalCost, m.conversionFactor) : null;
+        const effectiveCost = memberCost !== null && memberCost.gt(0) ? Number(memberCost) : null;
         // "el precio de venta no se mueva solo... el PRECIO es una
         // decisión comercial POR PRESENTACIÓN" (catalog/service.ts, Parte
         // A/C) — a diferencia del costo (un hecho físico compartido, que
