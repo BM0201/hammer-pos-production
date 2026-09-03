@@ -5,9 +5,10 @@ import { buildGlobalCostUpdateFields, resolveGlobalCostWriteTarget } from "@/mod
 
 /**
  * prompt-precios-costos-una-sola-fuente.md (LATA: input muestra 25, el
- * margen se calcula con ~39.5) — resolveCatalogDisplayCost Y resolveCostChain
- * (effective-pricing.ts) priorizan averageCost SOBRE globalCost cuando
- * averageCost no es null. updateProduct (edición manual de "Costo de
+ * margen se calcula con ~39.5) — resolveCostChain (effective-pricing.ts,
+ * la única resolución de costo del sistema — docs/COSTO-UNA-FUENTE.md)
+ * prioriza averageCost SOBRE globalCost cuando averageCost no es null.
+ * updateProduct (edición manual de "Costo de
  * compra") escribía SOLO globalCost — para cualquier producto que alguna
  * vez recibió una compra real (updateGlobalProductCostForReceiptTx deja
  * averageCost != null), la edición manual quedaba tapada para siempre:
@@ -22,7 +23,7 @@ const NOW = new Date("2026-08-31T12:00:00.000Z");
 test("Prueba LA QUE IMPORTA — editar globalCost también escribe averageCost al mismo valor", () => {
   const fields = buildGlobalCostUpdateFields({ globalCost: 25, actorUserId: ACTOR, now: NOW });
   assert.equal(fields.globalCost?.toString(), "25");
-  assert.equal(fields.averageCost?.toString(), "25", "sin esto, un averageCost viejo (de una compra real anterior) sigue ganando en resolveCatalogDisplayCost/resolveCostChain y la edición queda invisible");
+  assert.equal(fields.averageCost?.toString(), "25", "sin esto, un averageCost viejo (de una compra real anterior) sigue ganando en resolveCostChain y la edición queda invisible");
   assert.equal(fields.globalCost?.toString(), fields.averageCost?.toString(), "mismo invariante que updateGlobalProductCostForReceiptTx: globalCost y averageCost son el mismo número siempre");
 });
 

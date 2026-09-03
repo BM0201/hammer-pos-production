@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Prisma } from "@prisma/client";
 import { computeFusionMemberGlobalCost, aggregateWeightedAverageCost } from "@/modules/catalog/stock-group-crud";
-import { resolveCatalogDisplayCost } from "@/modules/catalog-inventory/service";
+import { resolveCostChain, resolveFusionMemberCost } from "@/modules/catalog/effective-pricing";
 
 /**
  * "es para poner el precio... una nueva linea que sea costo global de
@@ -122,17 +123,21 @@ test("aggregateWeightedAverageCost: sin ninguna existencia (cantidad total 0) �
   assert.equal(aggregateWeightedAverageCost([{ quantityOnHand: 0, weightedAverageCost: 50 }]), null);
 });
 
-test("Prueba LA QUE IMPORTA (el caso real de la captura) — resolveCatalogDisplayCost (el motor real) da un costo distinto y MAYOR que globalCost cuando hay WAC real de compras", () => {
+test("Prueba LA QUE IMPORTA (el caso real de la captura) — resolveCostChain + resolveFusionMemberCost (el motor real, docs/COSTO-UNA-FUENTE.md) dan un costo distinto y MAYOR que globalCost cuando hay WAC real de compras", () => {
   // LATA con globalCost=11.75 (lo que se editó en Fusiones) pero un WAC
   // real de compras de 18.55/lata (mayor — compras recientes más caras) —
   // el mismo escenario reportado: 18.55 × 40 ≈ 742, no 11.75 × 40 = 470.
-  const effectiveCost = resolveCatalogDisplayCost({
-    wac: 18.55,
-    averageCost: 11.75,
-    globalCost: 11.75,
-    lastPurchaseCost: 11.75,
-    factor: 40,
-  });
-  assert.ok(Math.abs(effectiveCost - 742) < 1, `el WAC real (18.55) debe ganar sobre globalCost (11.75) — dio ${effectiveCost}`);
-  assert.notEqual(effectiveCost, 11.75 * 40, "si esto diera 470, Fusiones seguiría mostrando el margen falso reportado");
+  // Migrado de resolveCatalogDisplayCost (borrada, docs/COSTO-UNA-FUENTE.md
+  // Parte B.5) a los dos primitivos que la reemplazan — misma regla,
+  // misma expectativa.
+  const canonicalCost = resolveCostChain({
+    branchCost: null,
+    averageCost: new Prisma.Decimal(11.75),
+    globalCost: new Prisma.Decimal(11.75),
+    lastPurchaseCost: new Prisma.Decimal(11.75),
+    weightedAverageCost: new Prisma.Decimal(18.55),
+  }).cost;
+  const effectiveCost = resolveFusionMemberCost(canonicalCost, new Prisma.Decimal(40));
+  assert.ok(effectiveCost !== null && Math.abs(Number(effectiveCost) - 742) < 1, `el WAC real (18.55) debe ganar sobre globalCost (11.75) — dio ${effectiveCost?.toString()}`);
+  assert.notEqual(Number(effectiveCost), 11.75 * 40, "si esto diera 470, Fusiones seguiría mostrando el margen falso reportado");
 });

@@ -32,40 +32,6 @@ export function computeHasNoPrice(standardSalePrice: number, branchPrices: numbe
   return standardSalePrice <= 0 && !hasAnyBranchPrice;
 }
 
-/**
- * Costo a MOSTRAR en el catálogo ("precios y costos"), coherente con el motor
- * de venta (modules/catalog/effective-pricing.ts → resolveCostChain).
- *
- * Prioridad: WAC (costo promedio ponderado, si es > 0) > averageCost >
- * globalCost > lastPurchaseCost. Un WAC de 0 significa "no sé", no "vale 0", y
- * se ignora. Para un miembro DERIVADO de fusión, `wac` y los campos de costo
- * son los del CANÓNICO (en unidad base) y `factor` los escala a la unidad del
- * derivado; para el canónico y los productos sin fusión, `factor` = 1 y son sus
- * propios campos.
- *
- * BUG que corrige: antes el catálogo tomaba el costo SOLO de
- * averageCost/globalCost/lastPurchaseCost e IGNORABA el WAC. Al comprar arena
- * por CAMIONADA y AJUSTAR el stock físico (en latas) se actualiza el WAC del
- * canónico (LATA), pero NO esos tres campos (solo las recepciones de orden de
- * compra los actualizan). Resultado: la venta usaba el WAC correcto (WAC ×
- * factor para METRO GRANDE/PEQUEÑA), mientras el catálogo mostraba un costo
- * viejo o en cero, un margen equivocado y marcaba la LATA y sus derivados como
- * "sin costo". Al incluir el WAC aquí, el costo mostrado coincide con el de
- * venta.
- */
-export function resolveCatalogDisplayCost(input: {
-  wac: number | null;
-  averageCost: Prisma.Decimal | number | string | null | undefined;
-  globalCost: Prisma.Decimal | number | string | null | undefined;
-  lastPurchaseCost: Prisma.Decimal | number | string | null | undefined;
-  factor?: number;
-}): number {
-  const factor = input.factor !== undefined && Number.isFinite(input.factor) ? (input.factor as number) : 1;
-  const usableWac = input.wac !== null && Number.isFinite(input.wac) && input.wac > 0 ? input.wac : null;
-  const baseCost = usableWac ?? decimalToNumber(input.averageCost ?? input.globalCost ?? input.lastPurchaseCost);
-  return baseCost * factor;
-}
-
 type CatalogStockConversion = {
   stockGroupId: string;
   stockGroupCode: string;
