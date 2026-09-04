@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { formatDualStock, convertBaseQtyToSaleQty, convertBaseUnitCostToSaleUnitCost, getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import type { ProductStockConversion } from "@/modules/inventory/unit-conversion";
 import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
@@ -213,6 +214,8 @@ async function batchMapProductsWithBranchInventory<TProduct extends CatalogProdu
   ]);
   const canonicalProductById = new Map(canonicalProducts.map((p) => [p.id, p]));
   const canonicalSettingById = new Map(canonicalSettings.map((s) => [s.productId, s]));
+  // prompt-wac-desactivar.md — leído UNA vez para todo el batch.
+  const wacEnabled = await isWacDrivesCostChainEnabled();
 
   return products.map((product) => {
     const conversion = conversionByProductId.get(product.id) ?? null;
@@ -220,7 +223,7 @@ async function batchMapProductsWithBranchInventory<TProduct extends CatalogProdu
     const balance = balanceByCanonicalId.get(canonicalId) ?? null;
     const canonicalProduct = conversion && !conversion.isCanonical ? canonicalProductById.get(canonicalId) ?? null : null;
     const canonicalSetting = conversion && !conversion.isCanonical ? canonicalSettingById.get(canonicalId) ?? null : null;
-    return mapSingleProductWithBranchInventory(product, branchId, conversion, balance, canonicalProduct, canonicalSetting);
+    return mapSingleProductWithBranchInventory(product, branchId, conversion, balance, canonicalProduct, canonicalSetting, wacEnabled);
   });
 }
 
@@ -240,6 +243,12 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
   balance: InventoryBalanceRow | null,
   canonicalProduct: CanonicalCostRow | null = null,
   canonicalBranchSetting: CanonicalBranchSettingRow | null = null,
+  // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — el único llamador
+  // (batchMapProductsWithBranchInventory) lee el flag real y lo pasa
+  // explícito; el default false acá es solo la red de seguridad para un
+  // llamador futuro que lo olvide — nunca vuelve a depender del WAC en
+  // silencio.
+  wacEnabled: boolean = false,
 ) {
   // Effective pricing from already-fetched branchProductSettings + inventoryBalances
   const branchSetting = product.branchProductSettings?.find((s) => s.branchId === branchId);
@@ -269,7 +278,7 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
           canonicalStandardSalePrice: canonicalProduct.standardSalePrice,
         }
       : null,
-  });
+  }, wacEnabled);
 
   // Una sola resolución: `effective` ya sale del canónico cuando corresponde
   // (fusion arriba) y tiene el respaldo al precio estándar y la prioridad de
@@ -755,6 +764,12 @@ export async function updateProduct(productId: string, input: {
     select: { id: true, sku: true, categoryId: true, category: { select: { name: true } }, standardSalePrice: true, globalCost: true },
   });
   if (!previous) throw new Error("NOT_FOUND");
+  // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — leído una vez,
+  // usado más abajo tanto para el costo efectivo del canónico (desvío de
+  // precio) como para el guard "costo de paquete como costo unitario"
+  // (que compara contra el WAC — sin sentido dejarlo activo si el WAC ya
+  // no es la fuente de verdad, ver Parte 2 del prompt).
+  const wacEnabled = await isWacDrivesCostChainEnabled();
 
   // "el ultimo costo que se meta es el que gana en las fusiones... con las
   // derivadas y la factorización equivalente al producto se ajuste" — el
@@ -805,6 +820,10 @@ export async function updateProduct(productId: string, input: {
       // sucursal — branchCost/branchPrice van en null a propósito, no una
       // sucursal inventada. effectiveCost sale igual de
       // resolveCostChain+resolveFusionMemberCost por dentro.
+      // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — canonicalWac se
+      // sigue calculando (no se borra el dato), solo se le pasa a
+      // resolveCostChain condicionado al flag (leído arriba, al inicio de
+      // updateProduct).
       const effective = resolveEffectivePricingFromParts({
         productId,
         standardSalePrice: previous.standardSalePrice,
@@ -824,7 +843,7 @@ export async function updateProduct(productId: string, input: {
           canonicalBranchPrice: null,
           canonicalStandardSalePrice: canonicalProduct.standardSalePrice,
         },
-      });
+      }, wacEnabled);
       const effectiveCostRaw = effective.effectiveCost !== null ? Number(effective.effectiveCost) : 0;
       const deviationCheck = evaluatePriceDeviationFromFusion({
         enteredPrice: input.standardSalePrice,
@@ -861,7 +880,11 @@ export async function updateProduct(productId: string, input: {
     // certeza qué presentación se tecleó, la conversión es exacta por el
     // factor ya validado, no una sospecha sobre un campo único que podría
     // significar dos cosas distintas.
-    if (conversion?.isCanonical) {
+    // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — este guard compara
+    // el costo nuevo contra el WAC; sin sentido dejarlo activo comparando
+    // contra un número que dejó de ser la fuente de verdad. wac.ts no se
+    // toca — el guard sigue existiendo tal cual, solo se salta la llamada.
+    if (wacEnabled && conversion?.isCanonical) {
       const siblings = await prisma.productStockGroupMember.findMany({
         where: { stockGroupId: conversion.stockGroupId, isActive: true, isCanonical: false },
         select: { conversionFactor: true },

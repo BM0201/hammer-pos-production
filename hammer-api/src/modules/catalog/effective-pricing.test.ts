@@ -45,8 +45,11 @@ const BASE: PricingInput = {
   weightedAverageCost: null,
 };
 
-function resolve(input: PricingInput) {
-  return resolveEffectivePricingFromParts({ ...input, fusion: null });
+// prompt-wac-desactivar.md — wacEnabled=true en todo este archivo salvo los
+// tests dedicados a wacEnabled=false más abajo: estos tests predatan el flag
+// y su intención original era probar la cadena CON el WAC participando.
+function resolve(input: PricingInput, wacEnabled = true) {
+  return resolveEffectivePricingFromParts({ ...input, fusion: null }, wacEnabled);
 }
 
 /* ── Prioridad de costo (B2): branchCost > WAC > averageCost > globalCost > lastPurchaseCost ── */
@@ -101,6 +104,48 @@ test("Sucursal (doc) Prueba 9: sin ninguna fuente → effectiveCost null, costSo
   assert.equal(result.costSource, "NONE");
 });
 
+/* ── prompt-wac-desactivar.md — WAC_DRIVES_COST_CHAIN=false: el WAC se
+ * salta por completo en la cadena, como si nunca existiera, cayendo directo
+ * a averageCost > globalCost > lastPurchaseCost. El dato del WAC sigue
+ * viajando en el objeto de entrada sin tocarse (nada se borra) — solo deja
+ * de participar en la resolución. ── */
+
+test("wacEnabled=false: WAC positivo se ignora y cae a averageCost, aunque con wacEnabled=true hubiera ganado", () => {
+  const withWac = resolve({ ...BASE, averageCost: d(20), weightedAverageCost: d(50) }, true);
+  assert.equal(withWac.effectiveCost?.toNumber(), 50);
+  assert.equal(withWac.costSource, "WAC_ESTIMATE");
+
+  const withoutWac = resolve({ ...BASE, averageCost: d(20), weightedAverageCost: d(50) }, false);
+  assert.equal(withoutWac.effectiveCost?.toNumber(), 20);
+  assert.equal(withoutWac.costSource, "GLOBAL_AVERAGE");
+});
+
+test("wacEnabled=false: dos sucursales con WAC distinto ya NO producen costos efectivos distintos (la regresión deliberada de apagar el flag)", () => {
+  const rivas = resolve({ ...BASE, globalCost: d(30), weightedAverageCost: d(18.55) }, false);
+  const managua = resolve({ ...BASE, globalCost: d(30), weightedAverageCost: d(22.10) }, false);
+  assert.equal(rivas.effectiveCost?.toNumber(), managua.effectiveCost?.toNumber());
+  assert.equal(rivas.costSource, "GLOBAL");
+  assert.equal(managua.costSource, "GLOBAL");
+});
+
+test("wacEnabled=false: si el WAC es la ÚNICA fuente disponible, effectiveCost queda null (NONE), no cae a WAC igual", () => {
+  const result = resolve({ ...BASE, weightedAverageCost: d(50) }, false);
+  assert.equal(result.effectiveCost, null);
+  assert.equal(result.costSource, "NONE");
+});
+
+test("resolveCostChain: wacEnabled=false ignora el WAC aunque sea positivo, directo en la función exportada", () => {
+  const result = resolveCostChain({ branchCost: null, averageCost: d(20), globalCost: null, lastPurchaseCost: null, weightedAverageCost: d(50) }, false);
+  assert.equal(result.cost?.toNumber(), 20);
+  assert.equal(result.source, "GLOBAL_AVERAGE");
+});
+
+test("wacEnabled=false: branchCost sigue ganando sin importar el flag — es una declaración explícita, no viene del WAC", () => {
+  const result = resolve({ ...BASE, branchCost: d(10), weightedAverageCost: d(50) }, false);
+  assert.equal(result.effectiveCost?.toNumber(), 10);
+  assert.equal(result.costSource, "BRANCH");
+});
+
 /* ── WAC de cero (B4): no es un costo, es "no sé" ── */
 
 test("Sucursal (doc) Prueba 8: WAC en cero se ignora y cae al siguiente respaldo — nunca produce costo efectivo cero", () => {
@@ -117,8 +162,8 @@ test("WAC en cero sin ningún otro respaldo → effectiveCost null (NONE), no ce
 });
 
 test("resolveCostChain: WAC en cero se trata igual que ausente, directamente en la función exportada", () => {
-  const withZero = resolveCostChain({ branchCost: null, averageCost: null, globalCost: null, lastPurchaseCost: d(40), weightedAverageCost: d(0) });
-  const withoutWac = resolveCostChain({ branchCost: null, averageCost: null, globalCost: null, lastPurchaseCost: d(40), weightedAverageCost: null });
+  const withZero = resolveCostChain({ branchCost: null, averageCost: null, globalCost: null, lastPurchaseCost: d(40), weightedAverageCost: d(0) }, true);
+  const withoutWac = resolveCostChain({ branchCost: null, averageCost: null, globalCost: null, lastPurchaseCost: d(40), weightedAverageCost: null }, true);
   assert.equal(withZero.cost?.toNumber(), withoutWac.cost?.toNumber());
   assert.equal(withZero.source, withoutWac.source);
 });
@@ -173,6 +218,41 @@ const FUSION_BASE: FusionMemberPricingBasis = {
   canonicalStandardSalePrice: d(30)!,
 };
 
+test("wacEnabled=false, miembro de fusión: el WAC del canónico se salta y el derivado cae al averageCost del canónico × factor (caso arena, con el flag apagado)", () => {
+  const result = resolveEffectivePricingFromParts({
+    productId: "prod-metro-arena",
+    standardSalePrice: d(650)!,
+    globalCost: null,
+    averageCost: null,
+    lastPurchaseCost: null,
+    branchPrice: null,
+    branchCost: null,
+    weightedAverageCost: null,
+    fusion: { ...FUSION_BASE, canonicalAverageCost: d(11.75)! }, // FUSION_BASE trae canonicalBaseWeightedAverageCost=18.55
+  }, false);
+  assert.equal(result.isFusionMember, true);
+  // 11.75 (averageCost del canónico) × 25 (factor) = 293.75 — NO 463.75 (lo que daría el WAC).
+  assert.equal(result.effectiveCost?.toNumber(), 293.75);
+  assert.equal(result.costSource, "GLOBAL_AVERAGE");
+});
+
+test("wacEnabled=false, miembro de fusión: sin ningún respaldo en el canónico salvo el WAC, effectiveCost queda null", () => {
+  const result = resolveEffectivePricingFromParts({
+    productId: "prod-metro-arena",
+    standardSalePrice: d(650)!,
+    globalCost: null,
+    averageCost: null,
+    lastPurchaseCost: null,
+    branchPrice: null,
+    branchCost: null,
+    weightedAverageCost: null,
+    fusion: FUSION_BASE, // solo trae canonicalBaseWeightedAverageCost
+  }, false);
+  assert.equal(result.effectiveCost, null);
+  assert.equal(result.costSource, "NONE");
+  assert.equal(result.sellability, "NO_COST");
+});
+
 test("Prueba 1 (doc): miembro derivado con globalCost cargado a mano → el costo efectivo IGNORA ese valor y deriva del canónico × factor", () => {
   const result = resolveEffectivePricingFromParts({
     productId: "prod-metro-arena",
@@ -184,7 +264,7 @@ test("Prueba 1 (doc): miembro derivado con globalCost cargado a mano → el cost
     branchCost: null,
     weightedAverageCost: null,
     fusion: FUSION_BASE,
-  });
+  }, true);
   assert.equal(result.isFusionMember, true);
   // 18.55 (WAC del canónico, por lata) × 25 (factor) = 463.75 — NO 1.00.
   assert.equal(result.effectiveCost?.toNumber(), 463.75);
@@ -203,7 +283,7 @@ test("Prueba 2 (doc): canónico con branchCost cargado → SÍ se respeta, es la
     branchCost: d(20)!, // costo de adquisición propio de esta sucursal
     weightedAverageCost: d(18.55)!,
     fusion: null, // el canónico mismo nunca pasa `fusion` — usa su propia cadena
-  });
+  }, true);
   assert.equal(result.isFusionMember, false);
   assert.equal(result.effectiveCost?.toNumber(), 20); // branchCost gana, como siempre en la cadena normal
   assert.equal(result.costSource, "BRANCH");
@@ -223,7 +303,7 @@ test("Prueba 3 (doc): fusión de arena corregida — dos presentaciones derivada
     branchCost: null,
     weightedAverageCost: null,
     fusion: { ...FUSION_BASE, conversionFactor: d(25)! },
-  });
+  }, true);
   const metroB = resolveEffectivePricingFromParts({
     productId: "prod-metro-b",
     standardSalePrice: d(1200)!,
@@ -234,7 +314,7 @@ test("Prueba 3 (doc): fusión de arena corregida — dos presentaciones derivada
     branchCost: d(999)!, // otro relleno, distinto del de METRO_A
     weightedAverageCost: null,
     fusion: { ...FUSION_BASE, conversionFactor: d(55)! },
-  });
+  }, true);
 
   const impliedBaseCostA = metroA.effectiveCost!.div(25);
   const impliedBaseCostB = metroB.effectiveCost!.div(55);
@@ -270,7 +350,7 @@ test("Prueba 5 (reescrita, Parte C): precio propio de una presentación (sin bra
     branchCost: null,
     weightedAverageCost: null,
     fusion: { ...FUSION_BASE, canonicalBranchPrice: null, canonicalStandardSalePrice: d(30)! },
-  });
+  }, true);
   assert.equal(result.isFusionPriceOverride, false);
   assert.equal(result.impliedFusionPrice?.toNumber(), 750, "el implícito (30 × 25) se sigue calculando — lo usa el aviso de desvío");
   assert.equal(result.effectivePrice?.toNumber(), 650, "pero el efectivo es el precio PROPIO de la presentación, no el implícito");
@@ -288,7 +368,7 @@ test("precio propio IGUAL al implícito (caso típico: nunca se repreció desde 
     branchCost: null,
     weightedAverageCost: null,
     fusion: { ...FUSION_BASE, canonicalBranchPrice: null, canonicalStandardSalePrice: d(30)! },
-  });
+  }, true);
   assert.equal(result.impliedFusionPrice?.toNumber(), 750);
   assert.equal(result.effectivePrice?.toNumber(), 750);
 });
@@ -304,7 +384,7 @@ test("precio de una presentación CON override → effectivePrice es el override
     branchCost: null,
     weightedAverageCost: null,
     fusion: { ...FUSION_BASE, canonicalBranchPrice: null, canonicalStandardSalePrice: d(30)! },
-  });
+  }, true);
   assert.equal(result.isFusionPriceOverride, true);
   assert.equal(result.impliedFusionPrice?.toNumber(), 750);
   assert.equal(result.effectivePrice?.toNumber(), 650); // el override, no el implícito
@@ -384,7 +464,7 @@ test("sellability: miembro de fusión con costo inflado (el síntoma de Fase 2) 
     branchCost: null,
     weightedAverageCost: null,
     fusion: { ...FUSION_BASE, conversionFactor: d(14)!, canonicalBaseWeightedAverageCost: d(185.89)! }, // WAC contaminado real
-  });
+  }, true);
   assert.equal(result.effectiveCost?.toNumber(), 185.89 * 14);
   assert.equal(result.sellability, "BELOW_COST");
 });
@@ -398,12 +478,18 @@ function createCountingFakeDb(fixtures: {
   settings?: Array<{ branchId: string; productId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null }>;
   balances?: Array<{ branchId: string; productId: string; weightedAverageCost: Prisma.Decimal | null }>;
 }) {
-  const calls = { productStockGroupMember: 0, product: 0, branchProductSetting: 0, inventoryBalance: 0 };
+  // prompt-wac-desactivar.md — getEffectiveProductPricingBatch ahora también
+  // lee isWacDrivesCostChainEnabled(txOrPrisma), así que el fake db necesita
+  // su propio systemSetting.findUnique (si no, el 41 crashea contra el
+  // prisma real por falta de DATABASE_URL). Se cuenta igual que las demás:
+  // sigue siendo UN round trip por batch, no por item.
+  const calls = { productStockGroupMember: 0, product: 0, branchProductSetting: 0, inventoryBalance: 0, systemSetting: 0 };
   const db = {
     productStockGroupMember: { findMany: async () => { calls.productStockGroupMember += 1; return fixtures.members ?? []; } },
     product: { findMany: async () => { calls.product += 1; return fixtures.products ?? []; } },
     branchProductSetting: { findMany: async () => { calls.branchProductSetting += 1; return fixtures.settings ?? []; } },
     inventoryBalance: { findMany: async () => { calls.inventoryBalance += 1; return fixtures.balances ?? []; } },
+    systemSetting: { findUnique: async () => { calls.systemSetting += 1; return null; } },
   };
   return { db: db as unknown as Prisma.TransactionClient, calls };
 }
@@ -421,9 +507,18 @@ test("getEffectiveProductPricingBatch: mismo número de consultas para 1 product
   const { db: db20, calls: calls20 } = createCountingFakeDb({ products: makeProducts(20) });
   await getEffectiveProductPricingBatch(db20, makeItems(20));
 
-  assert.deepEqual(calls1, calls20, "el número de round trips no debe crecer con N");
+  // systemSetting queda fuera del deepEqual: isWacDrivesCostChainEnabled
+  // cachea en una variable a nivel de módulo (TTL 60s) compartida por TODO
+  // este archivo de test — la llamada db1 la deja "tibia", así que db20
+  // puede resolverla sin tocar su propio fake db en absoluto (0 en vez de
+  // 1). Eso es la cache funcionando, no una regresión de round trips: por
+  // eso se verifica <=1 por lado en vez de igualdad estricta entre ambas.
+  const { systemSetting: _s1, ...rest1 } = calls1;
+  const { systemSetting: _s20, ...rest20 } = calls20;
+  assert.deepEqual(rest1, rest20, "el número de round trips no debe crecer con N");
   assert.equal(calls20.productStockGroupMember, 1);
   assert.equal(calls20.product, 1);
   assert.equal(calls20.branchProductSetting, 1);
   assert.equal(calls20.inventoryBalance, 1);
+  assert.ok(calls1.systemSetting <= 1 && calls20.systemSetting <= 1, "a lo sumo un round trip de systemSetting por invocación, nunca por item");
 });

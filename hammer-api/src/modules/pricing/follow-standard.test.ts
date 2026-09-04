@@ -73,7 +73,7 @@ test("Prueba 9 (LA QUE IMPORTA) — limpiar la excepción deja branchPrice en nu
     branchPrice: row.branchPrice,
     branchCost: null,
     weightedAverageCost: null,
-  });
+  }, true);
   assert.equal(effective.priceSource, "STANDARD");
   assert.ok(effective.effectivePrice?.equals(new Prisma.Decimal(450)));
 });

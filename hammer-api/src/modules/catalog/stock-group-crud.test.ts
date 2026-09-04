@@ -136,7 +136,7 @@ test("Prueba LA QUE IMPORTA (el caso real de la captura) — resolveCostChain + 
     globalCost: new Prisma.Decimal(11.75),
     lastPurchaseCost: new Prisma.Decimal(11.75),
     weightedAverageCost: new Prisma.Decimal(18.55),
-  }).cost;
+  }, true).cost;
   const effectiveCost = resolveFusionMemberCost(canonicalCost, new Prisma.Decimal(40));
   assert.ok(effectiveCost !== null && Math.abs(Number(effectiveCost) - 742) < 1, `el WAC real (18.55) debe ganar sobre globalCost (11.75) — dio ${effectiveCost?.toString()}`);
   assert.notEqual(Number(effectiveCost), 11.75 * 40, "si esto diera 470, Fusiones seguiría mostrando el margen falso reportado");

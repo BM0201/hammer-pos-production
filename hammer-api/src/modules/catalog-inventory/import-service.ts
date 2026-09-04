@@ -9,6 +9,7 @@ import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
 import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 
 export const INVENTORY_IMPORT_BATCH_STATUS = {
   UPLOADED: "UPLOADED",
@@ -984,6 +985,9 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
     const categories = await prisma.category.findMany({ select: { id: true, code: true, name: true, isActive: true } });
     const categoryByCode = new Map(categories.map((category) => [category.code.toUpperCase(), category]));
     const categoryByNameExec = new Map(categories.map((category) => [category.name.toUpperCase(), category]));
+    // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — leído una vez para
+    // todo el lote (no por línea/chunk).
+    const wacEnabled = await isWacDrivesCostChainEnabled();
 
     // Phase 2: Process lines in chunks
     const chunks: typeof lines[] = [];
@@ -1166,7 +1170,7 @@ export async function executeUnifiedCatalogInventoryImport(input: ExecuteInput) 
               // Excel (prioridad baja del hallazgo): si el costo del bulto
               // es de verdad correcto, se corrige y se reimporta la fila, o
               // se carga desde Precios y costos (que sí tiene el reintento).
-              if (conversion?.isCanonical) {
+              if (wacEnabled && conversion?.isCanonical) {
                 const siblings = await tx.productStockGroupMember.findMany({
                   where: { stockGroupId: conversion.stockGroupId, isActive: true, isCanonical: false },
                   select: { conversionFactor: true },

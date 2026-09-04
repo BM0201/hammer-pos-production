@@ -23,6 +23,7 @@ import {
   resolveInventoryProductForMovement,
 } from "@/modules/inventory/unit-conversion";
 import { branchProductScopeFilter, excludeDerivedStockGroupMembers, resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
 import { getProductionReservedBaseQtyTx } from "@/modules/production/reservations";
 
@@ -476,6 +477,14 @@ export async function createInventoryMovementTx(
 ) {
   const movementQty = new Prisma.Decimal(input.quantity);
   const movementUnitCost = new Prisma.Decimal(input.unitCost);
+  // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — detectPackageCostAsUnitCost
+  // y detectExcessiveWacJump (más abajo) comparan contra el WAC; sin
+  // sentido dejarlos activos comparando contra un número que dejó de ser
+  // la fuente de verdad. wac.ts no se toca — los guards siguen existiendo
+  // tal cual, solo se saltan las llamadas. detectSuspectedPackageCostOnFirstEntry
+  // NO se toca: compara contra el precio de venta del canónico, no contra
+  // el WAC — no depende de este flag.
+  const wacEnabled = await isWacDrivesCostChainEnabled(tx);
   const resolved = await resolveInventoryProductForMovement(tx, input.productId);
   const inventoryProductId = resolved.inventoryProductId;
   const tracksPackages = Boolean(resolved.conversion?.tracksPackages);
@@ -575,13 +584,15 @@ export async function createInventoryMovementTx(
   // por unidad que en realidad es el costo del PAQUETE completo (inflado
   // ~conversionFactor×). Sólo actúa en entradas de productos empacados con
   // un WAC de referencia real; se puede autorizar con allowHighUnitCost.
-  detectPackageCostAsUnitCost({
-    inbound,
-    baseMovementUnitCost,
-    existingWac: balance.weightedAverageCost,
-    packageFactor,
-    allowHighUnitCost: input.allowHighUnitCost,
-  });
+  if (wacEnabled) {
+    detectPackageCostAsUnitCost({
+      inbound,
+      baseMovementUnitCost,
+      existingWac: balance.weightedAverageCost,
+      packageFactor,
+      allowHighUnitCost: input.allowHighUnitCost,
+    });
+  }
 
   // ── Guard anti "costo de paquete", pero para la PRIMERA entrada (Parte D) ──
   // detectPackageCostAsUnitCost no puede actuar sin un WAC de referencia
@@ -729,19 +740,23 @@ export async function createInventoryMovementTx(
   // Independiente de qué camino causó el salto (compra, ajuste, saldo
   // inicial): si el WAC resultante se dispara muy por encima del actual,
   // se bloquea salvo autorización explícita (allowLargeWacJump).
-  detectExcessiveWacJump({
-    currentWac: balance.weightedAverageCost,
-    newWac: next.newWac,
-    currentQty: balance.quantityOnHand,
-    allowLargeWacJump: input.allowLargeWacJump,
-  });
+  // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — sin el WAC como
+  // fuente de costo, un salto de WAC ya no tiene nada que proteger.
+  if (wacEnabled) {
+    detectExcessiveWacJump({
+      currentWac: balance.weightedAverageCost,
+      newWac: next.newWac,
+      currentQty: balance.quantityOnHand,
+      allowLargeWacJump: input.allowLargeWacJump,
+    });
+  }
 
   // Para auditoría (B.3): distingue "allowLargeWacJump venía en true pero
   // el salto ni siquiera era grande" de "el override efectivamente evitó
   // el guard" — solo lo segundo se audita como autorización real. Reutiliza
   // el mismo guard puro sin el override, solo para diagnosticar.
   let wacJumpAuthorized = false;
-  if (input.allowLargeWacJump) {
+  if (wacEnabled && input.allowLargeWacJump) {
     try {
       detectExcessiveWacJump({
         currentWac: balance.weightedAverageCost,

@@ -146,6 +146,11 @@ function createFakeDb() {
     product: { findMany: async () => PRODUCTS },
     branchProductSetting: { findMany: async () => SETTINGS },
     inventoryBalance: { findMany: async () => BALANCES },
+    // prompt-wac-desactivar.md — getEffectiveProductPricingBatch ahora
+    // también lee isWacDrivesCostChainEnabled(db). Este archivo predata el
+    // flag y cada caso (los "trampa" de WAC alto que debe ganar/perder)
+    // asume WAC activo — value:"true" preserva esa intención original.
+    systemSetting: { findUnique: async () => ({ value: "true" }) },
   } as unknown as Prisma.TransactionClient;
 }
 
@@ -217,7 +222,7 @@ for (const { label, productId, factor, expected } of [
       globalCost: null,
       lastPurchaseCost: null,
       weightedAverageCost: null,
-    }).cost;
+    }, true).cost;
     const fusionCost = resolveFusionMemberCost(canonicalCost, factor);
 
     assert.equal(batchCost, expected);

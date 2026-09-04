@@ -107,6 +107,11 @@ function createArenaFakeDb(input: {
         return balances.filter((b) => productMatch(b.productId) && branchMatch(b.branchId));
       },
     },
+    // prompt-wac-desactivar.md — checkStockGroupPricingHealth ahora también
+    // lee isWacDrivesCostChainEnabled(db). Este archivo predata el flag y
+    // cada comentario ("el WAC real siempre gana sobre el relleno") asume
+    // WAC activo — value:"true" preserva esa intención original.
+    systemSetting: { findUnique: async () => ({ value: "true" }) },
   };
 
   return db as unknown as import("@prisma/client").PrismaClient;

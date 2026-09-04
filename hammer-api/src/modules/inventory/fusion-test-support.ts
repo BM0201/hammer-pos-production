@@ -195,6 +195,12 @@ export function createFusionFakeTx(config: FusionWorldConfig) {
         return args.data;
       },
     },
+    // prompt-wac-desactivar.md — createInventoryMovementTx ahora también lee
+    // isWacDrivesCostChainEnabled(tx). null → default false: estos tests
+    // prueban mecánica de composición (cajas/sueltas), no el guard de WAC.
+    systemSetting: {
+      findUnique: async () => null,
+    },
     $queryRaw: async () => [],
   };
 

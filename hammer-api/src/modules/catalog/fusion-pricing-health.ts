@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { getEffectiveProductPricingBatch, resolveCostChain } from "@/modules/catalog/effective-pricing";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 
 /**
  * prompt-costos-precios-fusion.md §2.3 — verificación de salud de PRECIO Y
@@ -93,6 +94,11 @@ export async function checkStockGroupPricingHealth(
   // usaría hoy para vender.
   const pricingItems = branchIds.flatMap((branchId) => allProductIds.map((productId) => ({ branchId, productId })));
   const pricingByKey = await getEffectiveProductPricingBatch(db, pricingItems);
+  // prompt-wac-desactivar.md — leído una vez, reusado más abajo en el
+  // chequeo de COST_BASIS_CONFLICT (esa llamada ya pasaba weightedAverageCost
+  // en null a propósito — el WAC no participa ahí de todas formas — pero
+  // resolveCostChain ahora exige el flag explícito igual).
+  const wacEnabled = await isWacDrivesCostChainEnabled(db);
 
   const canonicalBalances = await db.inventoryBalance.findMany({
     where: { productId: canonical.productId, branchId: { in: branchIds } },
@@ -189,7 +195,7 @@ export async function checkStockGroupPricingHealth(
         globalCost: ownProduct?.globalCost ?? null,
         lastPurchaseCost: ownProduct?.lastPurchaseCost ?? null,
         weightedAverageCost: null, // el WAC ya vive resuelto en pricingByKey; acá solo miran campos propios corruptibles
-      });
+      }, wacEnabled);
       if (cost !== null) impliedBaseCosts.push({ productId: member.productId, value: cost.div(factor) });
 
       if (ownSetting?.branchPrice) {

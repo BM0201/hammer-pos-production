@@ -87,6 +87,13 @@ function makeFakeDb(fixtures: {
         return fixtures.policies.filter((p) => inArray(where, "branchId", p.branchId) && inArray(where, "categoryId", p.categoryId));
       },
     },
+    // prompt-wac-desactivar.md — getEffectiveProductPricingBatch ahora
+    // también lee isWacDrivesCostChainEnabled(db). Este archivo predata el
+    // flag y el Test 7 (fusión arena) depende de que el WAC del canónico
+    // (18.55 × 25) gane — value:"true" preserva esa intención original.
+    systemSetting: {
+      findUnique: async () => ({ value: "true" }),
+    },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }

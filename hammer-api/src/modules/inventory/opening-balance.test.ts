@@ -67,6 +67,13 @@ function buildFakeDb(opts: { initialWac: number; initialQty: number; standardSal
         return args.data;
       },
     },
+    // prompt-wac-desactivar.md — createInventoryMovementTx (llamado por
+    // createOpeningBalanceTx) ahora también lee isWacDrivesCostChainEnabled(tx).
+    // null → default false, irrelevante acá: estos tests prueban mecánica de
+    // apertura de saldo (costMode/WAC reconstruido), no el guard de WAC.
+    systemSetting: {
+      findUnique: async () => null,
+    },
     $queryRaw: async () => [],
   };
 

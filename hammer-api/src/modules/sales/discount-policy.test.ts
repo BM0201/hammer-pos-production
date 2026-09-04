@@ -203,7 +203,7 @@ test("Fase 2 (síntoma real): miembro de fusión con costo inflado por encima de
       canonicalBranchPrice: null,
       canonicalStandardSalePrice: decimal(100),
     },
-  });
+  }, true);
   assert.equal(pricing.effectiveCost?.toNumber(), 185.8865 * 14);
   assert.ok(pricing.effectivePrice!.lt(pricing.effectiveCost!), "el precio real debe quedar por debajo del costo inflado — la premisa del síntoma");
 

@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { convertBaseUnitCostToSaleUnitCost, resolveInventoryProductForMovement, getProductStockConversionsBatch } from "@/modules/inventory/unit-conversion";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 
 type PricingClient = PrismaClient | Prisma.TransactionClient;
 
@@ -73,6 +74,11 @@ async function getEffectiveProductPricing(
   txOrPrisma: PricingClient,
   input: { branchId: string; productId: string },
 ): Promise<EffectivePricing> {
+  // prompt-wac-desactivar.md — docs/WAC-DESACTIVADO.md. Se lee UNA vez acá
+  // (con cache TTL propia) y se pasa explícito a resolveEffectivePricing/
+  // resolveCostChain — esas dos siguen siendo funciones puras, no leen la
+  // config por su cuenta.
+  const wacEnabled = await isWacDrivesCostChainEnabled(txOrPrisma);
   const product = await txOrPrisma.product.findUniqueOrThrow({
     where: { id: input.productId },
     select: { id: true, standardSalePrice: true, globalCost: true, averageCost: true, lastPurchaseCost: true },
@@ -130,7 +136,7 @@ async function getEffectiveProductPricing(
           canonicalStandardSalePrice: canonicalProduct.standardSalePrice,
         }
       : null,
-  });
+  }, wacEnabled);
 }
 
 /**
@@ -147,6 +153,9 @@ async function getEffectiveProductPricingBatch(
   const result = new Map<string, EffectivePricing>();
   if (items.length === 0) return result;
 
+  // prompt-wac-desactivar.md — leído UNA vez para todo el batch (no por
+  // item), cacheado igual que en getEffectiveProductPricing.
+  const wacEnabled = await isWacDrivesCostChainEnabled(txOrPrisma);
   const productIds = [...new Set(items.map((item) => item.productId))];
   const branchIds = [...new Set(items.map((item) => item.branchId))];
 
@@ -224,7 +233,7 @@ async function getEffectiveProductPricingBatch(
             canonicalStandardSalePrice: canonicalProduct.standardSalePrice,
           }
         : null,
-    }));
+    }, wacEnabled));
   }
 
   return result;
@@ -263,9 +272,17 @@ type CostChainInput = {
  * un miembro DERIVADO para detectar qué costo implicarían si todavía se
  * leyeran (ya no se leen, pero pueden seguir ahí como dato corrupto sin
  * limpiar).
+ *
+ * `wacEnabled` — prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md.
+ * Parámetro EXPLÍCITO y obligatorio a propósito (no un default interno):
+ * obliga a que cada llamador diga de dónde sale su decisión (leída del
+ * flag global, o fija en un test) en vez de que esta función pura vaya a
+ * buscar configuración por su cuenta. false → el WAC se trata como si
+ * nunca existiera (cae directo a averageCost > globalCost >
+ * lastPurchaseCost) — NO se borra el dato, solo se lo salta acá.
  */
-export function resolveCostChain(input: CostChainInput): { cost: Prisma.Decimal | null; source: EffectivePricing["costSource"] } {
-  const usableWac = input.weightedAverageCost && input.weightedAverageCost.gt(0) ? input.weightedAverageCost : null;
+export function resolveCostChain(input: CostChainInput, wacEnabled: boolean): { cost: Prisma.Decimal | null; source: EffectivePricing["costSource"] } {
+  const usableWac = wacEnabled && input.weightedAverageCost && input.weightedAverageCost.gt(0) ? input.weightedAverageCost : null;
 
   const cost = input.branchCost
     ?? usableWac
@@ -334,7 +351,7 @@ function resolveEffectivePricing(input: {
    * miembro (arriba) se ignoran para el costo cuando esto está presente.
    */
   fusion?: FusionMemberPricingBasis | null;
-}): EffectivePricing {
+}, wacEnabled: boolean): EffectivePricing {
   if (input.fusion) {
     const canonicalCost = resolveCostChain({
       branchCost: input.fusion.canonicalBranchCost,
@@ -342,7 +359,7 @@ function resolveEffectivePricing(input: {
       globalCost: input.fusion.canonicalGlobalCost,
       lastPurchaseCost: input.fusion.canonicalLastPurchaseCost,
       weightedAverageCost: input.fusion.canonicalBaseWeightedAverageCost,
-    });
+    }, wacEnabled);
     const effectiveCost = resolveFusionMemberCost(canonicalCost.cost, input.fusion.conversionFactor);
 
     const canonicalPriceBase = input.fusion.canonicalBranchPrice ?? input.fusion.canonicalStandardSalePrice;
@@ -398,7 +415,7 @@ function resolveEffectivePricing(input: {
     globalCost: input.globalCost,
     lastPurchaseCost: input.lastPurchaseCost,
     weightedAverageCost: input.weightedAverageCost,
-  });
+  }, wacEnabled);
 
   return {
     productId: input.productId,

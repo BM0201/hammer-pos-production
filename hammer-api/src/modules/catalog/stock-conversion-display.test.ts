@@ -93,7 +93,9 @@ test("Libra (factor 100, derivada): el costo efectivo sale del canónico × fact
   const conversion = conversionFor({ productId: "prod-libra", saleUnit: "LIBRA", conversionFactor: 100, isCanonical: false, isPackagePresentation: false });
   const product = { ...baseProduct("prod-libra"), globalCost: new Prisma.Decimal(1) }; // relleno tecleado a mano en el miembro
   const canonicalProduct = { id: "prod-unidad", standardSalePrice: new Prisma.Decimal(30), globalCost: null, averageCost: null, lastPurchaseCost: null };
-  const mapped = mapSingleProductWithBranchInventory(product, BRANCH_ID, conversion, balanceRow(), canonicalProduct, null);
+  // prompt-wac-desactivar.md — wacEnabled=true explícito: este test predata
+  // el flag y su intención original es probar la cadena CON el WAC activo.
+  const mapped = mapSingleProductWithBranchInventory(product, BRANCH_ID, conversion, balanceRow(), canonicalProduct, null, true);
   // balanceRow().weightedAverageCost = 10 (del canónico) × factor 100 = 1000 — NO 1.00.
   assert.equal(mapped.effectiveCost?.toNumber(), 1000);
   assert.notEqual(mapped.effectiveCost?.toNumber(), 1);
@@ -104,7 +106,7 @@ test("Libra (factor 100, derivada): costSource es coherente con effectiveCost �
   const conversion = conversionFor({ productId: "prod-libra", saleUnit: "LIBRA", conversionFactor: 100, isCanonical: false, isPackagePresentation: false });
   const product = { ...baseProduct("prod-libra"), globalCost: new Prisma.Decimal(1) };
   const canonicalProduct = { id: "prod-unidad", standardSalePrice: new Prisma.Decimal(30), globalCost: null, averageCost: null, lastPurchaseCost: null };
-  const mapped = mapSingleProductWithBranchInventory(product, BRANCH_ID, conversion, balanceRow(), canonicalProduct, null);
+  const mapped = mapSingleProductWithBranchInventory(product, BRANCH_ID, conversion, balanceRow(), canonicalProduct, null, true);
   // La fuente que se muestra (WAC_ESTIMATE, del canónico) tiene que corresponder
   // al número que efectivamente se usó — antes solo se pisaban effectiveCost y
   // weightedAverageCost, costSource podía quedar de la resolución vieja.

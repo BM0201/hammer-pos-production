@@ -59,14 +59,14 @@ test("2. Dos presentaciones derivadas de la misma fusión, con precios propios d
     globalCost: null, averageCost: null, lastPurchaseCost: null,
     branchPrice: null, branchCost: null, weightedAverageCost: null,
     fusion: { ...FUSION_BASE, conversionFactor: d(25) },
-  });
+  }, true);
   const metro220 = resolveEffectivePricingFromParts({
     productId: "metro-220p",
     standardSalePrice: d(1450), // precio propio DISTINTO de la otra presentación
     globalCost: null, averageCost: null, lastPurchaseCost: null,
     branchPrice: null, branchCost: null, weightedAverageCost: null,
     fusion: { ...FUSION_BASE, conversionFactor: d(55) },
-  });
+  }, true);
   assert.equal(metro100.effectivePrice?.toNumber(), 650);
   assert.equal(metro220.effectivePrice?.toNumber(), 1450);
   assert.notEqual(metro100.effectivePrice?.toNumber(), metro220.effectivePrice?.toNumber());
@@ -79,21 +79,21 @@ test("9. Los tres miembros de un grupo de fusión (ARENA_2), con precios propios
     globalCost: null, averageCost: null, lastPurchaseCost: null,
     branchPrice: null, branchCost: null, weightedAverageCost: null,
     fusion: null,
-  });
+  }, true);
   const metroA = resolveEffectivePricingFromParts({
     productId: "metro-a-arena-2",
     standardSalePrice: d(650),
     globalCost: null, averageCost: null, lastPurchaseCost: null,
     branchPrice: null, branchCost: null, weightedAverageCost: null,
     fusion: { ...FUSION_BASE, conversionFactor: d(25), canonicalStandardSalePrice: d(35) },
-  });
+  }, true);
   const metroB = resolveEffectivePricingFromParts({
     productId: "metro-b-arena-2",
     standardSalePrice: d(1900),
     globalCost: null, averageCost: null, lastPurchaseCost: null,
     branchPrice: null, branchCost: null, weightedAverageCost: null,
     fusion: { ...FUSION_BASE, conversionFactor: d(55), canonicalStandardSalePrice: d(35) },
-  });
+  }, true);
   assert.equal(canonical.effectivePrice?.toNumber(), 35);
   assert.equal(metroA.effectivePrice?.toNumber(), 650);
   assert.equal(metroB.effectivePrice?.toNumber(), 1900);

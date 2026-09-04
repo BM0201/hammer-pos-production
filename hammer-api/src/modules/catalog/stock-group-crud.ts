@@ -5,6 +5,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
 import { canonicalizePresentationUnit, findUnitCollisions } from "@/modules/catalog/presentation-units";
 import { resolveCostChain, resolveFusionMemberCost } from "@/modules/catalog/effective-pricing";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 
 export type StockGroupMemberInput = {
   productId: string;
@@ -851,6 +852,10 @@ export async function listStockGroups() {
     const aggregated = aggregateWeightedAverageCost(rows.map((b) => ({ quantityOnHand: Number(b.quantityOnHand), weightedAverageCost: Number(b.weightedAverageCost) })));
     if (aggregated !== null) wacByProductId.set(productId, aggregated);
   }
+  // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — wacByProductId se
+  // sigue agregando igual (no se borra el dato); resolveCostChain más
+  // abajo decide si lo usa.
+  const wacEnabled = await isWacDrivesCostChainEnabled();
 
   const healthByGroupId = new Map(
     await Promise.all(
@@ -968,6 +973,11 @@ export async function listStockGroups() {
     packageUnit: group.packageUnit,
     conversionFactorToBase: group.conversionFactorToBase ? Number(group.conversionFactorToBase) : null,
     tracksPackages: group.tracksPackages,
+    // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — el frontend
+    // (fusion-pricing-panel.tsx) no tiene forma propia de leer el flag; se
+    // repite por grupo (mismo valor siempre, un solo read por request) para
+    // no cambiar la forma del endpoint (array plano, sin envoltorio).
+    wacDrivesCostChain: wacEnabled,
     approximateFactor: group.approximateFactor,
     minimumClosedPackageReserve: Number(group.minimumClosedPackageReserve ?? 1),
     autoOpenForUnitSale: group.autoOpenForUnitSale,
@@ -1008,7 +1018,7 @@ export async function listStockGroups() {
               globalCost: canonicalMember.product.globalCost,
               lastPurchaseCost: canonicalMember.product.lastPurchaseCost,
               weightedAverageCost: canonicalWac !== null ? new Prisma.Decimal(canonicalWac) : null,
-            }).cost
+            }, wacEnabled).cost
           : null;
         const memberCost = canonicalCost !== null ? resolveFusionMemberCost(canonicalCost, m.conversionFactor) : null;
         const effectiveCost = memberCost !== null && memberCost.gt(0) ? Number(memberCost) : null;
