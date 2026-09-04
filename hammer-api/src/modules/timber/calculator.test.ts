@@ -227,3 +227,32 @@ test("DEFAULT_CLASSIFICATION_CONFIG deriva la tabla de cubicacion de VARA_LENGTH
   assert.equal(row8?.varas, 3);
   assert.equal(row8?.forceCuadro, true);
 });
+
+/**
+ * prompt-timber-borrador-bugs.md, BUG 2 — "Verificar que updateTimberTrip
+ * tolere bien un array vacío en input.lines". calculateTimberTrip ya
+ * tolera un array vacío sin tocarlo (los guards totalFeet>0/pieces>0/
+ * saleTotal>0 ya existían) — este test lo deja explícito, para que quien
+ * quite el guard de arriba por error lo note acá, no en producción.
+ */
+test("timber trip: lines vacío no rompe — es el estado real de un DRAFT a medio editar, no un error", () => {
+  const result = calculateTimberTrip([], 0, PRICING);
+  assert.equal(result.lines.length, 0);
+  assert.equal(result.totals.totalPieces, 0);
+  assert.equal(result.totals.totalFeet, 0);
+  assert.equal(result.totals.computedCostPerFoot, 0);
+  assert.equal(result.totals.landedCostPerFoot, 0);
+  assert.equal(result.totals.totalCostFeet, 0);
+  assert.equal(result.totals.globalMarginPct, 0, "0/0 no debe dar NaN ni Infinity");
+  assert.equal(result.distribution.pctTabla, 0);
+  assert.equal(result.marginAlerts.linesUnderTarget, 0);
+});
+
+test("timber trip: lines vacío con gastos del viaje ya cargados sigue sin romper (landedCostPerFoot cae a 0, no divide entre pies inexistentes)", () => {
+  const result = calculateTimberTrip([], 0, PRICING, {
+    expenses: { freightAmount: 500, fuelAmount: 100, perDiemAmount: 0, permitsAmount: 0, otherExpensesAmount: 0 },
+  });
+  assert.equal(result.totals.tripExpensesTotal, 600);
+  assert.equal(result.totals.landedCostPerFoot, 0);
+  assert.ok(Number.isFinite(result.totals.landedCostPerFoot));
+});

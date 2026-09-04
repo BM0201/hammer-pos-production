@@ -1372,7 +1372,15 @@ export async function listTimberTrips(filters?: {
   const skip = (page - 1) * limit;
 
   const where: Record<string, unknown> = {};
-  if (filters?.status) where.status = filters.status;
+  if (filters?.status) {
+    where.status = filters.status;
+  } else {
+    // prompt-timber-borrador-bugs.md, BUG 1 — sin un status pedido
+    // explícito, la lista activa no debe ensuciarse con viajes
+    // cancelados (ahora se pueden cancelar desde la interfaz). Quien
+    // necesite verlos igual puede pedir status=CANCELLED explícito.
+    where.status = { not: "CANCELLED" };
+  }
   if (filters?.destinationBranchId) where.destinationBranchId = filters.destinationBranchId;
   if (filters?.search) {
     where.OR = [

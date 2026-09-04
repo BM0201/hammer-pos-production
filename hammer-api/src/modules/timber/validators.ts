@@ -94,7 +94,15 @@ export const updateTimberTripSchema = z.object({
   expenses: timberTripExpensesSchema.optional(),
   invoicedFeet: z.number().positive("Los pies de factura deben ser mayor a 0").max(10000000).optional().nullable(),
   pricePolicy: timberPricePolicySchema.optional(),
-  lines: z.array(timberTripLineSchema).min(1).optional(),
+  // prompt-timber-borrador-bugs.md, BUG 2 — SIN el .min(1) que sigue
+  // teniendo createTimberTripSchema (arriba). El autoguardado de un
+  // DRAFT (timber-workspace.tsx save()) SIEMPRE manda `lines`, incluso
+  // vacío, mientras el usuario edita (quitó todas las líneas antes de
+  // volver a agregar, por ejemplo) — eso es un estado real e intermedio
+  // válido, no un error de payload. La exigencia de "al menos 1 línea"
+  // para poder AVANZAR ya existe donde corresponde: confirmTimberTrip
+  // (TRIP_HAS_NO_LINES), al momento de confirmar de verdad.
+  lines: z.array(timberTripLineSchema).optional(),
 });
 
 // Madera v2 Fase 4 — configuración como datos: tabla de cubicación, reglas de ancho,

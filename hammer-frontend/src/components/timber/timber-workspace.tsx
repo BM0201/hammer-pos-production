@@ -346,6 +346,7 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
   const [trip, setTrip] = useState<TripDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const [lines, setLines] = useState<TripLineDraft[]>([]);
   const [costMode, setCostMode] = useState<CostMode>("PER_FOOT");
@@ -463,6 +464,31 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
     });
   }
 
+  // prompt-timber-borrador-bugs.md, BUG 1 — cancelTimberTrip/PATCH
+  // {action:"cancel"} ya existían y funcionan (marca CANCELLED, no borra
+  // la fila — un DRAFT nunca tocó inventario, es seguro); solo faltaba
+  // el botón. Vuelve a la lista al cancelar, no tiene sentido seguir
+  // editando un viaje que ya no es DRAFT.
+  async function cancelTrip() {
+    if (!window.confirm(`¿Cancelar el viaje ${trip?.tripCode}? No se puede deshacer.`)) return;
+    setCancelling(true);
+    try {
+      const res = await apiFetch(`/api/timber/trips/${tripId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" }),
+      });
+      const raw = await readJson(res);
+      if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo cancelar el viaje."); return; }
+      showToast("success", "Viaje cancelado.");
+      onBack();
+    } catch {
+      showToast("error", "Error de red al cancelar el viaje.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   if (loading || !trip) {
     return <div className="p-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</div>;
   }
@@ -480,6 +506,9 @@ function TripWorkspace({ tripId, onBack }: { tripId: string; onBack: () => void 
         {trip.status === "CANCELLED" && <Badge variant="neutral">Cancelado</Badge>}
         <span className="flex-1" />
         {saving && <span className="text-xs text-[var(--color-text-soft)]">Guardando…</span>}
+        {trip.status === "DRAFT" && (
+          <Button variant="danger" size="sm" loading={cancelling} onClick={cancelTrip}>Cancelar viaje</Button>
+        )}
       </div>
 
       <div className="flex items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1">
@@ -529,8 +558,31 @@ function StepViajeYCubicacion(props: {
   applyCubicationImport: (recognized: CubicationImportRecognizedLine[]) => void;
 }) {
   const { lines, isEditable, costMode, setCostMode, costPerFoot, setCostPerFoot, woodTripTotalCost, setWoodTripTotalCost, expenses, setExpenses, invoicedFeet, setInvoicedFeet, trip, updateLinePieces, addMeasure, removeLine, fetchCubicationPreview, applyCubicationImport } = props;
-  const totalFeet = n(trip.totalFeet);
   const reconciliation = trip.reconciliation;
+  // prompt-timber-borrador-bugs.md, BUG 3 — antes esta pantalla mostraba
+  // trip.totalPieces/totalFeet (el último guardado exitoso) mientras el
+  // encabezado "N medidas" y la tabla de arriba ya reflejaban `lines` (la
+  // edición en curso): cuando el guardado fallaba o tardaba, la fila
+  // TOTALES quedaba de un momento distinto al resto de la pantalla.
+  // Aritmética trivial (T×W×L×piezas/12, la misma que feetPerPiece más
+  // abajo) — no lógica de negocio que haya que pedirle al servidor.
+  const totalPieces = lines.reduce((sum, l) => sum + l.pieces, 0);
+  const totalFeet = lines.reduce((sum, l) => sum + (l.thickness * l.width * l.length * l.pieces) / 12, 0);
+  // Precio por pie: en modo PER_FOOT es el input tal cual (ya vive en el
+  // cliente); en modo TOTAL es costo÷pies (misma división que hace
+  // calculateTimberTrip, sin duplicar la función). Solo cae al último
+  // valor guardado (trip.computedCostPerFoot) en el caso borde que SÍ
+  // necesita el servidor: TOTAL sin costo cargado todavía, donde el
+  // motor usa el costo por defecto configurado — dato que el cliente no
+  // tiene cargado y no vale la pena pedir aparte para un preview.
+  const computedCostPerFoot = costMode === "PER_FOOT"
+    ? (Number(costPerFoot) || 0)
+    : totalFeet > 0 && Number(woodTripTotalCost) > 0
+      ? Number(woodTripTotalCost) / totalFeet
+      : n(trip.computedCostPerFoot);
+  const maderaTotal = computedCostPerFoot * totalFeet;
+  const tripExpensesTotal = expenses.freightAmount + expenses.fuelAmount + expenses.perDiemAmount + expenses.permitsAmount + expenses.otherExpensesAmount;
+  const landedCostPerFoot = totalFeet > 0 ? (maderaTotal + tripExpensesTotal) / totalFeet : 0;
   const [cubicationPreview, setCubicationPreview] = useState<CubicationImportPreview | null>(null);
   const [cubicationImportLoading, setCubicationImportLoading] = useState(false);
   const cubicationFileInputRef = useRef<HTMLInputElement>(null);
@@ -612,7 +664,7 @@ function StepViajeYCubicacion(props: {
             })}
           </tbody>
           <tfoot>
-            <tr><td>TOTALES</td><td className="hm-num">{trip.totalPieces}</td><td /><td className="hm-num">{fmt(totalFeet)}</td><td /></tr>
+            <tr><td>TOTALES</td><td className="hm-num">{totalPieces}</td><td /><td className="hm-num">{fmt(totalFeet)}</td><td /></tr>
           </tfoot>
         </table>
       </Card>
@@ -699,7 +751,7 @@ function StepViajeYCubicacion(props: {
               <input disabled={!isEditable} type="number" value={woodTripTotalCost} onChange={(e) => setWoodTripTotalCost(e.target.value === "" ? "" : Number(e.target.value))} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-right font-mono text-sm" />
             </label>
           )}
-          <div className="mt-2.5 flex justify-between text-[12.5px]"><span className="text-[var(--color-text-muted)]">Madera ({fmt(totalFeet)} × {fmt(n(trip.computedCostPerFoot))})</span><b>C$ {fmt(n(trip.computedCostPerFoot) * totalFeet)}</b></div>
+          <div className="mt-2.5 flex justify-between text-[12.5px]"><span className="text-[var(--color-text-muted)]">Madera ({fmt(totalFeet)} × {fmt(computedCostPerFoot)})</span><b>C$ {fmt(maderaTotal)}</b></div>
         </Card>
 
         <Card>
@@ -712,8 +764,8 @@ function StepViajeYCubicacion(props: {
               </label>
             ))}
           </div>
-          <div className="mt-2.5 flex justify-between border-t border-[var(--color-border)] pt-2 text-[12.5px]"><span className="text-[var(--color-text-muted)]">Total gastos</span><b>C$ {fmt(n(trip.tripExpensesTotal))}</b></div>
-          <div className="flex justify-between text-[12.5px]"><span className="text-[var(--color-text-muted)]">Costo aterrizado por pie</span><b className="font-mono">C$ {fmt(n(trip.landedCostPerFoot), 4)}</b></div>
+          <div className="mt-2.5 flex justify-between border-t border-[var(--color-border)] pt-2 text-[12.5px]"><span className="text-[var(--color-text-muted)]">Total gastos</span><b>C$ {fmt(tripExpensesTotal)}</b></div>
+          <div className="flex justify-between text-[12.5px]"><span className="text-[var(--color-text-muted)]">Costo aterrizado por pie</span><b className="font-mono">C$ {fmt(landedCostPerFoot, 4)}</b></div>
         </Card>
 
         <Card>
