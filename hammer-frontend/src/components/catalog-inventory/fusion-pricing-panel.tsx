@@ -60,7 +60,7 @@ type FusionPricingMember = {
   isCanonical: boolean;
   isPackagePresentation?: boolean;
   globalCost: number | null;
-  /** Costo REAL que usa el resto del motor (WAC de compras si existe, si no cae a globalCost) — el margen se calcula con este, no con globalCost. */
+  /** Costo REAL que usa el resto del motor (WAC de compras si existe y WAC_DRIVES_COST_CHAIN está activo — ver wacDrivesCostChain más abajo — si no, cae a averageCost/globalCost/lastPurchaseCost). El margen se calcula con este, no con globalCost. */
   effectiveCost: number | null;
   standardSalePrice: number | null;
   marginPercent: number | null;
@@ -72,6 +72,8 @@ type FusionPricingGroup = {
   name: string;
   baseUnit: string;
   members: FusionPricingMember[];
+  /** prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — mismo valor en todos los grupos de una misma respuesta; leído una vez abajo. */
+  wacDrivesCostChain: boolean;
 };
 
 async function readJson(res: Response) {
@@ -128,6 +130,12 @@ export function FusionPricingPanel() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — mismo valor en cada
+  // grupo de la respuesta (viene de un solo read del flag en el backend);
+  // con groups vacío (aún cargando) el default false no dispara ningún
+  // aviso que cite WAC, que es el estado seguro mientras no se sabe.
+  const wacDrivesCostChain = groups[0]?.wacDrivesCostChain ?? false;
 
   const filteredGroups = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -187,10 +195,14 @@ export function FusionPricingPanel() {
       // real (ese siempre usa el WAC de compras) — la confusión que este
       // ciclo existe para cerrar en el momento mismo de guardar, no solo
       // en el banner de arriba que nadie relee.
+      // prompt-wac-desactivar.md — la cláusula "el margen usa el WAC de
+      // compras real" deja de agregarse con el flag apagado: ya no es
+      // cierta (el margen cae a averageCost/globalCost/lastPurchaseCost),
+      // y el aviso base (costo actualizado) sigue disparándose igual.
       showToast(
         "success",
         `${field === "globalCost" ? "Costo global" : "Precio"} actualizado para ${member.sku}${field === "globalCost" && !member.isCanonical ? " (aplicado al producto canónico)" : ""}.`
-          + (field === "globalCost" ? " Es una referencia manual — el margen usa el WAC de compras real." : ""),
+          + (field === "globalCost" && wacDrivesCostChain ? " Es una referencia manual — el margen usa el WAC de compras real." : ""),
       );
       await load();
     } catch {
@@ -265,7 +277,14 @@ export function FusionPricingPanel() {
                     <tr>
                       <th>Presentación</th>
                       <th>Equivale a</th>
-                      <th className="r" title="Referencia manual editable. El margen y las alertas de 'por debajo del costo' siempre usan el WAC de compras real, no este número — si no coinciden, la fila lo avisa abajo.">Costo global</th>
+                      <th
+                        className="r"
+                        title={
+                          wacDrivesCostChain
+                            ? "Referencia manual editable. El margen y las alertas de 'por debajo del costo' siempre usan el WAC de compras real, no este número — si no coinciden, la fila lo avisa abajo."
+                            : "Costo de esta presentación — deriva del costo del canónico, no del WAC (WAC_DRIVES_COST_CHAIN está apagado, ver docs/WAC-DESACTIVADO.md)."
+                        }
+                      >Costo global</th>
                       <th className="r">Precio general</th>
                       <th className="r">Margen</th>
                     </tr>
@@ -287,6 +306,12 @@ export function FusionPricingPanel() {
                       // costos/Brain/POS) — cuando eso pasa, editar el
                       // costo global de acá NO alcanza para cambiar el
                       // margen real, y hay que decirlo explícito.
+                      // prompt-wac-desactivar.md — el aviso ("Costo real: ...
+                      // (WAC de compras)") deja de dispararse con el flag
+                      // apagado: no se borra el texto ni el cálculo de
+                      // costDivergent, solo se envuelve en wacDrivesCostChain
+                      // (ver el <span> más abajo) — el WAC ya no es la fuente
+                      // de verdad, así que ya no tiene sentido avisar contra él.
                       const costDivergent = member.effectiveCost !== null
                         && (member.globalCost === null || Math.abs(member.effectiveCost - member.globalCost) > 0.01);
 
@@ -320,7 +345,7 @@ export function FusionPricingPanel() {
                                 {savingKey === costKey ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                               </button>
                             </div>
-                            {costDivergent && (
+                            {wacDrivesCostChain && costDivergent && (
                               <div className="mt-1 flex items-center justify-end gap-1 text-right text-[10.5px] text-[var(--color-warning-700)]">
                                 <AlertTriangle className="h-3 w-3 shrink-0" />
                                 <span>Costo real: {money(member.effectiveCost as number)} (WAC de compras) — el margen se calculó con este, no con el de arriba.</span>
