@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isPriceStaleAgainstCost, evaluateBranchCostAgainstReference } from "@/modules/brain/detectors/pricing-detector";
+import { isPriceStaleAgainstCost, evaluateBranchCostAgainstReference, escalateForTopMover } from "@/modules/brain/detectors/pricing-detector";
 
 /**
  * Fase 1.2 (prompt-motor-precios-lote-herencia-gobierno.md) — la señal
@@ -102,4 +102,41 @@ test("exactamente 2× no dispara — el umbral es estrictamente mayor que, no ma
 test("referenceCost en 0 no se usa como base (evita división/comparación sin sentido)", () => {
   const result = evaluateBranchCostAgainstReference({ branchCost: 4500, averageCost: 0, lastPurchaseCost: null });
   assert.equal(result.costLooksWrong, false);
+});
+
+/**
+ * prompt-precios-vigilancia-movimiento.md — "que se vigile bien... pero
+ * sobre todo lo que más se mueve": un producto clase A (el que más se
+ * mueve, commercial-intelligence.ts) escala un escalón de severidad y sube
+ * confidenceScore — ambos alimentan priorityScoreFor (brain/scoring.ts) al
+ * persistir, así que esto reordena la Bandeja sin tocar esa función
+ * genérica ni el ORDER BY de tray-service.ts (ya ordena por priorityScore desc).
+ */
+
+test("escalateForTopMover: producto que NO es clase A no cambia nada", () => {
+  const result = escalateForTopMover("MEDIUM", false, 0.8);
+  assert.equal(result.severity, "MEDIUM");
+  assert.equal(result.confidenceScore, 0.8);
+});
+
+test("escalateForTopMover: clase A sube un escalón de severidad (MEDIUM → HIGH)", () => {
+  const result = escalateForTopMover("MEDIUM", true, 0.8);
+  assert.equal(result.severity, "HIGH");
+});
+
+test("escalateForTopMover: clase A en HIGH sube a CRITICAL", () => {
+  const result = escalateForTopMover("HIGH", true, 0.8);
+  assert.equal(result.severity, "CRITICAL");
+});
+
+test("escalateForTopMover: ya en CRITICAL no sube más allá (tope)", () => {
+  const result = escalateForTopMover("CRITICAL", true, 0.8);
+  assert.equal(result.severity, "CRITICAL");
+});
+
+test("escalateForTopMover: clase A sube confidenceScore (+0.12), sin pasar de 0.98", () => {
+  const low = escalateForTopMover("LOW", true, 0.65);
+  assert.equal(low.confidenceScore, 0.77);
+  const high = escalateForTopMover("MEDIUM", true, 0.95);
+  assert.equal(high.confidenceScore, 0.98, "tope en 0.98, no 1.07");
 });

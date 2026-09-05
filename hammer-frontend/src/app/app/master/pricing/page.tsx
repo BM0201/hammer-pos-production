@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2, ReceiptText, Search } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2, ReceiptText, Search, HelpCircle, Flame } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -155,7 +155,7 @@ export default function PricingZonePage() {
 /* mudanza-zona-precios.md) — branchId llega del selector de la zona.        */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
-type Reason = "BELOW_COST" | "MARGIN_POLICY" | "COST_STALE";
+type Reason = "BELOW_COST" | "MARGIN_POLICY" | "COST_STALE" | "NO_COST";
 
 type TrayRow = {
   decisionId: string;
@@ -197,6 +197,11 @@ type ApplyResponse = {
 
 const REASON_GROUPS: Array<{ key: Reason; title: string; badge: string; icon: typeof TrendingDown }> = [
   { key: "BELOW_COST", title: "Vendiendo bajo el costo", badge: "CRITICAL", icon: AlertTriangle },
+  // prompt-precios-vigilancia-movimiento.md — "cuando... no tenga costo, me
+  // aparezca": sección propia, después de "bajo costo" (ahí sí hay un costo
+  // conocido y es peor) pero antes de margen/costo-viejo (acá directamente
+  // no se sabe si hay margen o pérdida).
+  { key: "NO_COST", title: "Sin costo conocido", badge: "", icon: HelpCircle },
   { key: "MARGIN_POLICY", title: "Margen bajo la política", badge: "", icon: TrendingDown },
   { key: "COST_STALE", title: "El costo cambió y el precio no", badge: "", icon: Clock3 },
 ];
@@ -204,6 +209,7 @@ const REASON_GROUPS: Array<{ key: Reason; title: string; badge: string; icon: ty
 /** Parte C.1 (prompt-zona-precios-consolidacion.md) — predicado para "Ningún producto ... tiene {motivo}"; distinto de REASON_GROUPS.title, que es un encabezado de sección, no una frase que sigue a "tiene". */
 const REASON_PREDICATE: Record<Reason, string> = {
   BELOW_COST: "precio bajo el costo",
+  NO_COST: "un costo sin registrar",
   MARGIN_POLICY: "margen bajo la política",
   COST_STALE: "el costo cambiado y el precio sin actualizar",
 };
@@ -341,7 +347,7 @@ function PricingTrayTab({
   }, []);
 
   const rowsByReason = useMemo(() => {
-    const map: Record<Reason, TrayRow[]> = { BELOW_COST: [], MARGIN_POLICY: [], COST_STALE: [] };
+    const map: Record<Reason, TrayRow[]> = { BELOW_COST: [], NO_COST: [], MARGIN_POLICY: [], COST_STALE: [] };
     for (const row of data?.rows ?? []) map[row.reason].push(row);
     return map;
   }, [data]);
@@ -725,6 +731,11 @@ function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
   const priceSource = typeof evidence.priceSource === "string" ? evidence.priceSource : null;
   const costSource = typeof evidence.costSource === "string" ? evidence.costSource : null;
   const stock = row.stockAtRisk;
+  // prompt-precios-vigilancia-movimiento.md — "sobre todo lo que más se
+  // mueve": el detector ya escala severidad/prioridad para clase A
+  // (escalateForTopMover, pricing-detector.ts) — este ícono hace ese
+  // criterio VISIBLE en la fila, no solo un efecto silencioso en el orden.
+  const isTopMover = evidence.abcClass === "A";
 
   return (
     <>
@@ -747,6 +758,11 @@ function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
           {/* Fase 4.2 (prompt-mudanza-zona-precios.md) — la bandeja enlaza a la ficha del producto en Catálogo (los dos sentidos, junto con 4.1). */}
           <Link href={`/app/master/catalog-inventory/products/${row.productId}`} className="flex items-center gap-1.5 group">
             <span className={["h-2 w-2 shrink-0 rounded-full", severityDot(row.severity)].join(" ")} aria-hidden="true" />
+            {isTopMover && (
+              <span title="Uno de los productos que más se mueve (clase A)" className="shrink-0">
+                <Flame className="h-3.5 w-3.5 text-[var(--color-danger-500)]" aria-hidden="true" />
+              </span>
+            )}
             <span className="min-w-0">
               <span className="block truncate font-medium text-[var(--color-text)] group-hover:underline">{row.productName}</span>
               <span className="block text-xs text-[var(--color-text-soft)]">{row.productSku}</span>

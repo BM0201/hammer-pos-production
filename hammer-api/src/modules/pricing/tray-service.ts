@@ -30,9 +30,9 @@ import { assertPriceApplicable, applySuggestedPriceTx } from "@/modules/pricing/
  * no tienen un precio/costo de un solo producto que esta fila sepa
  * mostrar (COST/PRICE_BASIS_CONFLICT implican varios productId a la vez).
  */
-const APPLICABLE_TYPES = ["REVIEW_PRICE_BELOW_COST", "REVIEW_PRICE_MARGIN_POLICY", "REVIEW_BRANCH_COST_PRICE", "COST_CHANGED_PRICE_STALE", "REVIEW_FUSION_UNSELLABLE"] as const;
+const APPLICABLE_TYPES = ["REVIEW_PRICE_BELOW_COST", "REVIEW_PRICE_MARGIN_POLICY", "REVIEW_BRANCH_COST_PRICE", "COST_CHANGED_PRICE_STALE", "REVIEW_FUSION_UNSELLABLE", "REVIEW_PRODUCT_NO_COST"] as const;
 
-export type PricingTrayReason = "BELOW_COST" | "MARGIN_POLICY" | "COST_STALE";
+export type PricingTrayReason = "BELOW_COST" | "MARGIN_POLICY" | "COST_STALE" | "NO_COST";
 
 const REASON_TO_TYPES: Record<PricingTrayReason, readonly string[]> = {
   // REVIEW_PRICE_BELOW_COST, REVIEW_BRANCH_COST_PRICE y REVIEW_FUSION_UNSELLABLE
@@ -42,11 +42,17 @@ const REASON_TO_TYPES: Record<PricingTrayReason, readonly string[]> = {
   BELOW_COST: ["REVIEW_PRICE_BELOW_COST", "REVIEW_BRANCH_COST_PRICE", "REVIEW_FUSION_UNSELLABLE"],
   MARGIN_POLICY: ["REVIEW_PRICE_MARGIN_POLICY"],
   COST_STALE: ["COST_CHANGED_PRICE_STALE"],
+  // prompt-precios-vigilancia-movimiento.md — "cuando... no tenga costo, me
+  // aparezca": sección propia, distinta de "vendiendo bajo el costo" (ahí sí
+  // hay un costo, y es mayor al precio; acá directamente no hay costo con
+  // qué comparar, así que no hay precio sugerido que aplicar).
+  NO_COST: ["REVIEW_PRODUCT_NO_COST"],
 };
 
 function reasonForType(type: string | null): PricingTrayReason {
   if (type === "REVIEW_PRICE_BELOW_COST" || type === "REVIEW_BRANCH_COST_PRICE" || type === "REVIEW_FUSION_UNSELLABLE") return "BELOW_COST";
   if (type === "REVIEW_PRICE_MARGIN_POLICY") return "MARGIN_POLICY";
+  if (type === "REVIEW_PRODUCT_NO_COST") return "NO_COST";
   return "COST_STALE";
 }
 
@@ -124,6 +130,7 @@ export function computeTrayTotals(rows: Array<Pick<PricingTrayRow, "reason" | "i
       BELOW_COST: rows.filter((r) => r.reason === "BELOW_COST").length,
       MARGIN_POLICY: rows.filter((r) => r.reason === "MARGIN_POLICY").length,
       COST_STALE: rows.filter((r) => r.reason === "COST_STALE").length,
+      NO_COST: rows.filter((r) => r.reason === "NO_COST").length,
     },
     costDoubtfulCount: rows.filter((r) => r.costLooksWrong).length,
   };

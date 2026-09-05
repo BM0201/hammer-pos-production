@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { BrainDecisionSeverity, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { riskScoreFor, severityForMargin } from "@/modules/brain/scoring";
 import { simulatePriceChange } from "@/modules/brain/prediction/price-simulation";
@@ -51,6 +51,29 @@ export function evaluateBranchCostAgainstReference(input: { branchCost: number; 
     input.averageCost !== null ? "averageCost" : input.lastPurchaseCost !== null ? "lastPurchaseCost" : null;
   const costLooksWrong = referenceCost !== null && referenceCost > 0 && input.branchCost > referenceCost * 2;
   return { referenceCost, referenceSource, costLooksWrong };
+}
+
+const SEVERITY_ORDER: BrainDecisionSeverity[] = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
+
+/**
+ * prompt-precios-vigilancia-movimiento.md — "que se vigile bien... pero
+ * sobre todo lo que más se mueve". Un problema de costo/precio en un
+ * producto clase A (commercial-intelligence.ts, el 80% acumulado de
+ * valor/volumen — resolveAbcXyzClassification, ÚNICA fuente de la clase)
+ * importa más que el mismo problema en un producto que casi no se vende.
+ *
+ * Sube un escalón de severidad (nunca más allá de CRITICAL) y el
+ * confidenceScore — ambos ya alimentan priorityScoreFor (brain/scoring.ts)
+ * al persistir la decisión (brain/service.ts::normalizeDraft), así que
+ * esto reordena la Bandeja (tray-service.ts ya ordena por
+ * priorityScore desc) sin tocar esa función de scoring genérica
+ * (la usan TODAS las categorías de Brain, no solo precios) ni el ORDER BY.
+ */
+export function escalateForTopMover(severity: BrainDecisionSeverity, isTopMover: boolean, baseConfidence: number): { severity: BrainDecisionSeverity; confidenceScore: number } {
+  if (!isTopMover) return { severity, confidenceScore: baseConfidence };
+  const idx = SEVERITY_ORDER.indexOf(severity);
+  const nextSeverity = idx >= 0 && idx < SEVERITY_ORDER.length - 1 ? SEVERITY_ORDER[idx + 1] : severity;
+  return { severity: nextSeverity, confidenceScore: Math.min(0.98, baseConfidence + 0.12) };
 }
 
 export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
@@ -107,12 +130,61 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     if (!effective || !policy || !commercial) continue;
     const cost = effective.effectiveCost === null ? n(balance.weightedAverageCost) : n(effective.effectiveCost);
     const price = n(effective.effectivePrice);
+    const isTopMover = commercial.abcClass === "A";
+
+    // prompt-precios-vigilancia-movimiento.md — "cuando... no tenga costo,
+    // me aparezca": antes esta fila se saltaba entera (cost<=0 caía al
+    // `continue` de abajo, igual que un producto sin precio) y nunca
+    // llegaba a la Bandeja. Un producto CON precio pero SIN costo conocido
+    // es exactamente el blindspot que el flag WAC_DRIVES_COST_CHAIN=false
+    // puede producir (docs/WAC-DESACTIVADO.md) — nadie sabe si se vende con
+    // margen o a pérdida. Va antes del `continue` de precio<=0: sin precio
+    // tampoco, ya es "Sin precio" (Precios vigentes), no competencia de acá.
+    if (cost <= 0 && price > 0) {
+      const stockQty = n(balance.quantityOnHand);
+      const { severity, confidenceScore } = escalateForTopMover(stockQty > 0 ? "HIGH" : "MEDIUM", isTopMover, stockQty > 0 ? 0.8 : 0.65);
+      decisions.push({
+        category: "PRICING",
+        severity,
+        title: `Sin costo conocido: ${balance.product.sku} - ${balance.product.name}`,
+        description: `${balance.branch.code} vende ${balance.product.name} a ${price.toFixed(2)} sin ningún costo registrado — no se puede saber si el margen es positivo o negativo.${isTopMover ? " Es uno de los productos que más se mueve (clase A)." : ""}`,
+        recommendation: "Cargar el costo de compra (global o de esta sucursal) para poder calcular el margen real.",
+        branchId: balance.branchId,
+        productId: balance.productId,
+        confidenceScore,
+        // No hay unitLoss real que calcular (no hay costo con qué
+        // compararlo) — el valor de venta expuesto sin costo conocido es el
+        // proxy más honesto de "cuánto dinero está en juego acá".
+        impactAmount: stockQty * price,
+        riskScore: riskScoreFor(severity, confidenceScore),
+        proposedActionType: "REVIEW_PRODUCT_NO_COST",
+        evidenceJson: {
+          price,
+          effectivePrice: price,
+          effectiveCost: null,
+          cost: null,
+          priceSource: effective.priceSource,
+          costSource: effective.costSource,
+          stockAtRisk: stockQty,
+          stock: stockQty,
+          commercialClass: commercial.combinedClass,
+          abcClass: commercial.abcClass,
+          marginActual: null,
+          marginObjetivo: policy.categoryPolicy.targetMarginPercent,
+        },
+        sourceJson: { detector: "pricing-detector" },
+        fingerprintParts: ["pricing", "no-cost", balance.branchId, balance.productId],
+      });
+      continue;
+    }
     if (cost <= 0 || price <= 0) continue;
 
     const margin = marginPct(price, cost);
     const minMargin = policy.categoryPolicy.minMarginPercent;
     if (price <= cost || margin < minMargin) {
-      const severity = severityForMargin(margin);
+      const marginSeverity = severityForMargin(margin);
+      const isBelowCost = price <= cost;
+      const { severity, confidenceScore } = escalateForTopMover(isBelowCost ? "CRITICAL" : marginSeverity, isTopMover, 0.82);
       const suggestion = calculatePricingSuggestion({
         mode: "ADVANCED",
         baseCost: cost,
@@ -132,24 +204,23 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
         suggestedPrice,
         recentUnits: n(balance.quantityOnHand),
       });
-      const isBelowCost = price <= cost;
       // G: when price < cost, impactAmount = stock × (cost – price) = real daily loss exposure.
       // When margin is just below policy, impactAmount = stock × (price – cost) = at-risk margin value.
       const unitLoss = isBelowCost ? Math.max(0, cost - price) : Math.max(0, price - cost);
       const stockQty = n(balance.quantityOnHand);
       decisions.push({
         category: "PRICING",
-        severity: isBelowCost ? "CRITICAL" : severity,
+        severity,
         title: `Margen bajo: ${balance.product.sku} - ${balance.product.name}`,
-        description: `${balance.branch.code} opera con margen efectivo de ${margin.toFixed(1)}%, por debajo de la politica (${minMargin.toFixed(1)}%).`,
+        description: `${balance.branch.code} opera con margen efectivo de ${margin.toFixed(1)}%, por debajo de la politica (${minMargin.toFixed(1)}%).${isTopMover ? " Es uno de los productos que más se mueve (clase A)." : ""}`,
         recommendation: isBelowCost
           ? "Precio efectivo debajo del costo efectivo: revisar costo/precio antes de vender."
           : "Validar costo reciente y recalcular precio con politica de categoria e inteligencia ABC-XYZ.",
         branchId: balance.branchId,
         productId: balance.productId,
-        confidenceScore: 0.82,
+        confidenceScore,
         impactAmount: stockQty * unitLoss,
-        riskScore: riskScoreFor(isBelowCost ? "CRITICAL" : severity, 0.82),
+        riskScore: riskScoreFor(severity, confidenceScore),
         proposedActionType: isBelowCost ? "REVIEW_PRICE_BELOW_COST" : "REVIEW_PRICE_MARGIN_POLICY",
         proposedActionJson: {
           productId: balance.productId,
@@ -174,6 +245,7 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
           policyMinMarginPercent: minMargin,
           recommendedMarginPercent: commercial.recommendedMarginPercent,
           commercialClass: commercial.combinedClass,
+          abcClass: commercial.abcClass,
           riskLevel: commercial.riskLevel,
           marginPct: margin.toFixed(1),
           // Alias — mismo nombre que usa COST_CHANGED_PRICE_STALE (§1.2),
@@ -319,17 +391,21 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
           calculationSnapshot: suggestion,
         };
       }
+      // prompt-precios-vigilancia-movimiento.md — "sobre todo lo que más
+      // se mueve": mismo escalón de severidad/confianza que el resto del
+      // detector para un producto clase A.
+      const { severity: branchCostSeverity, confidenceScore: branchCostConfidence } = escalateForTopMover(cost > price ? "CRITICAL" : "HIGH", commercial?.abcClass === "A", 0.9);
       decisions.push({
         category: "PRICING",
-        severity: cost > price ? "CRITICAL" : "HIGH",
+        severity: branchCostSeverity,
         title: `Costo de sucursal supera precio: ${setting.product.sku}`,
-        description: `${setting.branch.code} tiene costo ${cost.toFixed(2)} y precio ${price.toFixed(2)}.`,
+        description: `${setting.branch.code} tiene costo ${cost.toFixed(2)} y precio ${price.toFixed(2)}.${commercial?.abcClass === "A" ? " Es uno de los productos que más se mueve (clase A)." : ""}`,
         recommendation: "Actualizar precio o revisar costo de sucursal antes de continuar ventas.",
         branchId: setting.branchId,
         productId: setting.productId,
-        confidenceScore: 0.9,
+        confidenceScore: branchCostConfidence,
         impactAmount: stockQty * Math.max(0, cost - price),
-        riskScore: riskScoreFor(cost > price ? "CRITICAL" : "HIGH", 0.9),
+        riskScore: riskScoreFor(branchCostSeverity, branchCostConfidence),
         proposedActionType: "REVIEW_BRANCH_COST_PRICE",
         proposedActionJson,
         evidenceJson: {
@@ -347,6 +423,7 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
           referenceCost,
           costLooksWrong,
           referenceSource,
+          abcClass: commercial?.abcClass ?? null,
         },
         sourceJson: { detector: "pricing-detector" },
         fingerprintParts: ["pricing", "branch-cost-above-price", setting.branchId, setting.productId],
@@ -382,7 +459,9 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     // precio, así que "el costo subió" se aproxima con el síntoma que sí es
     // verificable hoy: el margen efectivo actual ya cayó bajo el mínimo de
     // la política de categoría.
-    const severity = currentMargin < minMargin ? "HIGH" : "MEDIUM";
+    const baseSeverity = currentMargin < minMargin ? "HIGH" : "MEDIUM";
+    // prompt-precios-vigilancia-movimiento.md — "sobre todo lo que más se mueve".
+    const { severity, confidenceScore } = escalateForTopMover(baseSeverity, commercial.abcClass === "A", 0.8);
 
     const suggestion = calculatePricingSuggestion({
       mode: "ADVANCED",
@@ -409,13 +488,13 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
       category: "PRICING",
       severity,
       title: `Costo actualizado, precio sin tocar: ${setting.product.sku} - ${setting.product.name}`,
-      description: `${setting.branch.code}: el costo cambió el ${costUpdatedAt.toISOString().slice(0, 10)}${setting.lastPriceUpdateAt ? `, después de la última actualización de precio (${setting.lastPriceUpdateAt.toISOString().slice(0, 10)})` : " y este precio nunca registró cuándo se fijó"}. Margen efectivo hoy: ${currentMargin.toFixed(1)}%.`,
+      description: `${setting.branch.code}: el costo cambió el ${costUpdatedAt.toISOString().slice(0, 10)}${setting.lastPriceUpdateAt ? `, después de la última actualización de precio (${setting.lastPriceUpdateAt.toISOString().slice(0, 10)})` : " y este precio nunca registró cuándo se fijó"}. Margen efectivo hoy: ${currentMargin.toFixed(1)}%.${commercial.abcClass === "A" ? " Es uno de los productos que más se mueve (clase A)." : ""}`,
       recommendation: "Recalcular el precio con el costo actual y aplicar la sugerencia.",
       branchId: setting.branchId,
       productId: setting.productId,
-      confidenceScore: 0.8,
+      confidenceScore,
       impactAmount: stockQty * unitImpact,
-      riskScore: riskScoreFor(severity, 0.8),
+      riskScore: riskScoreFor(severity, confidenceScore),
       proposedActionType: "COST_CHANGED_PRICE_STALE",
       proposedActionJson: {
         productId: setting.productId,
@@ -440,6 +519,7 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
         priceSource: effective.priceSource,
         costSource: effective.costSource,
         commercialClass: commercial.combinedClass,
+        abcClass: commercial.abcClass,
         stockAtRisk: stockQty,
       },
       sourceJson: { detector: "pricing-detector" },

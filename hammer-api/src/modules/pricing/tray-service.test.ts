@@ -196,3 +196,48 @@ test("Finding #2 — filtrar por reason: MARGIN_POLICY o COST_STALE NO incluye R
   assert.equal(marginResult.rows.length, 0);
   assert.equal(staleResult.rows.length, 0);
 });
+
+/**
+ * prompt-precios-vigilancia-movimiento.md — "cuando... no tenga costo, me
+ * aparezca": REVIEW_PRODUCT_NO_COST (pricing-detector.ts) es una sección
+ * propia (NO_COST), distinta de BELOW_COST — ahí SÍ hay un costo, y es
+ * mayor al precio; acá directamente no hay costo con qué comparar.
+ */
+function fixtureWithNoCostDecision(): FakeDecision[] {
+  return [
+    {
+      id: "d6", category: "PRICING", status: "OPEN", proposedActionType: "REVIEW_PRODUCT_NO_COST",
+      severity: "CRITICAL", branchId: MASAYA.id, productId: "product-sin-costo", impactAmount: 1500, priorityScore: 30,
+      // Sin costo con qué comparar, no hay precio sugerido que calcular —
+      // proposedActionJson queda null, igual que REVIEW_FUSION_UNSELLABLE.
+      evidenceJson: { effectivePrice: 150, effectiveCost: null, abcClass: "A", stockAtRisk: 10 },
+      proposedActionJson: null,
+      branch: MASAYA, product: { id: "product-sin-costo", sku: "SKU-SIN-COSTO", name: "Producto sin costo", categoryId: CAT_CEMENTO },
+    },
+  ];
+}
+
+test("prompt-precios-vigilancia-movimiento.md — REVIEW_PRODUCT_NO_COST aparece en la Bandeja como reason NO_COST", async () => {
+  const db = makeFakeDb(fixtureWithNoCostDecision());
+  const result = await getPricingTray({}, db);
+
+  assert.equal(result.rows.length, 1);
+  const row = result.rows[0];
+  assert.equal(row.reason, "NO_COST");
+  assert.equal(row.effectiveCost, null);
+  assert.equal(row.currentPrice, 150);
+  assert.equal(row.applicable, false, "sin costo no hay precio sugerido que aplicar con un clic — solo informativa");
+});
+
+test("prompt-precios-vigilancia-movimiento.md — filtrar por reason: NO_COST solo trae REVIEW_PRODUCT_NO_COST", async () => {
+  const db = makeFakeDb([...fixtureWithNoCostDecision(), ...fixtureDecisions()]);
+  const result = await getPricingTray({ reason: "NO_COST" }, db);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].productId, "product-sin-costo");
+});
+
+test("prompt-precios-vigilancia-movimiento.md — unfilteredTotals.byReason.NO_COST cuenta la decisión sin costo", async () => {
+  const db = makeFakeDb([...fixtureWithNoCostDecision(), ...fixtureDecisions()]);
+  const result = await getPricingTray({}, db);
+  assert.equal(result.unfilteredTotals.byReason.NO_COST, 1);
+});

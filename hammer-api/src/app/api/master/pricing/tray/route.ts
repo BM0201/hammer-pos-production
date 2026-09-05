@@ -6,7 +6,7 @@ import { isMaster } from "@/modules/rbac/guards";
 import { can, CAPABILITIES } from "@/modules/rbac/policies";
 import { getPricingTray, type PricingTrayReason } from "@/modules/pricing/tray-service";
 
-const VALID_REASONS: readonly PricingTrayReason[] = ["BELOW_COST", "MARGIN_POLICY", "COST_STALE"];
+const VALID_REASONS: readonly PricingTrayReason[] = ["BELOW_COST", "MARGIN_POLICY", "COST_STALE", "NO_COST"];
 
 /**
  * §1.3 (prompt-motor-precios-lote-herencia-gobierno.md) — bandeja de
