@@ -241,6 +241,7 @@ function PricingTrayTab({
   const [confirming, setConfirming] = useState(false);
   const [applying, setApplying] = useState(false);
   const [lastApplyResult, setLastApplyResult] = useState<ApplyResponse | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   // Parte A.2/B.3 (prompt-zona-precios-consolidacion.md) — la sucursal (estado
   // del padre) cuenta como filtro igual que categoría/motivo: es exactamente
@@ -270,6 +271,68 @@ function PricingTrayTab({
       setLoading(false);
     }
   }, [branchId, categoryFilter, reasonFilter]);
+
+  /**
+   * PARTE A (prompt-precios-mejoras-bandeja-visibilidad.md) — "Recalcular
+   * ahora" dispara un escaneo real (POST /api/master/brain/scan), no solo
+   * un refresh de lo que ya está guardado (eso es "Actualizar", arriba).
+   *
+   * category=PRICING NO alcanza solo: pricing-detector no está en
+   * QUICK_SCAN_CATEGORIES ni en ENTITY_SCAN_CATEGORIES/REPAIR_SCAN_CATEGORIES/
+   * OPERATIONAL_DAY_SCAN_CATEGORIES (brain/engine.ts::detectorAllowedForMode)
+   * — el único modo que deja pasar cualquier categoría es DEEP_SCAN. Ese
+   * modo exige dateFrom/dateTo (validateScanInput), pero detectPricingDecisions
+   * nunca los lee (confirmado en brain/detectors/pricing-detector.ts — filtra
+   * todo por ctx.branchId, no por fecha): la ventana de 1 día de acá es solo
+   * para satisfacer la validación, no porque el detector la use.
+   *
+   * El filtro de categoría de PRODUCTO de esta pantalla (categoryFilter) NO
+   * se manda al scan — scanBrainSchema.category es BrainDecisionCategory
+   * (PRICING/CASH/...), no categoría de catálogo. No hace falta filtrar el
+   * resultado del scan a mano tampoco: load() ya vuelve a pedir la bandeja
+   * con ?categoryId=categoryFilter después de escanear, igual que cualquier
+   * otro refresh.
+   */
+  async function recalcularAhora() {
+    setScanning(true);
+    try {
+      const now = new Date();
+      const dateFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const res = await apiFetch("/api/master/brain/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category: "PRICING",
+          branchId: branchId || undefined,
+          mode: "DEEP_SCAN",
+          dateFrom: dateFrom.toISOString(),
+          dateTo: now.toISOString(),
+          // Default de DEEP_SCAN es 15s; detectPricingDecisions hace un
+          // await secuencial de checkStockGroupPricingHealth por cada grupo
+          // de fusión activo (hasta 200) además de las 3 consultas batch —
+          // margen extra para que una sucursal con muchas fusiones no corte
+          // el scan a la mitad (maxDuration de la ruta es 60s).
+          timeoutMs: 25000,
+        }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo recalcular.");
+      const result = unwrapApiData(raw) as { created: number; updated: number; reopened: number; errors: Array<{ detector?: string; message: string }> };
+      if (result.errors.length > 0) {
+        toast.error(`Recalculado con avisos: ${result.errors[0].message}`, { duration: 8000 });
+      } else {
+        const total = result.created + result.updated + result.reopened;
+        toast.success(total > 0
+          ? `Recalculado — ${total} decisión${total === 1 ? "" : "es"} nueva${total === 1 ? "" : "s"} o actualizada${total === 1 ? "" : "s"}.`
+          : "Recalculado — sin novedades.");
+      }
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo recalcular.");
+    } finally {
+      setScanning(false);
+    }
+  }
 
   useEffect(() => { void load(); }, [load]);
 
@@ -417,6 +480,24 @@ function PricingTrayTab({
         {hasFilters && (
           <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>Quitar filtros</Button>
         )}
+        {/* PARTE A (prompt-precios-mejoras-bandeja-visibilidad.md) — distinto
+            de "Actualizar" (arriba, solo re-lee la bandeja guardada): esto
+            dispara un escaneo real sobre la sucursal/categoría elegidas
+            ahora mismo. El flujo completo: cambiás costo global o política
+            → "Recalcular ahora" acá → la bandeja se llena → selección
+            múltiple → Confirmar. */}
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="ml-auto"
+          onClick={() => void recalcularAhora()}
+          loading={scanning}
+          icon={<Calculator className="h-4 w-4" />}
+          title={branchId ? undefined : "Sin sucursal elegida, recalcula en todas"}
+        >
+          Recalcular ahora
+        </Button>
       </div>
 
       {loading ? (
@@ -740,6 +821,7 @@ function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 type CurrentPriceSource = "BRANCH" | "STANDARD" | "FUSION_DERIVED" | "MISSING";
+type CurrentCostSource = "BRANCH" | "GLOBAL_AVERAGE" | "GLOBAL" | "LAST_PURCHASE" | "WAC_ESTIMATE" | "NONE";
 
 type CurrentPriceRow = {
   productId: string;
@@ -749,6 +831,11 @@ type CurrentPriceRow = {
   effectiveCost: number;
   effectivePrice: number | null;
   priceSource: CurrentPriceSource;
+  /** Parte B (prompt-precios-mejoras-bandeja-visibilidad.md) — de dónde sale effectiveCost; BRANCH = costo manual propio de esta sucursal. */
+  costSource: CurrentCostSource;
+  /** Solo con costSource BRANCH y auditoría encontrada para ese BranchProductSetting. */
+  branchCostSetBy: string | null;
+  branchCostSetAt: string | null;
   standardPrice: number;
   marginPercent: number | null;
   minMarginPercent: number;
@@ -765,6 +852,8 @@ type CurrentPricesTotals = {
   byPriceSource: Record<CurrentPriceSource, number>;
   belowPolicyCount: number;
   missingCostCount: number;
+  /** Parte B.3 — contador del encabezado: "N productos con costo manual por sucursal". */
+  branchCostCount: number;
 };
 
 type CurrentPricesResponse = {
@@ -874,6 +963,18 @@ function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; on
               {data.totals.byPriceSource[source]} {PRICE_SOURCE_CHIP_LABEL[source]}
             </button>
           ))}
+          {/* Parte B.3 — contador de un vistazo, sin recorrer la tabla:
+              cuántas excepciones de costo manual hay activas en esta
+              sucursal. Informativo, no filtra (no hay filtro de costSource
+              en esta pantalla todavía). */}
+          {data.totals.branchCostCount > 0 && (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3 py-1 text-xs font-medium text-[var(--color-info-700)]"
+              title="Productos cuyo costo efectivo en esta sucursal viene de un costo manual propio (branchCost), no del costo global."
+            >
+              {data.totals.branchCostCount} con costo manual por sucursal
+            </span>
+          )}
         </div>
       )}
 
@@ -959,7 +1060,26 @@ function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; on
                         <span className="block text-xs text-[var(--color-text-soft)]">{row.sku}</span>
                       </td>
                       <td className="px-3 py-2.5 text-[var(--color-text-muted)]">{row.categoryName}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{row.effectiveCost > 0 ? fmt(row.effectiveCost) : <span className="text-[var(--color-text-soft)]">—</span>}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {/* Parte B (prompt-precios-mejoras-bandeja-visibilidad.md) — no
+                              bloquea ni oculta branchCost, solo lo hace visible: costSource
+                              BRANCH significa que esta sucursal NO sigue el costo global. */}
+                          {row.costSource === "BRANCH" && (
+                            <span
+                              className="inline-flex items-center rounded-full border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-info-700)]"
+                              title={
+                                row.branchCostSetBy
+                                  ? `Este producto NO usa el costo global en esta sucursal — costo manual fijado por ${row.branchCostSetBy}${row.branchCostSetAt ? ` el ${fmtDate(row.branchCostSetAt)}` : ""}.`
+                                  : "Este producto NO usa el costo global en esta sucursal — alguien fijó un costo manual aquí."
+                              }
+                            >
+                              Manual
+                            </span>
+                          )}
+                          {row.effectiveCost > 0 ? fmt(row.effectiveCost) : <span className="text-[var(--color-text-soft)]">—</span>}
+                        </div>
+                      </td>
                       <td className="px-3 py-2.5 text-right tabular-nums">{row.effectivePrice !== null ? fmt(row.effectivePrice) : <span className="text-[var(--color-text-soft)]">—</span>}</td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${badge.className}`} title={badgeTitle}>

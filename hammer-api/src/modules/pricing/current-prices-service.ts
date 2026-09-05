@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
+import { getEffectiveProductPricingBatch, type EffectivePricing } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
 import { getProductStockConversionsBatch } from "@/modules/inventory/unit-conversion";
 import { buildProductSearchWhere, rankProductMatches } from "@/modules/catalog/product-search";
@@ -32,6 +32,18 @@ export type CurrentPriceRow = {
   effectiveCost: number;
   effectivePrice: number | null;
   priceSource: CurrentPriceSource;
+  /**
+   * prompt-precios-mejoras-bandeja-visibilidad.md, Parte B — de dónde sale
+   * effectiveCost (el mismo motor de costo que el POS/Brain), para poder
+   * avisar cuando esta sucursal tiene un costo manual propio (BRANCH) en
+   * vez del general de la cadena. No se bloquea nada con esto, solo se
+   * hace visible.
+   */
+  costSource: EffectivePricing["costSource"];
+  /** Solo con costSource BRANCH y auditoría disponible para ese BranchProductSetting — quién fijó el costo manual. null si no hay rastro (el badge se muestra igual, sin este detalle). */
+  branchCostSetBy: string | null;
+  /** Igual que branchCostSetBy — cuándo se fijó. */
+  branchCostSetAt: string | null;
   standardPrice: number;
   marginPercent: number | null;
   minMarginPercent: number;
@@ -49,6 +61,8 @@ export type CurrentPricesTotals = {
   byPriceSource: Record<CurrentPriceSource, number>;
   belowPolicyCount: number;
   missingCostCount: number;
+  /** Parte B.3 — cuántos de los productos de esta consulta tienen un costo manual propio de esta sucursal (costSource BRANCH), para el contador del encabezado. */
+  branchCostCount: number;
 };
 
 export type CurrentPricesResult = {
@@ -64,7 +78,14 @@ const EMPTY_TOTALS: CurrentPricesTotals = {
   byPriceSource: { BRANCH: 0, STANDARD: 0, FUSION_DERIVED: 0, MISSING: 0 },
   belowPolicyCount: 0,
   missingCostCount: 0,
+  branchCostCount: 0,
 };
+
+/** BRANCH_PRODUCT_SETTING_UPSERT se dispara para branchPrice O branchCost — solo cuenta como "quién fijó el costo manual" si esa escritura puntual tocó branchCost. */
+function auditEntryTouchedBranchCost(metadataJson: Prisma.JsonValue | null): boolean {
+  if (!metadataJson || typeof metadataJson !== "object" || Array.isArray(metadataJson)) return false;
+  return (metadataJson as Record<string, unknown>).branchCost !== undefined && (metadataJson as Record<string, unknown>).branchCost !== null;
+}
 
 /**
  * `db` es inyectable (mismo patrón que getPricingTray en tray-service.ts)
@@ -114,7 +135,10 @@ export async function getCurrentPrices(
     getProductStockConversionsBatch(db, productIds),
     db.branchProductSetting.findMany({
       where: { branchId: filters.branchId, productId: { in: productIds } },
-      select: { productId: true, priceExceptionReason: true, priceExceptionAt: true, lastPriceUpdateAt: true },
+      // id: para correlacionar con AuditLog.entityId (Parte B.2) — el mismo
+      // BranchProductSetting.id que upsertBranchSettingTx usa como entityId
+      // al auditar BRANCH_PRODUCT_SETTING_UPSERT.
+      select: { id: true, productId: true, priceExceptionReason: true, priceExceptionAt: true, lastPriceUpdateAt: true },
     }),
     // Nota: stockOnHand es el balance PROPIO de esta fila de producto (no el
     // del canónico de fusión, a diferencia del costo) — simplificación
@@ -132,6 +156,34 @@ export async function getCurrentPrices(
 
   const settingByProductId = new Map(settings.map((s) => [s.productId, s]));
   const stockByProductId = new Map(balances.map((b) => [b.productId, Number(b.quantityOnHand)]));
+
+  // Parte B.2 — "quién fijó el costo manual" es best-effort: solo se busca
+  // para los BranchProductSetting que hoy resuelven costSource BRANCH (el
+  // resto ni tiene un costo manual que explicar). Un solo findMany batched
+  // por entityId — nunca uno por fila — mismo criterio que el resto de esta
+  // función (getEffectiveProductPricingBatch, resolvePolicyForProductBatch).
+  const branchCostSettingIds = settings
+    .filter((s) => pricingByKey.get(`${filters.branchId}:${s.productId}`)?.costSource === "BRANCH")
+    .map((s) => s.id);
+  const branchCostAuditBySettingId = new Map<string, { actorName: string | null; occurredAt: string }>();
+  if (branchCostSettingIds.length > 0) {
+    const auditLogs = await db.auditLog.findMany({
+      where: { entityType: "BranchProductSetting", entityId: { in: branchCostSettingIds }, action: "BRANCH_PRODUCT_SETTING_UPSERT" },
+      orderBy: { occurredAt: "desc" },
+      include: { actor: { select: { fullName: true, username: true } } },
+    });
+    for (const log of auditLogs) {
+      // Ya está ordenado más reciente primero — la primera entrada de cada
+      // entityId que de verdad tocó branchCost (no una escritura de solo
+      // branchPrice) es la que queda.
+      if (branchCostAuditBySettingId.has(log.entityId)) continue;
+      if (!auditEntryTouchedBranchCost(log.metadataJson)) continue;
+      branchCostAuditBySettingId.set(log.entityId, {
+        actorName: log.actor?.fullName ?? log.actor?.username ?? null,
+        occurredAt: log.occurredAt.toISOString(),
+      });
+    }
+  }
 
   const canonicalIds = [...new Set(
     productIds
@@ -167,6 +219,8 @@ export async function getCurrentPrices(
     const canonicalProductLabel = priceSource === "FUSION_DERIVED" && conversion && !conversion.isCanonical
       ? canonicalLabelById.get(conversion.canonicalProductId) ?? null
       : null;
+    const costSource: EffectivePricing["costSource"] = pricing?.costSource ?? "NONE";
+    const branchCostAudit = costSource === "BRANCH" && setting ? branchCostAuditBySettingId.get(setting.id) ?? null : null;
 
     return {
       productId: product.id,
@@ -176,6 +230,9 @@ export async function getCurrentPrices(
       effectiveCost: cost,
       effectivePrice,
       priceSource,
+      costSource,
+      branchCostSetBy: branchCostAudit?.actorName ?? null,
+      branchCostSetAt: branchCostAudit?.occurredAt ?? null,
       standardPrice: Number(product.standardSalePrice),
       marginPercent,
       minMarginPercent,
@@ -202,6 +259,7 @@ export async function getCurrentPrices(
     },
     belowPolicyCount: rows.filter((r) => r.belowPolicy).length,
     missingCostCount: rows.filter((r) => r.effectiveCost <= 0).length,
+    branchCostCount: rows.filter((r) => r.costSource === "BRANCH").length,
   };
 
   const filteredRows = filters.priceSource ? rows.filter((r) => r.priceSource === filters.priceSource) : rows;

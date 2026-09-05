@@ -25,7 +25,8 @@ const CAT_CEMENTO = "cat-cemento";
 const CAT_ARENA = "cat-arena";
 
 type FakeProduct = { id: string; sku: string; name: string; standardSalePrice: Prisma.Decimal; categoryId: string; isActive: boolean; averageCost: Prisma.Decimal | null; globalCost: Prisma.Decimal | null; lastPurchaseCost: Prisma.Decimal | null; category: { code: string; name: string } };
-type FakeSetting = { productId: string; branchId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null; priceExceptionReason: string | null; priceExceptionAt: Date | null; lastPriceUpdateAt: Date | null };
+type FakeSetting = { id: string; productId: string; branchId: string; branchPrice: Prisma.Decimal | null; branchCost: Prisma.Decimal | null; priceExceptionReason: string | null; priceExceptionAt: Date | null; lastPriceUpdateAt: Date | null };
+type FakeAuditLog = { id: string; entityType: string; entityId: string; action: string; occurredAt: Date; metadataJson: Record<string, unknown> | null; actor: { fullName: string | null; username: string } | null };
 type FakeBalance = { productId: string; branchId: string; weightedAverageCost: Prisma.Decimal | null; quantityOnHand: Prisma.Decimal };
 type FakeStockMember = { productId: string; isActive: boolean; isCanonical: boolean; conversionFactor: Prisma.Decimal; saleUnit: string; stockGroupId: string; stockGroup: { code: string; name: string; baseUnit: string; packageUnit: string | null; conversionFactorToBase: Prisma.Decimal | null; tracksPackages: boolean; approximateFactor: boolean; minimumClosedPackageReserve: Prisma.Decimal; autoOpenForUnitSale: boolean; isActive: boolean; products: Array<{ productId: string; isCanonical: boolean; conversionFactor: Prisma.Decimal }> }; isPackagePresentation: boolean };
 type FakePolicy = { branchId: string; categoryId: string; minMarginPercent: Prisma.Decimal; targetMarginPercent: Prisma.Decimal; minProfitAmount: Prisma.Decimal; maxDiscountPercent: Prisma.Decimal; estimatedMonthlyUnits: Prisma.Decimal; estimatedMonthlySalesValue: Prisma.Decimal | null; monthlyExpenseAllocation: Prisma.Decimal; stockPolicy: string; priceMode: string; roundingRule: string; isActive: boolean; notes: string | null; category: { code: string; name: string } };
@@ -47,6 +48,7 @@ function makeFakeDb(fixtures: {
   balances: FakeBalance[];
   stockMembers: FakeStockMember[];
   policies: FakePolicy[];
+  auditLogs?: FakeAuditLog[];
 }) {
   return {
     product: {
@@ -87,6 +89,19 @@ function makeFakeDb(fixtures: {
         return fixtures.policies.filter((p) => inArray(where, "branchId", p.branchId) && inArray(where, "categoryId", p.categoryId));
       },
     },
+    // Parte B.2 (prompt-precios-mejoras-bandeja-visibilidad.md) — getCurrentPrices
+    // ahora también consulta AuditLog para "quién fijó el costo manual" de un
+    // BranchProductSetting con costSource BRANCH.
+    auditLog: {
+      findMany: async ({ where }: { where?: { entityType?: string; entityId?: { in?: string[] }; action?: string } }) => {
+        const logs = fixtures.auditLogs ?? [];
+        return logs
+          .filter((l) => (!where?.entityType || l.entityType === where.entityType)
+            && (!where?.action || l.action === where.action)
+            && (!where?.entityId?.in || where.entityId.in.includes(l.entityId)))
+          .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+      },
+    },
     // prompt-wac-desactivar.md — getEffectiveProductPricingBatch ahora
     // también lee isWacDrivesCostChainEnabled(db). Este archivo predata el
     // flag y el Test 7 (fusión arena) depende de que el WAC del canónico
@@ -122,8 +137,8 @@ function baseFixtures() {
   ];
 
   const settings: FakeSetting[] = [
-    { productId: "p2", branchId: BRANCH, branchPrice: d(150), branchCost: null, priceExceptionReason: "Flete alto en esta sucursal", priceExceptionAt: new Date("2026-08-01"), lastPriceUpdateAt: new Date("2026-08-01") },
-    { productId: "p5", branchId: BRANCH, branchPrice: null, branchCost: d(60), priceExceptionReason: null, priceExceptionAt: null, lastPriceUpdateAt: null },
+    { id: "setting-p2", productId: "p2", branchId: BRANCH, branchPrice: d(150), branchCost: null, priceExceptionReason: "Flete alto en esta sucursal", priceExceptionAt: new Date("2026-08-01"), lastPriceUpdateAt: new Date("2026-08-01") },
+    { id: "setting-p5", productId: "p5", branchId: BRANCH, branchPrice: null, branchCost: d(60), priceExceptionReason: null, priceExceptionAt: null, lastPriceUpdateAt: null },
   ];
 
   const balances: FakeBalance[] = [
@@ -257,4 +272,95 @@ test("sort=marginAsc pone primero el peor margen y al final los que no tienen ma
   const result = await getCurrentPrices({ branchId: BRANCH, sort: "marginAsc" }, db);
   const last = result.rows[result.rows.length - 1];
   assert.equal(last.marginPercent, null, "los sin margen calculable van al final, no primero");
+});
+
+/* ── Parte B (prompt-precios-mejoras-bandeja-visibilidad.md) — costSource y
+ * la auditoría de "quién fijó el costo manual" de un branchCost activo. ── */
+
+test("Parte B: costSource BRANCH para el producto con costo propio de sucursal (p5), NONE/GLOBAL_AVERAGE para el resto", async () => {
+  const db = makeFakeDb(baseFixtures());
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  const p5 = result.rows.find((r) => r.productId === "p5")!;
+  assert.equal(p5.costSource, "BRANCH");
+  const p1 = result.rows.find((r) => r.productId === "p1")!;
+  assert.equal(p1.costSource, "GLOBAL_AVERAGE", "p1 no tiene branchCost — su costo sale del averageCost de red");
+});
+
+test("Parte B.3: branchCostCount cuenta exactamente los productos con costSource BRANCH (p5)", async () => {
+  const db = makeFakeDb(baseFixtures());
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  assert.equal(result.totals.branchCostCount, 1);
+});
+
+test("Parte B.2: con un AuditLog que sí tocó branchCost, branchCostSetBy/branchCostSetAt se completan", async () => {
+  const fixtures = baseFixtures();
+  const db = makeFakeDb({
+    ...fixtures,
+    auditLogs: [
+      {
+        id: "log-1",
+        entityType: "BranchProductSetting",
+        entityId: "setting-p5",
+        action: "BRANCH_PRODUCT_SETTING_UPSERT",
+        occurredAt: new Date("2026-08-15T10:00:00Z"),
+        metadataJson: { productId: "p5", branchCost: 60, branchPrice: null },
+        actor: { fullName: "Ana Pérez", username: "ana" },
+      },
+    ],
+  });
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  const p5 = result.rows.find((r) => r.productId === "p5")!;
+  assert.equal(p5.branchCostSetBy, "Ana Pérez");
+  assert.equal(p5.branchCostSetAt, new Date("2026-08-15T10:00:00Z").toISOString());
+});
+
+test("Parte B.2: sin AuditLog disponible, el badge no tiene detalle pero costSource sigue siendo BRANCH", async () => {
+  const db = makeFakeDb(baseFixtures()); // sin auditLogs
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  const p5 = result.rows.find((r) => r.productId === "p5")!;
+  assert.equal(p5.costSource, "BRANCH");
+  assert.equal(p5.branchCostSetBy, null);
+  assert.equal(p5.branchCostSetAt, null);
+});
+
+test("Parte B.2: un AuditLog de esa misma fila que solo tocó branchPrice (branchCost null) se ignora — no es 'quién fijó el costo'", async () => {
+  const fixtures = baseFixtures();
+  const db = makeFakeDb({
+    ...fixtures,
+    auditLogs: [
+      {
+        id: "log-1",
+        entityType: "BranchProductSetting",
+        entityId: "setting-p5",
+        action: "BRANCH_PRODUCT_SETTING_UPSERT",
+        occurredAt: new Date("2026-08-20T10:00:00Z"),
+        metadataJson: { productId: "p5", branchCost: null, branchPrice: 999 }, // esta escritura no tocó branchCost
+        actor: { fullName: "Beto Ruiz", username: "beto" },
+      },
+    ],
+  });
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  const p5 = result.rows.find((r) => r.productId === "p5")!;
+  assert.equal(p5.branchCostSetBy, null, "el único log que existe no tocó branchCost — no debe atribuirse a él");
+});
+
+test("Parte B.2: sin fullName, cae a username", async () => {
+  const fixtures = baseFixtures();
+  const db = makeFakeDb({
+    ...fixtures,
+    auditLogs: [
+      {
+        id: "log-1",
+        entityType: "BranchProductSetting",
+        entityId: "setting-p5",
+        action: "BRANCH_PRODUCT_SETTING_UPSERT",
+        occurredAt: new Date("2026-08-15T10:00:00Z"),
+        metadataJson: { productId: "p5", branchCost: 60 },
+        actor: { fullName: null, username: "beto" },
+      },
+    ],
+  });
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  const p5 = result.rows.find((r) => r.productId === "p5")!;
+  assert.equal(p5.branchCostSetBy, "beto");
 });

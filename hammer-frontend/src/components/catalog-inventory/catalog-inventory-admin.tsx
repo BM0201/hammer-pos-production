@@ -3744,7 +3744,13 @@ function PricingPanel({
                     return (
                       <td key={branch.id} className="text-xs">
                         <div>Precio: {formatMoneyOrNd(row.effectivePrice)} ({row.priceSource === "BRANCH" ? "Sucursal" : row.priceSource === "STANDARD" ? "Precio general" : row.priceSource === "FUSION_DERIVED" ? "Derivado de fusión" : "Sin precio"})</div>
-                        <div>Costo de compra: {formatMoneyOrNd(row.effectiveCost)} <span className="text-[var(--color-text-muted)]">· {row.costExplanation}</span></div>
+                        <div className="flex items-center gap-1">
+                          <span>Costo de compra: {formatMoneyOrNd(row.effectiveCost)} <span className="text-[var(--color-text-muted)]">· {row.costExplanation}</span></span>
+                          {/* Parte B (prompt-precios-mejoras-bandeja-visibilidad.md) — visibilidad, no bloqueo: esta sucursal NO usa el costo global. */}
+                          {row.costSource === "BRANCH" && (
+                            <Badge variant="info" title="Este producto NO usa el costo global en esta sucursal — alguien fijó un costo manual aquí.">Manual</Badge>
+                          )}
+                        </div>
                         <div>Margen: {formatMarginOrNd(row.effectiveMarginPercent)}</div>
                       </td>
                     );
@@ -3842,16 +3848,25 @@ function PricingPanel({
                             costo de compra general recién editado. Para un
                             derivado, aclara además que se convierte, no que
                             se guarda tal cual. */}
-                        <span className="text-[0.6rem] text-[var(--color-text-muted)]">
+                        <span className="flex flex-wrap items-center gap-1 text-[0.6rem] text-[var(--color-text-muted)]">
                           {p.stockConversion && !p.stockConversion.isCanonical
                             ? `${row.costExplanation} · se convierte al producto canónico (${p.stockConversion.baseUnit} × ${Number(p.stockConversion.conversionFactor)})`
                             : `Margen calculado con: ${formatMoneyOrNd(row.effectiveCost)} (${row.costExplanation})`}
+                          {/* Parte B (prompt-precios-mejoras-bandeja-visibilidad.md) — visibilidad, no bloqueo. */}
+                          {row.costSource === "BRANCH" && (
+                            <Badge variant="info" title="Este producto NO usa el costo global en esta sucursal — alguien fijó un costo manual aquí.">Manual</Badge>
+                          )}
                         </span>
                       </div>
                     ) : (
                       <div className="flex flex-col gap-0.5">
                         <span className="font-mono text-xs">{formatMoneyOrNd(row.effectiveCost)}</span>
-                        <span className="text-[0.6rem] text-[var(--color-text-muted)]">{row.costExplanation}</span>
+                        <span className="flex flex-wrap items-center gap-1 text-[0.6rem] text-[var(--color-text-muted)]">
+                          {row.costExplanation}
+                          {row.costSource === "BRANCH" && (
+                            <Badge variant="info" title="Este producto NO usa el costo global en esta sucursal — alguien fijó un costo manual aquí.">Manual</Badge>
+                          )}
+                        </span>
                       </div>
                     )}
                   </td>
