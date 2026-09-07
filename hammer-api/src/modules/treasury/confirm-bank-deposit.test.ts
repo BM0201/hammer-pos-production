@@ -22,6 +22,7 @@ import { confirmBankDepositTx } from "@/modules/treasury/service";
 
 const CUSTODY_ACCOUNT_ID = "acc-custody-1";
 const BANK_ACCOUNT_ID = "acc-bank-1";
+const OTHER_BANK_ACCOUNT_ID = "acc-bank-2";
 const BRANCH_ID = "branch-1";
 const CONFIRMED_BY_USER_ID = "user-1";
 
@@ -34,10 +35,11 @@ type FakeAccount = {
   accountAlias: string;
 };
 
-function buildFakeTx(opts: { custodyOpeningBalance: number }) {
+function buildFakeTx(opts: { custodyOpeningBalance: number; intendedBankAccountId?: string | null }) {
   const accounts = new Map<string, FakeAccount>([
     [CUSTODY_ACCOUNT_ID, { id: CUSTODY_ACCOUNT_ID, openingBalance: opts.custodyOpeningBalance, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "Custodia", accountAlias: "Juan Pérez" }],
     [BANK_ACCOUNT_ID, { id: BANK_ACCOUNT_ID, openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "BAC", accountAlias: "Cuenta corriente 123" }],
+    [OTHER_BANK_ACCOUNT_ID, { id: OTHER_BANK_ACCOUNT_ID, openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "BANPRO", accountAlias: "Cuenta corriente 456" }],
   ]);
   const treasuryEntries: Array<Record<string, unknown>> = [];
   const brainDecisions: Array<Record<string, unknown>> = [];
@@ -50,6 +52,7 @@ function buildFakeTx(opts: { custodyOpeningBalance: number }) {
         if (!account) throw new Error(`fake tx: cuenta ${where.id} no existe`);
         return account;
       },
+      findUnique: async ({ where }: { where: { id: string } }) => accounts.get(where.id) ?? null,
     },
     treasuryEntry: {
       aggregate: async ({ where }: { where: { accountId: string; direction: string } }) => {
@@ -58,7 +61,9 @@ function buildFakeTx(opts: { custodyOpeningBalance: number }) {
           .reduce((acc, e) => acc + (e.amount as number), 0);
         return { _sum: { amount: sum } };
       },
-      findFirst: async () => null, // sin DEPOSIT_DISPATCH previo — intendedBankAccountId queda null
+      // Sin DEPOSIT_DISPATCH previo por defecto (intendedBankAccountId queda
+      // null) — un test puede simular uno pasando opts.intendedBankAccountId.
+      findFirst: async () => (opts.intendedBankAccountId === undefined ? null : { intendedBankAccountId: opts.intendedBankAccountId }),
       create: async ({ data }: { data: Record<string, unknown> }) => {
         entryCounter += 1;
         const row = { id: `entry-${entryCounter}`, ...data };
@@ -78,9 +83,19 @@ function buildFakeTx(opts: { custodyOpeningBalance: number }) {
       },
     },
     brainDecision: {
-      create: async ({ data }: { data: Record<string, unknown> }) => {
-        brainDecisions.push(data);
-        return { id: `decision-${brainDecisions.length}`, ...data };
+      // raiseCashDiscrepancy (discrepancy-signals.ts) siempre usa upsert por
+      // fingerprint, nunca create simple — para un fingerprint atado a un
+      // deposit.id recién creado en esta misma transacción, upsert SIEMPRE
+      // toma la rama create (no puede existir una fila previa con ese id).
+      upsert: async ({ where, create, update }: { where: { fingerprint: string }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        const existing = brainDecisions.find((d) => d.fingerprint === where.fingerprint);
+        if (existing) {
+          Object.assign(existing, update);
+          return { id: existing.id, ...existing };
+        }
+        const row = { id: `decision-${brainDecisions.length + 1}`, ...create };
+        brainDecisions.push(row);
+        return row;
       },
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -218,4 +233,82 @@ test("cada decisión tiene un fingerprint distinto (uno por depósito, vía depo
 
   assert.equal(brainDecisions.length, 1);
   assert.ok(typeof brainDecisions[0].fingerprint === "string" && (brainDecisions[0].fingerprint as string).length > 0);
+});
+
+/**
+ * PASO 1 (prompt-vigilancia-tesoreria-generalizacion.md) — el otro lado que
+ * quedó a medias: bankAccountMismatch. A diferencia del shortfall, acá la
+ * plata SÍ llegó, solo que a otra cuenta — severity MEDIUM, no CRITICAL/HIGH.
+ */
+
+test("bankAccountMismatch: se confirma en una cuenta distinta a la declarada → crea REVIEW_BANK_DEPOSIT_ACCOUNT_MISMATCH", async () => {
+  const { tx, brainDecisions } = buildFakeTx({ custodyOpeningBalance: 5000, intendedBankAccountId: OTHER_BANK_ACCOUNT_ID });
+
+  await confirmBankDepositTx(tx, {
+    custodyAccountId: CUSTODY_ACCOUNT_ID,
+    bankAccountId: BANK_ACCOUNT_ID, // distinta de la declarada (OTHER_BANK_ACCOUNT_ID)
+    branchId: BRANCH_ID,
+    amount: 5000, // sin remanente — el mismatch puede pasar SOLO, sin shortfall
+    confirmedByUserId: CONFIRMED_BY_USER_ID,
+  }, 100);
+
+  assert.equal(brainDecisions.length, 1, "sin remanente no hay shortfall — solo el mismatch");
+  const decision = brainDecisions[0];
+  assert.equal(decision.category, "CASH");
+  assert.equal(decision.severity, "MEDIUM");
+  assert.equal(decision.proposedActionType, "REVIEW_BANK_DEPOSIT_ACCOUNT_MISMATCH");
+  assert.equal(decision.branchId, BRANCH_ID);
+  assert.match(decision.description as string, /BANPRO/, "nombra la cuenta declarada");
+  assert.match(decision.description as string, /BAC/, "nombra la cuenta real");
+
+  const evidence = decision.evidenceJson as Record<string, unknown>;
+  assert.equal(evidence.intendedBankAccountId, OTHER_BANK_ACCOUNT_ID);
+  assert.equal(evidence.actualBankAccountId, BANK_ACCOUNT_ID);
+  assert.equal(evidence.amountConfirmed, 5000);
+});
+
+test("bankAccountMismatch: se confirma en la MISMA cuenta declarada → NO crea nada", async () => {
+  const { tx, brainDecisions } = buildFakeTx({ custodyOpeningBalance: 5000, intendedBankAccountId: BANK_ACCOUNT_ID });
+
+  await confirmBankDepositTx(tx, {
+    custodyAccountId: CUSTODY_ACCOUNT_ID,
+    bankAccountId: BANK_ACCOUNT_ID, // igual a la declarada
+    branchId: BRANCH_ID,
+    amount: 5000,
+    confirmedByUserId: CONFIRMED_BY_USER_ID,
+  }, 100);
+
+  assert.equal(brainDecisions.length, 0);
+});
+
+test("bankAccountMismatch: sin DEPOSIT_DISPATCH previo (intendedBankAccountId null) → NO crea nada", async () => {
+  const { tx, brainDecisions } = buildFakeTx({ custodyOpeningBalance: 5000 }); // sin intendedBankAccountId
+
+  await confirmBankDepositTx(tx, {
+    custodyAccountId: CUSTODY_ACCOUNT_ID,
+    bankAccountId: BANK_ACCOUNT_ID,
+    branchId: BRANCH_ID,
+    amount: 5000,
+    confirmedByUserId: CONFIRMED_BY_USER_ID,
+  }, 100);
+
+  assert.equal(brainDecisions.length, 0);
+});
+
+test("shortfall Y bankAccountMismatch a la vez → crea las DOS decisiones, cada una con su propio fingerprint", async () => {
+  const { tx, brainDecisions } = buildFakeTx({ custodyOpeningBalance: 5000, intendedBankAccountId: OTHER_BANK_ACCOUNT_ID });
+
+  await confirmBankDepositTx(tx, {
+    custodyAccountId: CUSTODY_ACCOUNT_ID,
+    bankAccountId: BANK_ACCOUNT_ID,
+    branchId: BRANCH_ID,
+    amount: 4700, // remainder = 300, > tolerancia (100) — shortfall también
+    confirmedByUserId: CONFIRMED_BY_USER_ID,
+  }, 100);
+
+  assert.equal(brainDecisions.length, 2);
+  const types = brainDecisions.map((d) => d.proposedActionType).sort();
+  assert.deepEqual(types, ["REVIEW_BANK_DEPOSIT_ACCOUNT_MISMATCH", "REVIEW_BANK_DEPOSIT_SHORTFALL"]);
+  const fingerprints = new Set(brainDecisions.map((d) => d.fingerprint));
+  assert.equal(fingerprints.size, 2, "cada hallazgo tiene su propio fingerprint, no comparten uno");
 });

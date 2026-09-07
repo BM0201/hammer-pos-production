@@ -8,7 +8,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
 import { getCashToleranceConfig, resolveCashToleranceForBranch } from "@/modules/operations/cash-tolerance-config";
-import { makeDecisionFingerprint, riskScoreFor, priorityScoreFor } from "@/modules/brain/scoring";
+import { raiseCashDiscrepancy } from "@/modules/treasury/discrepancy-signals";
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -675,6 +675,7 @@ export async function confirmBankDepositTx(
   });
 
   const remainder = round2(custodyBalance.balance - input.amount);
+  const bankAccountMismatch = intendedBankAccountId !== null && intendedBankAccountId !== input.bankAccountId;
   await logAuditEvent({
     actorUserId: input.confirmedByUserId,
     branchId: input.branchId,
@@ -686,7 +687,7 @@ export async function confirmBankDepositTx(
       custodyAccountId: input.custodyAccountId,
       bankAccountId: input.bankAccountId,
       intendedBankAccountId,
-      bankAccountMismatch: intendedBankAccountId !== null && intendedBankAccountId !== input.bankAccountId,
+      bankAccountMismatch,
       amountConfirmed: input.amount,
       custodyBalanceBefore: custodyBalance.balance,
       remainderInCustody: remainder,
@@ -695,6 +696,11 @@ export async function confirmBankDepositTx(
     },
   });
 
+  const bankLabel = deposit.bankAccount
+    ? `${deposit.bankAccount.bankName} (${deposit.bankAccount.accountAlias})`
+    : "el banco";
+  const confirmedByLabel = deposit.confirmedBy?.fullName ?? deposit.confirmedBy?.username ?? "un usuario";
+
   // prompt-vigilancia-deposito-bancario.md — cerrar el hueco real: antes
   // "discrepant"/"remainderInCustody" (arriba) solo quedaban en el
   // metadataJson de este AuditLog, que nadie revisa proactivamente. Con el
@@ -702,11 +708,6 @@ export async function confirmBankDepositTx(
   // decisión de Brain EN LA MISMA TRANSACCIÓN — no se espera al próximo
   // runBrainScan (que puede tardar horas y ni siquiera escanea depósitos).
   if (remainder > toleranceAmount) {
-    const bankLabel = deposit.bankAccount
-      ? `${deposit.bankAccount.bankName} (${deposit.bankAccount.accountAlias})`
-      : "el banco";
-    const confirmedByLabel = deposit.confirmedBy?.fullName ?? deposit.confirmedBy?.username ?? "un usuario";
-
     // Mismo criterio de escalado que el resto de cash-detector.ts para
     // hechos de caja/custodia ya confirmados (ver REVIEW_CASH_SESSION,
     // RECALCULATE_CASH_SESSION): umbral binario, nunca por debajo de HIGH.
@@ -716,45 +717,76 @@ export async function confirmBankDepositTx(
     const severity: BrainDecisionSeverity = remainder > toleranceAmount * 2
       ? BrainDecisionSeverity.CRITICAL
       : BrainDecisionSeverity.HIGH;
-    // Hecho calculado (no una inferencia): el monto confirmado y el saldo de
-    // custodia son cifras exactas del libro mayor — misma confianza alta que
-    // REVIEW_CASH_SESSION (riskScoreFor(severity, 98) en cash-detector.ts).
-    const confidenceScore = 0.95;
-    const riskScore = riskScoreFor(severity, confidenceScore);
-    const priorityScore = priorityScoreFor({ severity, riskScore, confidenceScore, impactAmount: remainder });
 
-    await tx.brainDecision.create({
-      data: {
-        category: BrainDecisionCategory.CASH,
-        severity,
-        title: `Depósito corto: ${bankLabel}`,
-        description: `Depósito de C$${input.amount.toFixed(2)} en ${bankLabel} quedó C$${remainder.toFixed(2)} corto de lo que había en custodia (C$${custodyBalance.balance.toFixed(2)}) — confirmado por ${confirmedByLabel}.`,
-        recommendation: "Confirmar con quien hizo el depósito si el resto sigue en custodia, se depositó por otra vía, o hay que investigar la diferencia.",
+    await raiseCashDiscrepancy(tx, {
+      category: BrainDecisionCategory.CASH,
+      severity,
+      title: `Depósito corto: ${bankLabel}`,
+      description: `Depósito de C$${input.amount.toFixed(2)} en ${bankLabel} quedó C$${remainder.toFixed(2)} corto de lo que había en custodia (C$${custodyBalance.balance.toFixed(2)}) — confirmado por ${confirmedByLabel}.`,
+      recommendation: "Confirmar con quien hizo el depósito si el resto sigue en custodia, se depositó por otra vía, o hay que investigar la diferencia.",
+      branchId: input.branchId,
+      impactAmount: remainder,
+      proposedActionType: "REVIEW_BANK_DEPOSIT_SHORTFALL",
+      evidenceJson: {
+        custodyAccountId: input.custodyAccountId,
+        bankAccountId: input.bankAccountId,
         branchId: input.branchId,
-        confidenceScore: new Prisma.Decimal(confidenceScore),
-        impactAmount: new Prisma.Decimal(remainder),
-        riskScore: new Prisma.Decimal(riskScore),
-        priorityScore: new Prisma.Decimal(priorityScore),
-        proposedActionType: "REVIEW_BANK_DEPOSIT_SHORTFALL",
-        evidenceJson: {
-          custodyAccountId: input.custodyAccountId,
-          bankAccountId: input.bankAccountId,
-          branchId: input.branchId,
-          amountConfirmed: input.amount,
-          custodyBalanceBefore: custodyBalance.balance,
-          remainder,
-          confirmedByUserId: input.confirmedByUserId,
-          referenceNumber: input.referenceNumber ?? null,
-          toleranceAmount,
-        },
-        sourceJson: {
-          module: "treasury",
-          detector: "confirmBankDeposit",
-          referenceType: "BankDeposit",
-          referenceId: deposit.id,
-        },
-        fingerprint: makeDecisionFingerprint(["treasury", "bank-deposit-shortfall", deposit.id]),
+        amountConfirmed: input.amount,
+        custodyBalanceBefore: custodyBalance.balance,
+        remainder,
+        confirmedByUserId: input.confirmedByUserId,
+        referenceNumber: input.referenceNumber ?? null,
+        toleranceAmount,
       },
+      sourceJson: {
+        module: "treasury",
+        detector: "confirmBankDeposit",
+        referenceType: "BankDeposit",
+        referenceId: deposit.id,
+      },
+      fingerprintParts: ["treasury", "bank-deposit-shortfall", deposit.id],
+    });
+  }
+
+  // PASO 1 (prompt-vigilancia-tesoreria-generalizacion.md) — el otro lado
+  // que quedó a medias: bankAccountMismatch (arriba) también solo vivía en
+  // el AuditLog. A diferencia de la plata faltante, acá la plata SÍ llegó
+  // — solo que a otra cuenta — así que es una anomalía a revisar, no
+  // necesariamente una pérdida: severity MEDIUM, y puede pasar junto con
+  // el shortfall de arriba (son dos hechos independientes del mismo
+  // depósito, cada uno con su propio fingerprint) o solo, sin remanente.
+  if (bankAccountMismatch) {
+    const intendedAccount = await tx.treasuryAccount.findUnique({
+      where: { id: intendedBankAccountId! },
+      select: { bankName: true, accountAlias: true },
+    });
+    const intendedLabel = intendedAccount ? `${intendedAccount.bankName} (${intendedAccount.accountAlias})` : "otra cuenta";
+
+    await raiseCashDiscrepancy(tx, {
+      category: BrainDecisionCategory.CASH,
+      severity: BrainDecisionSeverity.MEDIUM,
+      title: `Depósito en cuenta distinta a la declarada: ${bankLabel}`,
+      description: `El depósito se había declarado para ${intendedLabel} (el último envío a depositar de esta custodia) pero se confirmó en ${bankLabel} — confirmado por ${confirmedByLabel}.`,
+      recommendation: "Confirmar si la plata terminó en la cuenta correcta por una razón válida (banco cerrado, cambio de destino) o si fue un error al confirmar.",
+      branchId: input.branchId,
+      impactAmount: input.amount,
+      proposedActionType: "REVIEW_BANK_DEPOSIT_ACCOUNT_MISMATCH",
+      evidenceJson: {
+        custodyAccountId: input.custodyAccountId,
+        intendedBankAccountId,
+        actualBankAccountId: input.bankAccountId,
+        amountConfirmed: input.amount,
+        branchId: input.branchId,
+        confirmedByUserId: input.confirmedByUserId,
+        referenceNumber: input.referenceNumber ?? null,
+      },
+      sourceJson: {
+        module: "treasury",
+        detector: "confirmBankDeposit",
+        referenceType: "BankDeposit",
+        referenceId: deposit.id,
+      },
+      fingerprintParts: ["treasury", "bank-deposit-account-mismatch", deposit.id],
     });
   }
 
@@ -929,17 +961,22 @@ export async function listCustodyAccountsWithBalance(branchId?: string | null) {
  * nada, solo informa. `threshold` es explícito porque ningún doc fija un
  * número; sin threshold, `exceeds` siempre es false.
  */
-export async function getBranchExposureStatus(branchId: string, threshold: ExposureAlertThreshold | null, now: Date = new Date()) {
+export async function getBranchExposureStatus(
+  branchId: string,
+  threshold: ExposureAlertThreshold | null,
+  now: Date = new Date(),
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+) {
   const [declarations, deposits, cashExpenses] = await Promise.all([
-    prisma.cashDestinationDeclaration.findMany({
+    db.cashDestinationDeclaration.findMany({
       where: { branchId, retainAwaitingDepositPortion: { gt: 0 } },
       select: { createdAt: true, retainAwaitingDepositPortion: true },
     }),
-    prisma.bankDeposit.findMany({
+    db.bankDeposit.findMany({
       where: { branchId },
       select: { depositedAt: true, amount: true },
     }),
-    getActiveRetainedCashExpenses(branchId, null),
+    getActiveRetainedCashExpenses(branchId, null, db),
   ]);
 
   const outstanding = computeOutstandingAwaitingDeposit(
@@ -963,6 +1000,61 @@ export async function getBranchExposureStatus(branchId: string, threshold: Expos
         note: "Los gastos pagados con efectivo retenido superan lo declarado menos lo depositado — descuadre real, no redondeado en silencio.",
       },
     });
+
+    // PASO 2 (prompt-vigilancia-tesoreria-generalizacion.md) — el propio
+    // comentario de exposure.ts ya califica esto de "descuadre real": antes
+    // solo quedaba en el AuditLog de arriba. computeOutstandingAwaitingDeposit
+    // es pura y no se toca — outstandingAmount da 0 exacto en este caso (la
+    // resta queda negativa y el máximo con 0 la aplana, ver su propio
+    // código), así que no sirve como impactAmount acá. El excedente
+    // (totalCashExpenses - afterDeposits) se deriva DE LOS MISMOS tres
+    // arrays que ya se leyeron arriba para llamar a computeOutstandingAwaitingDeposit
+    // — misma fórmula que esa función usa internamente para decidir el
+    // booleano, solo que expuesta para poder mostrarla; el barrido FIFO/
+    // antigüedad (lo único genuinamente complejo) sigue siendo exclusivo de
+    // exposure.ts.
+    const totalDeclared = declarations.reduce((sum, d) => sum + Number(d.retainAwaitingDepositPortion), 0);
+    const totalDeposited = deposits.reduce((sum, d) => sum + Number(d.amount), 0);
+    const totalCashExpenses = cashExpenses.reduce((sum, e) => sum + e.amount, 0);
+    const afterDeposits = Math.max(0, round2(totalDeclared - totalDeposited));
+    const excessAmount = round2(totalCashExpenses - afterDeposits);
+    // "estable por (branchId, fecha del gasto más antiguo sin cubrir) o
+    // similar" — computeOutstandingAwaitingDeposit no expone qué gastos
+    // puntuales quedaron sin cubrir (solo el total), así que se usa el más
+    // antiguo de TODOS los gastos retenidos vigentes de la sucursal: mismo
+    // conjunto de datos en cada GET mientras la situación no cambie → mismo
+    // fingerprint → el upsert de raiseCashDiscrepancy actualiza en vez de
+    // duplicar.
+    const oldestCashExpenseDate = cashExpenses.length > 0
+      ? new Date(Math.min(...cashExpenses.map((e) => e.occurredAt.getTime())))
+      : null;
+
+    await raiseCashDiscrepancy(db, {
+      category: BrainDecisionCategory.CASH,
+      severity: BrainDecisionSeverity.HIGH,
+      title: "Gastos con efectivo retenido superan lo declarado",
+      description: `Los gastos pagados con efectivo retenido en esta sucursal (C$${totalCashExpenses.toFixed(2)}) superan lo que quedaba disponible después de depósitos (C$${afterDeposits.toFixed(2)}) — C$${excessAmount.toFixed(2)} sin declarar como retenidos.`,
+      recommendation: "Revisar los gastos recientes pagados con efectivo retenido y confirmar si faltó declarar una retención, o si hay un error de registro.",
+      branchId,
+      impactAmount: excessAmount,
+      proposedActionType: "REVIEW_CASH_EXPENSES_EXCEED_RETAINED",
+      evidenceJson: {
+        branchId,
+        totalDeclared,
+        totalDeposited,
+        totalCashExpenses,
+        afterDeposits,
+        excessAmount,
+        oldestCashExpenseDate: oldestCashExpenseDate?.toISOString() ?? null,
+      },
+      sourceJson: {
+        module: "treasury",
+        detector: "getBranchExposureStatus",
+        referenceType: "Branch",
+        referenceId: branchId,
+      },
+      fingerprintParts: ["treasury", "cash-expenses-exceed-retained", branchId, oldestCashExpenseDate?.toISOString() ?? "unknown"],
+    });
   }
 
   return {
@@ -984,8 +1076,12 @@ export async function getBranchExposureStatus(branchId: string, threshold: Expos
  * confirmación) — mismo criterio, evita que un gasto de un ciclo anterior
  * ya cerrado siga descontando del acumulado del ciclo actual.
  */
-export async function getActiveRetainedCashExpenses(branchId: string, since: Date | null = null): Promise<Array<{ occurredAt: Date; amount: number }>> {
-  const entries = await prisma.treasuryEntry.findMany({
+export async function getActiveRetainedCashExpenses(
+  branchId: string,
+  since: Date | null = null,
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<Array<{ occurredAt: Date; amount: number }>> {
+  const entries = await db.treasuryEntry.findMany({
     where: {
       account: { branchId, type: "SAFE" },
       entryType: "EXPENSE",
@@ -998,7 +1094,7 @@ export async function getActiveRetainedCashExpenses(branchId: string, since: Dat
   if (entries.length === 0) return [];
   const expenseIds = entries.map((e) => e.expensePaymentId!).filter(Boolean);
   const activeExpenseIds = new Set(
-    (await prisma.operatingExpense.findMany({ where: { id: { in: expenseIds }, isActive: true }, select: { id: true } })).map((e) => e.id),
+    (await db.operatingExpense.findMany({ where: { id: { in: expenseIds }, isActive: true }, select: { id: true } })).map((e) => e.id),
   );
   return entries
     .filter((e) => e.expensePaymentId && activeExpenseIds.has(e.expensePaymentId))
@@ -1061,6 +1157,12 @@ export async function declareCashDestination(input: {
 
     // El total declarado debe corresponder al efectivo realmente contado al
     // cierre — los tres destinos cubren TODO el efectivo, no un subconjunto.
+    //
+    // PASO 4 (prompt-vigilancia-tesoreria-generalizacion.md) — DECLARATION_MISMATCH
+    // NO pasa por raiseCashDiscrepancy: es un guard de VALIDACIÓN que
+    // RECHAZA la solicitud (throw, la declaración nunca se guarda), no un
+    // hecho ya ocurrido que alguien necesite revisar después — quien lo
+    // dispara ve el error de inmediato y corrige los montos en el momento.
     const counted = Number(session.countedCashAmount ?? 0);
     const total = Math.round((input.handOverAmount + input.depositAmount + input.retainAmount) * 100) / 100;
     if (Math.abs(total - counted) > 0.01) {

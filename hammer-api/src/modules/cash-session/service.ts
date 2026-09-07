@@ -1,4 +1,4 @@
-import { CashMovementType, CashSessionOperatorRole, CashSessionStatus, PaymentMethod, PaymentStatus, Prisma, RoleCode, SaleOrderStatus } from "@prisma/client";
+import { BrainDecisionCategory, BrainDecisionSeverity, CashMovementType, CashSessionOperatorRole, CashSessionStatus, PaymentMethod, PaymentStatus, Prisma, RoleCode, SaleOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { CASH_SESSION_AUDIT_EVENTS } from "@/modules/cash-session/audit-events";
@@ -6,6 +6,7 @@ import { resolveOperationalDayForOperationTx, refreshOperationalDaySummaryTx, ge
 import { resolveAutoCloseReview } from "@/modules/cash-session/review-policy";
 import { cashMovementsNetTotal, computeExpectedCash } from "@/modules/cash-session/expected-cash";
 import { createAutoDefaultedDeclarationTx } from "@/modules/treasury/service";
+import { raiseCashDiscrepancy } from "@/modules/treasury/discrepancy-signals";
 
 function toDecimal(value: number): Prisma.Decimal {
   return new Prisma.Decimal(value);
@@ -124,6 +125,11 @@ export async function openCashSession(input: {
       });
 
       if (!cashBox) throw new Error("CASH_SESSION_CASH_BOX_INVALID");
+      // PASO 4 (prompt-vigilancia-tesoreria-generalizacion.md) — no pasa por
+      // raiseCashDiscrepancy: rechaza la apertura (throw, la sesión nunca
+      // se crea), no describe un hecho ya ocurrido — un error de
+      // configuración/selección que se corrige en el momento, no algo para
+      // revisar después.
       if (cashBox.branchId !== input.branchId) throw new Error("CASH_BOX_BRANCH_MISMATCH");
       if (!cashBox.isActive) throw new Error("CASH_BOX_INACTIVE");
 
@@ -490,6 +496,51 @@ export async function requestCloseCashSession(input: {
   });
 }
 
+/**
+ * PASO 3 (prompt-vigilancia-tesoreria-generalizacion.md) — pura, sin DB:
+ * el armado del CashDiscrepancySignal aislado de closeCashSession (que no
+ * se toca más allá de esta llamada — sigue siendo la MISMA transacción,
+ * mismo control de flujo, ningún gate nuevo) para poder probarlo sin base
+ * de datos, mismo principio que evaluateBranchCostAgainstReference/
+ * escalateForTopMover (pricing-detector.ts) en el mismo ciclo.
+ */
+export function buildCloseDiscrepancySignal(input: {
+  physicalCashBoxCode: string;
+  physicalCashBoxId: string;
+  branchId: string;
+  cashSessionId: string;
+  expectedCash: number;
+  countedCash: number;
+  difference: number;
+  threshold: number;
+}): Parameters<typeof raiseCashDiscrepancy>[1] {
+  return {
+    category: BrainDecisionCategory.CASH,
+    severity: BrainDecisionSeverity.INFO,
+    title: `Descuadre al cerrar caja: ${input.physicalCashBoxCode}`,
+    description: `Al cerrar la caja ${input.physicalCashBoxCode}, el conteo (C$${input.countedCash.toFixed(2)}) no coincidió con lo esperado (C$${input.expectedCash.toFixed(2)}) — diferencia de C$${input.difference.toFixed(2)}. El conteo real ocurre al depositar; esto es solo informativo.`,
+    recommendation: "Sin acción requerida ahora — se reconciliará al confirmar el depósito. Revisar solo si el patrón se repite seguido en la misma caja.",
+    branchId: input.branchId,
+    impactAmount: Math.abs(input.difference),
+    proposedActionType: "CASH_SESSION_CLOSE_DISCREPANCY",
+    evidenceJson: {
+      cashSessionId: input.cashSessionId,
+      physicalCashBoxId: input.physicalCashBoxId,
+      expectedCash: input.expectedCash,
+      countedCash: input.countedCash,
+      difference: input.difference,
+      threshold: input.threshold,
+    },
+    sourceJson: {
+      module: "cash_session",
+      detector: "closeCashSession",
+      referenceType: "CashSession",
+      referenceId: input.cashSessionId,
+    },
+    fingerprintParts: ["cash-session", "close-discrepancy", input.cashSessionId],
+  };
+}
+
 export async function closeCashSession(input: {
   cashSessionId: string;
   closingAmount: number;
@@ -574,6 +625,38 @@ export async function closeCashSession(input: {
           },
         },
       });
+
+      // PASO 3 (prompt-vigilancia-tesoreria-generalizacion.md) — informativo
+      // A PROPÓSITO, no bloquea nada: ya se decidió que el conteo real
+      // ocurre al depositar, no al cerrar (por eso no hay gate de
+      // aprobación acá y no se agrega uno — closeCashSession sigue
+      // aprobando/cerrando exactamente igual que antes). Antes esta señal
+      // solo quedaba en el AuditLog de arriba, sin aparecer en el Centro de
+      // Decisiones. severity INFO (el piso real de BrainDecisionSeverity,
+      // no un sustituto de LOW) — visible, sin exigir que nadie actúe con
+      // urgencia.
+      //
+      // Enlace con un eventual REVIEW_BANK_DEPOSIT_SHORTFALL del mismo
+      // efectivo: deliberadamente NO se enlazan. Miden cosas distintas en
+      // momentos distintos — el conteo de gaveta al cerrar vs. lo que
+      // efectivamente llega al banco al depositar — y la primera puede
+      // resolverse sola antes de la segunda (un mal conteo corregido antes
+      // de depositar). Enlazarlas por branchId + ventana de tiempo sería
+      // una heurística con falsos positivos (varias sesiones cierran y
+      // depositan el mismo día en la misma sucursal) para una señal que ya
+      // es "sin urgencia" — la correlación humana ya la da el propio Centro
+      // de Decisiones (mismo branchId, mismas fechas, visibles una al lado
+      // de la otra).
+      await raiseCashDiscrepancy(tx, buildCloseDiscrepancySignal({
+        physicalCashBoxCode: session.physicalCashBox.code,
+        physicalCashBoxId: session.physicalCashBoxId,
+        branchId: session.physicalCashBox.branchId,
+        cashSessionId: session.id,
+        expectedCash,
+        countedCash,
+        difference,
+        threshold,
+      }));
     }
 
     const updated = await tx.cashSession.update({

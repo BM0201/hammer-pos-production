@@ -41,6 +41,17 @@ function round2(value: number) {
  * explícito del caller, nunca un valor adivinado acá. Sin umbral
  * configurado, no hay alerta (informativo únicamente, nunca bloqueante,
  * y sin umbral no hay con qué comparar).
+ *
+ * PASO 4 (prompt-vigilancia-tesoreria-generalizacion.md) — `exceeds`
+ * deliberadamente NO pasa por raiseCashDiscrepancy (treasury/
+ * discrepancy-signals.ts): a diferencia de las cuatro señales que sí lo
+ * hacen (depósito corto, cuenta declarada distinta, gastos que superan lo
+ * retenido, descuadre al cerrar caja), esta YA es visible — getBranchExposureStatus
+ * la devuelve como `alert.exceeds` y banks-treasury-panel.tsx (hammer-frontend)
+ * ya la pinta con un borde de aviso en cada carga del panel. Duplicarla
+ * como BrainDecision agregaría una segunda fuente de la misma alerta sin
+ * ganar nada — el panel ya es "el Centro de Decisiones" de esta señal en
+ * particular.
  */
 export type ExposureAlertThreshold = { maxAmount: number; maxBusinessDays: number };
 
