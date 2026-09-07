@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { Prisma, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory, type RoleCode } from "@prisma/client";
+import { Prisma, BrainDecisionCategory, BrainDecisionSeverity, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory, type RoleCode } from "@prisma/client";
 import { decomposeRetainedAmount, computeExposureAlert, type ExposureAlertThreshold } from "@/modules/treasury/decomposition";
 import { computeOutstandingAwaitingDeposit, countBusinessDaysBetween } from "@/modules/treasury/exposure";
 import { getBranchCashPosition } from "@/modules/treasury/cash-monitor";
 import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
+import { getCashToleranceConfig, resolveCashToleranceForBranch } from "@/modules/operations/cash-tolerance-config";
+import { makeDecisionFingerprint, riskScoreFor, priorityScoreFor } from "@/modules/brain/scoring";
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -585,7 +587,7 @@ export async function recordSaleTenderEntriesTx(
  * queda ahí: no se ajusta solo. Escribe las dos patas (OUT custodia + IN
  * banco) con el mismo transferId.
  */
-export async function confirmBankDeposit(input: {
+export type ConfirmBankDepositInput = {
   custodyAccountId: string;
   bankAccountId: string;
   branchId: string;
@@ -593,74 +595,170 @@ export async function confirmBankDeposit(input: {
   confirmedByUserId: string;
   referenceNumber?: string | null;
   notes?: string | null;
-}) {
+};
+
+export async function confirmBankDeposit(input: ConfirmBankDepositInput) {
   if (input.amount <= 0) throw new Error("INVALID_DEPOSIT_AMOUNT: el monto depositado debe ser mayor que 0");
 
-  return prisma.$transaction(async (tx) => {
-    const custodyBalance = await getTreasuryAccountBalanceTx(tx, input.custodyAccountId);
-    if (input.amount > custodyBalance.balance + 0.01) {
-      throw new Error(`VALIDATION_ERROR: el monto confirmado (C$${input.amount}) supera lo que hay en custodia (C$${custodyBalance.balance})`);
-    }
+  // prompt-vigilancia-deposito-bancario.md — MISMA fuente que la tolerancia
+  // de caja (operations/cash-tolerance-config.ts, sin tocarla): se resuelve
+  // ACÁ, antes de abrir la transacción, porque ese módulo no acepta un `tx`
+  // inyectable (siempre lee del singleton `prisma`) — resolverla afuera deja
+  // a confirmBankDepositTx recibiendo un número plano y sigue siendo
+  // testeable con un tx en memoria, sin depender de systemSetting real.
+  const toleranceConfig = await getCashToleranceConfig();
+  const toleranceAmount = resolveCashToleranceForBranch(toleranceConfig, input.branchId);
 
-    // La intención declarada por quien despachó (A.6) — resuelta acá, del
-    // lado servidor, no confiando en lo que mande el cliente: la última
-    // DEPOSIT_DISPATCH de esta custodia es el prefill que ya vio Master en
-    // pantalla. Si eligió otra cuenta, la plata puede haber terminado ahí
-    // por una razón real — no se bloquea, pero la diferencia queda anotada.
-    const latestDispatch = await tx.treasuryEntry.findFirst({
-      where: { accountId: input.custodyAccountId, entryType: "DEPOSIT_DISPATCH" },
-      orderBy: { occurredAt: "desc" },
-      select: { intendedBankAccountId: true },
-    });
-    const intendedBankAccountId = latestDispatch?.intendedBankAccountId ?? null;
+  return prisma.$transaction((tx) => confirmBankDepositTx(tx, input, toleranceAmount));
+}
 
-    const deposit = await tx.bankDeposit.create({
-      data: {
-        bankAccountId: input.bankAccountId,
-        branchId: input.branchId,
-        amount: input.amount,
-        confirmedByUserId: input.confirmedByUserId,
-        referenceNumber: input.referenceNumber ?? null,
-        notes: input.notes ?? null,
-      },
-    });
+/**
+ * El cuerpo transaccional de confirmBankDeposit, separado del wrapper (que
+ * resuelve la tolerancia de sucursal arriba) para poder probarlo con un tx
+ * en memoria — mismo patrón que createOpeningBalanceTx/upsertBranchSettingTx.
+ */
+export async function confirmBankDepositTx(
+  tx: Prisma.TransactionClient,
+  input: ConfirmBankDepositInput,
+  toleranceAmount: number,
+) {
+  const custodyBalance = await getTreasuryAccountBalanceTx(tx, input.custodyAccountId);
+  if (input.amount > custodyBalance.balance + 0.01) {
+    throw new Error(`VALIDATION_ERROR: el monto confirmado (C$${input.amount}) supera lo que hay en custodia (C$${custodyBalance.balance})`);
+  }
 
-    const { transferId } = await createInternalTransferTx(tx, {
-      fromAccountId: input.custodyAccountId,
-      toAccountId: input.bankAccountId,
-      fromAmount: input.amount,
-      entryType: "DEPOSIT_CONFIRMED",
-      counterpartyType: "INTERNAL",
-      occurredAt: new Date(),
-      bankDepositId: deposit.id,
-      reference: input.referenceNumber ?? null,
-      notes: input.notes ?? null,
-      createdByUserId: input.confirmedByUserId,
-    });
-
-    const remainder = round2(custodyBalance.balance - input.amount);
-    await logAuditEvent({
-      actorUserId: input.confirmedByUserId,
-      branchId: input.branchId,
-      module: "treasury",
-      action: "BANK_DEPOSIT_CONFIRMED",
-      entityType: "BankDeposit",
-      entityId: deposit.id,
-      metadataJson: {
-        custodyAccountId: input.custodyAccountId,
-        bankAccountId: input.bankAccountId,
-        intendedBankAccountId,
-        bankAccountMismatch: intendedBankAccountId !== null && intendedBankAccountId !== input.bankAccountId,
-        amountConfirmed: input.amount,
-        custodyBalanceBefore: custodyBalance.balance,
-        remainderInCustody: remainder,
-        transferId,
-        discrepant: remainder > 0.01,
-      },
-    });
-
-    return { deposit, transferId, remainderInCustody: remainder };
+  // La intención declarada por quien despachó (A.6) — resuelta acá, del
+  // lado servidor, no confiando en lo que mande el cliente: la última
+  // DEPOSIT_DISPATCH de esta custodia es el prefill que ya vio Master en
+  // pantalla. Si eligió otra cuenta, la plata puede haber terminado ahí
+  // por una razón real — no se bloquea, pero la diferencia queda anotada.
+  const latestDispatch = await tx.treasuryEntry.findFirst({
+    where: { accountId: input.custodyAccountId, entryType: "DEPOSIT_DISPATCH" },
+    orderBy: { occurredAt: "desc" },
+    select: { intendedBankAccountId: true },
   });
+  const intendedBankAccountId = latestDispatch?.intendedBankAccountId ?? null;
+
+  const deposit = await tx.bankDeposit.create({
+    data: {
+      bankAccountId: input.bankAccountId,
+      branchId: input.branchId,
+      amount: input.amount,
+      confirmedByUserId: input.confirmedByUserId,
+      referenceNumber: input.referenceNumber ?? null,
+      notes: input.notes ?? null,
+    },
+    // prompt-vigilancia-deposito-bancario.md — nombres para el texto de la
+    // decisión de Brain más abajo (BrainDecision no tiene relación propia a
+    // TreasuryAccount/User, así que el nombre se hornea en title/description
+    // en el momento — mismo criterio que auto-close-service.ts, que arma su
+    // texto con locked.physicalCashBox.branch.name en vez de dejarlo para
+    // que el frontend lo resuelva). Un solo include en el create, no dos
+    // findUnique aparte.
+    include: {
+      bankAccount: { select: { bankName: true, accountAlias: true } },
+      confirmedBy: { select: { fullName: true, username: true } },
+    },
+  });
+
+  const { transferId } = await createInternalTransferTx(tx, {
+    fromAccountId: input.custodyAccountId,
+    toAccountId: input.bankAccountId,
+    fromAmount: input.amount,
+    entryType: "DEPOSIT_CONFIRMED",
+    counterpartyType: "INTERNAL",
+    occurredAt: new Date(),
+    bankDepositId: deposit.id,
+    reference: input.referenceNumber ?? null,
+    notes: input.notes ?? null,
+    createdByUserId: input.confirmedByUserId,
+  });
+
+  const remainder = round2(custodyBalance.balance - input.amount);
+  await logAuditEvent({
+    actorUserId: input.confirmedByUserId,
+    branchId: input.branchId,
+    module: "treasury",
+    action: "BANK_DEPOSIT_CONFIRMED",
+    entityType: "BankDeposit",
+    entityId: deposit.id,
+    metadataJson: {
+      custodyAccountId: input.custodyAccountId,
+      bankAccountId: input.bankAccountId,
+      intendedBankAccountId,
+      bankAccountMismatch: intendedBankAccountId !== null && intendedBankAccountId !== input.bankAccountId,
+      amountConfirmed: input.amount,
+      custodyBalanceBefore: custodyBalance.balance,
+      remainderInCustody: remainder,
+      transferId,
+      discrepant: remainder > 0.01,
+    },
+  });
+
+  // prompt-vigilancia-deposito-bancario.md — cerrar el hueco real: antes
+  // "discrepant"/"remainderInCustody" (arriba) solo quedaban en el
+  // metadataJson de este AuditLog, que nadie revisa proactivamente. Con el
+  // remanente por encima de la tolerancia de la sucursal, se crea la
+  // decisión de Brain EN LA MISMA TRANSACCIÓN — no se espera al próximo
+  // runBrainScan (que puede tardar horas y ni siquiera escanea depósitos).
+  if (remainder > toleranceAmount) {
+    const bankLabel = deposit.bankAccount
+      ? `${deposit.bankAccount.bankName} (${deposit.bankAccount.accountAlias})`
+      : "el banco";
+    const confirmedByLabel = deposit.confirmedBy?.fullName ?? deposit.confirmedBy?.username ?? "un usuario";
+
+    // Mismo criterio de escalado que el resto de cash-detector.ts para
+    // hechos de caja/custodia ya confirmados (ver REVIEW_CASH_SESSION,
+    // RECALCULATE_CASH_SESSION): umbral binario, nunca por debajo de HIGH.
+    // 2× la tolerancia configurada — mismo múltiplo "deliberadamente grueso"
+    // que evaluateBranchCostAgainstReference (pricing-detector.ts) usa para
+    // separar "pasó el límite" de "esto es un problema real".
+    const severity: BrainDecisionSeverity = remainder > toleranceAmount * 2
+      ? BrainDecisionSeverity.CRITICAL
+      : BrainDecisionSeverity.HIGH;
+    // Hecho calculado (no una inferencia): el monto confirmado y el saldo de
+    // custodia son cifras exactas del libro mayor — misma confianza alta que
+    // REVIEW_CASH_SESSION (riskScoreFor(severity, 98) en cash-detector.ts).
+    const confidenceScore = 0.95;
+    const riskScore = riskScoreFor(severity, confidenceScore);
+    const priorityScore = priorityScoreFor({ severity, riskScore, confidenceScore, impactAmount: remainder });
+
+    await tx.brainDecision.create({
+      data: {
+        category: BrainDecisionCategory.CASH,
+        severity,
+        title: `Depósito corto: ${bankLabel}`,
+        description: `Depósito de C$${input.amount.toFixed(2)} en ${bankLabel} quedó C$${remainder.toFixed(2)} corto de lo que había en custodia (C$${custodyBalance.balance.toFixed(2)}) — confirmado por ${confirmedByLabel}.`,
+        recommendation: "Confirmar con quien hizo el depósito si el resto sigue en custodia, se depositó por otra vía, o hay que investigar la diferencia.",
+        branchId: input.branchId,
+        confidenceScore: new Prisma.Decimal(confidenceScore),
+        impactAmount: new Prisma.Decimal(remainder),
+        riskScore: new Prisma.Decimal(riskScore),
+        priorityScore: new Prisma.Decimal(priorityScore),
+        proposedActionType: "REVIEW_BANK_DEPOSIT_SHORTFALL",
+        evidenceJson: {
+          custodyAccountId: input.custodyAccountId,
+          bankAccountId: input.bankAccountId,
+          branchId: input.branchId,
+          amountConfirmed: input.amount,
+          custodyBalanceBefore: custodyBalance.balance,
+          remainder,
+          confirmedByUserId: input.confirmedByUserId,
+          referenceNumber: input.referenceNumber ?? null,
+          toleranceAmount,
+        },
+        sourceJson: {
+          module: "treasury",
+          detector: "confirmBankDeposit",
+          referenceType: "BankDeposit",
+          referenceId: deposit.id,
+        },
+        fingerprint: makeDecisionFingerprint(["treasury", "bank-deposit-shortfall", deposit.id]),
+      },
+    });
+  }
+
+  return { deposit, transferId, remainderInCustody: remainder };
 }
 
 type DirectDepositInput = {
