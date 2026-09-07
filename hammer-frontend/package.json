@@ -38,7 +38,7 @@
     "eslint-config-next": "15.5.18",
     "knip": "^6.34.0",
     "tailwindcss": "4.1.18",
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.13",
     "typescript": "5.9.3"
   },
   "engines": {
