@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { PaymentStatus, SaleOrderStatus } from "@prisma/client";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
+import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
 export async function GET(request: Request) {
   try {
@@ -63,8 +64,12 @@ export async function GET(request: Request) {
         _count: { _all: true },
       }),
       // Productos con existencia crítica (<=5 unidades, >0 para excluir agotado)
+      // prompt-inventario-critico-fusion.md — excludeDerivedStockGroupMembers()
+      // (catalog/service.ts) saca los miembros derivados de una fusión activa,
+      // cuyo balance propio vive en 0 por diseño (mismo bug del dashboard de
+      // Supervisión de Sucursal, dashboard/service.ts).
       prisma.inventoryBalance.count({
-        where: { quantityOnHand: { gt: 0, lte: 5 }, ...directBranch },
+        where: { quantityOnHand: { gt: 0, lte: 5 }, ...directBranch, product: { isActive: true, ...excludeDerivedStockGroupMembers() } },
       }),
       // Préstamos activos
       prisma.employeeLoan.count({

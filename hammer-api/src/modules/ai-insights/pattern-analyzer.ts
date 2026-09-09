@@ -15,6 +15,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import {
   mean,
   linearRegression,
@@ -501,11 +502,15 @@ export async function generateRecommendations(
   }
 
   // 2. Inventory health check
+  // prompt-inventario-critico-fusion.md — excludeDerivedStockGroupMembers()
+  // (catalog/service.ts) saca los miembros derivados de una fusión activa:
+  // su balance propio vive en 0 por diseño (el stock real está en el
+  // canónico), así que sin este filtro cuentan como "stock bajo" falso.
   const lowStockProducts = await prisma.inventoryBalance.findMany({
     where: {
       quantityOnHand: { lte: 5 },
       ...(branchId ? { branchId } : {}),
-      product: { isActive: true },
+      product: { isActive: true, ...excludeDerivedStockGroupMembers() },
     },
     include: {
       product: { select: { name: true, abcClassification: true, averageDailySales: true } },

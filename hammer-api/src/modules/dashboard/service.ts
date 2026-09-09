@@ -1,6 +1,7 @@
 import { ApprovalStatus, PaymentStatus, SaleOrderStatus, TransportServiceStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getBranchSalesRealtimeSummary, getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
+import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
 function dayBounds(date = new Date()) {
   const start = new Date(date);
@@ -12,6 +13,33 @@ function dayBounds(date = new Date()) {
 
 function toNumber(value: { toNumber: () => number } | null | undefined): number {
   return value ? value.toNumber() : 0;
+}
+
+/**
+ * prompt-inventario-critico-fusion.md — aislado en su propia función, con
+ * un `db` inyectable (mismo patrón que findSafeAccountForBranch en
+ * treasury/service.ts), para poder probar el filtro con un fake en
+ * memoria sin tocar el resto de getBranchAdminDashboardSummary (KPIs de
+ * ventas/cobros/despachos/aprobaciones/transportes, sin cambios).
+ *
+ * Sin este filtro, cada miembro DERIVADO (no canónico) de una fusión
+ * activa cuenta como "crítico" porque su balance propio vive en 0 por
+ * diseño (el stock real está en el canónico) — doble conteo + ruido
+ * falso. excludeDerivedStockGroupMembers() (catalog/service.ts) es el
+ * filtro ÚNICO ya establecido para esto ("alertas de reposición", su
+ * propio doc comment) — reusado, no reinventado a mano acá (ver
+ * diagnóstico: un filtro literal a mano que solo mire isCanonical, sin
+ * isActive de la membresía/grupo, esconde productos hoy canónicos con
+ * basura de fusiones viejas ya disueltas).
+ */
+export async function countCriticalInventory(branchIds: string[], db: typeof prisma = prisma): Promise<number> {
+  return db.inventoryBalance.count({
+    where: {
+      branchId: { in: branchIds },
+      quantityOnHand: { lte: 5 },
+      product: { isActive: true, ...excludeDerivedStockGroupMembers() },
+    },
+  });
 }
 
 export async function getBranchAdminDashboardSummary(branchIds: string[]) {
@@ -26,9 +54,7 @@ export async function getBranchAdminDashboardSummary(branchIds: string[]) {
     prisma.approvalRequest.count({
       where: { branchId: { in: branchIds }, status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] } },
     }),
-    prisma.inventoryBalance.count({
-      where: { branchId: { in: branchIds }, quantityOnHand: { lte: 5 } },
-    }),
+    countCriticalInventory(branchIds),
     prisma.transportService.count({
       where: {
         branchId: { in: branchIds },

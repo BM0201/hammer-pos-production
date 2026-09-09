@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { riskScoreFor } from "@/modules/brain/scoring";
+import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
 
 function n(value: Prisma.Decimal | number | null | undefined) {
@@ -23,10 +24,15 @@ export async function detectPurchasingDecisions(ctx: BrainDetectorContext): Prom
       take: 100,
       orderBy: { createdAt: "asc" },
     }),
+    // prompt-inventario-critico-fusion.md — excludeDerivedStockGroupMembers()
+    // (catalog/service.ts): un miembro derivado de una fusión activa vive
+    // en quantityOnHand=0 por diseño (el stock real está en el canónico) —
+    // sin este filtro, se sugería comprar un producto cuyo inventario real
+    // ya existe (en su canónico).
     prisma.inventoryBalance.findMany({
       where: {
         quantityOnHand: { lte: 0 },
-        product: { is: { isActive: true } },
+        product: { is: { isActive: true, ...excludeDerivedStockGroupMembers() } },
         branch: { is: { isActive: true } },
         ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
       },

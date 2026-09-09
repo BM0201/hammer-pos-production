@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getEffectiveProductPricing, getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct, resolvePolicyForProductBatch, type CategoryPricingPolicyDto } from "@/modules/pricing/category-policy-service";
 import { resolveAbcXyzClassification, type AbcClass, type XyzClass, type CombinedAbcXyzClass } from "@/modules/analytics/abc-xyz-classification";
+import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
 export type { AbcClass, XyzClass, CombinedAbcXyzClass };
 export type CommercialRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -471,8 +472,15 @@ export async function buildCommercialIntelligenceForProduct(input: { branchId: s
 }
 
 export async function listCommercialAlerts(input: { branchId: string; limit?: number }) {
+  // prompt-inventario-critico-fusion.md — excludeDerivedStockGroupMembers()
+  // (catalog/service.ts): un miembro derivado de una fusión activa vive en
+  // stockOnHand=0 por diseño (el stock real está en el canónico), así que
+  // "Producto AX con stock bajo" (más abajo, stockOnHand <= 2) disparaba
+  // falso para cualquier derivado clase A. Filtrado en el where (no en JS
+  // después) para que el take:200 por inventoryValue no se gaste en filas
+  // que de todas formas se van a descartar.
   const balances = await prisma.inventoryBalance.findMany({
-    where: { branchId: input.branchId },
+    where: { branchId: input.branchId, product: { isActive: true, ...excludeDerivedStockGroupMembers() } },
     take: input.limit ?? 200,
     orderBy: { inventoryValue: "desc" },
     include: {
@@ -489,8 +497,7 @@ export async function listCommercialAlerts(input: { branchId: string; limit?: nu
     },
   });
 
-  const activeBalances = balances.filter((balance) => balance.product.isActive);
-  const pairs = activeBalances.map((balance) => ({ branchId: input.branchId, productId: balance.productId }));
+  const pairs = balances.map((balance) => ({ branchId: input.branchId, productId: balance.productId }));
   const [pricingByKey, policyByKey, commercialByKey] = await Promise.all([
     getEffectiveProductPricingBatch(prisma, pairs),
     resolvePolicyForProductBatch(pairs),
@@ -498,7 +505,7 @@ export async function listCommercialAlerts(input: { branchId: string; limit?: nu
   ]);
 
   const alerts: CommercialAlert[] = [];
-  for (const balance of activeBalances) {
+  for (const balance of balances) {
     const key = `${input.branchId}:${balance.productId}`;
     const pricing = pricingByKey.get(key);
     const policy = policyByKey.get(key);

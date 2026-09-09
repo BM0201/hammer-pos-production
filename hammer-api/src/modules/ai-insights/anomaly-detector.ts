@@ -15,6 +15,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import {
   mean,
   stddev,
@@ -231,24 +232,28 @@ async function detectInventoryAnomalies(branchId?: string): Promise<AnomalyInsig
   const anomalies: AnomalyInsight[] = [];
 
   // Products with negative or zero stock that had recent sales
+  // prompt-inventario-critico-fusion.md — excludeDerivedStockGroupMembers()
+  // (catalog/service.ts): un miembro derivado de una fusión activa vive en
+  // quantityOnHand=0 por diseño (el stock real está en el canónico), así
+  // que sin este filtro cualquier venta reciente del derivado dispara un
+  // falso "faltante o error" acá.
   const recentSince = daysAgo(7);
   const balances = await prisma.inventoryBalance.findMany({
     where: {
       ...(branchId ? { branchId } : {}),
       quantityOnHand: { lte: 0 },
+      product: { isActive: true, ...excludeDerivedStockGroupMembers() },
     },
     select: {
       productId: true,
       quantityOnHand: true,
       branchId: true,
-      product: { select: { name: true, isActive: true } },
+      product: { select: { name: true } },
       branch: { select: { name: true } },
     },
   });
 
   for (const b of balances) {
-    if (!b.product.isActive) continue;
-
     const recentMovements = await prisma.inventoryMovement.count({
       where: {
         productId: b.productId,
