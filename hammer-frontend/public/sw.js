@@ -9,12 +9,16 @@
 // nunca se purga nada y un cliente que ya tenía la app abierta puede seguir
 // sirviendo el HTML/JS viejo desde su caché local indefinidamente.
 //
-// IMPORTANTE: subir este número EN CADA despliegue que necesite forzar a los
-// navegadores ya abiertos a refrescar. layout.tsx registra este archivo con
-// `updateViaCache: "none"` para que el navegador siempre revise bytes
-// frescos de ESTE archivo (nunca desde su propio caché HTTP) — así el
-// cambio de versión se detecta de forma confiable.
-const CACHE = "hammer-pos-v2";
+// prompt-sw-cache-version.md — arreglo de raíz: scripts/inject-sw-cache-version.mjs
+// corre como "postbuild" (package.json, mismo mecanismo de hook de npm que
+// ya usa "prebuild" en este mismo package) DESPUÉS de cada `next build`, y
+// reescribe el valor de abajo con el buildId real de Next.js (.next/BUILD_ID
+// — único por compilación). Así CADA despliegue purga el caché viejo solo,
+// sin que nadie tenga que acordarse de subir un número a mano. El valor
+// "hammer-pos-v3" que queda commiteado acá es solo el default para `npm run
+// dev` (que nunca corre `next build`, así que nunca dispara el postbuild) —
+// en cualquier build real, este string sale sobrescrito.
+const CACHE = "hammer-pos-v3";
 const PRECACHE = ["/"];
 
 self.addEventListener("install", (event) => {

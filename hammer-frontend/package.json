@@ -12,6 +12,7 @@
     "test:unit:logic": "node --import tsx --test \"tests/unit-ts/**/*.test.ts\"",
     "prebuild": "node scripts/validate-critical-files.mjs",
     "build": "next build",
+    "postbuild": "node scripts/inject-sw-cache-version.mjs",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:e2e": "cd ../hammer-api && npm exec -- tsx prisma/e2e-seed.ts && cd ../hammer-frontend && playwright test",
