@@ -21,7 +21,6 @@ type KpiCardProps = {
 type ToneConfig = {
   tile: string;
   bar: string;
-  dot: string;
   iconBg: string;
   iconColor: string;
   Icon: LucideIcon;
@@ -32,7 +31,6 @@ function getTone(tone: string, roleCssPrefix: string): ToneConfig {
     return {
       tile: "hm-kpi-tile-alert",
       bar: "linear-gradient(90deg, var(--color-warning-400), var(--color-warning-600))",
-      dot: "bg-[var(--color-warning-500)]",
       iconBg: "bg-[var(--color-warning-50)] border border-[var(--color-warning-100)]",
       iconColor: "text-[var(--color-warning-600)]",
       Icon: AlertTriangle,
@@ -42,7 +40,6 @@ function getTone(tone: string, roleCssPrefix: string): ToneConfig {
     return {
       tile: "hm-kpi-tile-ok",
       bar: `linear-gradient(90deg, var(--color-${roleCssPrefix}-400), var(--color-${roleCssPrefix}-600))`,
-      dot: "bg-[var(--color-success-500)]",
       iconBg: `bg-[var(--color-${roleCssPrefix}-50)] border border-[var(--color-${roleCssPrefix}-100)]`,
       iconColor: `text-[var(--color-${roleCssPrefix}-600)]`,
       Icon: roleCssPrefix === "master" ? TrendingUp : CheckCircle2,
@@ -51,7 +48,6 @@ function getTone(tone: string, roleCssPrefix: string): ToneConfig {
   return {
     tile: "",
     bar: `linear-gradient(90deg, var(--color-${roleCssPrefix}-400), var(--color-${roleCssPrefix}-600))`,
-    dot: "bg-[var(--color-text-soft)]",
     iconBg: "bg-[var(--color-surface-alt)] border border-[var(--color-border)]",
     iconColor: "text-[var(--color-text-muted)]",
     Icon: Activity,
@@ -100,9 +96,6 @@ export function KpiCard({
           <Icon className={`${cfg.iconColor}`} style={{ width: "1.25rem", height: "1.25rem" }} />
         </div>
       </div>
-
-      {/* Bottom-right status dot */}
-      <div className={`absolute bottom-2.5 right-3 h-1.5 w-1.5 rounded-full ${cfg.dot} opacity-70`} />
     </div>
   );
 }

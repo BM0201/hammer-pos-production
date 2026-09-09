@@ -52,8 +52,15 @@ export function RoleSummary({
         </div>
       </div>
 
-      {/* KPI Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 stagger-children">{kpis}</div>
+      {/* KPI Grid — lg y xl comparten 3 columnas a propósito: los 4 call
+          sites reales (branch/page.tsx: SALES=3, CASHIER=3, WAREHOUSE=3,
+          BRANCH_ADMIN=6) son múltiplos de 3, así que ninguno deja una fila
+          incompleta. `kpis` llega como ReactNode opaco (no un arreglo), así
+          que este componente no puede saber cuántas tarjetas trae — si
+          alguna pantalla futura pasa una cantidad que no sea múltiplo de
+          3, esa fila asimétrica es un problema aparte de esa pantalla, no
+          de esta grilla. */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 stagger-children">{kpis}</div>
 
       {/* CTA Button */}
       {ctaButton && (

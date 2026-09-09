@@ -240,7 +240,7 @@ export default function BranchPage() {
           <>
             <KpiCard label="Borradores abiertos" value={summary.draftsOpen} tone={summary.draftsOpen > 0 ? "alert" : "ok"} roleAccent="SALES" />
             <KpiCard label="Enviadas a cobro" value={summary.sentToPayment} tone={summary.sentToPayment > 0 ? "alert" : "default"} roleAccent="SALES" />
-            <KpiCard label="Ventas del día" value={money(summary.salesToday)} tone="ok" roleAccent="SALES" />
+            <KpiCard label="Ventas del día" value={money(summary.salesToday)} tone={summary.salesToday > 0 ? "ok" : "default"} roleAccent="SALES" />
           </>
         )}
         quickLinks={[
@@ -351,7 +351,7 @@ export default function BranchPage() {
         alerts={summary.alerts}
         kpis={(
           <>
-            <KpiCard label="Ventas del día" value={money(summary.salesToday)} tone="ok" roleAccent="BRANCH_ADMIN" />
+            <KpiCard label="Ventas del día" value={money(summary.salesToday)} tone={summary.salesToday > 0 ? "ok" : "default"} roleAccent="BRANCH_ADMIN" />
             <KpiCard label="Cobros pendientes" value={summary.pendingPayments} tone={summary.pendingPayments > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
             <KpiCard label="Despachos pendientes" value={summary.pendingDispatches} tone={summary.pendingDispatches > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
             <KpiCard label="Aprobaciones pendientes" value={summary.pendingApprovals} tone={summary.pendingApprovals > 0 ? "alert" : "ok"} roleAccent="BRANCH_ADMIN" />
