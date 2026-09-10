@@ -67,6 +67,19 @@ export function fmtWeekdayDate(value: string | Date): string {
 }
 
 /**
+ * Fecha con día siempre a 2 dígitos ("04 mar 2026") — duplicada en
+ * retained-cash-expense-list y master/pricing antes de esta función.
+ * NO es lo mismo que fmtDate() de este archivo (day:"numeric", sin
+ * relleno — "4 mar 2026") ni que fmtDateShort() de payroll-calc.ts
+ * (construida a mano en UTC, sin relleno tampoco) — nombrada distinto
+ * a propósito para no invitar a confundirlas.
+ */
+export function fmtDatePadded(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleDateString("es-NI", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+/**
  * money() sin decimales, redondeado con Math.round (no vía Intl) — para
  * etiquetas compactas donde 2 decimales sobran (ej. barra de composición
  * de nómina). Se usa Math.round explícito en vez de maximumFractionDigits:0

@@ -7,7 +7,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import toast from "react-hot-toast";
-import { money } from "@/lib/format";
+import { money, fmtDatePadded } from "@/lib/format";
 
 const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
   PAYROLL: "Personal / Nómina",
@@ -89,7 +89,7 @@ export function RetainedCashExpenseList({ branchId, refreshKey }: { branchId: st
                     <span className="hm-chip">{EXPENSE_CATEGORY_LABELS[row.category] ?? row.category}</span>
                   </div>
                   <p className="text-xs text-[var(--color-text-muted)]">
-                    {new Date(row.occurredAt).toLocaleDateString("es-NI", { day: "2-digit", month: "short", year: "numeric" })}
+                    {fmtDatePadded(row.occurredAt)}
                     {row.receiptReference ? ` · ${row.receiptReference}` : ""}
                   </p>
                 </div>
