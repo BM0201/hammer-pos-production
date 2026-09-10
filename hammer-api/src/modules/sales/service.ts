@@ -1214,6 +1214,27 @@ export async function listSaleOrdersForManagement(params: {
 }
 
 /**
+ * Suma el CASH tenderizado de pagos POSTED de una anulación, agrupado por
+ * sesión de caja. Pura, sin DB — separada de cancelSaleOrderTx (que sí
+ * necesita un `tx` real) para poder probar que la acumulación es exacta:
+ * mismo patrón que aggregateOrderTotals (totals.ts), Prisma.Decimal en vez
+ * de number porque sumar varios tenders en punto flotante puede arrastrar
+ * error de redondeo (0.1 + 0.2 !== 0.3 en JS).
+ */
+export function sumCashTendersBySession(
+  cashTendersByPayment: Array<{ paymentId: string; amount: Prisma.Decimal }>,
+  paymentSessionById: Map<string, string>,
+): Map<string, Prisma.Decimal> {
+  const cashBySession = new Map<string, Prisma.Decimal>();
+  for (const tender of cashTendersByPayment) {
+    const sessionId = paymentSessionById.get(tender.paymentId);
+    if (!sessionId) continue;
+    cashBySession.set(sessionId, (cashBySession.get(sessionId) ?? new Prisma.Decimal(0)).plus(tender.amount));
+  }
+  return cashBySession;
+}
+
+/**
  * Core transaccional de la anulación de orden. Acepta un TransactionClient
  * para poder ser llamado tanto desde cancelSaleOrder (tx propia) como desde
  * executeSaleCancellation (tx única que engloba todo el flujo de anulación).
@@ -1316,12 +1337,7 @@ export async function cancelSaleOrderTx(
       })
     : [];
   const paymentSessionById = new Map(postedPayments.map((p) => [p.id, p.cashSessionId]));
-  const cashBySession = new Map<string, number>();
-  for (const tender of cashTendersByPayment) {
-    const sessionId = paymentSessionById.get(tender.paymentId);
-    if (!sessionId) continue;
-    cashBySession.set(sessionId, (cashBySession.get(sessionId) ?? 0) + Number(tender.amount));
-  }
+  const cashBySession = sumCashTendersBySession(cashTendersByPayment, paymentSessionById);
 
   const cashHandlingResults: Array<{
     cashSessionId: string;
@@ -1331,11 +1347,15 @@ export async function cancelSaleOrderTx(
     brainDecisionId?: string;
   }> = [];
   const sessionPlans: Array<{ cashSessionId: string; cashAmount: number; action: string }> = [];
-  for (const [cashSessionId, cashAmount] of cashBySession) {
+  for (const [cashSessionId, cashAmountDecimal] of cashBySession) {
     const session = await tx.cashSession.findUniqueOrThrow({
       where: { id: cashSessionId },
       select: { status: true },
     });
+    // resolveCancellationCashPlan espera number en su firma
+    // (cancellation-cash-policy.ts, sin tocar) — la conversión pasa acá,
+    // una sola vez, ya con la suma exacta hecha en Decimal arriba.
+    const cashAmount = cashAmountDecimal.toNumber();
     const plan = resolveCancellationCashPlan({
       cashTenderTotal: cashAmount,
       sessionStatus: session.status,

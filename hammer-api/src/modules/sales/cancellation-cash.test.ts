@@ -13,8 +13,9 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CashMovementType, CashSessionStatus } from "@prisma/client";
+import { CashMovementType, CashSessionStatus, Prisma } from "@prisma/client";
 import { resolveCancellationCashPlan } from "./cancellation-cash-policy";
+import { sumCashTendersBySession } from "./service";
 import { cashMovementsNetTotal, computeExpectedCash, type CashMovementLike } from "@/modules/cash-session/expected-cash";
 
 /** Espejo de la aritmética que ve la sesión: apertura + CASH posteado + movimientos. */
@@ -102,5 +103,77 @@ describe("anulación con efectivo — la aritmética cierra exacta", () => {
       cashRefundHandling: null,
     });
     assert.equal(plan.action, "NONE");
+  });
+});
+
+/**
+ * sumCashTendersBySession (service.ts) — mismo patrón que aggregateOrderTotals
+ * (totals.ts): acumular en Prisma.Decimal, no en number, para que sumar
+ * varios tenders CASH de la misma sesión no arrastre error de redondeo de
+ * punto flotante.
+ */
+describe("sumCashTendersBySession — la acumulación es exacta en Decimal", () => {
+  it("0.1 + 0.2 da EXACTO 0.3 — el caso clásico donde JS en punto flotante falla (0.30000000000000004)", () => {
+    // Documenta el problema real que Prisma.Decimal evita — no es un
+    // caso rebuscado, es LA demostración estándar de imprecisión IEEE 754.
+    assert.notEqual(0.1 + 0.2, 0.3, "si esto deja de fallar, el resto del test perdió su propósito");
+
+    const cashBySession = sumCashTendersBySession(
+      [
+        { paymentId: "pay-1", amount: new Prisma.Decimal(0.1) },
+        { paymentId: "pay-2", amount: new Prisma.Decimal(0.2) },
+      ],
+      new Map([
+        ["pay-1", "session-1"],
+        ["pay-2", "session-1"],
+      ]),
+    );
+
+    const total = cashBySession.get("session-1");
+    assert.ok(total, "debe existir un total acumulado para session-1");
+    assert.equal(total!.toString(), "0.3");
+    assert.equal(total!.toNumber(), 0.3);
+  });
+
+  it("dos sesiones distintas acumulan por separado, sin mezclarse", () => {
+    const cashBySession = sumCashTendersBySession(
+      [
+        { paymentId: "pay-1", amount: new Prisma.Decimal(0.1) },
+        { paymentId: "pay-2", amount: new Prisma.Decimal(0.2) },
+        { paymentId: "pay-3", amount: new Prisma.Decimal(50) },
+      ],
+      new Map([
+        ["pay-1", "session-1"],
+        ["pay-2", "session-1"],
+        ["pay-3", "session-2"],
+      ]),
+    );
+
+    assert.equal(cashBySession.get("session-1")!.toNumber(), 0.3);
+    assert.equal(cashBySession.get("session-2")!.toNumber(), 50);
+    assert.equal(cashBySession.size, 2);
+  });
+
+  it("un tender de un pago sin sesión asociada (no está en paymentSessionById) se ignora, no rompe el total", () => {
+    const cashBySession = sumCashTendersBySession(
+      [
+        { paymentId: "pay-1", amount: new Prisma.Decimal(0.1) },
+        { paymentId: "pay-huerfano", amount: new Prisma.Decimal(999) },
+        { paymentId: "pay-2", amount: new Prisma.Decimal(0.2) },
+      ],
+      new Map([
+        ["pay-1", "session-1"],
+        ["pay-2", "session-1"],
+        // pay-huerfano deliberadamente ausente
+      ]),
+    );
+
+    assert.equal(cashBySession.get("session-1")!.toNumber(), 0.3);
+    assert.equal(cashBySession.size, 1, "pay-huerfano no debe crear una entrada propia");
+  });
+
+  it("sin tenders → Map vacío", () => {
+    const cashBySession = sumCashTendersBySession([], new Map());
+    assert.equal(cashBySession.size, 0);
   });
 });
