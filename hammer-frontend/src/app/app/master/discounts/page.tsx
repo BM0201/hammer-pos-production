@@ -18,6 +18,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { fmtDateTime } from "@/lib/format";
 import toast from "react-hot-toast";
 import { Save, Check } from "lucide-react";
 
@@ -342,7 +343,7 @@ export default function DiscountsPage() {
               </p>
               {suggestionsGeneratedAt && (
                 <p className="mt-1 text-[11px] text-[var(--color-master-600)]">
-                  Último cálculo: {new Date(suggestionsGeneratedAt).toLocaleString()}
+                  Último cálculo: {fmtDateTime(suggestionsGeneratedAt)}
                 </p>
               )}
             </div>

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { mapDispatchStatusToSpanish, mapDispatchStatusVariant, mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { fmtDateTime } from "@/lib/format";
 
 type DispatchOrder = {
   id: string;
@@ -253,7 +254,7 @@ export function DispatchWorkspace({ branchId }: { branchId: string }) {
             {history.map((ticket) => (
               <li key={ticket.id} className={`rounded border p-3 ${recentIds.has(ticket.saleOrder.orderNumber) ? "border-[var(--color-success-200)] bg-[var(--color-success-50)]" : ""}`}>
                 <div className="font-medium">{ticket.saleOrder.orderNumber}</div>
-                <div className="text-xs text-[var(--color-text-muted)]">{ticket.branch.code} · {ticket.dispatchedAt ? new Date(ticket.dispatchedAt).toLocaleString() : "Sin fecha"}</div>
+                <div className="text-xs text-[var(--color-text-muted)]">{ticket.branch.code} · {ticket.dispatchedAt ? fmtDateTime(ticket.dispatchedAt) : "Sin fecha"}</div>
                 {ticket.saleOrder.requiresTransport ? (
                   <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
                     <span>Transporte:</span>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
+import { fmtDateTime } from "@/lib/format";
 import { CashMovementsPanel } from "./cash-movements-panel";
 import { CashDestinationDeclarationModal } from "./cash-destination-declaration-modal";
 
@@ -513,7 +514,7 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
             </div>
           )}
           <div className="text-[var(--color-success-700)]">
-            <strong>⏱ Abierta desde:</strong> {new Date(activeSession.openedAt).toLocaleString()}
+            <strong>⏱ Abierta desde:</strong> {fmtDateTime(activeSession.openedAt)}
           </div>
           <div className="text-[var(--color-success-700)]">
             <strong>Monto de apertura:</strong> C$ {Number(activeSession.openingAmount).toFixed(2)}
@@ -661,7 +662,7 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
                 >
                   {pendingAutoClosedSessions.map((session) => (
                     <option key={session.id} value={session.id}>
-                      {session.physicalCashBox?.code ?? "Caja"} - {session.autoClosedAt ? new Date(session.autoClosedAt).toLocaleString() : "auto-cierre"}
+                      {session.physicalCashBox?.code ?? "Caja"} - {session.autoClosedAt ? fmtDateTime(session.autoClosedAt) : "auto-cierre"}
                     </option>
                   ))}
                 </select>

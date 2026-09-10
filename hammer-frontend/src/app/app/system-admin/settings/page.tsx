@@ -11,6 +11,7 @@ import {
   Edit2,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { fmtDateTime } from "@/lib/format";
 
 type SystemSetting = {
   id: string;
@@ -224,7 +225,7 @@ export default function SettingsPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">
-                      {new Date(s.updatedAt).toLocaleString()}
+                      {fmtDateTime(s.updatedAt)}
                     </td>
                     <td className="px-4 py-3 text-right">
                       {editKey !== s.key && (

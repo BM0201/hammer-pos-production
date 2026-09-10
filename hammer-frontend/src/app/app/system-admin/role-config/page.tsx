@@ -11,6 +11,7 @@ import {
   Users,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { fmtDateTime } from "@/lib/format";
 
 type RoleConfig = {
   id: string;
@@ -159,7 +160,7 @@ export default function RoleConfigPage() {
                           <p className="text-sm text-gray-500">{role.description}</p>
                           {config && (
                             <p className="text-xs text-gray-400 mt-1">
-                              Última actualización: {new Date(config.updatedAt).toLocaleString()}
+                              Última actualización: {fmtDateTime(config.updatedAt)}
                               {config.updatedBy && ` por ${config.updatedBy.username}`}
                             </p>
                           )}
