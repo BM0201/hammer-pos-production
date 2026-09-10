@@ -13,6 +13,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LoadingState } from "@/components/ui/loading-state";
 import { EmptyState } from "@/components/ui/empty-state";
+import { money as formatMoney, fmtDateTime } from "@/lib/format";
 import { OperationalDaySummary, type OperationalDay } from "@/components/operations/operational-day-summary";
 import { CashSessionStatusList } from "@/components/operations/cash-session-status-list";
 import { OperationalDayChecklist, type DayChecklist } from "@/components/operations/operational-day-checklist";
@@ -65,9 +66,7 @@ const METHOD_LABEL: Record<string, string> = {
   CREDIT_NOTE: "Nota de crédito",
 };
 
-function money(value: string | number | null | undefined) {
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
-}
+const money = formatMoney;
 
 export function OperationalDayPanel({ branchId, masterMode = false }: { branchId: string; masterMode?: boolean }) {
   const sessionState = useSession();
@@ -414,7 +413,7 @@ export function OperationalDayPanel({ branchId, masterMode = false }: { branchId
                     {report.lateActivity!.orders.map((order) => (
                       <tr key={order.id}>
                         <td className="font-mono">{order.orderNumber}</td>
-                        <td>{order.syncedAt ? new Date(order.syncedAt).toLocaleString("es-NI") : "—"} <span className="hm-chip hm-chip-warning ml-1">tardía</span></td>
+                        <td>{order.syncedAt ? fmtDateTime(order.syncedAt) : "—"} <span className="hm-chip hm-chip-warning ml-1">tardía</span></td>
                         <td className="hm-num text-right font-semibold">{money(order.grandTotal)}</td>
                       </tr>
                     ))}

@@ -4,10 +4,7 @@ import { Wallet, AlertTriangle, CheckCircle2, Clock, ArrowRight } from "lucide-r
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import type { CashSessionRow } from "@/components/operations/operational-day-summary";
-
-function money(value: string | number | null | undefined) {
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
-}
+import { money } from "@/lib/format";
 
 function shortTime(iso?: string | null) {
   if (!iso) return "—";

@@ -9,6 +9,7 @@ import { showToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { money as formatMoney, fmtDateTime } from "@/lib/format";
 
 // ── Types (mirror force-cleanup-service response) ───────────────────────────────
 
@@ -33,11 +34,9 @@ type ActionKey =
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
-const money = (v: number | null | undefined) =>
-  new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(v ?? 0));
+const money = (v: number | null | undefined) => formatMoney(v);
 
-const fmtDate = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString("es-NI") : "—";
+const fmtDate = (iso: string | null) => (iso ? fmtDateTime(iso) : "—");
 
 type Finding = {
   key: ActionKey;

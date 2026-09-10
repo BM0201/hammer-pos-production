@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Building2, Calendar, Clock, TrendingUp, Wallet, AlertTriangle, CheckCircle2, XCircle, Activity, Truck, Brain } from "lucide-react";
+import { money } from "@/lib/format";
 
 export type OperationalDay = {
   id: string;
@@ -68,10 +69,6 @@ export type CashSessionRow = {
   openedBy?: { username: string; fullName?: string | null };
   closedBy?: { username: string; fullName?: string | null } | null;
 };
-
-function money(value: string | number | null | undefined) {
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
-}
 
 function businessDateDisplay(iso: string) {
   return new Date(iso).toLocaleDateString("es-NI", { timeZone: "UTC", weekday: "long", year: "numeric", month: "long", day: "numeric" });

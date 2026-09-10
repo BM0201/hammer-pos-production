@@ -4,10 +4,7 @@ import { useState, useEffect } from "react";
 import { Info, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { DayChecklist } from "@/components/operations/operational-day-checklist";
-
-function money(value: string | number | null | undefined) {
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
-}
+import { money } from "@/lib/format";
 
 type Summary = {
   salesTotal?: number | string | null;

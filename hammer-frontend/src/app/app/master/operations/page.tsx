@@ -13,6 +13,7 @@ import { showToast } from "@/components/ui/toast";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { money } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -83,9 +84,6 @@ type ScheduleReference = {
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-
-const money = (v: number | string | null | undefined) =>
-  new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(v ?? 0));
 
 function timeAgo(date: Date | null) {
   if (!date) return "sin actualizar";
