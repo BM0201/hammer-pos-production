@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { money } from "@/lib/format";
-import { fmtC0, fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES } from "./payroll-calc";
+import { money, moneyRounded as fmtC0 } from "@/lib/format";
+import { fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES } from "./payroll-calc";
 
 /**
  * Barra de composición del costo empresa (elemento firma de Planilla V2).

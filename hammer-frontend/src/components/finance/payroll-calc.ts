@@ -317,12 +317,10 @@ export function splitNetPayBiweekly(grossSalary: number, netPay: number): { firs
 }
 
 /* ── Formato ─────────────────────────────────────────────────────────────── */
-// El formateador de dinero a 2 decimales (fmtC) se eliminó de aquí — duplicaba
-// money() de @/lib/format, que es ahora la única fuente de verdad. fmtC0 se
-// queda: es un formato genuinamente distinto (0 decimales, para etiquetas
-// compactas de la barra de composición de nómina), no un duplicado.
-
-export const fmtC0 = (v: number) => `C$${Math.round(v).toLocaleString("es-NI")}`;
+// fmtC (2dp) y fmtC0 (0dp) se eliminaron de aquí — duplicaban money() y
+// moneyRounded() de @/lib/format, que ahora son la única fuente de verdad
+// (fmtC0 era un formato genuinamente distinto, no un duplicado de money(),
+// pero eso no significa que deba vivir aquí también — se reubicó tal cual).
 
 const MES_CORTO = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 export const MES_LARGO = [
