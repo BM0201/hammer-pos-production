@@ -22,6 +22,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money } from "@/lib/format";
 import {
   type Branch,
   type ApplyPreviewRow,
@@ -119,8 +120,6 @@ export function PricingCalculatorPanel({
     productMonthlyUnits: "",
   });
 
-  const formatC = (n: number) =>
-    `C$${n.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const selectedBranch = branches.find((b) => b.id === branchId);
 
   /* ── Load branches (nombres para "elegir sucursales" y la previsualización) ── */
@@ -528,9 +527,9 @@ export function PricingCalculatorPanel({
                   <Receipt className="h-4 w-4 text-amber-700" />
                   <span className="text-sm font-bold text-amber-800">Gastos Operativos Mensuales</span>
                 </div>
-                <p className="text-2xl font-extrabold text-amber-700">{formatC(summary.grandTotal)}</p>
+                <p className="text-2xl font-extrabold text-amber-700">{money(summary.grandTotal)}</p>
                 <p className="text-xs font-medium text-amber-700 mt-1">
-                  Prorrateado: {formatC(summary.grandTotal / Math.max(Number(configForm.estimatedMonthlyUnits) || 1, 1))} por unidad
+                  Prorrateado: {money(summary.grandTotal / Math.max(Number(configForm.estimatedMonthlyUnits) || 1, 1))} por unidad
                 </p>
               </div>
             )}
@@ -680,12 +679,12 @@ export function PricingCalculatorPanel({
                   <div className="sm:col-span-2 grid gap-2 rounded-lg border border-emerald-200 bg-white p-3 text-xs">
                     <div className="flex justify-between"><span>Producto</span><strong>{productContext.sku} - {productContext.name}</strong></div>
                     <div className="flex justify-between"><span>Categoria</span><strong>{productContext.categoryName}</strong></div>
-                    <div className="flex justify-between"><span>Precio semilla (referencia)</span><strong>{formatC(productContext.standardSalePrice)}</strong></div>
-                    <div className="flex justify-between"><span>Precio sucursal</span><strong>{productContext.branchPrice === null ? "Sin precio" : formatC(productContext.branchPrice)}</strong></div>
-                    <div className="flex justify-between"><span>Precio efectivo</span><strong>{productContext.effectivePrice === null ? "Sin precio en esta sucursal" : `${formatC(productContext.effectivePrice)} (${PRICE_SOURCE_LABEL[productContext.priceSource]})`}</strong></div>
-                    <div className="flex justify-between"><span>Costo efectivo</span><strong>{productContext.effectiveCost === null ? "Sin costo" : `${formatC(productContext.effectiveCost)} (${productContext.costSource})`}</strong></div>
+                    <div className="flex justify-between"><span>Precio semilla (referencia)</span><strong>{money(productContext.standardSalePrice)}</strong></div>
+                    <div className="flex justify-between"><span>Precio sucursal</span><strong>{productContext.branchPrice === null ? "Sin precio" : money(productContext.branchPrice)}</strong></div>
+                    <div className="flex justify-between"><span>Precio efectivo</span><strong>{productContext.effectivePrice === null ? "Sin precio en esta sucursal" : `${money(productContext.effectivePrice)} (${PRICE_SOURCE_LABEL[productContext.priceSource]})`}</strong></div>
+                    <div className="flex justify-between"><span>Costo efectivo</span><strong>{productContext.effectiveCost === null ? "Sin costo" : `${money(productContext.effectiveCost)} (${productContext.costSource})`}</strong></div>
                     <div className="rounded border border-amber-200 bg-amber-50 p-2 text-amber-800">
-                      Politica: margen {productContext.categoryPolicy.targetMarginPercent}% · utilidad {formatC(productContext.categoryPolicy.minProfitAmount)} · gasto {formatC(productContext.categoryPolicy.monthlyExpenseAllocation)} · redondeo {productContext.categoryPolicy.roundingRule}
+                      Politica: margen {productContext.categoryPolicy.targetMarginPercent}% · utilidad {money(productContext.categoryPolicy.minProfitAmount)} · gasto {money(productContext.categoryPolicy.monthlyExpenseAllocation)} · redondeo {productContext.categoryPolicy.roundingRule}
                       {productContext.categoryPolicy.isVirtualDefault ? " · default virtual" : ""}
                     </div>
                     <label className="flex items-center gap-2 text-xs font-semibold">
@@ -703,7 +702,7 @@ export function PricingCalculatorPanel({
                           <span>Margen recomendado: {productContext.commercialIntelligence.recommendedMarginPercent}%</span>
                           <span>Stock: {productContext.commercialIntelligence.recommendedStockPolicy}</span>
                           <span>Descuento max: {productContext.commercialIntelligence.recommendedMaxDiscountPercent}%</span>
-                          <span>Utilidad minima: {formatC(productContext.commercialIntelligence.recommendedMinProfitAmount)}</span>
+                          <span>Utilidad minima: {money(productContext.commercialIntelligence.recommendedMinProfitAmount)}</span>
                         </div>
                         {productContext.commercialIntelligence.recommendedActions.length > 0 ? (
                           <div className="mt-1 text-[11px]">{productContext.commercialIntelligence.recommendedActions.join(" ")}</div>
@@ -838,20 +837,20 @@ export function PricingCalculatorPanel({
                 <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Vista previa</p>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-slate-700">Costo base</span>
-                  <span className="text-sm font-bold text-slate-900">{formatC(Number(calcCost) || 0)}</span>
+                  <span className="text-sm font-bold text-slate-900">{money(Number(calcCost) || 0)}</span>
                 </div>
                 {includeTaxInCost && Number(ivaPercent) > 0 && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-amber-700 font-medium">+ IVA ({ivaPercent}%)</span>
                     <span className="text-sm font-bold text-amber-700">
-                      + {formatC((Number(calcCost) || 0) * (Number(ivaPercent) / 100))}
+                      + {money((Number(calcCost) || 0) * (Number(ivaPercent) / 100))}
                     </span>
                   </div>
                 )}
                 <div className="border-t-2 border-emerald-300 pt-2 flex items-center justify-between">
                   <span className="text-sm font-bold text-emerald-800">Costo real</span>
                   <span className="text-lg font-extrabold text-emerald-800">
-                    {formatC((Number(calcCost) || 0) * (includeTaxInCost ? (1 + (Number(ivaPercent) || 0) / 100) : 1))}
+                    {money((Number(calcCost) || 0) * (includeTaxInCost ? (1 + (Number(ivaPercent) || 0) / 100) : 1))}
                   </span>
                 </div>
                 {!includeTaxInCost && Number(ivaPercent) > 0 && (
@@ -917,7 +916,7 @@ export function PricingCalculatorPanel({
                       </p>
                       {calcResult.marketConflict ? (
                         <p className="mt-2 text-xs font-semibold">
-                          Minimo rentable: {formatC(calcResult.marketConflict.minPrice)} | Max mercado: {calcResult.marketConflict.marketMaxPrice === null ? "Sin limite" : formatC(calcResult.marketConflict.marketMaxPrice)}
+                          Minimo rentable: {money(calcResult.marketConflict.minPrice)} | Max mercado: {calcResult.marketConflict.marketMaxPrice === null ? "Sin limite" : money(calcResult.marketConflict.marketMaxPrice)}
                         </p>
                       ) : null}
                     </div>
@@ -937,7 +936,7 @@ export function PricingCalculatorPanel({
                   <div className="flex items-center gap-3 rounded-xl bg-[var(--color-surface)]/60 dark:bg-[var(--color-surface)]/5 px-4 py-3">
                     <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] font-bold text-slate-600 dark:text-slate-300">1</div>
                     <span className="flex-1 text-sm text-[var(--color-text-muted)]">Costo Base <span className="text-[10px]">(sin IVA)</span></span>
-                    <span className="text-sm font-semibold tabular-nums">{formatC(costoBase)}</span>
+                    <span className="text-sm font-semibold tabular-nums">{money(costoBase)}</span>
                   </div>
 
                   {/* Step 2: IVA */}
@@ -956,7 +955,7 @@ export function PricingCalculatorPanel({
                     <div className="flex items-center gap-3 rounded-xl bg-[var(--color-warning-50)]/80 dark:bg-amber-900/10 px-4 py-3">
                       <div className="flex items-center justify-center w-6 h-6 rounded-full bg-amber-200 dark:bg-amber-800 text-[10px] font-bold text-[var(--color-warning-700)] dark:text-amber-300">2</div>
                       <span className="flex-1 text-sm text-[var(--color-warning-700)] dark:text-amber-400">+ IVA ({iva}%)</span>
-                      <span className="text-sm font-semibold tabular-nums text-[var(--color-warning-700)] dark:text-amber-400">+ {formatC(ivaAmount)}</span>
+                      <span className="text-sm font-semibold tabular-nums text-[var(--color-warning-700)] dark:text-amber-400">+ {money(ivaAmount)}</span>
                     </div>
                   )}
 
@@ -965,7 +964,7 @@ export function PricingCalculatorPanel({
                     <div className="flex items-center gap-3 rounded-xl bg-slate-100/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 px-4 py-3">
                       <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-300 dark:bg-slate-600 text-[10px] font-bold text-slate-700 dark:text-slate-200">=</div>
                       <span className="flex-1 text-sm font-semibold text-[var(--color-text)]">Costo con IVA</span>
-                      <span className="text-sm font-bold tabular-nums">{formatC(calcResult.baseCost + calcResult.taxAmount)}</span>
+                      <span className="text-sm font-bold tabular-nums">{money(calcResult.baseCost + calcResult.taxAmount)}</span>
                     </div>
                   )}
 
@@ -978,7 +977,7 @@ export function PricingCalculatorPanel({
                     <div key={label} className="flex items-center gap-3 rounded-xl bg-white/70 px-4 py-3">
                       <div className="flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-700">+</div>
                       <span className="flex-1 text-sm text-[var(--color-text-muted)]">{label}</span>
-                      <span className="text-sm font-semibold tabular-nums">{formatC(Number(value))}</span>
+                      <span className="text-sm font-semibold tabular-nums">{money(Number(value))}</span>
                     </div>
                   ))}
 
@@ -989,7 +988,7 @@ export function PricingCalculatorPanel({
                       <span className="text-sm text-rose-700 dark:text-rose-400">+ Gasto Operativo</span>
                       <span className="text-[10px] text-rose-500 dark:text-rose-500 ml-1">/ unidad</span>
                     </div>
-                    <span className="text-sm font-semibold tabular-nums text-rose-700 dark:text-rose-400">+ {formatC(calcResult.operatingExpensePerUnit)}</span>
+                    <span className="text-sm font-semibold tabular-nums text-rose-700 dark:text-rose-400">+ {money(calcResult.operatingExpensePerUnit)}</span>
                   </div>
 
                   {/* Divider */}
@@ -999,17 +998,17 @@ export function PricingCalculatorPanel({
                   <div className="flex items-center gap-3 rounded-xl bg-slate-100/80 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 px-4 py-3">
                     <div className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-300 dark:bg-slate-600 text-[10px] font-bold text-slate-700 dark:text-slate-200">=</div>
                     <span className="flex-1 text-sm font-semibold text-[var(--color-text)]">Costo Total Interno</span>
-                    <span className="text-sm font-bold tabular-nums">{formatC(calcResult.totalInternalCost)}</span>
+                    <span className="text-sm font-bold tabular-nums">{money(calcResult.totalInternalCost)}</span>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 pt-2">
                     <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
                       <p className="text-[10px] font-bold uppercase text-slate-500">Precio minimo rentable</p>
-                      <p className="text-sm font-bold text-slate-900">{formatC(calcResult.minPrice)}</p>
+                      <p className="text-sm font-bold text-slate-900">{money(calcResult.minPrice)}</p>
                     </div>
                     <div className="rounded-xl bg-white/80 border border-slate-200 p-3">
                       <p className="text-[10px] font-bold uppercase text-slate-500">Precio maximo de mercado</p>
-                      <p className="text-sm font-bold text-slate-900">{calcResult.maxPrice === null ? "Sin limite" : formatC(calcResult.maxPrice)}</p>
+                      <p className="text-sm font-bold text-slate-900">{calcResult.maxPrice === null ? "Sin limite" : money(calcResult.maxPrice)}</p>
                     </div>
                   </div>
 
@@ -1042,14 +1041,14 @@ export function PricingCalculatorPanel({
                         Precio Sugerido
                       </p>
                       <p className="text-4xl lg:text-5xl font-extrabold text-white tracking-tight">
-                        {formatC(calcResult.suggestedPrice)}
+                        {money(calcResult.suggestedPrice)}
                       </p>
                       <div className="mt-3 pt-3 border-t border-white/20">
                         <p className="text-emerald-100 text-xs">
                           Ganancia por unidad
                         </p>
                         <p className="text-white font-bold text-lg mt-0.5">
-                          {formatC(ganancia)}
+                          {money(ganancia)}
                         </p>
                       </div>
                     </div>
@@ -1067,7 +1066,7 @@ export function PricingCalculatorPanel({
                     </div>
                     <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
                       <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Gastos/mes</p>
-                      <p className="text-xs font-bold text-[var(--color-text)]">{formatC(calcResult.totalMonthlyExpenses)}</p>
+                      <p className="text-xs font-bold text-[var(--color-text)]">{money(calcResult.totalMonthlyExpenses)}</p>
                     </div>
                     <div className="rounded-xl bg-white/90 dark:bg-[var(--color-surface)]/5 border border-slate-300 dark:border-slate-700 p-3 text-center shadow-sm">
                       <p className="text-[10px] font-bold uppercase text-[var(--color-text-secondary)]">Uds/mes</p>
@@ -1076,7 +1075,7 @@ export function PricingCalculatorPanel({
                   </div>
 
                   <div className="mt-4 w-full max-w-xs rounded-xl border border-slate-200 bg-white/80 p-3 text-left text-xs text-slate-700">
-                    <div className="flex justify-between"><span>Precio minimo crudo</span><strong>{formatC(calcResult.rawSuggestedPrice)}</strong></div>
+                    <div className="flex justify-between"><span>Precio minimo crudo</span><strong>{money(calcResult.rawSuggestedPrice)}</strong></div>
                     <div className="flex justify-between"><span>Redondeo</span><strong>{calcResult.roundingRule}</strong></div>
                     <div className="flex justify-between"><span>Piso aplicado</span><strong>{calcResult.priceFloorReason}</strong></div>
                     <div className="flex justify-between"><span>Ambito gasto</span><strong>{calcResult.expenseScopeLabel}</strong></div>
@@ -1175,8 +1174,8 @@ export function PricingCalculatorPanel({
                   {applyPreview.map((row) => (
                     <tr key={row.branchId} className="border-b border-[var(--color-border)] last:border-0">
                       <td className="px-2 py-1.5 text-[var(--color-text)]">{row.branchName}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{row.previousPrice === null ? "Sin precio" : formatC(row.previousPrice)}</td>
-                      <td className="px-2 py-1.5 text-right font-medium tabular-nums text-[var(--color-success-700)]">{formatC(row.newPrice)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{row.previousPrice === null ? "Sin precio" : money(row.previousPrice)}</td>
+                      <td className="px-2 py-1.5 text-right font-medium tabular-nums text-[var(--color-success-700)]">{money(row.newPrice)}</td>
                       <td className={`px-2 py-1.5 text-right tabular-nums ${row.belowMinMargin ? "font-semibold text-[var(--color-warning-700)]" : ""}`}>
                         {row.marginPercent === null ? "—" : `${row.marginPercent.toFixed(1)}%`}
                         {row.belowMinMargin && row.minMarginPercent !== null && (

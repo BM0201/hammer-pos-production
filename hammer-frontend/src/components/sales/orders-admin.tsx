@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
+import { money } from "@/lib/format";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -123,10 +124,6 @@ type OrderDetail = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function fmtCurrency(val: number) {
-  return `C$ ${val.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 function fmtDateTime(iso: string) {
   return new Date(iso).toLocaleString("es-NI", { dateStyle: "short", timeStyle: "short" });
@@ -496,29 +493,29 @@ function DetailPanel({
                   <div className="space-y-0.5">
                     <div className="flex justify-between">
                       <span>Subtotal</span>
-                      <span>{fmtCurrency(detail.totals.subtotal)}</span>
+                      <span>{money(detail.totals.subtotal)}</span>
                     </div>
                     {detail.totals.discountTotal > 0 && (
                       <div className="flex justify-between text-[var(--color-danger-700)]">
                         <span>Descuento</span>
-                        <span>−{fmtCurrency(detail.totals.discountTotal)}</span>
+                        <span>−{money(detail.totals.discountTotal)}</span>
                       </div>
                     )}
                     {detail.totals.taxTotal > 0 && (
                       <div className="flex justify-between">
                         <span>Impuesto</span>
-                        <span>{fmtCurrency(detail.totals.taxTotal)}</span>
+                        <span>{money(detail.totals.taxTotal)}</span>
                       </div>
                     )}
                     {detail.requiresTransport && (
                       <div className="flex justify-between">
                         <span>Transporte</span>
-                        <span>{fmtCurrency(detail.totals.transportAmount)}</span>
+                        <span>{money(detail.totals.transportAmount)}</span>
                       </div>
                     )}
                     <div className="flex justify-between border-t border-[var(--color-border)] pt-1 font-semibold">
                       <span>Total</span>
-                      <span>{fmtCurrency(detail.totals.grandTotal)}</span>
+                      <span>{money(detail.totals.grandTotal)}</span>
                     </div>
                   </div>
                 </div>
@@ -554,11 +551,11 @@ function DetailPanel({
                         <td className="py-2 pr-3 text-right">
                           {l.quantity} {l.unit ?? ""}
                         </td>
-                        <td className="py-2 pr-3 text-right">{fmtCurrency(l.unitPrice)}</td>
+                        <td className="py-2 pr-3 text-right">{money(l.unitPrice)}</td>
                         <td className="py-2 pr-3 text-right">
-                          {l.discountAmount > 0 ? fmtCurrency(l.discountAmount) : "—"}
+                          {l.discountAmount > 0 ? money(l.discountAmount) : "—"}
                         </td>
-                        <td className="py-2 text-right font-medium">{fmtCurrency(l.lineSubtotal)}</td>
+                        <td className="py-2 text-right font-medium">{money(l.lineSubtotal)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -581,7 +578,7 @@ function DetailPanel({
                   >
                     <div className="mb-2 flex items-center justify-between">
                       <span className="font-medium">
-                        {p.method} · {fmtCurrency(p.amount)} {p.currencyCode}
+                        {p.method} · {money(p.amount)} {p.currencyCode}
                       </span>
                       <Badge color={p.status === "POSTED" ? "green" : p.status === "VOIDED" ? "red" : "yellow"}>
                         {p.status === "POSTED" ? "Cobrado" : p.status === "VOIDED" ? "Anulado" : p.status}
@@ -598,9 +595,9 @@ function DetailPanel({
                           <div key={t.id} className="flex justify-between text-xs">
                             <span>{t.method}</span>
                             <span>
-                              {fmtCurrency(t.amount)}
+                              {money(t.amount)}
                               {t.receivedAmount != null && t.receivedAmount !== t.amount
-                                ? ` (recibido ${fmtCurrency(t.receivedAmount)}, cambio ${fmtCurrency(t.changeAmount ?? 0)})`
+                                ? ` (recibido ${money(t.receivedAmount)}, cambio ${money(t.changeAmount ?? 0)})`
                                 : ""}
                             </span>
                           </div>
@@ -826,7 +823,7 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
     <div className="space-y-4">
       {/* KPI Cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
-        <KpiCard label="Total del día" value={fmtCurrency(totalAmount)} />
+        <KpiCard label="Total del día" value={money(totalAmount)} />
         <KpiCard label="Órdenes" value={orders.length} />
         <KpiCard label="Pend. cobro" value={pendingPayment} color={pendingPayment > 0 ? "yellow" : undefined} />
         <KpiCard label="Pend. factura" value={pendingInvoice} color={pendingInvoice > 0 ? "yellow" : undefined} />
@@ -986,7 +983,7 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
                             {invoiceLabel(o.manualInvoiceStatus, o.requiresManualInvoice)}
                           </Badge>
                         </td>
-                        <td className="px-3 py-2 text-right font-medium">{fmtCurrency(o.grandTotal)}</td>
+                        <td className="px-3 py-2 text-right font-medium">{money(o.grandTotal)}</td>
                       </tr>
                     );
                   })}
@@ -1004,7 +1001,7 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
               </span>
               <span className="font-medium">
                 Total facturado (no anulado):{" "}
-                <span className="text-[var(--color-text)]">{fmtCurrency(totalAmount)}</span>
+                <span className="text-[var(--color-text)]">{money(totalAmount)}</span>
               </span>
             </div>
           )}

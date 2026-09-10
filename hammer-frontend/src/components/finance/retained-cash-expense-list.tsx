@@ -7,8 +7,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import toast from "react-hot-toast";
-
-const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { money } from "@/lib/format";
 
 const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
   PAYROLL: "Personal / Nómina",
@@ -95,7 +94,7 @@ export function RetainedCashExpenseList({ branchId, refreshKey }: { branchId: st
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <span className="font-mono text-sm font-bold tabular-nums text-[var(--color-danger-600)]">−{fmt(Number(row.amount))}</span>
+                  <span className="font-mono text-sm font-bold tabular-nums text-[var(--color-danger-600)]">−{money(Number(row.amount))}</span>
                   <Button variant="ghost" size="sm" onClick={() => setVoiding(row)} icon={<Undo2 className="h-3.5 w-3.5" />}>Anular</Button>
                 </div>
               </div>
@@ -103,7 +102,7 @@ export function RetainedCashExpenseList({ branchId, refreshKey }: { branchId: st
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-[var(--color-border)] pt-2.5 text-sm">
             <span className="text-[var(--color-text-muted)]">Total bajado del acumulado</span>
-            <span className="font-mono font-bold tabular-nums text-[var(--color-text)]">{fmt(total)}</span>
+            <span className="font-mono font-bold tabular-nums text-[var(--color-text)]">{money(total)}</span>
           </div>
         </>
       )}
@@ -151,7 +150,7 @@ function VoidExpenseModal({ row, onClose, onVoided }: { row: RetainedCashExpense
           <Button variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Cerrar</Button>
         </div>
         <p className="text-xs text-[var(--color-text-muted)]">
-          {row.description} · <span className="font-semibold">{fmt(Number(row.amount))}</span>. No se borra nada — se escribe un asiento inverso y el acumulado vuelve a subir.
+          {row.description} · <span className="font-semibold">{money(Number(row.amount))}</span>. No se borra nada — se escribe un asiento inverso y el acumulado vuelve a subir.
         </p>
         <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
           Razón de anulación (mínimo 10 caracteres)

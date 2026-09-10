@@ -22,6 +22,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money } from "@/lib/format";
 import {
   type Branch,
   type Expense,
@@ -315,9 +316,6 @@ export function ExpenseManager({
     });
   };
 
-  const formatC = (n: number) =>
-    `C$${n.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
   /* ── Selected branch name ── */
   const selectedBranch = branches.find((b) => b.id === selectedBranchId);
 
@@ -359,7 +357,7 @@ export function ExpenseManager({
               <div>
                 <p className="text-xs text-[var(--color-text-muted)] font-medium">Gastos Mensuales</p>
                 <p className="text-xl font-bold text-[var(--color-text)]">
-                  {formatC(summary.grandTotal)}
+                  {money(summary.grandTotal)}
                 </p>
               </div>
             </div>
@@ -458,7 +456,7 @@ export function ExpenseManager({
                 </div>
                 <div>
                   <p className="text-xs text-[var(--color-text-muted)] font-medium">Gasto total (todas)</p>
-                  <p className="text-xl font-bold text-[var(--color-text)]">{formatC(allSummary.grandTotal)}</p>
+                  <p className="text-xl font-bold text-[var(--color-text)]">{money(allSummary.grandTotal)}</p>
                 </div>
               </div>
             </Card>
@@ -515,10 +513,10 @@ export function ExpenseManager({
                         <td className="py-2 pr-3 font-semibold whitespace-nowrap text-[var(--color-text)]">
                           {b.branchCode} <span className="font-normal text-[var(--color-text-muted)]">{b.branchName}</span>
                         </td>
-                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(payroll)}</td>
-                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(fixed)}</td>
-                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(other)}</td>
-                        <td className="py-2 pr-3 text-right tabular-nums font-bold text-[var(--color-text)]">{formatC(b.total)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{money(payroll)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{money(fixed)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{money(other)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums font-bold text-[var(--color-text)]">{money(b.total)}</td>
                         <td className="py-2">
                           <div className="h-2 w-24 rounded-full bg-[var(--color-surface-alt)] overflow-hidden">
                             <div
@@ -569,7 +567,7 @@ export function ExpenseManager({
                         <td className="py-2 pr-3">
                           {c.last ? (
                             <>
-                              <span className="font-bold tabular-nums text-[var(--color-text)]">{formatC(c.last.amount)}</span>
+                              <span className="font-bold tabular-nums text-[var(--color-text)]">{money(c.last.amount)}</span>
                               <span className="ml-1.5 text-[var(--color-text-muted)]">
                                 {new Date(c.last.date).toLocaleDateString("es-NI", { day: "numeric", month: "short", timeZone: "UTC" })} · {c.last.description}
                               </span>
@@ -578,9 +576,9 @@ export function ExpenseManager({
                             "—"
                           )}
                         </td>
-                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(c.monthlyAverage)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{money(c.monthlyAverage)}</td>
                         <td className="py-2 text-right font-bold tabular-nums text-[var(--color-info-700)]">
-                          {c.suggestedBudget > 0 ? formatC(c.suggestedBudget) : "—"}
+                          {c.suggestedBudget > 0 ? money(c.suggestedBudget) : "—"}
                         </td>
                       </tr>
                     ))}
@@ -684,7 +682,7 @@ export function ExpenseManager({
                         <td className="py-2 pr-3">
                           {c.last ? (
                             <>
-                              <span className="font-bold tabular-nums text-[var(--color-text)]">{formatC(c.last.amount)}</span>
+                              <span className="font-bold tabular-nums text-[var(--color-text)]">{money(c.last.amount)}</span>
                               <span className="ml-1.5 text-[var(--color-text-muted)]">
                                 {new Date(c.last.date).toLocaleDateString("es-NI", { day: "numeric", month: "short", timeZone: "UTC" })} · {c.last.description}
                               </span>
@@ -693,9 +691,9 @@ export function ExpenseManager({
                             "—"
                           )}
                         </td>
-                        <td className="py-2 pr-3 text-right tabular-nums">{formatC(c.monthlyAverage)}</td>
+                        <td className="py-2 pr-3 text-right tabular-nums">{money(c.monthlyAverage)}</td>
                         <td className="py-2 pr-3 text-right font-bold tabular-nums text-[var(--color-info-700)]">
-                          {c.suggestedBudget > 0 ? formatC(c.suggestedBudget) : "—"}
+                          {c.suggestedBudget > 0 ? money(c.suggestedBudget) : "—"}
                         </td>
                         <td className="py-2 text-right">
                           {c.suggestedBudget > 0 && (
@@ -735,7 +733,7 @@ export function ExpenseManager({
                   Costo laboral (planilla) · {selectedBranch?.name}
                 </h4>
                 <span className="text-lg font-bold text-[var(--color-owner-600)]">
-                  {formatC(summary.byCategory.PAYROLL.total)}
+                  {money(summary.byCategory.PAYROLL.total)}
                 </span>
               </div>
               <p className="mb-3 text-xs text-[var(--color-text-muted)]">
@@ -747,7 +745,7 @@ export function ExpenseManager({
                   <div key={exp.id} className="flex items-center justify-between px-4 py-2.5">
                     <p className="text-sm text-[var(--color-text)]">{exp.description}</p>
                     <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">
-                      {formatC(Number(exp.amount))}
+                      {money(Number(exp.amount))}
                     </span>
                   </div>
                 ))}
@@ -774,7 +772,7 @@ export function ExpenseManager({
                             {CATEGORY_ICONS[cat]} {CATEGORY_LABELS[cat] || cat}
                           </span>
                           <span className="text-[var(--color-text-muted)]">
-                            {formatC(data.total)} ({pct.toFixed(1)}%)
+                            {money(data.total)} ({pct.toFixed(1)}%)
                           </span>
                         </div>
                         <div className="h-2 bg-[var(--color-neutral-100)] rounded-full overflow-hidden">
@@ -792,7 +790,7 @@ export function ExpenseManager({
               </div>
               <div className="mt-4 pt-3 border-t border-[var(--color-neutral-100)] flex justify-between items-center">
                 <span className="text-sm font-semibold text-[var(--color-text)]">Total Mensual</span>
-                <span className="text-lg font-bold text-[var(--color-danger-600)]">{formatC(summary.grandTotal)}</span>
+                <span className="text-lg font-bold text-[var(--color-danger-600)]">{money(summary.grandTotal)}</span>
               </div>
             </Card>
           )}
@@ -823,7 +821,7 @@ export function ExpenseManager({
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="text-sm font-bold text-[var(--color-text)]">
-                          {formatC(data.total)}
+                          {money(data.total)}
                         </span>
                         {expandedCategories.has(cat) ? (
                           <ChevronUp className="h-4 w-4 text-[var(--color-text-muted)]" />
@@ -841,7 +839,7 @@ export function ExpenseManager({
                             </div>
                             <div className="flex items-center gap-3">
                               <span className="text-sm font-semibold text-[var(--color-text)]">
-                                {formatC(Number(exp.amount))}
+                                {money(Number(exp.amount))}
                               </span>
                               <button
                                 onClick={() => handleDeleteExpense(exp.id)}
@@ -951,12 +949,12 @@ export function ExpenseManager({
                     <tr key={trip.id} className="border-b align-top">
                       <td className="py-2">{trip.route.name}</td>
                       <td>{trip.truck?.name ?? "Manual"}</td>
-                      <td>{formatC(Number(trip.totalTripCost))}</td>
+                      <td>{money(Number(trip.totalTripCost))}</td>
                       <td>{FREIGHT_STATUS_LABELS[trip.status] ?? trip.status}</td>
                       <td>
                         <div className="space-y-1">
                           {trip.lines.slice(0, 5).map((line) => (
-                            <div key={line.id}>{line.product.sku}: {formatC(Number(line.allocatedFreightPerUnit))}/u</div>
+                            <div key={line.id}>{line.product.sku}: {money(Number(line.allocatedFreightPerUnit))}/u</div>
                           ))}
                         </div>
                       </td>

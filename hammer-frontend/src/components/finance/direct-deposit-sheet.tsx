@@ -7,8 +7,7 @@ import { apiFetch } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
-
-const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { money } from "@/lib/format";
 
 type BankAccountOption = {
   id: string;
@@ -114,7 +113,7 @@ export function DirectDepositSheet({
     if (submitting) return; // el doble click no puede generar dos depósitos — este endpoint mueve dinero real.
     if (!bankAccountId) { toast.error("Selecciona la cuenta destino."); return; }
     if (amountNumber <= 0) { toast.error("El monto debe ser mayor que 0."); return; }
-    if (overCap) { toast.error(`El monto no puede superar lo disponible para depositar (${fmt(pendingDeposit)}).`); return; }
+    if (overCap) { toast.error(`El monto no puede superar lo disponible para depositar (${money(pendingDeposit)}).`); return; }
 
     setSubmitting(true);
     try {
@@ -132,7 +131,7 @@ export function DirectDepositSheet({
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar el depósito.");
       const account = eligibleAccounts.find((a) => a.id === bankAccountId);
-      toast.success(`Depósito de ${fmt(amountNumber)} registrado en ${account?.bankName ?? "la cuenta"}.`);
+      toast.success(`Depósito de ${money(amountNumber)} registrado en ${account?.bankName ?? "la cuenta"}.`);
       onDone();
       handleClose();
     } catch (error) {
@@ -187,7 +186,7 @@ export function DirectDepositSheet({
                 <Button type="button" variant="secondary" size="sm" onClick={() => setAmount(pendingDeposit.toFixed(2))}>Todo</Button>
               </div>
               <p className={["mt-1 text-[0.6875rem]", overCap ? "font-semibold text-[var(--color-danger-600)]" : "text-[var(--color-text-soft)]"].join(" ")}>
-                Máximo disponible: {fmt(pendingDeposit)}
+                Máximo disponible: {money(pendingDeposit)}
               </p>
             </label>
 
@@ -211,7 +210,7 @@ export function DirectDepositSheet({
             </label>
 
             <Button type="submit" variant="success" loading={submitting} disabled={overCap} className="w-full">
-              Depositar {amountNumber > 0 ? fmt(amountNumber) : ""}
+              Depositar {amountNumber > 0 ? money(amountNumber) : ""}
             </Button>
           </form>
         )}

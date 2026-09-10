@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Settings, Percent, Package, PieChart, Info, Save, Receipt } from "lucide-react";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money } from "@/lib/format";
 import { type ExpenseSummary } from "@/components/expenses/expense-manager.types";
 
 /**
@@ -22,9 +23,6 @@ export function PricingConfigPanel({ branchId, onSaved }: { branchId: string; on
     estimatedMonthlyUnits: "1000",
     prorationMethod: "BY_QUANTITY",
   });
-
-  const formatC = (n: number) =>
-    `C$${n.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const load = useCallback(async () => {
     if (!branchId) return;
@@ -174,9 +172,9 @@ export function PricingConfigPanel({ branchId, onSaved }: { branchId: string; on
                 <Receipt className="h-4 w-4 text-amber-700" />
                 <span className="text-sm font-bold text-amber-800">Gastos Operativos Mensuales</span>
               </div>
-              <p className="text-2xl font-extrabold text-amber-700">{formatC(summary.grandTotal)}</p>
+              <p className="text-2xl font-extrabold text-amber-700">{money(summary.grandTotal)}</p>
               <p className="text-xs font-medium text-amber-700 mt-1">
-                Prorrateado: {formatC(summary.grandTotal / Math.max(Number(configForm.estimatedMonthlyUnits) || 1, 1))} por unidad
+                Prorrateado: {money(summary.grandTotal / Math.max(Number(configForm.estimatedMonthlyUnits) || 1, 1))} por unidad
               </p>
             </div>
           )}

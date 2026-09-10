@@ -20,6 +20,7 @@ import {
   CalendarDays,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money } from "@/lib/format";
 import { DEFAULT_PAYROLL_RATES, splitNetPayBiweekly, MES_LARGO, type PayrollBreakdown, type PayrollRates } from "@/components/finance/payroll-calc";
 import { usePaydayForMonth, type PaydayForMonthEntry } from "@/components/finance/use-payday-for-month";
 import { AttendancePanel } from "@/components/finance/attendance-panel";
@@ -322,8 +323,6 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
   useEffect(() => { if (activeTab === "history") loadHistory(); }, [activeTab, loadHistory]);
   useEffect(() => { setPayrollResult(null); setDisbursements([]); setCashStatus([]); }, [selectedBranch]);
 
-  const fmt = (v: string | number | null | undefined) => `C$${Number(v ?? 0).toLocaleString("es-NI", { minimumFractionDigits: 2 })}`;
-
   const handleSubmit = async () => {
     if (!form.fullName.trim() || !form.branchId || !form.startDate) {
       flash("error", "Complete todos los campos requeridos");
@@ -433,7 +432,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
         setExcludedEmpIds(new Set());
         setSkipLoanEmpIds(new Set());
       }
-      flash("success", `Nomina calculada: ${fmt(data.totalGross)}`);
+      flash("success", `Nomina calculada: ${money(data.totalGross)}`);
       if (data.payrollRunStatus === "POSTED") {
         await loadDisbursements(data.payrollRunId);
       } else {
@@ -779,7 +778,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                       <td className="font-medium text-[var(--color-text)]">{emp.fullName}</td>
                       <td className="text-[var(--color-text-muted)]"><span className="inline-flex items-center gap-1"><Briefcase className="h-3.5 w-3.5" />{emp.position}</span></td>
                       <td className="text-[var(--color-text-muted)]">{emp.branch?.code ?? "—"}</td>
-                      <td className="text-right font-mono">{fmt(emp.monthlySalary)}</td>
+                      <td className="text-right font-mono">{money(emp.monthlySalary)}</td>
                       <td className="text-[var(--color-text-muted)]">{new Date(emp.startDate).toLocaleDateString("es-NI")}</td>
                       <td className="text-[var(--color-text-muted)]">{emp.endDate ? new Date(emp.endDate).toLocaleDateString("es-NI") : "—"}</td>
                       <td>
@@ -940,8 +939,8 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                                   </p>
                                   <p className="text-xs text-[var(--color-text-muted)]">
                                     {q.paid
-                                      ? `${fmt(q.total)} desembolsados${paidDate ? ` el ${paidDate}` : ""} — ya cuenta en la utilidad real`
-                                      : `${fmt(q.total)} por desembolsar — se paga en Cortes Quincenales`}
+                                      ? `${money(q.total)} desembolsados${paidDate ? ` el ${paidDate}` : ""} — ya cuenta en la utilidad real`
+                                      : `${money(q.total)} por desembolsar — se paga en Cortes Quincenales`}
                                   </p>
                                 </div>
                               </div>
@@ -988,14 +987,14 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                     <p className="font-bold text-[var(--color-text)]">Vas a postear: {monthLabel}</p>
                     <div className="mt-1.5 grid gap-1.5 text-[var(--color-text-secondary)] sm:grid-cols-2">
                       <div>
-                        <span className="font-semibold">1ª quincena</span> — {fmt(totals.first)}
+                        <span className="font-semibold">1ª quincena</span> — {money(totals.first)}
                         {firstHalfPayday && ` · ${fmtPaydayDate(firstHalfPayday)}`}
                         {noteFor(firstHalfPayday) && (
                           <span className="block text-xs text-[var(--color-warning-600)]">{noteFor(firstHalfPayday)}</span>
                         )}
                       </div>
                       <div>
-                        <span className="font-semibold">2ª quincena</span> — {fmt(totals.second)}
+                        <span className="font-semibold">2ª quincena</span> — {money(totals.second)}
                         {secondHalfPayday && ` · ${fmtPaydayDate(secondHalfPayday)}`}
                         {noteFor(secondHalfPayday) && (
                           <span className="block text-xs text-[var(--color-warning-600)]">{noteFor(secondHalfPayday)}</span>
@@ -1014,12 +1013,12 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     {appliedRows.map((c) => (
                       <span key={`applied-${c.branchId}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--color-success-700)]">
-                        ✓ {c.branchCode}: {fmt(c.appliedAmount)} descontado de caja
+                        ✓ {c.branchCode}: {money(c.appliedAmount)} descontado de caja
                       </span>
                     ))}
                     {pendingRows.map((c) => (
                       <span key={`pending-${c.branchId}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-2 py-0.5 text-[0.65rem] font-semibold text-[var(--color-warning-700)]">
-                        ⏳ {c.branchCode}: {fmt(c.pendingAmount)} pendiente — se aplicará al abrir caja
+                        ⏳ {c.branchCode}: {money(c.pendingAmount)} pendiente — se aplicará al abrir caja
                       </span>
                     ))}
                   </div>
@@ -1060,10 +1059,10 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                   </p>
                 </div>
                 <div className="hidden sm:flex gap-5 text-right text-sm">
-                  <div><p className="font-bold text-[var(--color-text)]">{fmt(payrollResult.totalGross)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Bruto (mes)</p></div>
-                  <div><p className="font-bold text-[var(--color-warning-700)]">{fmt(payrollResult.totalDeductions)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Deducc. (mes)</p></div>
-                  <div><p className="font-bold text-[var(--color-success-700)]">{fmt(payrollResult.totalNet)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Neto (mes)</p></div>
-                  <div><p className="font-bold text-[var(--color-info-700)]">{fmt(payrollResult.totalEmployerCost)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Costo emp. (mes)</p></div>
+                  <div><p className="font-bold text-[var(--color-text)]">{money(payrollResult.totalGross)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Bruto (mes)</p></div>
+                  <div><p className="font-bold text-[var(--color-warning-700)]">{money(payrollResult.totalDeductions)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Deducc. (mes)</p></div>
+                  <div><p className="font-bold text-[var(--color-success-700)]">{money(payrollResult.totalNet)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Neto (mes)</p></div>
+                  <div><p className="font-bold text-[var(--color-info-700)]">{money(payrollResult.totalEmployerCost)}</p><p className="text-[0.625rem] text-[var(--color-text-soft)]">Costo emp. (mes)</p></div>
                 </div>
               </div>
 
@@ -1119,13 +1118,13 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                             <span className="block text-[0.7rem] font-normal text-[var(--color-text-muted)]">{rosterEmp.position}</span>
                           </td>
                           <td className="text-center">{dim ? "—" : `${v.daysWorked}/${v.totalDays}`}</td>
-                          <td className="text-right font-mono">{dim ? "—" : fmt(v.grossSalary)}</td>
+                          <td className="text-right font-mono">{dim ? "—" : money(v.grossSalary)}</td>
                           {/* INSS/IR son MENSUALES (factura única del INSS): se
                               descuentan completos UNA vez, en la 2ª quincena. */}
-                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim ? "—" : `− ${fmt(v.inssLaboral ?? 0)}`}</td>
-                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim || !(v.ir > 0) ? "—" : `− ${fmt(v.ir)}`}</td>
+                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim ? "—" : `− ${money(v.inssLaboral ?? 0)}`}</td>
+                          <td className="text-right font-mono text-[var(--color-danger-600)]">{dim || !(v.ir > 0) ? "—" : `− ${money(v.ir)}`}</td>
                           <td className="text-right font-mono text-[var(--color-danger-600)]" title={!dim && v.absenceDays > 0 ? `${v.absenceDays} día(s) de falta injustificada` : undefined}>
-                            {dim || !(v.absenceDeduction > 0) ? "—" : `${v.absenceDays}d · − ${fmt(v.absenceDeduction)}`}
+                            {dim || !(v.absenceDeduction > 0) ? "—" : `${v.absenceDays}d · − ${money(v.absenceDeduction)}`}
                           </td>
                           <td className="text-right font-mono text-[var(--color-warning-700)]">
                             <span className="inline-flex items-center gap-1.5">
@@ -1139,7 +1138,7 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                                   aria-label={`Aplicar préstamo de ${rosterEmp.fullName}`}
                                 />
                               )}
-                              {dim ? "—" : v.loanDeductions > 0 ? `− ${fmt(v.loanDeductions)}` : "—"}
+                              {dim ? "—" : v.loanDeductions > 0 ? `− ${money(v.loanDeductions)}` : "—"}
                             </span>
                           </td>
                           {isBiweekly ? (
@@ -1147,15 +1146,15 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                               const q = splitNetPayBiweekly(v.grossSalary, v.netPay);
                               return (
                                 <>
-                                  <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : fmt(q.firstHalf)}</td>
-                                  <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : fmt(q.secondHalf)}</td>
+                                  <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : money(q.firstHalf)}</td>
+                                  <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : money(q.secondHalf)}</td>
                                 </>
                               );
                             })()
                           ) : (
-                            <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : fmt(v.netPay)}</td>
+                            <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">{dim ? "—" : money(v.netPay)}</td>
                           )}
-                          <td className="text-right font-mono">{dim ? "—" : fmt(v.employerCost)}</td>
+                          <td className="text-right font-mono">{dim ? "—" : money(v.employerCost)}</td>
                         </tr>
                       );
                     })}
@@ -1283,10 +1282,10 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                       <tr key={loan.id}>
                         <td className="font-medium text-[var(--color-text)]">{loan.employee.fullName}</td>
                         <td className="text-[var(--color-text-muted)]">{loan.branch.code}</td>
-                        <td className="text-right font-mono">{fmt(loan.principalAmount)}</td>
-                        <td className="text-right font-mono font-semibold">{fmt(loan.outstandingBalance)}</td>
+                        <td className="text-right font-mono">{money(loan.principalAmount)}</td>
+                        <td className="text-right font-mono font-semibold">{money(loan.outstandingBalance)}</td>
                         <td className="text-right font-mono">
-                          {loan.installmentAmount ? fmt(loan.installmentAmount) : "—"}
+                          {loan.installmentAmount ? money(loan.installmentAmount) : "—"}
                           {loan.installmentAmount && (
                             <span className={`ml-1.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide ${loan.installmentFrequency === "BIWEEKLY" ? "bg-[var(--color-info-100)] text-[var(--color-info-700)]" : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"}`}>
                               {loan.installmentFrequency === "BIWEEKLY" ? "Quincenal" : "Mensual"}
@@ -1386,10 +1385,10 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                           {isDraft ? "BORRADOR" : run.payrollRunStatus}
                         </span>
                       </td>
-                      <td className="text-right font-mono">{fmt(run.totalGross)}</td>
-                      <td className="text-right font-mono">{fmt(run.totalDeductions)}</td>
-                      <td className="text-right font-mono">{fmt(run.totalNet)}</td>
-                      <td className="text-right font-mono">{fmt(run.totalEmployerCost)}</td>
+                      <td className="text-right font-mono">{money(run.totalGross)}</td>
+                      <td className="text-right font-mono">{money(run.totalDeductions)}</td>
+                      <td className="text-right font-mono">{money(run.totalNet)}</td>
+                      <td className="text-right font-mono">{money(run.totalEmployerCost)}</td>
                       <td className="text-right">
                         {isDraft ? (
                           isConfirming ? (
@@ -1458,8 +1457,8 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                       <td className="font-medium text-[var(--color-text)]">{h.employee.fullName}</td>
                       <td className="text-[var(--color-text-muted)]">{h.employee.position}</td>
                       <td className="text-center">{h.daysWorked}/{h.totalDays}</td>
-                      <td className="text-right font-mono text-[var(--color-text-muted)]">{fmt(h.fullSalary)}</td>
-                      <td className="text-right font-mono font-semibold text-[var(--color-text)]">{fmt(h.proratedSalary)}</td>
+                      <td className="text-right font-mono text-[var(--color-text-muted)]">{money(h.fullSalary)}</td>
+                      <td className="text-right font-mono font-semibold text-[var(--color-text)]">{money(h.proratedSalary)}</td>
                     </tr>
                   ))}
                 </tbody>

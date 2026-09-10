@@ -11,6 +11,7 @@ import { PricingCalculatorPanel } from "@/components/pricing/pricing-calculator-
 import { CategoryPoliciesPanel } from "@/components/pricing/category-policies-panel";
 import { PricingConfigPanel } from "@/components/pricing/pricing-config-panel";
 import toast from "react-hot-toast";
+import { money } from "@/lib/format";
 
 /**
  * Zona Precios (prompt-mudanza-zona-precios.md, Fase 2) — cinco pestañas:
@@ -214,7 +215,7 @@ const REASON_PREDICATE: Record<Reason, string> = {
   COST_STALE: "el costo cambiado y el precio sin actualizar",
 };
 
-const fmt = (v: number | null) => (v === null ? "—" : `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+const fmt = (v: number | null) => (v === null ? "—" : money(v));
 const fmtPct = (v: number | null) => (v === null ? "—" : `${v.toFixed(1)}%`);
 const fmtDate = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString("es-NI", { day: "2-digit", month: "short", year: "numeric" }) : "nunca");
 

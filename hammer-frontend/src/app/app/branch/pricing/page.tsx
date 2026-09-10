@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
+import { money } from "@/lib/format";
 
 /**
  * Fase 4 (prompt-motor-precios-lote-herencia-gobierno.md) — la sucursal
@@ -34,7 +35,7 @@ type SetPriceResult =
   | { path: "IN_BAND"; applied: true; marginPercent: number; minMarginPercent: number; previousPrice: number | null; newPrice: number }
   | { path: "APPROVAL_REQUESTED"; applied: false; marginPercent: number; minMarginPercent: number; requestId: string; requestCreated: boolean };
 
-const fmt = (v: number | null) => (v === null ? "—" : `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+const fmt = (v: number | null) => (v === null ? "—" : money(v));
 
 export default function BranchPricingPage() {
   const sessionState = useSession();

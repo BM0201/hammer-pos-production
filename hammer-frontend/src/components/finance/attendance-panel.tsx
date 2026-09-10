@@ -6,7 +6,8 @@ import toast from "react-hot-toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { isMasterOrAbove } from "@/modules/rbac/role-routing";
-import { fmtC, fmtDateShort, round2 } from "./payroll-calc";
+import { money } from "@/lib/format";
+import { fmtDateShort, round2 } from "./payroll-calc";
 
 /**
  * Asistencia correlacionada con la nómina (Finanzas › Planilla › Asistencia).
@@ -387,9 +388,9 @@ export function AttendancePanel() {
         {/* La cuenta a la vista: cuánto vale el día de ESTE empleado. */}
         {selectedEmployee && (
           <p className="text-xs text-[var(--color-text-muted)]">
-            {selectedEmployee.fullName} gana <strong className="text-[var(--color-text)]">{fmtC(dailyRateOf(selectedEmployee))} por día</strong> (salario ÷ 30).
+            {selectedEmployee.fullName} gana <strong className="text-[var(--color-text)]">{money(dailyRateOf(selectedEmployee))} por día</strong> (salario ÷ 30).
             {form.kind === "UNJUSTIFIED"
-              ? <> Esta falta le descuenta <strong className="text-[var(--color-danger-600)]">−{fmtC(dailyRateOf(selectedEmployee))}</strong> de la nómina del mes.</>
+              ? <> Esta falta le descuenta <strong className="text-[var(--color-danger-600)]">−{money(dailyRateOf(selectedEmployee))}</strong> de la nómina del mes.</>
               : " Justificada: queda registrada, no descuenta."}
           </p>
         )}
@@ -410,7 +411,7 @@ export function AttendancePanel() {
           <div className="flex flex-wrap gap-2">
             {summary.map((s) => (
               <span key={s.name} className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] px-3 py-1 text-xs font-semibold text-[var(--color-danger-700)]">
-                {s.name}: {s.days} falta{s.days !== 1 ? "s" : ""} injustificada{s.days !== 1 ? "s" : ""} → −{fmtC(s.deduction)}
+                {s.name}: {s.days} falta{s.days !== 1 ? "s" : ""} injustificada{s.days !== 1 ? "s" : ""} → −{money(s.deduction)}
               </span>
             ))}
           </div>
@@ -450,7 +451,7 @@ export function AttendancePanel() {
                 </div>
                 {a.kind === "UNJUSTIFIED" && (
                   <span className="shrink-0 font-mono text-sm font-semibold text-[var(--color-danger-600)]">
-                    −{fmtC(round2(Number(a.employee.monthlySalary) / 30))}
+                    −{money(round2(Number(a.employee.monthlySalary) / 30))}
                   </span>
                 )}
                 <button

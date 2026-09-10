@@ -2,8 +2,7 @@
 
 import { AlertTriangle, Settings2, TrendingUp } from "lucide-react";
 import { STATE_META, type CashPosition } from "@/components/navigation/cash-indicator-panel";
-
-const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { money } from "@/lib/format";
 
 function fmtDate(iso: string | null) {
   if (!iso) return null;
@@ -55,7 +54,7 @@ export function CashAccumulationBar({ position, configureHref }: { position: Cas
           {position.state === "CRITICAL" && <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--color-danger-600)]" aria-hidden="true" />}
           <span className="text-sm font-semibold text-[var(--color-text)]">{meta.label}</span>
         </div>
-        <span className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{fmt(position.accumulatedAmount)}</span>
+        <span className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{money(position.accumulatedAmount)}</span>
       </div>
 
       {hasPolicy ? (
@@ -67,7 +66,7 @@ export function CashAccumulationBar({ position, configureHref }: { position: Cas
       {position.inTransitAmount > 0.01 && (
         <div className="mt-2.5 flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]">
           <TrendingUp className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span>En tránsito (ya salió de la sucursal, no cuenta para el techo): <span className="font-semibold tabular-nums">{fmt(position.inTransitAmount)}</span></span>
+          <span>En tránsito (ya salió de la sucursal, no cuenta para el techo): <span className="font-semibold tabular-nums">{money(position.inTransitAmount)}</span></span>
         </div>
       )}
 
@@ -97,7 +96,7 @@ function NoPolicyBar({ accumulatedAmount, configureHref }: { accumulatedAmount: 
         aria-valuenow={accumulatedAmount}
         aria-valuemin={0}
         aria-valuemax={accumulatedAmount || 1}
-        aria-valuetext={`${fmt(accumulatedAmount)} acumulado, sin política de depósito configurada`}
+        aria-valuetext={`${money(accumulatedAmount)} acumulado, sin política de depósito configurada`}
         className="h-3 w-full overflow-hidden rounded-full bg-[var(--color-surface-alt)]"
       >
         <div className="h-full rounded-full" style={{ width: accumulatedAmount > 0 ? "100%" : "0%", background: "var(--color-border-strong)" }} />
@@ -133,7 +132,7 @@ function PolicyBar({ position }: { position: CashPosition }) {
         aria-valuenow={accumulated}
         aria-valuemin={0}
         aria-valuemax={ceiling}
-        aria-valuetext={`${fmt(accumulated)} de ${fmt(threshold)} de umbral, techo ${fmt(ceiling)}${overflowPercent > 0 ? `, ${overflowPercent}% sobre el techo` : ""}`}
+        aria-valuetext={`${money(accumulated)} de ${money(threshold)} de umbral, techo ${money(ceiling)}${overflowPercent > 0 ? `, ${overflowPercent}% sobre el techo` : ""}`}
         className="relative h-3 w-full overflow-hidden rounded-full bg-[var(--color-surface-alt)]"
       >
         <div
@@ -147,12 +146,12 @@ function PolicyBar({ position }: { position: CashPosition }) {
       </div>
       <div className="mt-1 flex items-center justify-between text-[10px] text-[var(--color-text-soft)]">
         <span>C$0</span>
-        <span>Umbral {fmt(threshold)}</span>
-        <span>Techo {fmt(ceiling)}</span>
+        <span>Umbral {money(threshold)}</span>
+        <span>Techo {money(ceiling)}</span>
       </div>
       {overflowPercent > 0 && (
         <p className="mt-1.5 text-xs font-semibold text-[var(--color-danger-600)]">
-          {overflowPercent}% sobre el techo — {fmt(accumulated - ceiling)} de exceso.
+          {overflowPercent}% sobre el techo — {money(accumulated - ceiling)} de exceso.
         </p>
       )}
       {position.policy!.maxDaysHolding > 0 && (

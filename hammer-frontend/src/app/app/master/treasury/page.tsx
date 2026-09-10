@@ -13,6 +13,7 @@ import { CashAccumulationBar } from "@/components/finance/cash-accumulation-bar"
 import { RetainedCashExpenseSheet } from "@/components/finance/retained-cash-expense-sheet";
 import { RetainedCashExpenseList } from "@/components/finance/retained-cash-expense-list";
 import { DirectDepositSheet } from "@/components/finance/direct-deposit-sheet";
+import { money } from "@/lib/format";
 
 type Branch = { id: string; code: string; name: string; cashFundAmount: string | null };
 
@@ -81,7 +82,6 @@ type DepositSummary = {
   byBranch: Array<{ branchId: string; branchName: string; total: number; count: number }>;
 };
 
-const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /**
  * Orden de severidad (prompt-ajustes-finales-tesoreria.md §1/§2): la
@@ -378,7 +378,7 @@ export default function TreasuryPage() {
                   <p className="truncate text-xs text-[var(--color-text-muted)]">{branchName(a.branchId)}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <span className="text-base font-bold tabular-nums text-[var(--color-text)]">{fmt(a.balance.balance)}</span>
+                  <span className="text-base font-bold tabular-nums text-[var(--color-text)]">{money(a.balance.balance)}</span>
                   <ChevronRight className="h-4 w-4 text-[var(--color-text-soft)]" />
                 </div>
               </button>
@@ -478,10 +478,10 @@ function PositionTile({ icon: Icon, label, data, rate, amber }: {
       <div className="flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
         <Icon className="h-3 w-3" /> {label}
       </div>
-      <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{fmt(nio)}</p>
+      <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{money(nio)}</p>
       {usd !== 0 && (
         <p className="text-xs text-[var(--color-text-muted)]">
-          + ${usd.toLocaleString("es-NI", { minimumFractionDigits: 2 })} {rate ? `≈ ${fmt(usd * rate.rate)} (tasa ${rate.rate})` : "(sin tasa cargada)"}
+          + ${usd.toLocaleString("es-NI", { minimumFractionDigits: 2 })} {rate ? `≈ ${money(usd * rate.rate)} (tasa ${rate.rate})` : "(sin tasa cargada)"}
         </p>
       )}
     </div>
@@ -516,7 +516,7 @@ function TreasuryTotalsBar({ cashPositions, depositSummary }: { cashPositions: C
         <TotalTile label="En tránsito" value={totals.inTransit} amber={totals.inTransit > 0} />
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
           <div className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Depositado (mes)</div>
-          <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{fmt(depositSummary?.deposited.total ?? 0)}</p>
+          <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{money(depositSummary?.deposited.total ?? 0)}</p>
           {depositSummary && depositSummary.deposited.count > 0 ? (
             <button
               type="button"
@@ -542,7 +542,7 @@ function TreasuryTotalsBar({ cashPositions, depositSummary }: { cashPositions: C
                   {row.lastDepositAt ? ` · última ${new Date(row.lastDepositAt).toLocaleDateString("es-NI", { day: "2-digit", month: "2-digit" })}` : ""}
                 </span>
               </div>
-              <span className="shrink-0 font-mono font-bold tabular-nums text-[var(--color-text)]">{fmt(row.total)}</span>
+              <span className="shrink-0 font-mono font-bold tabular-nums text-[var(--color-text)]">{money(row.total)}</span>
             </div>
           ))}
         </div>
@@ -555,7 +555,7 @@ function TotalTile({ label, value, amber }: { label: string; value: number; ambe
   return (
     <div className={["rounded-xl border p-3", amber ? "border-[var(--color-warning-200)] bg-[var(--color-warning-50)]" : "border-[var(--color-border)] bg-[var(--color-surface-alt)]"].join(" ")}>
       <div className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">{label}</div>
-      <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{fmt(value)}</p>
+      <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{money(value)}</p>
     </div>
   );
 }
@@ -600,13 +600,13 @@ function CashPositionRowItem({
             {consecutivePostponements > 0 && <Badge variant="warning">Pospuesto {consecutivePostponements}x</Badge>}
           </div>
           <p className="text-xs text-[var(--color-text-muted)]">
-            En caja hoy {fmt(position.cashInDrawerToday)} · Acumulado {fmt(position.accumulatedAmount)}
-            {position.inTransitAmount > 0.01 ? ` · En tránsito ${fmt(position.inTransitAmount)}` : ""}
+            En caja hoy {money(position.cashInDrawerToday)} · Acumulado {money(position.accumulatedAmount)}
+            {position.inTransitAmount > 0.01 ? ` · En tránsito ${money(position.inTransitAmount)}` : ""}
           </p>
         </div>
         <div className="shrink-0 text-right">
           <p className="text-xs text-[var(--color-text-muted)]">Para depositar</p>
-          <p className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{fmt(position.pendingDeposit)}</p>
+          <p className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{money(position.pendingDeposit)}</p>
           {position.pendingDepositNote && <p className="text-[0.6875rem] italic text-[var(--color-text-soft)]">{position.pendingDepositNote}</p>}
         </div>
       </button>
@@ -769,12 +769,12 @@ function EntriesByAccountPanel({ branches }: { branches: Branch[] }) {
             <div key={row.account.id} className="rounded-lg border border-[var(--color-border)] p-3">
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-sm font-semibold text-[var(--color-text)]">{row.account.bankName} · {row.account.accountAlias}</span>
-                <span className="font-mono text-sm font-bold tabular-nums text-[var(--color-text)]">{fmt(row.total)}</span>
+                <span className="font-mono text-sm font-bold tabular-nums text-[var(--color-text)]">{money(row.total)}</span>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {row.breakdown.map((b) => (
                   <span key={b.entryType} className="hm-chip hm-chip-warning">
-                    {ENTRY_TYPE_LABEL[b.entryType] ?? b.entryType}: {fmt(b.total)} ({b.count})
+                    {ENTRY_TYPE_LABEL[b.entryType] ?? b.entryType}: {money(b.total)} ({b.count})
                   </span>
                 ))}
               </div>
@@ -988,7 +988,7 @@ function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accou
 
         <div className="mb-3 flex items-center justify-between rounded-lg bg-[var(--color-surface-alt)] px-3 py-2">
           <span className="text-xs text-[var(--color-text-muted)]">Saldo inicial del rango</span>
-          <span className="font-mono text-sm font-semibold tabular-nums">{fmt(rangeStartBalance)}</span>
+          <span className="font-mono text-sm font-semibold tabular-nums">{money(rangeStartBalance)}</span>
         </div>
 
         {loading ? (
@@ -1125,7 +1125,7 @@ function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts:
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-[var(--color-text)]">{row.account.holderUser?.fullName ?? row.account.accountAlias}</p>
-                  <p className="text-xs text-[var(--color-text-muted)]">{row.account.branch?.name ?? "Central"} · Enviado {fmt(row.balance.balance)}</p>
+                  <p className="text-xs text-[var(--color-text-muted)]">{row.account.branch?.name ?? "Central"} · Enviado {money(row.balance.balance)}</p>
                 </div>
                 <Button variant="secondary" size="sm" onClick={() => setSelected(row)}>Confirmar</Button>
               </div>
@@ -1178,7 +1178,7 @@ function ConfirmDepositForm({ custody, bankAccounts, onClose, onConfirmed }: { c
       });
       const raw = await res.json();
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo confirmar el depósito.");
-      toast.success(discrepant ? `Depósito confirmado. Quedan ${fmt(remainder)} en custodia.` : "Depósito confirmado.");
+      toast.success(discrepant ? `Depósito confirmado. Quedan ${money(remainder)} en custodia.` : "Depósito confirmado.");
       onConfirmed();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo confirmar el depósito.");
@@ -1193,7 +1193,7 @@ function ConfirmDepositForm({ custody, bankAccounts, onClose, onConfirmed }: { c
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold">Confirmar depósito</h3>
-            <p className="text-xs text-[var(--color-text-muted)]">{custody.account.holderUser?.fullName ?? custody.account.accountAlias} · Enviado {fmt(custody.balance.balance)}</p>
+            <p className="text-xs text-[var(--color-text-muted)]">{custody.account.holderUser?.fullName ?? custody.account.accountAlias} · Enviado {money(custody.balance.balance)}</p>
           </div>
           <Button type="button" variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Cerrar</Button>
         </div>
@@ -1210,7 +1210,7 @@ function ConfirmDepositForm({ custody, bankAccounts, onClose, onConfirmed }: { c
         </div>
         {discrepant && (
           <p className="rounded-lg bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
-            Confirmando menos de lo enviado. Quedan {fmt(remainder)} en la custodia de {custody.account.holderUser?.fullName ?? "esta persona"} — no se ajusta solo.
+            Confirmando menos de lo enviado. Quedan {money(remainder)} en la custodia de {custody.account.holderUser?.fullName ?? "esta persona"} — no se ajusta solo.
           </p>
         )}
         <div>

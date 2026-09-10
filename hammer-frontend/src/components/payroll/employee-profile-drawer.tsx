@@ -6,9 +6,9 @@ import type { Route } from "next";
 import { Calculator, X } from "lucide-react";
 import toast from "react-hot-toast";
 import { apiFetch } from "@/lib/client/api";
+import { money } from "@/lib/format";
 import {
   computeMonthlyBreakdown,
-  fmtC,
   fmtDateShort,
   fmtRatePct,
   fmtRatePct3,
@@ -249,7 +249,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
               {employee.endDate ? ` · fin ${fmtDateShort(employee.endDate)}` : ""}
             </p>
             <p className="text-[0.72rem] text-[var(--color-text-muted)]">
-              Salario {fmtC(salary)}
+              Salario {money(salary)}
               {employee.nationalId ? ` · Cédula ${employee.nationalId}` : " · Cédula sin registrar"}
               {employee.lastLiquidationAt ? ` · Última liquidación ${fmtDateShort(employee.lastLiquidationAt)}` : ""}
             </p>
@@ -270,28 +270,28 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
             <p className="mb-0.5 mt-3 text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
               Del salario del trabajador
             </p>
-            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("neto")}Neto al empleado</span><span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(b.netPay)}</span></div>
-            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("ret")}Retenciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">INSS {fmtRatePct(inssResolved.laboral)}{b.ir > 0 ? " + IR de ley" : " (sin retención de IR)"}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(amounts.ret)}</span></div>
+            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("neto")}Neto al empleado</span><span className="font-mono tabular-nums text-[var(--color-success-600)]">{money(b.netPay)}</span></div>
+            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("ret")}Retenciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">INSS {fmtRatePct(inssResolved.laboral)}{b.ir > 0 ? " + IR de ley" : " (sin retención de IR)"}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(amounts.ret)}</span></div>
 
             <p className="mb-0.5 mt-3 text-[0.625rem] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
               El patrón paga aparte (no se deduce al trabajador)
             </p>
-            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("patronal")}INSS patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.patronal)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.inssPatronal)}</span></div>
-            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("inatec")}INATEC <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(rates.inatecRate)} · lo paga la empresa</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.inatec)}</span></div>
+            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("patronal")}INSS patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.patronal)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.inssPatronal)}</span></div>
+            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("inatec")}INATEC <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(rates.inatecRate)} · lo paga la empresa</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.inatec)}</span></div>
             {includeProvisions && (
               <>
-                <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("agui")}Aguinaldo <small className="text-[0.6875rem] text-[var(--color-text-soft)]">1/12</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.aguinaldoAccrual)}</span></div>
-                <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("vac")}Vacaciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">2.5 días/mes</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.vacacionesAccrual)}</span></div>
-                <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("indem")}Indemnización <small className="text-[0.6875rem] text-[var(--color-text-soft)]">Art. 45 · {indemRate === 0 ? "tope" : fmtRatePct3(indemRate)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.indemnizacionAccrual)}</span></div>
+                <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("agui")}Aguinaldo <small className="text-[0.6875rem] text-[var(--color-text-soft)]">1/12</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.aguinaldoAccrual)}</span></div>
+                <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("vac")}Vacaciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">2.5 días/mes</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.vacacionesAccrual)}</span></div>
+                <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("indem")}Indemnización <small className="text-[0.6875rem] text-[var(--color-text-soft)]">Art. 45 · {indemRate === 0 ? "tope" : fmtRatePct3(indemRate)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.indemnizacionAccrual)}</span></div>
               </>
             )}
             <div className="flex items-baseline justify-between border-t border-[var(--color-border)] pt-1.5 text-[0.8125rem] font-semibold">
               <span className="text-[var(--color-text-secondary)]">Subtotal aportes del patrón</span>
-              <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(round2(b.inssPatronal + b.inatec + (includeProvisions ? b.provisions : 0)))}</span>
+              <span className="font-mono tabular-nums text-[var(--color-text)]">{money(round2(b.inssPatronal + b.inatec + (includeProvisions ? b.provisions : 0)))}</span>
             </div>
             <div className="mt-1.5 flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-2.5 text-sm font-bold">
               <span className="text-[var(--color-text-secondary)]">Costo mensual empresa</span>
-              <span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(cost)}</span>
+              <span className="font-mono tabular-nums text-[var(--color-warning-600)]">{money(cost)}</span>
             </div>
           </section>
 
@@ -299,25 +299,25 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
             <h4 className="hm-section-rule mb-2.5">
               Recibo del empleado
             </h4>
-            <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario base</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(salary)}</span></div>
-            <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario por día <small className="text-[0.6875rem] text-[var(--color-text-soft)]">÷30 · cada falta injustificada = −1 día</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.dailyRate ?? round2(salary / 30))}</span></div>
+            <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario base</span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(salary)}</span></div>
+            <div className={dline}><span className="text-[var(--color-text-secondary)]">Salario por día <small className="text-[0.6875rem] text-[var(--color-text-soft)]">÷30 · cada falta injustificada = −1 día</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.dailyRate ?? round2(salary / 30))}</span></div>
             <div className={dline}>
               <span className="text-[var(--color-text-secondary)]">
                 INSS laboral{" "}
                 <small className="text-[0.6875rem] text-[var(--color-text-soft)]">
                   {fmtRatePct(inssResolved.laboral)}
-                  {employee.inssSalary != null ? ` sobre base cotizable ${fmtC(Number(employee.inssSalary))}` : ""}{" "}
+                  {employee.inssSalary != null ? ` sobre base cotizable ${money(Number(employee.inssSalary))}` : ""}{" "}
                   · se retiene y entera 1 vez al mes
                 </small>
               </span>
-              <span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.inssLaboral)}</span>
+              <span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {money(b.inssLaboral)}</span>
             </div>
             {b.ir > 0 && (
-              <div className={dline}><span className="text-[var(--color-text-secondary)]">IR <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retención de ley (Ley 822) al superar C$100,000/año</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(b.ir)}</span></div>
+              <div className={dline}><span className="text-[var(--color-text-secondary)]">IR <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retención de ley (Ley 822) al superar C$100,000/año</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {money(b.ir)}</span></div>
             )}
             <div className="mt-1.5 flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-2.5 text-sm font-bold">
               <span className="text-[var(--color-text-secondary)]">Neto a pagar</span>
-              <span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(b.netPay)}</span>
+              <span className="font-mono tabular-nums text-[var(--color-success-600)]">{money(b.netPay)}</span>
             </div>
             <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
               Al trabajador SOLO se le deduce el INSS laboral{b.ir > 0 ? ", el IR de ley" : ""} y las cuotas de
@@ -339,14 +339,14 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
                 Aguinaldo del período <small className="text-[0.6875rem] text-[var(--color-text-soft)]">dic–nov · pagar antes del {b.aguinaldoDeadline ? fmtDateShort(b.aguinaldoDeadline) : "10 dic"}</small>
                 {chipExento}
               </span>
-              <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(aguinaldo)}</span>
+              <span className="font-mono tabular-nums text-[var(--color-text)]">{money(aguinaldo)}</span>
             </div>
             <div className={dline}>
               <span className="text-[var(--color-text-secondary)]">
                 Vacaciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{vacBalance.toLocaleString("es-NI", { maximumFractionDigits: 1 })} días de saldo</small>
                 {chipGravable}
               </span>
-              <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.vacationBalanceValue ?? 0)}</span>
+              <span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.vacationBalanceValue ?? 0)}</span>
             </div>
             <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 pl-0">
               <p className="text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
@@ -401,7 +401,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
                 </small>
                 {chipExento}
               </span>
-              <span className="font-mono tabular-nums text-[var(--color-text)]">{fmtC(b.indemnizacionAccrued ?? 0)}</span>
+              <span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.indemnizacionAccrued ?? 0)}</span>
             </div>
             <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
               La indemnización acumula 1 mes/año (años 1–3) y 20 días/año (años 4–6), con tope de 5 meses de
@@ -417,7 +417,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
                 Asistencia y liquidación
               </h4>
               <div className={dline}>
-                <span className="text-[var(--color-text-secondary)]">Faltas este mes <small className="text-[0.6875rem] text-[var(--color-text-soft)]">las injustificadas restan {fmtC(b.dailyRate ?? round2(salary / 30))}/día</small></span>
+                <span className="text-[var(--color-text-secondary)]">Faltas este mes <small className="text-[0.6875rem] text-[var(--color-text-soft)]">las injustificadas restan {money(b.dailyRate ?? round2(salary / 30))}/día</small></span>
                 <span className="font-mono tabular-nums text-[var(--color-text)]">
                   {b.absencesMonthUnjustified ?? 0} injust. · {b.absencesMonthJustified ?? 0} just.
                 </span>
@@ -429,7 +429,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
               {(b.loanOutstanding ?? 0) > 0 && (
                 <div className={dline}>
                   <span className="text-[var(--color-text-secondary)]">Préstamos pendientes <small className="text-[0.6875rem] text-[var(--color-text-soft)]">se descuentan al liquidar</small></span>
-                  <span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(b.loanOutstanding ?? 0)}</span>
+                  <span className="font-mono tabular-nums text-[var(--color-warning-600)]">{money(b.loanOutstanding ?? 0)}</span>
                 </div>
               )}
 
@@ -479,21 +479,21 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
                   )}
 
                   <div className="mt-2 space-y-1 text-[0.8125rem]">
-                    <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Aguinaldo proporcional {chipExento}</span><span className="font-mono tabular-nums">{fmtC(aguinaldo)}</span></div>
-                    <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Vacaciones ({(b.vacationDaysBalance ?? 0).toLocaleString("es-NI", { maximumFractionDigits: 1 })} días)</span><span className="font-mono tabular-nums">{fmtC(vacBruto)}</span></div>
+                    <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Aguinaldo proporcional {chipExento}</span><span className="font-mono tabular-nums">{money(aguinaldo)}</span></div>
+                    <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Vacaciones ({(b.vacationDaysBalance ?? 0).toLocaleString("es-NI", { maximumFractionDigits: 1 })} días)</span><span className="font-mono tabular-nums">{money(vacBruto)}</span></div>
                     {vacInss > 0 && (
-                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)] pl-3">− INSS {fmtRatePct(inssResolved.laboral)} sobre vacaciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">gravables al pagarse</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(vacInss)}</span></div>
+                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)] pl-3">− INSS {fmtRatePct(inssResolved.laboral)} sobre vacaciones <small className="text-[0.6875rem] text-[var(--color-text-soft)]">gravables al pagarse</small></span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {money(vacInss)}</span></div>
                     )}
                     <div className="flex items-baseline justify-between">
                       <span className="text-[var(--color-text-secondary)]">Indemnización Art. 45 {paysIndemnizacion ? chipExento : <span className="ml-1.5 text-[0.6875rem] text-[var(--color-text-soft)]">(no aplica por la causal)</span>}</span>
-                      <span className="font-mono tabular-nums">{fmtC(indemnizacion)}</span>
+                      <span className="font-mono tabular-nums">{money(indemnizacion)}</span>
                     </div>
                     {prestamos > 0 && (
-                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Préstamos pendientes</span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {fmtC(prestamos)}</span></div>
+                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Préstamos pendientes</span><span className="font-mono tabular-nums text-[var(--color-danger-600)]">− {money(prestamos)}</span></div>
                     )}
                     <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1.5 text-sm font-bold">
                       <span className="text-[var(--color-text)]">TOTAL A PAGAR</span>
-                      <span className="font-mono tabular-nums text-[var(--color-success-600)]">{fmtC(Math.max(0, total))}</span>
+                      <span className="font-mono tabular-nums text-[var(--color-success-600)]">{money(Math.max(0, total))}</span>
                     </div>
                   </div>
                   <p className="mt-2 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
@@ -515,8 +515,8 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
                       <>
                         <span className={`text-xs font-semibold ${settlementKind === "ROLLOVER" ? "text-[var(--color-info-700)]" : "text-[var(--color-danger-700)]"}`}>
                           {settlementKind === "ROLLOVER"
-                            ? `¿Confirmar liquidación y recontratación de ${employee.fullName} con total ${fmtC(Math.max(0, total))}? Sigue activo.`
-                            : `¿Confirmar baja de ${employee.fullName} con total ${fmtC(Math.max(0, total))}?`}
+                            ? `¿Confirmar liquidación y recontratación de ${employee.fullName} con total ${money(Math.max(0, total))}? Sigue activo.`
+                            : `¿Confirmar baja de ${employee.fullName} con total ${money(Math.max(0, total))}?`}
                         </span>
                         <button
                           onClick={() => void submitSettlement()}

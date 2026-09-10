@@ -7,6 +7,7 @@ import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
+import { money } from "@/lib/format";
 
 /**
  * Indicador de efectivo en la barra lateral (prompt-indicador-efectivo-
@@ -43,8 +44,6 @@ export const STATE_META: Record<CashIndicatorState, { label: string; tone: "neut
   IN_TRANSIT_ONLY: { label: "En tránsito", tone: "neutral" },
   CLEAR: { label: "Al día", tone: "neutral" },
 };
-
-const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function fmtDate(iso: string | null) {
   if (!iso) return null;
@@ -116,15 +115,15 @@ function CashStateCard({ position, branchLabel, onSendDeposit }: { position: Cas
       </div>
 
       <div className="space-y-0.5 text-[var(--color-text-muted)]">
-        <div className="flex justify-between"><span>En caja hoy</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmt(position.cashInDrawerToday)}</span></div>
-        <div className="flex justify-between"><span>Acumulado</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmt(position.accumulatedAmount)}</span></div>
+        <div className="flex justify-between"><span>En caja hoy</span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(position.cashInDrawerToday)}</span></div>
+        <div className="flex justify-between"><span>Acumulado</span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(position.accumulatedAmount)}</span></div>
         <div className="flex justify-between">
           <span>Para depositar</span>
-          <span className="font-mono tabular-nums text-[var(--color-text)]">{fmt(position.pendingDeposit)}</span>
+          <span className="font-mono tabular-nums text-[var(--color-text)]">{money(position.pendingDeposit)}</span>
         </div>
         {position.pendingDepositNote && <p className="text-[0.625rem] italic text-[var(--color-text-soft)]">{position.pendingDepositNote}</p>}
         {position.inTransitAmount > 0.01 && (
-          <div className="flex justify-between"><span>En tránsito</span><span className="font-mono tabular-nums text-[var(--color-text)]">{fmt(position.inTransitAmount)}</span></div>
+          <div className="flex justify-between"><span>En tránsito</span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(position.inTransitAmount)}</span></div>
         )}
       </div>
 
@@ -136,7 +135,7 @@ function CashStateCard({ position, branchLabel, onSendDeposit }: { position: Cas
       )}
       {!position.projection?.likelyDate && position.state === "APPROACHING" && position.projection && position.policy && (
         <p className="mt-1.5 border-t border-[var(--color-border)] pt-1.5 text-[var(--color-text)]">
-          Faltan {fmt(Math.max(0, position.policy.thresholdAmount - position.accumulatedAmount))} para el umbral
+          Faltan {money(Math.max(0, position.policy.thresholdAmount - position.accumulatedAmount))} para el umbral
         </p>
       )}
       {position.anomaly && (

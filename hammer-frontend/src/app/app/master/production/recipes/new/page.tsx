@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Copy, PackageSearch, Plus, Save, Trash2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { tokenize } from "@/lib/product-search";
+import { money as formatMoney } from "@/lib/format";
 
 type Product = {
   id: string;
@@ -29,7 +30,7 @@ type RecipeInputRow = {
 
 const emptyInput = (): RecipeInputRow => ({ inputProductId: "", quantity: "", unit: "", notes: "" });
 const n = (value: unknown) => typeof value === "number" ? value : Number(value ?? 0);
-const money = (value: number | null | undefined) => value == null || Number.isNaN(value) ? "-" : `C$${value.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (value: number | null | undefined) => value == null || Number.isNaN(value) ? "-" : formatMoney(value);
 
 function ProductPicker({
   label,

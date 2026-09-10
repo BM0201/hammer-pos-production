@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money } from "@/lib/format";
 import { EmployeeManager } from "@/components/payroll/employee-manager";
 import { BiweeklyCutsPanel } from "@/components/payroll/biweekly-cuts-panel";
 import { EmployeeProfileDrawer } from "@/components/payroll/employee-profile-drawer";
@@ -31,7 +32,6 @@ import {
   DEFAULT_PAYROLL_RATES,
   MES_LARGO,
   computeMonthlyBreakdown,
-  fmtC,
   fmtDateShort,
   fmtRatePct3,
   initials,
@@ -650,7 +650,7 @@ export function PayrollFinancePanel() {
                 if (paid) {
                   return (
                     <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-success-100)] bg-[var(--color-success-50)] px-2 py-0.5 text-[0.625rem] font-bold text-[var(--color-success-700)]">
-                      ✓ Pagada {fmtDateShort(paid.paidAt)} · {fmtC(Number(paid.amount))}
+                      ✓ Pagada {fmtDateShort(paid.paidAt)} · {money(Number(paid.amount))}
                     </span>
                   );
                 }
@@ -674,9 +674,9 @@ export function PayrollFinancePanel() {
                       {paidChip("INSS", patronInvoice.inssTotal)}
                     </div>
                     <div className="mt-1.5 space-y-1 text-[0.8125rem]">
-                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retenida a los trabajadores</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.laboral)}</span></div>
-                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.patronal)}</span></div>
-                      <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INSS</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(patronInvoice.inssTotal)}</span></div>
+                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota laboral <small className="text-[0.6875rem] text-[var(--color-text-soft)]">retenida a los trabajadores</small></span><span className="font-mono tabular-nums">{money(patronInvoice.laboral)}</span></div>
+                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">Cuota patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{money(patronInvoice.patronal)}</span></div>
+                      <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INSS</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{money(patronInvoice.inssTotal)}</span></div>
                     </div>
                     <p className="mt-2 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
                       El INSS se cobra <strong>una vez al mes</strong> (no por quincena): la factura de {periodLabel.toLowerCase()} vence ≈ {patronInvoice.dueLabel}.
@@ -690,8 +690,8 @@ export function PayrollFinancePanel() {
                       {paidChip("INATEC", patronInvoice.inatec)}
                     </div>
                     <div className="mt-1.5 space-y-1 text-[0.8125rem]">
-                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">2% sobre la base cotizable <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{fmtC(patronInvoice.inatec)}</span></div>
-                      <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INATEC</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{fmtC(patronInvoice.inatec)}</span></div>
+                      <div className="flex items-baseline justify-between"><span className="text-[var(--color-text-secondary)]">2% sobre la base cotizable <small className="text-[0.6875rem] text-[var(--color-text-soft)]">la paga el patrón</small></span><span className="font-mono tabular-nums">{money(patronInvoice.inatec)}</span></div>
+                      <div className="flex items-baseline justify-between border-t border-[var(--color-border-strong)] pt-1 font-bold"><span className="text-[var(--color-text)]">Total a pagar al INATEC</span><span className="font-mono tabular-nums text-[var(--color-warning-600)]">{money(patronInvoice.inatec)}</span></div>
                     </div>
                     <p className="mt-2 text-[0.6875rem] leading-relaxed text-[var(--color-text-soft)]">
                       Ninguna de estas facturas sale del salario del trabajador: a él solo se le retiene la cuota laboral,
@@ -967,11 +967,11 @@ export function PayrollFinancePanel() {
                                 {group.branch.code} — {group.branch.name} · {group.items.length}
                               </span>
                             </td>
-                            <td className="!bg-[var(--color-surface-muted)] !py-2 text-right font-mono text-[0.6875rem] font-semibold text-[var(--color-text-muted)]">{fmtC(sub.base)}</td>
+                            <td className="!bg-[var(--color-surface-muted)] !py-2 text-right font-mono text-[0.6875rem] font-semibold text-[var(--color-text-muted)]">{money(sub.base)}</td>
                             <td className="hidden !bg-[var(--color-surface-muted)] !py-2 md:table-cell" />
                             <td className="!bg-[var(--color-surface-muted)] !py-2" />
                             <td className="!bg-[var(--color-surface-muted)] !py-2" />
-                            <td className="hidden !bg-[var(--color-surface-muted)] !py-2 text-right font-mono text-[0.6875rem] font-semibold text-[var(--color-text-muted)] md:table-cell">{fmtC(sub.cost)}</td>
+                            <td className="hidden !bg-[var(--color-surface-muted)] !py-2 text-right font-mono text-[0.6875rem] font-semibold text-[var(--color-text-muted)] md:table-cell">{money(sub.cost)}</td>
                             <td colSpan={2} className="!bg-[var(--color-surface-muted)] !py-2" />
                           </tr>,
                         );
@@ -1019,11 +1019,11 @@ export function PayrollFinancePanel() {
                               </span>
                             </td>
                             <td className="text-right font-mono font-medium text-[var(--color-text)]">
-                              {fmtC(salary)}
+                              {money(salary)}
                               {b.belowMinimumWage && (
                                 <span
                                   className="hm-badge hm-badge-warning ml-1.5 align-middle text-[0.5rem]"
-                                  title={`Por debajo del salario mínimo sectorial configurado (${fmtC(rates.salarioMinimoSectorial)})`}
+                                  title={`Por debajo del salario mínimo sectorial configurado (${money(rates.salarioMinimoSectorial)})`}
                                 >
                                   &lt; mínimo
                                 </span>
@@ -1042,11 +1042,11 @@ export function PayrollFinancePanel() {
                             </td>
                             <td className="text-[var(--color-text-muted)]">{fmtDateShort(emp.startDate)}</td>
                             <td className="text-right font-mono font-semibold text-[var(--color-success-600)]">
-                              {fmtC(b.netPay)}
+                              {money(b.netPay)}
                               {estimated && <span className="hm-badge hm-badge-warning ml-1.5 align-middle text-[0.5rem]">EST</span>}
                             </td>
                             <td className="hidden text-right font-mono text-[var(--color-text-muted)] md:table-cell">
-                              {fmtC(employerCostOf(b))}
+                              {money(employerCostOf(b))}
                               {/* Tasa de indemnización visible cuando el tramo Art. 45 ya
                                   no es el inicial: explica por qué dos empleados con igual
                                   salario cuestan distinto. */}
@@ -1114,11 +1114,11 @@ export function PayrollFinancePanel() {
                       <td colSpan={2} className="border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-3.5 py-3 text-[0.8125rem] font-bold text-[var(--color-text)]">
                         Total · {visibleEmployees.length} empleado{visibleEmployees.length !== 1 ? "s" : ""}
                       </td>
-                      <td className="border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-3.5 py-3 text-right font-mono text-[0.8125rem] font-bold text-[var(--color-text)]">{fmtC(visibleTotals.base)}</td>
+                      <td className="border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-3.5 py-3 text-right font-mono text-[0.8125rem] font-bold text-[var(--color-text)]">{money(visibleTotals.base)}</td>
                       <td className="hidden border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] md:table-cell" />
                       <td className="border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)]" />
-                      <td className="border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-3.5 py-3 text-right font-mono text-[0.8125rem] font-bold text-[var(--color-success-600)]">{fmtC(visibleTotals.net)}</td>
-                      <td className="hidden border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-3.5 py-3 text-right font-mono text-[0.8125rem] font-bold text-[var(--color-warning-600)] md:table-cell">{fmtC(visibleTotals.cost)}</td>
+                      <td className="border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-3.5 py-3 text-right font-mono text-[0.8125rem] font-bold text-[var(--color-success-600)]">{money(visibleTotals.net)}</td>
+                      <td className="hidden border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-3.5 py-3 text-right font-mono text-[0.8125rem] font-bold text-[var(--color-warning-600)] md:table-cell">{money(visibleTotals.cost)}</td>
                       <td colSpan={2} className="border-t-[1.5px] border-[var(--color-border-strong)] bg-[var(--color-surface-alt)]" />
                     </tr>
                   </tfoot>

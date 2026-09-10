@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api";
 import { openPrintableDocument, printHtml, recordPrintAudit } from "@/lib/printing";
+import { money } from "@/lib/format";
 import type { ComposedTender } from "@/components/payments/payment-composer";
 
 /**
@@ -27,10 +28,6 @@ type ModalStep = "options" | "manual-invoice";
 type DocKey = "ticket" | "entrega" | "recibo";
 
 const METHOD_LABEL: Record<string, string> = { CASH: "Efectivo", CARD: "Tarjeta", TRANSFER: "Transferencia" };
-
-function fmt(value: number) {
-  return `C$${value.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 export function PrintModal({ orderId, orderNumber, tenders, onClose }: PrintModalProps) {
   const [step, setStep] = useState<ModalStep>("options");
@@ -132,7 +129,7 @@ export function PrintModal({ orderId, orderNumber, tenders, onClose }: PrintModa
   const total = tenders && tenders.length > 0 ? tenders.reduce((sum, t) => sum + t.amount, 0) : null;
   const change = tenders?.find((t) => t.method === "CASH")?.changeAmount ?? 0;
   const breakdown = tenders && tenders.length > 0
-    ? tenders.map((t) => `${METHOD_LABEL[t.method] ?? t.method} ${fmt(t.amount)}`).join(" · ")
+    ? tenders.map((t) => `${METHOD_LABEL[t.method] ?? t.method} ${money(t.amount)}`).join(" · ")
     : null;
 
   return (
@@ -157,7 +154,7 @@ export function PrintModal({ orderId, orderNumber, tenders, onClose }: PrintModa
               <div className="mb-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-4">
                 <div className="flex items-baseline justify-between">
                   <span className="text-sm text-[var(--color-text-muted)]">Cobrado</span>
-                  <span className="text-xl font-bold tabular-nums text-[var(--color-text)]">{fmt(total)}</span>
+                  <span className="text-xl font-bold tabular-nums text-[var(--color-text)]">{money(total)}</span>
                 </div>
                 {breakdown ? <p className="mt-1 text-xs text-[var(--color-text-soft)]">{breakdown}</p> : null}
                 {change > 0 && (
@@ -165,7 +162,7 @@ export function PrintModal({ orderId, orderNumber, tenders, onClose }: PrintModa
                     <span className="flex items-center gap-1.5 text-sm font-semibold text-[var(--color-warning-600)]">
                       <Coins className="h-4 w-4" /> Vuelto a entregar
                     </span>
-                    <span className="text-2xl font-bold tabular-nums text-[var(--color-warning-600)]">{fmt(change)}</span>
+                    <span className="text-2xl font-bold tabular-nums text-[var(--color-warning-600)]">{money(change)}</span>
                   </div>
                 )}
               </div>

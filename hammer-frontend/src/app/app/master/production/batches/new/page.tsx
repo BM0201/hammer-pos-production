@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { tokenize } from "@/lib/product-search";
+import { money as formatMoney, qty } from "@/lib/format";
 
 /**
  * Producción v2 Fase 6 — "Planificar lote" (mockup vista 2). Planificar
@@ -43,8 +44,7 @@ type CostPreview = {
 
 type Reservation = { inputProductId: string; requestedQuantity: number; reservedQuantity: number; shortfall: number };
 
-const money = (v: number | null | undefined) => v == null ? "—" : `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const qty = (v: number) => v.toLocaleString("es-NI", { maximumFractionDigits: 4 });
+const money = (v: number | null | undefined) => v == null ? "—" : formatMoney(v);
 
 function NewBatchContent() {
   const router = useRouter();

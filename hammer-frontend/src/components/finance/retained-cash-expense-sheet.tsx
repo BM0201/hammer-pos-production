@@ -7,8 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
 import type { CashPosition } from "@/components/navigation/cash-indicator-panel";
-
-const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { money } from "@/lib/format";
 
 const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
   UTILITIES: "Servicios (Agua, Luz, Internet)",
@@ -260,7 +259,7 @@ export function RetainedCashExpenseSheet({
           {preview && (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs">
               <p className="text-[var(--color-text-muted)]">
-                Acumulado tras este gasto: <span className="font-semibold tabular-nums text-[var(--color-text)]">{fmt(preview.newAccumulated)}</span>
+                Acumulado tras este gasto: <span className="font-semibold tabular-nums text-[var(--color-text)]">{money(preview.newAccumulated)}</span>
               </p>
               {preview.stillOverdue && (
                 <p className="mt-1.5 flex items-start gap-1.5 text-[var(--color-warning-700)]">

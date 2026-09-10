@@ -1,8 +1,9 @@
 "use client";
 
 import { Building2, Info, Landmark, Users } from "lucide-react";
+import { money } from "@/lib/format";
 import { PayrollCompositionBar, type PayrollSegmentAmounts } from "./payroll-composition-bar";
-import { fmtC, fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES, INSS_EMPLOYER_SIZE_THRESHOLD } from "./payroll-calc";
+import { fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES, INSS_EMPLOYER_SIZE_THRESHOLD } from "./payroll-calc";
 
 /**
  * Hero de costo de Planilla: la historia del costo total empresa del mes —
@@ -87,7 +88,7 @@ export function PayrollCostHero({ totals, periodLabel, branchLabel, provisionsIn
               )}
             </p>
             <p className="hm-num-2xl">
-              {fmtC(totals.cost)}
+              {money(totals.cost)}
               <span className="ml-2.5 inline-flex translate-y-[-6px] items-center gap-1 rounded-full border border-[var(--color-warning-100)] bg-[var(--color-warning-50)] px-2.5 py-0.5 align-middle text-[0.7rem] font-bold text-[var(--color-warning-700)]">
                 +{surcharge}% sobre la base
                 <span className="group relative inline-flex cursor-help" tabIndex={0}>
@@ -102,9 +103,9 @@ export function PayrollCostHero({ totals, periodLabel, branchLabel, provisionsIn
             {/* Cadena: Nómina base → + Cargas patronales → Neto a pagar */}
             <div className="mt-3 flex flex-wrap gap-6">
               {[
-                { k: "Nómina base", v: fmtC(totals.base), cls: "text-[var(--color-text-secondary)]" },
-                { k: "+ Cargas patronales", v: fmtC(totals.cost - totals.base), cls: "text-[var(--color-warning-600)]" },
-                { k: "Neto a pagar", v: fmtC(totals.net), cls: "text-[var(--color-success-600)]" },
+                { k: "Nómina base", v: money(totals.base), cls: "text-[var(--color-text-secondary)]" },
+                { k: "+ Cargas patronales", v: money(totals.cost - totals.base), cls: "text-[var(--color-warning-600)]" },
+                { k: "Neto a pagar", v: money(totals.net), cls: "text-[var(--color-success-600)]" },
               ].map((item, i) => (
                 <span key={item.k} className={i > 0 ? "border-l border-[var(--color-border-strong)] pl-6" : ""}>
                   <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.05em] text-[var(--color-text-soft)]">

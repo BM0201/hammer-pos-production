@@ -7,6 +7,7 @@ import { PaymentStatus, SaleOrderStatus } from "@prisma/client";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getOperationalWindowForManaguaDate } from "@/modules/sales/realtime-sales-summary";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
+import { ok } from "@/lib/api/response";
 
 export async function GET(request: Request) {
   try {
@@ -77,24 +78,20 @@ export async function GET(request: Request) {
       }),
     ]);
 
-    return NextResponse.json(
-      {
-        ok: true,
-        data: {
-          ventas30dias:         Number(ventas30dias._sum.amount ?? 0),
-          ventas30diasCount:    ventas30dias._count._all,
-          pagosHoy:             Number(pagosHoy._sum.amount ?? 0),
-          pagosHoyCount:        pagosHoy._count._all,
-          pendientePago:        Number(pendientePago._sum.grandTotal ?? 0),
-          pendientePagoCount:   pendientePago._count._all,
-          descuentos30dias:     Number(descuentos30dias._sum.discountAmount ?? 0),
-          descuentos30diasCount: descuentos30dias._count._all,
-          inventarioCritico,
-          prestamosActivos,
-        },
-      },
-      { status: 200, headers: { "cache-control": "no-store" } },
-    );
+    const res = ok({
+      ventas30dias:         Number(ventas30dias._sum.amount ?? 0),
+      ventas30diasCount:    ventas30dias._count._all,
+      pagosHoy:             Number(pagosHoy._sum.amount ?? 0),
+      pagosHoyCount:        pagosHoy._count._all,
+      pendientePago:        Number(pendientePago._sum.grandTotal ?? 0),
+      pendientePagoCount:   pendientePago._count._all,
+      descuentos30dias:     Number(descuentos30dias._sum.discountAmount ?? 0),
+      descuentos30diasCount: descuentos30dias._count._all,
+      inventarioCritico,
+      prestamosActivos,
+    });
+    res.headers.set("cache-control", "no-store");
+    return res;
   } catch (error) {
     if (error instanceof Error && error.message === "FORBIDDEN_BRANCH") {
       return NextResponse.json({ error: { code: "FORBIDDEN_BRANCH" } }, { status: 403 });

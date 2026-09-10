@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { tokenize } from "@/lib/product-search";
+import { money as formatMoney } from "@/lib/format";
 
 /**
  * Producción v2 Fase 6 — "Lotes y variancia" (mockup vista 4). Como el
@@ -42,7 +43,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 const ALL_STATUSES = ["DRAFT", "PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "REVERSED"];
 
-const money = (v: number | null | undefined) => v == null ? "—" : `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (v: number | null | undefined) => v == null ? "—" : formatMoney(v);
 const pct1 = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
 
 function yieldOf(b: Batch): number | null {

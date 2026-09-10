@@ -317,9 +317,10 @@ export function splitNetPayBiweekly(grossSalary: number, netPay: number): { firs
 }
 
 /* ── Formato ─────────────────────────────────────────────────────────────── */
-
-export const fmtC = (v: number | string | null | undefined) =>
-  `C$${Number(v ?? 0).toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// El formateador de dinero a 2 decimales (fmtC) se eliminó de aquí — duplicaba
+// money() de @/lib/format, que es ahora la única fuente de verdad. fmtC0 se
+// queda: es un formato genuinamente distinto (0 decimales, para etiquetas
+// compactas de la barra de composición de nómina), no un duplicado.
 
 export const fmtC0 = (v: number) => `C$${Math.round(v).toLocaleString("es-NI")}`;
 

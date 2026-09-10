@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { fmtC, fmtC0, fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES } from "./payroll-calc";
+import { money } from "@/lib/format";
+import { fmtC0, fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES } from "./payroll-calc";
 
 /**
  * Barra de composición del costo empresa (elemento firma de Planilla V2).
@@ -88,7 +89,7 @@ export function PayrollCompositionBar({ amounts, total, rates = DEFAULT_PAYROLL_
             className={`pay-seg pay-seg-${k}`}
             data-seg={k}
             style={{ width: `${pct(k)}%`, animationDelay: `${i * 45}ms` }}
-            title={`${labels[k]}: ${fmtC(amounts[k])} (${pct(k).toFixed(1)}%)`}
+            title={`${labels[k]}: ${money(amounts[k])} (${pct(k).toFixed(1)}%)`}
           />
         ))}
       </div>
@@ -107,7 +108,7 @@ export function PayrollCompositionBar({ amounts, total, rates = DEFAULT_PAYROLL_
             >
               <span className="h-[9px] w-[9px] self-center rounded-[3px]" style={{ background: `var(--pay-seg-${k})` }} />
               <span className="font-medium text-[var(--color-text-secondary)]">{labels[k]}</span>
-              <span className="font-bold tabular-nums text-[var(--color-text)]">{fmtC(amounts[k])}</span>
+              <span className="font-bold tabular-nums text-[var(--color-text)]">{money(amounts[k])}</span>
               <span className="text-[0.6563rem] tabular-nums text-[var(--color-text-soft)]">{pct(k).toFixed(1)}%</span>
             </span>
           ))}

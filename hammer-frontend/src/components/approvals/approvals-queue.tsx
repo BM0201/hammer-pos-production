@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { apiFetch } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
+import { money as formatMoney } from "@/lib/format";
 
 type ApprovalApiError = { ok: false; error: { code: string; message: string } };
 
@@ -30,7 +31,7 @@ type ApprovalItem = {
   payloadJson?: PriceOverridePayload | null;
 };
 
-const money = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+const money = (v: number | null | undefined) => (v === null || v === undefined ? "—" : formatMoney(v));
 
 export function ApprovalsQueue({ branchId }: { branchId?: string }) {
   const sessionState = useSession();

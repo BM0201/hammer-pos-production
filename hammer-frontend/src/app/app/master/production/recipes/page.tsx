@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Edit3, Factory, Plus, Search, ToggleLeft } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { tokenize } from "@/lib/product-search";
+import { money } from "@/lib/format";
 
 type RecipeInput = {
   id: string;
@@ -31,7 +32,6 @@ type Recipe = {
   _count?: { batches: number };
 };
 
-const money = (value: number) => `C$${value.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const FAMILIES = [
   ["all", "Todas"],
   ["WOOD", "Madera"],

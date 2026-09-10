@@ -11,6 +11,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money } from "@/lib/format";
 import toast from "react-hot-toast";
 
 /**
@@ -48,10 +49,6 @@ const MONTHS_ES = [
   "enero", "febrero", "marzo", "abril", "mayo", "junio",
   "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 ];
-
-function fmtMoney(v: string | number | null | undefined) {
-  return `C$${Number(v ?? 0).toLocaleString("es-NI", { minimumFractionDigits: 2 })}`;
-}
 
 /** Fecha real programada (respeta el último día real del mes, no un fijo "día 30"). */
 function fmtScheduled(iso: string) {
@@ -201,7 +198,7 @@ export function BiweeklyCutsPanel() {
           <Wallet className="h-4 w-4" /> Total pendiente de desembolsar
         </div>
         <div className="mt-1 text-2xl font-bold" style={{ color: grandTotal > 0 ? "var(--color-warning-600, #d97706)" : "var(--color-text)" }}>
-          {fmtMoney(grandTotal)}
+          {money(grandTotal)}
         </div>
         <div className="text-xs" style={{ color: "var(--color-text-muted)" }}>{items.length} desembolso(s) pendiente(s)</div>
       </div>
@@ -216,7 +213,7 @@ export function BiweeklyCutsPanel() {
             <div key={period} className="rounded-xl p-4 space-y-3" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)" }}>
               <div className="flex items-center justify-between">
                 <div className="font-semibold" style={{ color: "var(--color-text)" }}>{PERIOD_LABEL[period]}</div>
-                <div className="text-lg font-bold" style={{ color: "var(--color-text)" }}>{fmtMoney(g.total)}</div>
+                <div className="text-lg font-bold" style={{ color: "var(--color-text)" }}>{money(g.total)}</div>
               </div>
 
               {hasPending ? (
@@ -228,7 +225,7 @@ export function BiweeklyCutsPanel() {
                         <Building2 className="h-3.5 w-3.5" /> {branchLabel(bId)}
                         <span style={{ color: "var(--color-text-muted)" }}>· {v.count} empleado(s)</span>
                       </span>
-                      <span className="tabular-nums" style={{ color: "var(--color-text)" }}>{fmtMoney(v.total)}</span>
+                      <span className="tabular-nums" style={{ color: "var(--color-text)" }}>{money(v.total)}</span>
                     </div>
                   ))}
                 </div>
@@ -245,7 +242,7 @@ export function BiweeklyCutsPanel() {
                 style={{ background: hasPending ? "var(--color-master-600, #2563eb)" : "var(--color-surface-alt)", color: hasPending ? "#fff" : "var(--color-text-muted)" }}
               >
                 {isPaying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
-                {isPaying ? "Procesando…" : `Procesar corte${hasPending ? ` · ${fmtMoney(g.total)}` : ""}`}
+                {isPaying ? "Procesando…" : `Procesar corte${hasPending ? ` · ${money(g.total)}` : ""}`}
               </button>
             </div>
           );
@@ -274,7 +271,7 @@ export function BiweeklyCutsPanel() {
                   <td>{d.period === "FIRST_HALF" ? "1ra" : "2da"}</td>
                   <td>{MONTHS_ES[(d.payrollRun.month - 1) % 12]} {d.payrollRun.year}</td>
                   <td>{fmtScheduled(d.scheduledDate)}</td>
-                  <td className="hm-num text-[var(--color-text)]">{fmtMoney(d.amount)}</td>
+                  <td className="hm-num text-[var(--color-text)]">{money(d.amount)}</td>
                 </tr>
               ))}
             </tbody>

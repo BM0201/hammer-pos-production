@@ -1113,11 +1113,14 @@ export function TimberConfigPanel() {
             <div className="grid grid-cols-2 gap-2.5">
               <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
                 Margen objetivo (%)
-                <input type="number" value={config.targetMarginPercent * 100} onChange={(e) => setConfig({ ...config, targetMarginPercent: Number(e.target.value) / 100 })} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-right font-mono text-[12.5px]" />
+                {/* *100 sobre un Decimal puede arrastrar error de punto flotante
+                    (0.29 * 100 = 28.999999999999996) — .toFixed(2) antes de
+                    mostrarlo en el input, igual que .../3 (task PASO 3). */}
+                <input type="number" value={(config.targetMarginPercent * 100).toFixed(2)} onChange={(e) => setConfig({ ...config, targetMarginPercent: Number(e.target.value) / 100 })} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-right font-mono text-[12.5px]" />
               </label>
               <label className="block text-[11.5px] font-semibold text-[var(--color-text-muted)]">
                 Tolerancia conciliación (%)
-                <input type="number" value={config.reconciliationTolerancePercent * 100} onChange={(e) => setConfig({ ...config, reconciliationTolerancePercent: Number(e.target.value) / 100 })} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-right font-mono text-[12.5px]" />
+                <input type="number" value={(config.reconciliationTolerancePercent * 100).toFixed(2)} onChange={(e) => setConfig({ ...config, reconciliationTolerancePercent: Number(e.target.value) / 100 })} className="mt-1 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-right font-mono text-[12.5px]" />
               </label>
             </div>
             <div className="mt-2.5 flex flex-col gap-2 text-[12.5px]">

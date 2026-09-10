@@ -8,6 +8,7 @@ import { getActiveBranchId } from "@/lib/client/active-branch";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SendDepositModal, type CashPosition, type CashIndicatorState } from "@/components/navigation/cash-indicator-panel";
+import { money } from "@/lib/format";
 
 /**
  * "Dinero de la semana" (Admin de Sucursal, prompt-modulo-dinero-semana-
@@ -33,8 +34,6 @@ type BranchMoneySummary = {
   cashNow: CashPosition;
   inTransit: InTransitEntry[];
 };
-
-const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function shiftIsoDate(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -133,7 +132,7 @@ export default function BranchMoneyWeekPage() {
               <MethodTile icon={CreditCard} label="Tarjeta" amount={summary.totals.card} />
               <div className="rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] p-3">
                 <div className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Total cobrado</div>
-                <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{fmt(summary.totals.total)}</p>
+                <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{money(summary.totals.total)}</p>
                 {summary.totalChangePercent !== null && (
                   <p className={["flex items-center gap-1 text-xs font-medium", summary.totalChangePercent >= 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-600)]"].join(" ")}>
                     {summary.totalChangePercent >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
@@ -142,7 +141,7 @@ export default function BranchMoneyWeekPage() {
                 )}
               </div>
             </div>
-            {hasOther && <p className="mt-2 text-[0.6875rem] text-[var(--color-text-soft)]">Incluye {fmt(summary.totals.other)} en otros métodos (crédito).</p>}
+            {hasOther && <p className="mt-2 text-[0.6875rem] text-[var(--color-text-soft)]">Incluye {money(summary.totals.other)} en otros métodos (crédito).</p>}
           </Card>
 
           {/* Detalle día por día */}
@@ -162,11 +161,11 @@ export default function BranchMoneyWeekPage() {
                 {summary.days.map((day) => (
                   <tr key={day.businessDate}>
                     <td className="font-medium text-[var(--color-text)]">{fmtDayLabel(day.businessDate)}</td>
-                    <td className="text-right font-mono tabular-nums">{day.cash > 0 ? fmt(day.cash) : "—"}</td>
-                    <td className="text-right font-mono tabular-nums">{day.transfer > 0 ? fmt(day.transfer) : "—"}</td>
-                    <td className="text-right font-mono tabular-nums">{day.card > 0 ? fmt(day.card) : "—"}</td>
-                    {hasOther && <td className="text-right font-mono tabular-nums">{day.other > 0 ? fmt(day.other) : "—"}</td>}
-                    <td className="text-right font-mono font-semibold tabular-nums text-[var(--color-text)]">{day.total > 0 ? fmt(day.total) : "—"}</td>
+                    <td className="text-right font-mono tabular-nums">{day.cash > 0 ? money(day.cash) : "—"}</td>
+                    <td className="text-right font-mono tabular-nums">{day.transfer > 0 ? money(day.transfer) : "—"}</td>
+                    <td className="text-right font-mono tabular-nums">{day.card > 0 ? money(day.card) : "—"}</td>
+                    {hasOther && <td className="text-right font-mono tabular-nums">{day.other > 0 ? money(day.other) : "—"}</td>}
+                    <td className="text-right font-mono font-semibold tabular-nums text-[var(--color-text)]">{day.total > 0 ? money(day.total) : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -180,11 +179,11 @@ export default function BranchMoneyWeekPage() {
               <span className="rounded-full bg-[var(--color-surface-muted)] px-2 py-0.5 text-[0.6875rem] font-semibold text-[var(--color-text-muted)]">{STATE_LABEL[summary.cashNow.state]}</span>
             </div>
             <div className="space-y-1.5 text-sm">
-              <Row label="En caja hoy" value={fmt(summary.cashNow.cashInDrawerToday)} />
-              <Row label="Acumulado" value={fmt(summary.cashNow.accumulatedAmount)} />
-              <Row label="Fondo de caja (no se deposita)" value={summary.cashNow.cashFundAmount === null ? "—" : fmt(summary.cashNow.cashFundAmount)} />
+              <Row label="En caja hoy" value={money(summary.cashNow.cashInDrawerToday)} />
+              <Row label="Acumulado" value={money(summary.cashNow.accumulatedAmount)} />
+              <Row label="Fondo de caja (no se deposita)" value={summary.cashNow.cashFundAmount === null ? "—" : money(summary.cashNow.cashFundAmount)} />
               <div className="border-t border-[var(--color-border)] pt-1.5">
-                <Row label="Para depositar" value={fmt(summary.cashNow.pendingDeposit)} bold />
+                <Row label="Para depositar" value={money(summary.cashNow.pendingDeposit)} bold />
               </div>
               {summary.cashNow.pendingDepositNote && <p className="text-[0.6875rem] italic text-[var(--color-text-soft)]">{summary.cashNow.pendingDepositNote}</p>}
             </div>
@@ -218,7 +217,7 @@ export default function BranchMoneyWeekPage() {
                         {entry.sinceDate ? `Desde ${fmtDayLabel(entry.sinceDate)}` : ""} · Esperando confirmación de Master
                       </p>
                     </div>
-                    <span className="font-mono text-sm font-bold tabular-nums text-[var(--color-text)]">{fmt(entry.amount)}</span>
+                    <span className="font-mono text-sm font-bold tabular-nums text-[var(--color-text)]">{money(entry.amount)}</span>
                   </div>
                 ))}
               </div>
@@ -245,7 +244,7 @@ function MethodTile({ icon: Icon, label, amount }: { icon: typeof Wallet; label:
       <div className="flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
         <Icon className="h-3 w-3" /> {label}
       </div>
-      <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{fmt(amount)}</p>
+      <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{money(amount)}</p>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { roundDecimalsForResponse } from "./decimal-rounding";
 
 export type ApiSuccess<T> = {
   ok: true;
@@ -16,8 +17,15 @@ export type ApiError = {
   error: ApiErrorBody;
 };
 
+/**
+ * Frontera de salida: todo Prisma.Decimal en `data` se redondea a 2 decimales
+ * (dinero) o 4 (cantidad/factor) ANTES de serializar a JSON — ver
+ * decimal-rounding.ts. No afecta cómo se calculó o se guardó `data`; solo lo
+ * que sale por la red. okCached/created delegan aquí, así que heredan esto
+ * automáticamente.
+ */
 export function ok<T>(data: T, status = 200): NextResponse<ApiSuccess<T>> {
-  return NextResponse.json({ ok: true, data }, { status });
+  return NextResponse.json({ ok: true, data: roundDecimalsForResponse(data) }, { status });
 }
 
 /**

@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
+import { money } from "@/lib/format";
 
 /**
  * "Destino del efectivo" — un solo trabajo: decidir qué pasa con el
@@ -55,7 +56,6 @@ type CashDestinationSummary = {
 type BranchPerson = { id: string; fullName: string; roleLabel: string };
 type BankAccountOption = { id: string; bankName: string; accountAlias: string; accountNumber: string; currencyCode: "NIO" | "USD" };
 
-const fmt = (v: number) => `C$${v.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("es-NI", { day: "2-digit", month: "short" });
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit" });
 const currencySymbol = (code: "NIO" | "USD") => (code === "USD" ? "$" : "C$");
@@ -169,9 +169,9 @@ export default function CashDestinationPage() {
   const oldestPendingMovement = summary?.movements[0] ?? null;
   const oldestPendingPostponement = summary?.postponements[0] ?? null;
   const pendingNotice = oldestPendingMovement
-    ? `En tránsito desde ${fmtDate(oldestPendingMovement.occurredAt)}: ${fmt(oldestPendingMovement.amount)} con ${oldestPendingMovement.carrierName}, sin confirmar`
+    ? `En tránsito desde ${fmtDate(oldestPendingMovement.occurredAt)}: ${money(oldestPendingMovement.amount)} con ${oldestPendingMovement.carrierName}, sin confirmar`
     : oldestPendingPostponement
-    ? `Pospuesto desde ${fmtDate(oldestPendingPostponement.createdAt)}: ${fmt(oldestPendingPostponement.amount)}, sin llevar`
+    ? `Pospuesto desde ${fmtDate(oldestPendingPostponement.createdAt)}: ${money(oldestPendingPostponement.amount)}, sin llevar`
     : null;
 
   const history = summary
@@ -209,8 +209,8 @@ export default function CashDestinationPage() {
           {/* B.2 · El número primero — sin tarjeta que lo envuelva */}
           <div className="px-1">
             <p className="text-sm font-medium text-[var(--color-text-muted)]">Podés mover ahora</p>
-            <p className="mt-1 text-[44px] font-medium leading-none tabular-nums text-[var(--color-success-700)]">{fmt(summary.money.physical.availableToMove)}</p>
-            <p className="mt-2 text-sm text-[var(--color-text-muted)]">de los {fmt(cashInDrawer)} que hay en la gaveta</p>
+            <p className="mt-1 text-[44px] font-medium leading-none tabular-nums text-[var(--color-success-700)]">{money(summary.money.physical.availableToMove)}</p>
+            <p className="mt-2 text-sm text-[var(--color-text-muted)]">de los {money(cashInDrawer)} que hay en la gaveta</p>
 
             {/* B.3 · La barra del fondo de caja — solo proporción, sin texto adentro (Parte B: al 3.7% de ancho el texto se truncaba en "FO... C...") */}
             {summary.money.physical.cashFund > 0 && (
@@ -225,12 +225,12 @@ export default function CashDestinationPage() {
                   <span className="flex items-center gap-1.5">
                     <span className="h-2 w-2 shrink-0 rounded-sm bg-[var(--color-surface-alt)]" aria-hidden="true" />
                     <span className="text-[var(--color-text-muted)]">Fondo de caja</span>
-                    <span className="font-medium tabular-nums text-[var(--color-text)]">{fmt(summary.money.physical.cashFund)}</span>
+                    <span className="font-medium tabular-nums text-[var(--color-text)]">{money(summary.money.physical.cashFund)}</span>
                   </span>
                   <span className="flex items-center gap-1.5">
                     <span className="h-2 w-2 shrink-0 rounded-sm bg-[var(--color-success-500)]" aria-hidden="true" />
                     <span className="text-[var(--color-text-muted)]">Para mover</span>
-                    <span className="font-medium tabular-nums text-[var(--color-text)]">{fmt(summary.money.physical.availableToMove)}</span>
+                    <span className="font-medium tabular-nums text-[var(--color-text)]">{money(summary.money.physical.availableToMove)}</span>
                   </span>
                 </div>
 
@@ -245,7 +245,7 @@ export default function CashDestinationPage() {
           {/* B.4 · Cinco filas en tres grupos — o el estado vacío que corresponda (B.7) */}
           <div>
             <h2 className="px-1 text-[15px] font-medium text-[var(--color-text)]">
-              {noSurplus ? "Nada para mover todavía" : `¿Qué hacés con los ${fmt(summary.money.physical.availableToMove)}?`}
+              {noSurplus ? "Nada para mover todavía" : `¿Qué hacés con los ${money(summary.money.physical.availableToMove)}?`}
             </h2>
 
             {/* C.4 — qué pasó ANTES de decidir qué hacer ahora */}
@@ -260,7 +260,7 @@ export default function CashDestinationPage() {
               <p className="mt-2 px-1 text-sm text-[var(--color-text-muted)]">
                 {noCashAtAll
                   ? "Todavía no se ha cobrado efectivo en esta caja."
-                  : `Todo el efectivo en gaveta es el fondo de caja (${fmt(summary.money.physical.cashFund)}). No hay excedente para mover.`}
+                  : `Todo el efectivo en gaveta es el fondo de caja (${money(summary.money.physical.cashFund)}). No hay excedente para mover.`}
               </p>
             ) : (
               <div className="mt-3 space-y-4">
@@ -335,12 +335,12 @@ export default function CashDestinationPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="text-sm text-[var(--color-text-muted)]">En cuenta</span>
-                      <span className="text-[20px] font-medium leading-none tabular-nums text-[var(--color-text-muted)]">{fmt(summary.money.inAccount.total)}</span>
+                      <span className="text-[20px] font-medium leading-none tabular-nums text-[var(--color-text-muted)]">{money(summary.money.inAccount.total)}</span>
                     </div>
                     <div className="mt-1.5 space-y-0.5">
                       {summary.money.inAccount.byAccount.slice(0, 3).map((a) => (
                         <p key={a.accountId} className="text-[13px] text-[var(--color-text-soft)]">
-                          Banco {a.bankName} ****{a.last4} · {fmt(a.amount)}
+                          Banco {a.bankName} ****{a.last4} · {money(a.amount)}
                         </p>
                       ))}
                       {summary.money.inAccount.byAccount.length > 3 && (
@@ -357,7 +357,7 @@ export default function CashDestinationPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="text-sm text-[var(--color-text-muted)]">Por liquidar</span>
-                      <span className="text-[20px] font-medium leading-none tabular-nums text-[var(--color-text-muted)]">{fmt(summary.money.pendingSettlement.total)}</span>
+                      <span className="text-[20px] font-medium leading-none tabular-nums text-[var(--color-text-muted)]">{money(summary.money.pendingSettlement.total)}</span>
                     </div>
                     <p className="mt-1.5 text-[13px] text-[var(--color-text-soft)]">Pagos con tarjeta. El banco los deposita en 1-2 días.</p>
                   </div>
@@ -399,7 +399,7 @@ export default function CashDestinationPage() {
                       </div>
                     </div>
                     <span className={["shrink-0 font-mono font-bold tabular-nums", item.kind === "postponement" ? "text-[var(--color-warning-700)]" : "text-[var(--color-text)]"].join(" ")}>
-                      {fmt(item.amount)}
+                      {money(item.amount)}
                     </span>
                   </div>
                 ))}
@@ -663,7 +663,7 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
     if (picksRecipient && !selectedPersonId) { toast.error("Elegí a quién se lo vas a entregar."); return; }
     if (goesToBank && !bankAccountId) { toast.error("Elegí a qué cuenta va."); return; }
     if (amountNumber <= 0) { toast.error("El monto debe ser mayor que 0."); return; }
-    if (overCap) { toast.error(`El monto no puede superar lo disponible (${fmt(availableToMove)}).`); return; }
+    if (overCap) { toast.error(`El monto no puede superar lo disponible (${money(availableToMove)}).`); return; }
 
     setSubmitting(true);
     try {
@@ -681,7 +681,7 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
       });
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar el envío.");
-      toast.success(`${fmt(amountNumber)} — ${title}.`);
+      toast.success(`${money(amountNumber)} — ${title}.`);
       onDone();
     } catch (error) {
       // Error → el sheet queda ABIERTO con los datos intactos.
@@ -712,7 +712,7 @@ function SendCashSheet({ variant, branchId, cashSessionId, availableToMove, bank
             <Button type="button" variant="ghost" size="sm" onClick={() => setAmount(availableToMove.toFixed(2))}>Todo</Button>
           </div>
           <span className={["mt-1 block text-[0.6875rem]", overCap ? "font-semibold text-[var(--color-danger-600)]" : "text-[var(--color-text-soft)]"].join(" ")}>
-            Disponible: {fmt(availableToMove)}
+            Disponible: {money(availableToMove)}
           </span>
         </label>
 
@@ -775,7 +775,7 @@ function PostponeSheet({ cashSessionId, availableToMove, consecutivePostponement
     event.preventDefault();
     if (submitting) return; // registra un compromiso real — el doble toque no puede duplicarlo.
     if (amountNumber <= 0) { toast.error("El monto debe ser mayor que 0."); return; }
-    if (overCap) { toast.error(`El monto no puede superar el efectivo esperado en caja (${fmt(availableToMove)}).`); return; }
+    if (overCap) { toast.error(`El monto no puede superar el efectivo esperado en caja (${money(availableToMove)}).`); return; }
 
     setSubmitting(true);
     try {
@@ -812,7 +812,7 @@ function PostponeSheet({ cashSessionId, availableToMove, consecutivePostponement
             <Button type="button" variant="ghost" size="sm" onClick={() => setAmount(availableToMove.toFixed(2))}>Todo</Button>
           </div>
           <span className={["mt-1 block text-[0.6875rem]", overCap ? "font-semibold text-[var(--color-danger-600)]" : "text-[var(--color-text-soft)]"].join(" ")}>
-            Disponible: {fmt(availableToMove)}
+            Disponible: {money(availableToMove)}
           </span>
         </label>
 
