@@ -19,7 +19,6 @@ type PosRealtimeSummary = {
 
 export function usePosRealtimeSummary(branchId: string) {
   const [realtimeSummary, setRealtimeSummary] = useState<PosRealtimeSummary | null>(null);
-  const [summaryUpdatedAt, setSummaryUpdatedAt] = useState<string | null>(null);
   // Monotonically-increasing sequence number so stale in-flight responses
   // (from a previous poll tick) never overwrite a fresher one that resolved first.
   const summaryRequestId = useRef(0);
@@ -32,7 +31,6 @@ export function usePosRealtimeSummary(branchId: string) {
     const payload = unwrapApiData(raw) as { summary: PosRealtimeSummary };
     if (requestId !== summaryRequestId.current) return;
     setRealtimeSummary(payload.summary);
-    setSummaryUpdatedAt(new Date().toISOString());
   }, [branchId]);
 
   useOperationalPolling({
@@ -42,5 +40,5 @@ export function usePosRealtimeSummary(branchId: string) {
     onError: () => undefined,
   });
 
-  return { realtimeSummary, summaryUpdatedAt, loadRealtimeSummary };
+  return { realtimeSummary, loadRealtimeSummary };
 }

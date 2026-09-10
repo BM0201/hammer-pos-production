@@ -11,7 +11,6 @@ type RealtimeSummary = {
 
 type PosSummaryCardsProps = {
   realtimeSummary: RealtimeSummary;
-  summaryUpdatedAt: string | null;
   activeCashSessionId: string | null;
   cashSessionProblem?: CashSessionProblem | null;
 };

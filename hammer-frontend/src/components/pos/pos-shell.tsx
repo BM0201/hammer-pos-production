@@ -112,7 +112,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
   const roleCfg = getRoleColor(session.roleCode);
 
   const branchId = getActiveBranchId(session.branchIds, session.primaryBranchId) ?? "";
-  const { realtimeSummary, summaryUpdatedAt } = usePosRealtimeSummary(branchId);
+  const { realtimeSummary } = usePosRealtimeSummary(branchId);
   const { activeCashSessionId, cashSessionProblem } = usePosCashContext(branchId);
 
   /* ── Sidebar state ── */
@@ -488,7 +488,6 @@ export function PosShell({ session, children }: { session: ShellSession; childre
           <div className="flex-1 overflow-hidden">
             <PosSummaryCards
               realtimeSummary={realtimeSummary}
-              summaryUpdatedAt={summaryUpdatedAt}
               activeCashSessionId={activeCashSessionId}
               cashSessionProblem={cashSessionProblem}
             />
