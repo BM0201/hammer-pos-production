@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money as formatMoney } from "@/lib/format";
+import { money as formatMoney, qty2 } from "@/lib/format";
 
 type BatchSummary = {
   id: string;
@@ -75,7 +75,7 @@ const STATUS: Record<string, { label: string; cls: string }> = {
 };
 
 const money = (value: number | null | undefined) => value == null ? "-" : formatMoney(value);
-const num = (value: number | null | undefined) => value == null ? "-" : value.toLocaleString("es-NI", { maximumFractionDigits: 2 });
+const num = (value: number | null | undefined) => value == null ? "-" : qty2(value);
 type KpiItem = { label: string; value: string | number; Icon: LucideIcon };
 
 function EmptyState({ title, body }: { title: string; body: string }) {
