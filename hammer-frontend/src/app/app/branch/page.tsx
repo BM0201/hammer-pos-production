@@ -25,6 +25,12 @@ import { useSession } from "@/lib/client/session";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import type { SessionPayload } from "@/types/auth";
 
+/** "02:30:05 p. m." — usada en las 3 variantes de rol de abajo (SALES,
+ * etc.), duplicada 3 veces antes de extraerla. */
+function fmtTimeWithSeconds(iso: string): string {
+  return new Date(iso).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
 type QuickLink = { href: string; label: string; icon: ReactNode };
 
 type BranchSession = Pick<
@@ -231,7 +237,7 @@ export default function BranchPage() {
     const summary = data.summary;
     return (
       <>
-      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {new Date(updatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p> : null}
+      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {fmtTimeWithSeconds(updatedAt)}</p> : null}
       <RoleSummary
         title="Punto de Venta"
         subtitle="Tu actividad comercial del día."
@@ -263,7 +269,7 @@ export default function BranchPage() {
     const summary = data.summary;
     return (
       <>
-      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {new Date(updatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p> : null}
+      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {fmtTimeWithSeconds(updatedAt)}</p> : null}
       <RoleSummary
         title="Caja & Cobros"
         subtitle="Operación de cobro y estado de sesión de caja."
@@ -342,7 +348,7 @@ export default function BranchPage() {
 
   return (
     <>
-      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {new Date(updatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p> : null}
+      {updatedAt ? <p className="mb-3 text-xs text-[var(--color-text-muted)]">Actualizado {fmtTimeWithSeconds(updatedAt)}</p> : null}
       <RoleSummary
         title="Supervisión de Sucursal"
         subtitle="Resumen operativo para administración local."
