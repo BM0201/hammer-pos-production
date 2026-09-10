@@ -124,6 +124,14 @@ export function fmtTimeShort(value: string | Date): string {
   return d.toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit" });
 }
 
+/** Convierte una proporción (0-1) a porcentaje con 1 decimal ("15.5%"),
+ * "—" si es null/undefined — duplicada byte a byte en
+ * master/production/recipes/[id] y master/production/batches/[id] antes
+ * de esta función. */
+export function fmtRatioPercent(value: number | null | undefined): string {
+  return value == null ? "—" : `${(value * 100).toFixed(1)}%`;
+}
+
 /**
  * money() sin decimales, redondeado con Math.round (no vía Intl) — para
  * etiquetas compactas donde 2 decimales sobran (ej. barra de composición

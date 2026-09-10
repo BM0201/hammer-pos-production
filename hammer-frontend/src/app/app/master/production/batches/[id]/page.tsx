@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money as formatMoney, qty } from "@/lib/format";
+import { money as formatMoney, qty, fmtRatioPercent } from "@/lib/format";
 
 /**
  * Producción v2 Fase 6 — "Cerrar lote" (mockup vista 3, LA MÁS IMPORTANTE).
@@ -91,7 +91,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const money = (v: number | null | undefined) => v == null ? "—" : formatMoney(v);
-const pct = (v: number | null | undefined) => v == null ? "—" : `${(v * 100).toFixed(1)}%`;
+const pct = fmtRatioPercent;
 
 export default function BatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
