@@ -129,11 +129,7 @@ export function usePosCheckout(opts: PosCheckoutOpts) {
         const json = (await response.json()) as ApiErrorPayload;
 
         if (!response.ok) {
-          const errorCode =
-            (json as Record<string, unknown>)?.error &&
-            typeof (json as Record<string, unknown>).error === "object"
-              ? ((json as Record<string, { code?: string }>).error?.code ?? "")
-              : "";
+          const errorCode = json.error?.code ?? "";
           if (errorCode === "CASHIER_MODULE_ENABLED") {
             onNotice("El módulo de caja está activo. Use el flujo estándar de enviar a caja.", 10000);
           } else if (errorCode === "NO_ACTIVE_CASH_SESSION") {

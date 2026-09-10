@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
 import { apiFetch } from "@/lib/client/api";
 import type { ProductRow, TicketLine, TicketOrder } from "../types";
+import type { BelowCostConfirmState } from "../components/below-cost-override-dialog";
 
 const MAX_REASONABLE_QUANTITY = 9999;
 
@@ -30,11 +31,7 @@ export function usePosOrder(branchId: string, opts: PosOrderOpts) {
   // lines devuelve 409 BELOW_COST_OVERRIDE_REASON_REQUIRED: el rol SÍ tiene
   // autoridad, solo falta la razón. BELOW_COST_NOT_ALLOWED (sin autoridad)
   // sigue siendo el toast de siempre, sin puerta de escape.
-  const [belowCostConfirm, setBelowCostConfirm] = useState<{
-    product: ProductRow;
-    effectiveCost: number | null;
-    netUnitPriceAfterDiscount: number | null;
-  } | null>(null);
+  const [belowCostConfirm, setBelowCostConfirm] = useState<BelowCostConfirmState | null>(null);
   const [isSubmittingOverride, setIsSubmittingOverride] = useState(false);
 
   const ticketLines = useMemo(() => order?.lines ?? [], [order?.lines]);

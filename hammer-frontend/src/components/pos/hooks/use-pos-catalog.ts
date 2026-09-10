@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { mapPosErrorToSpanish, type ApiErrorPayload } from "@/lib/pos-ui";
+import { mapPosErrorToSpanish } from "@/lib/pos-ui";
 import { getCatalog, saveCatalog } from "@/lib/offline-db";
 import type { CachedProduct } from "@/lib/offline-db";
 import { tokenize, matchesAllTokens, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/lib/product-search";
@@ -36,12 +36,6 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
   useEffect(() => {
     searchRef.current = search;
   }, [search]);
-
-  const resolveError = useCallback(
-    (params: { payload?: ApiErrorPayload; status?: number; fallback: string; thrownError?: unknown }) =>
-      mapPosErrorToSpanish(params),
-    [],
-  );
 
   const seedSharedStock = useCallback((rows: ProductRow[]) => {
     const next: Record<string, number> = {};
@@ -88,7 +82,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       const json = (await response.json()) as { data?: ProductRow[]; message?: string; reason?: string };
 
       if (!response.ok) {
-        onNotice(resolveError({ payload: json, status: response.status, fallback: "No se pudieron cargar los productos más vendidos." }));
+        onNotice(mapPosErrorToSpanish({ payload: json, status: response.status, fallback: "No se pudieron cargar los productos más vendidos." }));
         return;
       }
 
@@ -117,9 +111,9 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
         return;
       }
       console.error("[POS][loadTopSelling]", error);
-      onNotice(resolveError({ fallback: "No se pudieron cargar los productos más vendidos.", thrownError: error }));
+      onNotice(mapPosErrorToSpanish({ fallback: "No se pudieron cargar los productos más vendidos.", thrownError: error }));
     }
-  }, [branchId, isOffline, resolveError, seedSharedStock, onNotice]);
+  }, [branchId, isOffline, seedSharedStock, onNotice]);
 
   const loadProducts = useCallback(async (rawQuery: string) => {
     const query = rawQuery.trim();
@@ -176,7 +170,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       const json = (await response.json()) as { data?: FamilyGroup<ProductRow>[]; message?: string; reason?: string };
 
       if (!response.ok) {
-        onNotice(resolveError({ payload: json, status: response.status, fallback: "No se pudo cargar el catálogo." }));
+        onNotice(mapPosErrorToSpanish({ payload: json, status: response.status, fallback: "No se pudo cargar el catálogo." }));
         return;
       }
 
@@ -201,7 +195,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
         return;
       }
       console.error("[POS][loadProducts]", error);
-      onNotice(resolveError({ fallback: "No se pudo cargar el catálogo.", thrownError: error }));
+      onNotice(mapPosErrorToSpanish({ fallback: "No se pudo cargar el catálogo.", thrownError: error }));
     } finally {
       // Only the latest request clears the loading flag.
       if (searchAbortRef.current === controller) {
@@ -209,7 +203,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
         setLoadingProducts(false);
       }
     }
-  }, [branchId, isOffline, resolveError, seedSharedStock, onNotice, applySearchRows]);
+  }, [branchId, isOffline, seedSharedStock, onNotice, applySearchRows]);
 
   // Load top-selling products once per branchId (replaces the combined effect in branch-pos).
   useEffect(() => {
