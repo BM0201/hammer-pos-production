@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money as formatMoney } from "@/lib/format";
+import { money as formatMoney, qty } from "@/lib/format";
 
 /**
  * Producción v2 Fase 6 — "Cerrar lote" (mockup vista 3, LA MÁS IMPORTANTE).
@@ -298,7 +298,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   {(preview?.lines ?? batch.inputs.map((bi) => ({ inputProductId: bi.inputProduct.id, productName: bi.inputProduct.name, neededQuantity: bi.plannedQuantity, unit: bi.unit, lineCost: 0 }))).map((line) => (
                     <tr key={line.inputProductId}>
                       <td>{line.productName}</td>
-                      <td className="hm-num">{line.neededQuantity.toLocaleString("es-NI", { maximumFractionDigits: 4 })} {line.unit}</td>
+                      <td className="hm-num">{qty(line.neededQuantity)} {line.unit}</td>
                       <td className="hm-num">{previewLoading ? "…" : money(line.lineCost)}</td>
                     </tr>
                   ))}
