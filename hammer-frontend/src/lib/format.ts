@@ -50,6 +50,18 @@ export function moneyRounded(value: number): string {
 }
 
 /**
+ * money() sin decimales, vía Intl directo (maximumFractionDigits: 0) — NO
+ * intercambiable con moneyRounded(): difieren en negativos (Math.round(-0.5)
+ * = -0 → "C$-0"; Intl redondea -0.5 lejos de cero → "-C$1"). Usada en
+ * dashboards de reportes de ventas (siempre valores ≥ 0 en la práctica, pero
+ * se mantiene separada de moneyRounded por si alguna vez no lo son).
+ */
+const money0Formatter = new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO", maximumFractionDigits: 0 });
+export function money0(value: number): string {
+  return money0Formatter.format(value);
+}
+
+/**
  * Cantidad con N decimales EXACTOS (rellena con ceros) — a diferencia de
  * qty(), que recorta ceros de sobra (maximumFractionDigits sin minimum).
  * decimals=2 por default. Usada donde varios campos comparten un mismo

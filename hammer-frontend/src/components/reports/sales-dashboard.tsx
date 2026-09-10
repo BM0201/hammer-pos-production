@@ -10,6 +10,7 @@ import {
   RefreshCw, Download, ChevronDown, ChevronUp, X, Wallet, PiggyBank,
 } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
+import { money, money0 } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 
@@ -79,9 +80,6 @@ type ProductsByDayData = {
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-const NIO = new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO", maximumFractionDigits: 0 });
-const NION = new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function getDefaultDates() {
   const today = new Date();
@@ -252,7 +250,7 @@ function DrilldownModal({
                     <td className="max-w-[200px] truncate">{r.name}</td>
                     <td className="text-xs text-[var(--color-text-muted)]">{r.category_name}</td>
                     <td className="text-right tabular-nums">{Number(r.total_qty).toLocaleString("es-NI")}</td>
-                    <td className="text-right tabular-nums">{NIO.format(r.total_sold)}</td>
+                    <td className="text-right tabular-nums">{money0(r.total_sold)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -446,7 +444,7 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
           <div className="hm-kpi-grid">
             <KpiCard
               label="Total vendido"
-              value={NIO.format(data.kpis.totalSold)}
+              value={money0(data.kpis.totalSold)}
               sub={`incluye transporte`}
               icon={TrendingUp}
               color="bg-gradient-to-r from-[var(--color-success-400)] to-[var(--color-success-600)]"
@@ -457,7 +455,7 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
                 recalculados con el WAC actual. */}
             <KpiCard
               label="Costo de lo vendido"
-              value={NIO.format(data.kpis.totalCost)}
+              value={money0(data.kpis.totalCost)}
               sub="al costo al momento de la venta"
               icon={Wallet}
               color="bg-gradient-to-r from-[var(--color-warning-400)] to-[var(--color-warning-600)]"
@@ -465,7 +463,7 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
             <KpiCard
               label="Margen bruto"
               value={`${data.kpis.marginPercent.toFixed(1)}%`}
-              sub={`${NIO.format(data.kpis.totalMargin)} de utilidad`}
+              sub={`${money0(data.kpis.totalMargin)} de utilidad`}
               icon={PiggyBank}
               color="bg-gradient-to-r from-[var(--color-success-400)] to-[var(--color-success-600)]"
             />
@@ -485,7 +483,7 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
             />
             <KpiCard
               label="Ticket promedio"
-              value={NION.format(data.kpis.avgTicket)}
+              value={money(data.kpis.avgTicket)}
               sub={`por orden`}
               icon={Calculator}
               color="bg-gradient-to-r from-[var(--color-master-400)] to-[var(--color-master-600)]"
@@ -514,8 +512,8 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
                   <BarChart data={data.byDay.map((r) => ({ name: fmtDate(r.date), total: r.total_sold }))} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
                     <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-                    <YAxis tickFormatter={(v: unknown) => NIO.format(Number(v)).replace("NIO", "").trim()} tick={{ fontSize: 10 }} />
-                    <Tooltip formatter={(v: unknown) => [NIO.format(Number(v)), "Total"]} />
+                    <YAxis tickFormatter={(v: unknown) => money0(Number(v)).replace("NIO", "").trim()} tick={{ fontSize: 10 }} />
+                    <Tooltip formatter={(v: unknown) => [money0(Number(v)), "Total"]} />
                     <Bar dataKey="total" fill="var(--color-info-500)" radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -553,9 +551,9 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={topAmtChart} layout="vertical" margin={{ top: 4, right: 16, left: 4, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
-                    <XAxis type="number" tickFormatter={(v: unknown) => NIO.format(Number(v)).replace("NIO", "").trim()} tick={{ fontSize: 10 }} />
+                    <XAxis type="number" tickFormatter={(v: unknown) => money0(Number(v)).replace("NIO", "").trim()} tick={{ fontSize: 10 }} />
                     <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 10 }} />
-                    <Tooltip formatter={(v: unknown) => [NIO.format(Number(v)), "Subtotal"]} />
+                    <Tooltip formatter={(v: unknown) => [money0(Number(v)), "Subtotal"]} />
                     <Bar dataKey="monto" fill="var(--color-warning-500)" radius={[0, 3, 3, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -579,7 +577,7 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
                           <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(v: unknown) => [NIO.format(Number(v)), "Ventas"]} />
+                      <Tooltip formatter={(v: unknown) => [money0(Number(v)), "Ventas"]} />
                       <Legend iconSize={8} wrapperStyle={{ fontSize: "0.65rem" }} />
                     </PieChart>
                   </ResponsiveContainer>
@@ -601,7 +599,7 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
                           <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(v: unknown) => [NIO.format(Number(v)), "Subtotal"]} />
+                      <Tooltip formatter={(v: unknown) => [money0(Number(v)), "Subtotal"]} />
                       <Legend iconSize={8} wrapperStyle={{ fontSize: "0.65rem" }} />
                     </PieChart>
                   </ResponsiveContainer>
@@ -645,12 +643,12 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
                   {sortedDays.map((r) => (
                     <tr key={r.date} className="hover:bg-[var(--color-surface-alt)] transition-colors">
                       <td className="font-mono text-xs">{fmtDate(r.date)}</td>
-                      <td className="text-right tabular-nums">{NIO.format(r.total_sold)}</td>
+                      <td className="text-right tabular-nums">{money0(r.total_sold)}</td>
                       <td className="text-right tabular-nums">{r.orders_count}</td>
                       <td className="text-right tabular-nums">{Number(r.units_sold).toLocaleString("es-NI")}</td>
                       <td className="text-right tabular-nums">{r.distinct_products}</td>
                       <td className="text-right tabular-nums">
-                        {r.orders_count > 0 ? NION.format(r.total_sold / r.orders_count) : "—"}
+                        {r.orders_count > 0 ? money(r.total_sold / r.orders_count) : "—"}
                       </td>
                       <td className="text-right">
                         <button
@@ -698,7 +696,7 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
                       <td className="max-w-[220px] truncate text-sm">{r.name}</td>
                       <td className="text-xs text-[var(--color-text-muted)]">{r.category_name}</td>
                       <td className="text-right tabular-nums">{Number(r.total_qty).toLocaleString("es-NI")}</td>
-                      <td className="text-right tabular-nums">{NIO.format(r.total_sold)}</td>
+                      <td className="text-right tabular-nums">{money0(r.total_sold)}</td>
                     </tr>
                   ))}
                 </tbody>

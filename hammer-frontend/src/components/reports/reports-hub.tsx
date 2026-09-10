@@ -7,6 +7,7 @@ import {
   ChevronRight, Download, Eye, X, Layers,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { money0 } from "@/lib/format";
 import { showToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { LoadingState, KpiSkeleton } from "@/components/ui/loading-state";
@@ -338,8 +339,6 @@ function getDefaultDates() {
   return { dateFrom: from.toISOString().split("T")[0], dateTo };
 }
 
-const NIO = new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO", maximumFractionDigits: 0 });
-
 function buildQuery(filters: FilterState, format: "json" | "csv" | "pdf") {
   const p = new URLSearchParams();
   if (filters.dateFrom)      p.set("dateFrom",      filters.dateFrom);
@@ -515,9 +514,9 @@ export function ReportsHub({ masterMode = false, defaultBranchId = "" }: Reports
         </p>
         {kpiLoading ? <KpiSkeleton count={4} /> : !kpi ? null : (
           <div className="hm-kpi-grid">
-            <KpiTile label="Ventas cobradas (30 d)" value={NIO.format(kpi.ventas30dias)} sub={`${kpi.ventas30diasCount.toLocaleString("es-NI")} cobros`} icon={TrendingUp} tone="ok" />
-            <KpiTile label="Cobrado hoy" value={NIO.format(kpi.pagosHoy)} sub={`${kpi.pagosHoyCount} pago${kpi.pagosHoyCount !== 1 ? "s" : ""} procesados`} icon={Wallet} tone={kpi.pagosHoy > 0 ? "ok" : "default"} />
-            <KpiTile label="Pendiente de cobro" value={NIO.format(kpi.pendientePago)} sub={`${kpi.pendientePagoCount} orden${kpi.pendientePagoCount !== 1 ? "es" : ""} sin pagar`} icon={TrendingDown} tone={kpi.pendientePago > 0 ? "warn" : "ok"} />
+            <KpiTile label="Ventas cobradas (30 d)" value={money0(kpi.ventas30dias)} sub={`${kpi.ventas30diasCount.toLocaleString("es-NI")} cobros`} icon={TrendingUp} tone="ok" />
+            <KpiTile label="Cobrado hoy" value={money0(kpi.pagosHoy)} sub={`${kpi.pagosHoyCount} pago${kpi.pagosHoyCount !== 1 ? "s" : ""} procesados`} icon={Wallet} tone={kpi.pagosHoy > 0 ? "ok" : "default"} />
+            <KpiTile label="Pendiente de cobro" value={money0(kpi.pendientePago)} sub={`${kpi.pendientePagoCount} orden${kpi.pendientePagoCount !== 1 ? "es" : ""} sin pagar`} icon={TrendingDown} tone={kpi.pendientePago > 0 ? "warn" : "ok"} />
             <KpiTile label="Inventario crítico" value={String(kpi.inventarioCritico)} sub={kpi.inventarioCritico > 0 ? "Productos ≤ 5 unidades" : "Sin alertas de stock"} icon={AlertTriangle} tone={kpi.inventarioCritico > 0 ? "alert" : "ok"} />
           </div>
         )}

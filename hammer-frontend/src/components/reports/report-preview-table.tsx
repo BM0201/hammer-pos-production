@@ -4,6 +4,7 @@ import { Download, FileText, AlertTriangle, ArrowUp, ArrowDown, Minus } from "lu
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useState, useMemo } from "react";
+import { money } from "@/lib/format";
 
 export type ColumnDef = {
   key: string;
@@ -12,7 +13,6 @@ export type ColumnDef = {
   align?: "left" | "right" | "center";
 };
 
-const NIO = new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" });
 const NUM = new Intl.NumberFormat("es-NI");
 
 function fmtDate(value: unknown): string {
@@ -58,7 +58,7 @@ function Cell({ value, type }: { value: unknown; type: ColumnDef["type"] }) {
   }
   switch (type) {
     case "currency":
-      return <span className="font-semibold tabular-nums">{NIO.format(Number(value))}</span>;
+      return <span className="font-semibold tabular-nums">{money(Number(value))}</span>;
     case "number":
       return <span className="tabular-nums">{NUM.format(Number(value))}</span>;
     case "percent":
