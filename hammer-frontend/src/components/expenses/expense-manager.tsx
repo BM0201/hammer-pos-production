@@ -22,7 +22,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money } from "@/lib/format";
+import { money, fmtDayMonthUTC } from "@/lib/format";
 import {
   type Branch,
   type Expense,
@@ -569,7 +569,7 @@ export function ExpenseManager({
                             <>
                               <span className="font-bold tabular-nums text-[var(--color-text)]">{money(c.last.amount)}</span>
                               <span className="ml-1.5 text-[var(--color-text-muted)]">
-                                {new Date(c.last.date).toLocaleDateString("es-NI", { day: "numeric", month: "short", timeZone: "UTC" })} · {c.last.description}
+                                {fmtDayMonthUTC(c.last.date)} · {c.last.description}
                               </span>
                             </>
                           ) : (
@@ -684,7 +684,7 @@ export function ExpenseManager({
                             <>
                               <span className="font-bold tabular-nums text-[var(--color-text)]">{money(c.last.amount)}</span>
                               <span className="ml-1.5 text-[var(--color-text-muted)]">
-                                {new Date(c.last.date).toLocaleDateString("es-NI", { day: "numeric", month: "short", timeZone: "UTC" })} · {c.last.description}
+                                {fmtDayMonthUTC(c.last.date)} · {c.last.description}
                               </span>
                             </>
                           ) : (

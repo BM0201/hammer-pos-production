@@ -13,7 +13,7 @@ import { showToast } from "@/components/ui/toast";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { money } from "@/lib/format";
+import { money, fmtDayMonthUTC } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -94,8 +94,7 @@ function timeAgo(date: Date | null) {
   return `hace ${Math.floor(minutes / 60)} h`;
 }
 
-const dayLabel = (businessDate: string) =>
-  new Date(businessDate).toLocaleDateString("es-NI", { timeZone: "UTC", day: "numeric", month: "short" });
+const dayLabel = (businessDate: string) => fmtDayMonthUTC(businessDate);
 
 const waitingLabel = (daysWaiting: number) =>
   daysWaiting <= 0 ? "hoy" : daysWaiting === 1 ? "hace 1 día" : `hace ${daysWaiting} días`;

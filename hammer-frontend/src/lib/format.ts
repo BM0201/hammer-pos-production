@@ -95,6 +95,18 @@ export function fmtDayMonth(value: string | Date): string {
 }
 
 /**
+ * Día y mes abreviado, leído en UTC (no cambia de día por la zona
+ * horaria del navegador) — duplicada en expense-manager.tsx (x2) y
+ * master/operations/page.tsx antes de esta función. NO es lo mismo que
+ * fmtDayMonth() (esa lee en la zona horaria local del navegador, esta
+ * fuerza UTC a propósito para fechas de negocio "puras").
+ */
+export function fmtDayMonthUTC(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleDateString("es-NI", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
+/**
  * money() sin decimales, redondeado con Math.round (no vía Intl) — para
  * etiquetas compactas donde 2 decimales sobran (ej. barra de composición
  * de nómina). Se usa Math.round explícito en vez de maximumFractionDigits:0
