@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, AlertTriangle, CreditCard, RefreshCw, Users } from "lucide-react";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
+import { fmtDateTimeShort } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 
 type ActivityUser = {
@@ -42,10 +43,7 @@ const statusStyle: Record<ActivityUser["status"], string> = {
 
 function formatDate(value: string | null) {
   if (!value) return "Sin actividad";
-  return new Intl.DateTimeFormat("es-NI", {
-    dateStyle: "short",
-    timeStyle: "short",
-  }).format(new Date(value));
+  return fmtDateTimeShort(value);
 }
 
 export default function UserActivityPage() {

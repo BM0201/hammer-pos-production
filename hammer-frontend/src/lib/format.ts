@@ -37,6 +37,21 @@ export function fmtDateTime(value: string | Date): string {
   return d.toLocaleString("es-NI");
 }
 
+/** Fecha + hora compacta ("15/3/26, 2:30 p. m.") — duplicada en ~6 archivos
+ * (brain, sales, cameras, security, users/activity) antes de esta función. */
+export function fmtDateTimeShort(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleString("es-NI", { dateStyle: "short", timeStyle: "short" });
+}
+
+/** Fecha + hora con mes en letras ("15 mar 2026, 2:30 p. m.") — duplicada
+ * en 3 archivos (brain/decision-center, decision-detail-drawer, account/mfa)
+ * antes de esta función. */
+export function fmtDateTimeMedium(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleString("es-NI", { dateStyle: "medium", timeStyle: "short" });
+}
+
 /**
  * money() sin decimales, redondeado con Math.round (no vía Intl) — para
  * etiquetas compactas donde 2 decimales sobran (ej. barra de composición

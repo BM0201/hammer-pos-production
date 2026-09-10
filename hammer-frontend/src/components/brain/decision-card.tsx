@@ -4,7 +4,7 @@ import { useState } from "react";
 import { AlertOctagon, AlertTriangle, ArrowRight, BadgeCheck, Clock, Eye, FileText, Gauge, Target, Zap } from "lucide-react";
 import { DecisionActionButtons, type BrainDecisionAction } from "@/components/brain/decision-action-buttons";
 import { DecisionDetailDrawer } from "@/components/brain/decision-detail-drawer";
-import { money as formatMoney } from "@/lib/format";
+import { money as formatMoney, fmtDateTimeShort } from "@/lib/format";
 import { DecisionEvidence } from "@/components/brain/decision-evidence";
 import type { BrainDecisionLog } from "@/components/brain/decision-timeline";
 
@@ -128,7 +128,7 @@ function scorePercent(value: string | number | null | undefined) {
 
 function formatDate(value?: string | null) {
   if (!value) return "Sin fecha";
-  return new Date(value).toLocaleString("es-NI", { dateStyle: "short", timeStyle: "short" });
+  return fmtDateTimeShort(value);
 }
 
 export function DecisionCard({ decision, busy, onAction }: DecisionCardProps) {

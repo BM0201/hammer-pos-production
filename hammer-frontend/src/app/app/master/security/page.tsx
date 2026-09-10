@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
+import { fmtDateTimeShort } from "@/lib/format";
 import {
   ShieldAlert,
   AlertTriangle,
@@ -74,10 +75,7 @@ const SEVERITY_STYLES: Record<AlertSeverity, { badge: string; icon: React.ReactN
 };
 
 function fmt(d: string) {
-  return new Date(d).toLocaleString("es-NI", {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
+  return fmtDateTimeShort(d);
 }
 
 function SeverityBadge({ severity }: { severity: AlertSeverity }) {

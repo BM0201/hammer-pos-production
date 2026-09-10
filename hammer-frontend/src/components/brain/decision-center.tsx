@@ -16,7 +16,7 @@ import {
   Zap,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money as formatMoney } from "@/lib/format";
+import { money as formatMoney, fmtDateTimeMedium } from "@/lib/format";
 import { BrainFilters, type BrainFilterState } from "@/components/brain/brain-filters";
 import { DecisionCard, type BrainDecision } from "@/components/brain/decision-card";
 import { BrainSummary, type BrainKpis } from "@/components/brain/brain-summary";
@@ -564,7 +564,7 @@ export function DecisionCenter() {
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-1 text-[var(--color-text-muted)]">
                   <RadioTower className="h-3.5 w-3.5 text-[var(--color-master-600)]" />
                   {/* Bug 3: compare timestamps as numbers, not lexicographic strings */}
-                  Último escaneo: {latestScan ? latestScan.toLocaleString("es-NI", { dateStyle: "medium", timeStyle: "short" }) : "Sin escaneo reciente"}
+                  Último escaneo: {latestScan ? fmtDateTimeMedium(latestScan) : "Sin escaneo reciente"}
                 </span>
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-1 text-[var(--color-text-muted)]">
                   <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-success-600)]" />

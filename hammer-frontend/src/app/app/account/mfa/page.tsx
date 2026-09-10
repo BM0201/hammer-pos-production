@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { fmtDateTimeMedium } from "@/lib/format";
 
 type MfaStatus = {
   mfaEnabled: boolean;
@@ -126,8 +127,7 @@ export default function MfaSetupPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const fmt = (d: string) =>
-    new Date(d).toLocaleString("es-NI", { dateStyle: "medium", timeStyle: "short" });
+  const fmt = (d: string) => fmtDateTimeMedium(d);
 
   return (
     <section className="space-y-6 max-w-lg">

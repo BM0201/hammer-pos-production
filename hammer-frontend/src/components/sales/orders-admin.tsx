@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
-import { money } from "@/lib/format";
+import { money, fmtDateTimeShort } from "@/lib/format";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -126,7 +126,7 @@ type OrderDetail = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtDateTime(iso: string) {
-  return new Date(iso).toLocaleString("es-NI", { dateStyle: "short", timeStyle: "short" });
+  return fmtDateTimeShort(iso);
 }
 
 function fmtDate(iso: string) {

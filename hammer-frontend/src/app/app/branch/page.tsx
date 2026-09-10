@@ -19,7 +19,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
-import { money } from "@/lib/format";
+import { money, fmtDateTimeShort } from "@/lib/format";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { useSession } from "@/lib/client/session";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
@@ -391,7 +391,7 @@ export default function BranchPage() {
                 <p className="text-xs text-[var(--color-text-muted)]">Precio transporte: <strong>C${Number(t.price).toFixed(2)}</strong></p>
                 {t.reference && <p className="text-xs text-[var(--color-text-muted)]">Ref: {t.reference}</p>}
                 {t.scheduledPaymentTime && (
-                  <p className="text-xs text-[var(--color-text-muted)]">Pago prog.: {new Date(t.scheduledPaymentTime).toLocaleString("es-NI", { dateStyle: "short", timeStyle: "short" })}</p>
+                  <p className="text-xs text-[var(--color-text-muted)]">Pago prog.: {fmtDateTimeShort(t.scheduledPaymentTime)}</p>
                 )}
               </Card>
             ))}

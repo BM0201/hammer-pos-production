@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
+import { fmtDateTimeShort } from "@/lib/format";
 
 type Branch = { id: string; code: string; name: string };
 
@@ -45,7 +46,7 @@ const STATUS_LABEL: Record<CameraHealthState, string> = {
 
 function fmtSince(iso: string | null) {
   if (!iso) return "sin datos";
-  return new Date(iso).toLocaleString("es-NI", { dateStyle: "short", timeStyle: "short" });
+  return fmtDateTimeShort(iso);
 }
 
 export default function MasterCamerasPage() {

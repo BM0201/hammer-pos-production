@@ -5,7 +5,7 @@ import { DecisionActionButtons, type BrainDecisionAction } from "@/components/br
 import { DecisionEvidence } from "@/components/brain/decision-evidence";
 import { DecisionTimeline } from "@/components/brain/decision-timeline";
 import type { BrainDecision } from "@/components/brain/decision-card";
-import { money } from "@/lib/format";
+import { money, fmtDateTimeMedium } from "@/lib/format";
 
 const severityChip: Record<string, string> = {
   CRITICAL: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]",
@@ -217,7 +217,7 @@ function labelForAction(action: string) {
 
 function formatDate(value?: string | null) {
   if (!value) return "Sin fecha";
-  return new Date(value).toLocaleString("es-NI", { dateStyle: "medium", timeStyle: "short" });
+  return fmtDateTimeMedium(value);
 }
 
 function InfoTile({ icon: Icon, label, value }: { icon: typeof AlertTriangle; label: string; value: string }) {
