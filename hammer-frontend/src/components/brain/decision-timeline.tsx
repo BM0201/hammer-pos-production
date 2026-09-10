@@ -1,5 +1,7 @@
 "use client";
 
+import { fmtDateTime } from "@/lib/format";
+
 export type BrainDecisionLog = {
   id: string;
   action: string;
@@ -21,7 +23,7 @@ export function DecisionTimeline({ logs }: { logs?: BrainDecisionLog[] }) {
           <li key={log.id} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-semibold text-[var(--color-text)]">{log.action}</span>
-              <span className="text-xs text-[var(--color-text-muted)]">{new Date(log.createdAt).toLocaleString("es-NI")}</span>
+              <span className="text-xs text-[var(--color-text-muted)]">{fmtDateTime(log.createdAt)}</span>
             </div>
             <div className="mt-1 text-xs text-[var(--color-text-muted)]">{log.actor?.fullName ?? log.actor?.username ?? "SYSTEM"}</div>
             {log.note ? <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{log.note}</p> : null}
