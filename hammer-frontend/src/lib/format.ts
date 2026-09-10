@@ -52,6 +52,13 @@ export function fmtDateTimeMedium(value: string | Date): string {
   return d.toLocaleString("es-NI", { dateStyle: "medium", timeStyle: "short" });
 }
 
+/** Fecha + hora numérica ("15/03/2026, 02:30") — duplicada en
+ * master/audit/print-logs y master/history antes de esta función. */
+export function fmtDateTimeNumeric(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleString("es-NI", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
 /**
  * money() sin decimales, redondeado con Math.round (no vía Intl) — para
  * etiquetas compactas donde 2 decimales sobran (ej. barra de composición

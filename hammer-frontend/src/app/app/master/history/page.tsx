@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch } from "@/lib/client/api";
+import { fmtDateTimeNumeric } from "@/lib/format";
 import { SalesCard } from "@/components/sales/sales-card";
 import "@/styles/responsive.css";
 
@@ -103,13 +104,7 @@ export default function MasterHistoryPage() {
   }
 
   function formatDate(dateStr: string) {
-    return new Date(dateStr).toLocaleString("es-NI", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    return fmtDateTimeNumeric(dateStr);
   }
 
   return (
