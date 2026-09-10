@@ -5,6 +5,7 @@ import { CalendarDays, X } from "lucide-react";
 import toast from "react-hot-toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { fmtDateShort, initials } from "@/components/finance/payroll-calc";
+import { fmtTimeNumeric } from "@/lib/format";
 
 /**
  * Calendario de asistencia (RRHH, tab propio): un mes con quién vino cada
@@ -38,7 +39,7 @@ const WEEKDAY_LABELS = ["D", "L", "M", "M", "J", "V", "S"];
 /** "hh:mm am/pm" en hora LOCAL del dispositivo, para la hora de llegada. */
 function fmtTime(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("es-NI", { hour: "numeric", minute: "2-digit" });
+  return fmtTimeNumeric(iso);
 }
 
 /** Cuadrícula del mes (semanas de 7), con relleno null antes/después para alinear con el día de la semana. */

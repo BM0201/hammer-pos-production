@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, Search, ChevronDown, ChevronRight } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { fmtTimeNumeric } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -67,7 +68,7 @@ function dayGroupLabel(occurredAt: string) {
 }
 
 function timeOfDay(occurredAt: string) {
-  return new Date(occurredAt).toLocaleTimeString("es-NI", { hour: "numeric", minute: "2-digit" });
+  return fmtTimeNumeric(occurredAt);
 }
 
 function Headline({ actorLabel, resolved }: { actorLabel: string; resolved: ResolvedEvent }) {

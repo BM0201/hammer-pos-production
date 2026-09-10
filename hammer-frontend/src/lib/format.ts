@@ -106,6 +106,24 @@ export function fmtDayMonthUTC(value: string | Date): string {
   return d.toLocaleDateString("es-NI", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
+/** Solo hora, "hh:mm am/pm" en hora local del dispositivo — duplicada en
+ * audit-log-viewer, attendance-panel y attendance-calendar (las dos
+ * últimas con el mismo fmtTime() byte a byte, mismo comentario incluso)
+ * antes de esta función. */
+export function fmtTimeNumeric(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleTimeString("es-NI", { hour: "numeric", minute: "2-digit" });
+}
+
+/** Solo hora, con hora SIEMPRE a 2 dígitos ("02:30 p. m.", no "2:30 p. m.")
+ * — duplicada en branch/cash-destination, sales-dashboard y
+ * master/operations antes de esta función. NO es lo mismo que
+ * fmtTimeNumeric() (esa no rellena la hora). */
+export function fmtTimeShort(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit" });
+}
+
 /**
  * money() sin decimales, redondeado con Math.round (no vía Intl) — para
  * etiquetas compactas donde 2 decimales sobran (ej. barra de composición

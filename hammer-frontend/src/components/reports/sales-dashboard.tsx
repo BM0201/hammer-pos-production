@@ -10,7 +10,7 @@ import {
   RefreshCw, Download, ChevronDown, ChevronUp, X, Wallet, PiggyBank,
 } from "lucide-react";
 import { apiFetch } from "@/lib/client/api";
-import { money, money0 } from "@/lib/format";
+import { money, money0, fmtTimeShort } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/loading-state";
 
@@ -387,7 +387,7 @@ export function SalesDashboard({ masterMode = false, defaultBranchId = "", branc
           </div>
           {data && (
             <p className="text-[0.6rem] text-[var(--color-text-soft)] hidden sm:block">
-              Actualizado {new Date(data.generatedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit" })}
+              Actualizado {fmtTimeShort(data.generatedAt)}
             </p>
           )}
         </div>

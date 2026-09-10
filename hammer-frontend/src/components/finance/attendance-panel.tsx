@@ -6,7 +6,7 @@ import toast from "react-hot-toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { isMasterOrAbove } from "@/modules/rbac/role-routing";
-import { money } from "@/lib/format";
+import { money, fmtTimeNumeric } from "@/lib/format";
 import { fmtDateShort, round2 } from "./payroll-calc";
 
 /**
@@ -65,7 +65,7 @@ const MARK_STATUS_OPTIONS: Array<{ value: RollCallMarkStatus; label: string; act
 /** "hh:mm am/pm" en hora LOCAL del dispositivo, para la hora de llegada. */
 function fmtTime(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("es-NI", { hour: "numeric", minute: "2-digit" });
+  return fmtTimeNumeric(iso);
 }
 
 /**

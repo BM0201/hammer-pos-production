@@ -13,7 +13,7 @@ import { showToast } from "@/components/ui/toast";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { money, fmtDayMonthUTC } from "@/lib/format";
+import { money, fmtDayMonthUTC, fmtTimeShort } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -832,7 +832,7 @@ function TodayCard({ data, onCloseDay }: { data: TodayCardData; onCloseDay: (day
           <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-[var(--color-success-600)] animate-pulse-soft" />
           {data.branchCode} {data.branchName}
         </div>
-        <span className="text-xs text-[var(--color-text-soft)]">desde {new Date(data.openedAt).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit" })}</span>
+        <span className="text-xs text-[var(--color-text-soft)]">desde {fmtTimeShort(data.openedAt)}</span>
       </div>
       <div className="space-y-1 text-sm">
         <div className="flex justify-between"><span className="text-[var(--color-text-muted)]">Ventas pagadas</span><b className="hm-num">{money(data.paidOrdersTotal)}</b></div>
