@@ -1,8 +1,10 @@
 "use client";
 
+import { fmtDateTime } from "@/lib/format";
+
 function renderValue(value: unknown): string {
   if (value === null || value === undefined) return "-";
-  if (value instanceof Date) return value.toLocaleString("es-NI");
+  if (value instanceof Date) return fmtDateTime(value);
   if (typeof value === "object") return JSON.stringify(value, null, 2);
   return String(value);
 }
