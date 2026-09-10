@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/client/api";
 import { enqueueOfflineSale } from "@/lib/offline-db";
 import { money } from "@/lib/format";
-import type { CachedProduct } from "@/lib/offline-db";
+import { toCachedProduct } from "./product-cache";
 import "@/styles/responsive.css";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -344,18 +344,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
             isBusy={isBusy}
             onAddProduct={isOffline
               ? (product) => {
-                  const rawPrice = product.effectivePrice ?? product.branchPrice ?? null;
-                  const cachedProduct: CachedProduct = {
-                    id: product.id,
-                    sku: product.sku,
-                    name: product.name,
-                    barcode: product.barcode,
-                    categoryName: product.categoryName,
-                    effectivePrice: rawPrice === null || rawPrice === undefined ? null : Number(rawPrice),
-                    unit: product.unit ?? "UND",
-                    availableSaleStock: typeof product.availableSaleStock === "number" ? product.availableSaleStock : null,
-                  };
-                  const added = offlineCart.addProduct(cachedProduct);
+                  const added = offlineCart.addProduct(toCachedProduct(product));
                   if (!added) {
                     setNoticeTimed(`${product.name} no tiene precio de venta asignado en esta sucursal. Asignalo antes de venderlo.`, 10000);
                   }

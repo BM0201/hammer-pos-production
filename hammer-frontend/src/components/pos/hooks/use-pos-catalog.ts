@@ -6,20 +6,7 @@ import { getCatalog, saveCatalog } from "@/lib/offline-db";
 import type { CachedProduct } from "@/lib/offline-db";
 import { tokenize, matchesAllTokens, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/lib/product-search";
 import type { InventoryBalanceRow, ProductRow } from "../types";
-
-function toCachedProduct(row: ProductRow): CachedProduct {
-  const price = row.effectivePrice ?? row.branchPrice ?? null;
-  return {
-    id: row.id,
-    sku: row.sku,
-    name: row.name,
-    barcode: row.barcode,
-    categoryName: row.categoryName,
-    effectivePrice: price === null || price === undefined ? null : Number(price),
-    unit: row.unit ?? "UND",
-    availableSaleStock: typeof row.availableSaleStock === "number" ? row.availableSaleStock : null,
-  };
-}
+import { toCachedProduct, fromCachedProduct } from "../product-cache";
 
 export function usePosCatalog(branchId: string, onNotice: (msg: string) => void, isOffline = false) {
   const [search, setSearch] = useState("");
@@ -83,19 +70,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     if (isOffline) {
       const cached = await getCatalog(branchId).catch(() => [] as CachedProduct[]);
       if (cached.length > 0) {
-        // Map cached products to ProductRow shape (enough for the UI)
-        const rows = cached.map(p => ({
-          ...p,
-          standardSalePrice: p.effectivePrice,
-          branchPrice: p.effectivePrice,
-          effectivePrice: p.effectivePrice,
-          priceSource: "CACHE" as const,
-          stockOnHand: p.availableSaleStock ?? 0,
-          availableStock: p.availableSaleStock ?? 0,
-          isActive: true,
-          stockConversion: null,
-          sharedStock: null,
-        } as unknown as ProductRow));
+        const rows = cached.map(fromCachedProduct);
         seedSharedStock(rows);
         topProductsRef.current = rows;
         if (!searchRef.current.trim()) {
@@ -131,18 +106,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       // Network error: try cached catalog
       const cached = await getCatalog(branchId).catch(() => [] as CachedProduct[]);
       if (cached.length > 0) {
-        const rows = cached.map(p => ({
-          ...p,
-          standardSalePrice: p.effectivePrice,
-          branchPrice: p.effectivePrice,
-          effectivePrice: p.effectivePrice,
-          priceSource: "CACHE" as const,
-          stockOnHand: p.availableSaleStock ?? 0,
-          availableStock: p.availableSaleStock ?? 0,
-          isActive: true,
-          stockConversion: null,
-          sharedStock: null,
-        } as unknown as ProductRow));
+        const rows = cached.map(fromCachedProduct);
         seedSharedStock(rows);
         topProductsRef.current = rows;
         if (!searchRef.current.trim()) {
@@ -180,18 +144,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       const tokens = tokenize(query);
       const matched = cached.filter((p) => matchesAllTokens(p, tokens));
       const ranked = rankProductMatches(matched, query).slice(0, 30);
-      const matches = ranked.map(p => ({
-        ...p,
-        standardSalePrice: p.effectivePrice,
-        branchPrice: p.effectivePrice,
-        effectivePrice: p.effectivePrice,
-        priceSource: "CACHE" as const,
-        stockOnHand: p.availableSaleStock ?? 0,
-        availableStock: p.availableSaleStock ?? 0,
-        isActive: true,
-        stockConversion: null,
-        sharedStock: null,
-      } as unknown as ProductRow));
+      const matches = ranked.map(fromCachedProduct);
       setShowingTopSelling(false);
       applySearchRows(matches, groupProductsByFamily(matches));
       return;
