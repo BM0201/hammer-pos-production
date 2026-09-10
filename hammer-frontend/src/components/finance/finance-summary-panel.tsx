@@ -7,6 +7,7 @@ import {
 import { TrendingUp, TrendingDown, Wallet, Receipt, Users, Landmark, Info, ChevronLeft, ChevronRight, RefreshCw, Building2 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { showToast } from "@/components/ui/toast";
+import { money } from "@/lib/format";
 
 /* ── Tipos del endpoint oficial: /api/master/finance/summary (finance/service.ts) ── */
 
@@ -73,10 +74,6 @@ type TrendPoint = {
 };
 
 const MONTH_NAMES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
-
-function money(value: number | null | undefined) {
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(Number(value ?? 0));
-}
 
 function managuaNow() {
   const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Managua", year: "numeric", month: "2-digit" }).format(new Date());
