@@ -7,6 +7,8 @@
  * un patrón de sensibilidad (*_DELETED, *VOID*, FORCE_*, etc).
  */
 
+import { money as formatMoney } from "@/lib/format";
+
 export type AuditActor = { id: string; username: string; fullName: string } | null;
 export type AuditBranch = { id: string; code: string; name: string } | null;
 
@@ -135,10 +137,11 @@ const GROUP_ROLE: Record<FilterGroup, Role> = {
 
 // ── Helpers de formato ──
 
-const money = (v: unknown) => {
-  const n = Number(v ?? 0);
-  return new Intl.NumberFormat("es-NI", { style: "currency", currency: "NIO" }).format(n);
-};
+// money() de lib/format.ts espera number|string|null|undefined; acá los
+// valores vienen de metadataJson (Record<string, unknown> | null), así que
+// se necesita el cast — misma lógica (Number(v ?? 0) + Intl NIO), una sola
+// instancia del formateador en vez de una por llamada.
+const money = (v: unknown) => formatMoney(v as number | string | null | undefined);
 const pct = (v: unknown) => `${Number(v ?? 0) >= 0 ? "+" : ""}${Number(v ?? 0).toFixed(1)}%`;
 const str = (v: unknown, fallback = "—") => (typeof v === "string" && v.trim() ? v : fallback);
 const num = (v: unknown) => Number(v ?? 0);
