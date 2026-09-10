@@ -7,7 +7,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { money, qty } from "@/lib/format";
+import { money, qty, fmtDateTime } from "@/lib/format";
 
 type BalanceRow = {
   id: string;
@@ -430,7 +430,7 @@ export function InventoryAdmin({
                   <tbody>
                     {movements.map((item) => (
                       <tr key={item.id}>
-                        <td>{new Date(item.createdAt).toLocaleString("es-NI")}</td>
+                        <td>{fmtDateTime(item.createdAt)}</td>
                         <td className="font-semibold">{item.product.sku}</td>
                         <td>{item.product.name}</td>
                         <td><Badge variant={item.movementType.includes("IN") ? "success" : "warning"}>{item.movementType}</Badge></td>
