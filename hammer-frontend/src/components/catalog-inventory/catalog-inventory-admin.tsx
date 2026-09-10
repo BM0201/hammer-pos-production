@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money, qty } from "@/lib/format";
+import { money, qty, fmtDateTime } from "@/lib/format";
 import { tokenize } from "@/lib/product-search";
 import { formatSharedStock } from "@/lib/inventory/shared-stock-format";
 
@@ -1816,7 +1816,7 @@ function InventorySummary({ kpis, onNavigate }: InventorySummaryProps) {
    ═══════════════════════════════════════════════════════════ */
 function CompactMovements({ movements }: { movements: Movement[] }) {
   if (!movements.length) return <div className="rounded-xl border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-alt)] px-4 py-6 text-center"><p className="text-sm text-[var(--color-text-muted)]">Sin movimientos recientes.</p></div>;
-  return <div className="space-y-1.5">{movements.map((item) => <div key={item.id} className="grid gap-2 rounded-lg border border-[var(--color-border)] p-2.5 text-xs md:grid-cols-6 hover:bg-[var(--color-surface-alt)] transition-colors"><span className="text-[var(--color-text-soft)]">{new Date(item.createdAt).toLocaleString("es-NI")}</span><span className="font-mono font-medium text-[var(--color-info-700)]">{item.product.sku}</span><span className="md:col-span-2 font-medium">{item.product.name}</span><span className="text-[var(--color-text-muted)]">{item.branch.code}</span><span className="font-medium">{item.movementType} · {qty(item.quantity)}</span></div>)}</div>;
+  return <div className="space-y-1.5">{movements.map((item) => <div key={item.id} className="grid gap-2 rounded-lg border border-[var(--color-border)] p-2.5 text-xs md:grid-cols-6 hover:bg-[var(--color-surface-alt)] transition-colors"><span className="text-[var(--color-text-soft)]">{fmtDateTime(item.createdAt)}</span><span className="font-mono font-medium text-[var(--color-info-700)]">{item.product.sku}</span><span className="md:col-span-2 font-medium">{item.product.name}</span><span className="text-[var(--color-text-muted)]">{item.branch.code}</span><span className="font-medium">{item.movementType} · {qty(item.quantity)}</span></div>)}</div>;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -3279,7 +3279,7 @@ function MovementsPanel({
                 return (
                   <tr key={item.id} className="group hover:bg-[var(--color-surface-alt)]">
                     <td className="whitespace-nowrap text-xs text-[var(--color-text-secondary)]">
-                      {new Date(item.createdAt).toLocaleString("es-NI")}
+                      {fmtDateTime(item.createdAt)}
                     </td>
                     <td>
                       <div className="font-medium text-[var(--color-text)] leading-tight">{item.product.name}</div>
@@ -4445,7 +4445,7 @@ function AuditPanel({ logs }: { logs: AuditRow[] }) {
           <tbody>
             {logs.map((log) => (
               <tr key={log.id}>
-                <td>{new Date(log.occurredAt).toLocaleString("es-NI")}</td>
+                <td>{fmtDateTime(log.occurredAt)}</td>
                 <td>{log.module}</td>
                 <td>{log.action}</td>
                 <td>{log.entityType}</td>
