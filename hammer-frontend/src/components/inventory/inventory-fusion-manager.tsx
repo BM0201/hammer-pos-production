@@ -10,6 +10,7 @@ import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Boxes, PackageCheck, PackageOpen, Pencil, Plus, Search, Split, Wrench, X } from "lucide-react";
 import { COMMON_PRESENTATION_UNITS, findDuplicateFactors, findUnitCollisions } from "@/lib/inventory/presentation-units";
+import { qty2 as fmt } from "@/lib/format";
 
 /* ─────────────────────────── Tipos ─────────────────────────── */
 
@@ -93,10 +94,6 @@ type UnmergePreviewBranch = { branchId: string; branchCode: string; targetNewQty
 type UnmergePreview = { stockGroupId: string; stockGroupCode: string; totalStock: string; targetProductId: string; branches: UnmergePreviewBranch[] };
 
 /* ─────────────────────────── Helpers ─────────────────────────── */
-
-function fmt(n: number) {
-  return n.toLocaleString("es-NI", { maximumFractionDigits: 2 });
-}
 
 function dualStockLabel(row: BranchStockRow, group: FusionGroup): { primary: string; secondary: string } {
   if (group.tracksPackages) {
