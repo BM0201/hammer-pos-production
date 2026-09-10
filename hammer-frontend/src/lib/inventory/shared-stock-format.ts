@@ -11,15 +11,13 @@
  * está escrita en este archivo.
  */
 import type { ProductStockView } from "@/lib/inventory/types";
+import { qty2 as fmt } from "@/lib/format";
 
 export type SharedStockDisplay = {
   primary: string;    // "2 metros"
   secondary: string;  // "Equivale a 53 latas"
   chip: string;       // "1 metro = 22 latas"
 };
-
-const fmt = (value: number) =>
-  new Intl.NumberFormat("es-NI", { maximumFractionDigits: 2 }).format(value);
 
 /** Plural simple en español, suficiente para nombres de unidad. */
 function pluralize(unit: string, quantity: number): string {
