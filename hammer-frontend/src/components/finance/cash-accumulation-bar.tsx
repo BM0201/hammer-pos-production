@@ -2,11 +2,11 @@
 
 import { AlertTriangle, Settings2, TrendingUp } from "lucide-react";
 import { STATE_META, type CashPosition } from "@/components/navigation/cash-indicator-panel";
-import { money } from "@/lib/format";
+import { money, fmtWeekdayDate } from "@/lib/format";
 
 function fmtDate(iso: string | null) {
   if (!iso) return null;
-  return new Date(iso).toLocaleDateString("es-NI", { weekday: "long", day: "2-digit", month: "short" });
+  return fmtWeekdayDate(iso);
 }
 
 const BAR_FILL_COLOR: Record<CashPosition["state"], string> = {

@@ -7,7 +7,7 @@ import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
-import { money } from "@/lib/format";
+import { money, fmtWeekdayDate } from "@/lib/format";
 
 /**
  * Indicador de efectivo en la barra lateral (prompt-indicador-efectivo-
@@ -47,7 +47,7 @@ export const STATE_META: Record<CashIndicatorState, { label: string; tone: "neut
 
 function fmtDate(iso: string | null) {
   if (!iso) return null;
-  return new Date(iso).toLocaleDateString("es-NI", { weekday: "long", day: "2-digit", month: "short" });
+  return fmtWeekdayDate(iso);
 }
 
 /**

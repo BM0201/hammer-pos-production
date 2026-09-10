@@ -59,6 +59,13 @@ export function fmtDateTimeNumeric(value: string | Date): string {
   return d.toLocaleString("es-NI", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+/** Fecha con día de la semana ("lunes, 15 mar") — duplicada en
+ * cash-indicator-panel y cash-accumulation-bar antes de esta función. */
+export function fmtWeekdayDate(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleDateString("es-NI", { weekday: "long", day: "2-digit", month: "short" });
+}
+
 /**
  * money() sin decimales, redondeado con Math.round (no vía Intl) — para
  * etiquetas compactas donde 2 decimales sobran (ej. barra de composición
