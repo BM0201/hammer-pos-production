@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Plus, Truck, Search, TreePine, X, Settings2, Upload, Loader2 } from "lucide-react";
+import { numFixed as fmt } from "@/lib/format";
 
 /* ─────────────────────────── Tipos ─────────────────────────── */
 
@@ -94,9 +95,6 @@ type CubicationImportPreview = { tripId: string; tripCode: string; recognized: C
 function n(v: number | string | null | undefined): number {
   if (v === null || v === undefined) return 0;
   return typeof v === "number" ? v : Number(v);
-}
-function fmt(v: number | string | null | undefined, decimals = 2): string {
-  return n(v).toLocaleString("es-NI", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 function pct(v: number | string | null | undefined): string {
   return `${(n(v) * 100).toFixed(2)}%`;
