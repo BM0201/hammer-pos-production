@@ -6,6 +6,7 @@
  */
 
 import { Badge } from "@/components/ui/badge";
+import { fmtDateNumeric } from "@/lib/format";
 
 type HistoryEntry = {
   id: string;
@@ -56,7 +57,7 @@ export function SalesCard({ entry, onView }: SalesCardProps) {
       <p className="text-sm mb-2">{entry.description}</p>
 
       <div className="flex items-center justify-between text-xs text-[var(--color-text-muted)]">
-        <span>{new Date(entry.date).toLocaleDateString("es-NI")}</span>
+        <span>{fmtDateNumeric(entry.date)}</span>
         <span className="font-bold text-base text-[var(--color-text)]">
           C$ {entry.amount.toFixed(2)}
         </span>

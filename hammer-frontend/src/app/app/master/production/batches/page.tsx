@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { tokenize } from "@/lib/product-search";
-import { money as formatMoney } from "@/lib/format";
+import { money as formatMoney, fmtDateNumeric } from "@/lib/format";
 
 /**
  * Producción v2 Fase 6 — "Lotes y variancia" (mockup vista 4). Como el
@@ -153,7 +153,7 @@ function BatchesContent() {
                       <tr key={b.id} className="hm-row-dense">
                         <td>
                           <Link href={`/app/master/production/batches/${b.id}`} className="font-mono text-[11px] font-semibold text-[var(--color-master-600)] hover:underline">{b.batchNumber}</Link>
-                          <br /><span className="text-[10.5px] text-[var(--color-text-muted)]">{new Date(b.createdAt).toLocaleDateString("es-NI")}</span>
+                          <br /><span className="text-[10.5px] text-[var(--color-text-muted)]">{fmtDateNumeric(b.createdAt)}</span>
                         </td>
                         <td>{b.recipe.name}</td>
                         <td className="hm-num">{b.producedGoodQuantity ?? "—"} / {b.plannedQuantity.toLocaleString("es-NI")}</td>

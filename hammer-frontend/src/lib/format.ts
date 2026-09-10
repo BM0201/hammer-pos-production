@@ -79,6 +79,21 @@ export function fmtDatePadded(value: string | Date): string {
   return d.toLocaleDateString("es-NI", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+/** Fecha numérica por defecto del motor ("5/3/2026") — sin opciones,
+ * duplicada en 6 archivos antes de esta función. NO es lo mismo que
+ * fmtDate() de este archivo ("5 mar 2026", con mes en letras). */
+export function fmtDateNumeric(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleDateString("es-NI");
+}
+
+/** Día y mes abreviado, sin año ("05-mar") — duplicada en login y
+ * branch/cash-destination antes de esta función. */
+export function fmtDayMonth(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toLocaleDateString("es-NI", { day: "2-digit", month: "short" });
+}
+
 /**
  * money() sin decimales, redondeado con Math.round (no vía Intl) — para
  * etiquetas compactas donde 2 decimales sobran (ej. barra de composición

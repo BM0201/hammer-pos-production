@@ -10,7 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
-import { money } from "@/lib/format";
+import { money, fmtDayMonth } from "@/lib/format";
 
 /**
  * "Destino del efectivo" — un solo trabajo: decidir qué pasa con el
@@ -56,7 +56,7 @@ type CashDestinationSummary = {
 type BranchPerson = { id: string; fullName: string; roleLabel: string };
 type BankAccountOption = { id: string; bankName: string; accountAlias: string; accountNumber: string; currencyCode: "NIO" | "USD" };
 
-const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("es-NI", { day: "2-digit", month: "short" });
+const fmtDate = (iso: string) => fmtDayMonth(iso);
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString("es-NI", { hour: "2-digit", minute: "2-digit" });
 const currencySymbol = (code: "NIO" | "USD") => (code === "USD" ? "$" : "C$");
 /** El cajero reconoce la cuenta por el banco y los últimos dígitos, no por un alias interno. */

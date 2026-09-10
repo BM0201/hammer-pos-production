@@ -20,7 +20,7 @@ import {
   CalendarDays,
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money } from "@/lib/format";
+import { money, fmtDateNumeric } from "@/lib/format";
 import { DEFAULT_PAYROLL_RATES, splitNetPayBiweekly, MES_LARGO, type PayrollBreakdown, type PayrollRates } from "@/components/finance/payroll-calc";
 import { usePaydayForMonth, type PaydayForMonthEntry } from "@/components/finance/use-payday-for-month";
 import { AttendancePanel } from "@/components/finance/attendance-panel";
@@ -779,8 +779,8 @@ export function EmployeeManager({ forcedTab, hideTabBar = false, hideKpis = fals
                       <td className="text-[var(--color-text-muted)]"><span className="inline-flex items-center gap-1"><Briefcase className="h-3.5 w-3.5" />{emp.position}</span></td>
                       <td className="text-[var(--color-text-muted)]">{emp.branch?.code ?? "—"}</td>
                       <td className="text-right font-mono">{money(emp.monthlySalary)}</td>
-                      <td className="text-[var(--color-text-muted)]">{new Date(emp.startDate).toLocaleDateString("es-NI")}</td>
-                      <td className="text-[var(--color-text-muted)]">{emp.endDate ? new Date(emp.endDate).toLocaleDateString("es-NI") : "—"}</td>
+                      <td className="text-[var(--color-text-muted)]">{fmtDateNumeric(emp.startDate)}</td>
+                      <td className="text-[var(--color-text-muted)]">{emp.endDate ? fmtDateNumeric(emp.endDate) : "—"}</td>
                       <td>
                         <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[0.5625rem] font-semibold ${
                           emp.isActive ? "bg-[var(--color-success-100)] text-[var(--color-success-700)]" : "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]"

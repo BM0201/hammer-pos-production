@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money as formatMoney, qty2 } from "@/lib/format";
+import { money as formatMoney, qty2, fmtDateNumeric } from "@/lib/format";
 
 type BatchSummary = {
   id: string;
@@ -367,7 +367,7 @@ export default function ProductionDashboardPage() {
                         <td className="px-4 py-3 text-center"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${st.cls}`}>{st.label}</span></td>
                         <td className="px-4 py-3 text-right">{num(batch.producedGoodQuantity ?? batch.plannedQuantity)}</td>
                         <td className="px-4 py-3 text-right">{money(batch.unitCost)}</td>
-                        <td className="px-4 py-3 text-[var(--color-text-muted)]">{new Date(batch.completedAt ?? batch.createdAt).toLocaleDateString("es-NI")}</td>
+                        <td className="px-4 py-3 text-[var(--color-text-muted)]">{fmtDateNumeric(batch.completedAt ?? batch.createdAt)}</td>
                       </tr>
                     );
                   })}

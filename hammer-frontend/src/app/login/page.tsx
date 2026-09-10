@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
 import { resolveRoleHome } from "@/modules/rbac/role-routing";
 import { TurnstileWidget, resetTurnstile } from "@/components/security/turnstile-widget";
+import { fmtDayMonth } from "@/lib/format";
 
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
@@ -80,7 +81,7 @@ function fmtAcceso(ts: string | null): string {
     return `Hoy, ${hora}`;
   if (new Date(now.getTime() - 86400000).toDateString() === d.toDateString())
     return `Ayer, ${hora}`;
-  return `${d.toLocaleDateString("es-NI", { day: "2-digit", month: "short" })}, ${hora}`;
+  return `${fmtDayMonth(d)}, ${hora}`;
 }
 
 type LoginStep = "credentials" | "mfa";
