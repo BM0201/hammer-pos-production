@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
-import { applyTimberCostsTx, resolveSellingPriceForPolicy } from "@/modules/timber/service";
+import { applyTimberCostsTx, applyTimberSalePriceRecalcRowsTx, resolveSellingPriceForPolicy, type TimberSalePriceRecalcRow } from "@/modules/timber/service";
 
 /**
  * Madera v2 Fase 2 — el bug a matar: resolveTimberProductForLineTx retornaba
@@ -259,4 +259,67 @@ test("Prueba LA QUE IMPORTA — producto de madera derivado de una fusión: el c
   assert.equal(canonicalSetting.branchCost?.toNumber(), 300, "3000 / 10 = 300 — el costo real por tabla, en el canónico");
   assert.equal(getBranchSetting()?.branchCost?.toNumber() ?? null, 320, "el derivado NUNCA guarda su propio costo — sigue con el valor viejo, no 3000");
   assert.equal(getProduct().standardSalePrice.toNumber(), 640.8, "el precio de venta se queda en el producto (derivado) — COST_ONLY, sin tocar");
+});
+
+/**
+ * Precio por pulgada configurable por sucursal (2026-09-11) — el "Aplicar" de
+ * la vista previa de recálculo masivo escribe SOLO branchPrice, nunca
+ * branchCost, y solo las filas que la vista previa trajo para esa sucursal.
+ * Fake tx con settings de DOS sucursales para probar que una escritura de
+ * MSY nunca toca MGA — el riesgo real de un recálculo masivo entre sucursales.
+ */
+function createSalePriceFakeTx(seed: Record<string, { branchCost: number; branchPrice: number }>) {
+  const settings = new Map(
+    Object.entries(seed).map(([key, v]) => [key, { branchCost: new Prisma.Decimal(v.branchCost), branchPrice: new Prisma.Decimal(v.branchPrice) }]),
+  );
+  const auditLogs: Array<Record<string, unknown>> = [];
+  const tx = {
+    branchProductSetting: {
+      upsert: async (args: { where: { branchId_productId: { branchId: string; productId: string } }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        const key = `${args.where.branchId_productId.branchId}:${args.where.branchId_productId.productId}`;
+        const data = (settings.has(key) ? args.update : args.create) as { branchPrice: Prisma.Decimal };
+        const existing = settings.get(key);
+        settings.set(key, { branchCost: existing?.branchCost ?? new Prisma.Decimal(0), branchPrice: data.branchPrice });
+        return settings.get(key);
+      },
+    },
+    auditLog: {
+      create: async (args: { data: Record<string, unknown> }) => {
+        auditLogs.push(args.data);
+        return args.data;
+      },
+    },
+  };
+  return {
+    tx: tx as unknown as Prisma.TransactionClient,
+    getSetting: (branchId: string, productId: string) => settings.get(`${branchId}:${productId}`),
+    auditLogs,
+  };
+}
+
+test("applyTimberSalePriceRecalcRowsTx: solo escribe branchPrice de las filas dadas — otra sucursal/producto no listado queda intacto", async () => {
+  const { tx, getSetting, auditLogs } = createSalePriceFakeTx({
+    "branch-msy:prod-a": { branchCost: 320, branchPrice: 640.8 },
+    "branch-mga:prod-b": { branchCost: 500, branchPrice: 900 },
+  });
+
+  const rows: TimberSalePriceRecalcRow[] = [
+    { productId: "prod-a", sku: "MAD-CUA-2x2x11", name: "Cuadro 2x2x11", branchId: "branch-msy", branchName: "Masaya", currentPrice: 640.8, newPrice: 700, difference: 59.2 },
+  ];
+
+  await applyTimberSalePriceRecalcRowsTx(tx, rows, "user-1");
+
+  const updated = getSetting("branch-msy", "prod-a");
+  assert.equal(updated?.branchPrice.toNumber(), 700, "branchPrice de la sucursal/producto en la lista se actualiza");
+  assert.equal(updated?.branchCost.toNumber(), 320, "branchCost NUNCA se toca — sigue en su valor original");
+
+  const untouched = getSetting("branch-mga", "prod-b");
+  assert.equal(untouched?.branchPrice.toNumber(), 900, "otra sucursal (MGA), fuera de la lista, no se toca");
+  assert.equal(untouched?.branchCost.toNumber(), 500);
+
+  assert.equal(auditLogs.length, 1);
+  assert.equal(auditLogs[0].branchId, "branch-msy");
+  const logged = auditLogs[0].metadataJson as { before: number; after: number };
+  assert.equal(logged.before, 640.8);
+  assert.equal(logged.after, 700);
 });

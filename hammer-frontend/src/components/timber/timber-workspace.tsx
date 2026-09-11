@@ -6,8 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { Plus, Truck, Search, TreePine, X, Settings2, Upload, Loader2 } from "lucide-react";
-import { numFixed as fmt } from "@/lib/format";
+import { Plus, Truck, Search, TreePine, X, Settings2, Upload, Loader2, Building2, ArrowRight } from "lucide-react";
+import { numFixed as fmt, money } from "@/lib/format";
 
 /* ─────────────────────────── Tipos ─────────────────────────── */
 
@@ -985,16 +985,35 @@ type FullConfig = {
   classification: { cubicationTable: CubicationRow[]; tablaWidths: number[]; tablillaWidths: number[] };
   targetMarginPercent: number; targetMarginRoundingMultiple: number;
   reconciliationTolerancePercent: number; warnBelowTargetMargin: boolean; blockNegativeMargin: boolean;
+  /** true solo si branchId venía con valor y existe fila propia de esa sucursal — false = viendo/heredando el default global. */
+  isBranchOverride: boolean;
 };
 
 export function TimberConfigPanel() {
   const [config, setConfig] = useState<FullConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // "" = default global. Mismo selector de sucursal que la zona Precios
+  // (Master), con la opción extra "Global (default)" — acá no hay un modo
+  // "todas las sucursales a la vez": Configuración siempre edita UNA fila
+  // (la global o la de una sucursal puntual).
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [branchId, setBranchId] = useState("");
+  // Paso 4 — después de guardar una sucursal puntual (nunca el default
+  // global, que no tiene un botón de aplicar propio acá) se ofrece el
+  // camino directo a la vista previa; el panel en sí solo se pide/carga si
+  // el usuario lo confirma con el botón, no automáticamente al guardar.
+  const [promptRecalcForBranch, setPromptRecalcForBranch] = useState<string | null>(null);
+  const [showRecalcForBranch, setShowRecalcForBranch] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch("/api/branches").then((r) => (r.ok ? r.json() : null)).then((raw) => { if (raw) setBranches(unwrapApiData(raw) as Branch[]); }).catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const res = await fetch("/api/timber/pricing");
+      const res = await fetch(`/api/timber/pricing${branchId ? `?branchId=${branchId}` : ""}`);
       const raw = await readJson(res);
       setConfig(unwrapApiData(raw));
     } catch {
@@ -1002,8 +1021,14 @@ export function TimberConfigPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [branchId]);
   useEffect(() => { void load(); }, [load]);
+
+  function selectBranch(nextBranchId: string) {
+    setBranchId(nextBranchId);
+    setPromptRecalcForBranch(null);
+    setShowRecalcForBranch(null);
+  }
 
   async function save() {
     if (!config) return;
@@ -1013,6 +1038,7 @@ export function TimberConfigPanel() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          branchId: branchId || undefined,
           costPerFoot: config.costPerFoot,
           pricePerInchTabla: config.pricePerInchTabla,
           pricePerInchTablilla: config.pricePerInchTablilla,
@@ -1029,8 +1055,11 @@ export function TimberConfigPanel() {
       });
       const raw = await readJson(res);
       if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo guardar la configuración."); return; }
-      showToast("success", "Configuración guardada.");
+      showToast("success", branchId ? `Configuración de ${branches.find((b) => b.id === branchId)?.name ?? "la sucursal"} guardada.` : "Configuración global guardada.");
       setConfig(unwrapApiData(raw));
+      // Paso 4 — después de editar UNA sucursal puntual, ofrecer directo el
+      // camino a los productos afectados, sin mandar a buscar una pantalla aparte.
+      if (branchId) setPromptRecalcForBranch(branchId);
     } catch {
       showToast("error", "Error de red al guardar.");
     } finally {
@@ -1048,17 +1077,75 @@ export function TimberConfigPanel() {
     return <div className="p-8 text-center text-sm text-[var(--color-text-muted)]">Cargando configuración…</div>;
   }
 
+  const activeBranchName = branches.find((b) => b.id === branchId)?.name;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-2.5">
         <div className="hm-section-icon hm-section-icon-warehouse"><Settings2 className="h-4 w-4" /></div>
         <div>
           <h1 className="text-lg font-bold tracking-tight text-[var(--color-text)]">Configuración de Madera</h1>
           <p className="text-sm text-[var(--color-text-muted)]">Tabla de cubicación, precios por pulgada, margen objetivo y alertas — todo editable, sin código.</p>
         </div>
         <span className="flex-1" />
+        <div className="flex items-end gap-2">
+          <Building2 className="mb-2.5 h-4 w-4 text-[var(--color-text-muted)]" />
+          <div className="w-[220px]">
+            <label htmlFor="timber-config-branch" className="mb-1 block text-xs text-[var(--color-text-muted)]">Sucursal</label>
+            <select id="timber-config-branch" className="hm-input" value={branchId} onChange={(e) => selectBranch(e.target.value)}>
+              <option value="">Global (default)</option>
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.code} · {b.name}</option>)}
+            </select>
+          </div>
+        </div>
         <Button variant="primary" loading={saving} onClick={save}>Guardar cambios</Button>
       </div>
+
+      {/* Paso 1/2 — deja claro si se está editando el default global o una
+          sucursal puntual, y si esa sucursal ya tiene override propio o
+          todavía está heredando el global (guardar acá crea su override). */}
+      {branchId ? (
+        <div className="rounded-lg border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3.5 py-2 text-[12.5px] text-[var(--color-info-800)]">
+          {config.isBranchOverride
+            ? <>Editando la configuración propia de <b>{activeBranchName}</b>.</>
+            : <>{activeBranchName} todavía no tiene configuración propia — mostrando el default global. Guardar acá crea su override, sin afectar a las demás sucursales.</>}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3.5 py-2 text-[12.5px] text-[var(--color-text-muted)]">
+          Editando el default global — aplica a toda sucursal sin configuración propia.
+        </div>
+      )}
+
+      {/* Paso 4 — ofrece directo el camino a la vista previa después de
+          guardar una sucursal puntual, sin auto-cargarla (puede ser una
+          lista larga) ni mandar a buscar una pantalla aparte. */}
+      {promptRecalcForBranch && !showRecalcForBranch && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--color-success-200)] bg-[var(--color-success-50)] px-3.5 py-2.5">
+          <p className="text-[12.5px] text-[var(--color-success-800)]">
+            El precio por pulgada de <b>{activeBranchName}</b> cambió — algunos productos de madera ya tienen un precio de venta distinto al calculado.
+          </p>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setPromptRecalcForBranch(null)}>Ahora no</Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              icon={<ArrowRight className="h-3.5 w-3.5" />}
+              onClick={() => { setShowRecalcForBranch(promptRecalcForBranch); setPromptRecalcForBranch(null); }}
+            >
+              Ver productos afectados y actualizar precios
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {showRecalcForBranch && (
+        <TimberSalePriceRecalcPreviewPanel
+          branchId={showRecalcForBranch}
+          branchName={branches.find((b) => b.id === showRecalcForBranch)?.name ?? "esta sucursal"}
+          onClose={() => setShowRecalcForBranch(null)}
+        />
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card noPadding>
@@ -1129,5 +1216,124 @@ export function TimberConfigPanel() {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ─────────────────────────── Recálculo masivo de precio de venta (Paso 3/4) ─────────────────────────── */
+
+type RecalcRow = {
+  productId: string;
+  sku: string;
+  name: string;
+  branchId: string;
+  branchName: string;
+  currentPrice: number;
+  newPrice: number;
+  difference: number;
+};
+
+/**
+ * Vista previa (GET, nada escrito todavía) → revisar → Aplicar (POST, escribe
+ * branchPrice de esa sucursal). Mismo patrón de "nunca escribir en masa sin
+ * mostrar antes qué va a cambiar" que ya usa el resto de la app (ej. la
+ * bandeja de Precios, la inyección de un viaje de madera).
+ */
+function TimberSalePriceRecalcPreviewPanel({ branchId, branchName, onClose }: { branchId: string; branchName: string; onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState<RecalcRow[] | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [applied, setApplied] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/timber/pricing/recalc-sale-prices?branchId=${branchId}`);
+      const raw = await readJson(res);
+      if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo calcular la vista previa."); return; }
+      setRows(unwrapApiData(raw) as RecalcRow[]);
+    } catch {
+      showToast("error", "Error de red al calcular la vista previa.");
+    } finally {
+      setLoading(false);
+    }
+  }, [branchId]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function apply() {
+    setApplying(true);
+    try {
+      const res = await apiFetch("/api/timber/pricing/recalc-sale-prices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branchId }),
+      });
+      const raw = await readJson(res);
+      if (!res.ok) { showToast("error", raw?.error?.message ?? "No se pudo aplicar el recálculo."); return; }
+      const result = unwrapApiData(raw) as { applied: number };
+      showToast("success", `${result.applied} precio(s) de venta actualizado(s) en ${branchName}.`);
+      setApplied(true);
+    } catch {
+      showToast("error", "Error de red al aplicar.");
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  return (
+    <Card noPadding>
+      <div className="flex items-center gap-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3.5 py-2.5">
+        <b className="text-[12.5px]">Productos afectados en {branchName}</b>
+        <span className="flex-1" />
+        <button type="button" onClick={onClose} className="text-[var(--color-text-soft)]" aria-label="Cerrar"><X className="h-4 w-4" /></button>
+      </div>
+
+      {loading ? (
+        <p className="py-10 text-center text-sm text-[var(--color-text-muted)] animate-pulse">Calculando…</p>
+      ) : !rows || rows.length === 0 ? (
+        <p className="py-10 text-center text-sm text-[var(--color-text-muted)]">Ningún producto de madera cambia de precio en {branchName} con la configuración vigente.</p>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="hm-sheet-table">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th className="r">Precio actual</th>
+                  <th className="r">Precio nuevo</th>
+                  <th className="r">Diferencia</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.productId}>
+                    <td>
+                      <span className="block font-medium">{row.name}</span>
+                      <span className="block text-[11px] text-[var(--color-text-soft)]">{row.sku}</span>
+                    </td>
+                    <td className="r tabular-nums">{money(row.currentPrice)}</td>
+                    <td className="r font-medium tabular-nums text-[var(--color-success-700)]">{money(row.newPrice)}</td>
+                    <td className={`r tabular-nums ${row.difference >= 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-600)]"}`}>
+                      {row.difference >= 0 ? "+" : ""}{money(row.difference)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center justify-between gap-3 border-t border-[var(--color-border)] px-3.5 py-2.5">
+            <span className="text-[11.5px] text-[var(--color-text-soft)]">
+              Aplicar solo actualiza el precio de venta (branchPrice) de {branchName} — no toca costos ni otras sucursales.
+            </span>
+            {applied ? (
+              <span className="text-[12.5px] font-medium text-[var(--color-success-700)]">Aplicado.</span>
+            ) : (
+              <Button type="button" variant="success" size="sm" loading={applying} onClick={apply}>
+                Aplicar {rows.length} precio{rows.length === 1 ? "" : "s"}
+              </Button>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
   );
 }

@@ -399,6 +399,7 @@ model Branch {
   cashDestinationDeclarations CashDestinationDeclaration[]
   depositPolicy               BranchDepositPolicy?
   cashDepositPostponements    CashDepositPostponement[]
+  timberPricingConfig         TimberPricingConfig?
 }
 
 model User {
@@ -921,9 +922,16 @@ model TimberProduct {
   @@index([timberType])
 }
 
-/// Global timber pricing configuration (adjustable by MASTER)
+/// Timber pricing configuration (adjustable by MASTER) — global default (branchId
+/// null) + optional per-branch overrides. getPricingConfig(branchId) resuelve la
+/// fila de esa sucursal si existe, si no cae a la global — mismo patrón de
+/// fallback que otros overrides por sucursal del proyecto (discounts.branchId null
+/// = aplica a todas).
 model TimberPricingConfig {
   id                   String  @id @default(cuid())
+  /// null = configuración global (default). Con valor = override propio de esa sucursal.
+  branchId             String? @unique
+  branch               Branch? @relation(fields: [branchId], references: [id])
   /// Cost per board foot (default C$20.00)
   costPerFoot          Decimal @default(20)
   /// Price per inch for TABLA (width >= 10", default C$8.90)

@@ -12,7 +12,7 @@ import { ok, fail } from "@/lib/api/response";
  * BUG FIX: Added try-catch error handling to both GET and PUT.
  * BUG FIX: PUT body parsing could throw if invalid JSON.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const session = await getCurrentSession();
     if (!session) return fail("ERROR", "No autenticado", 401);
@@ -24,7 +24,8 @@ export async function GET() {
     // cotizar) — se corrige igual por consistencia con PUT.
     assertFinanceAccess(session);
 
-    const config = await getPricingConfig();
+    const branchId = req.nextUrl.searchParams.get("branchId") || undefined;
+    const config = await getPricingConfig(branchId);
     return ok(config);
   } catch (err: unknown) {
     console.error("[TIMBER_PRICING_GET]", err);
@@ -45,7 +46,8 @@ export async function PUT(req: NextRequest) {
       return fail("ERROR", "Validación fallida", 400);
     }
 
-    const config = await updatePricingConfig(parsed.data, session.userId);
+    const branchId = typeof body?.branchId === "string" && body.branchId ? body.branchId : undefined;
+    const config = await updatePricingConfig(parsed.data, session.userId, branchId);
     return ok(config);
   } catch (err: unknown) {
     console.error("[TIMBER_PRICING_PUT]", err);

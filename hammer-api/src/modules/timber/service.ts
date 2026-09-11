@@ -26,7 +26,7 @@ import { Decimal } from "@prisma/client/runtime/library";
 import { createHash } from "crypto";
 import { parseWoodDimensions } from "@/modules/catalog/sku-generator";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
-import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
+import { resolveGlobalCostWriteTarget, branchProductScopeFilter } from "@/modules/catalog/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import type { Prisma, TimberTripLine } from "@prisma/client";
@@ -309,12 +309,22 @@ export type TimberFullConfig = TimberPricing & {
   reconciliationTolerancePercent: number;
   warnBelowTargetMargin: boolean;
   blockNegativeMargin: boolean;
+  /** true solo si se pidió un branchId y existe una fila propia de esa sucursal — false si se cayó al default global. */
+  isBranchOverride: boolean;
 };
 
-export async function getPricingConfig(): Promise<TimberFullConfig> {
-  const cfg = await prisma.timberPricingConfig.findFirst({
-    orderBy: { updatedAt: "desc" },
-  });
+/**
+ * branchId opcional — mismo patrón de fallback que usan los demás overrides por
+ * sucursal del proyecto: fila propia de la sucursal si existe, si no la fila
+ * global (branchId null). Sin branchId, siempre resuelve la global — igual que
+ * antes de que existieran los overrides.
+ */
+export async function getPricingConfig(branchId?: string | null): Promise<TimberFullConfig> {
+  const cfg = branchId
+    ? (await prisma.timberPricingConfig.findFirst({ where: { branchId } })) ??
+      (await prisma.timberPricingConfig.findFirst({ where: { branchId: null } }))
+    : await prisma.timberPricingConfig.findFirst({ where: { branchId: null } });
+
   if (!cfg) {
     return {
       ...DEFAULT_PRICING,
@@ -324,6 +334,7 @@ export async function getPricingConfig(): Promise<TimberFullConfig> {
       reconciliationTolerancePercent: 0.01,
       warnBelowTargetMargin: true,
       blockNegativeMargin: true,
+      isBranchOverride: false,
     };
   }
   const cubicationTable = Array.isArray(cfg.cubicationTable) && cfg.cubicationTable.length > 0
@@ -347,13 +358,22 @@ export async function getPricingConfig(): Promise<TimberFullConfig> {
     reconciliationTolerancePercent: cfg.reconciliationTolerancePercent.toNumber(),
     warnBelowTargetMargin: cfg.warnBelowTargetMargin,
     blockNegativeMargin: cfg.blockNegativeMargin,
+    isBranchOverride: !!branchId && cfg.branchId === branchId,
   };
 }
 
-/** Update pricing config */
-export async function updatePricingConfig(input: UpdateTimberPricingConfigInput, userId?: string) {
-  // Upsert — only one config record
-  const existing = await prisma.timberPricingConfig.findFirst();
+/**
+ * Update pricing config. Sin branchId, actualiza (o crea) la fila global —
+ * igual que siempre. Con branchId, upsert sobre la fila de esa sucursal
+ * específica; si no existe todavía, se crea copiando del default global los
+ * campos que el input no trae (mismos valores de partida que vería un Master
+ * que recién empieza a personalizar esa sucursal).
+ */
+export async function updatePricingConfig(
+  input: UpdateTimberPricingConfigInput,
+  userId?: string,
+  branchId?: string | null,
+) {
   const data = {
     costPerFoot: new Decimal(input.costPerFoot),
     pricePerInchTabla: new Decimal(input.pricePerInchTabla),
@@ -369,10 +389,188 @@ export async function updatePricingConfig(input: UpdateTimberPricingConfigInput,
     ...(input.blockNegativeMargin !== undefined ? { blockNegativeMargin: input.blockNegativeMargin } : {}),
     updatedBy: userId,
   };
+
+  if (branchId) {
+    const existing = await prisma.timberPricingConfig.findFirst({ where: { branchId } });
+    if (existing) {
+      return prisma.timberPricingConfig.update({ where: { id: existing.id }, data });
+    }
+    const globalDefault = await prisma.timberPricingConfig.findFirst({ where: { branchId: null } });
+    return prisma.timberPricingConfig.create({
+      data: {
+        branchId,
+        cubicationTable: globalDefault?.cubicationTable ?? undefined,
+        tablaWidths: globalDefault?.tablaWidths ?? undefined,
+        tablillaWidths: globalDefault?.tablillaWidths ?? undefined,
+        targetMarginPercent: globalDefault?.targetMarginPercent ?? new Decimal(0.4),
+        targetMarginRoundingMultiple: globalDefault?.targetMarginRoundingMultiple ?? new Decimal(1),
+        reconciliationTolerancePercent: globalDefault?.reconciliationTolerancePercent ?? new Decimal(0.01),
+        warnBelowTargetMargin: globalDefault?.warnBelowTargetMargin ?? true,
+        blockNegativeMargin: globalDefault?.blockNegativeMargin ?? true,
+        ...data,
+      },
+    });
+  }
+
+  const existing = await prisma.timberPricingConfig.findFirst({ where: { branchId: null } });
   if (existing) {
     return prisma.timberPricingConfig.update({ where: { id: existing.id }, data });
   }
   return prisma.timberPricingConfig.create({ data });
+}
+
+/* ══════════════════════════════════════════════════════════
+   Recálculo masivo de precio de venta (cambio de precio por pulgada)
+   ══════════════════════════════════════════════════════════ */
+
+export type TimberSalePriceRecalcRow = {
+  productId: string;
+  sku: string;
+  name: string;
+  branchId: string;
+  branchName: string;
+  currentPrice: number;
+  newPrice: number;
+  difference: number;
+};
+
+async function previewForBranch(
+  branch: { id: string; name: string },
+  pricing: TimberFullConfig,
+): Promise<TimberSalePriceRecalcRow[]> {
+  const products = await prisma.product.findMany({
+    where: { isTimber: true, isActive: true, ...branchProductScopeFilter(branch.id) },
+    include: {
+      timberProduct: true,
+      branchProductSettings: { where: { branchId: branch.id }, select: { branchPrice: true } },
+    },
+  });
+
+  const rows: TimberSalePriceRecalcRow[] = [];
+  for (const product of products) {
+    const tp = product.timberProduct;
+    if (!tp) continue;
+    const calc = calculateTimber(
+      { thickness: tp.thickness.toNumber(), width: tp.width.toNumber(), length: tp.length.toNumber() },
+      pricing,
+      pricing.classification,
+    );
+    const currentPrice = product.branchProductSettings[0]?.branchPrice?.toNumber() ?? product.standardSalePrice.toNumber();
+    const newPrice = calc.sellingPrice;
+    if (newPrice === currentPrice) continue;
+    rows.push({
+      productId: product.id,
+      sku: product.sku,
+      name: product.name,
+      branchId: branch.id,
+      branchName: branch.name,
+      currentPrice,
+      newPrice,
+      difference: roundMoney(newPrice - currentPrice),
+    });
+  }
+  return rows;
+}
+
+/**
+ * Vista previa (sin escribir nada) de cómo cambiaría sellingPrice de cada
+ * TimberProduct al recalcular con calculateTimber() usando el pricing vigente.
+ *
+ * Alcance: con branchId, solo esa sucursal (los productos que
+ * branchProductScopeFilter considera "de" esa sucursal — mismo filtro que ya
+ * usa el catálogo para POS/inventario). Sin branchId (se cambió el default
+ * global), el alcance es TODAS las sucursales que NO tienen su propio
+ * override — una sucursal con override propio no se mueve por un cambio al
+ * global, así que queda afuera de la vista previa a propósito.
+ */
+export async function previewTimberSalePriceRecalc(branchId?: string | null): Promise<TimberSalePriceRecalcRow[]> {
+  if (branchId) {
+    const branch = await prisma.branch.findUnique({ where: { id: branchId } });
+    if (!branch) throw new Error("BRANCH_NOT_FOUND");
+    return previewForBranch(branch, await getPricingConfig(branchId));
+  }
+
+  const [branches, overrides, globalPricing] = await Promise.all([
+    prisma.branch.findMany({ where: { isActive: true } }),
+    prisma.timberPricingConfig.findMany({ where: { branchId: { not: null } }, select: { branchId: true } }),
+    getPricingConfig(null),
+  ]);
+  const overriddenBranchIds = new Set(overrides.map((o) => o.branchId));
+
+  const rows: TimberSalePriceRecalcRow[] = [];
+  for (const branch of branches) {
+    if (overriddenBranchIds.has(branch.id)) continue;
+    rows.push(...(await previewForBranch(branch, globalPricing)));
+  }
+  return rows;
+}
+
+/**
+ * Escribe una lista ya calculada de filas: SOLO branchPrice en
+ * BranchProductSetting (nunca branchCost), y solo para el branchId de cada
+ * fila — mismo campo/patrón que ya usa applyTimberCostsTx para viajes, sin
+ * mecanismo nuevo de escritura de precio. Separada de applyTimberSalePriceRecalc
+ * (que resuelve las filas desde la DB) para poder probar el alcance de la
+ * escritura con un tx de prueba, igual que injection.test.ts prueba
+ * applyTimberCostsTx.
+ */
+export async function applyTimberSalePriceRecalcRowsTx(
+  tx: Prisma.TransactionClient,
+  rows: TimberSalePriceRecalcRow[],
+  userId?: string,
+): Promise<void> {
+  for (const row of rows) {
+    await tx.branchProductSetting.upsert({
+      where: { branchId_productId: { branchId: row.branchId, productId: row.productId } },
+      create: {
+        branchId: row.branchId,
+        productId: row.productId,
+        branchPrice: new Decimal(row.newPrice),
+        priceSource: "TIMBER_PRICE_PER_INCH_RECALC",
+        lastPriceUpdateAt: new Date(),
+        priceUpdatedByUserId: userId,
+      },
+      update: {
+        branchPrice: new Decimal(row.newPrice),
+        priceSource: "TIMBER_PRICE_PER_INCH_RECALC",
+        lastPriceUpdateAt: new Date(),
+        priceUpdatedByUserId: userId,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorUserId: userId,
+        branchId: row.branchId,
+        module: "timber",
+        action: "TIMBER_SALE_PRICE_RECALCULATED",
+        entityType: "Product",
+        entityId: row.productId,
+        metadataJson: { before: row.currentPrice, after: row.newPrice, difference: row.difference },
+      },
+    });
+  }
+}
+
+/**
+ * Recalcula la vista previa en el momento de escribir (no hay selección
+ * parcial de filas — "aplicar" es todo lo que la vista previa muestre en ese
+ * instante para esa sucursal) y la escribe con applyTimberSalePriceRecalcRowsTx.
+ *
+ * Solo una sucursal concreta a la vez — nunca el default global — para que
+ * una escritura masiva nunca cruce sucursales sin que quien la dispare haya
+ * elegido cuál.
+ */
+export async function applyTimberSalePriceRecalc(
+  branchId: string,
+  userId?: string,
+): Promise<{ applied: number; rows: TimberSalePriceRecalcRow[] }> {
+  if (!branchId) throw new Error("BRANCH_ID_REQUIRED");
+  const rows = await previewTimberSalePriceRecalc(branchId);
+  if (rows.length === 0) return { applied: 0, rows: [] };
+
+  await prisma.$transaction((tx) => applyTimberSalePriceRecalcRowsTx(tx, rows, userId));
+
+  return { applied: rows.length, rows };
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -663,7 +861,7 @@ async function generateTripCode(): Promise<string> {
 
 /** Create a new timber trip with lines */
 export async function createTimberTrip(input: CreateTimberTripInput, userId?: string) {
-  const pricing = await getPricingConfig();
+  const pricing = await getPricingConfig(input.destinationBranchId);
   const tripPricing: TimberPricing = {
     costPerFoot: pricing.costPerFoot,
     pricePerInchTabla: input.pricePerInchTabla ?? pricing.pricePerInchTabla,
@@ -754,7 +952,7 @@ export async function updateTimberTrip(id: string, input: UpdateTimberTripInput)
   if (!existing) throw new Error("TIMBER_TRIP_NOT_FOUND");
   if (existing.status !== "DRAFT") throw new Error("TRIP_NOT_EDITABLE");
 
-  const pricing = await getPricingConfig();
+  const pricing = await getPricingConfig(existing.destinationBranchId);
   const tripPricing: TimberPricing = {
     costPerFoot: pricing.costPerFoot,
     pricePerInchTabla: input.pricePerInchTabla ?? existing.pricePerInchTabla.toNumber(),
@@ -956,7 +1154,7 @@ export async function getTimberTripInjectionPreview(id: string): Promise<TimberI
   const trip = await prisma.timberTrip.findUnique({ where: { id }, include: { lines: true } });
   if (!trip) throw new Error("TIMBER_TRIP_NOT_FOUND");
 
-  const marginConfig = await getPricingConfig();
+  const marginConfig = await getPricingConfig(trip.destinationBranchId);
   const resolvedLines = await resolveLinesForInjectionReadOnly(trip);
 
   const lines: TimberInjectionLinePreview[] = [];
@@ -1182,7 +1380,7 @@ export async function confirmTimberTrip(
     throw new Error("TRIP_REQUIRES_COST");
   }
 
-const config = await getPricingConfig();
+  const config = await getPricingConfig(trip.destinationBranchId);
   const reconciliation = calculateReconciliation(
     trip.totalFeet.toNumber(),
     trip.invoicedFeet != null ? trip.invoicedFeet.toNumber() : null,
@@ -1329,7 +1527,7 @@ export async function cancelTimberTrip(id: string) {
   });
 
   // Mismo shape que getTimberTrip/updateTimberTrip/confirmTimberTrip.
-  const config = await getPricingConfig();
+  const config = await getPricingConfig(cancelled.destinationBranchId);
   const reconciliation = calculateReconciliation(
     cancelled.totalFeet.toNumber(),
     cancelled.invoicedFeet != null ? cancelled.invoicedFeet.toNumber() : null,
@@ -1349,7 +1547,7 @@ export async function getTimberTrip(id: string) {
   });
   if (!trip) return null;
 
-  const config = await getPricingConfig();
+  const config = await getPricingConfig(trip.destinationBranchId);
   const reconciliation = calculateReconciliation(
     trip.totalFeet.toNumber(),
     trip.invoicedFeet != null ? trip.invoicedFeet.toNumber() : null,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  calculateTimber,
   calculateTimberTrip,
   calculateReconciliation,
   classifyTimber,
@@ -21,6 +22,19 @@ const PRICING = {
 const lines: TimberTripLineInput[] = [
   { thickness: 1, width: 12, length: 16, pieces: 10, priceGroup: "TABLA" },
 ];
+
+// Madera por sucursal (2026-09-11) — mismo formula que usa el recálculo masivo
+// de precio de venta (previewTimberSalePriceRecalc → calculateTimber, sin
+// reimplementar la fórmula): sellingPrice = thickness × width × varaLength ×
+// pricePerInch. Ejemplo del usuario: 2"×2", varas=4 (largo comercial 11',
+// VARA_LENGTH_MAP) con pricePerInchCuadro=16 → 2×2×4×16 = 256.
+test("calculateTimber: 2×2×4 (varas) con pricePerInchCuadro=16 da 256 — mismo cálculo que usa el recálculo de precios por sucursal", () => {
+  const pricing = { costPerFoot: 20, pricePerInchTabla: 8.9, pricePerInchTablilla: 6.9, pricePerInchCuadro: 16 };
+  const calc = calculateTimber({ thickness: 2, width: 2, length: 11 }, pricing, DEFAULT_CLASSIFICATION_CONFIG);
+  assert.equal(calc.priceGroup, "CUADRO");
+  assert.equal(calc.varaLength, 4);
+  assert.equal(calc.sellingPrice, 256);
+});
 
 test("timber trip: TOTAL mode derives cost per foot from trip total", () => {
   const result = calculateTimberTrip(lines, 3200, PRICING);
