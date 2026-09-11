@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
 import Link from "next/link";
 import type { Route } from "next";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   Hammer,
   ShoppingCart,
@@ -20,10 +20,11 @@ import type { LucideIcon } from "lucide-react";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { applyUserTheme, ThemeToggle } from "@/components/ui/theme-toggle";
-import { apiFetch } from "@/lib/client/api";
 import { PosSummaryCards } from "./components/pos-summary-cards";
 import { usePosRealtimeSummary } from "./hooks/use-pos-realtime-summary";
 import { usePosCashContext } from "./hooks/use-pos-cash-context";
+import { useAuthHeartbeat } from "@/hooks/use-auth-heartbeat";
+import { LogoutButton } from "@/components/navigation/logout-button";
 import type { SessionPayload } from "@/types/auth";
 import { getRoleColor } from "@/lib/role-colors";
 
@@ -78,36 +79,7 @@ function buildPosNav(session: ShellSession): NavSection[] {
   return sections;
 }
 
-function LogoutButton() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(false);
-  const handleLogout = async () => {
-    setLoading(true);
-    try { await apiFetch("/api/auth/logout", { method: "POST" }); } catch {}
-    router.push("/login");
-  };
-  return (
-    <button
-      type="button"
-      onClick={handleLogout}
-      disabled={loading}
-      className="w-full flex items-center gap-2.5 px-3 py-2 text-[0.75rem] transition-colors"
-      style={{
-        background: "transparent",
-        border: "none",
-        cursor: loading ? "not-allowed" : "pointer",
-        color: "var(--color-sidebar-text)",
-        opacity: loading ? 0.6 : 1,
-      }}
-    >
-      <X className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--color-cashier-400, #fb7185)" }} />
-      {loading ? "Saliendo…" : "Cerrar sesión"}
-    </button>
-  );
-}
-
 export function PosShell({ session, children }: { session: ShellSession; children: ReactNode }) {
-  const router = useRouter();
   const pathname = usePathname();
   const roleCfg = getRoleColor(session.roleCode);
 
@@ -162,33 +134,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
      (terminal compartida) en vez de un frame después. */
   useLayoutEffect(() => { applyUserTheme(session.userId, session.themePreference); }, [session.userId, session.themePreference]);
 
-  /* Heartbeat */
-  const pathnameRef = useRef(pathname);
-  pathnameRef.current = pathname;
-  useEffect(() => {
-    let stopped = false;
-    let lastBeat = 0;
-    const sendHeartbeat = async () => {
-      try {
-        const response = await apiFetch("/api/auth/heartbeat", {
-          method: "POST",
-          body: JSON.stringify({ branchId: session.primaryBranchId, currentPath: pathnameRef.current, currentModule: "branch" }),
-        });
-        if (!stopped && response.status === 401) router.replace("/login");
-      } catch { /* best-effort */ }
-    };
-    const maybeSend = (minGapMs = 0) => {
-      if (stopped || document.hidden) return;
-      if (Date.now() - lastBeat < minGapMs) return;
-      lastBeat = Date.now();
-      void sendHeartbeat();
-    };
-    maybeSend();
-    const interval = window.setInterval(() => maybeSend(), 120_000);
-    const onFocus = () => maybeSend(5_000);
-    window.addEventListener("focus", onFocus);
-    return () => { stopped = true; window.clearInterval(interval); window.removeEventListener("focus", onFocus); };
-  }, [router, session.primaryBranchId]);
+  useAuthHeartbeat({ branchId: session.primaryBranchId, currentModule: "branch" });
 
   const sections = buildPosNav(session);
   const roleActiveBg = `var(--color-${roleCfg.cssPrefix}-600)`;
@@ -394,7 +340,7 @@ export function PosShell({ session, children }: { session: ShellSession; childre
                 style={{ color: "var(--color-sidebar-section)" }}
               />
             </div>
-            <LogoutButton />
+            <LogoutButton icon={X} />
           </div>
         )}
       </div>

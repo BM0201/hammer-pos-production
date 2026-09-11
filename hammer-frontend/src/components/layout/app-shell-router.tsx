@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useSelectedLayoutSegments, useRouter } from "next/navigation";
+import { useCallback, useLayoutEffect, useMemo, useState } from "react";
+import { useSelectedLayoutSegments, useRouter } from "next/navigation";
 import type { Route } from "next";
 import type { ReactNode } from "react";
 import type { SessionPayload } from "@/types/auth";
@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { applyUserTheme } from "@/components/ui/theme-toggle";
 import { apiFetch } from "@/lib/client/api";
 import { getRoleColor } from "@/lib/role-colors";
+import { useAuthHeartbeat } from "@/hooks/use-auth-heartbeat";
 
 type ShellSession = Pick<
   SessionPayload,
@@ -79,7 +80,6 @@ export function AppShellRouter({
   children: ReactNode;
 }) {
   const router = useRouter();
-  const pathname = usePathname();
   const segments = useSelectedLayoutSegments();
   const headerMeta = useMemo(() => resolveHeaderMeta(segments), [segments]);
   const canReturnToModules = segments[0] !== "branch" && segments.length > 1;
@@ -111,56 +111,7 @@ export function AppShellRouter({
     }
   }, []);
 
-  // Refs espejo para que el efecto del heartbeat NO dependa de pathname/segments:
-  // antes se destruía y recreaba en cada navegación, disparando un heartbeat
-  // inmediato por página visitada (mismo fix que ya tenía pos-shell).
-  const pathnameRef = useRef(pathname);
-  const moduleRef = useRef(segments[0] ?? "app");
-  pathnameRef.current = pathname;
-  moduleRef.current = segments[0] ?? "app";
-
-  useEffect(() => {
-    let stopped = false;
-
-    const sendHeartbeat = async () => {
-      try {
-        const response = await apiFetch("/api/auth/heartbeat", {
-          method: "POST",
-          body: JSON.stringify({
-            branchId: session.primaryBranchId,
-            currentPath: pathnameRef.current,
-            currentModule: moduleRef.current,
-          }),
-        });
-        if (!stopped && response.status === 401) {
-          router.replace("/login");
-        }
-      } catch {
-        /* presence is best-effort */
-      }
-    };
-
-    let lastBeat = 0;
-
-    const maybeSendHeartbeat = (minGapMs = 0) => {
-      if (stopped) return;
-      if (document.hidden) return;
-      if (Date.now() - lastBeat < minGapMs) return;
-      lastBeat = Date.now();
-      void sendHeartbeat();
-    };
-
-    maybeSendHeartbeat();
-    const interval = window.setInterval(() => maybeSendHeartbeat(), 120_000);
-    const onFocus = () => maybeSendHeartbeat(5_000);
-    window.addEventListener("focus", onFocus);
-
-    return () => {
-      stopped = true;
-      window.clearInterval(interval);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [router, session.primaryBranchId]);
+  useAuthHeartbeat({ branchId: session.primaryBranchId, currentModule: segments[0] ?? "app" });
 
   return (
     <div className="flex min-h-screen bg-[var(--color-page-bg)]">

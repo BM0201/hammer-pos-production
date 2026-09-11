@@ -14,6 +14,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useOperationalPolling } from "@/lib/realtime/use-operational-polling";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { CashIndicatorPanel } from "@/components/navigation/cash-indicator-panel";
+import { LogoutButton } from "@/components/navigation/logout-button";
 import {
   LayoutDashboard,
   Users,
@@ -45,7 +46,6 @@ import {
   Printer,
   Factory,
   History,
-  LogOut,
   Merge,
   ScrollText,
   ReceiptText,
@@ -287,37 +287,6 @@ function buildNavSections(
   if (governanceItems.length) sections.push({ title: "CONTROL", items: governanceItems });
 
   return sections;
-}
-
-/* ────────────────────────────────────────────────────────────── */
-
-function LogoutButton() {
-  const [loading, setLoading] = useState(false);
-  const handleLogout = async () => {
-    setLoading(true);
-    try { await apiFetch("/api/auth/logout", { method: "POST" }); } catch {}
-    // Navegación dura (no router.push): descarta todo el estado en memoria del
-    // SPA (caches de CSRF/sesión, datos de la cuenta anterior) antes del login.
-    window.location.assign("/login");
-  };
-  return (
-    <button
-      type="button"
-      onClick={handleLogout}
-      disabled={loading}
-      className="w-full flex items-center gap-2.5 px-3 py-2 text-[0.75rem] transition-colors"
-      style={{
-        background: "transparent",
-        border: "none",
-        cursor: loading ? "not-allowed" : "pointer",
-        color: "var(--color-sidebar-text)",
-        opacity: loading ? 0.6 : 1,
-      }}
-    >
-      <LogOut className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--color-cashier-400, #fb7185)" }} />
-      {loading ? "Saliendo…" : "Cerrar sesión"}
-    </button>
-  );
 }
 
 /* ────────────────────────────────────────────────────────────── */
