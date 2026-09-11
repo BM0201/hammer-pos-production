@@ -31,6 +31,8 @@ export const calculateTimberSchema = z.object({
   width: z.number().int().positive(),
   length: z.number().int().positive(),
   quantity: z.number().int().positive("Cantidad debe ser mayor a 0").optional().default(1),
+  /** Sucursal a cotizar — resuelve su override de precio por pulgada si existe, si no el default global. */
+  branchId: z.string().optional(),
   // Optional custom pricing
   costPerFoot: z.number().positive().optional(),
   pricePerInchTabla: z.number().nonnegative().optional(),

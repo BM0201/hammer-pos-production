@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
-import { applyTimberCostsTx, applyTimberSalePriceRecalcRowsTx, resolveSellingPriceForPolicy, type TimberSalePriceRecalcRow } from "@/modules/timber/service";
+import { applyTimberCostsTx, applyTimberSalePriceRecalcRowsTx, recalcTimberSalePrice, resolveSellingPriceForPolicy, type TimberSalePriceRecalcRow } from "@/modules/timber/service";
 
 /**
  * Madera v2 Fase 2 — el bug a matar: resolveTimberProductForLineTx retornaba
@@ -259,6 +259,29 @@ test("Prueba LA QUE IMPORTA — producto de madera derivado de una fusión: el c
   assert.equal(canonicalSetting.branchCost?.toNumber(), 300, "3000 / 10 = 300 — el costo real por tabla, en el canónico");
   assert.equal(getBranchSetting()?.branchCost?.toNumber() ?? null, 320, "el derivado NUNCA guarda su propio costo — sigue con el valor viejo, no 3000");
   assert.equal(getProduct().standardSalePrice.toNumber(), 640.8, "el precio de venta se queda en el producto (derivado) — COST_ONLY, sin tocar");
+});
+
+/**
+ * recalcTimberSalePrice: mismo ejemplo del usuario (2×2, varas=4,
+ * pricePerInchCuadro=16 → 256) pero por el camino que usa de verdad el
+ * recálculo masivo — timberType/varaLength YA guardados, sin reclasificar.
+ */
+test("recalcTimberSalePrice: 2×2×4 (varas) con pricePerInchCuadro=16 da 256 — usa timberType/varaLength guardados, no reclasifica", () => {
+  const pricing = { costPerFoot: 20, pricePerInchTabla: 8.9, pricePerInchTablilla: 6.9, pricePerInchCuadro: 16 };
+  const result = recalcTimberSalePrice({ timberType: "CUADRO", thickness: 2, width: 2, varaLength: 4 }, pricing);
+  assert.equal(result.priceGroup, "CUADRO");
+  assert.equal(result.pricePerInch, 16);
+  assert.equal(result.newPrice, 256);
+});
+
+test("recalcTimberSalePrice: un timberType TABLA guardado usa pricePerInchTabla aunque cambie la tabla de cubicación — no reclasifica por config nueva", () => {
+  const pricing = { costPerFoot: 20, pricePerInchTabla: 10, pricePerInchTablilla: 6.9, pricePerInchCuadro: 6.9 };
+  // Mismas dimensiones que clasificarían CUADRO con anchos por defecto (ancho 7"
+  // no está en TABLA/TABLILLA) — pero el producto quedó guardado como TABLA en
+  // su momento, y el recálculo debe respetar eso, no reclasificar con la config vigente.
+  const result = recalcTimberSalePrice({ timberType: "TABLA", thickness: 2, width: 7, varaLength: 5 }, pricing);
+  assert.equal(result.priceGroup, "TABLA");
+  assert.equal(result.newPrice, 700, "2 × 7 × 5 × 10 = 700, con pricePerInchTabla — no con pricePerInchCuadro");
 });
 
 /**

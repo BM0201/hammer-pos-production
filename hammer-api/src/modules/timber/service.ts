@@ -5,6 +5,7 @@ import {
   calculateReconciliation,
   calculateTargetMarginPrice,
   calculateBoardFeet,
+  getPricePerInch,
   DEFAULT_PRICING,
   DEFAULT_CLASSIFICATION_CONFIG,
   DEFAULT_CUBICATION_TABLE,
@@ -434,6 +435,29 @@ export type TimberSalePriceRecalcRow = {
   difference: number;
 };
 
+/**
+ * Pura — sin DB — para poder testear el cálculo del recálculo masivo sin
+ * montar productos/tx falsos. timberType y varaLength ya están guardados en
+ * el TimberProduct (se fijaron al cubicar/confirmar el viaje) — NO se
+ * re-clasifica acá. Si se reclasificara con la tabla de cubicación/anchos
+ * vigente, un producto podría "saltar" de grupo (p.ej. CUADRO → TABLA) solo
+ * porque cambió la config, sin que nadie haya tocado ESE producto — el
+ * recálculo de precio debe variar únicamente por el pricePerInch nuevo, no
+ * por una reclasificación implícita. Misma fórmula que calculateTimber
+ * (thickness × width × varaLength × pricePerInch[grupo]), sin pasar por
+ * calculateTimber/classifyTimber.
+ */
+export function recalcTimberSalePrice(
+  tp: { timberType: string; thickness: number; width: number; varaLength: number },
+  pricing: TimberPricing,
+): { priceGroup: TimberPriceGroup; pricePerInch: number; newPrice: number } {
+  const priceGroup: TimberPriceGroup =
+    tp.timberType === "TABLA" || tp.timberType === "TABLILLA" || tp.timberType === "CUADRO" ? tp.timberType : "CUADRO";
+  const pricePerInch = getPricePerInch(priceGroup, pricing);
+  const newPrice = roundMoney(tp.thickness * tp.width * tp.varaLength * pricePerInch);
+  return { priceGroup, pricePerInch, newPrice };
+}
+
 async function previewForBranch(
   branch: { id: string; name: string },
   pricing: TimberFullConfig,
@@ -450,13 +474,11 @@ async function previewForBranch(
   for (const product of products) {
     const tp = product.timberProduct;
     if (!tp) continue;
-    const calc = calculateTimber(
-      { thickness: tp.thickness.toNumber(), width: tp.width.toNumber(), length: tp.length.toNumber() },
+    const { newPrice } = recalcTimberSalePrice(
+      { timberType: tp.timberType, thickness: tp.thickness.toNumber(), width: tp.width.toNumber(), varaLength: tp.varaLength },
       pricing,
-      pricing.classification,
     );
     const currentPrice = product.branchProductSettings[0]?.branchPrice?.toNumber() ?? product.standardSalePrice.toNumber();
-    const newPrice = calc.sellingPrice;
     if (newPrice === currentPrice) continue;
     rows.push({
       productId: product.id,
@@ -474,7 +496,11 @@ async function previewForBranch(
 
 /**
  * Vista previa (sin escribir nada) de cómo cambiaría sellingPrice de cada
- * TimberProduct al recalcular con calculateTimber() usando el pricing vigente.
+ * TimberProduct al recalcular con el pricing vigente. Usa la MISMA fórmula
+ * que calculateTimber (thickness × width × varaLength × pricePerInch[grupo])
+ * pero sin pasar por calculateTimber/classifyTimber — timberType y varaLength
+ * ya están guardados en cada TimberProduct, así que solo cambia el
+ * pricePerInch (getPricePerInch), nunca la clasificación.
  *
  * Alcance: con branchId, solo esa sucursal (los productos que
  * branchProductScopeFilter considera "de" esa sucursal — mismo filtro que ya
@@ -577,6 +603,9 @@ export async function applyTimberSalePriceRecalc(
    Timber Products CRUD
    ══════════════════════════════════════════════════════════ */
 
+// Sin branchId a propósito: al crearse, el producto no pertenece a ninguna
+// sucursal en particular (es catálogo global) — el precio por sucursal se
+// resuelve después, en el catálogo, vía BranchProductSetting.branchPrice.
 export async function createTimberProduct(input: CreateTimberProductInput) {
   const pricing = await getPricingConfig();
   const calc = calculateTimber(
@@ -630,6 +659,8 @@ export async function updateTimberProduct(id: string, input: UpdateTimberProduct
   });
   if (!existing) throw new Error("TIMBER_PRODUCT_NOT_FOUND");
 
+  // Mismo motivo que createTimberProduct: el producto sigue sin sucursal
+  // propia, así que se recalcula contra el default global.
   const pricing = await getPricingConfig();
   const thickness = input.thickness ?? existing.thickness.toNumber();
   const width = input.width ?? existing.width.toNumber();

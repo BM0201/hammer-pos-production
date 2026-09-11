@@ -22,8 +22,9 @@ export async function POST(request: Request) {
     const body = await request.json();
     const parsed = calculateTimberSchema.parse(body);
 
-    // Use stored pricing config, but allow overrides from request
-    const storedPricing = await getPricingConfig();
+    // Use stored pricing config (de la sucursal cotizada si se mandó branchId,
+    // si no el default global), pero permite overrides puntuales del request.
+    const storedPricing = await getPricingConfig(parsed.branchId);
     const pricing: TimberPricing = {
       costPerFoot: parsed.costPerFoot ?? storedPricing.costPerFoot,
       pricePerInchTabla: parsed.pricePerInchTabla ?? storedPricing.pricePerInchTabla,

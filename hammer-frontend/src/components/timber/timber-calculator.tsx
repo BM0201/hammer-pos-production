@@ -86,6 +86,10 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
 
   // El cálculo vive SOLO en el servidor (calculator.ts) — nunca se duplica en el
   // cliente. Se pide con debounce cada vez que cambian las dimensiones/cantidad.
+  // branchId va en el body para que cotice con el precio por pulgada real de
+  // esa sucursal (override propio si existe, si no el default global) — antes
+  // esta pantalla siempre mostraba el global, sin importar qué sucursal se
+  // eligiera abajo para "Aplicar precio".
   const [calc, setCalc] = useState<CalcResult>(EMPTY_CALC);
   useEffect(() => {
     const handle = setTimeout(async () => {
@@ -93,7 +97,7 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
         const res = await apiFetch("/api/timber/calculate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ thickness, width, length, quantity: 1 }),
+          body: JSON.stringify({ thickness, width, length, quantity: 1, branchId: selectedBranchId || undefined }),
         });
         if (!res.ok) return;
         const raw = await res.json();
@@ -104,7 +108,7 @@ export function TimberCalculator({ showHeader = true }: { showHeader?: boolean }
       }
     }, 250);
     return () => clearTimeout(handle);
-  }, [thickness, width, length]);
+  }, [thickness, width, length, selectedBranchId]);
   const maderaCategory = useMemo(() => categories.find((category) => {
     const code = (category.code ?? "").toUpperCase();
     const name = category.name.toUpperCase();
