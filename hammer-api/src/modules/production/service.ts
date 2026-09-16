@@ -11,6 +11,8 @@ import {
 } from "@/modules/inventory/unit-conversion";
 import { buildProductSearchWhere } from "@/modules/catalog/product-search";
 import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
+import { resolveCostChain } from "@/modules/catalog/effective-pricing";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { calculateBatchCosts, calculateTargetMarginPrice, computeBatchCostSummary } from "./calculations";
 import { reserveBatchInputsTx, releaseBatchInputsTx, getProductionReservedBaseQtyTx, type ReservationResult } from "./reservations";
 import type {
@@ -286,16 +288,58 @@ export async function updateRecipe(
 // enviado por el cliente (Producción v2 Fase 1).
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function getInputWacTx(
+/**
+ * WAC apagado (docs/WAC-DESACTIVADO.md) — este sitio no estaba en el barrido
+ * original (documento lo listaba como "fuera de alcance a propósito", lectura
+ * que resultó incorrecta: un WAC contaminado acá se cuela como costo del
+ * insumo hacia adentro del producto terminado vía PRODUCTION_OUTPUT). Con el
+ * flag apagado, el insumo se costea con la MISMA cadena que el resto del
+ * catálogo (resolveCostChain, effective-pricing.ts) sobre el producto
+ * canónico — branchCost > averageCost > globalCost > lastPurchaseCost, WAC
+ * excluido. Con el flag prendido, sigue exactamente igual que siempre: WAC
+ * directo del balance, sin fallback.
+ */
+export async function getInputWacTx(
   db: DbClient,
   params: { branchId: string; productId: string; excludeBatchId?: string },
 ): Promise<{ wacSaleUnit: Prisma.Decimal; stockSaleUnit: Prisma.Decimal }> {
   const shared = await getSharedInventoryBalance(db, params);
-  const wacSaleUnit = shared.balance
-    ? shared.conversion
-      ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: shared.balance.weightedAverageCost, conversionFactor: shared.conversion.conversionFactor })
-      : shared.balance.weightedAverageCost
-    : new Prisma.Decimal(0);
+  const wacEnabled = await isWacDrivesCostChainEnabled(db);
+
+  let wacSaleUnit: Prisma.Decimal;
+  if (wacEnabled) {
+    wacSaleUnit = shared.balance
+      ? shared.conversion
+        ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost: shared.balance.weightedAverageCost, conversionFactor: shared.conversion.conversionFactor })
+        : shared.balance.weightedAverageCost
+      : new Prisma.Decimal(0);
+  } else {
+    const [inputProduct, branchSetting] = await Promise.all([
+      db.product.findUnique({
+        where: { id: shared.inventoryProductId },
+        select: { averageCost: true, globalCost: true, lastPurchaseCost: true },
+      }),
+      db.branchProductSetting.findUnique({
+        where: { branchId_productId: { branchId: params.branchId, productId: shared.inventoryProductId } },
+        select: { branchCost: true },
+      }),
+    ]);
+    const { cost } = resolveCostChain(
+      {
+        branchCost: branchSetting?.branchCost ?? null,
+        averageCost: inputProduct?.averageCost ?? null,
+        globalCost: inputProduct?.globalCost ?? null,
+        lastPurchaseCost: inputProduct?.lastPurchaseCost ?? null,
+        weightedAverageCost: null,
+      },
+      false,
+    );
+    const baseUnitCost = cost ?? new Prisma.Decimal(0);
+    wacSaleUnit = shared.conversion
+      ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost, conversionFactor: shared.conversion.conversionFactor })
+      : baseUnitCost;
+  }
+
   const physicalStockSaleUnit = shared.balance
     ? shared.conversion
       ? convertBaseQtyToSaleQty({ baseQuantity: shared.balance.quantityOnHand, conversionFactor: shared.conversion.conversionFactor })

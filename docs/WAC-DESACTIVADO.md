@@ -70,6 +70,24 @@ transacción):
   calcula ni se guarda, solo dejó de compararse contra él.
 - `executeUnifiedCatalogInventoryImport` (`catalog-inventory/import-service.ts`)
   — importación masiva desde Excel (misma guarda que Kardex, punto 2).
+- `getInputWacTx` (`production/service.ts`) — **agregado 2026-09-16, no
+  estaba en el barrido original** (este mismo documento lo listaba como
+  "fuera de alcance a propósito" más abajo — esa lectura era incorrecta).
+  Costeo estándar de Producción de Materiales: núcleo compartido por el
+  preview de planificación (`calculateCost`), el preview de inyección al
+  cerrar (`buildProductionInjectionPreview`) y el cierre real
+  (`completeBatch`). Con el flag apagado, el insumo se costea con la MISMA
+  cadena que el resto del catálogo (`resolveCostChain` sobre el producto
+  canónico del insumo: `branchCost → averageCost → globalCost →
+  lastPurchaseCost`) en vez de `InventoryBalance.weightedAverageCost`
+  directo — sin esto, un WAC contaminado se colaba como costo del insumo
+  hacia adentro del producto terminado vía el movimiento
+  `PRODUCTION_OUTPUT`. Con el flag prendido, sigue exactamente igual que
+  siempre. El movimiento `PRODUCTION_OUTPUT` en sí ya pasaba (y sigue
+  pasando) por `createInventoryMovementTx` normal — el WAC del producto
+  terminado se sigue calculando atrás sin cambios, solo que mientras el
+  flag esté apagado ya no es la fuente de costo/margen visible, igual que
+  el resto del sistema.
 
 ### 2. Guardas que comparaban contra el WAC
 
@@ -129,12 +147,23 @@ sin WAC todavía". No depende de este flag.
   `reports/service.ts`) — usa el WAC como valor de inventario (concepto
   contable estándar), no como fuente de costo/margen de venta. No pasa por
   `resolveCostChain`.
-- **Costeo estándar de Producción de Materiales** (`production/service.ts`,
-  `production-recommendation-service.ts`, recetas y lotes) — lee
-  `weightedAverageCost` directo del balance como ancla deliberada del
-  costeo estándar ("costeo estándar al WAC", ver
-  `docs/` histórico del módulo), un primitivo propio y separado, no la
-  cadena de prioridad que este flag gobierna.
+- ~~Costeo estándar de Producción de Materiales~~ — **corregido
+  2026-09-16, esto ya NO es cierto para el cierre de lote.** Se creía un
+  primitivo propio y separado ("costeo estándar al WAC"), pero en realidad
+  dejaba pasar la misma contaminación que este flag existe para evitar. Ver
+  `getInputWacTx` en la sección de arriba — ahora sí está gateado
+  (`calculateCost`, `buildProductionInjectionPreview`, `completeBatch`).
+  **Gap hermano encontrado al corregir esto, todavía SIN gatear:**
+  `getSaleStockAndCost` en `production-recommendation-service.ts`
+  (`evaluateRecipeAvailability`, motor de recomendaciones "producir en vez
+  de comprar") lee `shared.balance.weightedAverageCost` directo, el mismo
+  patrón que tenía `getInputWacTx` antes de este cambio — alimenta
+  `estimatedInputCost`/`estimatedProcessingCost`/`estimatedUnitCost` de la
+  recomendación (informativo, no escribe costo en ningún lado), pero con el
+  flag apagado puede estar sugiriendo "producir" o "comprar" basado en un
+  WAC contaminado. Fuera de alcance del pedido que gateó `getInputWacTx`
+  — señalado acá para la próxima pasada, mismo criterio que este documento
+  ya pedía aplicar.
 - **Historial de costo en Producto 360** (`product-360.tsx`, tab
   "Historial de costo") — reconstrucción/auditoría del WAC pasado, no
   cadena de costo activa. Debe seguir visible: es el historial que esta
