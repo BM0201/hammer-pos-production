@@ -3,6 +3,7 @@ import { refreshAllInsights } from "@/modules/ai-insights/service";
 import { detectCashDecisions } from "@/modules/brain/detectors/cash-detector";
 import { detectDispatchDecisions } from "@/modules/brain/detectors/dispatch-detector";
 import { detectInventoryDecisions } from "@/modules/brain/detectors/inventory-detector";
+import { detectWacHealthDecisions } from "@/modules/brain/detectors/wac-health-detector";
 import { detectPricingDecisions } from "@/modules/brain/detectors/pricing-detector";
 import { detectReorderDecisions } from "@/modules/brain/detectors/reorder-detector";
 import { detectSalesDecisions } from "@/modules/brain/detectors/sales-detector";
@@ -186,6 +187,7 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
 
   const detectors: Array<{ key: string; category: BrainDecisionCategory; run: () => Promise<BrainDecisionDraft[]> }> = [
     { key: "inventory-detector", category: BrainDecisionCategory.INVENTORY, run: () => detectInventoryDecisions(ctx) },
+    { key: "wac-health-detector", category: BrainDecisionCategory.INVENTORY, run: () => detectWacHealthDecisions(ctx) },
     { key: "reorder-detector", category: BrainDecisionCategory.REORDER, run: () => detectReorderDecisions(ctx) },
     { key: "pricing-detector", category: BrainDecisionCategory.PRICING, run: () => detectPricingDecisions(ctx) },
     { key: "cash-detector", category: BrainDecisionCategory.CASH, run: () => detectCashDecisions(ctx) },

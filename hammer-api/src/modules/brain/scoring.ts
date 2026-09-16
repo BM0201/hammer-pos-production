@@ -84,3 +84,19 @@ export function severityForMargin(marginPct: number): BrainDecisionSeverity {
   if (marginPct < 20) return "MEDIUM";
   return "LOW";
 }
+
+/**
+ * Escala de severidad genérica para checks de "cuánto se pasó de un
+ * umbral" — pensada para wac-health-detector.ts, cuyas 3 reglas comparten
+ * la misma forma (deviationPercent vs threshold) con umbrales distintos
+ * (15%/30%/40%). En vez de que cada regla invente su propia banda de
+ * porcentajes, escala relativo a SU umbral: 2x el umbral ya es HIGH, 4x ya
+ * es CRITICAL. Nunca INFO/LOW — para llegar acá ya se cruzó el umbral que
+ * decide si la fila es sospechosa en primer lugar.
+ */
+export function severityForDeviation(deviationPercent: number, threshold: number): BrainDecisionSeverity {
+  if (threshold <= 0) return "MEDIUM";
+  if (deviationPercent >= threshold * 4) return "CRITICAL";
+  if (deviationPercent >= threshold * 2) return "HIGH";
+  return "MEDIUM";
+}
