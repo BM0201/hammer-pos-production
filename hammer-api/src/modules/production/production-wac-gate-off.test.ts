@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
 import { getInputWacTx } from "@/modules/production/service";
+import { getSaleStockAndCost } from "@/modules/production/production-recommendation-service";
 
 /**
  * docs/WAC-DESACTIVADO.md — Producción de Materiales no estaba en el barrido
  * original (el doc la listaba como "fuera de alcance a propósito"), así que
  * con el flag apagado un WAC contaminado seguía colándose como costo del
- * insumo hacia adentro del producto terminado vía PRODUCTION_OUTPUT.
+ * insumo hacia adentro del producto terminado vía PRODUCTION_OUTPUT
+ * (getInputWacTx) y sesgando el motor de recomendación "producir vs comprar"
+ * (getSaleStockAndCost) — mismo patrón exacto en los dos sitios.
  *
  * isWacDrivesCostChainEnabled cachea en una variable a nivel de módulo (TTL
  * 60s) — igual que effective-pricing.test.ts documenta, ese cache es
@@ -85,4 +88,16 @@ test("getInputWacTx con el flag apagado: branchCost explícito de esa sucursal g
 
   const { wacSaleUnit } = await getInputWacTx(db, { branchId: "branch-1", productId: "prod-cemento" });
   assert.equal(wacSaleUnit.toNumber(), 20, "branchCost explícito de la sucursal gana sobre averageCost, igual que en effective-pricing.ts");
+});
+
+test("getSaleStockAndCost (motor de recomendación 'producir vs comprar') con el flag apagado: WAC contaminado (C$470) pero averageCost sano (C$18) — la recomendación se calcula sobre el segundo", async () => {
+  const db = createFakeDb({
+    weightedAverageCost: new Prisma.Decimal(470),
+    averageCost: new Prisma.Decimal(18),
+    globalCost: null,
+    lastPurchaseCost: null,
+  });
+
+  const { unitCost } = await getSaleStockAndCost("branch-1", "prod-cemento", db);
+  assert.equal(unitCost, 18, "debe usar averageCost (18), nunca el WAC contaminado (470)");
 });

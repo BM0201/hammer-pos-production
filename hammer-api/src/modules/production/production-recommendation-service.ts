@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createBatch } from "@/modules/production/service";
 import {
@@ -6,6 +6,10 @@ import {
   convertBaseUnitCostToSaleUnitCost,
   getSharedInventoryBalance,
 } from "@/modules/inventory/unit-conversion";
+import { resolveCostChain } from "@/modules/catalog/effective-pricing";
+import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
+
+type DbClient = PrismaClient | Prisma.TransactionClient;
 
 const DEFAULT_REORDER_POINT = 0;
 const DEFAULT_TARGET_STOCK = 0;
@@ -99,8 +103,18 @@ async function getPolicy(branchId: string, productId: string) {
   return { minStock: number(branchSetting?.minStock), reorderPoint, targetStock };
 }
 
-async function getSaleStockAndCost(branchId: string, productId: string) {
-  const shared = await getSharedInventoryBalance(prisma, { branchId, productId });
+/**
+ * WAC apagado (docs/WAC-DESACTIVADO.md) — mismo patrón exacto que
+ * production/service.ts::getInputWacTx (5dfaa22): con el flag apagado, el
+ * costo se resuelve con resolveCostChain (branchCost > averageCost >
+ * globalCost > lastPurchaseCost) sobre el producto canónico, no con
+ * weightedAverageCost directo — sin esto, un WAC contaminado sesgaba la
+ * recomendación "producir vs comprar". Con el flag prendido, sin cambios.
+ * `db` opcional (default: el singleton `prisma`) para poder testear con un
+ * db falso sin tocar el único llamador real (evaluateRecipeAvailability).
+ */
+export async function getSaleStockAndCost(branchId: string, productId: string, db: DbClient = prisma) {
+  const shared = await getSharedInventoryBalance(db, { branchId, productId });
   const stock = shared.balance
     ? Number(shared.conversion
         ? convertBaseQtyToSaleQty({
@@ -109,14 +123,45 @@ async function getSaleStockAndCost(branchId: string, productId: string) {
           })
         : shared.balance.quantityOnHand)
     : 0;
-  const unitCost = shared.balance
-    ? Number(shared.conversion
-        ? convertBaseUnitCostToSaleUnitCost({
-            baseUnitCost: shared.balance.weightedAverageCost,
-            conversionFactor: shared.conversion.conversionFactor,
-          })
-        : shared.balance.weightedAverageCost)
-    : 0;
+
+  const wacEnabled = await isWacDrivesCostChainEnabled(db);
+  let unitCost: number;
+  if (wacEnabled) {
+    unitCost = shared.balance
+      ? Number(shared.conversion
+          ? convertBaseUnitCostToSaleUnitCost({
+              baseUnitCost: shared.balance.weightedAverageCost,
+              conversionFactor: shared.conversion.conversionFactor,
+            })
+          : shared.balance.weightedAverageCost)
+      : 0;
+  } else {
+    const [inputProduct, branchSetting] = await Promise.all([
+      db.product.findUnique({
+        where: { id: shared.inventoryProductId },
+        select: { averageCost: true, globalCost: true, lastPurchaseCost: true },
+      }),
+      db.branchProductSetting.findUnique({
+        where: { branchId_productId: { branchId, productId: shared.inventoryProductId } },
+        select: { branchCost: true },
+      }),
+    ]);
+    const { cost } = resolveCostChain(
+      {
+        branchCost: branchSetting?.branchCost ?? null,
+        averageCost: inputProduct?.averageCost ?? null,
+        globalCost: inputProduct?.globalCost ?? null,
+        lastPurchaseCost: inputProduct?.lastPurchaseCost ?? null,
+        weightedAverageCost: null,
+      },
+      false,
+    );
+    const baseUnitCost = cost ?? new Prisma.Decimal(0);
+    unitCost = Number(shared.conversion
+      ? convertBaseUnitCostToSaleUnitCost({ baseUnitCost, conversionFactor: shared.conversion.conversionFactor })
+      : baseUnitCost);
+  }
+
   return { stock, unitCost };
 }
 

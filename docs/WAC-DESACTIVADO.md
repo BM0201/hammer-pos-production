@@ -88,6 +88,18 @@ transacción):
   terminado se sigue calculando atrás sin cambios, solo que mientras el
   flag esté apagado ya no es la fuente de costo/margen visible, igual que
   el resto del sistema.
+- `getSaleStockAndCost` (`production-recommendation-service.ts`) —
+  **agregado 2026-09-16, mismo día que `getInputWacTx` de arriba, mismo
+  patrón exacto** (era el "gap hermano" que ese cambio había dejado
+  señalado como pendiente, no una lectura nueva del código). Alimenta
+  `evaluateRecipeAvailability`, el motor de recomendación "producir vs
+  comprar" (`estimatedInputCost`/`estimatedProcessingCost`/
+  `estimatedUnitCost`). Con el flag apagado, usa la misma llamada a
+  `resolveCostChain` (reusada, no reimplementada una tercera vez) sobre el
+  producto canónico del insumo — antes leía
+  `InventoryBalance.weightedAverageCost` directo, así que un WAC
+  contaminado podía sesgar la recomendación hacia "producir" o "comprar"
+  con el número equivocado. Con el flag prendido, sin cambios.
 
 ### 2. Guardas que comparaban contra el WAC
 
@@ -148,22 +160,12 @@ sin WAC todavía". No depende de este flag.
   contable estándar), no como fuente de costo/margen de venta. No pasa por
   `resolveCostChain`.
 - ~~Costeo estándar de Producción de Materiales~~ — **corregido
-  2026-09-16, esto ya NO es cierto para el cierre de lote.** Se creía un
-  primitivo propio y separado ("costeo estándar al WAC"), pero en realidad
-  dejaba pasar la misma contaminación que este flag existe para evitar. Ver
-  `getInputWacTx` en la sección de arriba — ahora sí está gateado
-  (`calculateCost`, `buildProductionInjectionPreview`, `completeBatch`).
-  **Gap hermano encontrado al corregir esto, todavía SIN gatear:**
-  `getSaleStockAndCost` en `production-recommendation-service.ts`
-  (`evaluateRecipeAvailability`, motor de recomendaciones "producir en vez
-  de comprar") lee `shared.balance.weightedAverageCost` directo, el mismo
-  patrón que tenía `getInputWacTx` antes de este cambio — alimenta
-  `estimatedInputCost`/`estimatedProcessingCost`/`estimatedUnitCost` de la
-  recomendación (informativo, no escribe costo en ningún lado), pero con el
-  flag apagado puede estar sugiriendo "producir" o "comprar" basado en un
-  WAC contaminado. Fuera de alcance del pedido que gateó `getInputWacTx`
-  — señalado acá para la próxima pasada, mismo criterio que este documento
-  ya pedía aplicar.
+  2026-09-16, esto ya NO es cierto.** Se creía un primitivo propio y
+  separado ("costeo estándar al WAC"), pero en realidad dejaba pasar la
+  misma contaminación que este flag existe para evitar. Ver `getInputWacTx`
+  y `getSaleStockAndCost` en la sección de arriba — los dos sitios que leían
+  el WAC de este módulo (cierre de lote y motor de recomendación) ya están
+  gateados.
 - **Historial de costo en Producto 360** (`product-360.tsx`, tab
   "Historial de costo") — reconstrucción/auditoría del WAC pasado, no
   cadena de costo activa. Debe seguir visible: es el historial que esta
