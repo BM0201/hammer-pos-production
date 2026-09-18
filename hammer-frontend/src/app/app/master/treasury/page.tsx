@@ -13,6 +13,7 @@ import { CashAccumulationBar } from "@/components/finance/cash-accumulation-bar"
 import { RetainedCashExpenseSheet } from "@/components/finance/retained-cash-expense-sheet";
 import { RetainedCashExpenseList } from "@/components/finance/retained-cash-expense-list";
 import { DirectDepositSheet } from "@/components/finance/direct-deposit-sheet";
+import { CardSettlementSheet } from "@/components/finance/card-settlement-sheet";
 import { money } from "@/lib/format";
 
 type Branch = { id: string; code: string; name: string; cashFundAmount: string | null };
@@ -115,6 +116,7 @@ export default function TreasuryPage() {
   const [expenseSheetBranchId, setExpenseSheetBranchId] = useState<string | null>(null);
   const [expenseListRefreshKey, setExpenseListRefreshKey] = useState(0);
   const [depositSheetBranchId, setDepositSheetBranchId] = useState<string | null>(null);
+  const [settlementSheetAccountId, setSettlementSheetAccountId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -364,24 +366,31 @@ export default function TreasuryPage() {
           </div>
           <div className="space-y-1.5">
             {otherAccounts.map((a) => (
-              <button
+              <div
                 key={a.id}
-                type="button"
-                onClick={() => setDetailAccountId(a.id)}
-                className="flex w-full items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-left hover:border-[var(--color-border-strong)]"
+                className="flex w-full items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 hover:border-[var(--color-border-strong)]"
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="neutral">{a.type === "SETTLEMENT" ? "Por liquidar" : a.type === "CUSTODY" ? "Custodia" : "Caja fuerte"}</Badge>
-                    <span className="font-semibold text-[var(--color-text)]">{a.owner ?? a.accountAlias}</span>
+                <button
+                  type="button"
+                  onClick={() => setDetailAccountId(a.id)}
+                  className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="neutral">{a.type === "SETTLEMENT" ? "Por liquidar" : a.type === "CUSTODY" ? "Custodia" : "Caja fuerte"}</Badge>
+                      <span className="font-semibold text-[var(--color-text)]">{a.owner ?? a.accountAlias}</span>
+                    </div>
+                    <p className="truncate text-xs text-[var(--color-text-muted)]">{branchName(a.branchId)}</p>
                   </div>
-                  <p className="truncate text-xs text-[var(--color-text-muted)]">{branchName(a.branchId)}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="text-base font-bold tabular-nums text-[var(--color-text)]">{money(a.balance.balance)}</span>
-                  <ChevronRight className="h-4 w-4 text-[var(--color-text-soft)]" />
-                </div>
-              </button>
+                  <span className="shrink-0 text-base font-bold tabular-nums text-[var(--color-text)]">{money(a.balance.balance)}</span>
+                </button>
+                {a.type === "SETTLEMENT" && a.balance.balance > 0 && (
+                  <Button type="button" variant="secondary" size="sm" onClick={() => setSettlementSheetAccountId(a.id)}>
+                    Confirmar liquidación
+                  </Button>
+                )}
+                <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-text-soft)]" />
+              </div>
             ))}
           </div>
         </Card>
@@ -457,6 +466,15 @@ export default function TreasuryPage() {
         branchId={depositSheetBranchId ?? ""}
         branchName={branches.find((b) => b.id === depositSheetBranchId)?.name ?? ""}
         pendingDeposit={cashPositions.find((r) => r.branch.id === depositSheetBranchId)?.position.pendingDeposit ?? 0}
+        accounts={bankAccountsOnly}
+        onDone={() => void load()}
+      />
+
+      <CardSettlementSheet
+        open={settlementSheetAccountId !== null}
+        onClose={() => setSettlementSheetAccountId(null)}
+        settlementAccountId={settlementSheetAccountId ?? ""}
+        settlementBalance={accounts.find((a) => a.id === settlementSheetAccountId)?.balance.balance ?? 0}
         accounts={bankAccountsOnly}
         onDone={() => void load()}
       />

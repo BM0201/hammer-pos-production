@@ -793,6 +793,120 @@ export async function confirmBankDepositTx(
   return { deposit, transferId, remainderInCustody: remainder };
 }
 
+// ─── Liquidación de tarjeta (prompt-tesoreria-cerrar-circuito.md H-1) ─────
+//
+// recordSaleTenderEntriesTx manda cada tender CARD a SETTLEMENT-CENTRAL como
+// IN SALE_CARD — ese saldo crecía para siempre porque nada lo sacaba: el
+// adquirente cobra comisión y liquida el neto a una cuenta bancaria real
+// unos días después, y eso no tenía escritura. CARD_SETTLEMENT/CARD_FEE ya
+// existían en el enum (y en el frontend) sin ningún código que los generara.
+
+export type ConfirmCardSettlementInput = {
+  settlementAccountId: string;
+  bankAccountId: string;
+  /** Lo que el adquirente liquida ANTES de su comisión — el saldo que sale de SETTLEMENT. */
+  grossAmount: number;
+  /** Comisión del adquirente. 0 = liquidación sin comisión (poco común, pero válida). */
+  feeAmount?: number;
+  settledAt?: Date;
+  referenceNumber?: string | null;
+  notes?: string | null;
+  confirmedByUserId: string;
+};
+
+/**
+ * Confirma que el adquirente liquidó — mismo patrón que confirmBankDepositTx:
+ * lock de fila antes de leer el saldo, guard de que lo confirmado no supere
+ * lo que hay, dos patas con el mismo transferId (SETTLEMENT OUT / BANCO IN)
+ * vía createInternalTransferTx (fromAmount=bruto, toAmount=neto — igual que
+ * una conversión de moneda, aunque acá la "conversión" es la comisión
+ * descontada). La comisión es una TERCERA fila, SIN transferId: no se
+ * transfiere a ningún lado, sale del sistema como gasto financiero.
+ */
+export async function confirmCardSettlementTx(tx: Prisma.TransactionClient, input: ConfirmCardSettlementInput) {
+  if (input.grossAmount <= 0) throw new Error("VALIDATION_ERROR: el monto bruto liquidado debe ser mayor que 0");
+  const feeAmount = round2(input.feeAmount ?? 0);
+  if (feeAmount < 0) throw new Error("VALIDATION_ERROR: la comisión no puede ser negativa");
+  if (feeAmount >= input.grossAmount) throw new Error("VALIDATION_ERROR: la comisión no puede ser mayor o igual al monto bruto liquidado");
+
+  const [settlementAccount, bankAccount] = await Promise.all([
+    tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.settlementAccountId }, select: { type: true } }),
+    tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.bankAccountId }, select: { type: true } }),
+  ]);
+  if (settlementAccount.type !== "SETTLEMENT") {
+    throw new Error("VALIDATION_ERROR: la cuenta de origen debe ser de tipo SETTLEMENT");
+  }
+  if (bankAccount.type !== "BANK") {
+    throw new Error("VALIDATION_ERROR: la cuenta destino debe ser una cuenta bancaria");
+  }
+
+  // Lock de fila: serializa liquidaciones concurrentes sobre la misma cuenta
+  // SETTLEMENT antes de leer el saldo — mismo patrón que
+  // recordAccountPaymentTx/recordRetainedCashExpenseTx.
+  await tx.$queryRaw`SELECT id FROM "TreasuryAccount" WHERE id = ${input.settlementAccountId} FOR UPDATE`;
+
+  const settlementBalance = await getTreasuryAccountBalanceTx(tx, input.settlementAccountId);
+  if (input.grossAmount > settlementBalance.balance + 0.01) {
+    throw new Error(`VALIDATION_ERROR: el monto bruto a liquidar (C$${input.grossAmount}) supera lo que hay por liquidar (C$${settlementBalance.balance})`);
+  }
+
+  const netAmount = round2(input.grossAmount - feeAmount);
+  const occurredAt = input.settledAt ?? new Date();
+
+  const { transferId } = await createInternalTransferTx(tx, {
+    fromAccountId: input.settlementAccountId,
+    toAccountId: input.bankAccountId,
+    fromAmount: input.grossAmount,
+    toAmount: netAmount,
+    entryType: "CARD_SETTLEMENT",
+    counterpartyType: "ACQUIRER",
+    occurredAt,
+    reference: input.referenceNumber ?? null,
+    notes: input.notes ?? null,
+    createdByUserId: input.confirmedByUserId,
+  });
+
+  let feeEntryId: string | null = null;
+  if (feeAmount > 0) {
+    const feeEntry = await createTreasuryEntryTx(tx, {
+      accountId: input.settlementAccountId,
+      direction: "OUT",
+      amount: feeAmount,
+      entryType: "CARD_FEE",
+      counterpartyType: "ACQUIRER",
+      occurredAt,
+      reference: input.referenceNumber ?? null,
+      notes: input.notes ?? null,
+      createdByUserId: input.confirmedByUserId,
+    });
+    feeEntryId = feeEntry.id;
+  }
+
+  await logAuditEvent({
+    actorUserId: input.confirmedByUserId,
+    module: "treasury",
+    action: "TREASURY_CARD_SETTLEMENT_CONFIRMED",
+    entityType: "TreasuryAccount",
+    entityId: input.settlementAccountId,
+    metadataJson: {
+      settlementAccountId: input.settlementAccountId,
+      bankAccountId: input.bankAccountId,
+      grossAmount: input.grossAmount,
+      feeAmount,
+      netAmount,
+      transferId,
+      feeEntryId,
+      referenceNumber: input.referenceNumber ?? null,
+    },
+  });
+
+  return { transferId, grossAmount: input.grossAmount, feeAmount, netAmount, feeEntryId };
+}
+
+export async function confirmCardSettlement(input: ConfirmCardSettlementInput) {
+  return prisma.$transaction((tx) => confirmCardSettlementTx(tx, input));
+}
+
 type DirectDepositInput = {
   branchId: string;
   bankAccountId: string;

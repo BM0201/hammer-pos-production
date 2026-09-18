@@ -19,7 +19,7 @@ function createFakeDb(fixtures: {
     occurredAt: Date;
     expensePaymentId: string | null;
     branchId: string | null;
-    accountType: "BANK" | "SAFE";
+    accountType: "BANK" | "SAFE" | "SETTLEMENT";
   }>;
   expenses?: Array<{ id: string; category: string; isActive: boolean }>;
 }) {
@@ -100,6 +100,17 @@ test("una cuenta bancaria central (branchId null) se deja sin atribuir a ninguna
   assert.equal(result.length, 1);
   assert.equal(result[0].branchId, null);
   assert.equal(result[0].amount, 250);
+});
+
+test("la comisión de liquidación de tarjeta (CARD_FEE, cuenta SETTLEMENT central) cuenta como gasto financiero, sin sucursal", async () => {
+  const db = createFakeDb({
+    entries: [{ amount: 45, occurredAt: D("2026-09-10"), expensePaymentId: null, branchId: null, accountType: "SETTLEMENT" }],
+  });
+  const result = await fetchTreasuryExpenseEntries(null, RANGE.start, RANGE.end, db);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].kind, "BANK", "SETTLEMENT no es SAFE, cae en el mismo bucket que un pago bancario");
+  assert.equal(result[0].branchId, null, "SETTLEMENT-CENTRAL no tiene sucursal — no se atribuye a ninguna");
+  assert.equal(result[0].amount, 45);
 });
 
 test("varios gastos: banco, retenido, planilla excluida y anulado excluido — solo pasan los dos primeros", async () => {

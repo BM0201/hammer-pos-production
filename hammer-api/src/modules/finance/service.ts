@@ -352,6 +352,14 @@ type TreasuryExpenseEntry = { amount: number; occurredAt: Date; branchId: string
  * TreasuryEntry — universos disjuntos. El chequeo de PAYROLL/isActive de acá
  * sigue aplicando si eso cambia: expensePaymentId es la trazabilidad que el
  * schema ya declara para esto.
+ *
+ * CARD_FEE (prompt-tesoreria-cerrar-circuito.md H-1/Fase 2,
+ * confirmCardSettlementTx) también entra: es gasto financiero real (la
+ * comisión que cobra el adquirente al liquidar), no gasto operativo de
+ * sucursal. Sale siempre de la cuenta SETTLEMENT-CENTRAL (branchId null,
+ * findOrCreateSettlementAccountTx) — cae en el bucket BANK más abajo (no es
+ * SAFE) y, al no tener sucursal, queda sin atribuir a ningún byBranch, igual
+ * que cualquier otro gasto de cuenta central.
  */
 export async function fetchTreasuryExpenseEntries(
   branchId: string | null,
@@ -362,7 +370,7 @@ export async function fetchTreasuryExpenseEntries(
   const entries = await db.treasuryEntry.findMany({
     where: {
       direction: "OUT",
-      entryType: { in: ["EXPENSE", "SUPPLIER_PAYMENT"] },
+      entryType: { in: ["EXPENSE", "SUPPLIER_PAYMENT", "CARD_FEE"] },
       occurredAt: { gte: start, lt: end },
       ...(branchId ? { account: { is: { branchId } } } : {}),
     },

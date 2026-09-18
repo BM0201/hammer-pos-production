@@ -51,6 +51,17 @@ export const confirmBankDepositSchema = z.object({
   notes: z.string().max(500).optional().nullable(),
 });
 
+/** prompt-tesoreria-cerrar-circuito.md H-1/Fase 2 — confirmar que el adquirente liquidó SETTLEMENT hacia una cuenta bancaria, con su comisión. */
+export const confirmCardSettlementSchema = z.object({
+  settlementAccountId: z.string().cuid(),
+  bankAccountId: z.string().cuid(),
+  grossAmount: z.coerce.number().positive(),
+  feeAmount: z.coerce.number().nonnegative().optional(),
+  settledAt: z.coerce.date().optional(),
+  referenceNumber: z.string().max(100).optional().nullable(),
+  notes: z.string().max(500).optional().nullable(),
+});
+
 /**
  * Depósito directo: el acumulado de la sucursal (getBranchCashPosition) va
  * directo a una cuenta bancaria en córdobas, sin pasar por "enviar a alguien
