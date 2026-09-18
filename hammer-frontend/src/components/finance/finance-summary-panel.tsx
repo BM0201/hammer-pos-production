@@ -22,6 +22,8 @@ type BranchRow = {
   grossProfit: number;
   grossMarginPercent: number | null;
   cashExpenses: number;
+  bankExpenses: number;
+  retainedCashExpenses: number;
   payrollPaid: number;
   operatingExpenses: number;
   operatingProfit: number;
@@ -47,6 +49,8 @@ type FinanceSummary = {
     grossProfit: number;
     grossMarginPercent: number | null;
     cashExpenses: number;
+    bankExpenses: number;
+    retainedCashExpenses: number;
     payrollPaid: number;
     operatingExpenses: number;
     expensesBudgetMonthly: number;
@@ -69,6 +73,8 @@ type TrendPoint = {
   grossProfit: number;
   grossMarginPercent: number | null;
   cashExpenses: number;
+  bankExpenses: number;
+  retainedCashExpenses: number;
   payrollPaid: number;
   operatingProfit: number;
 };
@@ -391,7 +397,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                 </ResponsiveContainer>
               </div>
               <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                Barras = ingresos netos cobrados · línea = utilidad operativa real (ingresos − COGS − gastos de caja − planilla pagada).
+                Barras = ingresos netos cobrados · línea = utilidad operativa real (ingresos − COGS − gastos de caja − banco − efectivo retenido − planilla pagada).
                 El mes en curso se ve parcial hasta cerrarlo.
               </p>
             </section>
@@ -415,11 +421,14 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                 <PnlRow label="Costo de ventas (COGS)" value={perf.cogs} kind="minus" />
                 <PnlRow label="Utilidad bruta" value={perf.grossProfit} kind="subtotal" percent={perf.grossMarginPercent} />
                 <PnlRow label="Gastos pagados desde caja" value={perf.cashExpenses} kind="minus" />
+                <PnlRow label="Gastos pagados desde banco" value={perf.bankExpenses} kind="minus" />
+                <PnlRow label="Gastos con efectivo retenido" value={perf.retainedCashExpenses} kind="minus" />
                 <PnlRow label="Planilla pagada" value={perf.payrollPaid} kind="minus" />
                 <PnlRow label="Utilidad operativa" value={perf.operatingProfit} kind="total" />
                 <p className="mt-2 text-[10px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
-                  Gastos de caja = egresos reales que cada sucursal pagó en el período (luz, agua, compras del momento…),
-                  sin incluir planilla (va aparte para no doble-contarla).
+                  Gastos de caja = egresos que cada sucursal pagó desde la gaveta abierta · gastos de banco = pagos a
+                  proveedor/gasto desde una cuenta bancaria registrada · efectivo retenido = gastos pagados con dinero
+                  ya cerrado en caja fuerte, esperando depósito — ninguno incluye planilla (va aparte, a costo empresa).
                 </p>
               </div>
 
@@ -439,7 +448,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
                         <th className="py-1.5 pr-3 text-right">COGS</th>
                         <th className="py-1.5 pr-3 text-right">Ut. bruta</th>
                         <th className="py-1.5 pr-3 text-right">Margen</th>
-                        <th className="py-1.5 pr-3 text-right" title="Egresos de caja + planilla pagada del período">Gastos reales</th>
+                        <th className="py-1.5 pr-3 text-right" title="Egresos de caja + banco + efectivo retenido + planilla pagada del período">Gastos reales</th>
                         <th className="py-1.5 text-right">Ut. operativa</th>
                       </tr>
                     </thead>
@@ -480,7 +489,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
             <p className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
               Reglas (todo en base caja, corte mensual hora Managua): ventas netas = pagos cobrados − reembolsos ·
               COGS = costo de salidas por venta − reingresos vendibles por devolución (lo dañado queda como merma) ·
-              utilidad operativa = utilidad bruta − gastos REALES pagados (egresos de caja de sucursal + planilla desembolsada).
+              utilidad operativa = utilidad bruta − gastos REALES pagados (egresos de caja de sucursal + banco + efectivo retenido + planilla desembolsada).
               El presupuesto mensual configurado se compara aparte, no se resta.
             </p>
           </section>
@@ -488,7 +497,7 @@ export function FinanceSummaryPanel({ branchId: fixedBranchId }: { branchId?: st
           {/* ── 2. Costos del período: real vs presupuesto ── */}
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card icon={Wallet} label="Gastos reales pagados" value={money(perf.operatingExpenses)}
-              hint={`Caja ${money(perf.cashExpenses)} + planilla ${money(perf.payrollPaid)}`} />
+              hint={`Caja ${money(perf.cashExpenses)} + banco ${money(perf.bankExpenses)} + retenido ${money(perf.retainedCashExpenses)} + planilla ${money(perf.payrollPaid)}`} />
             <Card icon={Receipt} label="Presupuesto mensual configurado" value={money(perf.expensesBudgetMonthly)}
               tone={perf.expensesBudgetMonthly > 0 && perf.operatingExpenses > perf.expensesBudgetMonthly ? "warn" : "default"}
               hint={perf.expensesBudgetMonthly > 0

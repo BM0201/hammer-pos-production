@@ -1,6 +1,8 @@
-import { Prisma, PaymentStatus } from "@prisma/client";
+import { Prisma, PrismaClient, PaymentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
+
+type DbClient = PrismaClient | Prisma.TransactionClient;
 
 /**
  * Servicio central de Finanzas & Contabilidad.
@@ -116,13 +118,17 @@ export type FinanceSummary = {
     grossMarginPercent: number | null;
     /** Gastos pagados desde caja de sucursal en el período (luz, agua, compras del momento…), sin planilla. */
     cashExpenses: number;
+    /** prompt-tesoreria-cerrar-circuito.md H-2 — gastos/pagos a proveedor pagados desde una cuenta bancaria registrada (recordAccountPaymentTx), sin planilla. */
+    bankExpenses: number;
+    /** prompt-tesoreria-cerrar-circuito.md H-3 — gastos pagados con efectivo retenido en caja fuerte (recordRetainedCashExpenseTx), sin anulados. */
+    retainedCashExpenses: number;
     /**
      * Costo EMPRESA de la planilla desembolsada (PAID) en el período: el neto
      * pagado escalado a employerCost (incluye retenciones, INSS patronal,
      * INATEC y provisiones). Línea propia — ver computeRealPerformance.
      */
     payrollPaid: number;
-    /** Total de gastos REALES del período = cashExpenses + payrollPaid. */
+    /** Total de gastos REALES del período = cashExpenses + bankExpenses + retainedCashExpenses + payrollPaid. */
     operatingExpenses: number;
     /** Presupuesto mensual configurado (OperatingExpense) — referencia, no se resta. */
     expensesBudgetMonthly: number;
@@ -139,6 +145,8 @@ export type FinanceSummary = {
       grossProfit: number;
       grossMarginPercent: number | null;
       cashExpenses: number;
+      bankExpenses: number;
+      retainedCashExpenses: number;
       payrollPaid: number;
       operatingExpenses: number;
       operatingProfit: number;
@@ -316,6 +324,83 @@ function payrollEmployerCostPaid(d: {
   return paidNet * (lineCost / lineNet);
 }
 
+type TreasuryExpenseEntry = { amount: number; occurredAt: Date; branchId: string | null; kind: "BANK" | "RETAINED_CASH" };
+
+/**
+ * prompt-tesoreria-cerrar-circuito.md H-2/H-3 — el otro sumidero de gasto
+ * real que este módulo no veía: un pago desde cuenta bancaria
+ * (recordAccountPaymentTx, treasury/service.ts) o un gasto pagado con
+ * efectivo retenido (recordRetainedCashExpenseTx) bajan el saldo de
+ * tesorería, pero solo CashMovement EXPENSE_OUT (gaveta abierta) contaba acá.
+ *
+ * Exclusiones, mismo criterio que cashExpenseMovs de abajo:
+ *  - PAYROLL fuera: entra por su línea propia a costo empresa
+ *    (payrollEmployerCostPaid), no al neto pagado — doble-contarla la
+ *    inflaría.
+ *  - Un gasto de efectivo retenido ANULADO tampoco cuenta. La reversión que
+ *    escribe voidRetainedCashExpense es una fila IN RECONCILIATION —
+ *    invisible para este filtro (direction=OUT, entryType EXPENSE/
+ *    SUPPLIER_PAYMENT) — Y no reutiliza expensePaymentId (TreasuryEntry.
+ *    expensePaymentId es @unique, así que la reversión no podría tener el
+ *    mismo). Sin este chequeo, un gasto anulado seguiría bajando la utilidad
+ *    para siempre. Se usa OperatingExpense.isActive (que voidRetainedCashExpense
+ *    sí apaga) en vez de perseguir la reversión.
+ *
+ * No hay solape con CashMovement EXPENSE_OUT hoy: recordAccountPaymentTx/
+ * recordRetainedCashExpenseTx nunca crean un CashMovement, y
+ * createOperatingExpense(registerCashMovement:true) nunca crea un
+ * TreasuryEntry — universos disjuntos. El chequeo de PAYROLL/isActive de acá
+ * sigue aplicando si eso cambia: expensePaymentId es la trazabilidad que el
+ * schema ya declara para esto.
+ */
+export async function fetchTreasuryExpenseEntries(
+  branchId: string | null,
+  start: Date,
+  end: Date,
+  db: DbClient = prisma,
+): Promise<TreasuryExpenseEntry[]> {
+  const entries = await db.treasuryEntry.findMany({
+    where: {
+      direction: "OUT",
+      entryType: { in: ["EXPENSE", "SUPPLIER_PAYMENT"] },
+      occurredAt: { gte: start, lt: end },
+      ...(branchId ? { account: { is: { branchId } } } : {}),
+    },
+    select: {
+      amount: true,
+      occurredAt: true,
+      expensePaymentId: true,
+      account: { select: { branchId: true, type: true } },
+    },
+  });
+
+  const expensePaymentIds = entries.map((e) => e.expensePaymentId).filter((id): id is string => id !== null);
+  const linkedExpenses = expensePaymentIds.length > 0
+    ? await db.operatingExpense.findMany({
+        where: { id: { in: expensePaymentIds } },
+        select: { id: true, category: true, isActive: true },
+      })
+    : [];
+  const linkedById = new Map(linkedExpenses.map((e) => [e.id, e]));
+
+  return entries
+    .filter((e) => {
+      if (!e.expensePaymentId) return true;
+      const linked = linkedById.get(e.expensePaymentId);
+      // Sin el OperatingExpense (dato huérfano) se deja pasar — mismo
+      // criterio conservador que el resto del módulo: no inventar una
+      // exclusión que nadie puede verificar.
+      if (!linked) return true;
+      return linked.category !== "PAYROLL" && linked.isActive;
+    })
+    .map((e) => ({
+      amount: num(e.amount),
+      occurredAt: e.occurredAt,
+      branchId: e.account.branchId,
+      kind: e.account.type === "SAFE" ? ("RETAINED_CASH" as const) : ("BANK" as const),
+    }));
+}
+
 async function computeRealPerformance(
   branchId: string | null,
   start: Date,
@@ -323,7 +408,7 @@ async function computeRealPerformance(
   operatingExpenses: { monthlyTotal: number },
 ) {
   const branchFilter = branchId ? { branchId } : {};
-  const [payments, refunds, movements, branches, cashExpenseMovs, payrollDisbursed] = await Promise.all([
+  const [payments, refunds, movements, branches, cashExpenseMovs, payrollDisbursed, treasuryExpenseEntries] = await Promise.all([
     prisma.payment.findMany({
       where: {
         paidAt: { gte: start, lt: end },
@@ -365,19 +450,20 @@ async function computeRealPerformance(
       where: { status: "PAID", paidAt: { gte: start, lt: end }, ...(branchId ? { branchId } : {}) },
       select: { amount: true, branchId: true, payrollLine: { select: { netPay: true, employerCost: true } } },
     }),
+    fetchTreasuryExpenseEntries(branchId, start, end),
   ]);
 
   const branchMeta = new Map(branches.map((b) => [b.id, { code: b.code, name: b.name }]));
 
   type BranchAcc = {
     grossSales: number; refunds: number; cogsOut: number; cogsReturned: number;
-    cashExpenses: number; payrollPaid: number;
+    cashExpenses: number; bankExpenses: number; retainedCashExpenses: number; payrollPaid: number;
   };
   const perBranch = new Map<string, BranchAcc>();
   const acc = (id: string): BranchAcc => {
     let entry = perBranch.get(id);
     if (!entry) {
-      entry = { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, payrollPaid: 0 };
+      entry = { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, bankExpenses: 0, retainedCashExpenses: 0, payrollPaid: 0 };
       perBranch.set(id, entry);
     }
     return entry;
@@ -392,13 +478,23 @@ async function computeRealPerformance(
   }
   for (const e of cashExpenseMovs) acc(e.cashSession.physicalCashBox.branchId).cashExpenses += num(e.amount);
   for (const d of payrollDisbursed) acc(d.branchId).payrollPaid += payrollEmployerCostPaid(d);
+  // Cuenta bancaria CENTRAL (branchId null, ej. SETTLEMENT/pagos generales) no
+  // tiene una sucursal a la que atribuirse — cuenta en el total consolidado,
+  // fuera de todo byBranch. Solo puede pasar con kind=BANK: las cuentas SAFE
+  // siempre tienen branchId (findSafeAccountForBranch las exige).
+  let unattributedBankExpenses = 0;
+  for (const e of treasuryExpenseEntries) {
+    if (!e.branchId) { unattributedBankExpenses += e.amount; continue; }
+    if (e.kind === "BANK") acc(e.branchId).bankExpenses += e.amount;
+    else acc(e.branchId).retainedCashExpenses += e.amount;
+  }
 
   const byBranch = [...perBranch.entries()]
     .map(([id, b]) => {
       const netSales = b.grossSales - b.refunds;
       const cogs = b.cogsOut - b.cogsReturned;
       const grossProfit = netSales - cogs;
-      const realExpenses = b.cashExpenses + b.payrollPaid;
+      const realExpenses = b.cashExpenses + b.bankExpenses + b.retainedCashExpenses + b.payrollPaid;
       return {
         branchId: id,
         branchCode: branchMeta.get(id)?.code ?? null,
@@ -410,6 +506,8 @@ async function computeRealPerformance(
         grossProfit: round2(grossProfit),
         grossMarginPercent: netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null,
         cashExpenses: round2(b.cashExpenses),
+        bankExpenses: round2(b.bankExpenses),
+        retainedCashExpenses: round2(b.retainedCashExpenses),
         payrollPaid: round2(b.payrollPaid),
         operatingExpenses: round2(realExpenses),
         operatingProfit: round2(grossProfit - realExpenses),
@@ -424,8 +522,12 @@ async function computeRealPerformance(
   const grossProfit = netSales - cogs;
   const grossMarginPercent = netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null;
   const cashExpenses = byBranch.reduce((s, b) => s + b.cashExpenses, 0);
+  // unattributedBankExpenses (cuenta central, sin sucursal) solo suma acá —
+  // total > sum(byBranch.bankExpenses) es correcto y esperado cuando existe.
+  const bankExpenses = byBranch.reduce((s, b) => s + b.bankExpenses, 0) + unattributedBankExpenses;
+  const retainedCashExpenses = byBranch.reduce((s, b) => s + b.retainedCashExpenses, 0);
   const payrollPaid = byBranch.reduce((s, b) => s + b.payrollPaid, 0);
-  const realExpenses = cashExpenses + payrollPaid;
+  const realExpenses = cashExpenses + bankExpenses + retainedCashExpenses + payrollPaid;
   const operatingProfit = grossProfit - realExpenses;
 
   return {
@@ -436,6 +538,8 @@ async function computeRealPerformance(
     grossProfit: round2(grossProfit),
     grossMarginPercent,
     cashExpenses: round2(cashExpenses),
+    bankExpenses: round2(bankExpenses),
+    retainedCashExpenses: round2(retainedCashExpenses),
     payrollPaid: round2(payrollPaid),
     operatingExpenses: round2(realExpenses),
     expensesBudgetMonthly: round2(operatingExpenses.monthlyTotal),
@@ -485,6 +589,8 @@ export type FinanceTrendPoint = {
   grossProfit: number;
   grossMarginPercent: number | null;
   cashExpenses: number;
+  bankExpenses: number;
+  retainedCashExpenses: number;
   payrollPaid: number;
   operatingProfit: number;
 };
@@ -512,7 +618,7 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
   const { end } = managuaMonthRangeUtc(nowParts.year, nowParts.month);
 
   const branchFilter = branchId ? { branchId } : {};
-  const [payments, refunds, movements, cashExpenseMovs, payrollDisbursed] = await Promise.all([
+  const [payments, refunds, movements, cashExpenseMovs, payrollDisbursed, treasuryExpenseEntries] = await Promise.all([
     prisma.payment.findMany({
       where: {
         paidAt: { gte: start, lt: end },
@@ -547,13 +653,14 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
       where: { status: "PAID", paidAt: { gte: start, lt: end }, ...(branchId ? { branchId } : {}) },
       select: { amount: true, paidAt: true, payrollLine: { select: { netPay: true, employerCost: true } } },
     }),
+    fetchTreasuryExpenseEntries(branchId, start, end),
   ]);
 
-  type Acc = { grossSales: number; refunds: number; cogsOut: number; cogsReturned: number; cashExpenses: number; payrollPaid: number };
+  type Acc = { grossSales: number; refunds: number; cogsOut: number; cogsReturned: number; cashExpenses: number; bankExpenses: number; retainedCashExpenses: number; payrollPaid: number };
   const buckets = new Map<number, Acc>();
   // Pre-crear todos los meses para que la serie no tenga huecos (meses sin ventas = 0).
   for (let idx = startIdx; idx <= endIdx; idx++) {
-    buckets.set(idx, { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, payrollPaid: 0 });
+    buckets.set(idx, { grossSales: 0, refunds: 0, cogsOut: 0, cogsReturned: 0, cashExpenses: 0, bankExpenses: 0, retainedCashExpenses: 0, payrollPaid: 0 });
   }
   const at = (d: Date | null): Acc | undefined => (d ? buckets.get(managuaMonthIndex(d)) : undefined);
 
@@ -568,6 +675,17 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
   }
   for (const e of cashExpenseMovs) { const b = at(e.createdAt); if (b) b.cashExpenses += num(e.amount); }
   for (const d of payrollDisbursed) { const b = at(d.paidAt); if (b) b.payrollPaid += payrollEmployerCostPaid(d); }
+  // unattributed (cuenta central sin sucursal) queda fuera de la serie por
+  // mes-y-sucursal — mismo criterio que computeRealPerformance, esto es una
+  // serie que no desglosa por sucursal así que en la práctica no hay a dónde
+  // más atribuirlo que a "todas" (branchId=null); con branchId específico, la
+  // query de fetchTreasuryExpenseEntries ya filtró por cuenta de esa sucursal.
+  for (const e of treasuryExpenseEntries) {
+    const b = at(e.occurredAt);
+    if (!b) continue;
+    if (e.kind === "BANK") b.bankExpenses += e.amount;
+    else b.retainedCashExpenses += e.amount;
+  }
 
   const points: FinanceTrendPoint[] = [...buckets.entries()]
     .sort((a, b) => a[0] - b[0])
@@ -575,7 +693,7 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
       const netSales = b.grossSales - b.refunds;
       const cogs = b.cogsOut - b.cogsReturned;
       const grossProfit = netSales - cogs;
-      const operatingProfit = grossProfit - b.cashExpenses - b.payrollPaid;
+      const operatingProfit = grossProfit - b.cashExpenses - b.bankExpenses - b.retainedCashExpenses - b.payrollPaid;
       return {
         year: Math.floor(idx / 12),
         month: (idx % 12) + 1,
@@ -586,6 +704,8 @@ export async function getFinanceTrend(input: { branchId?: string | null; months?
         grossProfit: round2(grossProfit),
         grossMarginPercent: netSales > 0 ? Math.round((grossProfit / netSales) * 1000) / 10 : null,
         cashExpenses: round2(b.cashExpenses),
+        bankExpenses: round2(b.bankExpenses),
+        retainedCashExpenses: round2(b.retainedCashExpenses),
         payrollPaid: round2(b.payrollPaid),
         operatingProfit: round2(operatingProfit),
       };
