@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx, calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
 import { mean, stddev } from "@/modules/ai-insights/analyzer";
-import { createTreasuryEntryTx, findOrCreateCustodyAccountTx, getActiveRetainedCashExpenses } from "@/modules/treasury/service";
+import { createTreasuryEntryTx, createInternalTransferTx, findOrCreateCustodyAccountTx, getTreasuryAccountBalanceTx, getActiveRetainedCashExpenses } from "@/modules/treasury/service";
 import { nextBusinessDayFrom } from "@/modules/operations/business-date";
 
 /**
@@ -576,6 +576,124 @@ export async function sendCashOutToCustody(input: SendCashOutInput) {
   });
 
   return { movement: result.movement, custodyAccountId: result.custodyAccountId, treasuryEntryId: result.treasuryEntryId };
+}
+
+// ─── Confirmación de recepción de custodia (prompt-tesoreria-cerrar-circuito.md H-5) ──
+//
+// sendCashOutToCustody deja el efectivo en la custodia de quien lo CARGA
+// (el portador) — nadie del otro lado confirmaba que lo recibió de verdad.
+// Era el pendiente #1 de docs/PENDIENTES.md.
+
+export type ConfirmCustodyReceiptInput = {
+  fromCustodyAccountId: string;
+  amount: number;
+  receivedByUserId: string;
+  notes?: string | null;
+};
+
+/**
+ * Mismo patrón que confirmBankDepositTx: lock de fila antes de leer el
+ * saldo, guard de que lo confirmado no supere lo que hay en la custodia
+ * origen (el resto se queda ahí — no se ajusta solo), dos patas con el
+ * mismo transferId (OUT del portador, IN de quien recibe) vía
+ * createInternalTransferTx.
+ *
+ * Si la última entrega (HANDOVER) de esa custodia declaró un destinatario
+ * (intendedRecipientUserId, cuando el propio cajero cargó el efectivo para
+ * entregárselo a alguien más — sendCashOutToCustodyTx) y quien confirma NO
+ * es esa persona, NO se bloquea: el dinero físico ya se movió, el sistema
+ * anota la discrepancia (CUSTODY_RECEIPT_RECIPIENT_MISMATCH) en vez de
+ * negarla — mismo criterio que confirmBankDeposit con bankAccountMismatch.
+ */
+export async function confirmCustodyReceiptTx(tx: Prisma.TransactionClient, input: ConfirmCustodyReceiptInput) {
+  if (input.amount <= 0) throw new Error("VALIDATION_ERROR: el monto debe ser mayor que 0");
+
+  const fromAccount = await tx.treasuryAccount.findUniqueOrThrow({
+    where: { id: input.fromCustodyAccountId },
+    select: { type: true, branchId: true, holderUserId: true },
+  });
+  if (fromAccount.type !== "CUSTODY") {
+    throw new Error("VALIDATION_ERROR: la cuenta de origen debe ser de custodia");
+  }
+  if (fromAccount.holderUserId === input.receivedByUserId) {
+    throw new Error("VALIDATION_ERROR: no podés confirmar que recibiste efectivo que ya está en tu propia custodia");
+  }
+
+  // Lock de fila: serializa recepciones concurrentes sobre la misma custodia
+  // antes de leer el saldo — mismo patrón que recordAccountPaymentTx/
+  // confirmCardSettlementTx.
+  await tx.$queryRaw`SELECT id FROM "TreasuryAccount" WHERE id = ${input.fromCustodyAccountId} FOR UPDATE`;
+
+  const fromBalance = await getTreasuryAccountBalanceTx(tx, input.fromCustodyAccountId);
+  if (input.amount > fromBalance.balance + 0.01) {
+    throw new Error(`VALIDATION_ERROR: el monto confirmado (C$${input.amount}) supera lo que hay en esa custodia (C$${fromBalance.balance})`);
+  }
+
+  // La intención declarada por quien lo entregó (§A.6, igual que
+  // confirmBankDepositTx con intendedBankAccountId) — la última HANDOVER de
+  // esta custodia con destinatario declarado.
+  const latestHandover = await tx.treasuryEntry.findFirst({
+    where: { accountId: input.fromCustodyAccountId, entryType: "HANDOVER", intendedRecipientUserId: { not: null } },
+    orderBy: { occurredAt: "desc" },
+    select: { intendedRecipientUserId: true },
+  });
+  const intendedRecipientUserId = latestHandover?.intendedRecipientUserId ?? null;
+  const recipientMismatch = intendedRecipientUserId !== null && intendedRecipientUserId !== input.receivedByUserId;
+
+  const toAccount = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.receivedByUserId, branchId: fromAccount.branchId });
+
+  const { transferId } = await createInternalTransferTx(tx, {
+    fromAccountId: input.fromCustodyAccountId,
+    toAccountId: toAccount.id,
+    fromAmount: input.amount,
+    entryType: "HANDOVER",
+    counterpartyType: "INTERNAL",
+    notes: input.notes ?? null,
+    createdByUserId: input.receivedByUserId,
+  });
+
+  const remainder = round2(fromBalance.balance - input.amount);
+
+  await logAuditEvent({
+    actorUserId: input.receivedByUserId,
+    branchId: fromAccount.branchId ?? undefined,
+    module: "treasury",
+    action: "CUSTODY_RECEIPT_CONFIRMED",
+    entityType: "TreasuryAccount",
+    entityId: input.fromCustodyAccountId,
+    metadataJson: {
+      fromCustodyAccountId: input.fromCustodyAccountId,
+      toCustodyAccountId: toAccount.id,
+      amount: input.amount,
+      remainderInCustody: remainder,
+      transferId,
+      intendedRecipientUserId,
+      recipientMismatch,
+    },
+  });
+
+  if (recipientMismatch) {
+    await logAuditEvent({
+      actorUserId: input.receivedByUserId,
+      branchId: fromAccount.branchId ?? undefined,
+      module: "treasury",
+      action: "CUSTODY_RECEIPT_RECIPIENT_MISMATCH",
+      entityType: "TreasuryAccount",
+      entityId: input.fromCustodyAccountId,
+      metadataJson: {
+        fromCustodyAccountId: input.fromCustodyAccountId,
+        intendedRecipientUserId,
+        actualReceivedByUserId: input.receivedByUserId,
+        amount: input.amount,
+      },
+    });
+  }
+
+  return { transferId, amount: input.amount, remainderInCustody: remainder, recipientMismatch, intendedRecipientUserId, toCustodyAccountId: toAccount.id };
+}
+
+export async function confirmCustodyReceipt(input: ConfirmCustodyReceiptInput) {
+  return prisma.$transaction((tx) => confirmCustodyReceiptTx(tx, input));
 }
 
 /**

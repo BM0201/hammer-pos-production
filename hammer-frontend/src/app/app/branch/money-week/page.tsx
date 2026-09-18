@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SendDepositModal, type CashPosition, type CashIndicatorState } from "@/components/navigation/cash-indicator-panel";
 import { money } from "@/lib/format";
+import toast from "react-hot-toast";
 
 /**
  * "Dinero de la semana" (Admin de Sucursal, prompt-modulo-dinero-semana-
@@ -21,7 +22,7 @@ import { money } from "@/lib/format";
 
 type MoneyByMethod = { cash: number; transfer: number; card: number; other: number; total: number };
 type DayRow = MoneyByMethod & { businessDate: string };
-type InTransitEntry = { custodyAccountId: string; holderUserId: string | null; holderName: string; amount: number; sinceDate: string | null };
+type InTransitEntry = { custodyAccountId: string; holderUserId: string | null; holderName: string; amount: number; sinceDate: string | null; intendedRecipientUserId: string | null };
 
 type BranchMoneySummary = {
   branchId: string;
@@ -66,6 +67,7 @@ export default function BranchMoneyWeekPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSendModal, setShowSendModal] = useState(false);
+  const [confirmingReceiptId, setConfirmingReceiptId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!branchId) return;
@@ -86,6 +88,29 @@ export default function BranchMoneyWeekPage() {
   }, [branchId, weekStartOverride]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // prompt-tesoreria-cerrar-circuito.md H-5 — el lado que faltaba: quien
+  // recibe el efectivo confirma que lo tuvo, en vez de que quede "en
+  // tránsito" para siempre hasta que Master lo note a mano.
+  async function confirmReceipt(entry: InTransitEntry) {
+    if (confirmingReceiptId) return; // el doble click no puede generar dos confirmaciones — mueve dinero real.
+    setConfirmingReceiptId(entry.custodyAccountId);
+    try {
+      const res = await apiFetch("/api/treasury/custody-receipts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fromCustodyAccountId: entry.custodyAccountId, amount: entry.amount }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo confirmar la recepción.");
+      toast.success(`Confirmaste que recibiste ${money(entry.amount)} de ${entry.holderName}.`);
+      void load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo confirmar la recepción.");
+    } finally {
+      setConfirmingReceiptId(null);
+    }
+  }
 
   if (sessionState.status === "loading" || (!branchId && sessionState.status === "authenticated")) {
     return <p className="text-[var(--color-text-muted)] animate-pulse">Cargando…</p>;
@@ -201,7 +226,7 @@ export default function BranchMoneyWeekPage() {
             )}
           </Card>
 
-          {/* En tránsito — solo si hay algo, sin botón de acción (§2.3) */}
+          {/* En tránsito — con botón "Recibí este efectivo" para quien sea el destinatario declarado (§H-5) */}
           {summary.inTransit.length > 0 && (
             <Card className="p-4">
               <div className="mb-3 flex items-center gap-2">
@@ -209,17 +234,32 @@ export default function BranchMoneyWeekPage() {
                 <h2 className="text-sm font-semibold text-[var(--color-text)]">En tránsito</h2>
               </div>
               <div className="space-y-1.5">
-                {summary.inTransit.map((entry) => (
-                  <div key={entry.custodyAccountId} className="flex items-center justify-between rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
-                    <div>
-                      <p className="text-sm font-semibold text-[var(--color-text)]">{entry.holderName}</p>
-                      <p className="text-xs text-[var(--color-text-muted)]">
-                        {entry.sinceDate ? `Desde ${fmtDayLabel(entry.sinceDate)}` : ""} · Esperando confirmación de Master
-                      </p>
+                {summary.inTransit.map((entry) => {
+                  const isMyIncoming = entry.intendedRecipientUserId === sessionState.session.userId;
+                  return (
+                    <div key={entry.custodyAccountId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] p-3">
+                      <div>
+                        <p className="text-sm font-semibold text-[var(--color-text)]">{entry.holderName}</p>
+                        <p className="text-xs text-[var(--color-text-muted)]">
+                          {entry.sinceDate ? `Desde ${fmtDayLabel(entry.sinceDate)}` : ""} · {isMyIncoming ? "Es para vos" : "Esperando confirmación"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm font-bold tabular-nums text-[var(--color-text)]">{money(entry.amount)}</span>
+                        {isMyIncoming && (
+                          <Button
+                            variant="success"
+                            size="sm"
+                            loading={confirmingReceiptId === entry.custodyAccountId}
+                            onClick={() => void confirmReceipt(entry)}
+                          >
+                            Recibí este efectivo
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <span className="font-mono text-sm font-bold tabular-nums text-[var(--color-text)]">{money(entry.amount)}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
           )}

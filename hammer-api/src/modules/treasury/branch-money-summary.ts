@@ -92,6 +92,14 @@ export type InTransitEntry = {
   holderName: string;
   amount: number;
   sinceDate: string | null;
+  /**
+   * prompt-tesoreria-cerrar-circuito.md H-5 — quién debería recibir este
+   * efectivo, si el portador lo declaró al entregarlo (sendCashOutToCustodyTx,
+   * HANDOVER con recipientUserId). null cuando no hay un destinatario
+   * declarado — la pantalla usa esto para ofrecerle a esa persona (y solo a
+   * ella) el botón "Recibí este efectivo".
+   */
+  intendedRecipientUserId: string | null;
 };
 
 /**
@@ -114,6 +122,16 @@ async function getCustodySinceDate(accountId: string): Promise<Date | null> {
   return earliestInSinceReset?.occurredAt ?? null;
 }
 
+/** Misma lectura que confirmCustodyReceiptTx: la última HANDOVER de esta custodia con destinatario declarado. */
+async function getIntendedRecipient(accountId: string): Promise<string | null> {
+  const latestHandover = await prisma.treasuryEntry.findFirst({
+    where: { accountId, entryType: "HANDOVER", intendedRecipientUserId: { not: null } },
+    orderBy: { occurredAt: "desc" },
+    select: { intendedRecipientUserId: true },
+  });
+  return latestHandover?.intendedRecipientUserId ?? null;
+}
+
 async function getBranchInTransit(branchId: string): Promise<InTransitEntry[]> {
   const accounts = await prisma.treasuryAccount.findMany({
     where: { type: "CUSTODY", isActive: true, branchId },
@@ -124,13 +142,17 @@ async function getBranchInTransit(branchId: string): Promise<InTransitEntry[]> {
   const rows = await Promise.all(accounts.map(async (account) => {
     const balance = await getTreasuryAccountBalance(account.id);
     if (balance.balance <= 0.01) return null;
-    const sinceDate = await getCustodySinceDate(account.id);
+    const [sinceDate, intendedRecipientUserId] = await Promise.all([
+      getCustodySinceDate(account.id),
+      getIntendedRecipient(account.id),
+    ]);
     return {
       custodyAccountId: account.id,
       holderUserId: account.holderUser?.id ?? null,
       holderName: account.holderUser?.fullName ?? account.accountAlias,
       amount: round2(balance.balance),
       sinceDate: sinceDate ? ymd(sinceDate) : null,
+      intendedRecipientUserId,
     };
   }));
   return rows.filter((r): r is InTransitEntry => r !== null);

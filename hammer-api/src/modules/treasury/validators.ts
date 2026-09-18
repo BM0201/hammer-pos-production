@@ -63,6 +63,19 @@ export const confirmCardSettlementSchema = z.object({
 });
 
 /**
+ * prompt-tesoreria-cerrar-circuito.md H-5 — confirmar que se recibió
+ * efectivo en custodia. receivedByUserId es opcional: por defecto es el
+ * actor (confirmando su propia recepción); solo Master puede confirmar en
+ * nombre de otra persona (chequeado en la ruta, no acá).
+ */
+export const confirmCustodyReceiptSchema = z.object({
+  fromCustodyAccountId: z.string().cuid(),
+  amount: z.coerce.number().positive(),
+  receivedByUserId: z.string().cuid().optional(),
+  notes: z.string().max(500).optional().nullable(),
+});
+
+/**
  * Depósito directo: el acumulado de la sucursal (getBranchCashPosition) va
  * directo a una cuenta bancaria en córdobas, sin pasar por "enviar a alguien
  * y confirmar después". El tope real (pendingDeposit) se recalcula en el
