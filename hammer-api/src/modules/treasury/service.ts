@@ -431,17 +431,32 @@ export function applyRunningBalance<T extends { direction: "IN" | "OUT"; amount:
  * SAFE) se completa en el caller con CashSession — la gaveta no es una
  * cuenta de tesorería (§1), este módulo no la conoce.
  */
+/**
+ * H-6 (prompt-tesoreria-cerrar-circuito.md) — pura, sin DB: aislada para
+ * poder probar el caso que importa (dos monedas → total null) sin montar
+ * cuentas reales. El comentario de getTreasuryPosition ya decía "nunca
+ * sumada entre monedas sin decir a qué tasa", pero el código sumaba las
+ * filas de TODAS las monedas igual. Con una sola moneda en juego (o ninguna
+ * fila), el total es la suma directa; con dos o más, total queda null —
+ * byCurrency ya tiene el desglose real, ahí no hay nada que inventar
+ * convirtiendo sin tasa.
+ */
+export function groupBalancesByCurrency(rows: Array<{ currencyCode: string; balance: number }>): { total: number | null; byCurrency: Record<string, number> } {
+  const byCurrency: Record<string, number> = {};
+  for (const row of rows) byCurrency[row.currencyCode] = round2((byCurrency[row.currencyCode] ?? 0) + row.balance);
+  const total = Object.keys(byCurrency).length <= 1 ? round2(rows.reduce((s, r) => s + r.balance, 0)) : null;
+  return { total, byCurrency };
+}
+
 export async function getTreasuryPosition(branchId?: string | null) {
   const accounts = await prisma.treasuryAccount.findMany({
     where: { isActive: true, ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}) },
   });
   const balances = await Promise.all(accounts.map(async (account) => ({ account, ...(await getTreasuryAccountBalance(account.id)) })));
 
-  function groupByCurrency(type: TreasuryAccountType) {
+  function groupByCurrency(type: TreasuryAccountType): { total: number | null; byCurrency: Record<string, number> } {
     const rows = balances.filter((b) => b.account.type === type);
-    const byCurrency: Record<string, number> = {};
-    for (const row of rows) byCurrency[row.account.currencyCode] = round2((byCurrency[row.account.currencyCode] ?? 0) + row.balance);
-    return { total: round2(rows.reduce((s, r) => s + r.balance, 0)), byCurrency };
+    return groupBalancesByCurrency(rows.map((r) => ({ currencyCode: r.account.currencyCode, balance: r.balance })));
   }
 
   const latestRate = await prisma.exchangeRate.findFirst({ where: { fromCurrency: "USD", toCurrency: "NIO" }, orderBy: { effectiveAt: "desc" } });
@@ -451,9 +466,75 @@ export async function getTreasuryPosition(branchId?: string | null) {
     settlement: groupByCurrency("SETTLEMENT"),
     safe: groupByCurrency("SAFE"),
     custody: groupByCurrency("CUSTODY"),
-    latestExchangeRate: latestRate ? { rate: Number(latestRate.rate), effectiveAt: latestRate.effectiveAt } : null,
+    latestExchangeRate: latestRate ? { rate: Number(latestRate.rate), effectiveAt: latestRate.effectiveAt, source: latestRate.source } : null,
     accountsPendingOpening: balances.filter((b) => b.pendingOpening).map((b) => ({ id: b.account.id, bankName: b.account.bankName, accountAlias: b.account.accountAlias, type: b.account.type })),
   };
+}
+
+// ─── Tipo de cambio (prompt-tesoreria-cerrar-circuito.md H-7) ─────────────
+//
+// ExchangeRate ya existía en el schema (comentario propio: "la posición
+// total exige una tasa y su fecha, y las muestra") pero su único uso en todo
+// el repo era el findFirst de getTreasuryPosition — nada lo escribía nunca,
+// así que latestExchangeRate salía siempre null. Estas dos funciones son el
+// camino de escritura/lectura que faltaba. NINGÚN saldo se convierte acá ni
+// en ningún otro lado — la tasa se muestra, con su fecha y su fuente; si
+// alguna vista algún día convierte, tiene que decir a qué tasa y de qué
+// fecha, no inventar la conversión en silencio.
+
+export type CreateExchangeRateInput = {
+  fromCurrency: CurrencyCode;
+  toCurrency: CurrencyCode;
+  rate: number;
+  effectiveAt?: Date;
+  source?: "MANUAL" | "BANK_RECEIPT";
+  createdByUserId: string;
+};
+
+export async function createExchangeRate(input: CreateExchangeRateInput) {
+  if (input.rate <= 0) throw new Error("VALIDATION_ERROR: la tasa debe ser mayor que 0");
+  if (input.fromCurrency === input.toCurrency) throw new Error("VALIDATION_ERROR: fromCurrency y toCurrency no pueden ser la misma moneda");
+
+  const rate = await prisma.exchangeRate.create({
+    data: {
+      fromCurrency: input.fromCurrency,
+      toCurrency: input.toCurrency,
+      rate: input.rate,
+      effectiveAt: input.effectiveAt ?? new Date(),
+      source: input.source ?? "MANUAL",
+      createdByUserId: input.createdByUserId,
+    },
+  });
+
+  await logAuditEvent({
+    actorUserId: input.createdByUserId,
+    module: "treasury",
+    action: "EXCHANGE_RATE_CREATED",
+    entityType: "ExchangeRate",
+    entityId: rate.id,
+    metadataJson: {
+      fromCurrency: input.fromCurrency,
+      toCurrency: input.toCurrency,
+      rate: input.rate,
+      effectiveAt: rate.effectiveAt,
+      source: rate.source,
+    },
+  });
+
+  return rate;
+}
+
+/** Histórico de tasas registradas, más recientes primero — para el bloque de Tesorería (§4) y para auditar de dónde salió la tasa vigente. */
+export async function listExchangeRates(input: { fromCurrency?: CurrencyCode; toCurrency?: CurrencyCode; limit?: number } = {}) {
+  return prisma.exchangeRate.findMany({
+    where: {
+      ...(input.fromCurrency ? { fromCurrency: input.fromCurrency } : {}),
+      ...(input.toCurrency ? { toCurrency: input.toCurrency } : {}),
+    },
+    orderBy: { effectiveAt: "desc" },
+    take: Math.min(200, input.limit ?? 50),
+    include: { createdBy: { select: { fullName: true, username: true } } },
+  });
 }
 
 /**

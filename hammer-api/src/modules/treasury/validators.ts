@@ -75,6 +75,15 @@ export const confirmCustodyReceiptSchema = z.object({
   notes: z.string().max(500).optional().nullable(),
 });
 
+/** prompt-tesoreria-cerrar-circuito.md H-7 — registrar una tasa de cambio. Nunca convierte nada, solo la deja registrada con su fecha y fuente. */
+export const createExchangeRateSchema = z.object({
+  fromCurrency: z.enum(["NIO", "USD"]),
+  toCurrency: z.enum(["NIO", "USD"]),
+  rate: z.coerce.number().positive(),
+  effectiveAt: z.coerce.date().optional(),
+  source: z.enum(["MANUAL", "BANK_RECEIPT"]).optional(),
+});
+
 /**
  * Depósito directo: el acumulado de la sucursal (getBranchCashPosition) va
  * directo a una cuenta bancaria en córdobas, sin pasar por "enviar a alguien
