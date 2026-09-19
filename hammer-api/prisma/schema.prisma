@@ -1,13 +1,19 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // Fase 2 (prompt-flujo-velocidad.md): necesario para declarar los índices
+  // GIN de pg_trgm de Product.name/sku (@@index(..., type: Gin)) — sin esto
+  // Prisma no modela el operator class y un futuro `prisma migrate dev`
+  // intentaría borrarlos por no verlos en el schema.
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider   = "postgresql"
   // Pooled connection (e.g. pgbouncer / Neon pooler) — used by the app
-  url       = env("DATABASE_URL")
+  url        = env("DATABASE_URL")
   // Direct connection — used by `prisma migrate` and introspection
-  directUrl = env("DIRECT_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [pgTrgm(map: "pg_trgm")]
 }
 
 enum RoleCode {
@@ -627,7 +633,10 @@ model CashMovement {
   treasuryEntry        TreasuryEntry?
 
   @@index([cashSessionId, createdAt])
-  @@index([type])
+  // Fase 2 (prompt-flujo-velocidad.md): reemplaza el índice de solo `type`
+  // (redundante como prefijo de este compuesto) — gastos/depósitos filtran
+  // por type Y rango de fecha (reportes, P&L) casi siempre juntos.
+  @@index([type, createdAt])
 }
 
 model OperationalDay {
@@ -841,6 +850,15 @@ model Product {
 
   @@index([abcClassification])
   @@index([rotationIndex])
+  // Fase 2 (prompt-flujo-velocidad.md): catálogo/POS filtran casi siempre
+  // por isActive + ordenan/buscan por name; categoryId se usa en filtros de
+  // categoría sueltos (reposición, reportes) sin pasar por isActive/name.
+  @@index([isActive, name])
+  @@index([categoryId])
+  // Búsqueda de catálogo/POS por texto libre (ILIKE '%term%') — sin GIN de
+  // pg_trgm cada tecleo en el buscador es un seq scan de toda la tabla.
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([sku(ops: raw("gin_trgm_ops"))], type: Gin)
 }
 
 model ProductStockGroup {
@@ -2488,6 +2506,10 @@ model AuditLog {
   // Historial de producto consulta por entityId sin entityType (catalog-inventory);
   // sin este indice era full scan sobre la tabla de mayor crecimiento del sistema
   @@index([entityId, occurredAt])
+  // Fase 2 (prompt-flujo-velocidad.md): bitácora del Día Operativo 360 filtra
+  // por sucursal + rango de fecha — sin este compuesto usa el índice de solo
+  // occurredAt y filtra branchId en memoria sobre TODA la tabla.
+  @@index([branchId, occurredAt])
 }
 
 model BrainDecision {
@@ -2661,7 +2683,8 @@ model CsrfToken {
   createdAt DateTime @default(now())
   expiresAt DateTime
 
-  @@index([token])
+  // Fase 2 (prompt-flujo-velocidad.md): se quita @@index([token]) — token ya
+  // es @unique, que crea su propio índice; el @@index era un duplicado exacto.
   @@index([expiresAt])
 }
 
@@ -3759,6 +3782,10 @@ model TreasuryEntry {
   @@index([cardId])
   @@index([intendedBankAccountId])
   @@index([intendedRecipientUserId])
+  // Fase 2 (prompt-flujo-velocidad.md): getTreasuryAccountBalanceTx suma
+  // IN/OUT de una cuenta por separado — accountId+occurredAt+createdAt no
+  // cubre bien un filtro directo por direction sin ordenar por fecha primero.
+  @@index([accountId, direction])
 }
 
 /// Cada cuenta tiene su moneda y las entradas se guardan sin convertir — la
