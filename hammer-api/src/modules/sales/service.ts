@@ -358,6 +358,10 @@ export async function addSaleOrderLine(input: {
     const line = await tx.saleOrderLine.create({
       data: {
         saleOrderId: input.saleOrderId,
+        // Fase 3 (prompt-flujo-velocidad.md): branchId denormalizado desde
+        // SaleOrder — branchProductScopeFilter lo filtra directo sin el join
+        // SaleOrderLine->SaleOrder que pagaba antes cada búsqueda del POS.
+        branchId: order.branchId,
         productId: input.productId,
         quantity,
         unitPrice,

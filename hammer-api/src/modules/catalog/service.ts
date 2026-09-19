@@ -10,6 +10,7 @@ import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/m
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
 import { aggregateWeightedAverageCost } from "@/modules/catalog/stock-group-crud";
+import { getVisibleProductIdsForBranch } from "@/modules/catalog/branch-visible-products-cache";
 
 /**
  * "el precio de venta no se mueva solo" — umbral de desvío contra el precio
@@ -458,40 +459,23 @@ export function excludeDerivedStockGroupMembers(): Prisma.ProductWhereInput {
   return { NOT: derivedStockGroupMemberFilter() };
 }
 
-/**
- * Branch-scope visibility filter: a product is relevant to a branch if it
- * satisfies at least one of the 4 conditions (stock, history, manual assignment,
- * or active inbound process). Products that satisfy none are hidden from that
- * branch's POS, catalog, and inventory views.
- */
-export function branchProductScopeFilter(branchId: string): Prisma.ProductWhereInput {
-  return {
-    OR: [
-      // 1. Has stock > 0 at this branch
-      { inventoryBalances: { some: { branchId, quantityOnHand: { gt: 0 } } } },
-      // 2. Has sale history at this branch
-      { orderLines: { some: { saleOrder: { branchId } } } },
-      // 3. Manually assigned as available at this branch
-      { branchProductSettings: { some: { branchId, isAvailable: true } } },
-      // 4. In active inbound transfer to this branch
-      {
-        transferLines: {
-          some: {
-            transfer: {
-              toBranchId: branchId,
-              status: { in: ["DRAFT", "APPROVED", "IN_TRANSIT"] },
-            },
-          },
-        },
-      },
-    ],
-  };
-}
+// branchProductScopeFilter vive en branch-product-scope.ts (Fase 3,
+// prompt-flujo-velocidad.md) — separado de este archivo para que
+// branch-visible-products-cache.ts lo pueda importar sin crear un ciclo
+// (este archivo importa de vuelta esa cache más abajo, en listProducts).
+export { branchProductScopeFilter } from "@/modules/catalog/branch-product-scope";
 
 export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string; limit?: number; inStockOnly?: boolean; group?: boolean }) {
   const andClauses: Prisma.ProductWhereInput[] = [];
 
-  if (params.branchId) andClauses.push(branchProductScopeFilter(params.branchId));
+  // Fase 3 (prompt-flujo-velocidad.md): en vez de repetir las 4 condiciones
+  // OR de branchProductScopeFilter (que Postgres reevalúa por subconsulta
+  // correlacionada en cada búsqueda) se usa el set de ids ya resuelto y
+  // cacheado 30s (branch-visible-products-cache.ts) — un filtro `id IN
+  // (...)` directo. El resto de los llamadores de branchProductScopeFilter
+  // (inventory/service.ts, replenishment-service.ts, timber/service.ts) no
+  // son la ruta de búsqueda del POS — se dejan con el filtro directo.
+  if (params.branchId) andClauses.push({ id: { in: await getVisibleProductIdsForBranch(params.branchId) } });
 
   if (params.q) {
     andClauses.push(

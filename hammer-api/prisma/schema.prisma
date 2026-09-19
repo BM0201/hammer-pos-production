@@ -356,6 +356,7 @@ model Branch {
   inventoryConditionBalances  InventoryConditionBalance[]
   inventoryMovements          InventoryMovement[]
   saleOrders                  SaleOrder[]
+  saleOrderLines              SaleOrderLine[]
   saleCancellations           SaleCancellation[]
   saleReturns                 SaleReturn[]
   refunds                     Refund[]
@@ -1358,6 +1359,15 @@ model SaleOrderLine {
   id                    String   @id @default(cuid())
   saleOrderId           String
   productId             String
+  // Fase 3 (prompt-flujo-velocidad.md): denormalizado desde saleOrder.branchId
+  // en el momento de crear la línea (addSaleOrderLine, offline-sync.service.ts)
+  // — branchProductScopeFilter (catalog/service.ts) lo filtra directo en vez
+  // de armar el JOIN SaleOrderLine->SaleOrder que pagaba cada búsqueda del
+  // POS. Nullable porque las filas existentes al momento de esta migración
+  // se llenan con un backfill aparte (scripts/backfill-sale-order-line-branch-id.ts),
+  // no dentro de la migración — la tabla puede crecer mucho y un backfill
+  // batcheado en su propio script no bloquea el deploy.
+  branchId              String?
   quantity              Decimal
   unitPrice             Decimal
   costSnapshot          Decimal?
@@ -1370,12 +1380,16 @@ model SaleOrderLine {
 
   saleOrder   SaleOrder        @relation(fields: [saleOrderId], references: [id])
   product     Product          @relation(fields: [productId], references: [id])
+  branch      Branch?          @relation(fields: [branchId], references: [id])
   returnItems SaleReturnItem[]
 
   @@unique([saleOrderId, productId])
   @@index([saleOrderId])
   // Señales de venta / analytics / top-selling agrupan por productId constantemente
   @@index([productId])
+  // branchProductScopeFilter: visibilidad de producto por sucursal vía
+  // historial de venta, sin pasar por SaleOrder.
+  @@index([branchId, productId])
 }
 
 model Payment {

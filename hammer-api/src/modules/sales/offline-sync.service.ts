@@ -245,6 +245,9 @@ export async function syncOfflineSale(input: OfflineSyncInput) {
       await tx.saleOrderLine.create({
         data: {
           saleOrderId: order.id,
+          // Fase 3 (prompt-flujo-velocidad.md): mismo denormalizado de
+          // branchId que addSaleOrderLine (sales/service.ts).
+          branchId: input.branchId,
           productId: line.productId,
           quantity: line.quantity,
           unitPrice: line.unitPrice,
