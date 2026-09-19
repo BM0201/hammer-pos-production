@@ -28,8 +28,15 @@ function shouldUseNeonAdapter(): boolean {
 }
 
 function buildPrismaClient(): PrismaClient {
-  const log: Prisma.LogLevel[] =
+  const baseLog: Prisma.LogLevel[] =
     process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"];
+  // Fase 0 (prompt-flujo-velocidad.md): agrega el evento 'query' SOLO si se
+  // pide instrumentación explícita (INSTRUMENT_QUERIES=1) — sin esto, el log
+  // se queda igual que siempre. Lo consume src/lib/query-instrumentation.ts
+  // para contar consultas por request en las rutas calientes.
+  const log = process.env.INSTRUMENT_QUERIES === "1"
+    ? [...baseLog, { emit: "event", level: "query" } as const]
+    : baseLog;
 
   if (shouldUseNeonAdapter()) {
     // Dynamic require so local/dev environments don't need the adapter package.
@@ -40,7 +47,7 @@ function buildPrismaClient(): PrismaClient {
     return new PrismaClient({ adapter, log } as unknown as Prisma.PrismaClientOptions);
   }
 
-  return new PrismaClient({ log });
+  return new PrismaClient({ log } as unknown as Prisma.PrismaClientOptions);
 }
 
 function createPrismaClient(): PrismaClient {

@@ -8,6 +8,7 @@ import { createProductSchema } from "@/modules/catalog/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, okCached, created, fail } from "@/lib/api/response";
+import { withQueryInstrumentation } from "@/lib/query-instrumentation";
 
 // Auditoría 2026-08-03: globalCost/averageCost/lastPurchaseCost/branchCost/
 // weightedAverageCost/effectiveCost/costSource viajaban siempre en la
@@ -50,6 +51,10 @@ function redactCostFieldsDeep(rows: unknown[]): unknown[] {
 }
 
 export async function GET(request: Request) {
+  return withQueryInstrumentation("GET /api/catalog/products", () => handleGet(request));
+}
+
+async function handleGet(request: Request) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);

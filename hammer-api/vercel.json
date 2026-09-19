@@ -3,6 +3,7 @@
   "buildCommand": "npm run vercel-build",
   "framework": "nextjs",
   "installCommand": "npm install",
+  "regions": ["cle1"],
   "crons": [
     {
       "path": "/api/system/cron/operational-automation",

@@ -12,8 +12,13 @@ import { saleOrderDirectSaleSchema } from "@/modules/sales/validators";
 import { ok, validationFail, fail, notFound } from "@/lib/api/response";
 import { toApiErrorResponse } from "@/lib/api/errors";
 import { assertBranchWorkflowAction, WORKFLOW_ACTIONS } from "@/modules/workflow/branch-workflow";
+import { withQueryInstrumentation } from "@/lib/query-instrumentation";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  return withQueryInstrumentation("POST /api/sales/orders/[id]/direct-sale", () => handlePost(request, { params }));
+}
+
+async function handlePost(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);

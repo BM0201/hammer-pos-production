@@ -3,6 +3,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { getCommandCenterSnapshot } from "@/modules/dashboard/command-center";
 import { toApiErrorResponse } from "@/lib/api/errors";
 import { ok } from "@/lib/api/response";
+import { withQueryInstrumentation } from "@/lib/query-instrumentation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,10 @@ export const dynamic = "force-dynamic";
  * branch and current operational-day metrics.
  */
 export async function GET() {
+  return withQueryInstrumentation("GET /api/master/command-center", handleGet);
+}
+
+async function handleGet() {
   try {
     const session = await getCurrentSession();
     assertAuthenticated(session);
