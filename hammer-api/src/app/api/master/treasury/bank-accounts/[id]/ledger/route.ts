@@ -19,7 +19,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       ? { from: fromRaw ? new Date(fromRaw) : undefined, to: toRaw ? new Date(toRaw) : undefined }
       : undefined;
 
-    return ok(await getTreasuryAccountLedger(id, range));
+    // Fase 4 (prompt-flujo-velocidad.md): paginación opcional — sin page/limit
+    // en la query, se comporta igual que antes (todo el rango de una vez).
+    const pageRaw = url.searchParams.get("page");
+    const limitRaw = url.searchParams.get("limit");
+    const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
+    const page = pageRaw ? Math.max(1, parseInt(pageRaw, 10)) : 1;
+    const pagination = limit ? { skip: (page - 1) * limit, take: limit } : undefined;
+
+    return ok(await getTreasuryAccountLedger(id, range, pagination));
   } catch (error) {
     return toHttpErrorResponse(error);
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Landmark, Plus, X, Check, RefreshCcw, PiggyBank, Wallet, Vault, Users, ArrowLeftRight, ChevronRight, AlarmClock, ListFilter, CreditCard, Banknote } from "lucide-react";
+import { Landmark, Plus, X, Check, RefreshCcw, PiggyBank, Wallet, Vault, Users, ArrowLeftRight, ChevronLeft, ChevronRight, AlarmClock, ListFilter, CreditCard, Banknote } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1071,50 +1071,78 @@ const ENTRY_TYPE_LABEL: Record<string, string> = {
   RECONCILIATION: "Ajuste de conciliación",
 };
 
+// Fase 4 (prompt-flujo-velocidad.md): antes esta pantalla traía TODA la
+// historia de la cuenta de una vez — con años de movimientos, cada apertura
+// del detalle cargaba y renderizaba filas que el usuario nunca iba a ver.
+const LEDGER_PAGE_SIZE = 50;
+
 /** 6.3 · Detalle de cuenta — fecha · concepto · movimiento · saldo. */
 function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accountId: string; account: BankAccount | null; onClose: () => void; onChanged: () => void }) {
   const [rows, setRows] = useState<LedgerRow[] | null>(null);
   const [rangeStartBalance, setRangeStartBalance] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [showOpeningForm, setShowOpeningForm] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/master/treasury/bank-accounts/${accountId}/ledger`);
+      const res = await apiFetch(`/api/master/treasury/bank-accounts/${accountId}/ledger?page=${page}&limit=${LEDGER_PAGE_SIZE}`);
       const raw = await res.json();
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar el detalle.");
-      const data = unwrapApiData(raw) as { rows: LedgerRow[]; rangeStartBalance: number };
+      const data = unwrapApiData(raw) as { rows: LedgerRow[]; rangeStartBalance: number; totalCount: number };
       setRows(data.rows);
       setRangeStartBalance(data.rangeStartBalance);
+      setTotalCount(data.totalCount);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cargar el detalle.");
     } finally {
       setLoading(false);
     }
-  }, [accountId]);
+  }, [accountId, page]);
 
   useEffect(() => { void load(); }, [load]);
+  // La cuenta puede cambiar sin que cambie `page` (ej. reabrir el drawer en
+  // otra cuenta) — sin esto quedaría paginado en la página de la cuenta anterior.
+  useEffect(() => { setPage(1); }, [accountId]);
 
-  function exportCsv() {
-    if (!rows) return;
-    const header = "fecha,concepto,contraparte,referencia,direccion,monto,saldo\n";
-    const body = rows.map((r) => [
-      new Date(r.occurredAt).toISOString().slice(0, 10),
-      ENTRY_TYPE_LABEL[r.entryType] ?? r.entryType,
-      r.counterpartyName ?? "",
-      r.reference ?? "",
-      r.direction,
-      r.amount.toFixed(2),
-      r.runningBalance.toFixed(2),
-    ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([header + body], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `tesoreria-${account?.accountAlias ?? accountId}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const totalPages = Math.max(1, Math.ceil(totalCount / LEDGER_PAGE_SIZE));
+
+  async function exportCsv() {
+    // Exporta el libro COMPLETO, no solo la página visible — antes de
+    // paginar, `rows` ya era todo el historial; se mantiene ese alcance acá
+    // con un pedido aparte sin límite, en vez de reusar `rows` (que ahora es
+    // solo una página).
+    setExporting(true);
+    try {
+      const res = await apiFetch(`/api/master/treasury/bank-accounts/${accountId}/ledger`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo exportar.");
+      const data = unwrapApiData(raw) as { rows: LedgerRow[] };
+      const header = "fecha,concepto,contraparte,referencia,direccion,monto,saldo\n";
+      const body = data.rows.map((r) => [
+        new Date(r.occurredAt).toISOString().slice(0, 10),
+        ENTRY_TYPE_LABEL[r.entryType] ?? r.entryType,
+        r.counterpartyName ?? "",
+        r.reference ?? "",
+        r.direction,
+        r.amount.toFixed(2),
+        r.runningBalance.toFixed(2),
+      ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+      const blob = new Blob([header + body], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `tesoreria-${account?.accountAlias ?? accountId}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo exportar.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -1126,7 +1154,7 @@ function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accou
             <p className="text-xs text-[var(--color-text-muted)]">{account?.owner ?? account?.accountAlias} {account?.accountNumber ? `· ${account.accountNumber}` : ""}</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={exportCsv}>Exportar CSV</Button>
+            <Button variant="ghost" size="sm" onClick={exportCsv} disabled={exporting}>{exporting ? "Exportando…" : "Exportar CSV"}</Button>
             <Button variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Cerrar</Button>
           </div>
         </div>
@@ -1176,6 +1204,16 @@ function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accou
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {rows && rows.length > 0 && totalPages > 1 && (
+          <div className="mt-3 flex items-center justify-between text-xs text-[var(--color-text-muted)]">
+            <span>Página {page} de {totalPages} · {totalCount} movimientos</span>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="sm" disabled={page <= 1 || loading} onClick={() => setPage((p) => Math.max(1, p - 1))} icon={<ChevronLeft className="h-4 w-4" />}>Anterior</Button>
+              <Button variant="ghost" size="sm" disabled={page >= totalPages || loading} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} icon={<ChevronRight className="h-4 w-4" />}>Siguiente</Button>
+            </div>
           </div>
         )}
       </div>

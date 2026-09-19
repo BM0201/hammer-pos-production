@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import { Prisma, BrainDecisionCategory, BrainDecisionSeverity, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory, type RoleCode } from "@prisma/client";
+import { Prisma, PrismaClient, BrainDecisionCategory, BrainDecisionSeverity, type RetainedCashLocation, type TreasuryAccountType, type TreasuryEntryType, type TreasuryCounterpartyType, type CurrencyCode, type ExpenseCategory, type RoleCode } from "@prisma/client";
+
+type DbClient = PrismaClient | Prisma.TransactionClient;
 import { decomposeRetainedAmount, computeExposureAlert, type ExposureAlertThreshold } from "@/modules/treasury/decomposition";
 import { computeOutstandingAwaitingDeposit, countBusinessDaysBetween } from "@/modules/treasury/exposure";
 import { getBranchCashPosition } from "@/modules/treasury/cash-monitor";
@@ -537,32 +539,96 @@ export async function listExchangeRates(input: { fromCurrency?: CurrencyCode; to
   });
 }
 
+/** IN suma, OUT resta — mismo signo que aplica applyRunningBalance por fila. */
+function directionalDelta(entry: { direction: "IN" | "OUT"; amount: number }): number {
+  return entry.direction === "IN" ? entry.amount : -entry.amount;
+}
+
+/**
+ * Fase 4 (prompt-flujo-velocidad.md): delta de saldo (suma IN − OUT) de una
+ * cuenta antes de `before` (occurredAt < before), vía agregados en la base
+ * — antes getTreasuryAccountLedger traía TODAS las entradas de la cuenta y
+ * las iteraba en memoria para encontrar la última anterior al rango. Con
+ * cuentas de varios años de historial, esto crecía sin límite en cada
+ * apertura del detalle aunque el usuario solo quisiera "este mes".
+ */
+async function computeLedgerDeltaBeforeTx(
+  db: DbClient,
+  accountId: string,
+  before: Date,
+): Promise<number> {
+  const [inAgg, outAgg] = await Promise.all([
+    db.treasuryEntry.aggregate({ where: { accountId, direction: "IN", occurredAt: { lt: before } }, _sum: { amount: true } }),
+    db.treasuryEntry.aggregate({ where: { accountId, direction: "OUT", occurredAt: { lt: before } }, _sum: { amount: true } }),
+  ]);
+  return Number(inAgg._sum.amount ?? 0) - Number(outAgg._sum.amount ?? 0);
+}
+
 /**
  * §6.3 — detalle con saldo corriente, calculado hacia ADELANTE desde el
  * saldo de apertura (§2.4) — nunca hacia atrás desde el saldo actual, o
  * insertar una entrada vieja reescribiría todas las líneas posteriores de
  * forma invisible. Orden canónico: (occurredAt, createdAt, id).
+ *
+ * Fase 4: el filtro de fecha se empuja al WHERE de SQL (antes traía todo y
+ * filtraba `rows` en memoria) y el saldo de inicio de rango se calcula con
+ * un agregado acotado por occurredAt < from (antes iteraba todas las filas
+ * previas). `skip`/`take` paginan el resultado — para que la fila de saldo
+ * corriente de la página 2+ siga siendo correcta sin traer TODO el rango,
+ * se suma aparte el delta de las `skip` filas anteriores DENTRO del rango
+ * (solo amount+direction, no la fila completa) — sigue siendo mucho más
+ * barato que el diseño anterior (todas las columnas de TODA la historia),
+ * y a la escala real de estas cuentas (cientos a pocos miles de entradas)
+ * un `skip` acotado por el tamaño de página no es un problema. Nunca se
+ * guarda un saldo — se sigue calculando siempre (§2, tesorería).
  */
-export async function getTreasuryAccountLedger(accountId: string, range?: { from?: Date; to?: Date }) {
-  const account = await prisma.treasuryAccount.findUniqueOrThrow({ where: { id: accountId } });
-  const entries = await prisma.treasuryEntry.findMany({
-    where: { accountId },
-    orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-  });
+export async function getTreasuryAccountLedger(
+  accountId: string,
+  range?: { from?: Date; to?: Date },
+  pagination?: { skip?: number; take?: number },
+  db: DbClient = prisma,
+) {
+  const account = await db.treasuryAccount.findUniqueOrThrow({ where: { id: accountId } });
+  const openingBalance = Number(account.openingBalance);
+  const from = range?.from;
+  const to = range?.to;
+  const skip = pagination?.skip ?? 0;
+  const take = pagination?.take;
+
+  const where: Prisma.TreasuryEntryWhereInput = {
+    accountId,
+    ...(from || to ? { occurredAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+  };
+
+  const [entries, totalCount, deltaBeforeRange, priorPageRows] = await Promise.all([
+    db.treasuryEntry.findMany({
+      where,
+      orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      skip,
+      take,
+    }),
+    db.treasuryEntry.count({ where }),
+    from ? computeLedgerDeltaBeforeTx(db, accountId, from) : Promise.resolve(0),
+    skip > 0
+      ? db.treasuryEntry.findMany({
+          where,
+          orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+          take: skip,
+          select: { amount: true, direction: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const deltaWithinRangeBeforeSkip = priorPageRows.reduce((sum, e) => sum + directionalDelta({ direction: e.direction, amount: Number(e.amount) }), 0);
+  const rangeStartBalance = round2(openingBalance + deltaBeforeRange);
+  const pageStartBalance = round2(rangeStartBalance + deltaWithinRangeBeforeSkip);
 
   const rows = applyRunningBalance(
-    Number(account.openingBalance),
+    pageStartBalance,
     entries.map((entry) => ({ ...entry, amount: Number(entry.amount) })),
   );
 
-  if (!range?.from && !range?.to) {
-    return { account, rows, rangeStartBalance: Number(account.openingBalance) };
-  }
-  const from = range.from ?? new Date(0);
-  const to = range.to ?? new Date(8_640_000_000_000_000);
-  const before = rows.filter((r) => r.occurredAt < from);
-  const rangeStartBalance = before.length > 0 ? before[before.length - 1].runningBalance : Number(account.openingBalance);
-  return { account, rows: rows.filter((r) => r.occurredAt >= from && r.occurredAt <= to), rangeStartBalance };
+  return { account, rows, rangeStartBalance, totalCount, skip, take: take ?? totalCount };
 }
 
 // ─── Enganche: venta con tender TRANSFER/CARD (§3, §8 paso 2) ─────────────
