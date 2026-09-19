@@ -5,7 +5,7 @@ import { logAuditEvent, attachAuditToError, writePendingAuditFromError } from "@
 import { aggregateOrderTotals, calculateLineSubtotal } from "@/modules/sales/totals";
 import { SALE_AUDIT_EVENTS } from "@/modules/sales/audit-events";
 import { getBranchModuleConfig } from "@/modules/branch-config/service";
-import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
+import { consumeSharedStockForSaleTx, createInventoryMovementTx, getSaleStockAvailabilityBatchTx, getSaleStockAvailabilityTx } from "@/modules/inventory/service";
 import { ensureTransportServiceForOrderTx, resolveTransportCustomerName } from "@/modules/transport/service";
 import { refreshOperationalDaySummaryTx, resolveOperationalDayForOperationTx } from "@/modules/operations/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
@@ -789,6 +789,20 @@ export function normalizeDirectSaleTenders(input: {
 }
 
 /**
+ * Orden determinista de bloqueo de InventoryBalance para el cierre de venta.
+ * Extraída como función pura (testeable sin fake-tx ni DB real) porque el
+ * hecho de que sea determinista es justo lo que evita el deadlock: dos
+ * ventas concurrentes que comparten productos pero los tienen en líneas en
+ * orden distinto (ej. venta A: [clavo, martillo], venta B: [martillo,
+ * clavo]) deben pedir el lock FOR UPDATE en el MISMO orden global — si no,
+ * Postgres puede terminar con A esperando el lock que B tiene y B esperando
+ * el que A tiene (deadlock cruzado 40P01).
+ */
+export function computeInventoryLockProductIds(productIds: string[]): string[] {
+  return [...new Set(productIds)].sort();
+}
+
+/**
  * Direct sale V2-compatible path: the seller submits and collects in one step
  * when branch workflow and cash-session operator rules allow it.
  */
@@ -820,25 +834,35 @@ export async function submitDirectSale(input: {
     if (order.status !== SaleOrderStatus.DRAFT) throw new Error("ORDER_NOT_DRAFT");
     if (order.lines.length === 0) throw new Error("ORDER_EMPTY");
 
-    const uniqueProductIds = [...new Set(order.lines.map((line) => line.productId))].sort();
-    for (const productId of uniqueProductIds) {
+    // Bloqueo por lote en una sola consulta (antes: un SELECT...FOR UPDATE
+    // por producto — una venta de 10 líneas pagaba 10 round-trips solo para
+    // bloquear). El ORDER BY no es cosmético: toda transacción que compita
+    // por los mismos productos debe pedir el lock en el MISMO orden
+    // determinista o dos ventas concurrentes con productos cruzados pueden
+    // deadlockearse (A bloquea 1→2 mientras B bloquea 2→1). uniqueProductIds
+    // ya viene ordenado; el ORDER BY del SQL refuerza ese mismo orden dentro
+    // de la propia consulta batched.
+    const uniqueProductIds = computeInventoryLockProductIds(order.lines.map((line) => line.productId));
+    if (uniqueProductIds.length > 0) {
       await tx.$queryRaw`
         SELECT id
         FROM "InventoryBalance"
         WHERE "branchId" = ${order.branchId}
-          AND "productId" = ${productId}
+          AND "productId" = ANY(ARRAY[${Prisma.join(uniqueProductIds)}])
+        ORDER BY "productId"
         FOR UPDATE
       `;
     }
 
-    // Verify stock (locked balances)
+    // Verify stock (locked balances) — una sola consulta batched para toda
+    // la orden en vez de una por línea (getSaleStockAvailabilityBatchTx).
+    const availabilityByProductId = await getSaleStockAvailabilityBatchTx(tx, {
+      branchId: order.branchId,
+      lines: order.lines.map((line) => ({ productId: line.productId, quantity: line.quantity })),
+    });
     for (const line of order.lines) {
-      const availability = await getSaleStockAvailabilityTx(tx, {
-        branchId: order.branchId,
-        productId: line.productId,
-        quantity: line.quantity,
-      });
-      if (!availability.ok) throw new Error(availability.reason ?? "INSUFFICIENT_STOCK");
+      const availability = availabilityByProductId.get(line.productId);
+      if (!availability || !availability.ok) throw new Error(availability?.reason ?? "INSUFFICIENT_STOCK");
     }
 
     // Calculate totals

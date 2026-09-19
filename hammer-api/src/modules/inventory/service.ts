@@ -20,12 +20,12 @@ import {
   formatDualStock,
   calculateSharedStockChange,
   getSharedInventoryBalance,
+  getProductStockConversionsBatch,
   resolveInventoryProductForMovement,
 } from "@/modules/inventory/unit-conversion";
 import { branchProductScopeFilter, excludeDerivedStockGroupMembers, resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
-import { getProductionReservedBaseQtyTx } from "@/modules/production/reservations";
 
 export const INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD = 25;
 
@@ -293,111 +293,196 @@ export class InventoryStockError extends Error {
   }
 }
 
-export async function getSaleStockAvailabilityTx(
-  tx: Prisma.TransactionClient,
-  input: { branchId: string; productId: string; quantity: Prisma.Decimal | number | string },
-): Promise<SaleStockAvailability> {
-  const requestedQty = new Prisma.Decimal(input.quantity);
-  const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
-  const conversion = shared.conversion;
-  const balance = shared.balance;
+export type SaleStockAvailabilityLine = { productId: string; quantity: Prisma.Decimal | number | string };
 
-  if (!conversion?.tracksPackages) {
-    const requestedBaseQuantity = conversion
-      ? convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor })
-      : requestedQty;
-    // Producción v2 Fase 2: lo reservado por lotes PLANNED/IN_PROGRESS no
-    // está disponible para venta/traslado — se resta de lo físico. Solo en
-    // esta rama (la común para insumos de producción: cemento, arena,
-    // colorante — no fusiones con presentación de paquete) para mantener el
-    // cambio acotado al caso real; los productos con tracksPackages no son
-    // insumos típicos de receta y no se tocan aquí.
-    const reservedBaseQuantity = await getProductionReservedBaseQtyTx(tx, { branchId: input.branchId, productId: input.productId });
-    const availableBaseQuantity = Prisma.Decimal.max(0, (balance?.quantityOnHand ?? new Prisma.Decimal(0)).sub(reservedBaseQuantity));
-    return {
-      ok: availableBaseQuantity.gte(requestedBaseQuantity),
-      branchId: input.branchId,
-      productId: input.productId,
-      inventoryProductId: shared.inventoryProductId,
-      requestedQuantity: requestedQty,
-      requestedBaseQuantity,
-      availableBaseQuantity,
-      availableSaleQuantity: conversion
-        ? convertBaseQtyToSaleQty({ baseQuantity: availableBaseQuantity, conversionFactor: conversion.conversionFactor })
-        : availableBaseQuantity,
-      stockMode: "STANDARD",
-      reason: availableBaseQuantity.gte(requestedBaseQuantity) ? undefined : "INSUFFICIENT_STOCK",
-      details: {
-        baseUnit: conversion?.baseUnit ?? null,
-        conversionFactor: conversion?.conversionFactor,
+/**
+ * prompt-flujo-velocidad.md Fase 1 — versión por lote de
+ * getSaleStockAvailabilityTx (abajo, ahora un envoltorio de esta función con
+ * un solo elemento — misma regla, una sola implementación). Antes, una venta
+ * de N líneas pagaba ~4 consultas por línea (getSharedInventoryBalance →
+ * getProductStockConversion + inventoryBalance.findUnique, más
+ * getProductionReservedBaseQtyTx → productionBatchInput.findMany y, si había
+ * filas, otra vez getProductStockConversion) — acá son 3 consultas con IN
+ * para TODAS las líneas de una sola vez, sin importar N. Mismo patrón que
+ * batchMapProductsWithBranchInventory (catalog/service.ts): resolver
+ * conversiones → balances del canónico → el dato restante, todo por lote, y
+ * recién ahí mapear de vuelta por producto. Misma lógica de 3 ramas
+ * (STANDARD/PACKAGE/LOOSE_WITH_AUTO_OPEN) que la versión de una línea, sin
+ * tocar ninguna fórmula.
+ */
+export async function getSaleStockAvailabilityBatchTx(
+  tx: Prisma.TransactionClient,
+  input: { branchId: string; lines: SaleStockAvailabilityLine[]; excludeBatchId?: string },
+): Promise<Map<string, SaleStockAvailability>> {
+  const result = new Map<string, SaleStockAvailability>();
+  if (input.lines.length === 0) return result;
+
+  // Nada impide en el schema que una orden tenga dos líneas con el mismo
+  // productId (SaleOrderLine no tiene unique en [saleOrderId, productId]).
+  // La versión original chequeaba cada línea por separado contra el MISMO
+  // balance sin sumar entre sí — ya era un hueco (5+3 contra un balance de
+  // 6 pasaban las dos por separado). Acá el Map solo puede guardar un
+  // resultado por productId, así que si no se suma antes, la última línea
+  // pisaría el resultado de la anterior — incluso si la anterior sola ya
+  // debía rechazar la venta. Se suma la cantidad pedida por productId para
+  // que el veredicto sea uno solo y correcto para todas las líneas de ese
+  // producto.
+  const requestedQtyByProductId = new Map<string, Prisma.Decimal>();
+  for (const line of input.lines) {
+    const current = requestedQtyByProductId.get(line.productId) ?? new Prisma.Decimal(0);
+    requestedQtyByProductId.set(line.productId, current.add(new Prisma.Decimal(line.quantity)));
+  }
+  const productIds = [...requestedQtyByProductId.keys()];
+
+  // 1. Conversiones de grupo de stock de todos los productos pedidos.
+  const conversionByProductId = await getProductStockConversionsBatch(tx, productIds);
+
+  // 2. Balances del CANÓNICO de cada producto (el propio productId si no
+  // pertenece a ninguna fusión) — mismo criterio que getSharedInventoryBalance.
+  const canonicalIds = new Set<string>();
+  for (const productId of productIds) {
+    canonicalIds.add(conversionByProductId.get(productId)?.canonicalProductId ?? productId);
+  }
+  const balances = await tx.inventoryBalance.findMany({
+    where: { branchId: input.branchId, productId: { in: [...canonicalIds] } },
+  });
+  const balanceByCanonicalId = new Map(balances.map((b) => [b.productId, b]));
+
+  // 3. Reservado por lotes PLANNED/IN_PROGRESS de todos los productos —
+  // mismo where que getProductionReservedBaseQtyTx, con IN en vez de un
+  // productId a la vez. Solo importa para la rama STANDARD (insumos de
+  // producción), pero se trae para todos junto, más barato que filtrar antes.
+  const reservationRows = await tx.productionBatchInput.findMany({
+    where: {
+      inputProductId: { in: productIds },
+      reservedQuantity: { gt: 0 },
+      batch: {
+        branchId: input.branchId,
+        status: { in: ["PLANNED", "IN_PROGRESS"] },
+        ...(input.excludeBatchId ? { id: { not: input.excludeBatchId } } : {}),
       },
-    };
+    },
+    select: { inputProductId: true, reservedQuantity: true },
+  });
+  const reservedSaleQtyByProductId = new Map<string, Prisma.Decimal>();
+  for (const row of reservationRows) {
+    const current = reservedSaleQtyByProductId.get(row.inputProductId) ?? new Prisma.Decimal(0);
+    reservedSaleQtyByProductId.set(row.inputProductId, current.add(row.reservedQuantity));
   }
 
-  const factor = new Prisma.Decimal(conversion.conversionFactorToBase ?? conversion.conversionFactor);
-  const closed = balance?.closedPackageQuantity ?? new Prisma.Decimal(0);
-  const loose = balance?.looseUnitQuantity ?? new Prisma.Decimal(0);
-  const reserve = new Prisma.Decimal(conversion.minimumClosedPackageReserve ?? DEFAULT_MINIMUM_CLOSED_PACKAGE_RESERVE);
-  const equivalent = closed.mul(factor).add(loose);
+  for (const productId of productIds) {
+    const requestedQty = requestedQtyByProductId.get(productId)!;
+    const conversion = conversionByProductId.get(productId) ?? null;
+    const canonicalId = conversion?.canonicalProductId ?? productId;
+    const balance = balanceByCanonicalId.get(canonicalId) ?? null;
+    const inventoryProductId = canonicalId;
 
-  if (conversion.isPackagePresentation) {
-    return {
-      ok: closed.gte(requestedQty),
+    if (!conversion?.tracksPackages) {
+      const requestedBaseQuantity = conversion
+        ? convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor })
+        : requestedQty;
+      const reservedSaleQty = reservedSaleQtyByProductId.get(productId) ?? new Prisma.Decimal(0);
+      const reservedBaseQuantity = conversion
+        ? convertSaleQtyToBaseQty({ quantity: reservedSaleQty, conversionFactor: conversion.conversionFactor })
+        : reservedSaleQty;
+      const availableBaseQuantity = Prisma.Decimal.max(0, (balance?.quantityOnHand ?? new Prisma.Decimal(0)).sub(reservedBaseQuantity));
+      result.set(productId, {
+        ok: availableBaseQuantity.gte(requestedBaseQuantity),
+        branchId: input.branchId,
+        productId,
+        inventoryProductId,
+        requestedQuantity: requestedQty,
+        requestedBaseQuantity,
+        availableBaseQuantity,
+        availableSaleQuantity: conversion
+          ? convertBaseQtyToSaleQty({ baseQuantity: availableBaseQuantity, conversionFactor: conversion.conversionFactor })
+          : availableBaseQuantity,
+        stockMode: "STANDARD",
+        reason: availableBaseQuantity.gte(requestedBaseQuantity) ? undefined : "INSUFFICIENT_STOCK",
+        details: {
+          baseUnit: conversion?.baseUnit ?? null,
+          conversionFactor: conversion?.conversionFactor,
+        },
+      });
+      continue;
+    }
+
+    const factor = new Prisma.Decimal(conversion.conversionFactorToBase ?? conversion.conversionFactor);
+    const closed = balance?.closedPackageQuantity ?? new Prisma.Decimal(0);
+    const loose = balance?.looseUnitQuantity ?? new Prisma.Decimal(0);
+    const reserve = new Prisma.Decimal(conversion.minimumClosedPackageReserve ?? DEFAULT_MINIMUM_CLOSED_PACKAGE_RESERVE);
+    const equivalent = closed.mul(factor).add(loose);
+
+    if (conversion.isPackagePresentation) {
+      result.set(productId, {
+        ok: closed.gte(requestedQty),
+        branchId: input.branchId,
+        productId,
+        inventoryProductId,
+        requestedQuantity: requestedQty,
+        requestedBaseQuantity: requestedQty.mul(factor),
+        availableBaseQuantity: equivalent,
+        availableSaleQuantity: closed,
+        stockMode: "PACKAGE",
+        reason: closed.gte(requestedQty) ? undefined : "INSUFFICIENT_CLOSED_PACKAGE_STOCK",
+        details: {
+          closedPackageQuantity: closed,
+          looseUnitQuantity: loose,
+          minimumClosedPackageReserve: reserve,
+          packageUnit: conversion.packageUnit,
+          baseUnit: conversion.baseUnit,
+          conversionFactor: factor,
+        },
+      });
+      continue;
+    }
+
+    // Fusión triple: bug real — requestedQty viene en la unidad de venta del
+    // producto pedido (ej. LIBRA, factor≈0.4536), pero loose/openableUnits/
+    // equivalent están en unidades BASE (ej. KILO). En el modelo dual viejo
+    // esto nunca se notaba porque el único no-empaque posible era el
+    // canónico (factor=1, base=venta son la misma cosa) — con una
+    // presentación suelta alternativa de factor≠1 (Libra, Unidad) comparar
+    // sin convertir rechazaba ventas con stock de sobra, o aceptaba ventas
+    // sin stock suficiente, según los números. Se compara todo en base.
+    const requestedBaseQuantity = convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor });
+    const openablePackages = Prisma.Decimal.max(0, closed.sub(reserve));
+    const openableUnits = conversion.autoOpenForUnitSale ? openablePackages.mul(factor) : new Prisma.Decimal(0);
+    const availableLooseForSaleBase = loose.add(openableUnits);
+    const availableLooseForSale = convertBaseQtyToSaleQty({ baseQuantity: availableLooseForSaleBase, conversionFactor: conversion.conversionFactor });
+    result.set(productId, {
+      ok: availableLooseForSaleBase.gte(requestedBaseQuantity),
       branchId: input.branchId,
-      productId: input.productId,
-      inventoryProductId: shared.inventoryProductId,
+      productId,
+      inventoryProductId,
       requestedQuantity: requestedQty,
-      requestedBaseQuantity: requestedQty.mul(factor),
+      requestedBaseQuantity,
       availableBaseQuantity: equivalent,
-      availableSaleQuantity: closed,
-      stockMode: "PACKAGE",
-      reason: closed.gte(requestedQty) ? undefined : "INSUFFICIENT_CLOSED_PACKAGE_STOCK",
+      availableSaleQuantity: availableLooseForSale,
+      stockMode: "LOOSE_WITH_AUTO_OPEN",
+      reason: availableLooseForSaleBase.gte(requestedBaseQuantity) ? undefined : "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK",
       details: {
         closedPackageQuantity: closed,
         looseUnitQuantity: loose,
+        openablePackageQuantity: openablePackages,
+        openableUnitQuantity: openableUnits,
         minimumClosedPackageReserve: reserve,
         packageUnit: conversion.packageUnit,
         baseUnit: conversion.baseUnit,
         conversionFactor: factor,
       },
-    };
+    });
   }
 
-  // Fusión triple: bug real — requestedQty viene en la unidad de venta del
-  // producto pedido (ej. LIBRA, factor≈0.4536), pero loose/openableUnits/
-  // equivalent están en unidades BASE (ej. KILO). En el modelo dual viejo
-  // esto nunca se notaba porque el único no-empaque posible era el
-  // canónico (factor=1, base=venta son la misma cosa) — con una
-  // presentación suelta alternativa de factor≠1 (Libra, Unidad) comparar
-  // sin convertir rechazaba ventas con stock de sobra, o aceptaba ventas
-  // sin stock suficiente, según los números. Se compara todo en base.
-  const requestedBaseQuantity = convertSaleQtyToBaseQty({ quantity: requestedQty, conversionFactor: conversion.conversionFactor });
-  const openablePackages = Prisma.Decimal.max(0, closed.sub(reserve));
-  const openableUnits = conversion.autoOpenForUnitSale ? openablePackages.mul(factor) : new Prisma.Decimal(0);
-  const availableLooseForSaleBase = loose.add(openableUnits);
-  const availableLooseForSale = convertBaseQtyToSaleQty({ baseQuantity: availableLooseForSaleBase, conversionFactor: conversion.conversionFactor });
-  return {
-    ok: availableLooseForSaleBase.gte(requestedBaseQuantity),
-    branchId: input.branchId,
-    productId: input.productId,
-    inventoryProductId: shared.inventoryProductId,
-    requestedQuantity: requestedQty,
-    requestedBaseQuantity,
-    availableBaseQuantity: equivalent,
-    availableSaleQuantity: availableLooseForSale,
-    stockMode: "LOOSE_WITH_AUTO_OPEN",
-    reason: availableLooseForSaleBase.gte(requestedBaseQuantity) ? undefined : "INSUFFICIENT_LOOSE_AND_RESERVED_PACKAGE_STOCK",
-    details: {
-      closedPackageQuantity: closed,
-      looseUnitQuantity: loose,
-      openablePackageQuantity: openablePackages,
-      openableUnitQuantity: openableUnits,
-      minimumClosedPackageReserve: reserve,
-      packageUnit: conversion.packageUnit,
-      baseUnit: conversion.baseUnit,
-      conversionFactor: factor,
-    },
-  };
+  return result;
+}
+
+export async function getSaleStockAvailabilityTx(
+  tx: Prisma.TransactionClient,
+  input: { branchId: string; productId: string; quantity: Prisma.Decimal | number | string },
+): Promise<SaleStockAvailability> {
+  const batch = await getSaleStockAvailabilityBatchTx(tx, { branchId: input.branchId, lines: [{ productId: input.productId, quantity: input.quantity }] });
+  return batch.get(input.productId)!;
 }
 
 type OpenPackageInput = {
