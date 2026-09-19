@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { Route } from "next";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
@@ -11,17 +12,10 @@ import {
   DollarSign,
   Brain,
   ClipboardList,
-  TrendingUp,
-  TrendingDown,
-  Minus,
   BarChart3,
-  Calendar,
   Building2,
   Tag,
   Activity,
-  Filter,
-  ChevronDown,
-  ChevronUp,
   AlertTriangle,
   Calculator,
   History,
@@ -34,9 +28,30 @@ import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty, fmtDateTime } from "@/lib/format";
 
+// Fase 5 (prompt-flujo-velocidad.md): las 3 pestañas más pesadas de esta
+// ficha de producto (Kardex, historial de costo, historial de precio) se
+// extrajeron a sus propios archivos para poder cargarlas diferido — solo
+// se montan cuando el usuario abre esa pestaña específica, no en cada
+// visita a la ficha. ssr:false porque las tres arman su propio estado del
+// lado del cliente (fetch propio contra la API).
+const KardexTab = dynamic(() => import("@/components/catalog-inventory/kardex-tab").then((m) => m.KardexTab), {
+  ssr: false,
+  loading: () => <p className="py-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</p>,
+});
+const WacHistoryTab = dynamic(() => import("@/components/catalog-inventory/wac-history-tab").then((m) => m.WacHistoryTab), {
+  ssr: false,
+  loading: () => <p className="py-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</p>,
+});
+const PriceHistoryTab = dynamic(() => import("@/components/catalog-inventory/price-history-tab").then((m) => m.PriceHistoryTab), {
+  ssr: false,
+  loading: () => <p className="py-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</p>,
+});
+
 /* ── Types ── */
-type Branch = { id: string; code: string; name: string };
-type ProductDetail = {
+// export: kardex-tab.tsx, wac-history-tab.tsx y price-history-tab.tsx
+// (Fase 5) importan estos dos tipos — el resto de sus tipos son propios.
+export type Branch = { id: string; code: string; name: string };
+export type ProductDetail = {
   product: {
     id: string;
     sku: string;
@@ -96,117 +111,13 @@ type ProductDetail = {
     branch?: Branch | null;
   }>;
 };
-type KardexMovement = ProductDetail["product"]["inventoryMovements"][number] & {
-  notes?: string | null;
-  product?: { id: string; sku: string; name: string };
-};
-type MovementPagination = { page: number; limit: number; total: number; totalPages: number };
-
 type Tab = "general" | "stock" | "movements" | "wacHistory" | "priceHistory" | "pricing" | "brain" | "audit";
 
-/* ── Historial de precio (Parte B.3) ── */
-type PriceHistoryRow = {
-  id: string;
-  occurredAt: string;
-  field: "standardSalePrice" | "branchPrice";
-  branchId: string | null;
-  previousPrice: number | null;
-  newPrice: number | null;
-  origin: string | null;
-  actorUserId: string | null;
-  actorName: string | null;
-  propagatedFromProductId: string | null;
-  propagatedFromSku: string | null;
-};
-
-/* ── Historial de costo (Parte A) ── */
-type WacHistoryRow = {
-  movementId: string;
-  createdAt: string;
-  movementType: string;
-  referenceType: string;
-  referenceId: string;
-  quantity: number;
-  unitCost: number;
-  conversionFactorSnapshot: number | null;
-  inputUnit: string | null;
-  inputQuantity: number | null;
-  wacBefore: number;
-  wacAfter: number;
-  wacDelta: number;
-  wacDeltaPercent: number | null;
-  actorUserId: string | null;
-  actorName: string | null;
-  notes: string | null;
-  excludedFromReplay: boolean;
-};
-type WacHistoryResponse = {
-  productId: string;
-  branchId: string;
-  requestedSku: string | null;
-  requestedName: string | null;
-  isDerived: boolean;
-  canonicalProductId: string | null;
-  canonicalSku: string | null;
-  canonicalName: string | null;
-  conversionFactor: number | null;
-  fusionNote: string | null;
-  currentWac: number;
-  movementCount: number;
-  breakdownByReferenceType: Record<string, number>;
-  rows: WacHistoryRow[];
-  reconstructed: number;
-  reconstructedQty: number;
-  stored: number;
-  matches: boolean;
-};
-
-/* ── Movement type label + color ── */
-function movementLabel(type: string) {
-  const map: Record<string, { label: string; color: "success" | "danger" | "warning" | "info" | "neutral" }> = {
-    PURCHASE_IN: { label: "Compra / entrada", color: "success" },
-    SALE_OUT: { label: "Venta / salida", color: "danger" },
-    ADJUSTMENT_IN: { label: "Ajuste entrada", color: "success" },
-    ADJUSTMENT_OUT: { label: "Ajuste salida", color: "danger" },
-    RETURN_IN: { label: "Devolucion entrada", color: "success" },
-    RETURN_OUT: { label: "Devolucion salida", color: "danger" },
-    TRANSFER_IN: { label: "Transfer. Entrada", color: "success" },
-    TRANSFER_OUT: { label: "Transfer. Salida", color: "warning" },
-    TIMBER_INTAKE_IN: { label: "Entrada madera", color: "info" },
-    PURCHASE: { label: "Compra", color: "success" },
-    SALE: { label: "Venta", color: "danger" },
-    ADJUSTMENT_ADD: { label: "Ajuste (+)", color: "success" },
-    ADJUSTMENT_SUBTRACT: { label: "Ajuste (−)", color: "danger" },
-    IMPORT: { label: "Importación", color: "info" },
-    PRODUCTION: { label: "Producción", color: "info" },
-    INITIAL_STOCK: { label: "Stock Inicial", color: "info" },
-    PHYSICAL_COUNT: { label: "Conteo Físico", color: "warning" },
-  };
-  return map[type] ?? { label: type, color: "neutral" as const };
-}
-
-function MovementIcon({ type }: { type: string }) {
-  if (isOutboundMovement(type))
-    return <TrendingDown className="h-4 w-4 text-red-500" />;
-  if (isInboundMovement(type))
-    return <TrendingUp className="h-4 w-4 text-emerald-500" />;
-  return <Minus className="h-4 w-4 text-slate-400" />;
-}
-
-function isInboundMovement(type: string) {
-  return (
-    type.endsWith("_IN") ||
-    type.includes("ADD") ||
-    type === "PURCHASE" ||
-    type === "INITIAL_STOCK" ||
-    type === "IMPORT" ||
-    type === "PRODUCTION"
-  );
-}
-
-function isOutboundMovement(type: string) {
-  return type.endsWith("_OUT") || type.includes("SUBTRACT") || type === "SALE";
-}
+// Los tipos de datos de Kardex/historial de costo/historial de precio y sus
+// helpers (movementLabel, MovementIcon, etc.) se movieron a
+// kardex-tab.tsx / wac-history-tab.tsx / price-history-tab.tsx /
+// movement-history-helpers.tsx (Fase 5, prompt-flujo-velocidad.md) junto
+// con los componentes que los usan — ya no viven acá.
 
 /* ── Tab config ── */
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
@@ -742,7 +653,8 @@ function BranchPricingBlock({ productId, standardSalePriceFallback }: { productI
 /* ═══════════════════════════════════════════════════════════════════════════ */
 /* ── KPI Mini Card ── */
 /* ═══════════════════════════════════════════════════════════════════════════ */
-function KpiMini({
+// export: wac-history-tab.tsx (Fase 5) también la usa.
+export function KpiMini({
   icon: Icon,
   label,
   value,
@@ -776,515 +688,3 @@ function KpiMini({
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/* ── Kardex Tab — full-featured movements view ── */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-function KardexTab({
-  productId,
-  fallbackMovements,
-}: {
-  productId: string;
-  fallbackMovements: ProductDetail["product"]["inventoryMovements"];
-}) {
-  const [movements, setMovements] = useState<KardexMovement[]>(fallbackMovements);
-  const [pagination, setPagination] = useState<MovementPagination>({ page: 1, limit: 30, total: fallbackMovements.length, totalPages: 1 });
-  const [filterBranch, setFilterBranch] = useState("");
-  const [filterType, setFilterType] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(30);
-  const [loading, setLoading] = useState(false);
-  const [sortAsc, setSortAsc] = useState(false);
-
-  const loadMovements = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
-      if (filterBranch) params.set("branchId", filterBranch);
-      if (filterType) params.set("movementType", filterType);
-      if (dateFrom) params.set("dateFrom", dateFrom);
-      if (dateTo) params.set("dateTo", dateTo);
-      const response = await fetch(`/api/master/catalog-inventory/products/${productId}/movements?${params}`, { cache: "no-store" });
-      const raw = await response.json();
-      if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo cargar Kardex.");
-      const payload = raw.data as { rows: KardexMovement[]; pagination: MovementPagination };
-      setMovements(payload.rows);
-      setPagination(payload.pagination);
-    } catch {
-      setMovements(fallbackMovements);
-    } finally {
-      setLoading(false);
-    }
-  }, [dateFrom, dateTo, fallbackMovements, filterBranch, filterType, limit, page, productId]);
-
-  useEffect(() => {
-    void loadMovements();
-  }, [loadMovements]);
-
-  const branches = [...new Map([...fallbackMovements, ...movements].map((m) => [m.branch.id, m.branch])).values()].sort((a, b) => a.code.localeCompare(b.code));
-  const types = [...new Set([...fallbackMovements, ...movements].map((m) => m.movementType))].sort();
-
-  const sorted = [...movements].sort((a, b) => {
-    const diff = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    return sortAsc ? diff : -diff;
-  });
-
-  // Totals
-  const totalEntries = sorted.filter((m) => isInboundMovement(m.movementType)).length;
-  const totalExits = sorted.filter((m) => isOutboundMovement(m.movementType)).length;
-
-  return (
-    <div className="space-y-4">
-      {/* ── Filters + Summary ── */}
-      <div className="flex flex-wrap items-center gap-3">
-        {/* Branch filter */}
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-[var(--color-text-muted)]" />
-          <select
-            value={filterBranch}
-            onChange={(e) => { setFilterBranch(e.target.value); setPage(1); }}
-            className="hm-input !w-auto !py-1.5 !px-3 !text-sm"
-          >
-            <option value="">Todas las sucursales</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>{b.code}</option>
-            ))}
-          </select>
-        </div>
-        {/* Type filter */}
-        <select
-          value={filterType}
-          onChange={(e) => { setFilterType(e.target.value); setPage(1); }}
-          className="hm-input !w-auto !py-1.5 !px-3 !text-sm"
-        >
-          <option value="">Todos los tipos</option>
-          {types.map((t) => {
-            const lbl = movementLabel(t);
-            return <option key={t} value={t}>{lbl.label}</option>;
-          })}
-        </select>
-        <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} className="hm-input !w-auto !py-1.5 !px-3 !text-sm" />
-        <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="hm-input !w-auto !py-1.5 !px-3 !text-sm" />
-        <select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }} className="hm-input !w-auto !py-1.5 !px-3 !text-sm">
-          <option value="30">30</option>
-          <option value="50">50</option>
-          <option value="100">100</option>
-        </select>
-
-        {/* Sort toggle */}
-        <button
-          onClick={() => setSortAsc(!sortAsc)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-[var(--color-text-secondary)] bg-[var(--color-surface-alt)] hover:bg-[var(--color-surface-muted)] transition-colors border border-[var(--color-border)]"
-        >
-          <Calendar className="h-3.5 w-3.5" />
-          {sortAsc ? "Antiguos primero" : "Recientes primero"}
-          {sortAsc ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-        </button>
-
-        {/* Summary pills */}
-        <div className="ml-auto flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-bold text-emerald-700">
-            <TrendingUp className="h-3 w-3" /> {totalEntries} entradas
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-full bg-red-50 border border-red-200 px-3 py-1 text-xs font-bold text-red-700">
-            <TrendingDown className="h-3 w-3" /> {totalExits} salidas
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-300 px-3 py-1 text-xs font-bold text-slate-700">
-            {pagination.total} total
-          </span>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
-        <span>Pagina {pagination.page} de {pagination.totalPages}{loading ? " · cargando..." : ""}</span>
-        <div className="flex items-center gap-2">
-          <button type="button" disabled={page <= 1 || loading} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-md border border-[var(--color-border)] px-2 py-1 disabled:opacity-40">Anterior</button>
-          <button type="button" disabled={page >= pagination.totalPages || loading} onClick={() => setPage((p) => p + 1)} className="rounded-md border border-[var(--color-border)] px-2 py-1 disabled:opacity-40">Siguiente</button>
-        </div>
-      </div>
-
-      {/* ── Table ── */}
-      <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-        <div className="hm-card-header-green px-5 py-3 flex items-center gap-2">
-          <ArrowLeftRight className="h-5 w-5" />
-          <h2 className="font-semibold">Kardex de Movimientos</h2>
-          <span className="ml-auto text-xs opacity-80">{pagination.total} registros</span>
-        </div>
-
-        {sorted.length === 0 ? (
-          <div className="p-8 text-center">
-            <ArrowLeftRight className="h-10 w-10 mx-auto mb-3 text-[var(--color-text-muted)]" />
-            <p className="text-sm font-medium text-[var(--color-text-secondary)]">
-              No hay movimientos {filterBranch || filterType ? "con los filtros seleccionados" : "registrados"}
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="hm-table">
-              <thead>
-                <tr>
-                  <th className="w-8"></th>
-                  <th>Fecha</th>
-                  <th>Sucursal</th>
-                  <th>Tipo</th>
-                  <th className="text-right">Cantidad</th>
-                  <th className="text-right">Costo unit.</th>
-                  <th className="text-right">Valor total</th>
-                  <th>Referencia</th>
-                  <th>Nota</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((m) => {
-                  const ml = movementLabel(m.movementType);
-                  const isNegative = isOutboundMovement(m.movementType);
-                  const qtyVal = Number(m.quantity);
-                  const costVal = Number(m.unitCost);
-                  const totalVal = qtyVal * costVal;
-                  const refLabel = {
-                    OPENING_BALANCE: "Carga inicial",
-                    OPENING_BALANCE_BULK: "Carga masiva",
-                    MANUAL_ADJUSTMENT: "Ajuste manual",
-                    SALE: "Venta",
-                    SALE_RETURN: "Devolución",
-                    PURCHASE: "Compra",
-                    TRANSFER: "Traslado",
-                    MANUAL: "Manual",
-                  }[m.referenceType] ?? m.referenceType;
-                  const refShort = m.referenceId.startsWith("OPENING-BULK-")
-                    ? `Lote·${m.referenceId.split("-").pop()}`
-                    : m.referenceId.length > 18 ? `${m.referenceId.slice(0, 16)}…` : m.referenceId;
-                  const nota = m.notes?.trim() || null;
-                  return (
-                    <tr key={m.id} className="group hover:bg-[var(--color-surface-alt)]">
-                      <td><MovementIcon type={m.movementType} /></td>
-                      <td className="whitespace-nowrap text-[var(--color-text-secondary)] text-xs">{fmtDateTime(m.createdAt)}</td>
-                      <td>
-                        <span className="flex items-center justify-center w-6 h-6 rounded bg-[var(--color-master-50)] text-[var(--color-master-700)] text-[10px] font-bold">
-                          {m.branch.code}
-                        </span>
-                      </td>
-                      <td><Badge variant={ml.color}>{ml.label}</Badge></td>
-                      <td className={`text-right font-mono font-semibold text-sm ${isNegative ? "text-red-600" : "text-emerald-600"}`}>
-                        {isNegative ? "−" : "+"}{qty(qtyVal)}
-                      </td>
-                      <td className="text-right font-mono text-xs text-[var(--color-text-secondary)]">{money(costVal)}</td>
-                      <td className="text-right font-mono text-xs font-semibold text-[var(--color-text)]">{money(totalVal)}</td>
-                      <td>
-                        <div className="text-[11px] font-medium text-[var(--color-text-secondary)]">{refLabel}</div>
-                        <div className="font-mono text-[10px] text-[var(--color-text-muted)]">{refShort}</div>
-                      </td>
-                      <td className="max-w-[160px]">
-                        {nota ? (
-                          <span className="text-xs text-[var(--color-text-secondary)] line-clamp-2" title={nota}>{nota}</span>
-                        ) : (
-                          <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/* ── Historial de costo Tab — Parte A: reconstrucción del WAC ── */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-function wacRefLabel(referenceType: string) {
-  return ({
-    OPENING_BALANCE: "Carga inicial",
-    OPENING_BALANCE_BULK: "Carga masiva",
-    MANUAL_ADJUSTMENT: "Ajuste manual",
-    SALE: "Venta",
-    SALE_RETURN: "Devolución",
-    SALE_RETURN_DAMAGED: "Devolución (dañado)",
-    SALE_CANCEL: "Anulación de venta",
-    PURCHASE: "Compra",
-    TRANSFER: "Traslado",
-    MANUAL: "Manual",
-  } as Record<string, string>)[referenceType] ?? referenceType;
-}
-
-function WacHistoryTab({ productId, branches }: { productId: string; branches: Branch[] }) {
-  const [branchId, setBranchId] = useState(branches[0]?.id ?? "");
-  const [data, setData] = useState<WacHistoryResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!branchId) return;
-    setLoading(true);
-    setError("");
-    const params = new URLSearchParams({ productId, branchId });
-    fetch(`/api/master/inventory/wac-history?${params}`, { cache: "no-store" })
-      .then(async (response) => {
-        const raw = await response.json();
-        if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo cargar el historial de costo.");
-        setData(raw.data as WacHistoryResponse);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar el historial de costo."))
-      .finally(() => setLoading(false));
-  }, [productId, branchId]);
-
-  if (branches.length === 0) {
-    return (
-      <Card className="p-8 text-center">
-        <History className="h-10 w-10 mx-auto mb-3 text-[var(--color-text-muted)]" />
-        <p className="text-sm font-medium text-[var(--color-text-secondary)]">Este producto no tiene existencias registradas en ninguna sucursal todavía.</p>
-      </Card>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      {/* ── Selector de sucursal ── */}
-      <div className="flex flex-wrap items-center gap-3">
-        <Filter className="h-4 w-4 text-[var(--color-text-muted)]" />
-        <select
-          value={branchId}
-          onChange={(e) => setBranchId(e.target.value)}
-          className="hm-input !w-auto !py-1.5 !px-3 !text-sm"
-        >
-          {branches.map((b) => (
-            <option key={b.id} value={b.id}>{b.code} · {b.name}</option>
-          ))}
-        </select>
-        {loading && <span className="text-xs text-[var(--color-text-muted)]">Cargando…</span>}
-      </div>
-
-      {error ? (
-        <Card className="p-6 text-center">
-          <AlertTriangle className="h-8 w-8 mx-auto text-red-500 mb-2" />
-          <p className="text-sm font-semibold text-[var(--color-danger-700)]">{error}</p>
-        </Card>
-      ) : !data ? (
-        <Card className="p-8 text-center">
-          <div className="h-8 w-8 mx-auto mb-3 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-info-600)]" />
-        </Card>
-      ) : (
-        <>
-          {/* ── Aviso de discrepancia: el hallazgo que importa ── */}
-          {!data.matches && (
-            <div className="rounded-xl border-2 border-red-300 bg-red-50 px-4 py-3 flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
-              <div className="text-sm">
-                <p className="font-bold text-red-800">
-                  El costo guardado ({money(data.stored)}) no coincide con el que resulta de los movimientos ({money(data.reconstructed)}).
-                </p>
-                <p className="text-red-700 mt-0.5">Hay una escritura del costo promedio fuera del historial de movimientos.</p>
-              </div>
-            </div>
-          )}
-
-          {/* ── Nota de fusión ── */}
-          {data.isDerived && data.fusionNote && (
-            <div className="rounded-xl border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-4 py-3 flex items-start gap-3">
-              <Activity className="h-4 w-4 text-[var(--color-info-600)] shrink-0 mt-0.5" />
-              <p className="text-sm text-[var(--color-info-800)]">{data.fusionNote}</p>
-            </div>
-          )}
-
-          {/* ── Resumen ── */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <KpiMini icon={DollarSign} label="Costo promedio actual" value={money(data.currentWac)} accent="blue" />
-            <KpiMini icon={ArrowLeftRight} label="Movimientos que lo formaron" value={String(data.movementCount)} accent="indigo" />
-            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-              <p className="text-xs font-semibold text-[var(--color-text-muted)] mb-2">Por tipo de origen</p>
-              <div className="flex flex-wrap gap-1.5">
-                {Object.entries(data.breakdownByReferenceType).length === 0 ? (
-                  <span className="text-xs text-[var(--color-text-muted)]">Sin movimientos</span>
-                ) : (
-                  Object.entries(data.breakdownByReferenceType).map(([ref, count]) => (
-                    <span key={ref} className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-2.5 py-0.5 text-[11px] font-semibold text-[var(--color-text-secondary)]">
-                      {wacRefLabel(ref)} · {count}
-                    </span>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* ── Línea de tiempo ── */}
-          <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-            <div className="hm-card-header-green px-5 py-3 flex items-center gap-2">
-              <History className="h-5 w-5" />
-              <h2 className="font-semibold">Cómo se formó el costo promedio</h2>
-              <span className="ml-auto text-xs opacity-80">{data.rows.length} filas</span>
-            </div>
-            {data.rows.length === 0 ? (
-              <div className="p-8 text-center">
-                <History className="h-10 w-10 mx-auto mb-3 text-[var(--color-text-muted)]" />
-                <p className="text-sm font-medium text-[var(--color-text-secondary)]">Sin movimientos registrados en esta sucursal todavía.</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="hm-table">
-                  <thead>
-                    <tr>
-                      <th>Fecha</th>
-                      <th>Tipo</th>
-                      <th>Referencia</th>
-                      <th className="text-right">Cantidad</th>
-                      <th className="text-right">Costo unit.</th>
-                      <th className="text-right">Costo antes</th>
-                      <th className="text-right">Costo después</th>
-                      <th className="text-right">Δ%</th>
-                      <th>Quién</th>
-                      <th>Nota</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.rows.map((row) => {
-                      const ml = movementLabel(row.movementType);
-                      const absPercent = row.wacDeltaPercent !== null ? Math.abs(row.wacDeltaPercent) : 0;
-                      const rowClass = row.excludedFromReplay
-                        ? "opacity-50"
-                        : absPercent > 100
-                          ? "bg-red-50"
-                          : absPercent > 25
-                            ? "bg-amber-50"
-                            : "";
-                      return (
-                        <tr key={row.movementId} className={`${rowClass} hover:bg-[var(--color-surface-alt)]`}>
-                          <td className="whitespace-nowrap text-[var(--color-text-secondary)] text-xs">{fmtDateTime(row.createdAt)}</td>
-                          <td><Badge variant={ml.color}>{ml.label}</Badge></td>
-                          <td>
-                            <div className="text-[11px] font-medium text-[var(--color-text-secondary)]">{wacRefLabel(row.referenceType)}</div>
-                            <div className="font-mono text-[10px] text-[var(--color-text-muted)]">{row.referenceId.length > 18 ? `${row.referenceId.slice(0, 16)}…` : row.referenceId}</div>
-                          </td>
-                          <td className="text-right font-mono text-xs">{qty(row.quantity)}</td>
-                          <td className="text-right font-mono text-xs text-[var(--color-text-secondary)]">{money(row.unitCost)}</td>
-                          {row.excludedFromReplay ? (
-                            <td colSpan={3} className="text-center text-[11px] text-[var(--color-text-muted)] italic">Sin efecto en el costo promedio</td>
-                          ) : (
-                            <>
-                              <td className="text-right font-mono text-xs text-[var(--color-text-secondary)]">{money(row.wacBefore)}</td>
-                              <td className="text-right font-mono text-xs font-semibold text-[var(--color-text)]">{money(row.wacAfter)}</td>
-                              <td className={`text-right font-mono text-xs font-bold ${absPercent > 100 ? "text-red-700" : absPercent > 25 ? "text-amber-700" : "text-[var(--color-text-secondary)]"}`}>
-                                {row.wacDeltaPercent === null ? "—" : `${row.wacDeltaPercent >= 0 ? "+" : ""}${row.wacDeltaPercent.toFixed(1)}%`}
-                              </td>
-                            </>
-                          )}
-                          <td className="text-xs text-[var(--color-text-secondary)] whitespace-nowrap">{row.actorName ?? "—"}</td>
-                          <td className="max-w-[160px]">
-                            {row.notes?.trim() ? (
-                              <span className="text-xs text-[var(--color-text-secondary)] line-clamp-2" title={row.notes}>{row.notes}</span>
-                            ) : (
-                              <span className="text-[10px] text-[var(--color-text-muted)]">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/* ── Historial de precio Tab — Parte B.3 ── */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-const PRICE_ORIGIN_LABEL: Record<string, string> = {
-  catalogo: "Catálogo",
-  fusion: "Fusiones",
-  importacion_excel: "Importación Excel",
-  bandeja_precios: "Bandeja de precios",
-  calculadora: "Calculadora",
-  saldo_inicial: "Saldo inicial",
-};
-
-function PriceHistoryTab({ productId, branches }: { productId: string; branches: Branch[] }) {
-  const [rows, setRows] = useState<PriceHistoryRow[] | null>(null);
-  const [error, setError] = useState("");
-  const branchById = new Map(branches.map((b) => [b.id, b]));
-
-  useEffect(() => {
-    fetch(`/api/master/catalog/price-history?productId=${productId}`, { cache: "no-store" })
-      .then(async (response) => {
-        const raw = await response.json();
-        if (!response.ok) throw new Error(raw?.error?.message ?? raw?.message ?? "No se pudo cargar el historial de precio.");
-        setRows(raw.data as PriceHistoryRow[]);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar el historial de precio."));
-  }, [productId]);
-
-  if (error) {
-    return (
-      <Card className="p-6 text-center">
-        <AlertTriangle className="h-8 w-8 mx-auto text-red-500 mb-2" />
-        <p className="text-sm font-semibold text-[var(--color-danger-700)]">{error}</p>
-      </Card>
-    );
-  }
-  if (!rows) {
-    return (
-      <Card className="p-8 text-center">
-        <div className="h-8 w-8 mx-auto mb-3 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-info-600)]" />
-      </Card>
-    );
-  }
-
-  return (
-    <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden shadow-sm">
-      <div className="hm-card-header-green px-5 py-3 flex items-center gap-2">
-        <Tag className="h-5 w-5" />
-        <h2 className="font-semibold">Historial de precio</h2>
-        <span className="ml-auto text-xs opacity-80">{rows.length} cambios</span>
-      </div>
-      {rows.length === 0 ? (
-        <div className="p-8 text-center">
-          <Tag className="h-10 w-10 mx-auto mb-3 text-[var(--color-text-muted)]" />
-          <p className="text-sm font-medium text-[var(--color-text-secondary)]">Sin cambios de precio registrados todavía.</p>
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="hm-table">
-            <thead>
-              <tr>
-                <th>Fecha</th>
-                <th>Precio anterior</th>
-                <th>Precio nuevo</th>
-                <th>Campo</th>
-                <th>Sucursal</th>
-                <th>Origen</th>
-                <th>Quién</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id} className="hover:bg-[var(--color-surface-alt)]">
-                  <td className="whitespace-nowrap text-[var(--color-text-secondary)] text-xs">{fmtDateTime(row.occurredAt)}</td>
-                  <td className="text-right font-mono text-xs text-[var(--color-text-secondary)]">{row.previousPrice === null ? "—" : money(row.previousPrice)}</td>
-                  <td className="text-right font-mono text-xs font-semibold text-[var(--color-text)]">{row.newPrice === null ? "—" : money(row.newPrice)}</td>
-                  <td className="text-xs">
-                    <Badge variant={row.field === "branchPrice" ? "info" : "neutral"}>{row.field === "branchPrice" ? "Precio de sucursal" : "Precio general"}</Badge>
-                  </td>
-                  <td className="text-xs text-[var(--color-text-secondary)]">{row.branchId ? branchById.get(row.branchId)?.code ?? row.branchId : "—"}</td>
-                  <td className="text-xs text-[var(--color-text-secondary)]">
-                    {row.origin ? PRICE_ORIGIN_LABEL[row.origin] ?? row.origin : "—"}
-                    {row.propagatedFromSku && (
-                      <div className="text-[10px] text-[var(--color-warning-700)]">Propagado desde {row.propagatedFromSku}</div>
-                    )}
-                  </td>
-                  <td className="text-xs text-[var(--color-text-secondary)] whitespace-nowrap">{row.actorName ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}

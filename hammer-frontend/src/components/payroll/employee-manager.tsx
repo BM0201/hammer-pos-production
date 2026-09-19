@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import dynamic from "next/dynamic";
 import {
   Users,
   Plus,
@@ -23,10 +24,15 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, fmtDateNumeric } from "@/lib/format";
 import { DEFAULT_PAYROLL_RATES, splitNetPayBiweekly, MES_LARGO, type PayrollBreakdown, type PayrollRates } from "@/components/finance/payroll-calc";
 import { usePaydayForMonth, type PaydayForMonthEntry } from "@/components/finance/use-payday-for-month";
-import { AttendancePanel } from "@/components/finance/attendance-panel";
-import { AttendanceCalendar } from "@/components/payroll/attendance-calendar";
-import { EmployeeProfileDrawer } from "@/components/payroll/employee-profile-drawer";
 import toast from "react-hot-toast";
+
+// Fase 5 (prompt-flujo-velocidad.md): las 3 solo se montan por interacción
+// (pestaña "attendance"/"calendar", o abrir el perfil de un empleado) — carga
+// diferida para que su bundle no viaje con el resto de esta página (1480
+// líneas) en cada visita a Empleados, aunque el usuario nunca las abra.
+const AttendancePanel = dynamic(() => import("@/components/finance/attendance-panel").then((m) => m.AttendancePanel), { ssr: false });
+const AttendanceCalendar = dynamic(() => import("@/components/payroll/attendance-calendar").then((m) => m.AttendanceCalendar), { ssr: false });
+const EmployeeProfileDrawer = dynamic(() => import("@/components/payroll/employee-profile-drawer").then((m) => m.EmployeeProfileDrawer), { ssr: false });
 
 type Branch = { id: string; code: string; name: string };
 type Employee = {

@@ -41,20 +41,24 @@ function readApi(relFromRepoRoot) {
 }
 
 const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
+// Fase 5 (prompt-flujo-velocidad.md): PricingPanel (la pestaña "Precios y
+// costos") se extrajo de ADMIN a su propio archivo para cargarlo con
+// next/dynamic — el contenido de costo por presentación derivada vive ahí.
+const PRICING = "components/catalog-inventory/pricing-panel.tsx";
 
 test("frontend: el costo de un miembro derivado ya NO es de solo lectura — no queda el mensaje viejo de 'edítalo en la unidad base'", () => {
-  const c = read(ADMIN);
+  const c = read(PRICING);
   assert.ok(!c.includes("edítalo en la unidad base"), "el mensaje de solo-lectura de antes no debe seguir en el código");
   assert.ok(!/el costo NO se edita ac/.test(c), "el comentario que documentaba el bloqueo viejo debe haberse ido con el bloqueo");
 });
 
 test("frontend: la fila de un derivado usa el MISMO input editable que el canónico (onSaveGlobalCost), con título aclarando la conversión", () => {
-  const c = read(ADMIN);
+  const c = read(PRICING);
   assert.ok(c.includes("se convierte automáticamente al producto canónico"), "debe avisar que lo tecleado se convierte, no se guarda tal cual");
 });
 
 test("frontend: globalCostServerValue precarga el input de un derivado con el costo YA convertido a su unidad (row.effectiveCost), no con product.globalCost (siempre null en un derivado)", () => {
-  const c = read(ADMIN);
+  const c = read(PRICING);
   assert.ok(c.includes("function globalCostServerValue"));
   assert.match(c, /buildBranchPricingCostRow\(product, activeBranch\)/, "debe reusar el mismo motor que ya calcula el costo efectivo de la fila, no reimplementarlo");
 });

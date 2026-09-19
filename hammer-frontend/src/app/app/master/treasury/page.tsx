@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { Landmark, Plus, X, Check, RefreshCcw, PiggyBank, Wallet, Vault, Users, ArrowLeftRight, ChevronLeft, ChevronRight, AlarmClock, ListFilter, CreditCard, Banknote } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Badge } from "@/components/ui/badge";
@@ -10,11 +11,17 @@ import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
 import { STATE_META, type CashPosition, type CashIndicatorState } from "@/components/navigation/cash-indicator-panel";
 import { CashAccumulationBar } from "@/components/finance/cash-accumulation-bar";
-import { RetainedCashExpenseSheet } from "@/components/finance/retained-cash-expense-sheet";
-import { RetainedCashExpenseList } from "@/components/finance/retained-cash-expense-list";
-import { DirectDepositSheet } from "@/components/finance/direct-deposit-sheet";
-import { CardSettlementSheet } from "@/components/finance/card-settlement-sheet";
 import { money } from "@/lib/format";
+
+// Fase 5 (prompt-flujo-velocidad.md): los 3 sheets se controlan por `open`
+// pero se montan siempre (para animar su cierre) — igual se benefician de
+// separarse del bundle principal de esta página. RetainedCashExpenseList
+// solo se monta al expandir una sucursal (accordion, línea ~771), así que
+// además difiere la carga hasta que el usuario realmente la abre.
+const RetainedCashExpenseSheet = dynamic(() => import("@/components/finance/retained-cash-expense-sheet").then((m) => m.RetainedCashExpenseSheet), { ssr: false });
+const RetainedCashExpenseList = dynamic(() => import("@/components/finance/retained-cash-expense-list").then((m) => m.RetainedCashExpenseList), { ssr: false });
+const DirectDepositSheet = dynamic(() => import("@/components/finance/direct-deposit-sheet").then((m) => m.DirectDepositSheet), { ssr: false });
+const CardSettlementSheet = dynamic(() => import("@/components/finance/card-settlement-sheet").then((m) => m.CardSettlementSheet), { ssr: false });
 
 type Branch = { id: string; code: string; name: string; cashFundAmount: string | null };
 

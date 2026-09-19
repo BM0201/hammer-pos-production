@@ -43,6 +43,10 @@ function readApi(relFromRepoRoot) {
 }
 
 const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
+// Fase 5 (prompt-flujo-velocidad.md): PricingPanel se extrajo de ADMIN a su
+// propio archivo para cargarlo con next/dynamic — la lógica de fila
+// (isMissing, etc.) vive ahí ahora.
+const PRICING = "components/catalog-inventory/pricing-panel.tsx";
 
 test("backend: updateProduct sincroniza averageCost con globalCost al editar el costo (buildGlobalCostUpdateFields)", () => {
   const service = readApi("hammer-api/src/modules/catalog/service.ts");
@@ -69,7 +73,7 @@ test("frontend: priceSource cae a STANDARD cuando no hay branchPrice — ya no c
 });
 
 test("frontend: isMissing (fila roja / botón Asignar) se decide sobre branchPrice, no sobre effectivePrice", () => {
-  const c = read(ADMIN);
+  const c = read(PRICING);
   assert.ok(c.includes("const isMissing = row.branchPrice === null"), "con el fallback a STANDARD, effectivePrice casi nunca es null — isMissing tiene que seguir siendo sobre branchPrice para no perder el aviso de 'esta sucursal no tiene precio propio'");
 });
 

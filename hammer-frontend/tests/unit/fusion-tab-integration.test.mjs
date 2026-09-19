@@ -48,7 +48,10 @@ test("Catálogo e Inventario tiene la pestaña 'Fusiones', junto a 'Precios y co
 
 test("la pestaña Fusiones renderiza FusionPricingPanel (SOLO precio), no InventoryFusionManager (el editor completo)", () => {
   const c = read(ADMIN);
-  assert.ok(c.includes('import { FusionPricingPanel } from "@/components/catalog-inventory/fusion-pricing-panel"'));
+  // Fase 5 (prompt-flujo-velocidad.md): FusionPricingPanel se carga con
+  // next/dynamic (solo se monta con la pestaña activa) en vez de import
+  // estático — el import literal ya no aparece, pero el módulo de origen sí.
+  assert.ok(c.includes('import("@/components/catalog-inventory/fusion-pricing-panel")'), "debe cargar el módulo de FusionPricingPanel (dynamic import)");
   assert.ok(c.includes('tab === "fusion" ? <FusionPricingPanel /> : null'));
   assert.ok(!c.includes("InventoryFusionManager"), "el editor completo (crear/editar estructura) NO debe estar en esta pestaña — es otra pantalla, a propósito");
 });

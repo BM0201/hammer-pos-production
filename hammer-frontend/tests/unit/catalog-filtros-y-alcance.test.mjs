@@ -28,6 +28,10 @@ function read(rel) {
 }
 
 const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
+// Fase 5 (prompt-flujo-velocidad.md): PricingPanel se extrajo de ADMIN a su
+// propio archivo para cargarlo con next/dynamic — el contenido que prueba
+// C.4 vive ahí ahora, no en catalog-inventory-admin.tsx.
+const PRICING = "components/catalog-inventory/pricing-panel.tsx";
 
 test("Parte A: la barra de filtros no usa .hm-input directo sin envolver — cada control en su propio div con ancho fijo", () => {
   const c = read(ADMIN);
@@ -93,7 +97,7 @@ test("Parte C.3: con sucursal elegida, el encabezado de columna dice 'Costo · {
 });
 
 test("Parte C.4: 'Precios y costos' (PricingPanel) ya no cae a branches[0] en silencio — activeBranch es null sin sucursal, no un fallback local", () => {
-  const c = read(ADMIN);
+  const c = read(PRICING);
   assert.ok(!c.includes("branches.find((branch) => branch.id === selectedBranchId) ?? branches[0]"), "activeBranch no debe caer a branches[0]");
   assert.ok(c.includes("branches.find((branch) => branch.id === selectedBranchId) ?? null"), "activeBranch debe ser null explícito sin sucursal elegida");
   assert.ok(!c.includes("if (!selectedBranchId && branches[0]) {"), "no debe existir el useEffect que auto-seleccionaba branches[0] y mutaba el branchId compartido");
