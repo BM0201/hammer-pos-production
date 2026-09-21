@@ -81,6 +81,8 @@ type SupplierSnapshot = {
   accountHolder: string | null;
   paymentTerms: string | null;
   supplierCode: string | null;
+  /// Cuentas por pagar (prompt-cxp.md) — el que manda para paymentTermDaysSnapshot.
+  paymentTermDays: number | null;
 };
 
 async function supplierSnapshot(tx: Prisma.TransactionClient, supplierId?: string | null): Promise<SupplierSnapshot | null> {
@@ -102,6 +104,7 @@ async function supplierSnapshot(tx: Prisma.TransactionClient, supplierId?: strin
       accountHolder: true,
       paymentTerms: true,
       supplierCode: true,
+      paymentTermDays: true,
       isActive: true,
     },
   });
@@ -458,6 +461,12 @@ export async function createPurchaseOrder(input: CreatePOInput, db: Prisma.Trans
       notes: input.notes || null,
       branchId: input.branchId,
       userId: input.userId,
+      // Cuentas por pagar (prompt-cxp.md, D1) — copiado del proveedor AHORA,
+      // no leído en vivo después: si el proveedor cambia sus términos, las
+      // compras ya creadas no se mueven. dueDate se calcula recién en la
+      // primera recepción (receivePurchaseOrder) — acá no hay fecha de
+      // recepción todavía.
+      paymentTermDaysSnapshot: supplier?.paymentTermDays ?? null,
       total,
       subtotalBeforeTax: new Prisma.Decimal(subtotalBeforeTaxNumber),
       taxAmount: new Prisma.Decimal(taxAmountNumber),
@@ -754,9 +763,19 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
       const requestedBaseQty = requestedByProduct.get(line.productId) ?? Number(line.quantity);
       return (totalReceivedByProduct.get(resolution?.inventoryProductId ?? line.productId) ?? 0) >= requestedBaseQty;
     });
+    // Cuentas por pagar (prompt-cxp.md, D1) — dueDate se fija en la PRIMERA
+    // recepción, nunca se recalcula después: el crédito lo otorga la
+    // primera entrega de mercadería, no la última. po.dueDate ya viene
+    // cargado del findUnique de arriba (sin select explícito trae todos los
+    // escalares) — si ya tiene valor, esta orden ya recibió antes.
+    const dueDate = po.dueDate ?? (
+      po.paymentTermDaysSnapshot != null
+        ? new Date(Date.now() + po.paymentTermDaysSnapshot * 24 * 60 * 60 * 1000)
+        : new Date()
+    );
     await tx.purchaseOrder.update({
       where: { id },
-      data: { status: fullyReceived ? "RECEIVED" : "APPROVED" },
+      data: { status: fullyReceived ? "RECEIVED" : "APPROVED", dueDate },
     });
 
     return {

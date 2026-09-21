@@ -2347,14 +2347,26 @@ model PurchaseOrder {
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
 
-  branch      Branch              @relation(fields: [branchId], references: [id])
-  createdBy   User                @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
-  supplierRef Supplier?           @relation(fields: [supplierId], references: [id])
-  lines       PurchaseOrderLine[]
+  /// Cuentas por pagar (prompt-cxp.md) — copiado del proveedor al crear la
+  /// orden (si el proveedor cambia sus términos después, esta orden no se
+  /// mueve). null = contado.
+  paymentTermDaysSnapshot Int?
+  /// Se calcula en la PRIMERA recepción: fecha de esa recepción +
+  /// paymentTermDaysSnapshot (null = contado, vence el mismo día). Nunca se
+  /// recalcula en recepciones posteriores — el crédito lo otorga la primera
+  /// entrega de mercadería, no la última.
+  dueDate                 DateTime?
+
+  branch          Branch              @relation(fields: [branchId], references: [id])
+  createdBy       User                @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
+  supplierRef     Supplier?           @relation(fields: [supplierId], references: [id])
+  lines           PurchaseOrderLine[]
+  treasuryEntries TreasuryEntry[]
 
   @@index([branchId, status])
   @@index([supplierId])
   @@index([date])
+  @@index([dueDate])
 }
 
 model PurchaseOrderLine {
@@ -2402,6 +2414,11 @@ model Supplier {
   bankAccountNumber      String?
   accountHolder          String?
   paymentTerms           String?
+  /// Cuentas por pagar (prompt-cxp.md) — días de crédito, el campo que
+  /// manda para calcular dueDate. `paymentTerms` (arriba) sigue siendo
+  /// texto libre para lo que ya haya cargado cada proveedor; no se parsea.
+  /// null = contado.
+  paymentTermDays        Int?
   creditLimit            Decimal?
   notes                  String?
   category               String?
@@ -2416,6 +2433,7 @@ model Supplier {
   purchaseOrders          PurchaseOrder[]
   reorderPolicies         StockReorderPolicy[]     @relation("ReorderPolicyPreferredSupplier")
   replenishmentDraftItems ReplenishmentDraftItem[] @relation("ReplenishmentDraftItemSupplier")
+  treasuryEntries         TreasuryEntry[]
 
   @@index([name])
   @@index([isActive])
@@ -3781,6 +3799,14 @@ model TreasuryEntry {
   /// ocurrió — es la intención declarada, igual que intendedBankAccountId.
   intendedRecipientUserId String?
 
+  /// Cuentas por pagar (prompt-cxp.md) — solo en SUPPLIER_PAYMENT ligados a
+  /// una orden de compra concreta. supplierId se guarda aparte (no solo
+  /// derivado de purchaseOrder.supplierId) porque un pago puede declararse
+  /// contra un proveedor sin elegir una orden puntual — ver Fase 2. Ninguno
+  /// de los dos es @unique: una compra se paga en varios abonos.
+  purchaseOrderId String?
+  supplierId      String?
+
   account       TreasuryAccount  @relation("TreasuryEntryAccount", fields: [accountId], references: [id])
   intendedBankAccount TreasuryAccount? @relation("TreasuryEntryIntendedBank", fields: [intendedBankAccountId], references: [id])
   intendedRecipient   User?            @relation("TreasuryEntryIntendedRecipient", fields: [intendedRecipientUserId], references: [id])
@@ -3789,6 +3815,8 @@ model TreasuryEntry {
   bankDeposit   BankDeposit?    @relation(fields: [bankDepositId], references: [id])
   card          TreasuryCard?   @relation(fields: [cardId], references: [id])
   createdBy     User            @relation("TreasuryEntryCreatedBy", fields: [createdByUserId], references: [id])
+  purchaseOrder PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id])
+  supplier      Supplier?       @relation(fields: [supplierId], references: [id])
 
   @@index([accountId, occurredAt, createdAt])
   @@index([transferId])
@@ -3800,6 +3828,8 @@ model TreasuryEntry {
   // IN/OUT de una cuenta por separado — accountId+occurredAt+createdAt no
   // cubre bien un filtro directo por direction sin ordenar por fecha primero.
   @@index([accountId, direction])
+  @@index([purchaseOrderId])
+  @@index([supplierId])
 }
 
 /// Cada cuenta tiene su moneda y las entradas se guardan sin convertir — la
