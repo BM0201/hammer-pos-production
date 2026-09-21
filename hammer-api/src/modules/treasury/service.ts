@@ -11,6 +11,7 @@ import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
 import { getCashToleranceConfig, resolveCashToleranceForBranch } from "@/modules/operations/cash-tolerance-config";
 import { raiseCashDiscrepancy } from "@/modules/treasury/discrepancy-signals";
+import { getPurchaseOrderPayable } from "@/modules/purchase-orders/payables";
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -170,6 +171,9 @@ type EntryLinkage = {
   intendedBankAccountId?: string | null;
   /** Solo HANDOVER con el cajero como portador: a quién declaró entregárselo — intención, no el hecho. */
   intendedRecipientUserId?: string | null;
+  /** Cuentas por pagar (prompt-cxp.md) — solo SUPPLIER_PAYMENT ligado a una orden concreta. Ninguno de los dos es @unique: una compra se paga en varios abonos. */
+  purchaseOrderId?: string | null;
+  supplierId?: string | null;
 };
 
 type CreateEntryInput = EntryLinkage & {
@@ -214,6 +218,8 @@ export async function createTreasuryEntryTx(tx: Prisma.TransactionClient, input:
       cardId: input.cardId ?? null,
       intendedBankAccountId: input.intendedBankAccountId ?? null,
       intendedRecipientUserId: input.intendedRecipientUserId ?? null,
+      purchaseOrderId: input.purchaseOrderId ?? null,
+      supplierId: input.supplierId ?? null,
       reference: input.reference ?? null,
       notes: input.notes ?? null,
       createdByUserId: input.createdByUserId,
@@ -1870,8 +1876,15 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
   expensePaymentId?: string | null;
   allowNegativeBalance?: boolean;
   overrideReason?: string | null;
+  /** Cuentas por pagar (prompt-cxp.md, Fase 2) — cuando viene, fuerza entryType=SUPPLIER_PAYMENT y valida contra el saldo real de la orden. */
+  purchaseOrderId?: string | null;
+  /** Ligado informativo sin una orden puntual (ej. abono general a proveedor). Si purchaseOrderId también viene, éste manda — se ignora para evitar que los dos diverjan. */
+  supplierId?: string | null;
   createdByUserId: string;
 }) {
+  if (input.purchaseOrderId && input.entryType !== "SUPPLIER_PAYMENT") {
+    throw new Error("VALIDATION_ERROR: un pago ligado a una orden de compra debe ser SUPPLIER_PAYMENT");
+  }
   if (!OUTGOING_ENTRY_TYPES.includes(input.entryType)) {
     throw new Error("VALIDATION_ERROR: tipo de pago saliente inválido");
   }
@@ -1881,7 +1894,7 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
 
   const account = await tx.treasuryAccount.findUniqueOrThrow({
     where: { id: input.accountId },
-    select: { id: true, type: true, isActive: true, openingBalance: true },
+    select: { id: true, type: true, isActive: true, openingBalance: true, currencyCode: true },
   });
   if (account.type !== "BANK") {
     throw new Error("VALIDATION_ERROR: solo se puede pagar desde una cuenta de banco registrada");
@@ -1927,6 +1940,33 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
     }
   }
 
+  // Cuentas por pagar (prompt-cxp.md, Fase 2) — todo esto DENTRO de la
+  // transacción y DESPUÉS del lock de la cuenta de arriba, pero el lock de
+  // la cuenta no alcanza: dos pagos contra la MISMA orden desde DOS cuentas
+  // distintas no quedan serializados por ese lock (cada uno bloquea una
+  // fila de cuenta diferente). Por eso se toma también un lock de la fila
+  // de la orden antes de leer su saldo — el mismo principio que ya usa el
+  // lock de TreasuryAccount, aplicado a la otra mitad de la transacción.
+  let purchaseOrderSupplierId: string | null = null;
+  if (input.purchaseOrderId) {
+    if (account.currencyCode !== "NIO") {
+      throw new Error("PURCHASE_PAYMENT_CURRENCY_MISMATCH: solo se puede pagar una orden de compra desde una cuenta en córdobas — compras en otra moneda no están soportadas todavía");
+    }
+    await tx.$queryRaw`SELECT id FROM "PurchaseOrder" WHERE id = ${input.purchaseOrderId} FOR UPDATE`;
+
+    const po = await tx.purchaseOrder.findUnique({ where: { id: input.purchaseOrderId }, select: { supplierId: true } });
+    if (!po) throw new Error("VALIDATION_ERROR: la orden de compra no existe");
+    purchaseOrderSupplierId = po.supplierId;
+
+    const payable = await getPurchaseOrderPayable(input.purchaseOrderId, tx);
+    if (payable.debt <= 0) {
+      throw new Error("VALIDATION_ERROR: esta orden todavía no tiene recepciones registradas — no hay deuda que pagar");
+    }
+    if (round2(input.amount - payable.balance) > 0) {
+      throw new Error(`PURCHASE_OVERPAYMENT: el pago (${input.amount}) supera el saldo pendiente de la orden (${payable.balance})`);
+    }
+  }
+
   // TreasuryEntry no tiene columna para overrideReason (deuda para una
   // migración posterior). Hasta entonces, se antepone a notes con un
   // prefijo reconocible en vez de pisar el texto libre del operador.
@@ -1939,7 +1979,7 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
     accountId: input.accountId,
     direction: "OUT",
     amount: round2(input.amount),
-    entryType: input.entryType,
+    entryType: input.purchaseOrderId ? "SUPPLIER_PAYMENT" : input.entryType,
     counterpartyType: input.counterpartyType,
     counterpartyName: input.counterpartyName ?? null,
     cardId: input.cardId ?? null,
@@ -1947,6 +1987,8 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
     reference: input.reference ?? null,
     notes,
     expensePaymentId: input.expensePaymentId ?? null,
+    purchaseOrderId: input.purchaseOrderId ?? null,
+    supplierId: input.purchaseOrderId ? purchaseOrderSupplierId : (input.supplierId ?? null),
     createdByUserId: input.createdByUserId,
   });
 }
@@ -1964,6 +2006,8 @@ export async function recordAccountPayment(input: {
   notes?: string | null;
   allowNegativeBalance?: boolean;
   overrideReason?: string | null;
+  purchaseOrderId?: string | null;
+  supplierId?: string | null;
   actorUserId: string;
 }) {
   const entry = await prisma.$transaction((tx) =>
@@ -1985,6 +2029,9 @@ export async function recordAccountPayment(input: {
       counterpartyName: input.counterpartyName ?? null,
       allowNegativeBalance: input.allowNegativeBalance ?? false,
       overrideReason: input.overrideReason ?? null,
+      purchaseOrderId: input.purchaseOrderId ?? null,
+      supplierId: entry.supplierId,
+      balanceAfterPayment: input.purchaseOrderId ? round2((await getPurchaseOrderPayable(input.purchaseOrderId)).balance) : null,
     },
   });
   return entry;

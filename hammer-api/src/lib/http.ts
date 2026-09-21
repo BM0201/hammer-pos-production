@@ -131,6 +131,14 @@ export function toHttpErrorResponse(error: unknown) {
       return errJson("PRICE_DEVIATES_FROM_FUSION", error.message.replace(/^PRICE_DEVIATES_FROM_FUSION:\s?/, ""), 409);
     }
 
+    // Cuentas por pagar (prompt-cxp.md, Fase 2) — recordAccountPaymentTx.
+    if (error.message.startsWith("PURCHASE_OVERPAYMENT:")) {
+      return errJson("PURCHASE_OVERPAYMENT", error.message.replace(/^PURCHASE_OVERPAYMENT:\s?/, ""), 400);
+    }
+    if (error.message.startsWith("PURCHASE_PAYMENT_CURRENCY_MISMATCH:")) {
+      return errJson("PURCHASE_PAYMENT_CURRENCY_MISMATCH", error.message.replace(/^PURCHASE_PAYMENT_CURRENCY_MISMATCH:\s?/, ""), 400);
+    }
+
     // Stock errors
     if (error.message === "INSUFFICIENT_STOCK" || error.message === "INSUFFICIENT_STOCK_AT_PAYMENT") {
       return errJson("CONFLICT", "Stock insuficiente", 409);

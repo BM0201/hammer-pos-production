@@ -188,6 +188,11 @@ export const recordAccountPaymentSchema = z
     // Obligatoria cuando allowNegativeBalance es true — ver superRefine abajo.
     // El mínimo de 10 caracteres es deliberado: obliga a escribir una razón, no una letra.
     overrideReason: z.string().min(10).max(300).optional().nullable(),
+    // Cuentas por pagar (prompt-cxp.md, Fase 2) — cuando viene, el servicio
+    // fuerza entryType=SUPPLIER_PAYMENT y valida contra el saldo real de la
+    // orden (existe, tiene deuda, no sobrepaga, cuenta en córdobas).
+    purchaseOrderId: z.string().cuid().optional().nullable(),
+    supplierId: z.string().cuid().optional().nullable(),
   })
   .superRefine((data, ctx) => {
     if (data.allowNegativeBalance && !data.overrideReason) {
