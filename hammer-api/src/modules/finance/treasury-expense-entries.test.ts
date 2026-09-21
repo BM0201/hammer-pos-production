@@ -20,6 +20,7 @@ function createFakeDb(fixtures: {
     expensePaymentId: string | null;
     branchId: string | null;
     accountType: "BANK" | "SAFE" | "SETTLEMENT";
+    purchaseOrderId?: string | null;
   }>;
   expenses?: Array<{ id: string; category: string; isActive: boolean }>;
 }) {
@@ -30,6 +31,7 @@ function createFakeDb(fixtures: {
           amount: new Prisma.Decimal(e.amount),
           occurredAt: e.occurredAt,
           expensePaymentId: e.expensePaymentId,
+          purchaseOrderId: e.purchaseOrderId ?? null,
           account: { branchId: e.branchId, type: e.accountType },
         })),
     },
@@ -130,4 +132,41 @@ test("varios gastos: banco, retenido, planilla excluida y anulado excluido — s
   const result = await fetchTreasuryExpenseEntries("branch-1", RANGE.start, RANGE.end, db);
   assert.equal(result.length, 2);
   assert.equal(result.reduce((s, e) => s + e.amount, 0), 300, "100 (banco) + 200 (retenido) = 300 — planilla y anulado quedan fuera");
+});
+
+/**
+ * prompt-cxp.md Fase 3 — LA QUE IMPORTA de este archivo ahora: un
+ * SUPPLIER_PAYMENT ligado a una orden de compra (purchaseOrderId, Fase 2 de
+ * ese doc) es un pago de MERCADERÍA — su costo ya entra a la utilidad como
+ * COGS cuando el producto se vende. Contarlo también acá lo infla dos
+ * veces. Un SUPPLIER_PAYMENT sin purchaseOrderId (servicios, fletes de
+ * terceros) sigue contando igual que siempre.
+ */
+test("LA QUE IMPORTA — un pago ligado a una orden de compra (purchaseOrderId) NO cuenta como gasto operativo", async () => {
+  const db = createFakeDb({
+    entries: [{ amount: 5000, occurredAt: D("2026-09-10"), expensePaymentId: null, branchId: "branch-1", accountType: "BANK", purchaseOrderId: "po-1" }],
+  });
+  const result = await fetchTreasuryExpenseEntries("branch-1", RANGE.start, RANGE.end, db);
+  assert.equal(result.length, 0, "un pago de mercadería no debe contar como gasto — su costo ya entra por COGS al vender");
+});
+
+test("un SUPPLIER_PAYMENT SIN purchaseOrderId (servicio, flete de tercero) sigue contando igual que siempre", async () => {
+  const db = createFakeDb({
+    entries: [{ amount: 800, occurredAt: D("2026-09-10"), expensePaymentId: null, branchId: "branch-1", accountType: "BANK", purchaseOrderId: null }],
+  });
+  const result = await fetchTreasuryExpenseEntries("branch-1", RANGE.start, RANGE.end, db);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].amount, 800);
+});
+
+test("mezcla: un pago de mercadería (excluido) junto a un pago de servicio (incluido) — solo el segundo cuenta", async () => {
+  const db = createFakeDb({
+    entries: [
+      { amount: 5000, occurredAt: D("2026-09-05"), expensePaymentId: null, branchId: "branch-1", accountType: "BANK", purchaseOrderId: "po-1" },
+      { amount: 800, occurredAt: D("2026-09-06"), expensePaymentId: null, branchId: "branch-1", accountType: "BANK", purchaseOrderId: null },
+    ],
+  });
+  const result = await fetchTreasuryExpenseEntries("branch-1", RANGE.start, RANGE.end, db);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].amount, 800);
 });

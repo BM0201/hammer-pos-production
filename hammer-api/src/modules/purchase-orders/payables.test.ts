@@ -89,16 +89,21 @@ test("computeOrderDebt: varias líneas de productos distintos se calculan indepe
 function createFakeDb(input: {
   po?: { dueDate: Date | null };
   lines?: { purchaseOrderId: string; productId: string; unitTaxAmount: number }[];
-  movements?: { referenceId: string; productId: string; quantity: number; unitCost: number }[];
+  movements?: { referenceId: string; productId: string; quantity: number; unitCost: number; createdAt?: Date }[];
   paidByOrder?: Record<string, number>;
+  paidEntries?: { purchaseOrderId: string; amount: number; occurredAt: Date }[];
   orders?: { id: string; orderNumber: string; dueDate: Date | null; supplierId: string | null; supplierNameSnapshot: string | null; supplier: string | null }[];
 }) {
   const lines = input.lines ?? [];
   const movements = input.movements ?? [];
+  // paidEntries es la fixture "fecha-consciente" — paidByOrder sigue andando
+  // para los tests que no les importa la fecha (occurredAt lejano en el pasado).
+  const paidEntries = input.paidEntries ?? Object.entries(input.paidByOrder ?? {}).map(([purchaseOrderId, amount]) => ({ purchaseOrderId, amount, occurredAt: new Date("2020-01-01T00:00:00Z") }));
   return {
     purchaseOrder: {
       findUniqueOrThrow: async () => input.po,
-      findMany: async () => input.orders ?? [],
+      findMany: async (args: { where: { date?: { lte: Date } } }) =>
+        (input.orders ?? []).filter((o) => !args.where.date || (o as { date?: Date }).date === undefined || (o as { date?: Date }).date! <= args.where.date.lte),
     },
     purchaseOrderLine: {
       findMany: async (args: { where: { purchaseOrderId: string | { in: string[] } } }) => {
@@ -107,16 +112,28 @@ function createFakeDb(input: {
       },
     },
     inventoryMovement: {
-      findMany: async (args: { where: { referenceId: string | { in: string[] } } }) => {
+      findMany: async (args: { where: { referenceId: string | { in: string[] }; createdAt?: { lte: Date } } }) => {
         const ids = typeof args.where.referenceId === "string" ? [args.where.referenceId] : args.where.referenceId.in;
-        return movements.filter((m) => ids.includes(m.referenceId)).map((m) => ({ referenceId: m.referenceId, productId: m.productId, quantity: new Prisma.Decimal(m.quantity), unitCost: new Prisma.Decimal(m.unitCost) }));
+        return movements
+          .filter((m) => ids.includes(m.referenceId))
+          .filter((m) => !args.where.createdAt || !m.createdAt || m.createdAt <= args.where.createdAt.lte)
+          .map((m) => ({ referenceId: m.referenceId, productId: m.productId, quantity: new Prisma.Decimal(m.quantity), unitCost: new Prisma.Decimal(m.unitCost) }));
       },
     },
     treasuryEntry: {
-      aggregate: async (args: { where: { purchaseOrderId: string } }) => ({
-        _sum: { amount: new Prisma.Decimal(input.paidByOrder?.[args.where.purchaseOrderId] ?? 0) },
-      }),
-      groupBy: async () => Object.entries(input.paidByOrder ?? {}).map(([purchaseOrderId, amount]) => ({ purchaseOrderId, _sum: { amount: new Prisma.Decimal(amount) } })),
+      aggregate: async (args: { where: { purchaseOrderId: string; occurredAt?: { lte: Date } } }) => {
+        const sum = paidEntries
+          .filter((e) => e.purchaseOrderId === args.where.purchaseOrderId)
+          .filter((e) => !args.where.occurredAt || e.occurredAt <= args.where.occurredAt.lte)
+          .reduce((s, e) => s + e.amount, 0);
+        return { _sum: { amount: new Prisma.Decimal(sum) } };
+      },
+      groupBy: async (args: { where: { purchaseOrderId: { in: string[] }; occurredAt?: { lte: Date } } }) => {
+        const filtered = paidEntries.filter((e) => args.where.purchaseOrderId.in.includes(e.purchaseOrderId) && (!args.where.occurredAt || e.occurredAt <= args.where.occurredAt.lte));
+        const byOrder = new Map<string, number>();
+        for (const e of filtered) byOrder.set(e.purchaseOrderId, (byOrder.get(e.purchaseOrderId) ?? 0) + e.amount);
+        return [...byOrder.entries()].map(([purchaseOrderId, amount]) => ({ purchaseOrderId, _sum: { amount: new Prisma.Decimal(amount) } }));
+      },
     },
   } as unknown as Parameters<typeof getPurchaseOrderPayable>[1];
 }
@@ -167,6 +184,38 @@ test("getPurchaseOrderPayable: daysOverdue cuenta días desde dueDate cuando hay
   });
   const result = await getPurchaseOrderPayable("po1", db, asOf);
   assert.equal(result.daysOverdue, 10);
+});
+
+/**
+ * prompt-cxp.md Fase 3 — payablesOpen es "a la fecha de corte", no "a
+ * ahora mismo": un reporte de un período pasado no debe verse afectado por
+ * una recepción o un pago que ocurrieron DESPUÉS de ese corte.
+ */
+test("getPurchaseOrderPayable: asOf excluye recepciones posteriores al corte — la deuda es la que había EN ese momento", async () => {
+  const asOf = new Date("2026-01-31T23:59:59Z");
+  const db = createFakeDb({
+    po: { dueDate: new Date("2026-01-10T00:00:00Z") },
+    lines: [{ purchaseOrderId: "po1", productId: "p1", unitTaxAmount: 0 }],
+    movements: [
+      { referenceId: "po1", productId: "p1", quantity: 10, unitCost: 100, createdAt: new Date("2026-01-05T00:00:00Z") }, // dentro del corte
+      { referenceId: "po1", productId: "p1", quantity: 5, unitCost: 100, createdAt: new Date("2026-02-10T00:00:00Z") }, // después del corte
+    ],
+  });
+  const result = await getPurchaseOrderPayable("po1", db, asOf);
+  assert.equal(result.debt, 1000, "solo la recepción de enero debe contar, no la de febrero");
+});
+
+test("getPurchaseOrderPayable: asOf excluye pagos posteriores al corte — el saldo pendiente no baja por un pago que todavía no había pasado", async () => {
+  const asOf = new Date("2026-01-31T23:59:59Z");
+  const db = createFakeDb({
+    po: { dueDate: new Date("2026-01-10T00:00:00Z") },
+    lines: [{ purchaseOrderId: "po1", productId: "p1", unitTaxAmount: 0 }],
+    movements: [{ referenceId: "po1", productId: "p1", quantity: 10, unitCost: 100, createdAt: new Date("2026-01-05T00:00:00Z") }],
+    paidEntries: [{ purchaseOrderId: "po1", amount: 1000, occurredAt: new Date("2026-02-15T00:00:00Z") }], // pago de febrero
+  });
+  const result = await getPurchaseOrderPayable("po1", db, asOf);
+  assert.equal(result.paid, 0, "el pago de febrero no debe contar en un corte de enero");
+  assert.equal(result.balance, 1000);
 });
 
 test("listSupplierPayables: agrupa por proveedor y suma varias órdenes", async () => {

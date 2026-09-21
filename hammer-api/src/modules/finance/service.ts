@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient, PaymentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
+import { listSupplierPayables } from "@/modules/purchase-orders/payables";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -134,6 +135,18 @@ export type FinanceSummary = {
     expensesBudgetMonthly: number;
     operatingProfit: number;
     estimatedNetProfit: number;
+    /**
+     * prompt-cxp.md Fase 3 — INFORMACIÓN, no se resta de operatingProfit (ver
+     * fetchTreasuryExpenseEntries: el pago de una orden de compra ya se
+     * excluyó de ahí porque su costo entra por COGS al vender, no acá).
+     * purchasesPaid: pagado a proveedores contra órdenes de compra EN el
+     * período. payablesOpen: saldo pendiente total a la fecha de corte
+     * (`end`, no "ahora") — mismo criterio que paymentValidAsOfPeriodEnd,
+     * un pago o una recepción posteriores al corte no deben mover el
+     * número de un período ya cerrado.
+     */
+    purchasesPaid: number;
+    payablesOpen: number;
     byBranch: Array<{
       branchId: string;
       branchCode: string | null;
@@ -360,6 +373,20 @@ type TreasuryExpenseEntry = { amount: number; occurredAt: Date; branchId: string
  * findOrCreateSettlementAccountTx) — cae en el bucket BANK más abajo (no es
  * SAFE) y, al no tener sucursal, queda sin atribuir a ningún byBranch, igual
  * que cualquier otro gasto de cuenta central.
+ *
+ * prompt-cxp.md Fase 3 — EXCLUSIÓN NUEVA, la razón de prioridad de ese
+ * trabajo: un SUPPLIER_PAYMENT con purchaseOrderId (Fase 2 de ese doc) es
+ * un pago de MERCADERÍA — su costo ya entra a la utilidad como COGS cuando
+ * el producto se vende (resolveCostChain, catalog/effective-pricing.ts).
+ * Contarlo TAMBIÉN acá como gasto operativo lo infla dos veces: una vez al
+ * vender (costo de la línea), otra vez al pagarle al proveedor. Un
+ * SUPPLIER_PAYMENT sin purchaseOrderId (servicios, fletes de terceros, lo
+ * que sea que no pasó por una orden) sigue contando igual que siempre — la
+ * exclusión es específica al vínculo, no al entryType.
+ *
+ * NO TOCAR esta exclusión sin entender esto primero: quien la revierta
+ * infla el gasto y desinfla la utilidad dos veces, en silencio, para toda
+ * orden de compra pagada.
  */
 export async function fetchTreasuryExpenseEntries(
   branchId: string | null,
@@ -378,6 +405,7 @@ export async function fetchTreasuryExpenseEntries(
       amount: true,
       occurredAt: true,
       expensePaymentId: true,
+      purchaseOrderId: true,
       account: { select: { branchId: true, type: true } },
     },
   });
@@ -393,6 +421,8 @@ export async function fetchTreasuryExpenseEntries(
 
   return entries
     .filter((e) => {
+      // Fase 3 (prompt-cxp.md) — ver comentario grande arriba de la función.
+      if (e.purchaseOrderId) return false;
       if (!e.expensePaymentId) return true;
       const linked = linkedById.get(e.expensePaymentId);
       // Sin el OperatingExpense (dato huérfano) se deja pasar — mismo
@@ -416,7 +446,7 @@ async function computeRealPerformance(
   operatingExpenses: { monthlyTotal: number },
 ) {
   const branchFilter = branchId ? { branchId } : {};
-  const [payments, refunds, movements, branches, cashExpenseMovs, payrollDisbursed, treasuryExpenseEntries] = await Promise.all([
+  const [payments, refunds, movements, branches, cashExpenseMovs, payrollDisbursed, treasuryExpenseEntries, purchasesPaidAgg, supplierPayables] = await Promise.all([
     prisma.payment.findMany({
       where: {
         paidAt: { gte: start, lt: end },
@@ -459,6 +489,23 @@ async function computeRealPerformance(
       select: { amount: true, branchId: true, payrollLine: { select: { netPay: true, employerCost: true } } },
     }),
     fetchTreasuryExpenseEntries(branchId, start, end),
+    // prompt-cxp.md Fase 3 — purchasesPaid: lo que fetchTreasuryExpenseEntries
+    // excluyó de arriba (pagos de mercadería, ya no cuentan como gasto
+    // operativo) se cuenta acá aparte, como información de flujo de caja.
+    prisma.treasuryEntry.aggregate({
+      where: {
+        direction: "OUT",
+        entryType: "SUPPLIER_PAYMENT",
+        purchaseOrderId: { not: null },
+        occurredAt: { gte: start, lt: end },
+        ...(branchId ? { account: { is: { branchId } } } : {}),
+      },
+      _sum: { amount: true },
+    }),
+    // payablesOpen: saldo pendiente a la fecha de CORTE (end), no "ahora" —
+    // un período ya cerrado no debe moverse por un pago o recepción
+    // posteriores (ver asOf en payables.ts).
+    listSupplierPayables({ branchId, onlyOpen: true, asOf: end }),
   ]);
 
   const branchMeta = new Map(branches.map((b) => [b.id, { code: b.code, name: b.name }]));
@@ -554,6 +601,8 @@ async function computeRealPerformance(
     operatingProfit: round2(operatingProfit),
     // Sin impuestos modelados: la utilidad neta estimada = utilidad operativa.
     estimatedNetProfit: round2(operatingProfit),
+    purchasesPaid: round2(num(purchasesPaidAgg._sum.amount ?? 0)),
+    payablesOpen: round2(supplierPayables.reduce((s, sp) => s + sp.totalBalance, 0)),
     byBranch,
   };
 }

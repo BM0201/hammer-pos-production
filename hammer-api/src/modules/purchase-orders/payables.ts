@@ -87,14 +87,17 @@ export type PurchaseOrderPayable = {
   daysOverdue: number | null;
 };
 
-async function loadOrderDebtInputs(db: DbClient, purchaseOrderId: string) {
+async function loadOrderDebtInputs(db: DbClient, purchaseOrderId: string, asOf: Date) {
   const [lines, movements] = await Promise.all([
     db.purchaseOrderLine.findMany({
       where: { purchaseOrderId },
       select: { productId: true, unitTaxAmount: true },
     }),
+    // asOf acota "recibido hasta esta fecha" — sin esto, un reporte de un
+    // período pasado (Fase 3: payablesOpen "a la fecha de corte") contaría
+    // recepciones que todavía no habían pasado en ese momento.
     db.inventoryMovement.findMany({
-      where: { referenceType: "PurchaseOrder", referenceId: purchaseOrderId, movementType: "PURCHASE_IN" },
+      where: { referenceType: "PurchaseOrder", referenceId: purchaseOrderId, movementType: "PURCHASE_IN", createdAt: { lte: asOf } },
       select: { productId: true, quantity: true, unitCost: true },
     }),
   ]);
@@ -114,9 +117,9 @@ function computeDaysOverdue(dueDate: Date | null, balance: number, asOf: Date): 
 export async function getPurchaseOrderPayable(purchaseOrderId: string, db: DbClient = prisma, asOf: Date = new Date()): Promise<PurchaseOrderPayable> {
   const [po, { lines, movements }, paidAgg] = await Promise.all([
     db.purchaseOrder.findUniqueOrThrow({ where: { id: purchaseOrderId }, select: { dueDate: true } }),
-    loadOrderDebtInputs(db, purchaseOrderId),
+    loadOrderDebtInputs(db, purchaseOrderId, asOf),
     db.treasuryEntry.aggregate({
-      where: { purchaseOrderId, direction: "OUT" },
+      where: { purchaseOrderId, direction: "OUT", occurredAt: { lte: asOf } },
       _sum: { amount: true },
     }),
   ]);
@@ -151,7 +154,7 @@ export type SupplierPayableSummary = {
  * InventoryMovement y una sola de TreasuryEntry, nunca una por orden.
  */
 export async function listSupplierPayables(
-  params: { supplierId?: string; onlyOpen?: boolean; asOf?: Date },
+  params: { supplierId?: string; branchId?: string | null; onlyOpen?: boolean; asOf?: Date },
   db: DbClient = prisma,
 ): Promise<SupplierPayableSummary[]> {
   const asOf = params.asOf ?? new Date();
@@ -160,6 +163,8 @@ export async function listSupplierPayables(
     where: {
       status: { in: ["APPROVED", "RECEIVED"] },
       supplierId: params.supplierId ? params.supplierId : { not: null },
+      date: { lte: asOf },
+      ...(params.branchId ? { branchId: params.branchId } : {}),
     },
     select: { id: true, orderNumber: true, dueDate: true, supplierId: true, supplierNameSnapshot: true, supplier: true },
     orderBy: { date: "asc" },
@@ -173,13 +178,14 @@ export async function listSupplierPayables(
       where: { purchaseOrderId: { in: orderIds } },
       select: { purchaseOrderId: true, productId: true, unitTaxAmount: true },
     }),
+    // asOf acota igual que en getPurchaseOrderPayable — ver ese comentario.
     db.inventoryMovement.findMany({
-      where: { referenceType: "PurchaseOrder", referenceId: { in: orderIds }, movementType: "PURCHASE_IN" },
+      where: { referenceType: "PurchaseOrder", referenceId: { in: orderIds }, movementType: "PURCHASE_IN", createdAt: { lte: asOf } },
       select: { referenceId: true, productId: true, quantity: true, unitCost: true },
     }),
     db.treasuryEntry.groupBy({
       by: ["purchaseOrderId"],
-      where: { purchaseOrderId: { in: orderIds }, direction: "OUT" },
+      where: { purchaseOrderId: { in: orderIds }, direction: "OUT", occurredAt: { lte: asOf } },
       _sum: { amount: true },
     }),
   ]);
