@@ -1,6 +1,7 @@
 import { PurchaseOrderStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
+import { getPurchaseOrderPayable } from "@/modules/purchase-orders/payables";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
@@ -347,9 +348,17 @@ export async function getPurchaseOrder(id: string) {
   ]);
   const reception = receptionByOrderId.get(po.id);
 
+  // Cuentas por pagar (prompt-cxp.md, Fase 4) — deuda/pagado/saldo/
+  // vencimiento para la pantalla de detalle de la orden. null en DRAFT (sin
+  // recepciones todavía, getPurchaseOrderPayable exige que la orden exista
+  // pero calcula deuda 0 igual — se evita la consulta de más para el caso
+  // común de una orden recién creada).
+  const payable = po.status === "DRAFT" ? null : await getPurchaseOrderPayable(po.id);
+
   return {
     ...po,
     receptionState: reception?.receptionState ?? "NONE",
+    payable,
     lines: po.lines.map((line) => ({
       ...line,
       receivedQuantity: reception?.lines.get(line.id)?.receivedQuantity ?? 0,

@@ -23,6 +23,7 @@ import {
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { openPrintableDocument, recordPrintAudit } from "@/lib/printing";
 import { money, qty, fmtDate, fmtDateTime } from "@/lib/format";
+import { PayableStatusPanel } from "@/components/purchase-orders/payable-status-panel";
 
 /* ── Types ── */
 type Product = { id: string; sku: string; name: string; unit: string };
@@ -38,6 +39,8 @@ type Supplier = {
   bankAccountNumber?: string | null;
   accountHolder?: string | null;
   paymentTerms?: string | null;
+  /** prompt-cxp.md Fase 4 — días de crédito; el que manda para PurchaseOrder.dueDate. */
+  paymentTermDays?: number | null;
 };
 type POLine = {
   id?: string;
@@ -56,6 +59,14 @@ type POLine = {
   subtotal: number;
   receivedQuantity?: number;
   pendingQuantity?: number;
+};
+type PurchaseOrderPayable = {
+  purchaseOrderId: string;
+  debt: number;
+  paid: number;
+  balance: number;
+  dueDate: string | null;
+  daysOverdue: number | null;
 };
 type PurchaseOrder = {
   id: string;
@@ -79,6 +90,8 @@ type PurchaseOrder = {
   lines: (POLine & { product: Product })[];
   createdAt: string;
   receptionState?: "NONE" | "PARTIAL" | "FULL";
+  /** prompt-cxp.md Fase 4 — null en DRAFT (sin recepciones todavía). */
+  payable?: PurchaseOrderPayable | null;
 };
 type Branch = { id: string; code: string; name: string };
 type PurchaseOrderLineForm = { productId: string; quantity: string; unitCostBeforeTax: string; taxRate: string };
@@ -463,6 +476,9 @@ export default function PurchaseOrdersPage() {
     bankAccountNumber: "",
     accountHolder: "",
     paymentTerms: "",
+    // prompt-cxp.md Fase 4 — string en el draft (mismo patrón que el resto
+    // de los campos), se convierte a número al enviar (ver handleQuickCreateSupplier).
+    paymentTermDays: "",
   });
 
   // Form state
@@ -560,7 +576,7 @@ export default function PurchaseOrdersPage() {
     setFormSupplier("");
     setSupplierQuery("");
     setShowSupplierQuickCreate(false);
-    setSupplierDraft({ name: "", ruc: "", phone: "", email: "", contactName: "", bankName: "", bankAccountNumber: "", accountHolder: "", paymentTerms: "" });
+    setSupplierDraft({ name: "", ruc: "", phone: "", email: "", contactName: "", bankName: "", bankAccountNumber: "", accountHolder: "", paymentTerms: "", paymentTermDays: "" });
     setFormNotes("");
     setPurchaseTaxTreatment("INCLUDE_IN_COST");
     setFreightAmount("0");
@@ -621,10 +637,17 @@ export default function PurchaseOrdersPage() {
     try {
       if (!supplierDraft.name.trim()) throw new Error("Nombre del proveedor requerido");
       setActionLoading("supplier");
+      // paymentTermDays viaja como string en el draft (mismo patrón que el resto de
+      // los campos del formulario); la API espera number|null.
+      const trimmedDays = supplierDraft.paymentTermDays.trim();
+      const paymentTermDays = trimmedDays ? Number(trimmedDays) : null;
+      if (paymentTermDays !== null && (!Number.isFinite(paymentTermDays) || paymentTermDays < 0)) {
+        throw new Error("Días de crédito inválidos");
+      }
       const res = await apiFetch("/api/suppliers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(supplierDraft),
+        body: JSON.stringify({ ...supplierDraft, paymentTermDays }),
       });
       const raw = await res.json();
       if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al crear proveedor");
@@ -634,7 +657,7 @@ export default function PurchaseOrdersPage() {
       setFormSupplier(supplier.name);
       setSupplierQuery("");
       setShowSupplierQuickCreate(false);
-      setSupplierDraft({ name: "", ruc: "", phone: "", email: "", contactName: "", bankName: "", bankAccountNumber: "", accountHolder: "", paymentTerms: "" });
+      setSupplierDraft({ name: "", ruc: "", phone: "", email: "", contactName: "", bankName: "", bankAccountNumber: "", accountHolder: "", paymentTerms: "", paymentTermDays: "" });
       toast.success("Proveedor creado");
     } catch (error) {
       toast.error(getErrorMessage(error, "Error al crear proveedor"));
@@ -1003,6 +1026,13 @@ export default function PurchaseOrdersPage() {
                     </div>
                   </section>
 
+                  <PayableStatusPanel
+                    purchaseOrderId={selectedOrderDetail.id}
+                    payable={selectedOrderDetail.payable}
+                    supplierName={(selectedOrderDetail.supplierRef?.name ?? selectedOrderDetail.supplierNameSnapshot ?? selectedOrderDetail.supplier) || ""}
+                    onPaymentRecorded={() => loadDetail(selectedOrderDetail.id)}
+                  />
+
                   {/* Líneas */}
                   <section className="mb-6">
                     <h4 className="hm-section-rule mb-2.5">Líneas</h4>
@@ -1210,10 +1240,13 @@ export default function PurchaseOrdersPage() {
                     ["bankAccountNumber", "Cuenta bancaria"],
                     ["accountHolder", "Titular"],
                     ["paymentTerms", "Plazo de pago"],
+                    ["paymentTermDays", "Días de crédito"],
                   ] as const).map(([field, label]) => (
                     <label key={field} className="text-xs font-medium text-[var(--color-text-secondary)]">
                       {label}
                       <input
+                        type={field === "paymentTermDays" ? "number" : "text"}
+                        min={field === "paymentTermDays" ? 0 : undefined}
                         value={supplierDraft[field]}
                         onChange={(e) => setSupplierDraft((draft) => ({ ...draft, [field]: e.target.value }))}
                         className="hm-input mt-1 w-full rounded-lg text-sm"

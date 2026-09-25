@@ -16,6 +16,8 @@ export type SupplierInput = {
   bankAccountNumber?: string | null;
   accountHolder?: string | null;
   paymentTerms?: string | null;
+  /** Cuentas por pagar (prompt-cxp.md) — días de crédito; el que manda para PurchaseOrder.dueDate. paymentTerms sigue como texto libre, sin parsear. null = contado. */
+  paymentTermDays?: number | null;
   creditLimit?: number | null;
   notes?: string | null;
   category?: string | null;
@@ -67,6 +69,7 @@ function supplierData(input: SupplierInput): Prisma.SupplierUncheckedCreateInput
     bankAccountNumber: clean(input.bankAccountNumber),
     accountHolder: clean(input.accountHolder),
     paymentTerms: clean(input.paymentTerms),
+    paymentTermDays: input.paymentTermDays ?? null,
     creditLimit: input.creditLimit === null || input.creditLimit === undefined ? null : new Prisma.Decimal(input.creditLimit),
     notes: clean(input.notes),
     category: clean(input.category),
@@ -140,6 +143,7 @@ export async function updateSupplier(id: string, input: Partial<SupplierInput>, 
     bankAccountNumber: input.bankAccountNumber ?? current.bankAccountNumber,
     accountHolder: input.accountHolder ?? current.accountHolder,
     paymentTerms: input.paymentTerms ?? current.paymentTerms,
+    paymentTermDays: input.paymentTermDays ?? current.paymentTermDays,
     creditLimit: input.creditLimit ?? (current.creditLimit === null ? null : Number(current.creditLimit)),
     notes: input.notes ?? current.notes,
     category: input.category ?? current.category,

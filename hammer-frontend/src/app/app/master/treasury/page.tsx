@@ -22,6 +22,9 @@ const RetainedCashExpenseSheet = dynamic(() => import("@/components/finance/reta
 const RetainedCashExpenseList = dynamic(() => import("@/components/finance/retained-cash-expense-list").then((m) => m.RetainedCashExpenseList), { ssr: false });
 const DirectDepositSheet = dynamic(() => import("@/components/finance/direct-deposit-sheet").then((m) => m.DirectDepositSheet), { ssr: false });
 const CardSettlementSheet = dynamic(() => import("@/components/finance/card-settlement-sheet").then((m) => m.CardSettlementSheet), { ssr: false });
+// prompt-cxp.md Fase 4 — "Por pagar" pide su propia consulta agrupada al
+// montarse; igual que el resto de los paneles de esta página, se difiere.
+const PayablesPanel = dynamic(() => import("@/components/treasury/payables-panel").then((m) => m.PayablesPanel), { ssr: false });
 
 type Branch = { id: string; code: string; name: string; cashFundAmount: string | null };
 
@@ -368,6 +371,9 @@ export default function TreasuryPage() {
 
       {/* Tarjetas ligadas + pagos SALIENTES desde una cuenta registrada */}
       <AccountPaymentsPanel accounts={bankAccountsOnly} onChanged={() => void load()} />
+
+      {/* Cuentas por pagar — prompt-cxp.md Fase 4 */}
+      <PayablesPanel />
 
       {/* Cuentas de tesorería no-bancarias (SETTLEMENT/CUSTODY/SAFE) — de solo lectura salvo SAFE, que Master crea a mano */}
       {otherAccounts.length > 0 && (
@@ -1438,6 +1444,8 @@ function ConfirmDepositForm({ custody, bankAccounts, onClose, onConfirmed }: { c
  * "Esperado" porque Hammer no se conecta al banco — refleja lo que el negocio
  * registró, no el extracto bancario.
  */
+type OpenPayableOrder = { purchaseOrderId: string; orderNumber: string; balance: number; supplierId: string; supplierName: string };
+
 function AccountPaymentsPanel({ accounts, onChanged }: { accounts: BankAccount[]; onChanged: () => void }) {
   const [accountId, setAccountId] = useState("");
   const [entryType, setEntryType] = useState<"SUPPLIER_PAYMENT" | "PAYROLL" | "EXPENSE">("SUPPLIER_PAYMENT");
@@ -1448,16 +1456,46 @@ function AccountPaymentsPanel({ accounts, onChanged }: { accounts: BankAccount[]
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [showAddCard, setShowAddCard] = useState(false);
+  // prompt-cxp.md Fase 4 — selector opcional de orden de compra: prellena
+  // proveedor y monto con el saldo pendiente, y no deja teclear de más.
+  const [openOrders, setOpenOrders] = useState<OpenPayableOrder[] | null>(null);
+  const [purchaseOrderId, setPurchaseOrderId] = useState("");
 
   const account = accounts.find((a) => a.id === accountId) ?? null;
   const cards = account?.cards ?? [];
   const cardType = entryType === "PAYROLL" ? "EMPLOYEE" : "SUPPLIER";
+  const selectedOrder = openOrders?.find((o) => o.purchaseOrderId === purchaseOrderId) ?? null;
+
+  async function loadOpenOrders() {
+    try {
+      const res = await apiFetch("/api/master/treasury/payables?onlyOpen=true");
+      const raw = await res.json();
+      if (!res.ok) return;
+      const bySupplier = unwrapApiData(raw) as Array<{ supplierId: string; supplierName: string; orders: Array<{ purchaseOrderId: string; orderNumber: string; balance: number }> }>;
+      setOpenOrders(bySupplier.flatMap((s) => s.orders.map((o) => ({ ...o, supplierId: s.supplierId, supplierName: s.supplierName }))));
+    } catch { /* non-critical — el selector queda vacío, el pago sigue funcionando sin ligar */ }
+  }
+
+  useEffect(() => { void loadOpenOrders(); }, []);
+
+  function selectOrder(id: string) {
+    setPurchaseOrderId(id);
+    const order = openOrders?.find((o) => o.purchaseOrderId === id) ?? null;
+    if (order) {
+      setCounterpartyName(order.supplierName);
+      setAmount(String(order.balance));
+    }
+  }
 
   async function submitPayment(event: React.FormEvent) {
     event.preventDefault();
     if (!accountId) { toast.error("Selecciona la cuenta de la que sale el pago."); return; }
     const numeric = Number(amount);
     if (!Number.isFinite(numeric) || numeric <= 0) { toast.error("El monto debe ser mayor que 0."); return; }
+    if (selectedOrder && numeric > selectedOrder.balance + 0.001) {
+      toast.error(`El pago no puede superar el saldo pendiente de la orden (${money(selectedOrder.balance)}).`);
+      return;
+    }
     setSaving(true);
     try {
       const res = await apiFetch("/api/master/treasury/payments", {
@@ -1472,12 +1510,14 @@ function AccountPaymentsPanel({ accounts, onChanged }: { accounts: BankAccount[]
           cardId: cardId || null,
           reference: reference.trim() || null,
           notes: notes.trim() || null,
+          purchaseOrderId: purchaseOrderId || null,
         }),
       });
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar el pago.");
       toast.success("Pago registrado. El saldo de la cuenta bajó.");
-      setAmount(""); setCounterpartyName(""); setReference(""); setNotes(""); setCardId("");
+      setAmount(""); setCounterpartyName(""); setReference(""); setNotes(""); setCardId(""); setPurchaseOrderId("");
+      void loadOpenOrders();
       onChanged();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo registrar el pago.");
@@ -1515,13 +1555,36 @@ function AccountPaymentsPanel({ accounts, onChanged }: { accounts: BankAccount[]
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Tipo de pago</label>
-              <select className="hm-input w-full" value={entryType} onChange={(e) => setEntryType(e.target.value as typeof entryType)}>
+              <select
+                className="hm-input w-full"
+                value={entryType}
+                disabled={Boolean(purchaseOrderId)}
+                title={purchaseOrderId ? "Un pago ligado a una orden de compra siempre es a proveedor" : undefined}
+                onChange={(e) => setEntryType(e.target.value as typeof entryType)}
+              >
                 <option value="SUPPLIER_PAYMENT">Proveedor</option>
                 <option value="PAYROLL">Planilla</option>
                 <option value="EXPENSE">Gasto</option>
               </select>
             </div>
           </div>
+
+          {entryType === "SUPPLIER_PAYMENT" && (
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Orden de compra (opcional)</label>
+              <select className="hm-input w-full" value={purchaseOrderId} onChange={(e) => selectOrder(e.target.value)}>
+                <option value="">Sin ligar a una orden — pago general</option>
+                {(openOrders ?? []).map((o) => (
+                  <option key={o.purchaseOrderId} value={o.purchaseOrderId}>{o.orderNumber} · {o.supplierName} · {money(o.balance)}</option>
+                ))}
+              </select>
+              {purchaseOrderId && (
+                <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                  Prellenado con el proveedor y el saldo pendiente de la orden — el monto no puede superarlo.
+                </p>
+              )}
+            </div>
+          )}
 
           {account && (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
@@ -1557,8 +1620,8 @@ function AccountPaymentsPanel({ accounts, onChanged }: { accounts: BankAccount[]
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Monto</label>
-              <Input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Monto{selectedOrder ? ` (máx. ${money(selectedOrder.balance)})` : ""}</label>
+              <Input type="number" step="0.01" min="0.01" max={selectedOrder ? selectedOrder.balance : undefined} value={amount} onChange={(e) => setAmount(e.target.value)} required />
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">{entryType === "PAYROLL" ? "Empleado" : "Proveedor / beneficiario"}</label>
