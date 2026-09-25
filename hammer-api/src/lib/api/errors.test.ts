@@ -216,6 +216,13 @@ test("errors: SALE_CANCELLATION_ALREADY_EXECUTED returns 409 with its own code",
   assert.equal(body.error.code, "SALE_CANCELLATION_ALREADY_EXECUTED");
 });
 
+test("errors: OPERATIONAL_DAY_ALREADY_CONFIRMED returns 409 with its own code (prompt-historial-sucursal.md Fase 3.2)", async () => {
+  const res = toApiErrorResponse(new Error("OPERATIONAL_DAY_ALREADY_CONFIRMED"));
+  assert.equal(res.status, 409);
+  const body = await jsonBody(res);
+  assert.equal(body.error.code, "OPERATIONAL_DAY_ALREADY_CONFIRMED");
+});
+
 // ─── Unknown error returns 500 ──────────────────────────────────
 
 test("errors: unknown error returns 500", async () => {

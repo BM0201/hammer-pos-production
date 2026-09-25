@@ -9,6 +9,9 @@ import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import type { SessionPayload } from "@/types/auth";
 import { SaleReturnRequestSheet } from "./sale-return-request-sheet";
 import { SaleReturnExecuteModal } from "./sale-return-execute-modal";
+import { CashRefundHandlingPicker, type CashRefundHandling } from "./cash-refund-handling-picker";
+import { SaleCancellationRequestModal } from "./sale-cancellation-request-modal";
+import { SaleCancellationExecuteModal } from "./sale-cancellation-execute-modal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -80,6 +83,14 @@ type OrderDetail = {
       refundableAmount: number;
     }[];
   };
+  /** prompt-historial-sucursal.md Fase 1.3 */
+  cancellations: {
+    id: string;
+    status: string;
+    reason: string;
+    createdAt: string;
+    executedAt: string | null;
+  }[];
   requiresManualInvoice: boolean;
   manualInvoice: {
     series: string | null;
@@ -180,21 +191,36 @@ function statusColor(s: string): BadgeColor {
   return "blue";
 }
 
-// prompt-pendientes-2026-09.md Fase 3 — SaleReturnStatus (schema.prisma), no confundir con el status de SaleOrder de arriba.
-const RETURN_STATUS_LABEL: Record<string, string> = {
+// prompt-pendientes-2026-09.md Fase 3 — SaleReturnStatus y (desde
+// prompt-historial-sucursal.md Fase 3) SaleCancellationStatus comparten
+// exactamente los mismos 5 valores (schema.prisma); no confundir con el
+// status de SaleOrder de arriba.
+const RESOLUTION_STATUS_LABEL: Record<string, string> = {
   REQUESTED: "Solicitada",
   APPROVED: "Aprobada",
   REJECTED: "Rechazada",
   EXECUTED: "Ejecutada",
   CANCELLED: "Cancelada",
 };
-const RETURN_STATUS_COLOR: Record<string, BadgeColor> = {
+const RESOLUTION_STATUS_COLOR: Record<string, BadgeColor> = {
   REQUESTED: "yellow",
   APPROVED: "blue",
   REJECTED: "red",
   EXECUTED: "green",
   CANCELLED: "gray",
 };
+
+/**
+ * prompt-historial-sucursal.md Fase 3.3 — condición para mostrar "Solicitar
+ * anulación": la orden debe ser anulable Y no tener ya una anulación
+ * REQUESTED/APPROVED en curso (mismo criterio que el guard del backend,
+ * requestSaleCancellation → SALE_CANCELLATION_ALREADY_PENDING). Exportada
+ * para poder testearla sin montar el componente.
+ */
+export function canRequestCancellation(detail: { cancellable: boolean; cancellations: { status: string }[] } | null): boolean {
+  if (!detail || !detail.cancellable) return false;
+  return !detail.cancellations.some((c) => c.status === "REQUESTED" || c.status === "APPROVED");
+}
 
 function paymentLabel(o: OrderSummary): string {
   if (o.paymentStatus === "POSTED") return "Cobrado";
@@ -289,8 +315,6 @@ function KpiCard({ label, value, color }: { label: string; value: string | numbe
 
 // ─── Cancel Modal ─────────────────────────────────────────────────────────────
 
-export type CashRefundHandling = "REFUNDED_FROM_DRAWER" | "NO_CASH_MOVEMENT";
-
 function CancelModal({
   orderNumber,
   onConfirm,
@@ -325,38 +349,7 @@ function CancelModal({
           onChange={(e) => setReason(e.target.value)}
           autoFocus
         />
-        <fieldset className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
-          <legend className="px-1 text-sm font-medium text-[var(--color-text)]">
-            ¿Se devolvió el efectivo de la gaveta?
-          </legend>
-          <label className="flex cursor-pointer items-start gap-2 py-1 text-sm text-[var(--color-text-secondary)]">
-            <input
-              type="radio"
-              name="cash-refund-handling"
-              className="mt-0.5"
-              checked={cashHandling === "REFUNDED_FROM_DRAWER"}
-              onChange={() => setCashHandling("REFUNDED_FROM_DRAWER")}
-            />
-            <span>
-              <strong>Sí</strong> — se entregó el efectivo al cliente (queda registrado como salida de caja)
-            </span>
-          </label>
-          <label className="flex cursor-pointer items-start gap-2 py-1 text-sm text-[var(--color-text-secondary)]">
-            <input
-              type="radio"
-              name="cash-refund-handling"
-              className="mt-0.5"
-              checked={cashHandling === "NO_CASH_MOVEMENT"}
-              onChange={() => setCashHandling("NO_CASH_MOVEMENT")}
-            />
-            <span>
-              <strong>No</strong> — el dinero nunca entró a la gaveta / fue un error antes de cobrar
-            </span>
-          </label>
-          <p className="mt-1 text-xs text-[var(--color-text-soft)]">
-            Solo aplica si el pago incluyó efectivo y la caja sigue abierta.
-          </p>
-        </fieldset>
+        <CashRefundHandlingPicker value={cashHandling} onChange={setCashHandling} />
         <div className="flex gap-2 justify-end">
           <button
             className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-60"
@@ -390,7 +383,7 @@ function DetailPanel({
   loading,
   onClose,
   onCancel,
-  onReturnsChanged,
+  onOrderChanged,
 }: {
   mode: "master" | "branch";
   session: SessionPayload | null;
@@ -399,7 +392,7 @@ function DetailPanel({
   loading: boolean;
   onClose: () => void;
   onCancel: (id: string) => void;
-  onReturnsChanged: () => void;
+  onOrderChanged: () => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("resumen");
   // Devoluciones (prompt-pendientes-2026-09.md Fase 3) — el backend
@@ -408,11 +401,18 @@ function DetailPanel({
   // genérica (approvals-queue.tsx), sin cambios.
   const [showReturnRequest, setShowReturnRequest] = useState(false);
   const [executingReturnId, setExecutingReturnId] = useState<string | null>(null);
+  // Anulaciones (prompt-historial-sucursal.md Fase 3) — mismo hueco que
+  // devoluciones: el backend (solicitar → aprobar → ejecutar) ya existía,
+  // pero nadie en la UI llamaba a solicitar ni a ejecutar.
+  const [showCancellationRequest, setShowCancellationRequest] = useState(false);
+  const [executingCancellationId, setExecutingCancellationId] = useState<string | null>(null);
 
   useEffect(() => {
     setTab("resumen");
     setShowReturnRequest(false);
     setExecutingReturnId(null);
+    setShowCancellationRequest(false);
+    setExecutingCancellationId(null);
   }, [detail?.id]);
 
   // Auditoría es dato de Master (prompt-historial-sucursal.md Fase 2.1) —
@@ -440,6 +440,20 @@ function DetailPanel({
   );
   const canExecuteReturn = Boolean(
     detail && (isMasterSession || canInBranch(session, detail.branch.id, CAPABILITIES.SALE_RETURN_EXECUTE)),
+  );
+  // "Solicitar anulación" — solo sucursal (prompt-historial-sucursal.md
+  // Fase 2.2/3.3): Master ya anula directo con el botón "Anular" de
+  // arriba, sin pasar por aprobación. "Ejecutar anulación" sí se muestra
+  // en los dos modos: Master también debe poder cerrar una anulación
+  // aprobada que quedó colgada.
+  const canRequestCancel = Boolean(
+    mode === "branch"
+    && canRequestCancellation(detail)
+    && detail
+    && (isMasterSession || canInBranch(session, detail.branch.id, CAPABILITIES.SALE_CANCELLATION_REQUEST)),
+  );
+  const canExecuteCancellation = Boolean(
+    detail && (isMasterSession || canInBranch(session, detail.branch.id, CAPABILITIES.SALE_CANCELLATION_EXECUTE)),
   );
   // Mismo criterio "isMixed" que executeSaleReturn en el backend: más de un
   // método entre los pagos POSTED se trata como MIXED (cualquier método de
@@ -478,6 +492,14 @@ function DetailPanel({
               onClick={() => setShowReturnRequest(true)}
             >
               Solicitar devolución
+            </button>
+          )}
+          {canRequestCancel && detail && (
+            <button
+              className="rounded border border-[var(--color-danger-400)] px-2 py-1 text-xs text-[var(--color-danger-700)] hover:bg-[var(--color-danger-100)]"
+              onClick={() => setShowCancellationRequest(true)}
+            >
+              Solicitar anulación
             </button>
           )}
           {mode === "master" && detail?.cancellable && (
@@ -610,7 +632,7 @@ function DetailPanel({
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="font-mono text-xs">{r.returnNumber}</span>
-                              <Badge color={RETURN_STATUS_COLOR[r.status] ?? "gray"}>{RETURN_STATUS_LABEL[r.status] ?? r.status}</Badge>
+                              <Badge color={RESOLUTION_STATUS_COLOR[r.status] ?? "gray"}>{RESOLUTION_STATUS_LABEL[r.status] ?? r.status}</Badge>
                               <span className="text-xs text-[var(--color-text-muted)]">{r.returnType === "TOTAL" ? "Total" : "Parcial"}</span>
                             </div>
                             <p className="text-xs text-[var(--color-text-muted)]">{fmtDateTime(r.createdAt)}</p>
@@ -626,6 +648,33 @@ function DetailPanel({
                               </button>
                             )}
                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {detail.cancellations.length > 0 && (
+                  <div className="rounded-lg border border-[var(--color-border)] p-3 text-sm">
+                    <p className="mb-2 font-medium text-[var(--color-text-muted)]">Anulaciones</p>
+                    <div className="space-y-2">
+                      {detail.cancellations.map((c) => (
+                        <div key={c.id} className="flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <Badge color={RESOLUTION_STATUS_COLOR[c.status] ?? "gray"}>{RESOLUTION_STATUS_LABEL[c.status] ?? c.status}</Badge>
+                            </div>
+                            <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">{c.reason}</p>
+                            <p className="text-xs text-[var(--color-text-muted)]">{fmtDateTime(c.createdAt)}</p>
+                          </div>
+                          {c.status === "APPROVED" && canExecuteCancellation && (
+                            <button
+                              className="shrink-0 rounded border border-[var(--color-danger-400)] px-2 py-1 text-xs text-[var(--color-danger-700)] hover:bg-[var(--color-danger-100)]"
+                              onClick={() => setExecutingCancellationId(c.id)}
+                            >
+                              Ejecutar anulación
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -813,7 +862,7 @@ function DetailPanel({
           onClose={() => setShowReturnRequest(false)}
           onRequested={() => {
             setShowReturnRequest(false);
-            onReturnsChanged();
+            onOrderChanged();
           }}
         />
       )}
@@ -828,7 +877,33 @@ function DetailPanel({
           onClose={() => setExecutingReturnId(null)}
           onExecuted={() => {
             setExecutingReturnId(null);
-            onReturnsChanged();
+            onOrderChanged();
+          }}
+        />
+      )}
+
+      {showCancellationRequest && detail && (
+        <SaleCancellationRequestModal
+          orderId={detail.id}
+          orderNumber={detail.orderNumber}
+          total={detail.totals.grandTotal}
+          onClose={() => setShowCancellationRequest(false)}
+          onRequested={() => {
+            setShowCancellationRequest(false);
+            onOrderChanged();
+          }}
+        />
+      )}
+
+      {executingCancellationId && detail && (
+        <SaleCancellationExecuteModal
+          cancellationId={executingCancellationId}
+          orderNumber={detail.orderNumber}
+          payments={detail.payments}
+          onClose={() => setExecutingCancellationId(null)}
+          onExecuted={() => {
+            setExecutingCancellationId(null);
+            onOrderChanged();
           }}
         />
       )}
@@ -1186,7 +1261,7 @@ export function OrdersAdmin(props: OrdersAdminProps) {
                 setDetail(null);
               }}
               onCancel={(id) => setCancelTargetId(id)}
-              onReturnsChanged={() => {
+              onOrderChanged={() => {
                 if (selectedId) void loadDetail(selectedId);
                 void load();
               }}

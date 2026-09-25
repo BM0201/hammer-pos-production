@@ -119,6 +119,13 @@ export function toApiErrorResponse(error: unknown) {
     return fail("OPERATIONAL_DAY_ALREADY_CLOSED", "El dia operativo ya fue cerrado.", 409);
   }
 
+  // prompt-historial-sucursal.md Fase 3.2 — executeSaleCancellation
+  // (sales-returns/service.ts) lo lanza si el día operativo de la
+  // anulación ya está CONFIRMED (un período cerrado no se reabre).
+  if (message === "OPERATIONAL_DAY_ALREADY_CONFIRMED") {
+    return fail("OPERATIONAL_DAY_ALREADY_CONFIRMED", "El dia operativo de esta anulacion ya fue confirmado — no se puede ejecutar.", 409);
+  }
+
   if (message === "CASH_SESSION_RECONCILING") {
     return fail("CASH_SESSION_RECONCILING", "La caja esta en proceso de conciliacion.", 409);
   }
