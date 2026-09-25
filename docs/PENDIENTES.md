@@ -1,32 +1,9 @@
 # Pendientes abiertos — inventario
 
 Registro de trabajo marcado en prompts anteriores y verificado en el código
-como NO implementado a la fecha de este documento (2026-08-27, rama
-`Hammer-V1`, sobre el commit `7fdd9b8`). Existe para que estos pendientes
+como NO implementado a la fecha de este documento (2026-09-25, rama
+`Hammer-V1`, sobre el commit `8cb47ce`). Existe para que estos pendientes
 dejen de vivir solo en el historial de una conversación.
-
-**Ninguno de los ítems de abajo se implementó en este ciclo** — es
-inventario, no ejecución.
-
----
-
-## 1. Confirmación de recepción del efectivo en tránsito
-
-**Prioridad: la más alta.** Es el hueco más grande que queda abierto en
-Tesorería.
-
-Hay caminos que dejan dinero a nombre de alguien (`sendCashOutToCustody`,
-las variantes "yo lo llevo al banco" / "yo se lo llevo a alguien" /
-"otra persona lo lleva" del módulo Destino del efectivo) y **ninguno tiene
-el otro lado**: falta el "recibí C$X de `<persona>`" que transfiere la
-custodia. El dinero sale de la gaveta, queda registrado en una cuenta
-`CUSTODY`, y se queda ahí hasta que Master lo mueve a mano — no hay un
-flujo donde el receptor (Master, otro cajero, quien sea) confirme que
-efectivamente lo recibió.
-
-Verificado: no existe ningún endpoint ni función `confirmCustodyReceipt`/
-`receiveCash`/equivalente en `hammer-api/src/modules/treasury/` ni en
-`hammer-api/src/app/api/`.
 
 ## 2. Destello de tema en terminal compartida
 
@@ -57,12 +34,28 @@ cash-session/` referencia `CashDepositPostponement`/posposiciones.
 
 ---
 
-## Ítems del prompt original que YA ESTABAN RESUELTOS (no se incluyen arriba)
+## Ítems ya resueltos (no se incluyen arriba)
 
-El prompt que originó este inventario listaba dos ítems adicionales que,
-al verificar el código actual, ya estaban implementados — ambos en el
-commit `d1ebcd5` (`feat(pos): cinco destinos para el efectivo y barra que
-no se trunca`), de una fase anterior de esta misma rama de trabajo:
+### 1. Confirmación de recepción del efectivo en tránsito — RESUELTO en `ac0f9c5`
+
+**Era la prioridad más alta.** Era el hueco más grande que quedaba
+abierto en Tesorería: había caminos que dejaban dinero a nombre de
+alguien (`sendCashOutToCustody`, las variantes "yo lo llevo al banco" /
+"yo se lo llevo a alguien" / "otra persona lo lleva" del módulo Destino
+del efectivo) y ninguno tenía el otro lado: faltaba el "recibí C$X de
+`<persona>`" que transfiere la custodia.
+
+Resuelto en `ac0f9c5` (`feat(treasury): confirmación de recepción del
+efectivo en custodia`): `confirmCustodyReceiptTx` (cash-monitor.ts, mismo
+patrón que `confirmBankDepositTx`) — lock de fila antes de leer el saldo,
+guard de que lo confirmado no supere lo que hay en la custodia origen, dos
+patas con el mismo `transferId` vía `createInternalTransferTx`.
+
+El prompt original que dio origen a este inventario listaba además dos
+ítems que, al verificar el código actual, ya estaban implementados —
+ambos en el commit `d1ebcd5` (`feat(pos): cinco destinos para el efectivo
+y barra que no se trunca`), de una fase anterior de esta misma rama de
+trabajo:
 
 - **Barra de Destino del efectivo con `truncate`/`uppercase`** (el "FO...
   C..." de la captura original): la barra actual (`hammer-frontend/src/

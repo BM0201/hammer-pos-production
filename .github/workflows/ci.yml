@@ -7,10 +7,12 @@
 #    high/critical en dependencias de producción (--omit=dev --audit-level=high).
 name: CI
 
+# Si se renombra la rama de trabajo, hay que actualizar `branches` abajo.
 on:
   push:
-    branches: ["hammer-v2", "main"]
+    branches: ["Hammer-V1", "main"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   api:
