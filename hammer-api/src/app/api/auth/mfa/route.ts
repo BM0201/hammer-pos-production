@@ -9,7 +9,7 @@ import { z } from "zod";
 import { ok, fail } from "@/lib/api/response";
 import { consumeMfaPendingToken, verifyMfaCode } from "@/modules/auth/mfa-service";
 import { createSessionAfterMfa, setSessionCookie } from "@/modules/auth/service";
-import { getRoleAwareHome } from "@/modules/rbac/guards";
+import { buildLoginSuccessBody } from "@/modules/auth/login-response";
 import { getClientIp } from "@/lib/client-ip";
 
 const schema = z.object({
@@ -54,11 +54,5 @@ export async function POST(request: Request) {
 
   await setSessionCookie(result.token);
 
-  return ok({
-    redirectTo: result.mustChangePassword
-      ? "/app/change-password"
-      : getRoleAwareHome(result.role),
-    mustChangePassword: result.mustChangePassword,
-    fullName: result.fullName,
-  });
+  return ok(buildLoginSuccessBody(result));
 }

@@ -1,4 +1,5 @@
 import { getCurrentSession } from "@/modules/auth/service";
+import { normalizeThemePreference } from "@/modules/auth/login-response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/api/response";
@@ -24,7 +25,7 @@ export async function GET(request: Request) {
         select: { mustChangePassword: true, themePreference: true, fullName: true },
       });
       mustChangePassword = user?.mustChangePassword ?? false;
-      themePreference = user?.themePreference === "light" || user?.themePreference === "dark" ? user.themePreference : null;
+      themePreference = normalizeThemePreference(user?.themePreference);
       fullName = user?.fullName ?? null;
     } catch {
       // If DB is unavailable degrade gracefully

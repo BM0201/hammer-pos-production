@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { apiFetch, unwrapApiData, type ApiResponse } from "@/lib/client/api";
 import { resolveRoleHome } from "@/modules/rbac/role-routing";
 import { TurnstileWidget, resetTurnstile } from "@/components/security/turnstile-widget";
+import { applyUserTheme } from "@/components/ui/theme-toggle";
 import { fmtDayMonth } from "@/lib/format";
 
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
@@ -350,6 +351,8 @@ export default function LoginPage() {
         mfaRequired?: boolean;
         pendingToken?: string;
         fullName?: string;
+        userId?: string;
+        themePreference?: "light" | "dark" | null;
       }>;
 
       if (!res.ok) {
@@ -397,6 +400,10 @@ export default function LoginPage() {
       dest         = data.redirectTo;
       resolvedName = data.fullName || username;
       if (data.fullName) setFullName(data.fullName);
+      // Fija el tema del usuario ANTES de animar la transición — si no, en
+      // una terminal compartida la pantalla parpadea con el tema del
+      // usuario anterior hasta que AppShellRouter lo corrige (PENDIENTES #2).
+      if (data.userId) applyUserTheme(data.userId, data.themePreference);
       playAnim     = true;
     } catch {
       setError("No se pudo iniciar sesión. Verifica tu conexión e inténtalo de nuevo.");
@@ -426,7 +433,7 @@ export default function LoginPage() {
         method: "POST",
         body: JSON.stringify({ pendingToken: pending, code: mfaCode.trim() }),
       });
-      const json = await res.json() as ApiResponse<{ redirectTo: string; fullName?: string }>;
+      const json = await res.json() as ApiResponse<{ redirectTo: string; fullName?: string; userId?: string; themePreference?: "light" | "dark" | null }>;
 
       if (!res.ok) {
         const msg =
@@ -442,6 +449,7 @@ export default function LoginPage() {
       const mfaData = unwrapApiData(json);
       dest = mfaData.redirectTo;
       if (mfaData.fullName) { resolvedName = mfaData.fullName; setFullName(mfaData.fullName); }
+      if (mfaData.userId) applyUserTheme(mfaData.userId, mfaData.themePreference);
       playAnim = true;
     } catch {
       setError("No se pudo verificar el código. Verifica tu conexión e inténtalo de nuevo.");

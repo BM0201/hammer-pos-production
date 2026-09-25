@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticate, setSessionCookie } from "@/modules/auth/service";
+import { buildLoginSuccessBody, buildMfaRequiredBody } from "@/modules/auth/login-response";
 import { MissingDatabaseUrlError, isDatabaseConnectionError } from "@/lib/prisma";
-import { getRoleAwareHome } from "@/modules/rbac/guards";
 import { checkLoginRateLimit, recordLoginAttempt, LOGIN_CHALLENGE_AFTER_FAILURES } from "@/modules/security/rate-limiter";
 import { isTurnstileConfigured, verifyTurnstileToken } from "@/modules/security/turnstile";
 import { ok, fail } from "@/lib/api/response";
@@ -95,7 +95,7 @@ export async function POST(request: Request) {
 
     // MFA challenge — no crear sesión todavía
     if ("mfaRequired" in authResult) {
-      return ok({ mfaRequired: true, pendingToken: authResult.pendingToken, fullName: authResult.fullName });
+      return ok(buildMfaRequiredBody(authResult.pendingToken, authResult.fullName));
     }
 
     await setSessionCookie(authResult.token);
@@ -111,11 +111,7 @@ export async function POST(request: Request) {
       console.error("[auth/login] No fue posible registrar presencia", presenceError);
     }
 
-    return ok({
-      redirectTo: authResult.mustChangePassword ? "/app/change-password" : getRoleAwareHome(authResult.role),
-      mustChangePassword: authResult.mustChangePassword,
-      fullName: authResult.fullName,
-    });
+    return ok(buildLoginSuccessBody(authResult));
   } catch (error) {
     if (error instanceof Error && error.message === "FORBIDDEN_MASTER_ONLY") {
       return fail("FORBIDDEN", "No tienes permisos para acceder.", 403);

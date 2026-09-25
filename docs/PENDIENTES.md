@@ -5,20 +5,6 @@ como NO implementado a la fecha de este documento (2026-09-25, rama
 `Hammer-V1`, sobre el commit `8cb47ce`). Existe para que estos pendientes
 dejen de vivir solo en el historial de una conversación.
 
-## 2. Destello de tema en terminal compartida
-
-`POST /api/auth/login` (`hammer-api/src/app/api/auth/login/route.ts`)
-devuelve `{ redirectTo, mustChangePassword, fullName }` en el éxito — sin
-`userId` ni `themePreference`. Sin esos dos datos, `applyUserTheme` (el
-lado del frontend que fija el tema ANTES de pintar la pantalla) no puede
-correr antes de `playTransition`, así que en una terminal compartida
-(usuario A en claro, sale, usuario B entra) la pantalla parpadea con el
-tema del usuario anterior una fracción de segundo antes de corregirse al
-tema correcto.
-
-Verificado contra el código actual del route: el objeto de éxito no trae
-esos dos campos.
-
 ## 3. Cierre de caja con posposición activa
 
 El modal de declaración de destino al cierre (`cash-session/
@@ -50,6 +36,23 @@ efectivo en custodia`): `confirmCustodyReceiptTx` (cash-monitor.ts, mismo
 patrón que `confirmBankDepositTx`) — lock de fila antes de leer el saldo,
 guard de que lo confirmado no supere lo que hay en la custodia origen, dos
 patas con el mismo `transferId` vía `createInternalTransferTx`.
+
+### 2. Destello de tema en terminal compartida — RESUELTO en `fix(auth): el login devuelve userId/themePreference...`
+
+`POST /api/auth/login` devolvía `{ redirectTo, mustChangePassword,
+fullName }` en el éxito — sin `userId` ni `themePreference`. Sin esos dos
+datos, `applyUserTheme` (el lado del frontend que fija el tema ANTES de
+pintar la pantalla) no podía correr antes de `playTransition`, así que en
+una terminal compartida (usuario A en claro, sale, usuario B entra) la
+pantalla parpadeaba con el tema del usuario anterior una fracción de
+segundo antes de corregirse al tema correcto.
+
+Resuelto (prompt-pendientes-2026-09.md Fase 1): login y el segundo paso de
+MFA devuelven `userId`/`themePreference` en el éxito (nunca en el paso
+intermedio `mfaRequired`, donde la sesión todavía no es válida) vía
+`buildLoginSuccessBody`/`buildMfaRequiredBody`
+(`hammer-api/src/modules/auth/login-response.ts`); `login/page.tsx` llama
+`applyUserTheme` antes de `playTransition` en los dos caminos de éxito.
 
 El prompt original que dio origen a este inventario listaba además dos
 ítems que, al verificar el código actual, ya estaban implementados —

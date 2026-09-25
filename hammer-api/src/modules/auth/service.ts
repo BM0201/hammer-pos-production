@@ -10,6 +10,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { isTokenRevoked } from "@/modules/security/token-revocation";
 import { getEffectiveBranchMemberships } from "@/modules/rbac/effective-permissions";
 import { MFA_REQUIRED_ROLES, createMfaPendingToken } from "@/modules/auth/mfa-service";
+import { normalizeThemePreference, type ThemePreference } from "@/modules/auth/login-response";
 
 function normalizeUsername(username: string) {
   return username.trim().toLowerCase();
@@ -22,7 +23,7 @@ type LoginAuditContext = {
 
 export type AuthenticateResult =
   | { mfaRequired: true; pendingToken: string; fullName: string }
-  | { token: string; role: RoleCode; mustChangePassword: boolean; session: SessionPayload; fullName: string };
+  | { token: string; role: RoleCode; mustChangePassword: boolean; session: SessionPayload; fullName: string; themePreference: ThemePreference };
 
 export async function authenticate(
   username: string,
@@ -174,7 +175,15 @@ export async function authenticate(
     userAgent: auditContext.userAgent,
   });
 
-  return { token, role: derivedRole, mustChangePassword: user.mustChangePassword, session: payload, fullName: user.fullName };
+  return {
+    token,
+    role: derivedRole,
+    mustChangePassword: user.mustChangePassword,
+    session: payload,
+    fullName: user.fullName,
+    // user ya viene sin `select` (fila completa) — no hace falta otra consulta.
+    themePreference: normalizeThemePreference(user.themePreference),
+  };
 }
 
 export async function setSessionCookie(token: string): Promise<void> {
@@ -279,7 +288,7 @@ export async function getCurrentSession(): Promise<SessionPayload | null> {
 export async function createSessionAfterMfa(
   userId: string,
   auditContext: LoginAuditContext = {},
-): Promise<{ token: string; role: RoleCode; mustChangePassword: boolean; session: SessionPayload; fullName: string } | null> {
+): Promise<{ token: string; role: RoleCode; mustChangePassword: boolean; session: SessionPayload; fullName: string; themePreference: ThemePreference } | null> {
   const user = await prisma.user.findUnique({
     where: { id: userId, isActive: true },
     include: { userBranchRoles: { where: { isActive: true } } },
@@ -329,5 +338,12 @@ export async function createSessionAfterMfa(
     userAgent: auditContext.userAgent,
   });
 
-  return { token, role: roleCode, mustChangePassword: user.mustChangePassword, session: payload, fullName: user.fullName };
+  return {
+    token,
+    role: roleCode,
+    mustChangePassword: user.mustChangePassword,
+    session: payload,
+    fullName: user.fullName,
+    themePreference: normalizeThemePreference(user.themePreference),
+  };
 }
