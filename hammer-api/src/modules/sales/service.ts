@@ -1,4 +1,4 @@
-import { BrainDecisionCategory, BrainDecisionSeverity, CashMovementType, DispatchStatus, Prisma, SaleOrderStatus, InventoryMovementType, PaymentMethod, PaymentStatus, CashSessionStatus } from "@prisma/client";
+import { BrainDecisionCategory, BrainDecisionSeverity, CashMovementType, DispatchStatus, Prisma, PrismaClient, SaleOrderStatus, InventoryMovementType, PaymentMethod, PaymentStatus, CashSessionStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent, attachAuditToError, writePendingAuditFromError } from "@/modules/audit/service";
@@ -1100,6 +1100,19 @@ export function isSaleOrderReturnable(status: SaleOrderStatus): boolean {
   return RETURNABLE_SALE_ORDER_STATUSES.includes(status);
 }
 
+/**
+ * prompt-historial-sucursal.md Fase 1 — decisión de acceso que comparten
+ * GET /api/sales/order-history (403 en false) y su /[id] (404 en false, para
+ * no revelar que existe una orden de otra sucursal). Master siempre pasa;
+ * el resto necesita SALES_VIEW en la sucursal de la orden/consulta.
+ * Extraída para poder testearla sin montar un Request/Response de Next.js
+ * (no hay ese patrón en el repo) — canInBranch/isMaster ya están cubiertos
+ * en rbac/cross-branch-access.test.ts, esto solo fija la combinación.
+ */
+export function canViewSalesHistoryForBranch(isMasterSession: boolean, hasBranchCapability: boolean): boolean {
+  return isMasterSession || hasBranchCapability;
+}
+
 /** Zona horaria de Nicaragua (UTC-6, sin horario de verano). */
 const NICARAGUA_UTC_OFFSET_HOURS = 6;
 
@@ -1590,8 +1603,17 @@ export async function cancelSaleOrder(input: {
  * pagos (con tenders), usuario vendedor, totales e historial de auditoría.
  * Reservado al rol master/admin (validado en el endpoint).
  */
-export async function getSaleOrderDetailForManagement(orderId: string) {
-  const order = await prisma.saleOrder.findUnique({
+/**
+ * prompt-historial-sucursal.md Fase 1 — `db` inyectable (mismo patrón que
+ * DbClient en purchase-orders/payables.ts) para poder testear
+ * includeAuditHistory sin una base real; por defecto usa el singleton.
+ */
+export async function getSaleOrderDetailForManagement(
+  orderId: string,
+  options: { includeAuditHistory: boolean },
+  db: PrismaClient | Prisma.TransactionClient = prisma,
+) {
+  const order = await db.saleOrder.findUnique({
     where: { id: orderId },
     include: {
       branch: { select: { id: true, code: true, name: true } },
@@ -1628,6 +1650,14 @@ export async function getSaleOrderDetailForManagement(orderId: string) {
         },
         orderBy: { createdAt: "asc" },
       },
+      // prompt-historial-sucursal.md Fase 1.3 — para que el historial de
+      // sucursal sepa si ya hay una anulación en curso (no ofrecer
+      // "Solicitar anulación" de nuevo) y para mostrar "Ejecutar anulación"
+      // cuando ya está APPROVED.
+      cancellations: {
+        select: { id: true, status: true, reason: true, createdAt: true, executedAt: true },
+        orderBy: { createdAt: "desc" },
+      },
     },
   });
 
@@ -1663,20 +1693,25 @@ export async function getSaleOrderDetailForManagement(orderId: string) {
     .reduce((sum, saleReturn) => sum + saleReturn.items.reduce((lineSum, item) => lineSum + Number(item.refundableAmount), 0), 0);
   const fullyReturned = order.lines.length > 0 && order.lines.every((line) => (returnedQtyByLine.get(line.id) ?? 0) >= Number(line.quantity));
 
-  // Historial de auditoría asociado a esta orden (anulación, intentos, etc.).
-  const auditLogs = await prisma.auditLog.findMany({
-    where: { entityType: "SaleOrder", entityId: order.id },
-    orderBy: { occurredAt: "desc" },
-    take: 50,
-    select: {
-      id: true,
-      occurredAt: true,
-      action: true,
-      module: true,
-      metadataJson: true,
-      actor: { select: { id: true, username: true, fullName: true } },
-    },
-  });
+  // Historial de auditoría asociado a esta orden (anulación, intentos, etc.)
+  // — dato de Master; el historial de sucursal pasa includeAuditHistory:
+  // false y se salta esta consulta entera (prompt-historial-sucursal.md
+  // Fase 1.2).
+  const auditLogs = options.includeAuditHistory
+    ? await db.auditLog.findMany({
+        where: { entityType: "SaleOrder", entityId: order.id },
+        orderBy: { occurredAt: "desc" },
+        take: 50,
+        select: {
+          id: true,
+          occurredAt: true,
+          action: true,
+          module: true,
+          metadataJson: true,
+          actor: { select: { id: true, username: true, fullName: true } },
+        },
+      })
+    : [];
 
   return {
     id: order.id,
@@ -1697,6 +1732,13 @@ export async function getSaleOrderDetailForManagement(orderId: string) {
         refundableAmount: saleReturn.items.reduce((sum, item) => sum + Number(item.refundableAmount), 0),
       })),
     },
+    cancellations: order.cancellations.map((c) => ({
+      id: c.id,
+      status: c.status,
+      reason: c.reason,
+      createdAt: c.createdAt.toISOString(),
+      executedAt: c.executedAt ? c.executedAt.toISOString() : null,
+    })),
     requiresTransport: order.requiresTransport,
     transportAmount: Number(order.transportAmount),
     createdAt: order.createdAt.toISOString(),

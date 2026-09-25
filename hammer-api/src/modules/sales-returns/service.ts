@@ -67,6 +67,20 @@ const REJECTABLE_CANCELLATION_STATUSES: SaleCancellationStatus[] = [
   SaleCancellationStatus.APPROVED,
 ];
 
+/**
+ * prompt-historial-sucursal.md Fase 1.4 — REQUESTED/APPROVED son los dos
+ * estados no terminales de una anulación: mismo set que
+ * REJECTABLE_CANCELLATION_STATUSES (todavía se puede actuar sobre ellas),
+ * reutilizado acá para decidir si ya "hay una en curso" y bloquear una
+ * segunda solicitud. Exportada para poder testear la clasificación sin
+ * base de datos — requestSaleCancellation entero sigue sin ser testeable
+ * sin DB real, mismo criterio que el resto de este archivo (ningún export
+ * de acá separa su cuerpo transaccional en una función tx-inyectable).
+ */
+export function isPendingCancellationStatus(status: SaleCancellationStatus): boolean {
+  return REJECTABLE_CANCELLATION_STATUSES.includes(status);
+}
+
 function isMasterActor(actor: Actor): boolean {
   return actor.roleCode === "MASTER"
     || actor.roleCode === "OWNER"
@@ -750,6 +764,17 @@ export async function executeSaleReturn(returnId: string, input: ExecuteSaleRetu
 
 export async function requestSaleCancellation(saleOrderId: string, reason: string, actor: Actor) {
   return prisma.$transaction(async (tx) => {
+    // prompt-historial-sucursal.md Fase 1.4 — no había ningún guard contra
+    // duplicados: se podían crear N solicitudes REQUESTED para la misma
+    // orden (y N aprobaciones en la cola). Bloquea la fila ANTES de leer
+    // para que dos requests simultáneos no pasen los dos el chequeo de
+    // abajo (mismo patrón FOR UPDATE que cash-session/service.ts).
+    await tx.$queryRaw`
+      SELECT id FROM "SaleOrder"
+      WHERE id = ${saleOrderId}
+      FOR UPDATE
+    `;
+
     const order = await tx.saleOrder.findUniqueOrThrow({
       where: { id: saleOrderId },
       include: { transportServices: true, branch: { select: { id: true } } },
@@ -757,6 +782,11 @@ export async function requestSaleCancellation(saleOrderId: string, reason: strin
     if (!CANCELLABLE_SALE_STATUSES.includes(order.status)) {
       throw new Error("SALE_ORDER_NOT_CANCELLABLE");
     }
+    const existingPending = await tx.saleCancellation.findFirst({
+      where: { saleOrderId, status: { in: REJECTABLE_CANCELLATION_STATUSES } },
+      select: { id: true },
+    });
+    if (existingPending) throw new Error("SALE_CANCELLATION_ALREADY_PENDING");
     const operationalDayId = await findOpenOperationalDayId(tx, order.branchId);
     const hadTransport = order.requiresTransport || order.transportServices.length > 0 || order.transportAmount.gt(0);
     const transportWasExecuted = order.transportServices.some((transport) => transport.status === "DELIVERED");

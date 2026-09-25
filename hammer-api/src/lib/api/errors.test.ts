@@ -186,6 +186,36 @@ test("errors: CUSTOMER_REQUIRED_FOR_CREDIT_NOTE returns 400", async () => {
   assert.equal(res.status, 400);
 });
 
+// ─── Sale cancellations (prompt-historial-sucursal.md Fase 1.4) ─
+
+test("errors: SALE_ORDER_NOT_CANCELLABLE returns 409 with its own code", async () => {
+  const res = toApiErrorResponse(new Error("SALE_ORDER_NOT_CANCELLABLE"));
+  assert.equal(res.status, 409);
+  const body = await jsonBody(res);
+  assert.equal(body.error.code, "SALE_ORDER_NOT_CANCELLABLE");
+});
+
+test("errors: SALE_CANCELLATION_ALREADY_PENDING returns 409 with its own code", async () => {
+  const res = toApiErrorResponse(new Error("SALE_CANCELLATION_ALREADY_PENDING"));
+  assert.equal(res.status, 409);
+  const body = await jsonBody(res);
+  assert.equal(body.error.code, "SALE_CANCELLATION_ALREADY_PENDING");
+});
+
+test("errors: SALE_CANCELLATION_NOT_APPROVED returns 409 with its own code", async () => {
+  const res = toApiErrorResponse(new Error("SALE_CANCELLATION_NOT_APPROVED"));
+  assert.equal(res.status, 409);
+  const body = await jsonBody(res);
+  assert.equal(body.error.code, "SALE_CANCELLATION_NOT_APPROVED");
+});
+
+test("errors: SALE_CANCELLATION_ALREADY_EXECUTED returns 409 with its own code", async () => {
+  const res = toApiErrorResponse(new Error("SALE_CANCELLATION_ALREADY_EXECUTED"));
+  assert.equal(res.status, 409);
+  const body = await jsonBody(res);
+  assert.equal(body.error.code, "SALE_CANCELLATION_ALREADY_EXECUTED");
+});
+
 // ─── Unknown error returns 500 ──────────────────────────────────
 
 test("errors: unknown error returns 500", async () => {

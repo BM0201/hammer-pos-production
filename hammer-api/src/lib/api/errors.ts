@@ -262,6 +262,24 @@ export function toApiErrorResponse(error: unknown) {
     return fail("CUSTOMER_REQUIRED_FOR_CREDIT_NOTE", "Se requiere un cliente para emitir una nota de crédito.", 400);
   }
 
+  // prompt-historial-sucursal.md Fase 1.4 — mismos códigos de
+  // sales-returns/service.ts para anulaciones, sin mapear hasta ahora.
+  if (message === "SALE_ORDER_NOT_CANCELLABLE") {
+    return fail("SALE_ORDER_NOT_CANCELLABLE", "Esta orden no está en un estado que permita anularla.", 409);
+  }
+
+  if (message === "SALE_CANCELLATION_ALREADY_PENDING") {
+    return fail("SALE_CANCELLATION_ALREADY_PENDING", "Ya hay una solicitud de anulación en curso para esta orden.", 409);
+  }
+
+  if (message === "SALE_CANCELLATION_NOT_APPROVED") {
+    return fail("SALE_CANCELLATION_NOT_APPROVED", "Esta anulación todavía no fue aprobada.", 409);
+  }
+
+  if (message === "SALE_CANCELLATION_ALREADY_EXECUTED") {
+    return fail("SALE_CANCELLATION_ALREADY_EXECUTED", "Esta anulación ya fue ejecutada.", 409);
+  }
+
   if (message?.includes("NOT_FOUND") || message?.toLowerCase().includes("not found")) {
     return notFound();
   }

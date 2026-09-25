@@ -24,7 +24,7 @@ export async function GET(
     assertMaster(session!);
 
     const { id } = await params;
-    const order = await getSaleOrderDetailForManagement(id);
+    const order = await getSaleOrderDetailForManagement(id, { includeAuditHistory: true });
     return ok({ order });
   } catch (error) {
     return toHttpErrorResponse(error);

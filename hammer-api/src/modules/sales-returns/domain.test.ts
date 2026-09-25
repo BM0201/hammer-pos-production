@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Prisma, ReturnedItemCondition, ReturnInventoryDestination } from "@prisma/client";
-import { assertReturnItemDestination, calculateRefundableAmount } from "@/modules/sales-returns/service";
+import { Prisma, ReturnedItemCondition, ReturnInventoryDestination, SaleCancellationStatus } from "@prisma/client";
+import { assertReturnItemDestination, calculateRefundableAmount, isPendingCancellationStatus } from "@/modules/sales-returns/service";
 
 // ── Helpers de dominio puro para stock paquete/suelto ───────────────────────
 // Estas funciones espejan la lógica de inventory/service sin BD para mantener
@@ -113,6 +113,30 @@ test("sales returns: refundable amount rejects invalid original quantity", () =>
     }),
     /INVALID_ORIGINAL_QUANTITY/,
   );
+});
+
+// ── prompt-historial-sucursal.md Fase 1.4 — clasificación que usa el guard
+// de requestSaleCancellation (REQUESTED/APPROVED bloquean una segunda
+// solicitud; REJECTED/CANCELLED/EXECUTED la permiten) ────────────────────
+
+test("sales cancellations: REQUESTED cuenta como pendiente", () => {
+  assert.equal(isPendingCancellationStatus(SaleCancellationStatus.REQUESTED), true);
+});
+
+test("sales cancellations: APPROVED cuenta como pendiente", () => {
+  assert.equal(isPendingCancellationStatus(SaleCancellationStatus.APPROVED), true);
+});
+
+test("sales cancellations: REJECTED ya no bloquea una nueva solicitud", () => {
+  assert.equal(isPendingCancellationStatus(SaleCancellationStatus.REJECTED), false);
+});
+
+test("sales cancellations: CANCELLED ya no bloquea una nueva solicitud", () => {
+  assert.equal(isPendingCancellationStatus(SaleCancellationStatus.CANCELLED), false);
+});
+
+test("sales cancellations: EXECUTED ya no bloquea una nueva solicitud", () => {
+  assert.equal(isPendingCancellationStatus(SaleCancellationStatus.EXECUTED), false);
 });
 
 // ── Tests de stock paquete/suelto ───────────────────────────────────────────
