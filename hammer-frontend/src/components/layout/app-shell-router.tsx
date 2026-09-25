@@ -61,6 +61,14 @@ const SECTION_META: Record<string, { title: string; subtitle: string }> = {
 function resolveHeaderMeta(segments: string[]) {
   const root = segments[0] ?? "master";
 
+  // prompt-historial-sucursal.md Fase 2.3 — segments[1] === "sales" matchea
+  // TANTO /branch/sales/orders (POS) como la nueva /branch/sales/history:
+  // sin este caso más específico primero, el historial se mostraba con el
+  // header sticky "Punto de Venta / Captura de tickets…", que no le
+  // corresponde.
+  if (root === "branch" && segments[1] === "sales" && segments[2] === "history") {
+    return { title: "Historial de ventas", subtitle: "Ordenes, devoluciones y anulaciones de la sucursal." };
+  }
   if (root === "branch" && segments[1] === "sales") {
     return { title: "Punto de Venta", subtitle: "Captura de tickets y envio fluido a caja." };
   }

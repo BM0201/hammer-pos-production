@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
 import { money, fmtDateTimeShort } from "@/lib/format";
+import { useSession } from "@/lib/client/session";
+import { isMasterOrAbove } from "@/modules/rbac/role-routing";
+import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+import type { SessionPayload } from "@/types/auth";
 import { SaleReturnRequestSheet } from "./sale-return-request-sheet";
 import { SaleReturnExecuteModal } from "./sale-return-execute-modal";
 
@@ -379,12 +383,18 @@ function CancelModal({
 type DetailTab = "resumen" | "productos" | "pago" | "factura" | "auditoria";
 
 function DetailPanel({
+  mode,
+  session,
+  isMasterSession,
   detail,
   loading,
   onClose,
   onCancel,
   onReturnsChanged,
 }: {
+  mode: "master" | "branch";
+  session: SessionPayload | null;
+  isMasterSession: boolean;
   detail: OrderDetail | null;
   loading: boolean;
   onClose: () => void;
@@ -405,20 +415,31 @@ function DetailPanel({
     setExecutingReturnId(null);
   }, [detail?.id]);
 
+  // Auditoría es dato de Master (prompt-historial-sucursal.md Fase 2.1) —
+  // el historial de sucursal ni siquiera la trae (includeAuditHistory:
+  // false en el backend), así que la pestaña no tiene nada que mostrar ahí.
   const tabs: { id: DetailTab; label: string }[] = [
     { id: "resumen", label: "Resumen" },
     { id: "productos", label: "Productos" },
     { id: "pago", label: "Pago" },
     ...(detail?.requiresManualInvoice ? [{ id: "factura" as DetailTab, label: "Factura" }] : []),
-    { id: "auditoria", label: "Auditoría" },
+    ...(mode === "master" ? [{ id: "auditoria" as DetailTab, label: "Auditoría" }] : []),
   ];
 
   // returnable ya viene calculado del backend (misma lista que
   // requestSaleReturn valida); acá solo se suman las dos condiciones que el
   // backend también exige: al menos un pago POSTED y que no esté ya devuelta
-  // por completo — mismo criterio que el prompt describe para el botón.
+  // por completo — mismo criterio que el prompt describe para el botón. En
+  // sucursal, además hace falta la capability (Master la pasa siempre,
+  // igual que del lado del backend) — prompt-historial-sucursal.md Fase 2.2.
   const canRequestReturn = Boolean(
-    detail?.returnable && !detail.returns.fullyReturned && detail.payments.some((p) => p.status === "POSTED"),
+    detail?.returnable
+    && !detail.returns.fullyReturned
+    && detail.payments.some((p) => p.status === "POSTED")
+    && (isMasterSession || canInBranch(session, detail.branch.id, CAPABILITIES.SALE_RETURN_REQUEST)),
+  );
+  const canExecuteReturn = Boolean(
+    detail && (isMasterSession || canInBranch(session, detail.branch.id, CAPABILITIES.SALE_RETURN_EXECUTE)),
   );
   // Mismo criterio "isMixed" que executeSaleReturn en el backend: más de un
   // método entre los pagos POSTED se trata como MIXED (cualquier método de
@@ -459,7 +480,7 @@ function DetailPanel({
               Solicitar devolución
             </button>
           )}
-          {detail?.cancellable && (
+          {mode === "master" && detail?.cancellable && (
             <button
               className="rounded border border-[var(--color-danger-400)] px-2 py-1 text-xs text-[var(--color-danger-700)] hover:bg-[var(--color-danger-100)]"
               onClick={() => onCancel(detail.id)}
@@ -596,7 +617,7 @@ function DetailPanel({
                           </div>
                           <div className="flex shrink-0 items-center gap-2">
                             <span className="font-semibold">{money(r.refundableAmount)}</span>
-                            {r.status === "APPROVED" && (
+                            {r.status === "APPROVED" && canExecuteReturn && (
                               <button
                                 className="rounded border border-[var(--color-success-400)] px-2 py-1 text-xs text-[var(--color-success-700)] hover:bg-[var(--color-success-100)]"
                                 onClick={() => setExecutingReturnId(r.id)}
@@ -827,7 +848,19 @@ const STATUS_OPTIONS = [
   { value: "RETURN_REQUESTED", label: "Dev. solicitadas" },
 ];
 
-export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolean }) {
+// prompt-historial-sucursal.md Fase 2.1 — branchId es obligatorio en modo
+// branch (una sola sucursal, siempre) y opcional en modo master (filtra si
+// se da, "todas las sucursales" si no — mismo comportamiento de hoy).
+export type OrdersAdminProps =
+  | { mode: "master"; branchId?: string }
+  | { mode: "branch"; branchId: string };
+
+export function OrdersAdmin(props: OrdersAdminProps) {
+  const { mode, branchId } = props;
+  const sessionState = useSession();
+  const session = sessionState.status === "authenticated" ? sessionState.session : null;
+  const isMasterSession = Boolean(session && isMasterOrAbove(session.roleCode, session.globalRoles));
+
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -852,6 +885,12 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
 
   const activeDate = dateMode === "custom" ? customDate : dateMode === "yesterday" ? yesterdayNi() : todayNi();
 
+  // prompt-historial-sucursal.md Fase 2.1 — rutas hermanas: master gestiona
+  // todas las sucursales (assertMaster), branch está acotada a la suya
+  // propia con SALES_VIEW (/api/sales/order-history). Mismo prefijo para
+  // lista y detalle (el detalle solo agrega /${id}).
+  const ordersEndpoint = mode === "master" ? "/api/master/sales-orders" : "/api/sales/order-history";
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -861,7 +900,7 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
       if (activeDate) params.set("date", activeDate);
       if (statusFilter) params.set("status", statusFilter);
       if (search.trim()) params.set("search", search.trim());
-      const res = await apiFetch(`/api/master/sales-orders?${params.toString()}`);
+      const res = await apiFetch(`${ordersEndpoint}?${params.toString()}`);
       const json = (await res.json()) as { data?: { orders?: OrderSummary[] } };
       setOrders(json.data?.orders ?? []);
     } catch {
@@ -869,7 +908,7 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
     } finally {
       setLoading(false);
     }
-  }, [branchId, activeDate, statusFilter, search]);
+  }, [ordersEndpoint, branchId, activeDate, statusFilter, search]);
 
   useEffect(() => {
     load().catch(() => undefined);
@@ -888,21 +927,22 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
     setDetailLoading(true);
     setDetail(null);
     try {
-      const res = await apiFetch(`/api/master/sales-orders/${id}`);
+      const res = await apiFetch(`${ordersEndpoint}/${id}`);
       const json = (await res.json()) as { data?: { order?: OrderDetail } };
       // La ruta envuelve el detalle como { order: {...} } (ver master/page.tsx,
       // que ya lo desenvolvía así) — este componente lo estaba leyendo como
       // json.data directo, así que detail.branch/lines/etc. quedaban
       // undefined y el panel de detalle nunca renderizaba de verdad. Bug
       // preexistente, encontrado al construir la UI de devoluciones sobre
-      // este mismo detalle (prompt-pendientes-2026-09.md Fase 3).
+      // este mismo detalle (prompt-pendientes-2026-09.md Fase 3). La ruta de
+      // sucursal (order-history/[id]) envuelve igual.
       setDetail(json.data?.order ?? null);
     } catch {
       setDetail(null);
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [ordersEndpoint]);
 
   const handleCancel = useCallback(
     async (orderId: string, reason: string, cashRefundHandling: CashRefundHandling) => {
@@ -1136,6 +1176,9 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
         {selectedId && (
           <div className="h-[600px]">
             <DetailPanel
+              mode={mode}
+              session={session}
+              isMasterSession={isMasterSession}
               detail={detail}
               loading={detailLoading}
               onClose={() => {
@@ -1152,8 +1195,10 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
         )}
       </div>
 
-      {/* Cancel modal */}
-      {cancelTargetId && (cancelTarget !== null || true) && (
+      {/* Cancel modal — solo master: anula directo, sin pasar por aprobación
+          (prompt-historial-sucursal.md Fase 2.1). En sucursal, "Anular" no
+          se ofrece — el camino ahí es Solicitar/Ejecutar anulación (Fase 3). */}
+      {mode === "master" && cancelTargetId && (cancelTarget !== null || true) && (
         <CancelModal
           orderNumber={
             (cancelTarget as OrderSummary | OrderDetail | null)?.orderNumber ?? "?"

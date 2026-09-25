@@ -253,6 +253,11 @@ function buildNavSections(
   if (hasAny(CAPABILITIES.SALES_VIEW, CAPABILITIES.POS_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW)) {
     operationItems.push({ href: "/app/branch/sales/orders", label: "Punto de Venta", icon: ShoppingCart });
   }
+  // prompt-historial-sucursal.md Fase 2.3 — la sucursal no tenía dónde ver
+  // sus propias órdenes (devoluciones/anulaciones); solo el POS activo.
+  if (hasAny(CAPABILITIES.SALES_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.SALES_VIEW)) {
+    operationItems.push({ href: "/app/branch/sales/history", label: "Historial de ventas", icon: History });
+  }
   if (hasAny(CAPABILITIES.OPERATIONS_VIEW) && canInAnyAssignedBranch(session, CAPABILITIES.OPERATIONS_VIEW)) {
     operationItems.push({ href: "/app/branch/operations", label: "Operacion de hoy", icon: ClipboardList });
   }

@@ -74,7 +74,7 @@ function MasterSalesOrdersContent() {
         ))}
       </div>
 
-      <OrdersAdmin branchId={branchId} isMaster={true} />
+      <OrdersAdmin mode="master" branchId={branchId} />
     </section>
   );
 }
