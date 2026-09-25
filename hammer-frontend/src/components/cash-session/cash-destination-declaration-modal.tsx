@@ -1,14 +1,34 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, X, HandCoins, Landmark, Vault } from "lucide-react";
+import { Check, X, HandCoins, Landmark, Vault, Clock } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { fmtDate } from "@/lib/format";
 import toast from "react-hot-toast";
 
 type Person = { id: string; fullName: string; username: string };
 type BankAccountOption = { id: string; bankName: string; accountAlias: string };
+/** Mismo shape que Postponement en app/branch/cash-destination/page.tsx. */
+type Postponement = { id: string; amount: number; reason: string | null; postponedUntil: string; createdAt: string };
+
+/**
+ * prompt-pendientes-2026-09.md Fase 2 (PENDIENTES #3) — si el cajero ya
+ * declaró durante la sesión "se queda en la gaveta hasta mañana"
+ * (postponeCashDeposit), el cierre debe prellenar Retener con eso en vez
+ * de volver a preguntar. Sin posposiciones, se comporta como siempre
+ * (retiene todo lo contado). Exportada para poder testearla sin montar el
+ * componente (mismo patrón que quickCashAmounts en payment-composer.tsx).
+ */
+export function initialDeclarationFromPostponements(countedAmount: number, postponements: Pick<Postponement, "amount">[]) {
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const postponedTotal = round2(postponements.reduce((sum, p) => sum + p.amount, 0));
+  if (postponements.length === 0) {
+    return { retainAmount: round2(countedAmount), postponedTotal: 0 };
+  }
+  return { retainAmount: round2(Math.min(postponedTotal, countedAmount)), postponedTotal };
+}
 
 /**
  * Espejo puro de decomposeRetainedAmount (hammer-api/src/modules/treasury/decomposition.ts)
@@ -50,21 +70,33 @@ export function CashDestinationDeclarationModal({
   const [retainAmount, setRetainAmount] = useState(countedAmount.toFixed(2));
   const [awaitingDepositLocation, setAwaitingDepositLocation] = useState<"DRAWER" | "SAFE">("DRAWER");
   const [saving, setSaving] = useState(false);
+  const [postponements, setPostponements] = useState<Postponement[]>([]);
 
   useEffect(() => {
     Promise.all([
       apiFetch(`/api/branches/${branchId}/members`).then((r) => (r.ok ? r.json() : null)),
       apiFetch(`/api/master/treasury/bank-accounts?branchId=${branchId}`).then((r) => (r.ok ? r.json() : null)),
       apiFetch("/api/branches").then((r) => (r.ok ? r.json() : null)),
-    ]).then(([peopleRaw, accountsRaw, branchesRaw]) => {
+      // Si falla, el modal se comporta como hoy — esto no debe bloquear el cierre.
+      apiFetch(`/api/cashier/cash-sessions/${cashSessionId}/cash-destination`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([peopleRaw, accountsRaw, branchesRaw, destinationRaw]) => {
       if (peopleRaw) setPeople(unwrapApiData(peopleRaw) as Person[]);
       if (accountsRaw) setBankAccounts(unwrapApiData(accountsRaw) as BankAccountOption[]);
       if (branchesRaw) {
         const branches = unwrapApiData(branchesRaw) as Array<{ id: string; cashFundAmount: number | null }>;
         setCashFundAmount(branches.find((b) => b.id === branchId)?.cashFundAmount ?? null);
       }
+      if (destinationRaw) {
+        const summary = unwrapApiData(destinationRaw) as { postponements: Postponement[] };
+        setPostponements(summary.postponements);
+        const prefill = initialDeclarationFromPostponements(countedAmount, summary.postponements);
+        if (summary.postponements.length > 0) setRetainAmount(prefill.retainAmount.toFixed(2));
+      }
     }).catch(() => {});
-  }, [branchId]);
+    // countedAmount no debe re-disparar el fetch — solo se usa para el prefill
+    // inicial, que corre una sola vez al abrir el modal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchId, cashSessionId]);
 
   const handOver = Number(handOverAmount) || 0;
   const deposit = Number(depositAmount) || 0;
@@ -82,6 +114,12 @@ export function CashDestinationDeclarationModal({
   // (prompt-pantallas-recorrido-dinero.md §3).
   const needsDepositAccount = deposit > 0 && bankAccounts.length > 0 && !depositBankAccountId;
   const canConfirm = !saving && exactMatch && !needsHandOverPerson && !needsDepositCarrier && !needsDepositAccount;
+
+  const postponedTotal = initialDeclarationFromPostponements(countedAmount, postponements).postponedTotal;
+  const exceedsCounted = postponedTotal > countedAmount + 0.005;
+  // Informativo, no bloquea: el cajero puede cambiar los montos a mano —
+  // esto solo le avisa que está tocando algo que ya había declarado antes.
+  const belowPostponed = postponedTotal > 0 && retain < postponedTotal - 0.005;
 
   async function submit() {
     if (!canConfirm) return;
@@ -136,6 +174,34 @@ export function CashDestinationDeclarationModal({
           </div>
           <Button type="button" variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Después</Button>
         </div>
+
+        {postponements.length > 0 && (
+          <div className="flex items-start gap-2 rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2.5 text-[13px] text-[var(--color-warning-700)]">
+            <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <div className="space-y-1">
+              {postponements.length === 1 ? (
+                <span>
+                  Ya declaraste que C$ {postponements[0].amount.toFixed(2)} se queda hasta el {fmtDate(postponements[0].postponedUntil)}
+                  {postponements[0].reason ? ` — ${postponements[0].reason}` : ""}.
+                </span>
+              ) : (
+                <>
+                  <span>Ya declaraste C$ {postponedTotal.toFixed(2)} pospuestos en {postponements.length} veces durante esta sesión:</span>
+                  <ul className="ml-4 list-disc space-y-0.5">
+                    {postponements.map((p) => (
+                      <li key={p.id}>
+                        C$ {p.amount.toFixed(2)} hasta el {fmtDate(p.postponedUntil)}{p.reason ? ` — ${p.reason}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {exceedsCounted && (
+                <p className="font-semibold">Lo pospuesto (C$ {postponedTotal.toFixed(2)}) supera lo contado ahora (C$ {countedAmount.toFixed(2)}).</p>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-3">
           <div className="rounded-lg border border-[var(--color-border)] p-3">
@@ -201,6 +267,11 @@ export function CashDestinationDeclarationModal({
                   <span className="tabular-nums">C$ {retainSplit.awaitingDepositPortion.toFixed(2)}</span>
                 </div>
               </div>
+            )}
+            {belowPostponed && (
+              <p className="mt-1.5 text-[0.65rem] text-[var(--color-warning-700)]">
+                Esto es menos de lo que ya declaraste pospuesto (C$ {postponedTotal.toFixed(2)}) — estás cambiando lo que dijiste antes.
+              </p>
             )}
           </div>
         </div>

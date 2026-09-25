@@ -5,18 +5,10 @@ como NO implementado a la fecha de este documento (2026-09-25, rama
 `Hammer-V1`, sobre el commit `8cb47ce`). Existe para que estos pendientes
 dejen de vivir solo en el historial de una conversación.
 
-## 3. Cierre de caja con posposición activa
-
-El modal de declaración de destino al cierre (`cash-session/
-cash-destination-declaration-modal.tsx`) vuelve a preguntar qué hacer con
-efectivo que **ya se pospuso** durante la sesión (vía "se queda en la
-gaveta hasta mañana" / `postponeCashDeposit`), sin prefill del monto ya
-comprometido ni del motivo que se declaró en ese momento. El cajero
-termina re-declarando lo mismo dos veces, o el cierre no refleja el
-compromiso que ya existía.
-
-Verificado: ningún componente bajo `hammer-frontend/src/components/
-cash-session/` referencia `CashDepositPostponement`/posposiciones.
+Los ítems 1 a 3 de este inventario ya están resueltos — ver la sección de
+abajo. Queda el ítem 8 (devoluciones y anulaciones sin formulario, dentro
+de "Pendientes de la limpieza de código muerto") y las preguntas de
+arquitectura del mismo barrido.
 
 ---
 
@@ -53,6 +45,25 @@ intermedio `mfaRequired`, donde la sesión todavía no es válida) vía
 `buildLoginSuccessBody`/`buildMfaRequiredBody`
 (`hammer-api/src/modules/auth/login-response.ts`); `login/page.tsx` llama
 `applyUserTheme` antes de `playTransition` en los dos caminos de éxito.
+
+### 3. Cierre de caja con posposición activa — RESUELTO en `fix(cash-session): el cierre respeta el efectivo ya pospuesto en la sesión`
+
+El modal de declaración de destino al cierre (`cash-session/
+cash-destination-declaration-modal.tsx`) volvía a preguntar qué hacer con
+efectivo que **ya se había pospuesto** durante la sesión (vía "se queda en
+la gaveta hasta mañana" / `postponeCashDeposit`), sin prefill del monto ya
+comprometido ni del motivo declarado en ese momento. El cajero terminaba
+re-declarando lo mismo dos veces, o el cierre no reflejaba el compromiso
+que ya existía.
+
+Resuelto (prompt-pendientes-2026-09.md Fase 2): el modal ahora lee `GET
+/api/cashier/cash-sessions/[id]/cash-destination` al abrir (sin bloquear
+el cierre si falla), muestra lo ya comprometido (monto, hasta cuándo,
+motivo) y prellena "Retener" con `min(pospuesto, contado)` vía
+`initialDeclarationFromPostponements`. El vínculo declaración↔posposición
+en el backend (marcar las posposiciones como consumidas) quedó **fuera de
+alcance a propósito** — esta fase fue solo de UI, ver el reporte final del
+prompt.
 
 El prompt original que dio origen a este inventario listaba además dos
 ítems que, al verificar el código actual, ya estaban implementados —
