@@ -1,4 +1,4 @@
-import { BrainDecisionCategory, BrainDecisionSeverity, CashMovementType, DispatchStatus, Prisma, PrismaClient, SaleOrderStatus, InventoryMovementType, PaymentMethod, PaymentStatus, CashSessionStatus } from "@prisma/client";
+import { BrainDecisionCategory, BrainDecisionSeverity, CashMovementType, DispatchStatus, Prisma, PrismaClient, SaleOrderStatus, InventoryMovementType, PaymentMethod, PaymentStatus, CashSessionStatus, SaleCancellationStatus, SaleReturnStatus, ApprovalStatus } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent, attachAuditToError, writePendingAuditFromError } from "@/modules/audit/service";
@@ -1577,9 +1577,95 @@ export async function cancelSaleOrderTx(
 }
 
 /**
+ * fix-anulacion-directa-cierra-solicitudes — la anulación directa de Master
+ * (cancelSaleOrder, abajo) no resolvía las solicitudes de devolución o
+ * anulación en curso sobre la misma orden: una SaleCancellation/SaleReturn
+ * REQUESTED/APPROVED quedaba huérfana (su ApprovalRequest seguía pendiente
+ * en la cola) y, si alguien intentaba ejecutarla después, fallaba porque la
+ * orden ya estaba CANCELLED.
+ *
+ * Deliberadamente NO vive dentro de cancelSaleOrderTx: esa función también
+ * la usa executeSaleCancellation, que ya resuelve su PROPIA solicitud a
+ * EXECUTED — llamar esto ahí duplicaría/pisaría ese cierre. Solo
+ * cancelSaleOrder (el camino directo) necesita cerrar solicitudes AJENAS
+ * al propio flujo que está corriendo.
+ *
+ * ApprovalStatus (schema.prisma) no tiene un estado de "ya no aplica" —
+ * REQUESTED/UNDER_REVIEW/APPROVED/REJECTED/EXECUTED. Se usa REJECTED con
+ * una nota explícita en vez de agregar un valor al enum en este commit.
+ */
+export async function supersedePendingRequestsForOrderTx(
+  tx: Prisma.TransactionClient,
+  input: { saleOrderId: string; actorUserId: string },
+) {
+  const pendingCancellations = await tx.saleCancellation.findMany({
+    where: { saleOrderId: input.saleOrderId, status: { in: [SaleCancellationStatus.REQUESTED, SaleCancellationStatus.APPROVED] } },
+    select: { id: true, status: true, approvalRequestId: true },
+  });
+  for (const cancellation of pendingCancellations) {
+    await tx.saleCancellation.update({ where: { id: cancellation.id }, data: { status: SaleCancellationStatus.CANCELLED } });
+    if (cancellation.approvalRequestId) {
+      await tx.approvalRequest.updateMany({
+        where: { id: cancellation.approvalRequestId, status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] } },
+        data: {
+          status: ApprovalStatus.REJECTED,
+          resolvedByUserId: input.actorUserId,
+          resolvedAt: new Date(),
+          resolutionNotes: "Orden anulada directamente por Master",
+        },
+      });
+    }
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        module: "sales_cancellations",
+        action: "SALE_CANCELLATION_SUPERSEDED",
+        entityType: "SaleCancellation",
+        entityId: cancellation.id,
+        // No existe un id propio de "la anulación directa" — Master no crea
+        // ningún registro al anular así, solo cambia SaleOrder.status. El
+        // saleOrderId ES esa referencia.
+        metadataJson: { saleOrderId: input.saleOrderId, previousStatus: cancellation.status },
+      },
+    });
+  }
+
+  const pendingReturns = await tx.saleReturn.findMany({
+    where: { saleOrderId: input.saleOrderId, status: { in: [SaleReturnStatus.REQUESTED, SaleReturnStatus.APPROVED] } },
+    select: { id: true, status: true, approvalRequestId: true },
+  });
+  for (const saleReturn of pendingReturns) {
+    await tx.saleReturn.update({ where: { id: saleReturn.id }, data: { status: SaleReturnStatus.CANCELLED } });
+    if (saleReturn.approvalRequestId) {
+      await tx.approvalRequest.updateMany({
+        where: { id: saleReturn.approvalRequestId, status: { in: [ApprovalStatus.REQUESTED, ApprovalStatus.UNDER_REVIEW] } },
+        data: {
+          status: ApprovalStatus.REJECTED,
+          resolvedByUserId: input.actorUserId,
+          resolvedAt: new Date(),
+          resolutionNotes: "Orden anulada directamente por Master",
+        },
+      });
+    }
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        module: "sales_returns",
+        action: "SALE_RETURN_SUPERSEDED",
+        entityType: "SaleReturn",
+        entityId: saleReturn.id,
+        metadataJson: { saleOrderId: input.saleOrderId, previousStatus: saleReturn.status },
+      },
+    });
+  }
+}
+
+/**
  * Anula (CANCELLED) una orden/factura de venta. Operación reservada al rol
  * master/admin (validado en el endpoint). Wrapper público que abre su propia
- * transacción y delega en cancelSaleOrderTx.
+ * transacción y delega en cancelSaleOrderTx — en la misma transacción,
+ * también cierra cualquier solicitud de devolución/anulación en curso sobre
+ * esa orden (ver supersedePendingRequestsForOrderTx arriba).
  */
 export async function cancelSaleOrder(input: {
   orderId: string;
@@ -1591,10 +1677,11 @@ export async function cancelSaleOrder(input: {
   if (reason.length < 3) {
     throw new Error("INVALID_INPUT: Debe indicar un motivo de anulación (mínimo 3 caracteres).");
   }
-  return prisma.$transaction(
-    (tx) => cancelSaleOrderTx(tx, { ...input, reason }),
-    { timeout: 20000 },
-  );
+  return prisma.$transaction(async (tx) => {
+    const result = await cancelSaleOrderTx(tx, { ...input, reason });
+    await supersedePendingRequestsForOrderTx(tx, { saleOrderId: input.orderId, actorUserId: input.actorUserId });
+    return result;
+  }, { timeout: 20000 });
 }
 
 /**
