@@ -201,6 +201,60 @@ export function toApiErrorResponse(error: unknown) {
     return fail(message, "El despacho no puede completarse en el estado actual.", 409);
   }
 
+  // prompt-pendientes-2026-09.md Fase 3 — sales-returns/service.ts lanzaba
+  // estos codigos desde antes, pero ninguno estaba mapeado acá: las rutas de
+  // solicitar/ejecutar devolucion (que usan toApiErrorResponse, a diferencia
+  // de approvals/[id]/route.ts que ya traducia SALE_RETURN_NOT_REQUESTED por
+  // su cuenta con toHttpErrorResponse) devolvian 500 generico para cualquier
+  // regla de negocio violada, sin forma de distinguir una de otra en la UI.
+  if (message === "SALE_ORDER_NOT_RETURNABLE") {
+    return conflict("Esta orden no esta en un estado que permita devoluciones.");
+  }
+
+  if (message === "SALE_ORDER_NOT_PAID") {
+    return conflict("Esta orden no tiene pagos confirmados.");
+  }
+
+  if (message === "SALE_RETURN_LINE_NOT_IN_ORDER") {
+    return fail("SALE_RETURN_LINE_NOT_IN_ORDER", "Una de las lineas no pertenece a esta orden.", 400);
+  }
+
+  if (message === "SALE_RETURN_QUANTITY_EXCEEDS_SOLD") {
+    return fail("SALE_RETURN_QUANTITY_EXCEEDS_SOLD", "La cantidad supera lo vendido (o ya solicitado/devuelto) de esa linea.", 400);
+  }
+
+  if (message?.startsWith("RETURN_ITEM_")) {
+    return fail(message, "La condicion del item no coincide con el destino de inventario.", 400);
+  }
+
+  if (message === "SALE_RETURN_NOT_REQUESTED" || message === "SALE_CANCELLATION_NOT_REQUESTED") {
+    return conflict("Esta solicitud ya fue resuelta o ejecutada.");
+  }
+
+  if (message === "SALE_RETURN_NOT_APPROVED") {
+    return conflict("Esta devolucion todavia no fue aprobada.");
+  }
+
+  if (message === "SALE_RETURN_ALREADY_EXECUTED") {
+    return conflict("Esta devolucion ya fue ejecutada.");
+  }
+
+  if (message === "CASH_SESSION_REQUIRED_FOR_CASH_REFUND") {
+    return fail("CASH_SESSION_REQUIRED_FOR_CASH_REFUND", "Selecciona la sesion de caja para un reembolso en efectivo.", 400);
+  }
+
+  if (message === "REFUND_EXCEEDS_AMOUNT_PAID") {
+    return conflict("El monto a reembolsar supera lo efectivamente pagado.");
+  }
+
+  if (message === "REFUND_METHOD_MISMATCH_REQUIRES_MASTER_EXCEPTION") {
+    return conflict("Cambiar el metodo de reembolso requiere una devolucion aprobada por Master.");
+  }
+
+  if (message === "CUSTOMER_REQUIRED_FOR_CREDIT_NOTE") {
+    return fail("CUSTOMER_REQUIRED_FOR_CREDIT_NOTE", "Se requiere un cliente para emitir una nota de credito.", 400);
+  }
+
   if (message?.includes("NOT_FOUND") || message?.toLowerCase().includes("not found")) {
     return notFound();
   }

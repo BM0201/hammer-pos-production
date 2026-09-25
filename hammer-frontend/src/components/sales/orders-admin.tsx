@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/client/api";
 import { money, fmtDateTimeShort } from "@/lib/format";
+import { SaleReturnRequestSheet } from "./sale-return-request-sheet";
+import { SaleReturnExecuteModal } from "./sale-return-execute-modal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +36,8 @@ type OrderDetail = {
   orderNumber: string;
   status: string;
   cancellable: boolean;
+  /** prompt-pendientes-2026-09.md Fase 3 — misma lista que gobierna requestSaleReturn en el backend. */
+  returnable: boolean;
   requiresTransport: boolean;
   transportAmount: number;
   createdAt: string;
@@ -94,6 +98,8 @@ type OrderDetail = {
     unitPrice: number;
     discountAmount: number;
     lineSubtotal: number;
+    /** Cantidad ya solicitada o devuelta (REQUESTED/APPROVED/EXECUTED) — el tope para una nueva solicitud. */
+    pendingOrReturnedQuantity: number;
   }[];
   payments: {
     id: string;
@@ -169,6 +175,22 @@ function statusColor(s: string): BadgeColor {
   if (s === "DRAFT") return "gray";
   return "blue";
 }
+
+// prompt-pendientes-2026-09.md Fase 3 — SaleReturnStatus (schema.prisma), no confundir con el status de SaleOrder de arriba.
+const RETURN_STATUS_LABEL: Record<string, string> = {
+  REQUESTED: "Solicitada",
+  APPROVED: "Aprobada",
+  REJECTED: "Rechazada",
+  EXECUTED: "Ejecutada",
+  CANCELLED: "Cancelada",
+};
+const RETURN_STATUS_COLOR: Record<string, BadgeColor> = {
+  REQUESTED: "yellow",
+  APPROVED: "blue",
+  REJECTED: "red",
+  EXECUTED: "green",
+  CANCELLED: "gray",
+};
 
 function paymentLabel(o: OrderSummary): string {
   if (o.paymentStatus === "POSTED") return "Cobrado";
@@ -361,16 +383,26 @@ function DetailPanel({
   loading,
   onClose,
   onCancel,
+  onReturnsChanged,
 }: {
   detail: OrderDetail | null;
   loading: boolean;
   onClose: () => void;
   onCancel: (id: string) => void;
+  onReturnsChanged: () => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("resumen");
+  // Devoluciones (prompt-pendientes-2026-09.md Fase 3) — el backend
+  // (solicitar → aprobar → ejecutar) ya existía completo; esta pantalla era
+  // el hueco. Aprobar/rechazar sigue viviendo en la cola de aprobaciones
+  // genérica (approvals-queue.tsx), sin cambios.
+  const [showReturnRequest, setShowReturnRequest] = useState(false);
+  const [executingReturnId, setExecutingReturnId] = useState<string | null>(null);
 
   useEffect(() => {
     setTab("resumen");
+    setShowReturnRequest(false);
+    setExecutingReturnId(null);
   }, [detail?.id]);
 
   const tabs: { id: DetailTab; label: string }[] = [
@@ -380,6 +412,19 @@ function DetailPanel({
     ...(detail?.requiresManualInvoice ? [{ id: "factura" as DetailTab, label: "Factura" }] : []),
     { id: "auditoria", label: "Auditoría" },
   ];
+
+  // returnable ya viene calculado del backend (misma lista que
+  // requestSaleReturn valida); acá solo se suman las dos condiciones que el
+  // backend también exige: al menos un pago POSTED y que no esté ya devuelta
+  // por completo — mismo criterio que el prompt describe para el botón.
+  const canRequestReturn = Boolean(
+    detail?.returnable && !detail.returns.fullyReturned && detail.payments.some((p) => p.status === "POSTED"),
+  );
+  // Mismo criterio "isMixed" que executeSaleReturn en el backend: más de un
+  // método entre los pagos POSTED se trata como MIXED (cualquier método de
+  // reembolso queda permitido sin excepción Master), no solo el primero.
+  const postedMethods = new Set((detail?.payments ?? []).filter((p) => p.status === "POSTED").map((p) => p.method));
+  const originalPaymentMethod = postedMethods.size === 0 ? null : postedMethods.size > 1 ? "MIXED" : [...postedMethods][0];
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
@@ -406,6 +451,14 @@ function DetailPanel({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {canRequestReturn && detail && (
+            <button
+              className="rounded border border-[var(--color-master-400)] px-2 py-1 text-xs text-[var(--color-master-700)] hover:bg-[var(--color-master-100)]"
+              onClick={() => setShowReturnRequest(true)}
+            >
+              Solicitar devolución
+            </button>
+          )}
           {detail?.cancellable && (
             <button
               className="rounded border border-[var(--color-danger-400)] px-2 py-1 text-xs text-[var(--color-danger-700)] hover:bg-[var(--color-danger-100)]"
@@ -524,6 +577,37 @@ function DetailPanel({
                   <div className="rounded-lg border border-[var(--color-warning-300)] bg-[var(--color-warning-50)] p-3 text-sm">
                     <p className="mb-1 font-medium text-[var(--color-warning-700)]">Notas</p>
                     <p className="whitespace-pre-wrap text-[var(--color-text)]">{detail.notes}</p>
+                  </div>
+                )}
+
+                {detail.returns.items.length > 0 && (
+                  <div className="rounded-lg border border-[var(--color-border)] p-3 text-sm">
+                    <p className="mb-2 font-medium text-[var(--color-text-muted)]">Devoluciones</p>
+                    <div className="space-y-2">
+                      {detail.returns.items.map((r) => (
+                        <div key={r.id} className="flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs">{r.returnNumber}</span>
+                              <Badge color={RETURN_STATUS_COLOR[r.status] ?? "gray"}>{RETURN_STATUS_LABEL[r.status] ?? r.status}</Badge>
+                              <span className="text-xs text-[var(--color-text-muted)]">{r.returnType === "TOTAL" ? "Total" : "Parcial"}</span>
+                            </div>
+                            <p className="text-xs text-[var(--color-text-muted)]">{fmtDateTime(r.createdAt)}</p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className="font-semibold">{money(r.refundableAmount)}</span>
+                            {r.status === "APPROVED" && (
+                              <button
+                                className="rounded border border-[var(--color-success-400)] px-2 py-1 text-xs text-[var(--color-success-700)] hover:bg-[var(--color-success-100)]"
+                                onClick={() => setExecutingReturnId(r.id)}
+                              >
+                                Ejecutar reembolso
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -692,6 +776,41 @@ function DetailPanel({
           </>
         )}
       </div>
+
+      {showReturnRequest && detail && (
+        <SaleReturnRequestSheet
+          orderId={detail.id}
+          lines={detail.lines.map((l) => ({
+            id: l.id,
+            productName: l.productName,
+            sku: l.sku,
+            unit: l.unit,
+            quantity: l.quantity,
+            lineSubtotal: l.lineSubtotal,
+            pendingOrReturnedQuantity: l.pendingOrReturnedQuantity,
+          }))}
+          onClose={() => setShowReturnRequest(false)}
+          onRequested={() => {
+            setShowReturnRequest(false);
+            onReturnsChanged();
+          }}
+        />
+      )}
+
+      {executingReturnId && detail && (
+        <SaleReturnExecuteModal
+          saleReturnId={executingReturnId}
+          returnNumber={detail.returns.items.find((r) => r.id === executingReturnId)?.returnNumber ?? ""}
+          branchId={detail.branch.id}
+          orderLines={detail.lines.map((l) => ({ id: l.id, productName: l.productName }))}
+          originalPaymentMethod={originalPaymentMethod}
+          onClose={() => setExecutingReturnId(null)}
+          onExecuted={() => {
+            setExecutingReturnId(null);
+            onReturnsChanged();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -770,8 +889,14 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
     setDetail(null);
     try {
       const res = await apiFetch(`/api/master/sales-orders/${id}`);
-      const json = (await res.json()) as { data?: OrderDetail };
-      setDetail(json.data ?? null);
+      const json = (await res.json()) as { data?: { order?: OrderDetail } };
+      // La ruta envuelve el detalle como { order: {...} } (ver master/page.tsx,
+      // que ya lo desenvolvía así) — este componente lo estaba leyendo como
+      // json.data directo, así que detail.branch/lines/etc. quedaban
+      // undefined y el panel de detalle nunca renderizaba de verdad. Bug
+      // preexistente, encontrado al construir la UI de devoluciones sobre
+      // este mismo detalle (prompt-pendientes-2026-09.md Fase 3).
+      setDetail(json.data?.order ?? null);
     } catch {
       setDetail(null);
     } finally {
@@ -1018,6 +1143,10 @@ export function OrdersAdmin({ branchId }: { branchId?: string; isMaster?: boolea
                 setDetail(null);
               }}
               onCancel={(id) => setCancelTargetId(id)}
+              onReturnsChanged={() => {
+                if (selectedId) void loadDetail(selectedId);
+                void load();
+              }}
             />
           </div>
         )}

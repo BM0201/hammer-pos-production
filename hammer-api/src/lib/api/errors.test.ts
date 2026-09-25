@@ -100,6 +100,69 @@ test("errors: NOT_FOUND returns 404", async () => {
   assert.equal(res.status, 404);
 });
 
+// ─── Sale returns (prompt-pendientes-2026-09.md Fase 3) ─────────
+// Antes de esto, ninguno de estos codigos estaba mapeado y todos caian en
+// el 500 generico — ver el comentario en errors.ts.
+
+test("errors: SALE_ORDER_NOT_RETURNABLE returns 409", async () => {
+  const res = toApiErrorResponse(new Error("SALE_ORDER_NOT_RETURNABLE"));
+  assert.equal(res.status, 409);
+  const body = await jsonBody(res);
+  assert.equal(body.error.code, "CONFLICT");
+});
+
+test("errors: SALE_ORDER_NOT_PAID returns 409", async () => {
+  const res = toApiErrorResponse(new Error("SALE_ORDER_NOT_PAID"));
+  assert.equal(res.status, 409);
+});
+
+test("errors: SALE_RETURN_QUANTITY_EXCEEDS_SOLD returns 400", async () => {
+  const res = toApiErrorResponse(new Error("SALE_RETURN_QUANTITY_EXCEEDS_SOLD"));
+  assert.equal(res.status, 400);
+  const body = await jsonBody(res);
+  assert.equal(body.error.code, "SALE_RETURN_QUANTITY_EXCEEDS_SOLD");
+});
+
+test("errors: RETURN_ITEM_* codes return 400", async () => {
+  const res = toApiErrorResponse(new Error("RETURN_ITEM_GOOD_MUST_GO_TO_SELLABLE"));
+  assert.equal(res.status, 400);
+});
+
+test("errors: SALE_RETURN_NOT_REQUESTED and SALE_CANCELLATION_NOT_REQUESTED return 409", async () => {
+  assert.equal(toApiErrorResponse(new Error("SALE_RETURN_NOT_REQUESTED")).status, 409);
+  assert.equal(toApiErrorResponse(new Error("SALE_CANCELLATION_NOT_REQUESTED")).status, 409);
+});
+
+test("errors: SALE_RETURN_NOT_APPROVED returns 409", async () => {
+  const res = toApiErrorResponse(new Error("SALE_RETURN_NOT_APPROVED"));
+  assert.equal(res.status, 409);
+});
+
+test("errors: SALE_RETURN_ALREADY_EXECUTED returns 409", async () => {
+  const res = toApiErrorResponse(new Error("SALE_RETURN_ALREADY_EXECUTED"));
+  assert.equal(res.status, 409);
+});
+
+test("errors: CASH_SESSION_REQUIRED_FOR_CASH_REFUND returns 400", async () => {
+  const res = toApiErrorResponse(new Error("CASH_SESSION_REQUIRED_FOR_CASH_REFUND"));
+  assert.equal(res.status, 400);
+});
+
+test("errors: REFUND_EXCEEDS_AMOUNT_PAID returns 409", async () => {
+  const res = toApiErrorResponse(new Error("REFUND_EXCEEDS_AMOUNT_PAID"));
+  assert.equal(res.status, 409);
+});
+
+test("errors: REFUND_METHOD_MISMATCH_REQUIRES_MASTER_EXCEPTION returns 409", async () => {
+  const res = toApiErrorResponse(new Error("REFUND_METHOD_MISMATCH_REQUIRES_MASTER_EXCEPTION"));
+  assert.equal(res.status, 409);
+});
+
+test("errors: CUSTOMER_REQUIRED_FOR_CREDIT_NOTE returns 400", async () => {
+  const res = toApiErrorResponse(new Error("CUSTOMER_REQUIRED_FOR_CREDIT_NOTE"));
+  assert.equal(res.status, 400);
+});
+
 // ─── Unknown error returns 500 ──────────────────────────────────
 
 test("errors: unknown error returns 500", async () => {

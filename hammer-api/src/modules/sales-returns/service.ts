@@ -22,7 +22,7 @@ import { prisma } from "@/lib/prisma";
 import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { refreshOperationalDaySummaryTx, businessDateFromNow, sweepDayToAwaitingReviewTx } from "@/modules/operations/service";
-import { cancelSaleOrderTx } from "@/modules/sales/service";
+import { cancelSaleOrderTx, isSaleOrderReturnable } from "@/modules/sales/service";
 import type { CashRefundHandling } from "@/modules/sales/cancellation-cash-policy";
 
 type Actor = {
@@ -49,12 +49,6 @@ type ExecuteSaleReturnInput = {
   refundMethod: RefundMethod;
   cashSessionId?: string | null;
 };
-
-const RETURNABLE_SALE_STATUSES: SaleOrderStatus[] = [
-  SaleOrderStatus.PAID,
-  SaleOrderStatus.DISPATCH_PENDING,
-  SaleOrderStatus.DISPATCHED,
-];
 
 const CANCELLABLE_SALE_STATUSES: SaleOrderStatus[] = [
   SaleOrderStatus.PENDING_PAYMENT,
@@ -236,7 +230,7 @@ async function getPaidOrderForReturn(tx: Prisma.TransactionClient, saleOrderId: 
     },
   });
   if (!order) throw new Error("SALE_ORDER_NOT_FOUND");
-  if (!RETURNABLE_SALE_STATUSES.includes(order.status)) {
+  if (!isSaleOrderReturnable(order.status)) {
     throw new Error("SALE_ORDER_NOT_RETURNABLE");
   }
   if (order.payments.length === 0) throw new Error("SALE_ORDER_NOT_PAID");

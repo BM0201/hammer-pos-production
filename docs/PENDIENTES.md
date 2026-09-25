@@ -6,8 +6,9 @@ como NO implementado a la fecha de este documento (2026-09-25, rama
 dejen de vivir solo en el historial de una conversación.
 
 Los ítems 1 a 3 de este inventario ya están resueltos — ver la sección de
-abajo. Queda el ítem 8 (devoluciones y anulaciones sin formulario, dentro
-de "Pendientes de la limpieza de código muerto") y las preguntas de
+abajo. El ítem 8 (dentro de "Pendientes de la limpieza de código muerto")
+quedó parcialmente resuelto: devoluciones sí, anulaciones de sucursal
+todavía no (ver el detalle en ese ítem). Quedan las preguntas de
 arquitectura del mismo barrido.
 
 ---
@@ -128,20 +129,47 @@ operador extra en una caja ya abierta) tienen backend completo
 (transacción + audit log) pero nunca tuvieron pantalla — ni en v1 ni en
 v2. ¿Se construye la UI, o se retira el backend?
 
-### 8. Devoluciones y anulaciones de venta sin formulario de solicitud
+### 8. Devoluciones y anulaciones de venta sin formulario de solicitud — PARCIALMENTE RESUELTO en `feat(sales): solicitar y ejecutar devoluciones desde el detalle de la orden`
 
 Los árboles completos `/api/sales/returns/*` y
 `/api/sales/cancellations/*` (10 rutas: listar, solicitar, aprobar,
-ejecutar, rechazar) no tienen ningún punto de entrada en la UI para que
-un usuario solicite una devolución o anulación — la única superficie
-conectada es la cola genérica de aprobaciones (`approvals-queue.tsx`),
-que actúa sobre solicitudes ya existentes, no las crea. Esto significa
-que hoy, en la práctica, **nadie puede iniciar una devolución o
-anulación formal desde la aplicación** salvo que se haga por otra vía no
-identificada en este barrido. Dado que toca crédito de cliente y stock,
-es el hallazgo de mayor impacto de negocio de todo este documento —
-amerita confirmar con el dueño del producto si esto es un gap real o si
-existe un camino de creación que este análisis no vio.
+ejecutar, rechazar) no tenían ningún punto de entrada en la UI para que
+un usuario solicitara una devolución o anulación — la única superficie
+conectada era la cola genérica de aprobaciones (`approvals-queue.tsx`),
+que actúa sobre solicitudes ya existentes, no las crea.
+
+**Devoluciones (`/api/sales/returns/*`) resuelto** (prompt-pendientes-2026-09.md
+Fase 3): desde el detalle de una orden en `orders-admin.tsx` (Master,
+`/app/master/sales/orders`) ahora se puede solicitar una devolución
+(`SaleReturnRequestSheet` — cantidad por línea con tope real, condición →
+destino derivado, tipo PARTIAL/TOTAL calculado, reembolsable estimado en
+vivo) y, una vez aprobada desde la cola de aprobaciones de siempre,
+ejecutar el reembolso (`SaleReturnExecuteModal` — método con aviso si
+requiere excepción Master, sesión de caja para CASH). De paso se
+encontraron y corrigieron dos huecos que esto dejaba al descubierto:
+`orders-admin.tsx` leía `json.data` en vez de `json.data.order` en
+`loadDetail` (el panel de detalle nunca cargaba de verdad — bug
+preexistente, no introducido por esta fase) y `toApiErrorResponse`
+(`hammer-api/src/lib/api/errors.ts`) no traducía ninguno de los códigos de
+error propios de devoluciones (`SALE_RETURN_QUANTITY_EXCEEDS_SOLD`,
+`CASH_SESSION_REQUIRED_FOR_CASH_REFUND`, etc.) — todos cerraban en un 500
+genérico.
+
+**Sin implementar a propósito** (fuera de alcance explícito de la Fase 3):
+- **Historial de ventas en sucursal**: `BranchPos`/`/app/branch/sales/orders`
+  no tiene ningún panel de órdenes recientes o reimpresión — solo el POS
+  activo. `SaleReturnRequestSheet`/`SaleReturnExecuteModal` quedaron
+  extraídos a sus propios archivos (`components/sales/`) listos para
+  reusarse el día que exista esa vista, pero esa vista no se construyó
+  acá.
+- **Anulaciones (`/api/sales/cancellations/*`)**: verificado, no
+  implementado. `BRANCH_ADMIN` y `CASHIER` tienen la capability
+  `SALE_CANCELLATION_REQUEST` en `rbac/policies.ts` pero ningún componente
+  del frontend llama a `POST /api/sales/cancellations` — el único camino de
+  anulación real hoy es el de Master (`POST
+  /api/master/sales-orders/[id]/cancel`, botón "Anular", cancela directo
+  sin pasar por aprobación). Sigue siendo un gap real: un cajero o admin de
+  sucursal con esa capability no tiene cómo usarla.
 
 ### 9. `/api/inventory/adjustments` — ajuste con aprobación, sin formulario
 

@@ -1083,6 +1083,23 @@ export function isSaleOrderCancellable(status: SaleOrderStatus): boolean {
   return CANCELLABLE_SALE_ORDER_STATUSES.includes(status);
 }
 
+/**
+ * prompt-pendientes-2026-09.md Fase 3 — misma lista que gobierna
+ * requestSaleReturn (sales-returns/service.ts). Vive acá y no al revés
+ * porque sales-returns/service.ts YA importa de este módulo
+ * (cancelSaleOrderTx); importar en la otra dirección crearía un ciclo.
+ */
+const RETURNABLE_SALE_ORDER_STATUSES: SaleOrderStatus[] = [
+  SaleOrderStatus.PAID,
+  SaleOrderStatus.DISPATCH_PENDING,
+  SaleOrderStatus.DISPATCHED,
+];
+
+/** Indica si una orden, según su estado, puede tener una devolución solicitada. */
+export function isSaleOrderReturnable(status: SaleOrderStatus): boolean {
+  return RETURNABLE_SALE_ORDER_STATUSES.includes(status);
+}
+
 /** Zona horaria de Nicaragua (UTC-6, sin horario de verano). */
 const NICARAGUA_UTC_OFFSET_HOURS = 6;
 
@@ -1624,7 +1641,18 @@ export async function getSaleOrderDetailForManagement(orderId: string) {
   // Se agrega el detalle de las devoluciones y cuánta cantidad de cada línea
   // ya fue devuelta (EXECUTED), sin tocar el status de la orden.
   const returnedQtyByLine = new Map<string, number>();
+  // Fase 3 (prompt-pendientes-2026-09.md) — además de lo ya EJECUTADO, el
+  // formulario de solicitud necesita el tope real: cantidad ya solicitada O
+  // devuelta (REQUESTED/APPROVED/EXECUTED, no REJECTED/CANCELLED) por línea —
+  // el mismo criterio que SALE_RETURN_QUANTITY_EXCEEDS_SOLD valida en
+  // requestSaleReturn (sales-returns/service.ts). Reutiliza order.returns, ya
+  // cargado arriba — no agrega ninguna consulta nueva.
+  const committedQtyByLine = new Map<string, number>();
   for (const saleReturn of order.returns) {
+    if (saleReturn.status === "REJECTED" || saleReturn.status === "CANCELLED") continue;
+    for (const item of saleReturn.items) {
+      committedQtyByLine.set(item.saleOrderLineId, (committedQtyByLine.get(item.saleOrderLineId) ?? 0) + Number(item.quantity));
+    }
     if (saleReturn.status !== "EXECUTED") continue;
     for (const item of saleReturn.items) {
       returnedQtyByLine.set(item.saleOrderLineId, (returnedQtyByLine.get(item.saleOrderLineId) ?? 0) + Number(item.quantity));
@@ -1655,6 +1683,7 @@ export async function getSaleOrderDetailForManagement(orderId: string) {
     orderNumber: order.orderNumber,
     status: order.status,
     cancellable: isSaleOrderCancellable(order.status),
+    returnable: isSaleOrderReturnable(order.status),
     returns: {
       fullyReturned,
       totalRefundedAmount,
@@ -1729,6 +1758,7 @@ export async function getSaleOrderDetailForManagement(orderId: string) {
       unitPrice: Number(l.unitPrice),
       discountAmount: Number(l.discountAmount),
       lineSubtotal: Number(l.lineSubtotal),
+      pendingOrReturnedQuantity: committedQtyByLine.get(l.id) ?? 0,
     })),
     payments: order.payments.map((p) => ({
       id: p.id,
