@@ -202,57 +202,64 @@ export function toApiErrorResponse(error: unknown) {
   }
 
   // prompt-pendientes-2026-09.md Fase 3 — sales-returns/service.ts lanzaba
-  // estos codigos desde antes, pero ninguno estaba mapeado acá: las rutas de
-  // solicitar/ejecutar devolucion (que usan toApiErrorResponse, a diferencia
-  // de approvals/[id]/route.ts que ya traducia SALE_RETURN_NOT_REQUESTED por
-  // su cuenta con toHttpErrorResponse) devolvian 500 generico para cualquier
+  // estos códigos desde antes, pero ninguno estaba mapeado acá: las rutas de
+  // solicitar/ejecutar devolución (que usan toApiErrorResponse, a diferencia
+  // de approvals/[id]/route.ts que ya traducía SALE_RETURN_NOT_REQUESTED por
+  // su cuenta con toHttpErrorResponse) devolvían 500 genérico para cualquier
   // regla de negocio violada, sin forma de distinguir una de otra en la UI.
+  // conflict() siempre devuelve code "CONFLICT" — acá se usa fail() con el
+  // código original para que el mapa de mensajes del frontend (que busca por
+  // code) pueda distinguir cada caso.
   if (message === "SALE_ORDER_NOT_RETURNABLE") {
-    return conflict("Esta orden no esta en un estado que permita devoluciones.");
+    return fail("SALE_ORDER_NOT_RETURNABLE", "Esta orden no está en un estado que permita devoluciones.", 409);
   }
 
   if (message === "SALE_ORDER_NOT_PAID") {
-    return conflict("Esta orden no tiene pagos confirmados.");
+    return fail("SALE_ORDER_NOT_PAID", "Esta orden no tiene pagos confirmados.", 409);
   }
 
   if (message === "SALE_RETURN_LINE_NOT_IN_ORDER") {
-    return fail("SALE_RETURN_LINE_NOT_IN_ORDER", "Una de las lineas no pertenece a esta orden.", 400);
+    return fail("SALE_RETURN_LINE_NOT_IN_ORDER", "Una de las líneas no pertenece a esta orden.", 400);
   }
 
   if (message === "SALE_RETURN_QUANTITY_EXCEEDS_SOLD") {
-    return fail("SALE_RETURN_QUANTITY_EXCEEDS_SOLD", "La cantidad supera lo vendido (o ya solicitado/devuelto) de esa linea.", 400);
+    return fail("SALE_RETURN_QUANTITY_EXCEEDS_SOLD", "La cantidad supera lo vendido (o ya solicitado/devuelto) de esa línea.", 400);
   }
 
   if (message?.startsWith("RETURN_ITEM_")) {
-    return fail(message, "La condicion del item no coincide con el destino de inventario.", 400);
+    return fail(message, "La condición del ítem no coincide con el destino de inventario.", 400);
   }
 
-  if (message === "SALE_RETURN_NOT_REQUESTED" || message === "SALE_CANCELLATION_NOT_REQUESTED") {
-    return conflict("Esta solicitud ya fue resuelta o ejecutada.");
+  if (message === "SALE_RETURN_NOT_REQUESTED") {
+    return fail("SALE_RETURN_NOT_REQUESTED", "Esta solicitud ya fue resuelta o ejecutada.", 409);
+  }
+
+  if (message === "SALE_CANCELLATION_NOT_REQUESTED") {
+    return fail("SALE_CANCELLATION_NOT_REQUESTED", "Esta solicitud ya fue resuelta o ejecutada.", 409);
   }
 
   if (message === "SALE_RETURN_NOT_APPROVED") {
-    return conflict("Esta devolucion todavia no fue aprobada.");
+    return fail("SALE_RETURN_NOT_APPROVED", "Esta devolución todavía no fue aprobada.", 409);
   }
 
   if (message === "SALE_RETURN_ALREADY_EXECUTED") {
-    return conflict("Esta devolucion ya fue ejecutada.");
+    return fail("SALE_RETURN_ALREADY_EXECUTED", "Esta devolución ya fue ejecutada.", 409);
   }
 
   if (message === "CASH_SESSION_REQUIRED_FOR_CASH_REFUND") {
-    return fail("CASH_SESSION_REQUIRED_FOR_CASH_REFUND", "Selecciona la sesion de caja para un reembolso en efectivo.", 400);
+    return fail("CASH_SESSION_REQUIRED_FOR_CASH_REFUND", "Selecciona la sesión de caja para un reembolso en efectivo.", 400);
   }
 
   if (message === "REFUND_EXCEEDS_AMOUNT_PAID") {
-    return conflict("El monto a reembolsar supera lo efectivamente pagado.");
+    return fail("REFUND_EXCEEDS_AMOUNT_PAID", "El monto a reembolsar supera lo efectivamente pagado.", 409);
   }
 
   if (message === "REFUND_METHOD_MISMATCH_REQUIRES_MASTER_EXCEPTION") {
-    return conflict("Cambiar el metodo de reembolso requiere una devolucion aprobada por Master.");
+    return fail("REFUND_METHOD_MISMATCH_REQUIRES_MASTER_EXCEPTION", "Cambiar el método de reembolso requiere una devolución aprobada por Master.", 409);
   }
 
   if (message === "CUSTOMER_REQUIRED_FOR_CREDIT_NOTE") {
-    return fail("CUSTOMER_REQUIRED_FOR_CREDIT_NOTE", "Se requiere un cliente para emitir una nota de credito.", 400);
+    return fail("CUSTOMER_REQUIRED_FOR_CREDIT_NOTE", "Se requiere un cliente para emitir una nota de crédito.", 400);
   }
 
   if (message?.includes("NOT_FOUND") || message?.toLowerCase().includes("not found")) {

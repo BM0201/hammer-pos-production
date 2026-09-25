@@ -55,6 +55,35 @@ type SaleReturnFull = {
   items: SaleReturnItem[];
 };
 
+// GET /api/sales/returns/[id] devuelve la fila Prisma cruda: quantity y
+// refundableAmount son Prisma.Decimal en el schema, y roundDecimalsForResponse
+// (decimal-rounding.ts) los redondea pero NO los convierte a number — llegan
+// serializados como STRING ("100.00", vía Decimal.toJSON()). Sin normalizar,
+// `sum + refundableAmount` en el total concatena en vez de sumar (con 1 ítem
+// da bien "por casualidad" porque round2 multiplica por 100 y ahí sí coacciona
+// a number; con 2+ ítems da NaN).
+type RawSaleReturnItem = Omit<SaleReturnItem, "quantity" | "refundableAmount"> & {
+  quantity: number | string;
+  refundableAmount: number | string;
+};
+type RawSaleReturnFull = Omit<SaleReturnFull, "items"> & { items: RawSaleReturnItem[] };
+
+function normalizeSaleReturn(raw: RawSaleReturnFull): SaleReturnFull {
+  return {
+    ...raw,
+    items: raw.items.map((item) => ({
+      ...item,
+      quantity: Number(item.quantity),
+      refundableAmount: Number(item.refundableAmount),
+    })),
+  };
+}
+
+/** Espejo del total que arma executeSaleReturn (sales-returns/service.ts) sobre refundableAmount por ítem — acepta string u number porque la fuente es un Decimal serializado. */
+export function totalRefundableFromItems(items: { refundableAmount: number | string }[]): number {
+  return round2(items.reduce((sum, i) => sum + Number(i.refundableAmount), 0));
+}
+
 type ActiveCashSession = { id: string; status: string; physicalCashBox?: { code?: string } | null } | null;
 
 function isOriginalMethod(m: string | null): m is RefundMethod {
@@ -88,7 +117,7 @@ export function SaleReturnExecuteModal({
       .then(async (res) => {
         const raw = await res.json();
         if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar la devolución.");
-        setSaleReturn(unwrapApiData(raw) as SaleReturnFull);
+        setSaleReturn(normalizeSaleReturn(unwrapApiData(raw) as RawSaleReturnFull));
       })
       .catch((error) => toast.error(error instanceof Error ? error.message : "No se pudo cargar la devolución."));
 
@@ -102,7 +131,7 @@ export function SaleReturnExecuteModal({
   }, [saleReturnId, branchId]);
 
   const nameByLineId = new Map(orderLines.map((l) => [l.id, l.productName]));
-  const totalRefundable = saleReturn ? round2(saleReturn.items.reduce((sum, i) => sum + i.refundableAmount, 0)) : 0;
+  const totalRefundable = saleReturn ? totalRefundableFromItems(saleReturn.items) : 0;
   const hasMasterException = Boolean(saleReturn?.approvedByMasterId);
   const changedMethod = isOriginalMethod(originalPaymentMethod) && originalPaymentMethod !== refundMethod && refundMethod !== "CREDIT_NOTE";
   const blockedByMethodMismatch = changedMethod && !hasMasterException;
