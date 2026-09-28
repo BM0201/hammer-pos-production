@@ -53,6 +53,7 @@ import {
   PiggyBank,
   DollarSign,
   Calculator,
+  Receipt,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -129,6 +130,7 @@ const MASTER_NAV: NavSection[] = [
       { href: "/app/master/cameras", label: "Cámaras", icon: Camera, capabilities: [CAPABILITIES.MASTER_CAMERAS_VIEW] },
       { href: "/app/master/audit", label: "Auditoría", icon: ScrollText, capabilities: [CAPABILITIES.AUDIT_VIEW] },
       { href: "/app/master/settings/print", label: "Impresión", icon: Printer },
+      { href: "/app/master/settings/payroll", label: "Nómina", icon: Receipt },
     ],
   },
   {

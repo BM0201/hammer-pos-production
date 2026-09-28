@@ -35,12 +35,29 @@ export async function getPayrollRates(): Promise<PayrollRates> {
   return {
     inssRegime: row.inssRegime,
     activeEmployeeCount,
+    // INATEC ignora la fila: hoy es constante legal (no vive en
+    // PayrollRateConfig). prompt-nomina-config.md Fase 2 la pasa a
+    // PayrollLegalRateVersion (versionada por vigencia); acá se queda igual.
     inatecRate: DEFAULT_PAYROLL_RATES.inatecRate,
     aguinaldoMode: row.aguinaldoMode,
     vacacionesMode: row.vacacionesMode,
     indemnizacionMode: row.indemnizacionMode,
     salarioMinimoSectorial: Number(row.salarioMinimoSectorial) || 0,
   };
+}
+
+/**
+ * prompt-nomina-config.md Fase 1 — cantidad de empleados activos por debajo
+ * del salario mínimo sectorial vigente, para el aviso informativo de la
+ * pantalla de configuración (no bloquea nada, mismo criterio que el propio
+ * salarioMinimoSectorial). Sin mínimo configurado (0), no hay nada que
+ * advertir.
+ */
+export async function countActiveEmployeesBelowMinimum(salarioMinimoSectorial: number): Promise<number> {
+  if (!salarioMinimoSectorial || salarioMinimoSectorial <= 0) return 0;
+  return prisma.employee.count({
+    where: { isActive: true, monthlySalary: { lt: salarioMinimoSectorial } },
+  });
 }
 
 /** Tasas INSS resueltas para una config (conveniencia para endpoints/UI). */

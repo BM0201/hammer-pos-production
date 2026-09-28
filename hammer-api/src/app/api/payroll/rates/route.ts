@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertFinanceAccess, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
-import { getPayrollRates, resolvedInssRatesFor, updatePayrollRates } from "@/modules/payroll/payroll-rate-config";
+import { countActiveEmployeesBelowMinimum, getPayrollRates, resolvedInssRatesFor, updatePayrollRates } from "@/modules/payroll/payroll-rate-config";
 import { IR_TABLE_ANNUAL } from "@/modules/payroll/payroll-nicaragua";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok } from "@/lib/api/response";
@@ -19,7 +19,8 @@ export async function GET() {
     assertFinanceAccess(session!);
 
     const rates = await getPayrollRates();
-    return ok({ rates, inss: resolvedInssRatesFor(rates), irTableAnnual: IR_TABLE_ANNUAL });
+    const activeEmployeesBelowMinimum = await countActiveEmployeesBelowMinimum(rates.salarioMinimoSectorial);
+    return ok({ rates, inss: resolvedInssRatesFor(rates), irTableAnnual: IR_TABLE_ANNUAL, activeEmployeesBelowMinimum });
   } catch (err: unknown) {
     return toHttpErrorResponse(err);
   }
@@ -35,7 +36,8 @@ export async function PATCH(req: NextRequest) {
 
     const body = await req.json();
     const rates = await updatePayrollRates(body, session!.userId);
-    return ok({ rates, inss: resolvedInssRatesFor(rates), irTableAnnual: IR_TABLE_ANNUAL });
+    const activeEmployeesBelowMinimum = await countActiveEmployeesBelowMinimum(rates.salarioMinimoSectorial);
+    return ok({ rates, inss: resolvedInssRatesFor(rates), irTableAnnual: IR_TABLE_ANNUAL, activeEmployeesBelowMinimum });
   } catch (err: unknown) {
     return toHttpErrorResponse(err);
   }
