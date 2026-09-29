@@ -607,11 +607,19 @@ export async function getTreasuryAccountLedger(
   };
 
   const [entries, totalCount, deltaBeforeRange, priorPageRows] = await Promise.all([
+    // prompt-tesoreria-depositos.md Fase 3.4 — incluir el BankDeposit
+    // ligado (cuando lo hay) para que el historial pueda mostrar "Anulado"
+    // tachado sobre la fila del depósito original, sin una segunda consulta.
     db.treasuryEntry.findMany({
       where,
       orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
       skip,
       take,
+      include: {
+        bankDeposit: {
+          select: { id: true, voidedAt: true, voidReason: true, confirmedBy: { select: { fullName: true, username: true } } },
+        },
+      },
     }),
     db.treasuryEntry.count({ where }),
     from ? computeLedgerDeltaBeforeTx(db, accountId, from) : Promise.resolve(0),
@@ -958,6 +966,194 @@ export async function confirmBankDepositTx(
   return { deposit, transferId, remainderInCustody: remainder };
 }
 
+// ─── Anular depósito / ajustar custodia (prompt-tesoreria-depositos.md Fase 3) ──
+//
+// Corregir lo que el Bug 1 ya infló: no existía forma de revertir un
+// BankDeposit. Anular no borra nada del libro mayor — marca el depósito y
+// devuelve el monto del banco a la custodia de donde salió (RECONCILIATION,
+// mismo entryType/counterpartyType que ya usa voidRetainedCashExpense para
+// "esto nunca debió contar"). El corte de getAccumulatedRetainedTx NO se
+// mueve: esta plata ya estaba fuera del acumulado desde que se despachó.
+
+export type VoidBankDepositInput = {
+  bankDepositId: string;
+  reason: string;
+  actorUserId: string;
+};
+
+/**
+ * El cuerpo transaccional de voidBankDeposit (abajo), separado del wrapper
+ * para poder probarlo con un tx en memoria — mismo patrón que
+ * confirmBankDepositTx/depositBranchCashDirectTx.
+ */
+export async function voidBankDepositTx(tx: Prisma.TransactionClient, input: VoidBankDepositInput) {
+  const reason = input.reason.trim();
+  if (reason.length < 10) {
+    throw new Error("VALIDATION_ERROR: el motivo de la anulación debe tener al menos 10 caracteres");
+  }
+
+  // Lock de fila: serializa anulaciones concurrentes del mismo depósito
+  // antes de leer si ya está anulado — mismo patrón que el resto del módulo.
+  await tx.$queryRaw`SELECT id FROM "BankDeposit" WHERE id = ${input.bankDepositId} FOR UPDATE`;
+
+  const deposit = await tx.bankDeposit.findUniqueOrThrow({ where: { id: input.bankDepositId } });
+  if (deposit.voidedAt !== null) {
+    throw new Error("BANK_DEPOSIT_ALREADY_VOIDED");
+  }
+
+  // De qué custodia salió: la pata DEPOSIT_CONFIRMED OUT de este mismo
+  // depósito (dos filas comparten bankDepositId — ver el comentario del
+  // modelo BankDeposit). Sin esa pata (dato imposible salvo corrupción),
+  // no hay a dónde devolver la plata.
+  const confirmedOut = await tx.treasuryEntry.findFirst({
+    where: { bankDepositId: input.bankDepositId, entryType: "DEPOSIT_CONFIRMED", direction: "OUT" },
+    select: { accountId: true },
+  });
+  if (!confirmedOut) {
+    throw new Error("VALIDATION_ERROR: no se encontró la custodia de origen de este depósito");
+  }
+
+  const amount = Number(deposit.amount);
+  const bankBalanceBefore = await getTreasuryAccountBalanceTx(tx, deposit.bankAccountId);
+  // El saldo del banco es "esperado", no real (Hammer no se conecta al
+  // banco) — anular un depósito inflado es justamente bajarlo. Si el saldo
+  // ya no alcanza, se permite igual (nunca se bloquea), y queda anotado en
+  // el audit log para que quede visible, no oculto.
+  const bankBalanceWentNegative = round2(bankBalanceBefore.balance - amount) < 0;
+
+  const { transferId } = await createInternalTransferTx(tx, {
+    fromAccountId: deposit.bankAccountId,
+    toAccountId: confirmedOut.accountId,
+    fromAmount: amount,
+    entryType: "RECONCILIATION",
+    counterpartyType: "ADJUSTMENT",
+    bankDepositId: deposit.id,
+    notes: `Anulación de depósito: ${reason}`,
+    createdByUserId: input.actorUserId,
+  });
+
+  const updated = await tx.bankDeposit.update({
+    where: { id: deposit.id },
+    data: { voidedAt: new Date(), voidedByUserId: input.actorUserId, voidReason: reason },
+  });
+
+  return {
+    deposit: updated,
+    transferId,
+    custodyAccountId: confirmedOut.accountId,
+    amount,
+    bankBalanceBefore: bankBalanceBefore.balance,
+    bankBalanceWentNegative,
+  };
+}
+
+/**
+ * Anula un BankDeposit: el monto vuelve del banco a la custodia de origen,
+ * el depósito queda marcado (no borrado), y deja de contar en getDepositSummary
+ * y en cualquier listado (§3.3). Si la plata era real, Master la vuelve a
+ * confirmar a la cuenta correcta con el flujo de siempre; si era fantasma
+ * (el caso del Bug 1), se da de baja con adjustCustodyBalance.
+ */
+export async function voidBankDeposit(input: VoidBankDepositInput) {
+  const result = await prisma.$transaction((tx) => voidBankDepositTx(tx, input));
+
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: result.deposit.branchId,
+    module: "treasury",
+    action: "BANK_DEPOSIT_VOIDED",
+    entityType: "BankDeposit",
+    entityId: result.deposit.id,
+    metadataJson: {
+      bankDepositId: result.deposit.id,
+      bankAccountId: result.deposit.bankAccountId,
+      custodyAccountId: result.custodyAccountId,
+      amount: result.amount,
+      reason: result.deposit.voidReason,
+      transferId: result.transferId,
+      bankBalanceBeforeVoid: result.bankBalanceBefore,
+      bankBalanceWentNegative: result.bankBalanceWentNegative,
+    },
+  });
+
+  return { deposit: result.deposit, transferId: result.transferId, custodyAccountId: result.custodyAccountId };
+}
+
+export type AdjustCustodyBalanceInput = {
+  custodyAccountId: string;
+  amount: number;
+  reason: string;
+  actorUserId: string;
+};
+
+/**
+ * El cuerpo transaccional de adjustCustodyBalance (abajo) — mismo patrón
+ * de separación que el resto del módulo.
+ */
+export async function adjustCustodyBalanceTx(tx: Prisma.TransactionClient, input: AdjustCustodyBalanceInput) {
+  if (input.amount <= 0) {
+    throw new Error("VALIDATION_ERROR: el monto del ajuste debe ser mayor que 0");
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 10) {
+    throw new Error("VALIDATION_ERROR: el motivo del ajuste debe tener al menos 10 caracteres");
+  }
+
+  // Lock de fila: serializa ajustes concurrentes sobre la misma custodia
+  // antes de leer el saldo — mismo patrón que confirmBankDepositTx.
+  await tx.$queryRaw`SELECT id FROM "TreasuryAccount" WHERE id = ${input.custodyAccountId} FOR UPDATE`;
+
+  const account = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.custodyAccountId } });
+  if (account.type !== "CUSTODY") {
+    throw new Error("VALIDATION_ERROR: el ajuste de saldo solo aplica a cuentas de custodia");
+  }
+
+  const balance = await getTreasuryAccountBalanceTx(tx, input.custodyAccountId);
+  if (input.amount > balance.balance + 0.01) {
+    throw new Error(`VALIDATION_ERROR: el monto del ajuste (C$${input.amount}) supera el saldo de la custodia (C$${balance.balance})`);
+  }
+
+  const entry = await createTreasuryEntryTx(tx, {
+    accountId: input.custodyAccountId,
+    direction: "OUT",
+    amount: input.amount,
+    entryType: "RECONCILIATION",
+    counterpartyType: "ADJUSTMENT",
+    notes: `Ajuste de custodia: ${reason}`,
+    createdByUserId: input.actorUserId,
+  });
+
+  return { entryId: entry.id, balanceBefore: balance.balance, branchId: account.branchId };
+}
+
+/**
+ * Da de baja efectivo que nunca existió de verdad en una custodia (el caso
+ * fantasma del Bug 1: un depósito directo repetido que dispatchó el mismo
+ * acumulado más de una vez). Una sola entrada OUT — no hay a dónde
+ * transferirlo, simplemente nunca estuvo.
+ */
+export async function adjustCustodyBalance(input: AdjustCustodyBalanceInput) {
+  const result = await prisma.$transaction((tx) => adjustCustodyBalanceTx(tx, input));
+
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: result.branchId ?? undefined,
+    module: "treasury",
+    action: "CUSTODY_BALANCE_ADJUSTED",
+    entityType: "TreasuryAccount",
+    entityId: input.custodyAccountId,
+    metadataJson: {
+      custodyAccountId: input.custodyAccountId,
+      amount: input.amount,
+      reason: input.reason.trim(),
+      balanceBefore: result.balanceBefore,
+      entryId: result.entryId,
+    },
+  });
+
+  return { entryId: result.entryId };
+}
+
 // ─── Liquidación de tarjeta (prompt-tesoreria-cerrar-circuito.md H-1) ─────
 //
 // recordSaleTenderEntriesTx manda cada tender CARD a SETTLEMENT-CENTRAL como
@@ -1292,8 +1488,11 @@ export async function getBranchExposureStatus(
       where: { branchId, retainAwaitingDepositPortion: { gt: 0 } },
       select: { createdAt: true, retainAwaitingDepositPortion: true },
     }),
+    // prompt-tesoreria-depositos.md Fase 3.3 — un depósito anulado no bajó
+    // de verdad lo pendiente de depositar (el monto volvió a custodia):
+    // contarlo acá lo restaría dos veces.
     db.bankDeposit.findMany({
-      where: { branchId },
+      where: { branchId, voidedAt: null },
       select: { depositedAt: true, amount: true },
     }),
     getActiveRetainedCashExpenses(branchId, null, db),

@@ -3644,15 +3644,25 @@ enum TreasuryCardType {
 /// recibidas a esa cuenta. La resolución de "efectivo esperando depósito"
 /// hacia "ya depositado" pasa por acá.
 model BankDeposit {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   bankAccountId     String
   branchId          String
   amount            Decimal
-  depositedAt       DateTime @default(now())
+  depositedAt       DateTime  @default(now())
   confirmedByUserId String
   referenceNumber   String?
   notes             String?
-  createdAt         DateTime @default(now())
+  createdAt         DateTime  @default(now())
+  /// prompt-tesoreria-depositos.md Fase 3 — anular un depósito (voidBankDeposit,
+  /// treasury/service.ts) NO lo borra: lo marca. El corte de
+  /// getAccumulatedRetainedTx no se mueve; el monto vuelve a la custodia de
+  /// origen vía una TreasuryEntry RECONCILIATION aparte. Sin @relation en
+  /// voidedByUserId (mismo criterio que createdByUserId en
+  /// PayrollLegalRateVersion) — es un dato de auditoría, no algo que se
+  /// necesite recorrer desde User.
+  voidedAt          DateTime?
+  voidedByUserId    String?
+  voidReason        String?
 
   bankAccount     TreasuryAccount @relation(fields: [bankAccountId], references: [id])
   branch          Branch          @relation(fields: [branchId], references: [id])

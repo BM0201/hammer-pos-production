@@ -1068,6 +1068,8 @@ type LedgerRow = {
   notes: string | null;
   occurredAt: string;
   runningBalance: number;
+  /** prompt-tesoreria-depositos.md Fase 3.4 — solo poblado cuando esta fila está ligada a un BankDeposit (DEPOSIT_CONFIRMED). */
+  bankDeposit: { id: string; voidedAt: string | null; voidReason: string | null; confirmedBy: { fullName: string | null; username: string } } | null;
 };
 
 const ENTRY_TYPE_LABEL: Record<string, string> = {
@@ -1100,6 +1102,7 @@ function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accou
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [showOpeningForm, setShowOpeningForm] = useState(false);
+  const [voidingRow, setVoidingRow] = useState<LedgerRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1199,27 +1202,48 @@ function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accou
           <div className="overflow-x-auto">
             <table className="hm-table w-full text-xs">
               <thead>
-                <tr><th>Fecha</th><th>Concepto</th><th className="text-right">Movimiento</th><th className="text-right">Saldo</th></tr>
+                <tr><th>Fecha</th><th>Concepto</th><th className="text-right">Movimiento</th><th className="text-right">Saldo</th><th></th></tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id}>
-                    <td className="whitespace-nowrap">{new Date(r.occurredAt).toLocaleDateString("es-NI", { day: "2-digit", month: "2-digit", year: "numeric" })}</td>
-                    <td>
-                      <p className="font-medium text-[var(--color-text)]">{ENTRY_TYPE_LABEL[r.entryType] ?? r.entryType}</p>
-                      {(r.counterpartyName || r.reference) && (
-                        <p className="text-[0.6875rem] text-[var(--color-text-muted)]">{[r.counterpartyName, r.reference].filter(Boolean).join(" · ")}</p>
-                      )}
-                    </td>
-                    <td className={["text-right font-mono tabular-nums", r.direction === "IN" ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-600)]"].join(" ")}>
-                      {r.direction === "IN" ? "+" : "−"}{r.amount.toLocaleString("es-NI", { minimumFractionDigits: 2 })}
-                    </td>
-                    <td className="text-right font-mono tabular-nums text-[var(--color-text)]">{r.runningBalance.toLocaleString("es-NI", { minimumFractionDigits: 2 })}</td>
-                  </tr>
-                ))}
+                {rows.map((r) => {
+                  const voided = r.bankDeposit?.voidedAt != null;
+                  return (
+                    <tr key={r.id} className={voided ? "opacity-60" : ""}>
+                      <td className="whitespace-nowrap">{new Date(r.occurredAt).toLocaleDateString("es-NI", { day: "2-digit", month: "2-digit", year: "numeric" })}</td>
+                      <td>
+                        <p className={["font-medium text-[var(--color-text)]", voided ? "line-through" : ""].join(" ")}>{ENTRY_TYPE_LABEL[r.entryType] ?? r.entryType}</p>
+                        {(r.counterpartyName || r.reference) && (
+                          <p className={["text-[0.6875rem] text-[var(--color-text-muted)]", voided ? "line-through" : ""].join(" ")}>{[r.counterpartyName, r.reference].filter(Boolean).join(" · ")}</p>
+                        )}
+                        {voided && <Badge variant="danger">Anulado</Badge>}
+                      </td>
+                      <td className={["text-right font-mono tabular-nums", voided ? "line-through" : "", r.direction === "IN" ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-600)]"].join(" ")}>
+                        {r.direction === "IN" ? "+" : "−"}{r.amount.toLocaleString("es-NI", { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="text-right font-mono tabular-nums text-[var(--color-text)]">{r.runningBalance.toLocaleString("es-NI", { minimumFractionDigits: 2 })}</td>
+                      <td className="text-right">
+                        {r.bankDeposit && !voided && (
+                          <Button variant="ghost" size="sm" onClick={() => setVoidingRow(r)}>Anular</Button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
+        )}
+
+        {voidingRow?.bankDeposit && (
+          <VoidBankDepositModal
+            bankDepositId={voidingRow.bankDeposit.id}
+            amount={voidingRow.amount}
+            occurredAt={voidingRow.occurredAt}
+            accountLabel={account ? formatBankAccountOption({ ...account, accountAlias: account.owner ?? account.accountAlias }) : ""}
+            confirmedByName={voidingRow.bankDeposit.confirmedBy.fullName ?? voidingRow.bankDeposit.confirmedBy.username}
+            onClose={() => setVoidingRow(null)}
+            onVoided={() => { setVoidingRow(null); void load(); onChanged(); }}
+          />
         )}
 
         {rows && rows.length > 0 && totalPages > 1 && (
@@ -1231,6 +1255,146 @@ function AccountDetailDrawer({ accountId, account, onClose, onChanged }: { accou
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * prompt-tesoreria-depositos.md Fase 3.4 — anular corrige lo que el Bug 1
+ * ya infló: el monto vuelve del banco a la custodia de origen (RECONCILIATION,
+ * el corte no se mueve). Motivo obligatorio (≥10 caracteres, el backend
+ * revalida). Si el depósito era fantasma (nunca hubo plata real), el
+ * siguiente paso es "Ajustar saldo" sobre esa custodia.
+ */
+function VoidBankDepositModal({
+  bankDepositId, amount, occurredAt, accountLabel, confirmedByName, onClose, onVoided,
+}: {
+  bankDepositId: string;
+  amount: number;
+  occurredAt: string;
+  accountLabel: string;
+  confirmedByName: string;
+  onClose: () => void;
+  onVoided: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const canConfirm = reason.trim().length >= 10;
+
+  async function submit() {
+    if (!canConfirm) return;
+    setSaving(true);
+    try {
+      const res = await apiFetch(`/api/master/treasury/bank-deposits/${bankDepositId}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo anular el depósito.");
+      toast.success("Depósito anulado. El monto volvió a la custodia de origen.");
+      onVoided();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo anular el depósito.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
+        <h3 className="text-sm font-semibold text-[var(--color-text)]">Anular depósito</h3>
+        <div className="space-y-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-sm">
+          <div className="flex justify-between"><span className="text-[var(--color-text-secondary)]">Monto</span><span className="font-semibold">{money(amount)}</span></div>
+          <div className="flex justify-between"><span className="text-[var(--color-text-secondary)]">Cuenta</span><span className="text-right font-medium">{accountLabel}</span></div>
+          <div className="flex justify-between"><span className="text-[var(--color-text-secondary)]">Fecha</span><span>{new Date(occurredAt).toLocaleDateString("es-NI", { day: "2-digit", month: "2-digit", year: "numeric" })}</span></div>
+          <div className="flex justify-between"><span className="text-[var(--color-text-secondary)]">Registrado por</span><span>{confirmedByName}</span></div>
+        </div>
+        <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
+          Motivo (obligatorio, mínimo 10 caracteres)
+          <textarea
+            className="hm-input mt-1 w-full"
+            rows={3}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Ej. Depósito duplicado — el mismo efectivo retenido se despachó dos veces."
+          />
+        </label>
+        <p className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
+          El monto vuelve a la custodia de origen de este depósito. Si el depósito nunca existió de verdad, después ajustá el saldo de esa custodia.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancelar</Button>
+          <Button variant="danger" size="sm" onClick={() => void submit()} disabled={!canConfirm} loading={saving}>Anular depósito</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * prompt-tesoreria-depositos.md Fase 3.4 — da de baja efectivo que nunca
+ * existió de verdad en una custodia (el caso fantasma del Bug 1). Una sola
+ * entrada OUT — no hay a dónde transferirlo, el tope es el saldo actual.
+ */
+function AdjustCustodyBalanceModal({ custody, onClose, onAdjusted }: { custody: CustodyRow; onClose: () => void; onAdjusted: () => void }) {
+  const [amount, setAmount] = useState(custody.balance.balance.toFixed(2));
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const amountNumber = Number(amount) || 0;
+  const overCap = amountNumber > custody.balance.balance + 0.01;
+  const canConfirm = amountNumber > 0 && !overCap && reason.trim().length >= 10;
+
+  async function submit() {
+    if (!canConfirm) return;
+    setSaving(true);
+    try {
+      const res = await apiFetch(`/api/master/treasury/custody-accounts/${custody.account.id}/adjust`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: amountNumber, reason: reason.trim() }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo ajustar la custodia.");
+      toast.success("Custodia ajustada.");
+      onAdjusted();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo ajustar la custodia.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
+        <h3 className="text-sm font-semibold text-[var(--color-text)]">Ajustar saldo de custodia</h3>
+        <p className="text-xs text-[var(--color-text-muted)]">{custody.account.holderUser?.fullName ?? custody.account.accountAlias} · Saldo actual {money(custody.balance.balance)}</p>
+        <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
+          Monto a dar de baja (tope: el saldo)
+          <Input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className={overCap ? "border-[var(--color-danger-400)]" : ""} />
+          {overCap && <p className="mt-1 text-[0.6875rem] font-semibold text-[var(--color-danger-600)]">No puede superar el saldo ({money(custody.balance.balance)}).</p>}
+        </label>
+        <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
+          Motivo (obligatorio, mínimo 10 caracteres)
+          <textarea
+            className="hm-input mt-1 w-full"
+            rows={3}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Ej. Efectivo fantasma del depósito directo repetido, ya anulado."
+          />
+        </label>
+        <p className="rounded-lg border border-[var(--color-warning-200)] bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
+          Esto reduce el saldo de la custodia sin moverlo a ningún otro lado — úsalo solo cuando el efectivo nunca existió de verdad.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancelar</Button>
+          <Button variant="danger" size="sm" onClick={() => void submit()} disabled={!canConfirm} loading={saving}>Ajustar saldo</Button>
+        </div>
       </div>
     </div>
   );
@@ -1301,6 +1465,7 @@ function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts:
   const [custodies, setCustodies] = useState<CustodyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<CustodyRow | null>(null);
+  const [adjusting, setAdjusting] = useState<CustodyRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1337,11 +1502,21 @@ function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts:
                   <p className="text-sm font-semibold text-[var(--color-text)]">{row.account.holderUser?.fullName ?? row.account.accountAlias}</p>
                   <p className="text-xs text-[var(--color-text-muted)]">{row.account.branch?.name ?? "Central"} · Enviado {money(row.balance.balance)}</p>
                 </div>
-                <Button variant="secondary" size="sm" onClick={() => setSelected(row)}>Confirmar</Button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setAdjusting(row)}>Ajustar saldo</Button>
+                  <Button variant="secondary" size="sm" onClick={() => setSelected(row)}>Confirmar</Button>
+                </div>
               </div>
             </div>
           ))}
         </div>
+      )}
+      {adjusting && (
+        <AdjustCustodyBalanceModal
+          custody={adjusting}
+          onClose={() => setAdjusting(null)}
+          onAdjusted={() => { setAdjusting(null); void load(); onConfirmed(); }}
+        />
       )}
       {selected && (
         <ConfirmDepositForm

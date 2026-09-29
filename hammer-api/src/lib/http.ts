@@ -108,6 +108,12 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "LEGAL_RATES_VERSION_EXISTS") {
       return errJson("LEGAL_RATES_VERSION_EXISTS", "Ya existe una versión de tasas legales para ese mes. Para corregirla, bórrala y creá una nueva.", 409);
     }
+    // prompt-tesoreria-depositos.md Fase 3 — voidBankDepositTx. Todas las
+    // rutas de tesorería usan toHttpErrorResponse (este archivo), nunca
+    // toApiErrorResponse (lib/api/errors.ts) — los códigos nuevos van acá.
+    if (error.message === "BANK_DEPOSIT_ALREADY_VOIDED") {
+      return errJson("BANK_DEPOSIT_ALREADY_VOIDED", "Este depósito ya fue anulado.", 409);
+    }
     if (error.message === "INJECTION_PREVIEW_STALE") {
       return errJson("INJECTION_PREVIEW_STALE", "El costo del inventario cambió desde que se generó el preview. Vuelve a calcular antes de completar el lote.", 409);
     }

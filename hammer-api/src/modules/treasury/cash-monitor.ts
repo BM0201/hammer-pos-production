@@ -1118,18 +1118,26 @@ export type DepositSummary = {
  * findMany aparte — un groupBy más, no uno menos, que reconstruir la misma
  * respuesta con una consulta extra.
  */
-export async function getDepositSummary(input: { from: Date; to: Date }): Promise<DepositSummary> {
-  const where = { depositedAt: { gte: input.from, lte: input.to } };
+export async function getDepositSummary(
+  input: { from: Date; to: Date },
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<DepositSummary> {
+  // prompt-tesoreria-depositos.md Fase 3.3 — un depósito anulado deja de
+  // contar en la barra de totales (el monto volvió a custodia, nunca llegó
+  // de verdad al banco). `db` inyectable (mismo patrón que
+  // getBranchExposureStatus) para poder probar la exclusión con un fake en
+  // memoria sin base de datos real.
+  const where = { depositedAt: { gte: input.from, lte: input.to }, voidedAt: null };
 
   const [byAccountGroup, byBranchGroup] = await Promise.all([
-    prisma.bankDeposit.groupBy({
+    db.bankDeposit.groupBy({
       by: ["bankAccountId"],
       where,
       _sum: { amount: true },
       _count: { _all: true },
       _max: { depositedAt: true },
     }),
-    prisma.bankDeposit.groupBy({
+    db.bankDeposit.groupBy({
       by: ["branchId"],
       where,
       _sum: { amount: true },
@@ -1142,11 +1150,11 @@ export async function getDepositSummary(input: { from: Date; to: Date }): Promis
   }
 
   const [accounts, branches] = await Promise.all([
-    prisma.treasuryAccount.findMany({
+    db.treasuryAccount.findMany({
       where: { id: { in: byAccountGroup.map((g) => g.bankAccountId) } },
       select: { id: true, bankName: true, accountAlias: true, accountNumber: true, currencyCode: true },
     }),
-    prisma.branch.findMany({
+    db.branch.findMany({
       where: { id: { in: byBranchGroup.map((g) => g.branchId) } },
       select: { id: true, name: true },
     }),

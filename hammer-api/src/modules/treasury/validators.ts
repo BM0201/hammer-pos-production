@@ -222,3 +222,13 @@ export const recordRetainedCashExpenseSchema = z.object({
 export const voidRetainedCashExpenseSchema = z.object({
   reason: z.string().min(10).max(300),
 });
+
+// prompt-tesoreria-depositos.md Fase 3 — mismo shape que voidRetainedCashExpenseSchema.
+export const voidBankDepositSchema = z.object({
+  reason: z.string().min(10).max(300),
+});
+
+export const adjustCustodyBalanceSchema = z.object({
+  amount: z.coerce.number().positive(),
+  reason: z.string().min(10).max(300),
+});
