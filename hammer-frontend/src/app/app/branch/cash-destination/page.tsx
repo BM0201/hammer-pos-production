@@ -10,7 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
-import { money, fmtDayMonth, fmtTimeShort } from "@/lib/format";
+import { money, fmtDayMonth, fmtTimeShort, maskAccountNumber } from "@/lib/format";
 
 /**
  * "Destino del efectivo" — un solo trabajo: decidir qué pasa con el
@@ -59,8 +59,6 @@ type BankAccountOption = { id: string; bankName: string; accountAlias: string; a
 const fmtDate = (iso: string) => fmtDayMonth(iso);
 const fmtTime = (iso: string) => fmtTimeShort(iso);
 const currencySymbol = (code: "NIO" | "USD") => (code === "USD" ? "$" : "C$");
-/** El cajero reconoce la cuenta por el banco y los últimos dígitos, no por un alias interno. */
-const maskAccountNumber = (accountNumber: string) => (accountNumber.length <= 4 ? accountNumber : `····${accountNumber.slice(-4)}`);
 
 /** Título del sheet = título exacto de la fila que lo abrió (D.1) — dos textos distintos para la misma operación confunden a quien está aprendiendo. */
 const SHEET_TITLES: Record<Exclude<SheetKind, "POSTPONE">, string> = {

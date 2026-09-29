@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { syncCashSessionSnapshotTx, userCanOperateCashSessionTx, calculateExpectedCashForSessionTx } from "@/modules/cash-session/service";
 import { mean, stddev } from "@/modules/ai-insights/analyzer";
-import { createTreasuryEntryTx, createInternalTransferTx, findOrCreateCustodyAccountTx, getTreasuryAccountBalanceTx, getActiveRetainedCashExpenses } from "@/modules/treasury/service";
+import { createTreasuryEntryTx, createInternalTransferTx, findOrCreateCustodyAccountTx, getTreasuryAccountBalanceTx, getActiveRetainedCashExpenses, assertCashDepositTargetTx } from "@/modules/treasury/service";
 import { nextBusinessDayFrom } from "@/modules/operations/business-date";
 
 /**
@@ -472,9 +472,11 @@ export async function sendCashOutToCustodyTx(tx: Prisma.TransactionClient, input
   let intendedBankAccountId: string | null = null;
   if (input.reason === "DEPOSIT_DISPATCH") {
     if (!input.bankAccountId) throw new Error("VALIDATION_ERROR: elegí la cuenta destino del depósito");
-    const bank = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.bankAccountId } });
-    if (bank.type !== "BANK") throw new Error("VALIDATION_ERROR: la cuenta destino no es bancaria");
-    if (!bank.isActive) throw new Error("VALIDATION_ERROR: la cuenta destino está inactiva");
+    // prompt-tesoreria-depositos.md Fase 2 (Bug 2) — antes no validaba
+    // moneda: se podía declarar un depósito de efectivo en córdobas hacia
+    // una cuenta en dólares. assertCashDepositTargetTx cubre tipo/actividad/
+    // moneda; la pertenencia a esta sucursal es específica de este flujo.
+    const bank = await assertCashDepositTargetTx(tx, input.bankAccountId);
     if (bank.branchId !== null && bank.branchId !== input.branchId) {
       throw new Error("VALIDATION_ERROR: esa cuenta no pertenece a esta sucursal");
     }

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
 import type { CashPosition } from "@/components/navigation/cash-indicator-panel";
-import { money } from "@/lib/format";
+import { money, formatBankAccountOption } from "@/lib/format";
 
 const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
   UTILITIES: "Servicios (Agua, Luz, Internet)",
@@ -25,6 +25,7 @@ type BankAccountOption = {
   bankName: string;
   accountAlias: string;
   accountNumber: string;
+  currencyCode: string;
   owner: string | null;
   cards?: Array<{ id: string; label: string; last4: string | null; cardType: "DEBIT" | "CREDIT" }>;
 };
@@ -227,7 +228,9 @@ export function RetainedCashExpenseSheet({
                 Cuenta de origen
                 <select ref={firstSelectFieldRef} className="hm-input mt-1 w-full" value={accountId} onChange={(e) => { setAccountId(e.target.value); setCardId(""); }} required>
                   <option value="">Selecciona una cuenta…</option>
-                  {bankAccounts.map((a) => <option key={a.id} value={a.id}>{a.bankName} · {a.owner ?? a.accountAlias} · {a.accountNumber}</option>)}
+                  {bankAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>{formatBankAccountOption({ ...a, accountAlias: a.owner ?? a.accountAlias })}</option>
+                  ))}
                 </select>
               </label>
               {source === "CARD" && account && (

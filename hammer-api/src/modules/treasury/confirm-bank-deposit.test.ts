@@ -28,6 +28,8 @@ const CONFIRMED_BY_USER_ID = "user-1";
 
 type FakeAccount = {
   id: string;
+  type: string;
+  isActive: boolean;
   openingBalance: number;
   openingBalanceAt: Date | null;
   currencyCode: string;
@@ -35,11 +37,14 @@ type FakeAccount = {
   accountAlias: string;
 };
 
+const USD_BANK_ACCOUNT_ID = "acc-bank-usd";
+
 function buildFakeTx(opts: { custodyOpeningBalance: number; intendedBankAccountId?: string | null }) {
   const accounts = new Map<string, FakeAccount>([
-    [CUSTODY_ACCOUNT_ID, { id: CUSTODY_ACCOUNT_ID, openingBalance: opts.custodyOpeningBalance, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "Custodia", accountAlias: "Juan Pérez" }],
-    [BANK_ACCOUNT_ID, { id: BANK_ACCOUNT_ID, openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "BAC", accountAlias: "Cuenta corriente 123" }],
-    [OTHER_BANK_ACCOUNT_ID, { id: OTHER_BANK_ACCOUNT_ID, openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "BANPRO", accountAlias: "Cuenta corriente 456" }],
+    [CUSTODY_ACCOUNT_ID, { id: CUSTODY_ACCOUNT_ID, type: "CUSTODY", isActive: true, openingBalance: opts.custodyOpeningBalance, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "Custodia", accountAlias: "Juan Pérez" }],
+    [BANK_ACCOUNT_ID, { id: BANK_ACCOUNT_ID, type: "BANK", isActive: true, openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "BAC", accountAlias: "Cuenta corriente 123" }],
+    [OTHER_BANK_ACCOUNT_ID, { id: OTHER_BANK_ACCOUNT_ID, type: "BANK", isActive: true, openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", bankName: "BANPRO", accountAlias: "Cuenta corriente 456" }],
+    [USD_BANK_ACCOUNT_ID, { id: USD_BANK_ACCOUNT_ID, type: "BANK", isActive: true, openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "USD", bankName: "BAC", accountAlias: "Cuenta dólares" }],
   ]);
   const treasuryEntries: Array<Record<string, unknown>> = [];
   const brainDecisions: Array<Record<string, unknown>> = [];
@@ -346,4 +351,25 @@ test("bloquea la custodia (FOR UPDATE) antes de leer su saldo", async () => {
   assert.ok(calls.includes("balance_read"), "debe leer el saldo");
   assert.equal(calls[0], "lock", "el bloqueo tiene que ser la PRIMERA operación, antes de leer el saldo");
   assert.ok(calls.indexOf("lock") < calls.indexOf("balance_read"), "el bloqueo va antes de la lectura del saldo");
+});
+
+/**
+ * prompt-tesoreria-depositos.md Fase 2 (Bug 2) — antes confirmBankDepositTx
+ * no validaba tipo/actividad/moneda de la cuenta destino en absoluto: se
+ * podía confirmar efectivo en córdobas contra una cuenta en dólares.
+ */
+test("LA QUE IMPORTA — confirmar contra una cuenta en dólares: rechazado, sin BankDeposit ni transferencia creados", async () => {
+  const { tx, treasuryEntries } = buildFakeTx({ custodyOpeningBalance: 5000 });
+
+  await assert.rejects(
+    confirmBankDepositTx(tx, {
+      custodyAccountId: CUSTODY_ACCOUNT_ID,
+      bankAccountId: USD_BANK_ACCOUNT_ID,
+      branchId: BRANCH_ID,
+      amount: 5000,
+      confirmedByUserId: CONFIRMED_BY_USER_ID,
+    }, 100),
+    /VALIDATION_ERROR.*córdobas/,
+  );
+  assert.equal(treasuryEntries.length, 0, "sin transferencia si la validación de moneda rechaza");
 });

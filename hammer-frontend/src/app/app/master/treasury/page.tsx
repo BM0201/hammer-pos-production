@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
 import { STATE_META, type CashPosition, type CashIndicatorState } from "@/components/navigation/cash-indicator-panel";
 import { CashAccumulationBar } from "@/components/finance/cash-accumulation-bar";
-import { money } from "@/lib/format";
+import { money, formatBankAccountOption } from "@/lib/format";
 
 // Fase 5 (prompt-flujo-velocidad.md): los 3 sheets se controlan por `open`
 // pero se montan siempre (para animar su cierre) — igual se benefician de
@@ -494,6 +494,7 @@ export default function TreasuryPage() {
         onClose={() => setSettlementSheetAccountId(null)}
         settlementAccountId={settlementSheetAccountId ?? ""}
         settlementBalance={accounts.find((a) => a.id === settlementSheetAccountId)?.balance.balance ?? 0}
+        settlementCurrencyCode={accounts.find((a) => a.id === settlementSheetAccountId)?.currencyCode ?? "NIO"}
         accounts={bankAccountsOnly}
         onDone={() => void load()}
       />
@@ -1355,7 +1356,14 @@ function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts:
 }
 
 function ConfirmDepositForm({ custody, bankAccounts, onClose, onConfirmed }: { custody: CustodyRow; bankAccounts: BankAccount[]; onClose: () => void; onConfirmed: () => void }) {
-  const [bankAccountId, setBankAccountId] = useState(custody.intendedBankAccountId ?? "");
+  // prompt-tesoreria-depositos.md Fase 2 (Bug 2) — el prefill (lo que
+  // declaró quien despachó) nunca puede quedar apuntando a una cuenta
+  // deshabilitada (USD): si eso pasó, arranca vacío en vez de una opción
+  // que no se puede elegir.
+  const [bankAccountId, setBankAccountId] = useState(() => {
+    const intended = bankAccounts.find((a) => a.id === custody.intendedBankAccountId);
+    return intended && intended.currencyCode === "NIO" ? intended.id : "";
+  });
   const [amount, setAmount] = useState(custody.balance.balance.toFixed(2));
   const [referenceNumber, setReferenceNumber] = useState("");
   const [notes, setNotes] = useState("");
@@ -1410,8 +1418,13 @@ function ConfirmDepositForm({ custody, bankAccounts, onClose, onConfirmed }: { c
           <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Cuenta destino</label>
           <select className="hm-input w-full" value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)} required>
             <option value="">Selecciona una cuenta…</option>
-            {bankAccounts.map((a) => <option key={a.id} value={a.id}>{a.bankName} · {a.owner ?? a.accountAlias} · {a.accountNumber}</option>)}
+            {bankAccounts.map((a) => (
+              <option key={a.id} value={a.id} disabled={a.currencyCode !== "NIO"}>
+                {formatBankAccountOption({ ...a, accountAlias: a.owner ?? a.accountAlias })}{a.currencyCode !== "NIO" ? " — no admite efectivo en córdobas" : ""}
+              </option>
+            ))}
           </select>
+          <p className="mt-1 text-[0.6875rem] text-[var(--color-text-soft)]">Se acreditará en C$ (córdobas).</p>
         </div>
         <div>
           <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Monto confirmado</label>
@@ -1548,8 +1561,9 @@ function AccountPaymentsPanel({ accounts, onChanged }: { accounts: BankAccount[]
                 <option value="">Selecciona una cuenta…</option>
                 {accounts.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.bankName} · {a.owner ?? a.accountAlias} · {a.accountNumber}
-                    {a.balance.pendingOpening ? " (pendiente de apertura)" : ` · ${a.currencyCode === "USD" ? "$" : "C$"}${a.balance.balance.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    {a.balance.pendingOpening
+                      ? `${formatBankAccountOption({ ...a, accountAlias: a.owner ?? a.accountAlias })} (pendiente de apertura)`
+                      : formatBankAccountOption({ ...a, accountAlias: a.owner ?? a.accountAlias }, { balance: a.balance.balance })}
                   </option>
                 ))}
               </select>

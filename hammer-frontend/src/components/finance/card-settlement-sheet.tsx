@@ -7,7 +7,7 @@ import { apiFetch } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
-import { money } from "@/lib/format";
+import { money, formatBankAccountOption } from "@/lib/format";
 
 type BankAccountOption = {
   id: string;
@@ -27,10 +27,17 @@ type BankAccountOption = {
  * (CARD_FEE) como gasto financiero. El neto se muestra calculado ANTES de
  * confirmar — mismo principio que DirectDepositSheet (nunca escribir en
  * masa/con dinero real sin mostrar antes qué va a pasar).
+ *
+ * prompt-tesoreria-depositos.md Fase 2 — confirmCardSettlementTx exige que
+ * la cuenta destino tenga la MISMA moneda que la cuenta de liquidación (no
+ * "solo córdobas": no se captura tipo de cambio, así que mezclar monedas
+ * dejaría un monto mal denominado sin ningún tipo de cambio real aplicado).
+ * Las cuentas de otra moneda se MUESTRAN deshabilitadas, no se ocultan.
  */
 export function CardSettlementSheet({
   settlementAccountId,
   settlementBalance,
+  settlementCurrencyCode,
   accounts,
   open,
   onClose,
@@ -38,12 +45,14 @@ export function CardSettlementSheet({
 }: {
   settlementAccountId: string;
   settlementBalance: number;
+  settlementCurrencyCode: string;
   accounts: BankAccountOption[];
   open: boolean;
   onClose: () => void;
   onDone: () => void;
 }) {
-  const eligibleAccounts = accounts.filter((a) => a.type === "BANK" && a.isActive && a.currencyCode === "NIO");
+  const bankAccounts = accounts.filter((a) => a.type === "BANK" && a.isActive);
+  const eligibleAccounts = bankAccounts.filter((a) => a.currencyCode === settlementCurrencyCode);
 
   const [grossAmount, setGrossAmount] = useState(settlementBalance.toFixed(2));
   const [feeAmount, setFeeAmount] = useState("0.00");
@@ -168,7 +177,7 @@ export function CardSettlementSheet({
         {eligibleAccounts.length === 0 ? (
           <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 text-center text-sm">
             <Landmark className="mx-auto mb-2 h-5 w-5 text-[var(--color-text-soft)]" aria-hidden="true" />
-            <p className="text-[var(--color-text-muted)]">No hay cuentas en córdobas activas.</p>
+            <p className="text-[var(--color-text-muted)]">No hay cuentas activas en {settlementCurrencyCode === "USD" ? "dólares" : "córdobas"}.</p>
             <Link href="/app/master/treasury" className="mt-2 inline-block text-xs font-semibold text-[var(--color-pay)] hover:underline">
               Ir a Cuentas bancarias
             </Link>
@@ -215,8 +224,11 @@ export function CardSettlementSheet({
             <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
               Cuenta destino
               <select className="hm-input mt-1 w-full" value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)} required>
-                {eligibleAccounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.bankName} · {a.owner ?? a.accountAlias} · {a.accountNumber}</option>
+                {bankAccounts.map((a) => (
+                  <option key={a.id} value={a.id} disabled={a.currencyCode !== settlementCurrencyCode}>
+                    {formatBankAccountOption({ ...a, accountAlias: a.owner ?? a.accountAlias })}
+                    {a.currencyCode !== settlementCurrencyCode ? " — no coincide con la moneda a liquidar" : ""}
+                  </option>
                 ))}
               </select>
             </label>

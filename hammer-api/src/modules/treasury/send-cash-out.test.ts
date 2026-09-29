@@ -200,6 +200,16 @@ test("Prueba 4 — DEPOSIT_DISPATCH con cuenta de OTRA sucursal es rechazado", a
   );
 });
 
+test("Prueba 3.1 (prompt-tesoreria-depositos.md Fase 2) — DEPOSIT_DISPATCH con cuenta en dólares es rechazado", async () => {
+  const usdBank: FakeAccount = { id: "acct-bank-usd", type: "BANK", isActive: true, branchId: BRANCH, currencyCode: "USD", bankName: "BAC", accountAlias: "Reserva", accountNumber: "1122334455" };
+  const { tx, treasuryEntries } = createFakeTx({ sessions: [SESSION], users: [ACTOR, CARRIER], operators: [OPERATOR], accounts: [usdBank], tenders: TENDERS });
+  await assert.rejects(
+    () => sendCashOutToCustodyTx(tx, { cashSessionId: "session-1", branchId: BRANCH, amount: 500, carrierUserId: "user-carrier", reason: "DEPOSIT_DISPATCH", bankAccountId: "acct-bank-usd", actorUserId: "user-1" }),
+    /VALIDATION_ERROR.*córdobas/,
+  );
+  assert.equal(treasuryEntries.length, 0, "sin CashMovement ni TreasuryEntry si la validación de moneda rechaza");
+});
+
 test("Prueba 5 — cuenta con branchId null (cuenta global/central) es aceptada", async () => {
   const centralBank: FakeAccount = { id: "acct-bank-central", type: "BANK", isActive: true, branchId: null, currencyCode: "NIO", bankName: "BAC", accountAlias: "Central", accountNumber: "9988776655" };
   const { tx, treasuryEntries } = createFakeTx({ sessions: [SESSION], users: [ACTOR, CARRIER], operators: [OPERATOR], accounts: [centralBank], tenders: TENDERS });

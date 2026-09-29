@@ -7,7 +7,7 @@ import { apiFetch } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
-import { money } from "@/lib/format";
+import { money, formatBankAccountOption } from "@/lib/format";
 
 type BankAccountOption = {
   id: string;
@@ -53,7 +53,13 @@ export function DirectDepositSheet({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const eligibleAccounts = accounts.filter((a) => a.type === "BANK" && a.isActive && a.currencyCode === "NIO");
+  // prompt-tesoreria-depositos.md Fase 2 (Bug 2) — las cuentas USD se
+  // MUESTRAN deshabilitadas, no se ocultan: que la cuenta no aparezca hace
+  // parecer que dejó de existir. bankAccounts es la lista completa (para
+  // renderizar todas las opciones); nioAccounts es la única elegible de
+  // verdad — la usan el estado vacío y el prefill.
+  const bankAccounts = accounts.filter((a) => a.type === "BANK" && a.isActive);
+  const nioAccounts = bankAccounts.filter((a) => a.currencyCode === "NIO");
 
   const [amount, setAmount] = useState(directDepositAvailable.toFixed(2));
   const [bankAccountId, setBankAccountId] = useState("");
@@ -68,7 +74,8 @@ export function DirectDepositSheet({
   useEffect(() => {
     if (!open) return;
     setAmount(directDepositAvailable.toFixed(2));
-    setBankAccountId((prev) => (prev && eligibleAccounts.some((a) => a.id === prev) ? prev : eligibleAccounts[0]?.id ?? ""));
+    // El prefill nunca puede quedar apuntando a una cuenta deshabilitada (USD).
+    setBankAccountId((prev) => (prev && nioAccounts.some((a) => a.id === prev) ? prev : nioAccounts[0]?.id ?? ""));
     setReferenceNumber("");
     setNotes("");
     returnFocusRef.current = document.activeElement;
@@ -139,7 +146,7 @@ export function DirectDepositSheet({
       });
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar el depósito.");
-      const account = eligibleAccounts.find((a) => a.id === bankAccountId);
+      const account = nioAccounts.find((a) => a.id === bankAccountId);
       toast.success(`Depósito de ${money(amountNumber)} registrado en ${account?.bankName ?? "la cuenta"}.`);
       onDone();
       handleClose();
@@ -169,7 +176,7 @@ export function DirectDepositSheet({
           <Button type="button" variant="ghost" size="sm" onClick={handleClose} disabled={submitting} icon={<X className="h-4 w-4" />}>Cerrar</Button>
         </div>
 
-        {eligibleAccounts.length === 0 ? (
+        {nioAccounts.length === 0 ? (
           <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 text-center text-sm">
             <Landmark className="mx-auto mb-2 h-5 w-5 text-[var(--color-text-soft)]" aria-hidden="true" />
             <p className="text-[var(--color-text-muted)]">No hay cuentas en córdobas activas.</p>
@@ -217,10 +224,13 @@ export function DirectDepositSheet({
             <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
               Cuenta destino
               <select className="hm-input mt-1 w-full" value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)} required>
-                {eligibleAccounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.bankName} · {a.owner ?? a.accountAlias} · {a.accountNumber}</option>
+                {bankAccounts.map((a) => (
+                  <option key={a.id} value={a.id} disabled={a.currencyCode !== "NIO"}>
+                    {formatBankAccountOption({ ...a, accountAlias: a.owner ?? a.accountAlias })}{a.currencyCode !== "NIO" ? " — no admite efectivo en córdobas" : ""}
+                  </option>
                 ))}
               </select>
+              <p className="mt-1 text-[0.6875rem] text-[var(--color-text-soft)]">Se acreditará en C$ (córdobas).</p>
             </label>
 
             <label className="block text-xs font-semibold text-[var(--color-text-muted)]">

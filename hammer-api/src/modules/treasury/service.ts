@@ -799,6 +799,11 @@ export async function confirmBankDepositTx(
   });
   const intendedBankAccountId = latestDispatch?.intendedBankAccountId ?? null;
 
+  // prompt-tesoreria-depositos.md Fase 2 (Bug 2) — antes no validaba nada:
+  // se podía confirmar un depósito de efectivo en córdobas contra una
+  // cuenta en dólares (o inactiva, o no bancaria) sin que nada lo impidiera.
+  await assertCashDepositTargetTx(tx, input.bankAccountId);
+
   const deposit = await tx.bankDeposit.create({
     data: {
       bankAccountId: input.bankAccountId,
@@ -990,14 +995,30 @@ export async function confirmCardSettlementTx(tx: Prisma.TransactionClient, inpu
   if (feeAmount >= input.grossAmount) throw new Error("VALIDATION_ERROR: la comisión no puede ser mayor o igual al monto bruto liquidado");
 
   const [settlementAccount, bankAccount] = await Promise.all([
-    tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.settlementAccountId }, select: { type: true } }),
-    tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.bankAccountId }, select: { type: true } }),
+    tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.settlementAccountId }, select: { type: true, currencyCode: true } }),
+    tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.bankAccountId }, select: { type: true, currencyCode: true, isActive: true } }),
   ]);
   if (settlementAccount.type !== "SETTLEMENT") {
     throw new Error("VALIDATION_ERROR: la cuenta de origen debe ser de tipo SETTLEMENT");
   }
   if (bankAccount.type !== "BANK") {
     throw new Error("VALIDATION_ERROR: la cuenta destino debe ser una cuenta bancaria");
+  }
+  if (!bankAccount.isActive) {
+    throw new Error("VALIDATION_ERROR: la cuenta destino está inactiva");
+  }
+  // prompt-tesoreria-depositos.md Fase 2 — createInternalTransferTx exige
+  // toAmount cuando las monedas difieren (invariante 4), y esta función
+  // SIEMPRE manda netAmount explícito: eso sorteaba el guard de moneda
+  // distinta, así que una liquidación en córdobas podía acreditarse en una
+  // cuenta en dólares sin ningún tipo de cambio real — el mismo monto
+  // numérico tratado como si fuera otra moneda. No es "solo córdobas": es
+  // la MISMA moneda que la cuenta de liquidación (SETTLEMENT-CENTRAL es NIO
+  // hoy, pero la regla no depende de ese hecho).
+  if (bankAccount.currencyCode !== settlementAccount.currencyCode) {
+    throw new Error(
+      `VALIDATION_ERROR: la cuenta destino es en ${bankAccount.currencyCode} y la liquidación es en ${settlementAccount.currencyCode} — sin tipo de cambio, la cuenta destino tiene que ser de la misma moneda`,
+    );
   }
 
   // Lock de fila: serializa liquidaciones concurrentes sobre la misma cuenta
@@ -1077,6 +1098,35 @@ type DirectDepositInput = {
 };
 
 /**
+ * prompt-tesoreria-depositos.md Fase 2 (Bug 2) — una sola validación para
+ * las 4 rutas que reciben efectivo FÍSICO en córdobas y necesitan una
+ * cuenta bancaria destino: depósito directo, confirmación de depósito,
+ * envío a custodia (DEPOSIT_DISPATCH) y declaración de destino al cierre.
+ * Antes cada una tenía su propia versión (depositBranchCashDirectTx con 3
+ * ifs, sendCashOutToCustodyTx con 2) o ninguna (confirmBankDepositTx y
+ * declareCashDestination no validaban tipo/actividad/moneda de la cuenta
+ * en absoluto — un depósito de efectivo en córdobas podía confirmarse o
+ * declararse contra una cuenta en dólares sin que nada lo impidiera).
+ * Devuelve la cuenta completa para que el caller no tenga que volver a
+ * buscarla si necesita otro campo (p.ej. branchId en sendCashOutToCustodyTx).
+ */
+export async function assertCashDepositTargetTx(tx: Prisma.TransactionClient, bankAccountId: string) {
+  const account = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: bankAccountId } });
+  if (account.type !== "BANK") {
+    throw new Error("VALIDATION_ERROR: la cuenta destino no es bancaria");
+  }
+  if (!account.isActive) {
+    throw new Error("VALIDATION_ERROR: la cuenta destino está inactiva");
+  }
+  if (account.currencyCode !== "NIO") {
+    throw new Error(
+      `VALIDATION_ERROR: la cuenta ${account.bankName} · ${account.accountAlias} es en dólares; un depósito de efectivo en córdobas solo puede ir a una cuenta en córdobas`,
+    );
+  }
+  return account;
+}
+
+/**
  * prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) — el cuerpo transaccional
  * de depositBranchCashDirect (abajo), separado del wrapper para poder
  * probarlo con un tx en memoria (mismo patrón que recordAccountPaymentTx/
@@ -1112,18 +1162,7 @@ export async function depositBranchCashDirectTx(
     );
   }
 
-  const bank = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.bankAccountId } });
-  if (bank.type !== "BANK") {
-    throw new Error("VALIDATION_ERROR: la cuenta destino no es bancaria");
-  }
-  if (!bank.isActive) {
-    throw new Error("VALIDATION_ERROR: la cuenta destino está inactiva");
-  }
-  if (bank.currencyCode !== "NIO") {
-    throw new Error(
-      "VALIDATION_ERROR: depósito directo solo a cuentas en córdobas (una cuenta en dólares requiere tipo de cambio explícito)",
-    );
-  }
+  await assertCashDepositTargetTx(tx, input.bankAccountId);
 
   const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.actorUserId, branchId: input.branchId });
 
@@ -1434,6 +1473,13 @@ export async function declareCashDestination(input: {
     // declaración real ya hecha por una persona, no.
     if (existing && !existing.isAutoDefaulted) {
       throw new Error("DECLARATION_ALREADY_EXISTS: esta sesión ya tiene una declaración de destino");
+    }
+
+    // prompt-tesoreria-depositos.md Fase 2 (Bug 2) — antes no validaba nada:
+    // se podía declarar un depósito de efectivo en córdobas hacia una
+    // cuenta en dólares. Antes de escribir nada (upsert incluido).
+    if (input.depositBankAccountId) {
+      await assertCashDepositTargetTx(tx, input.depositBankAccountId);
     }
 
     // El total declarado debe corresponder al efectivo realmente contado al

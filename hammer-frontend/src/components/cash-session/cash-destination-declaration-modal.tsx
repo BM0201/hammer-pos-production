@@ -5,11 +5,11 @@ import { Check, X, HandCoins, Landmark, Vault, Clock } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, formatBankAccountOption } from "@/lib/format";
 import toast from "react-hot-toast";
 
 type Person = { id: string; fullName: string; username: string };
-type BankAccountOption = { id: string; bankName: string; accountAlias: string };
+type BankAccountOption = { id: string; type: string; bankName: string; accountAlias: string; accountNumber: string; currencyCode: string };
 /** Mismo shape que Postponement en app/branch/cash-destination/page.tsx. */
 type Postponement = { id: string; amount: number; reason: string | null; postponedUntil: string; createdAt: string };
 
@@ -106,13 +106,20 @@ export function CashDestinationDeclarationModal({
   const exactMatch = Math.abs(missing) < 0.005;
   const retainSplit = decomposeRetainedAmount(retain, cashFundAmount);
 
+  // prompt-tesoreria-depositos.md Fase 2 (Bug 2) — el endpoint devuelve
+  // cualquier tipo de cuenta activa de la sucursal (CUSTODY/SAFE/SETTLEMENT
+  // incluidas); acá solo importan las bancarias. Las de otra moneda se
+  // MUESTRAN deshabilitadas, no se ocultan.
+  const bankOptions = bankAccounts.filter((a) => a.type === "BANK");
+  const nioOptions = bankOptions.filter((a) => a.currencyCode === "NIO");
+
   const needsHandOverPerson = handOver > 0 && !handOverUserId;
   const needsDepositCarrier = deposit > 0 && !depositCarrierUserId;
   // Cuenta destino obligatoria cuando hay entre cuáles elegir — mismo
   // criterio que el selector de cobro por transferencia: sin ninguna cuenta
   // cargada no se puede pedir un dato que no existe
   // (prompt-pantallas-recorrido-dinero.md §3).
-  const needsDepositAccount = deposit > 0 && bankAccounts.length > 0 && !depositBankAccountId;
+  const needsDepositAccount = deposit > 0 && nioOptions.length > 0 && !depositBankAccountId;
   const canConfirm = !saving && exactMatch && !needsHandOverPerson && !needsDepositCarrier && !needsDepositAccount;
 
   const postponedTotal = initialDeclarationFromPostponements(countedAmount, postponements).postponedTotal;
@@ -233,11 +240,18 @@ export function CashDestinationDeclarationModal({
                 </select>
               )}
             </div>
-            {deposit > 0 && bankAccounts.length > 0 && (
-              <select className="hm-input mt-2 w-full" value={depositBankAccountId} onChange={(e) => setDepositBankAccountId(e.target.value)}>
-                <option value="">Cuenta destino…</option>
-                {bankAccounts.map((a) => <option key={a.id} value={a.id}>{a.bankName} · {a.accountAlias}</option>)}
-              </select>
+            {deposit > 0 && bankOptions.length > 0 && (
+              <>
+                <select className="hm-input mt-2 w-full" value={depositBankAccountId} onChange={(e) => setDepositBankAccountId(e.target.value)}>
+                  <option value="">Cuenta destino…</option>
+                  {bankOptions.map((a) => (
+                    <option key={a.id} value={a.id} disabled={a.currencyCode !== "NIO"}>
+                      {formatBankAccountOption(a)}{a.currencyCode !== "NIO" ? " — no admite efectivo en córdobas" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[0.65rem] text-[var(--color-text-soft)]">Se acreditará en C$ (córdobas).</p>
+              </>
             )}
             {needsDepositCarrier && <p className="mt-1 text-[0.65rem] text-[var(--color-danger-600)]">Falta quién lo lleva.</p>}
             {needsDepositAccount && <p className="mt-1 text-[0.65rem] text-[var(--color-danger-600)]">Falta la cuenta destino.</p>}

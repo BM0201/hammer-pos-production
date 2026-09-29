@@ -175,3 +175,38 @@ export function numFixed(value: number | string | null | undefined, decimals = 2
 export function qty2(value: number): string {
   return value.toLocaleString("es-NI", { maximumFractionDigits: 2 });
 }
+
+/**
+ * Últimos 4 dígitos visibles, el resto enmascarado — el usuario reconoce la
+ * cuenta por el banco y esos dígitos, no por el número completo en pantalla.
+ * Movida acá desde branch/cash-destination/page.tsx (prompt-tesoreria-
+ * depositos.md Fase 2) para que formatBankAccountOption la reuse.
+ */
+export function maskAccountNumber(accountNumber: string): string {
+  return accountNumber.length <= 4 ? accountNumber : `····${accountNumber.slice(-4)}`;
+}
+
+const CURRENCY_LABELS: Record<string, { symbol: string; name: string }> = {
+  NIO: { symbol: "C$", name: "Córdobas" },
+  USD: { symbol: "US$", name: "Dólares" },
+};
+
+/**
+ * prompt-tesoreria-depositos.md Fase 2 (Bug 2) — los selectores de cuenta
+ * bancaria mostraban "banco · alias · número" sin moneda, y un depósito de
+ * efectivo en córdobas podía confirmarse contra una cuenta en dólares sin
+ * ninguna señal visual. Un solo formato para TODOS los selectores, con la
+ * moneda SIEMPRE visible: "BAC · Operaciones · ····4821 · C$ Córdobas".
+ * `balance` opcional agrega el saldo, en la moneda propia de la cuenta
+ * (nunca convertido).
+ */
+export function formatBankAccountOption(
+  account: { bankName: string; accountAlias: string; accountNumber: string; currencyCode: string },
+  opts?: { balance?: number },
+): string {
+  const currency = CURRENCY_LABELS[account.currencyCode] ?? { symbol: account.currencyCode, name: account.currencyCode };
+  const base = `${account.bankName} · ${account.accountAlias} · ${maskAccountNumber(account.accountNumber)} · ${currency.symbol} ${currency.name}`;
+  if (opts?.balance === undefined) return base;
+  const amount = opts.balance.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${base} · ${currency.symbol}${amount}`;
+}

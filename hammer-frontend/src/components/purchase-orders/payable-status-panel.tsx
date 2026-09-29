@@ -6,7 +6,7 @@ import { AlertTriangle, Banknote, Check, Clock, DollarSign } from "lucide-react"
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money, fmtDate } from "@/lib/format";
+import { money, fmtDate, formatBankAccountOption } from "@/lib/format";
 
 /**
  * Fase 4 (prompt-cxp.md) — estado de pago de una orden de compra + registrar
@@ -146,7 +146,7 @@ export function PayableStatusPanel({
                 <select className="hm-input w-full" value={accountId} onChange={(e) => setAccountId(e.target.value)} required>
                   <option value="">Selecciona una cuenta…</option>
                   {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.bankName} · {a.owner ?? a.accountAlias} · {a.accountNumber} · {money(a.balance.balance)}</option>
+                    <option key={a.id} value={a.id}>{formatBankAccountOption({ ...a, accountAlias: a.owner ?? a.accountAlias }, { balance: a.balance.balance })}</option>
                   ))}
                 </select>
               )}

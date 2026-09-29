@@ -20,13 +20,18 @@ const BANK_ACCOUNT_ID = "acc-bank-1";
 const SAFE_ACCOUNT_ID = "acc-safe-1";
 const CONFIRMED_BY_USER_ID = "user-1";
 
-type FakeAccount = { id: string; type: string; openingBalance: number; openingBalanceAt: Date | null; currencyCode: string };
+type FakeAccount = { id: string; type: string; openingBalance: number; openingBalanceAt: Date | null; currencyCode: string; isActive: boolean };
+
+const USD_BANK_ACCOUNT_ID = "acc-bank-usd";
+const INACTIVE_BANK_ACCOUNT_ID = "acc-bank-inactive";
 
 function buildFakeTx(opts: { settlementOpeningBalance: number }) {
   const accounts = new Map<string, FakeAccount>([
-    [SETTLEMENT_ACCOUNT_ID, { id: SETTLEMENT_ACCOUNT_ID, type: "SETTLEMENT", openingBalance: opts.settlementOpeningBalance, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO" }],
-    [BANK_ACCOUNT_ID, { id: BANK_ACCOUNT_ID, type: "BANK", openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO" }],
-    [SAFE_ACCOUNT_ID, { id: SAFE_ACCOUNT_ID, type: "SAFE", openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO" }],
+    [SETTLEMENT_ACCOUNT_ID, { id: SETTLEMENT_ACCOUNT_ID, type: "SETTLEMENT", openingBalance: opts.settlementOpeningBalance, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", isActive: true }],
+    [BANK_ACCOUNT_ID, { id: BANK_ACCOUNT_ID, type: "BANK", openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", isActive: true }],
+    [SAFE_ACCOUNT_ID, { id: SAFE_ACCOUNT_ID, type: "SAFE", openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", isActive: true }],
+    [USD_BANK_ACCOUNT_ID, { id: USD_BANK_ACCOUNT_ID, type: "BANK", openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "USD", isActive: true }],
+    [INACTIVE_BANK_ACCOUNT_ID, { id: INACTIVE_BANK_ACCOUNT_ID, type: "BANK", openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO", isActive: false }],
   ]);
   const treasuryEntries: Array<Record<string, unknown>> = [];
   let entryCounter = 0;
@@ -177,4 +182,41 @@ test("liquidar exactamente lo que hay disponible (sin comisión) no se rechaza",
   });
 
   assert.equal(treasuryEntries.length, 2);
+});
+
+/**
+ * prompt-tesoreria-depositos.md Fase 2 — createInternalTransferTx exige
+ * toAmount cuando las monedas difieren, y confirmCardSettlementTx SIEMPRE
+ * manda netAmount explícito: sin este guard, una liquidación en córdobas
+ * (SETTLEMENT-CENTRAL, NIO) podía acreditarse en una cuenta en dólares sin
+ * ningún tipo de cambio real — el mismo número tratado como otra moneda.
+ */
+test("LA QUE IMPORTA — liquidación en córdobas hacia una cuenta en dólares: rechazada, sin ninguna entrada creada", async () => {
+  const { tx, treasuryEntries } = buildFakeTx({ settlementOpeningBalance: 10000 });
+
+  await assert.rejects(
+    confirmCardSettlementTx(tx, {
+      settlementAccountId: SETTLEMENT_ACCOUNT_ID,
+      bankAccountId: USD_BANK_ACCOUNT_ID,
+      grossAmount: 5000,
+      confirmedByUserId: CONFIRMED_BY_USER_ID,
+    }),
+    /VALIDATION_ERROR.*misma moneda/,
+  );
+  assert.equal(treasuryEntries.length, 0, "no se crea ninguna entrada si la validación de moneda rechaza");
+});
+
+test("la cuenta destino inactiva se rechaza", async () => {
+  const { tx, treasuryEntries } = buildFakeTx({ settlementOpeningBalance: 10000 });
+
+  await assert.rejects(
+    confirmCardSettlementTx(tx, {
+      settlementAccountId: SETTLEMENT_ACCOUNT_ID,
+      bankAccountId: INACTIVE_BANK_ACCOUNT_ID,
+      grossAmount: 500,
+      confirmedByUserId: CONFIRMED_BY_USER_ID,
+    }),
+    /VALIDATION_ERROR.*inactiva/,
+  );
+  assert.equal(treasuryEntries.length, 0);
 });
