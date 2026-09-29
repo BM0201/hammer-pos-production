@@ -85,6 +85,10 @@ function createFakeTx(opts: {
   let seq = 0;
 
   const tx = {
+    // prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) — DEPOSIT_DISPATCH
+    // ahora bloquea la sucursal antes de todo lo demás (mismo corte que
+    // getAccumulatedRetainedTx). HANDOVER no lo llama.
+    $queryRaw: async () => [],
     cashSession: {
       findUniqueOrThrow: async ({ where }: { where: { id: string } }) => {
         const s = sessions.get(where.id);

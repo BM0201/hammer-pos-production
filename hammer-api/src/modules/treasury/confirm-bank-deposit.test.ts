@@ -43,9 +43,19 @@ function buildFakeTx(opts: { custodyOpeningBalance: number; intendedBankAccountI
   ]);
   const treasuryEntries: Array<Record<string, unknown>> = [];
   const brainDecisions: Array<Record<string, unknown>> = [];
+  // prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) — orden de llamadas:
+  // confirmBankDepositTx ahora bloquea la custodia ANTES de leer el saldo.
+  // "lock" lo escribe $queryRaw; "balance_read" el primer aggregate (el que
+  // arma getTreasuryAccountBalanceTx) — si el orden se invirtiera algún día,
+  // el test de ordering de abajo lo detecta.
+  const calls: string[] = [];
   let entryCounter = 0;
 
   const tx = {
+    $queryRaw: async () => {
+      calls.push("lock");
+      return [];
+    },
     treasuryAccount: {
       findUniqueOrThrow: async ({ where }: { where: { id: string } }) => {
         const account = accounts.get(where.id);
@@ -56,6 +66,7 @@ function buildFakeTx(opts: { custodyOpeningBalance: number; intendedBankAccountI
     },
     treasuryEntry: {
       aggregate: async ({ where }: { where: { accountId: string; direction: string } }) => {
+        calls.push("balance_read");
         const sum = treasuryEntries
           .filter((e) => e.accountId === where.accountId && e.direction === where.direction)
           .reduce((acc, e) => acc + (e.amount as number), 0);
@@ -101,7 +112,7 @@ function buildFakeTx(opts: { custodyOpeningBalance: number; intendedBankAccountI
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 
-  return { tx, brainDecisions, treasuryEntries };
+  return { tx, brainDecisions, treasuryEntries, calls };
 }
 
 test("shortfall mayor a la tolerancia → crea REVIEW_BANK_DEPOSIT_SHORTFALL con los datos correctos", async () => {
@@ -311,4 +322,28 @@ test("shortfall Y bankAccountMismatch a la vez → crea las DOS decisiones, cada
   assert.deepEqual(types, ["REVIEW_BANK_DEPOSIT_ACCOUNT_MISMATCH", "REVIEW_BANK_DEPOSIT_SHORTFALL"]);
   const fingerprints = new Set(brainDecisions.map((d) => d.fingerprint));
   assert.equal(fingerprints.size, 2, "cada hallazgo tiene su propio fingerprint, no comparten uno");
+});
+
+/**
+ * prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) — sin este lock, dos
+ * confirmaciones concurrentes sobre la misma custodia podían leer el mismo
+ * saldo y pasar las dos el guard de "amount > balance". El fix bloquea la
+ * fila ANTES de leer — este test verifica el ORDEN, no solo que el lock se
+ * llame alguna vez.
+ */
+test("bloquea la custodia (FOR UPDATE) antes de leer su saldo", async () => {
+  const { tx, calls } = buildFakeTx({ custodyOpeningBalance: 5000 });
+
+  await confirmBankDepositTx(tx, {
+    custodyAccountId: CUSTODY_ACCOUNT_ID,
+    bankAccountId: BANK_ACCOUNT_ID,
+    branchId: BRANCH_ID,
+    amount: 4700,
+    confirmedByUserId: CONFIRMED_BY_USER_ID,
+  }, 100);
+
+  assert.ok(calls.includes("lock"), "debe bloquear la fila de la custodia");
+  assert.ok(calls.includes("balance_read"), "debe leer el saldo");
+  assert.equal(calls[0], "lock", "el bloqueo tiene que ser la PRIMERA operación, antes de leer el saldo");
+  assert.ok(calls.indexOf("lock") < calls.indexOf("balance_read"), "el bloqueo va antes de la lectura del saldo");
 });

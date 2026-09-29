@@ -5,7 +5,7 @@ import { Prisma, PrismaClient, BrainDecisionCategory, BrainDecisionSeverity, typ
 type DbClient = PrismaClient | Prisma.TransactionClient;
 import { decomposeRetainedAmount, computeExposureAlert, type ExposureAlertThreshold } from "@/modules/treasury/decomposition";
 import { computeOutstandingAwaitingDeposit, countBusinessDaysBetween } from "@/modules/treasury/exposure";
-import { getBranchCashPosition } from "@/modules/treasury/cash-monitor";
+import { getAccumulatedRetainedTx } from "@/modules/treasury/cash-monitor";
 import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
 import { APPROVAL_REQUEST_TYPES } from "@/modules/approvals/constants";
@@ -775,6 +775,13 @@ export async function confirmBankDepositTx(
   input: ConfirmBankDepositInput,
   toleranceAmount: number,
 ) {
+  // prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) — lock de fila ANTES de
+  // leer el saldo: sin esto, dos confirmaciones concurrentes sobre la misma
+  // custodia podían leer el mismo balance y pasar las dos el guard de abajo
+  // (el propio comentario de getTreasuryAccountBalanceTx ya advertía este
+  // riesgo). Mismo patrón que confirmCardSettlementTx/confirmCustodyReceiptTx.
+  await tx.$queryRaw`SELECT id FROM "TreasuryAccount" WHERE id = ${input.custodyAccountId} FOR UPDATE`;
+
   const custodyBalance = await getTreasuryAccountBalanceTx(tx, input.custodyAccountId);
   if (input.amount > custodyBalance.balance + 0.01) {
     throw new Error(`VALIDATION_ERROR: el monto confirmado (C$${input.amount}) supera lo que hay en custodia (C$${custodyBalance.balance})`);
@@ -1070,36 +1077,39 @@ type DirectDepositInput = {
 };
 
 /**
- * El cuerpo transaccional de depositBranchCashDirect (abajo), separado del
- * wrapper que abre la transacción para poder probarlo con un tx en memoria
- * (mismo patrón que recordAccountPaymentTx/account-payment.test.ts):
- * getBranchCashPosition usa el cliente global de Prisma — no se puede fakear
- * sin una base de datos real — así que el wrapper la resuelve ANTES de abrir
- * la transacción y le pasa acá solo los dos números que hacen falta.
+ * prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) — el cuerpo transaccional
+ * de depositBranchCashDirect (abajo), separado del wrapper para poder
+ * probarlo con un tx en memoria (mismo patrón que recordAccountPaymentTx/
+ * account-payment.test.ts). Recibe SOLO accumulatedAmount — ya no
+ * pendingDeposit: ese número incluía cashInDrawerToday (la gaveta ABIERTA),
+ * y el depósito directo no puede tocar esa plata (regla correcta: el
+ * efectivo de una caja abierta solo sale por la sesión — sendCashOutToCustody
+ * / Destino del efectivo —, que sí registra el CashMovement y baja el
+ * esperado). El wrapper recalcula accumulatedAmount DENTRO de su propia
+ * transacción, con la sucursal bloqueada (getAccumulatedRetainedTx,
+ * cash-monitor.ts) — antes se resolvía afuera sin lock, así que dos
+ * depósitos concurrentes pasaban los dos la validación.
  *
- * POR QUÉ SE DESPACHA max(amount, accumulatedAmount) Y NO SOLO `amount`:
- * getBranchCashPosition corta el acumulado por TIEMPO — busca el último
- * DEPOSIT_DISPATCH/DEPOSIT_CONFIRMED sobre una cuenta CUSTODY de la sucursal
- * y descarta TODA declaración anterior a esa fecha, sin importar el monto
- * despachado. Si acá se despachara solo `amount` en un depósito PARCIAL, ese
- * despacho igual movería el corte hacia adelante y accumulatedAmount
- * quedaría en 0 aunque falte plata por depositar — un descuadre silencioso
- * (la sucursal reportaría "al día" con dinero todavía retenido). Por eso se
- * despacha el acumulado COMPLETO a la custodia del actor y se transfiere al
- * banco solo `amount`: el remanente (accumulatedAmount - amount, si amount
- * es menor) se queda en esa custodia como "en tránsito" — el mismo
- * remanente que ya maneja confirmBankDeposit cuando confirma menos de lo que
- * hay en custodia. Si `amount` excede accumulatedAmount (cubre además algo
- * del efectivo de hoy en la gaveta abierta), no queda remanente.
+ * Con el guard de abajo, amount nunca supera accumulatedAmount — así que lo
+ * que se despacha a custodia es siempre accumulatedAmount completo (ya no
+ * hace falta max(amount, accumulatedAmount)): sigue siendo necesario
+ * despachar el acumulado COMPLETO y no solo `amount`, porque
+ * getAccumulatedRetainedTx corta por TIEMPO (último DEPOSIT_DISPATCH/
+ * DEPOSIT_CONFIRMED), no por monto — despachar solo `amount` en un depósito
+ * parcial igual movería el corte y dejaría accumulatedAmount en 0 con plata
+ * todavía sin depositar. El remanente (accumulatedAmount - amount) se queda
+ * en la custodia del actor como "en tránsito", igual que ya maneja
+ * confirmBankDeposit cuando confirma menos de lo que hay en custodia.
  */
 export async function depositBranchCashDirectTx(
   tx: Prisma.TransactionClient,
   input: DirectDepositInput,
-  pendingDeposit: number,
   accumulatedAmount: number,
 ) {
-  if (input.amount > pendingDeposit + 0.01) {
-    throw new Error(`VALIDATION_ERROR: el monto supera lo disponible para depositar (C$${pendingDeposit})`);
+  if (input.amount > accumulatedAmount + 0.01) {
+    throw new Error(
+      `VALIDATION_ERROR: el monto supera el efectivo retenido de cierres anteriores (C$${accumulatedAmount}). El efectivo de la caja abierta se envía desde Destino del efectivo.`,
+    );
   }
 
   const bank = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.bankAccountId } });
@@ -1117,7 +1127,7 @@ export async function depositBranchCashDirectTx(
 
   const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.actorUserId, branchId: input.branchId });
 
-  const dispatchAmount = round2(Math.max(input.amount, accumulatedAmount));
+  const dispatchAmount = round2(accumulatedAmount);
   await createTreasuryEntryTx(tx, {
     accountId: custody.id,
     direction: "IN",
@@ -1160,20 +1170,25 @@ export async function depositBranchCashDirectTx(
 }
 
 /**
- * Depósito DIRECTO: el efectivo acumulado de la sucursal (getBranchCashPosition,
- * cash-monitor.ts) sale directo a una cuenta bancaria en córdobas, sin pasar
- * por "enviar a alguien y que Master confirme después" (confirmBankDeposit,
- * arriba). El tope se recalcula acá — nunca se confía en el monto del
- * cliente como límite. Ver depositBranchCashDirectTx para el porqué del
- * paso por custodia con el acumulado completo.
+ * Depósito DIRECTO: el efectivo acumulado de la sucursal sale directo a una
+ * cuenta bancaria en córdobas, sin pasar por "enviar a alguien y que Master
+ * confirme después" (confirmBankDeposit, arriba). El tope (accumulatedAmount)
+ * se recalcula DENTRO de la transacción, con la sucursal bloqueada (FOR
+ * UPDATE) — antes se leía con getBranchCashPosition ANTES de abrir la
+ * transacción y sin lock, así que dos requests simultáneos (dos pestañas, un
+ * reintento de red) podían pasar los dos la validación contra el mismo
+ * acumulado. Ver depositBranchCashDirectTx para el porqué del paso por
+ * custodia con el acumulado completo.
  */
 export async function depositBranchCashDirect(input: DirectDepositInput) {
   if (input.amount <= 0) throw new Error("INVALID_DEPOSIT_AMOUNT: el monto depositado debe ser mayor que 0");
 
-  const position = await getBranchCashPosition(input.branchId);
-  const result = await prisma.$transaction((tx) =>
-    depositBranchCashDirectTx(tx, input, position.pendingDeposit, position.accumulatedAmount),
-  );
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Branch" WHERE id = ${input.branchId} FOR UPDATE`;
+    const { accumulatedAmount } = await getAccumulatedRetainedTx(tx, input.branchId);
+    const txResult = await depositBranchCashDirectTx(tx, input, accumulatedAmount);
+    return { ...txResult, accumulatedBefore: accumulatedAmount };
+  });
 
   await logAuditEvent({
     actorUserId: input.actorUserId,
@@ -1187,8 +1202,7 @@ export async function depositBranchCashDirect(input: DirectDepositInput) {
       bankAccountId: input.bankAccountId,
       amount: input.amount,
       custodyAccountId: result.custodyAccountId,
-      pendingDepositBefore: position.pendingDeposit,
-      accumulatedBefore: position.accumulatedAmount,
+      accumulatedBefore: result.accumulatedBefore,
       remainderLeftInCustody: result.remainderInCustody,
       transferId: result.transferId,
     },

@@ -236,6 +236,12 @@ export type BranchCashPosition = {
   cashFundAmount: number | null;
   pendingDeposit: number;
   pendingDepositNote: string | null;
+  /** prompt-tesoreria-depositos.md Fase 1 — lo único que el depósito
+   * DIRECTO puede tomar: el acumulado retenido de cierres anteriores,
+   * nunca la gaveta abierta (esa sale por Destino del efectivo). Distinto
+   * de pendingDeposit, que sigue siendo informativo ("cuánto habría que
+   * depositar en total") pero ya no es tope de nada. */
+  directDepositAvailable: number;
   inTransitAmount: number;
   state: CashIndicatorState;
   projection: ThresholdProjection | null;
@@ -263,6 +269,52 @@ async function getLastDepositCutoff(db: Prisma.TransactionClient | typeof prisma
   return lastDispatchOrConfirm?.occurredAt ?? null;
 }
 
+/**
+ * prompt-tesoreria-depositos.md Fase 1 — el efectivo retenido de cierres
+ * ANTERIORES (nunca la gaveta abierta), la misma cuenta que ya hacía
+ * getBranchCashPosition pero extraída para que depositBranchCashDirectTx
+ * pueda recalcularla DENTRO de su propia transacción, con la sucursal
+ * bloqueada — antes se resolvía afuera (getBranchCashPosition, sin lock),
+ * lo que permitía que dos depósitos concurrentes pasaran los dos la
+ * validación. getLastDepositCutoff y getActiveRetainedCashExpenses ya
+ * aceptaban un `db` inyectable; lo único que faltaba pasar era el
+ * findMany de declaraciones, antes fijo al cliente global.
+ */
+export async function getAccumulatedRetainedTx(
+  db: Prisma.TransactionClient | typeof prisma,
+  branchId: string,
+): Promise<{ accumulatedAmount: number; oldestRetainedAt: Date | null }> {
+  const lastDispatchOrConfirmAt = await getLastDepositCutoff(db, branchId);
+
+  const retainedDeclarations = await db.cashDestinationDeclaration.findMany({
+    where: {
+      branchId,
+      retainAwaitingDepositPortion: { gt: 0 },
+      ...(lastDispatchOrConfirmAt ? { createdAt: { gt: lastDispatchOrConfirmAt } } : {}),
+    },
+    select: { retainAwaitingDepositPortion: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const cashExpensesSinceCutoff = await getActiveRetainedCashExpenses(branchId, lastDispatchOrConfirmAt, db);
+  const totalDeclared = retainedDeclarations.reduce((sum, d) => sum + Number(d.retainAwaitingDepositPortion), 0);
+  const totalCashExpenses = cashExpensesSinceCutoff.reduce((sum, e) => sum + e.amount, 0);
+  const accumulatedAmount = round2(Math.max(0, totalDeclared - totalCashExpenses));
+  const oldestRetainedAt = retainedDeclarations[0]?.createdAt ?? null;
+
+  return { accumulatedAmount, oldestRetainedAt };
+}
+
+/**
+ * Cuánto puede salir HOY por depósito directo (§Bug 1 del doc) — hoy es
+ * simplemente el acumulado retenido, pero queda nombrada y separada por si
+ * en el futuro gana una regla propia (p.ej. un tope aparte de compliance)
+ * que no deba aplicarse a otros usos de accumulatedAmount.
+ */
+export function computeDirectDepositAvailable(accumulatedAmount: number): number {
+  return accumulatedAmount;
+}
+
 export async function getBranchCashPosition(branchId: string, now: Date = new Date()): Promise<BranchCashPosition> {
   const [branch, policy, openSession, custodyAccounts] = await Promise.all([
     prisma.branch.findUniqueOrThrow({ where: { id: branchId }, select: { cashFundAmount: true } }),
@@ -283,28 +335,7 @@ export async function getBranchCashPosition(branchId: string, now: Date = new Da
     inTransitAmount = round2(Number(inAgg._sum.amount ?? 0) - Number(outAgg._sum.amount ?? 0));
   }
 
-  const lastDispatchOrConfirmAt = await getLastDepositCutoff(prisma, branchId);
-
-  const retainedDeclarations = await prisma.cashDestinationDeclaration.findMany({
-    where: {
-      branchId,
-      retainAwaitingDepositPortion: { gt: 0 },
-      ...(lastDispatchOrConfirmAt ? { createdAt: { gt: lastDispatchOrConfirmAt } } : {}),
-    },
-    select: { retainAwaitingDepositPortion: true, createdAt: true },
-    orderBy: { createdAt: "asc" },
-  });
-
-  // prompt-tesoreria-gasto-retenido-y-techo.md D-1 — un gasto pagado con
-  // efectivo retenido baja el acumulado, con el mismo corte que ya usa esta
-  // función para las declaraciones (desde el último despacho/confirmación).
-  // No se envejece nada acá — este indicador no calcula antigüedad por
-  // declaración, solo el monto total.
-  const cashExpensesSinceCutoff = await getActiveRetainedCashExpenses(branchId, lastDispatchOrConfirmAt);
-  const totalDeclared = retainedDeclarations.reduce((sum, d) => sum + Number(d.retainAwaitingDepositPortion), 0);
-  const totalCashExpenses = cashExpensesSinceCutoff.reduce((sum, e) => sum + e.amount, 0);
-  const accumulatedAmount = round2(Math.max(0, totalDeclared - totalCashExpenses));
-  const oldestRetainedAt = retainedDeclarations[0]?.createdAt ?? null;
+  const { accumulatedAmount, oldestRetainedAt } = await getAccumulatedRetainedTx(prisma, branchId);
   const daysSinceOldestRetained = oldestRetainedAt ? Math.floor((now.getTime() - oldestRetainedAt.getTime()) / MS_PER_DAY) : 0;
 
   const cashFundAmount = branch.cashFundAmount === null ? null : Number(branch.cashFundAmount);
@@ -357,6 +388,7 @@ export async function getBranchCashPosition(branchId: string, now: Date = new Da
     cashFundAmount,
     pendingDeposit,
     pendingDepositNote,
+    directDepositAvailable: computeDirectDepositAvailable(accumulatedAmount),
     inTransitAmount,
     state,
     projection,
@@ -410,6 +442,15 @@ type SendCashOutInput = {
  * escribe contra `tx`.
  */
 export async function sendCashOutToCustodyTx(tx: Prisma.TransactionClient, input: SendCashOutInput) {
+  // prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) — DEPOSIT_DISPATCH
+  // mueve el mismo corte que usa getAccumulatedRetainedTx (getLastDepositCutoff):
+  // bloquear la sucursal serializa esto contra un depositBranchCashDirect
+  // concurrente, que también bloquea la sucursal antes de recalcular su
+  // acumulado. HANDOVER no mueve ese corte — no hace falta el lock ahí.
+  if (input.reason === "DEPOSIT_DISPATCH") {
+    await tx.$queryRaw`SELECT id FROM "Branch" WHERE id = ${input.branchId} FOR UPDATE`;
+  }
+
   // Mismo cuerpo que createCashMovement (cash-session/service.ts), pero
   // reconstruido acá en vez de llamarlo: esa función abre SU PROPIA
   // transacción, y el CashMovement (sale de la gaveta) y la entrada del

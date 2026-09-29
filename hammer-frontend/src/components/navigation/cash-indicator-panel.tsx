@@ -25,6 +25,11 @@ export type CashPosition = {
   cashFundAmount: number | null;
   pendingDeposit: number;
   pendingDepositNote: string | null;
+  /** prompt-tesoreria-depositos.md Fase 1 — lo único que el depósito
+   * DIRECTO puede tomar (ver DirectDepositSheet); distinto de
+   * pendingDeposit, que sigue siendo informativo pero ya no es tope de
+   * nada porque incluye la gaveta abierta. */
+  directDepositAvailable: number;
   inTransitAmount: number;
   state: CashIndicatorState;
   projection: { earliestDate: string | null; likelyDate: string | null; basis: string; confidence: "LOW" | "MEDIUM" | "HIGH" } | null;

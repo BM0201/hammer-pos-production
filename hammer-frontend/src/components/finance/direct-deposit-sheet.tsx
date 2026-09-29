@@ -21,17 +21,24 @@ type BankAccountOption = {
 };
 
 /**
- * Depósito directo: el acumulado retenido de la sucursal sale directo a una
- * cuenta bancaria en córdobas, en una sola acción — sin pasar por "enviar a
- * alguien y que Master confirme después" (ConfirmDepositForm, en la misma
- * pantalla). El monto SIEMPRE se revalida contra el tope en el servidor —
- * este formulario solo evita el viaje redondo obvio (tipear un monto que ya
- * se sabe que va a rebotar).
+ * Depósito directo: el acumulado retenido de CIERRES ANTERIORES sale
+ * directo a una cuenta bancaria en córdobas, en una sola acción — sin pasar
+ * por "enviar a alguien y que Master confirme después" (ConfirmDepositForm,
+ * en la misma pantalla). El monto SIEMPRE se revalida contra el tope en el
+ * servidor — este formulario solo evita el viaje redondo obvio (tipear un
+ * monto que ya se sabe que va a rebotar).
+ *
+ * prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) — el tope YA NO es
+ * pendingDeposit (que incluía la gaveta ABIERTA, cashInDrawerToday): ese
+ * efectivo solo puede salir por la sesión de caja (Destino del efectivo),
+ * nunca desde acá. directDepositAvailable es lo único que este flujo puede
+ * tomar.
  */
 export function DirectDepositSheet({
   branchId,
   branchName,
-  pendingDeposit,
+  directDepositAvailable,
+  cashInDrawerToday,
   accounts,
   open,
   onClose,
@@ -39,7 +46,8 @@ export function DirectDepositSheet({
 }: {
   branchId: string;
   branchName: string;
-  pendingDeposit: number;
+  directDepositAvailable: number;
+  cashInDrawerToday: number;
   accounts: BankAccountOption[];
   open: boolean;
   onClose: () => void;
@@ -47,7 +55,7 @@ export function DirectDepositSheet({
 }) {
   const eligibleAccounts = accounts.filter((a) => a.type === "BANK" && a.isActive && a.currencyCode === "NIO");
 
-  const [amount, setAmount] = useState(pendingDeposit.toFixed(2));
+  const [amount, setAmount] = useState(directDepositAvailable.toFixed(2));
   const [bankAccountId, setBankAccountId] = useState("");
   const [referenceNumber, setReferenceNumber] = useState("");
   const [notes, setNotes] = useState("");
@@ -59,7 +67,7 @@ export function DirectDepositSheet({
 
   useEffect(() => {
     if (!open) return;
-    setAmount(pendingDeposit.toFixed(2));
+    setAmount(directDepositAvailable.toFixed(2));
     setBankAccountId((prev) => (prev && eligibleAccounts.some((a) => a.id === prev) ? prev : eligibleAccounts[0]?.id ?? ""));
     setReferenceNumber("");
     setNotes("");
@@ -106,14 +114,15 @@ export function DirectDepositSheet({
   if (!open) return null;
 
   const amountNumber = Number(amount) || 0;
-  const overCap = amountNumber > pendingDeposit + 0.01;
+  const overCap = amountNumber > directDepositAvailable + 0.01;
+  const nothingAvailable = directDepositAvailable <= 0.01;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (submitting) return; // el doble click no puede generar dos depósitos — este endpoint mueve dinero real.
     if (!bankAccountId) { toast.error("Selecciona la cuenta destino."); return; }
     if (amountNumber <= 0) { toast.error("El monto debe ser mayor que 0."); return; }
-    if (overCap) { toast.error(`El monto no puede superar lo disponible para depositar (${money(pendingDeposit)}).`); return; }
+    if (overCap) { toast.error(`El monto no puede superar lo disponible para depositar (${money(directDepositAvailable)}).`); return; }
 
     setSubmitting(true);
     try {
@@ -168,8 +177,23 @@ export function DirectDepositSheet({
               Ir a Cuentas bancarias
             </Link>
           </div>
+        ) : nothingAvailable ? (
+          <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 text-center text-sm">
+            <Landmark className="mx-auto mb-2 h-5 w-5 text-[var(--color-text-soft)]" aria-hidden="true" />
+            <p className="text-[var(--color-text-muted)]">Nada disponible para depositar todavía — no hay efectivo retenido de cierres anteriores.</p>
+            {cashInDrawerToday > 0 && (
+              <p className="mt-1 text-[0.6875rem] text-[var(--color-text-soft)]">
+                La caja abierta tiene {money(cashInDrawerToday)}. Ese efectivo se envía desde Destino del efectivo, no desde acá.
+              </p>
+            )}
+          </div>
         ) : (
           <form onSubmit={submit} className="flex-none space-y-3">
+            {cashInDrawerToday > 0 && (
+              <p className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-[0.6875rem] text-[var(--color-text-muted)]">
+                La caja abierta tiene {money(cashInDrawerToday)}. Ese efectivo se envía desde Destino del efectivo, no desde acá.
+              </p>
+            )}
             <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
               Monto
               <div className="mt-1 flex items-center gap-2">
@@ -183,10 +207,10 @@ export function DirectDepositSheet({
                   className={overCap ? "border-[var(--color-danger-400)]" : ""}
                   required
                 />
-                <Button type="button" variant="secondary" size="sm" onClick={() => setAmount(pendingDeposit.toFixed(2))}>Todo</Button>
+                <Button type="button" variant="secondary" size="sm" onClick={() => setAmount(directDepositAvailable.toFixed(2))}>Todo</Button>
               </div>
               <p className={["mt-1 text-[0.6875rem]", overCap ? "font-semibold text-[var(--color-danger-600)]" : "text-[var(--color-text-soft)]"].join(" ")}>
-                Máximo disponible: {money(pendingDeposit)}
+                Máximo disponible: {money(directDepositAvailable)}
               </p>
             </label>
 

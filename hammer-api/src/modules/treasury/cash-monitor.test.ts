@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { projectThresholdReach, detectBelowTypicalCash, computeCashIndicatorState, computeAmountToDeposit } from "@/modules/treasury/cash-monitor";
+import { projectThresholdReach, detectBelowTypicalCash, computeCashIndicatorState, computeAmountToDeposit, computeDirectDepositAvailable, getAccumulatedRetainedTx } from "@/modules/treasury/cash-monitor";
 
 /**
  * prompt-indicador-efectivo-inteligente.md §8 — pruebas sobre las
@@ -197,4 +197,109 @@ test("computeAmountToDeposit: suma SIEMPRE los dos términos, hoy y acumulado ju
 test("computeAmountToDeposit: el resultado nunca es negativo aunque el fondo supere el total", () => {
   const result = computeAmountToDeposit({ cashInDrawerToday: 10, accumulatedAmount: 5, cashFloor: 10000 });
   assert.equal(result.amount, 0);
+});
+
+// ── prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) ────────────────────
+
+test("computeDirectDepositAvailable: hoy es simplemente el acumulado (identidad, con nombre propio para el futuro)", () => {
+  assert.equal(computeDirectDepositAvailable(1000), 1000);
+  assert.equal(computeDirectDepositAvailable(0), 0);
+});
+
+/**
+ * getAccumulatedRetainedTx — con `db` inyectable (mismo patrón que
+ * account-payment.test.ts), sin base de datos real. La prueba que importa
+ * es la última: la función NUNCA consulta CashSession — no puede incluir la
+ * gaveta abierta aunque quisiera, es estructuralmente imposible, no solo
+ * "no lo hace hoy".
+ */
+function buildFakeRetainedDb(opts: {
+  cutoffEntry?: { occurredAt: Date } | null;
+  declarations: Array<{ retainAwaitingDepositPortion: number; createdAt: Date }>;
+  cashExpenseEntries?: Array<{ occurredAt: Date; amount: number; expensePaymentId: string }>;
+  activeExpenseIds?: string[];
+}) {
+  const declarations = opts.declarations;
+  const cashExpenseEntries = opts.cashExpenseEntries ?? [];
+  const activeExpenseIds = new Set(opts.activeExpenseIds ?? cashExpenseEntries.map((e) => e.expensePaymentId));
+
+  const db = {
+    treasuryEntry: {
+      // getLastDepositCutoff (DEPOSIT_DISPATCH/DEPOSIT_CONFIRMED) y
+      // getActiveRetainedCashExpenses (EXPENSE/SAFE) comparten esta misma
+      // tabla fake — se distinguen por el shape del where, no hace falta
+      // más que devolver lo que cada uno espera.
+      findFirst: async () => opts.cutoffEntry ?? null,
+      findMany: async ({ where }: { where: { occurredAt?: { gt: Date } } }) =>
+        cashExpenseEntries.filter((e) => !where.occurredAt || e.occurredAt > where.occurredAt.gt),
+    },
+    cashDestinationDeclaration: {
+      findMany: async ({ where }: { where: { createdAt?: { gt: Date } } }) =>
+        declarations.filter((d) => !where.createdAt || d.createdAt > where.createdAt.gt),
+    },
+    operatingExpense: {
+      findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.filter((id) => activeExpenseIds.has(id)).map((id) => ({ id })),
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+
+  return db;
+}
+
+test("getAccumulatedRetainedTx: sin corte previo, suma todas las declaraciones retenidas", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [
+      { retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-01") },
+      { retainAwaitingDepositPortion: 2000, createdAt: new Date("2026-01-02") },
+    ],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 3000);
+  assert.deepEqual(result.oldestRetainedAt, new Date("2026-01-01"));
+});
+
+test("getAccumulatedRetainedTx: con corte, solo cuenta declaraciones POSTERIORES al último despacho/confirmación", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: { occurredAt: new Date("2026-01-05") },
+    declarations: [
+      { retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-02") }, // antes del corte, no cuenta
+      { retainAwaitingDepositPortion: 500, createdAt: new Date("2026-01-06") },
+    ],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 500);
+});
+
+test("getAccumulatedRetainedTx: un gasto pagado con efectivo retenido baja el acumulado", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [{ retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-01") }],
+    cashExpenseEntries: [{ occurredAt: new Date("2026-01-02"), amount: 300, expensePaymentId: "exp-1" }],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 700);
+});
+
+test("getAccumulatedRetainedTx: nunca da negativo aunque los gastos superen lo declarado", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [{ retainAwaitingDepositPortion: 200, createdAt: new Date("2026-01-01") }],
+    cashExpenseEntries: [{ occurredAt: new Date("2026-01-02"), amount: 500, expensePaymentId: "exp-1" }],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 0);
+});
+
+test("getAccumulatedRetainedTx: NUNCA consulta CashSession — la gaveta abierta no puede colarse en el resultado (fix Bug 1)", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [{ retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-01") }],
+  });
+  // Si la implementación alguna vez intentara leer la gaveta abierta,
+  // db.cashSession ni siquiera existe acá — explotaría en vez de devolver
+  // un número inflado en silencio.
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 1000, "el acumulado sale solo de lo retenido, nunca de la gaveta");
 });

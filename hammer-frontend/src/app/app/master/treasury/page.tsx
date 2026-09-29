@@ -483,7 +483,8 @@ export default function TreasuryPage() {
         onClose={() => setDepositSheetBranchId(null)}
         branchId={depositSheetBranchId ?? ""}
         branchName={branches.find((b) => b.id === depositSheetBranchId)?.name ?? ""}
-        pendingDeposit={cashPositions.find((r) => r.branch.id === depositSheetBranchId)?.position.pendingDeposit ?? 0}
+        directDepositAvailable={cashPositions.find((r) => r.branch.id === depositSheetBranchId)?.position.directDepositAvailable ?? 0}
+        cashInDrawerToday={cashPositions.find((r) => r.branch.id === depositSheetBranchId)?.position.cashInDrawerToday ?? 0}
         accounts={bankAccountsOnly}
         onDone={() => void load()}
       />
@@ -790,8 +791,8 @@ function CashPositionRowItem({
               variant="success"
               size="sm"
               onClick={onDeposit}
-              disabled={position.pendingDeposit <= 0.01}
-              title={position.pendingDeposit <= 0.01 ? "Nada disponible para depositar" : undefined}
+              disabled={position.directDepositAvailable <= 0.01}
+              title={position.directDepositAvailable <= 0.01 ? "No hay efectivo retenido pendiente de depósito" : undefined}
             >
               Depositar a cuenta
             </Button>
