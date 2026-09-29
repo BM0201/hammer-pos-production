@@ -17,11 +17,54 @@ export type BenefitAccrualMode = "ACCRUE_MONTHLY" | "ON_PAYMENT";
 
 export const INSS_EMPLOYER_SIZE_THRESHOLD = 50;
 
-/** Tasas INSS según régimen y conteo GLOBAL de activos (<50 / ≥50). */
-export function resolveInssRates(regime: InssRegime, activeEmployeeCount: number): { laboral: number; patronal: number } {
-  const large = activeEmployeeCount >= INSS_EMPLOYER_SIZE_THRESHOLD;
-  if (regime === "IVM_RP") return { laboral: 0.05, patronal: large ? 0.165 : 0.155 };
-  return { laboral: 0.07, patronal: large ? 0.225 : 0.215 };
+/** Tabla progresiva ANUAL del IR salarial (Ley 822), en córdobas. */
+export type IrBracket = { from: number; base: number; rate: number };
+
+export const IR_TABLE_ANNUAL: IrBracket[] = [
+  { from: 0, base: 0, rate: 0.0 },
+  { from: 100_000, base: 0, rate: 0.15 },
+  { from: 200_000, base: 15_000, rate: 0.2 },
+  { from: 350_000, base: 45_000, rate: 0.25 },
+  { from: 500_000, base: 82_500, rate: 0.3 },
+];
+
+/**
+ * prompt-nomina-config.md Fase 3.1 — mismo cambio que Fase 2.2 del backend
+ * (payroll-nicaragua.ts): el conjunto completo de tasas legales
+ * versionables. DEFAULT_LEGAL_RATES es el fallback (las constantes de
+ * siempre) para cuando el backend todavía no sirvió `legal` — el panel de
+ * Planilla ya trae su propio desglose del servidor la mayoría del tiempo;
+ * esto es solo la red de seguridad, igual que el resto de este archivo.
+ */
+export type LegalRates = {
+  inssIntegralLaboral: number;
+  inssIntegralPatronalLt50: number;
+  inssIntegralPatronalGte50: number;
+  inssIvmRpLaboral: number;
+  inssIvmRpPatronalLt50: number;
+  inssIvmRpPatronalGte50: number;
+  inssEmployerSizeThreshold: number;
+  inatecRate: number;
+  irTableAnnual: IrBracket[];
+};
+
+export const DEFAULT_LEGAL_RATES: LegalRates = {
+  inssIntegralLaboral: 0.07,
+  inssIntegralPatronalLt50: 0.215,
+  inssIntegralPatronalGte50: 0.225,
+  inssIvmRpLaboral: 0.05,
+  inssIvmRpPatronalLt50: 0.155,
+  inssIvmRpPatronalGte50: 0.165,
+  inssEmployerSizeThreshold: INSS_EMPLOYER_SIZE_THRESHOLD,
+  inatecRate: 0.02,
+  irTableAnnual: IR_TABLE_ANNUAL,
+};
+
+/** Tasas INSS según régimen y conteo GLOBAL de activos (<50 / ≥50). `legal` opcional, por defecto DEFAULT_LEGAL_RATES — mismo comportamiento de siempre si no se pasa. */
+export function resolveInssRates(regime: InssRegime, activeEmployeeCount: number, legal: LegalRates = DEFAULT_LEGAL_RATES): { laboral: number; patronal: number } {
+  const large = activeEmployeeCount >= legal.inssEmployerSizeThreshold;
+  if (regime === "IVM_RP") return { laboral: legal.inssIvmRpLaboral, patronal: large ? legal.inssIvmRpPatronalGte50 : legal.inssIvmRpPatronalLt50 };
+  return { laboral: legal.inssIntegralLaboral, patronal: large ? legal.inssIntegralPatronalGte50 : legal.inssIntegralPatronalLt50 };
 }
 
 export type PayrollRates = {
@@ -32,6 +75,8 @@ export type PayrollRates = {
   vacacionesMode: BenefitAccrualMode;
   indemnizacionMode: BenefitAccrualMode;
   salarioMinimoSectorial: number;
+  /** Tasas legales servidas por el backend para el período — ver payroll-rate-config.ts (API). */
+  legal?: LegalRates;
 };
 
 export const DEFAULT_PAYROLL_RATES: PayrollRates = {
@@ -42,23 +87,16 @@ export const DEFAULT_PAYROLL_RATES: PayrollRates = {
   vacacionesMode: "ACCRUE_MONTHLY",
   indemnizacionMode: "ACCRUE_MONTHLY",
   salarioMinimoSectorial: 0,
+  legal: DEFAULT_LEGAL_RATES,
 };
-
-/** Tabla progresiva ANUAL del IR salarial (Ley 822), en córdobas. */
-const IR_TABLE_ANNUAL = [
-  { from: 0, base: 0, rate: 0.0 },
-  { from: 100_000, base: 0, rate: 0.15 },
-  { from: 200_000, base: 15_000, rate: 0.2 },
-  { from: 350_000, base: 45_000, rate: 0.25 },
-  { from: 500_000, base: 82_500, rate: 0.3 },
-];
 
 export const round2 = (v: number) => Math.round(v * 100) / 100;
 
-function computeAnnualIr(annualTaxable: number): number {
+/** IR anual según la tabla progresiva — exportada para la vista previa del editor de reformas legales (Fase 3.2). */
+export function computeAnnualIr(annualTaxable: number, table: IrBracket[] = DEFAULT_LEGAL_RATES.irTableAnnual): number {
   if (!Number.isFinite(annualTaxable) || annualTaxable <= 0) return 0;
-  let bracket = IR_TABLE_ANNUAL[0];
-  for (const b of IR_TABLE_ANNUAL) if (annualTaxable > b.from) bracket = b;
+  let bracket = table[0];
+  for (const b of table) if (annualTaxable > b.from) bracket = b;
   return Math.max(0, bracket.base + (annualTaxable - bracket.from) * bracket.rate);
 }
 
@@ -249,15 +287,19 @@ export function computeMonthlyBreakdown(
   inssMonthlySalary?: number,
 ): PayrollBreakdown {
   const salary = Math.max(0, monthlySalary);
+  // legal es opcional en PayrollRates (puede no haber llegado todavía del
+  // backend) — DEFAULT_LEGAL_RATES es la misma red de seguridad que el
+  // resto de este archivo.
+  const legal = rates.legal ?? DEFAULT_LEGAL_RATES;
   // INSS laboral/patronal e INATEC sobre la base cotizable (como la factura);
   // prestaciones y neto sobre el salario real.
   const inssBase = Math.max(0, inssMonthlySalary ?? salary);
-  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
+  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount, legal);
   const inssLaboral = round2(inssBase * inss.laboral);
-  const ir = applyIrRetention ? round2(computeAnnualIr((salary - inssBase * inss.laboral) * 12) / 12) : 0;
+  const ir = applyIrRetention ? round2(computeAnnualIr((salary - inssBase * inss.laboral) * 12, legal.irTableAnnual) / 12) : 0;
   const netPay = round2(Math.max(0, salary - inssLaboral - ir));
   const inssPatronal = round2(inssBase * inss.patronal);
-  const inatec = round2(inssBase * rates.inatecRate);
+  const inatec = round2(inssBase * legal.inatecRate);
 
   const at = new Date();
   const months = startDate ? monthsOfService(startDate, at) : 0;

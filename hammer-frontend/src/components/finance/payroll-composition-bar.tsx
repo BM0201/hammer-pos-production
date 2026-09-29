@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { money, moneyRounded as fmtC0 } from "@/lib/format";
-import { fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES } from "./payroll-calc";
+import { fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES, DEFAULT_LEGAL_RATES } from "./payroll-calc";
 
 /**
  * Barra de composición del costo empresa (elemento firma de Planilla V2).
@@ -22,12 +22,13 @@ export type PayrollSegKey = "neto" | "ret" | "patronal" | "inatec" | "agui" | "v
 export type PayrollSegmentAmounts = Record<PayrollSegKey, number>;
 
 export function segmentLabels(rates: PayrollRates = DEFAULT_PAYROLL_RATES): Record<PayrollSegKey, string> {
-  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
+  const legal = rates.legal ?? DEFAULT_LEGAL_RATES;
+  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount, legal);
   return {
     neto: "Neto al empleado",
     ret: `Retenciones (INSS ${fmtRatePct(inss.laboral)} + IR)`,
     patronal: `INSS patronal ${fmtRatePct(inss.patronal)}`,
-    inatec: `INATEC ${fmtRatePct(rates.inatecRate)}`,
+    inatec: `INATEC ${fmtRatePct(legal.inatecRate)}`,
     agui: "Aguinaldo (1/12)",
     vac: "Vacaciones (2.5 días/mes)",
     indem: "Indemnización Art. 45 (según antigüedad)",

@@ -3,7 +3,7 @@
 import { Building2, Info, Landmark, Users } from "lucide-react";
 import { money } from "@/lib/format";
 import { PayrollCompositionBar, type PayrollSegmentAmounts } from "./payroll-composition-bar";
-import { fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES, INSS_EMPLOYER_SIZE_THRESHOLD } from "./payroll-calc";
+import { fmtRatePct, resolveInssRates, type PayrollRates, DEFAULT_PAYROLL_RATES, DEFAULT_LEGAL_RATES } from "./payroll-calc";
 
 /**
  * Hero de costo de Planilla: la historia del costo total empresa del mes —
@@ -54,12 +54,14 @@ export function PayrollCostHero({ totals, periodLabel, branchLabel, provisionsIn
     indem: totals.indem,
   };
   // Chip informativo del INSS: régimen + tasa patronal resuelta por el conteo
-  // REAL de activos de la empresa; al cruzar el umbral de 50 cambia solo.
-  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
+  // REAL de activos de la empresa; al cruzar el umbral (legal, versionable)
+  // cambia solo.
+  const legal = rates.legal ?? DEFAULT_LEGAL_RATES;
+  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount, legal);
   const regimeLabel = rates.inssRegime === "IVM_RP" ? "Régimen IVM-RP" : "Régimen Integral";
-  const sizeLabel = rates.activeEmployeeCount >= INSS_EMPLOYER_SIZE_THRESHOLD
-    ? `≥${INSS_EMPLOYER_SIZE_THRESHOLD} empleados`
-    : `<${INSS_EMPLOYER_SIZE_THRESHOLD} empleados`;
+  const sizeLabel = rates.activeEmployeeCount >= legal.inssEmployerSizeThreshold
+    ? `≥${legal.inssEmployerSizeThreshold} empleados`
+    : `<${legal.inssEmployerSizeThreshold} empleados`;
 
   return (
     <div className="hm-module-card overflow-hidden">

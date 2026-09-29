@@ -9,6 +9,7 @@ import { apiFetch } from "@/lib/client/api";
 import { money } from "@/lib/format";
 import {
   computeMonthlyBreakdown,
+  DEFAULT_LEGAL_RATES,
   fmtDateShort,
   fmtRatePct,
   fmtRatePct3,
@@ -169,7 +170,8 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
 
   if (!employee) return null;
 
-  const inssResolved = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
+  const legal = rates.legal ?? DEFAULT_LEGAL_RATES;
+  const inssResolved = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount, legal);
   // Ancla de antigüedad: si ya se liquidó-y-recontrató, todo se cuenta desde
   // ahí — evita que la indemnización acumule sin límite.
   const anchor = employee.lastLiquidationAt ?? employee.startDate;
@@ -277,7 +279,7 @@ export function EmployeeProfileDrawer({ employee, rates, includeProvisions = tru
               El patrón paga aparte (no se deduce al trabajador)
             </p>
             <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("patronal")}INSS patronal <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(inssResolved.patronal)}</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.inssPatronal)}</span></div>
-            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("inatec")}INATEC <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(rates.inatecRate)} · lo paga la empresa</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.inatec)}</span></div>
+            <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("inatec")}INATEC <small className="text-[0.6875rem] text-[var(--color-text-soft)]">{fmtRatePct(legal.inatecRate)} · lo paga la empresa</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.inatec)}</span></div>
             {includeProvisions && (
               <>
                 <div className={dline}><span className="flex items-center gap-2 text-[var(--color-text-secondary)]">{sw("agui")}Aguinaldo <small className="text-[0.6875rem] text-[var(--color-text-soft)]">1/12</small></span><span className="font-mono tabular-nums text-[var(--color-text)]">{money(b.aguinaldoAccrual)}</span></div>

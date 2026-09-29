@@ -6,6 +6,8 @@ import { Receipt, RefreshCw, Save, AlertTriangle } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money } from "@/lib/format";
 import { buildPayrollConfigPatch, type PayrollConfigFields } from "@/components/payroll/payroll-config-patch";
+import { LegalRatesSection, type LegalRateVersionSummary } from "@/components/payroll/legal-rates-section";
+import type { LegalRates } from "@/components/finance/payroll-calc";
 
 /**
  * prompt-nomina-config.md Fase 1 — PATCH /api/payroll/rates existía
@@ -32,6 +34,9 @@ type RatesResponse = {
   inss: { laboral: number; patronal: number };
   irTableAnnual: IrBracket[];
   activeEmployeesBelowMinimum: number;
+  legal: LegalRates;
+  legalSource: string;
+  legalVersions: LegalRateVersionSummary[];
 };
 
 const INSS_REGIME_OPTIONS: { value: InssRegime; label: string }[] = [
@@ -242,51 +247,12 @@ export default function PayrollConfigPage() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5 space-y-3">
-        <h2 className="text-base font-semibold text-[var(--color-text)]">Tasas legales vigentes</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border)] text-left text-xs text-[var(--color-text-muted)]">
-                <th className="py-1.5 pr-3">Concepto</th>
-                <th className="py-1.5 pr-3 text-right">Tasa</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="border-b border-[var(--color-border)]"><td className="py-1.5 pr-3">INSS laboral (Integral)</td><td className="py-1.5 pr-3 text-right">7.00%</td></tr>
-              <tr className="border-b border-[var(--color-border)]"><td className="py-1.5 pr-3">INSS patronal Integral, empresa &lt;50</td><td className="py-1.5 pr-3 text-right">21.50%</td></tr>
-              <tr className="border-b border-[var(--color-border)]"><td className="py-1.5 pr-3">INSS patronal Integral, empresa ≥50</td><td className="py-1.5 pr-3 text-right">22.50%</td></tr>
-              <tr className="border-b border-[var(--color-border)]"><td className="py-1.5 pr-3">INSS laboral (IVM-RP)</td><td className="py-1.5 pr-3 text-right">5.00%</td></tr>
-              <tr className="border-b border-[var(--color-border)]"><td className="py-1.5 pr-3">INSS patronal IVM-RP, empresa &lt;50</td><td className="py-1.5 pr-3 text-right">15.50%</td></tr>
-              <tr className="border-b border-[var(--color-border)]"><td className="py-1.5 pr-3">INSS patronal IVM-RP, empresa ≥50</td><td className="py-1.5 pr-3 text-right">16.50%</td></tr>
-              <tr><td className="py-1.5 pr-3">INATEC (patronal, ambos regímenes)</td><td className="py-1.5 pr-3 text-right">{(data.rates.inatecRate * 100).toFixed(2)}%</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <p className="pt-2 text-sm font-medium text-[var(--color-text)]">Tabla IR anual (Ley 822, art. 23)</p>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border)] text-left text-xs text-[var(--color-text-muted)]">
-                <th className="py-1.5 pr-3">Desde</th>
-                <th className="py-1.5 pr-3 text-right">Base</th>
-                <th className="py-1.5 pr-3 text-right">Tasa sobre exceso</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.irTableAnnual.map((b) => (
-                <tr key={b.from} className="border-b border-[var(--color-border)] last:border-0">
-                  <td className="py-1.5 pr-3">{money(b.from)}</td>
-                  <td className="py-1.5 pr-3 text-right">{money(b.base)}</td>
-                  <td className="py-1.5 pr-3 text-right">{(b.rate * 100).toFixed(0)}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="text-xs text-[var(--color-text-muted)]">Solo lectura por ahora.</p>
-      </div>
+      <LegalRatesSection
+        legal={data.legal}
+        legalSource={data.legalSource}
+        legalVersions={data.legalVersions}
+        onChanged={() => void load()}
+      />
 
       {showConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
