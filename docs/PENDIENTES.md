@@ -180,13 +180,32 @@ ningún consumidor. ¿Cubre `manual-adjustment` todos los casos de uso
 reales, o hace falta este segundo camino para roles sin
 `INVENTORY_MOVEMENT_POST`?
 
-### 10. Configuración de nómina (INSS/IR) sin pantalla de edición
+### 10. Configuración de nómina (INSS/IR) sin pantalla de edición — RESUELTO (2026-09-29)
 
-`/api/payroll/rates` (GET config vigente + PATCH para editarla) no tiene
-consumidor — el frontend calcula con constantes locales en vez de leer
-esta config. Si el régimen INSS o el salario mínimo cambian (evento legal
-real en Nicaragua), hoy requeriría un deploy de código en vez de una
-edición desde Master. ¿Se construye la pantalla de configuración?
+No era que el frontend ignorara la configuración: faltaba la pantalla y,
+además, las tasas legales (INSS, INATEC, tabla IR) eran constantes fijas
+en código en ambos workspaces, sin versión ni vigencia — `PATCH
+/api/payroll/rates` solo cubría régimen/prestaciones/salario mínimo, nunca
+las tasas legales en sí.
+
+Resuelto en 3 fases (`prompt-nomina-config.md`):
+- Fase 1 (`3c3b2d1`): pantalla `/app/master/settings/payroll` — régimen
+  INSS, modos de prestaciones, salario mínimo sectorial con aviso de
+  empleados por debajo.
+- Fase 2 (`f82309d`): modelo `PayrollLegalRateVersion` (vigencia por mes,
+  sin seed), `payroll-nicaragua.ts` deja de leer constantes fijas y
+  resuelve `LegalRates` por período; endpoints
+  `POST`/`DELETE /api/payroll/legal-rates` con guard de planilla ya
+  posteada.
+- Fase 3 (`9777495`): editor de reformas en el frontend (vigente,
+  historial, "Registrar reforma" con tabla IR de bases auto-calculadas y
+  vista previa de impacto); los componentes de planilla leen las tasas
+  servidas por el backend, las constantes locales quedan solo de
+  fallback.
+
+`inatecRate` en `PayrollRates` se mantuvo (no se eliminó) como espejo de
+compatibilidad de `legal.inatecRate` — eliminarlo habría roto la Fase 1 ya
+desplegada antes de que la Fase 3 llegara a producción.
 
 ### 11. `hasAnyAssignedBranch` (rbac/guards.ts) sin reemplazo verificado
 
