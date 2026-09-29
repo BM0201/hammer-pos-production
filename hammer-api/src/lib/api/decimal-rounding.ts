@@ -33,6 +33,18 @@ const EXACT_MONEY_KEYS = new Set(["ir"]); // Impuesto sobre la Renta — monto e
 const EXACT_NON_MONEY_KEYS = new Set([
   "value", // Discount.value: "Percentage (e.g., 10 = 10%) or fixed amount in C$" según el propio comment de schema.prisma — polimórfico. Redondear de más (4dp) nunca pierde el 2dp de un monto real; redondear de menos (2dp) SÍ podría truncar un porcentaje con más precisión. Más seguro por defecto.
   "rate", // ídem "taxRate"/"returnRate": ya cubierto por el patrón EXCLUDE de abajo, listado aquí también por claridad cuando aparece solo.
+  // prompt-nomina-config.md Fase 2 — PayrollLegalRateVersion: tasas INSS
+  // (0-1, 4dp reales, ej. 0.2250) que contienen "inss" como substring y por
+  // eso el patrón MONEY de abajo las agarraría — igual que ya le pasa a
+  // PayrollLine.inssLaboral/inssPatronal (esos SÍ son córdobas, por eso no
+  // se puede resolver con un patrón amplio "laboral"/"patronal": rompería
+  // esos). Cada nombre exacto, sin ambigüedad con los de PayrollLine.
+  "inssintegrallaboral",
+  "inssintegralpatronallt50",
+  "inssintegralpatronalgte50",
+  "inssivmrplaboral",
+  "inssivmrppatronallt50",
+  "inssivmrppatronalgte50",
 ]);
 
 /** Substrings que indican cantidad/factor/porcentaje/score — se revisan ANTES

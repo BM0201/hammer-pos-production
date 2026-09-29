@@ -167,3 +167,32 @@ test("ok(): una division no exacta (100/3) en un campo de cantidad sale con 4 de
   const body = await res.json();
   assert.equal(body.data.conversionFactor, "33.3333");
 });
+
+// ─── PayrollLegalRateVersion (prompt-nomina-config.md Fase 2) ───────────
+// Los 6 campos de tasa INSS contienen "inss" como substring — sin la
+// exclusión exacta en EXACT_NON_MONEY_KEYS, el patrón MONEY los agarraría
+// y una tasa 0.2250 llegaría como 0.23 (2dp), no como 0.2250 (4dp real).
+
+test("isMoneyField: las 6 tasas INSS de PayrollLegalRateVersion → false (no son dinero)", () => {
+  for (const key of [
+    "inssIntegralLaboral",
+    "inssIntegralPatronalLt50",
+    "inssIntegralPatronalGte50",
+    "inssIvmRpLaboral",
+    "inssIvmRpPatronalLt50",
+    "inssIvmRpPatronalGte50",
+  ]) {
+    assert.equal(isMoneyField(key), false, key);
+  }
+});
+
+test("isMoneyField: PayrollLine.inssLaboral/inssPatronal siguen siendo dinero (no se rompen por la exclusión de arriba)", () => {
+  assert.equal(isMoneyField("inssLaboral"), true);
+  assert.equal(isMoneyField("inssPatronal"), true);
+});
+
+test("roundDecimalsForResponse: una tasa INSS de 0.2250 llega con sus 4 decimales, no redondeada a 0.23", () => {
+  const input = { inssIntegralPatronalGte50: new Prisma.Decimal("0.2250") };
+  const out = roundDecimalsForResponse(input);
+  assert.equal(out.inssIntegralPatronalGte50.toFixed(4), "0.2250");
+});

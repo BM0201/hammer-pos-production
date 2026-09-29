@@ -36,19 +36,71 @@ export const INATEC_RATE = 0.02;
 export const INSS_EMPLOYER_SIZE_THRESHOLD = 50;
 
 /**
+ * Tabla progresiva ANUAL del IR salarial (Ley 822, art. 23), en córdobas.
+ * `base` es el impuesto acumulado de los tramos anteriores; `rate` aplica
+ * sobre el exceso de `from`.
+ */
+export type IrBracket = { from: number; base: number; rate: number };
+
+export const IR_TABLE_ANNUAL: readonly IrBracket[] = [
+  { from: 0, base: 0, rate: 0.0 },
+  { from: 100_000, base: 0, rate: 0.15 },
+  { from: 200_000, base: 15_000, rate: 0.2 },
+  { from: 350_000, base: 45_000, rate: 0.25 },
+  { from: 500_000, base: 82_500, rate: 0.3 },
+];
+
+/**
+ * prompt-nomina-config.md Fase 2 — el conjunto completo de tasas legales
+ * versionables (PayrollLegalRateVersion). Mismos campos que la tabla, en
+ * `number` — sin ella (o sin ninguna versión vigente para el período) rige
+ * DEFAULT_LEGAL_RATES, construido con las constantes de arriba.
+ */
+export type LegalRates = {
+  inssIntegralLaboral: number;
+  inssIntegralPatronalLt50: number;
+  inssIntegralPatronalGte50: number;
+  inssIvmRpLaboral: number;
+  inssIvmRpPatronalLt50: number;
+  inssIvmRpPatronalGte50: number;
+  inssEmployerSizeThreshold: number;
+  inatecRate: number;
+  irTableAnnual: readonly IrBracket[];
+};
+
+export const DEFAULT_LEGAL_RATES: LegalRates = {
+  inssIntegralLaboral: INSS_INTEGRAL_LABORAL,
+  inssIntegralPatronalLt50: INSS_INTEGRAL_PATRONAL_LT50,
+  inssIntegralPatronalGte50: INSS_INTEGRAL_PATRONAL_GTE50,
+  inssIvmRpLaboral: INSS_IVM_RP_LABORAL,
+  inssIvmRpPatronalLt50: INSS_IVM_RP_PATRONAL_LT50,
+  inssIvmRpPatronalGte50: INSS_IVM_RP_PATRONAL_GTE50,
+  inssEmployerSizeThreshold: INSS_EMPLOYER_SIZE_THRESHOLD,
+  inatecRate: INATEC_RATE,
+  irTableAnnual: IR_TABLE_ANNUAL,
+};
+
+/**
  * Tasas INSS vigentes según régimen y tamaño de empresa. El conteo de activos
  * es GLOBAL (todas las sucursales): la tasa por tamaño aplica a toda la
  * planilla, no por sucursal.
+ *
+ * prompt-nomina-config.md Fase 2 — `legal` es opcional y por defecto usa
+ * DEFAULT_LEGAL_RATES (las mismas constantes de siempre), así que todo
+ * llamador existente que no pase el parámetro se comporta IGUAL. Cuando
+ * payroll-rate-config.ts resuelve una PayrollLegalRateVersion vigente para
+ * el período, pasa esas tasas acá en vez de las constantes.
  */
 export function resolveInssRates(
   regime: InssRegime,
   activeEmployeeCount: number,
+  legal: LegalRates = DEFAULT_LEGAL_RATES,
 ): { laboral: number; patronal: number } {
-  const large = activeEmployeeCount >= INSS_EMPLOYER_SIZE_THRESHOLD;
+  const large = activeEmployeeCount >= legal.inssEmployerSizeThreshold;
   if (regime === "IVM_RP") {
-    return { laboral: INSS_IVM_RP_LABORAL, patronal: large ? INSS_IVM_RP_PATRONAL_GTE50 : INSS_IVM_RP_PATRONAL_LT50 };
+    return { laboral: legal.inssIvmRpLaboral, patronal: large ? legal.inssIvmRpPatronalGte50 : legal.inssIvmRpPatronalLt50 };
   }
-  return { laboral: INSS_INTEGRAL_LABORAL, patronal: large ? INSS_INTEGRAL_PATRONAL_GTE50 : INSS_INTEGRAL_PATRONAL_LT50 };
+  return { laboral: legal.inssIntegralLaboral, patronal: large ? legal.inssIntegralPatronalGte50 : legal.inssIntegralPatronalLt50 };
 }
 
 /* ── Prestaciones sociales: modos de reconocimiento ─────────────────────────── */
@@ -77,15 +129,24 @@ export type PayrollRates = {
   inssRegime: InssRegime;
   /** Trabajadores activos de TODA la empresa (define la tasa patronal). */
   activeEmployeeCount: number;
+  /**
+   * prompt-nomina-config.md Fase 2 — se mantiene por compatibilidad (varios
+   * consumidores, backend y frontend, todavía leen rates.inatecRate
+   * directamente) pero deja de ser la fuente: siempre espejea
+   * legal.inatecRate. computePayrollLineBreakdown ya lee de `legal`
+   * directo, no de acá.
+   */
   inatecRate: number;
   aguinaldoMode: BenefitAccrualMode;
   vacacionesMode: BenefitAccrualMode;
   indemnizacionMode: BenefitAccrualMode;
   /** Salario mínimo sectorial: solo para ADVERTIR salarios por debajo (no bloquea). */
   salarioMinimoSectorial: number;
+  /** Tasas legales vigentes para el período de este cálculo (ver payroll-rate-config.ts). */
+  legal: LegalRates;
 };
 
-/** Config por defecto: régimen Integral, empresa <50, todo provisionado mensual. */
+/** Config por defecto: régimen Integral, empresa <50, todo provisionado mensual, tasas legales actuales. */
 export const DEFAULT_PAYROLL_RATES: PayrollRates = {
   inssRegime: "INTEGRAL",
   activeEmployeeCount: 0,
@@ -94,32 +155,23 @@ export const DEFAULT_PAYROLL_RATES: PayrollRates = {
   vacacionesMode: "ACCRUE_MONTHLY",
   indemnizacionMode: "ACCRUE_MONTHLY",
   salarioMinimoSectorial: 0,
+  legal: DEFAULT_LEGAL_RATES,
 };
-
-/**
- * Tabla progresiva ANUAL del IR salarial (Ley 822, art. 23), en córdobas.
- * `base` es el impuesto acumulado de los tramos anteriores; `rate` aplica
- * sobre el exceso de `from`.
- */
-export type IrBracket = { from: number; base: number; rate: number };
-
-export const IR_TABLE_ANNUAL: readonly IrBracket[] = [
-  { from: 0, base: 0, rate: 0.0 },
-  { from: 100_000, base: 0, rate: 0.15 },
-  { from: 200_000, base: 15_000, rate: 0.2 },
-  { from: 350_000, base: 45_000, rate: 0.25 },
-  { from: 500_000, base: 82_500, rate: 0.3 },
-];
 
 export function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-/** IR anual según la tabla progresiva para una renta neta anual dada. */
-export function computeAnnualIr(annualTaxable: number): number {
+/**
+ * IR anual según la tabla progresiva para una renta neta anual dada.
+ * prompt-nomina-config.md Fase 2 — `table` opcional, por defecto
+ * DEFAULT_LEGAL_RATES.irTableAnnual (la tabla de siempre): todo llamador
+ * existente que no la pase se comporta igual.
+ */
+export function computeAnnualIr(annualTaxable: number, table: readonly IrBracket[] = DEFAULT_LEGAL_RATES.irTableAnnual): number {
   if (!Number.isFinite(annualTaxable) || annualTaxable <= 0) return 0;
-  let bracket = IR_TABLE_ANNUAL[0];
-  for (const b of IR_TABLE_ANNUAL) {
+  let bracket = table[0];
+  for (const b of table) {
     if (annualTaxable > b.from) bracket = b;
   }
   return Math.max(0, bracket.base + (annualTaxable - bracket.from) * bracket.rate);
@@ -209,7 +261,7 @@ export type PayrollLineBreakdown = {
  */
 export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): PayrollLineBreakdown {
   const rates = input.rates ?? DEFAULT_PAYROLL_RATES;
-  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount);
+  const inss = resolveInssRates(rates.inssRegime, rates.activeEmployeeCount, rates.legal);
   const grossSalary = Math.max(0, input.grossSalary);
   const monthlySalary = Math.max(0, input.monthlySalary);
   const loanDeductions = round2(Math.max(0, input.loanDeductions ?? 0));
@@ -230,7 +282,7 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
   // La base imponible resta el INSS realmente retenido (sobre base cotizable).
   const applyIr = input.applyIrRetention ?? true;
   const fullMonthInss = inssMonthlyBase * inss.laboral;
-  const irMonthlyFull = applyIr ? computeAnnualIr((monthlySalary - fullMonthInss) * 12) / 12 : 0;
+  const irMonthlyFull = applyIr ? computeAnnualIr((monthlySalary - fullMonthInss) * 12, rates.legal.irTableAnnual) / 12 : 0;
   const ir = round2(irMonthlyFull * prorationFactor);
 
   // Faltas injustificadas: cada día es pago NO devengado (salario/30). No es
@@ -244,7 +296,7 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
   const netPay = round2(Math.max(0, grossSalary - absenceDeduction - totalDeductions));
 
   const inssPatronal = round2(inssBaseForPeriod * inss.patronal);
-  const inatec = round2(inssBaseForPeriod * rates.inatecRate);
+  const inatec = round2(inssBaseForPeriod * rates.legal.inatecRate);
 
   const indemnizacionRate = input.indemnizacionRate ?? INDEMNIZACION_RATE_Y1_3;
   // CIERRE EXACTO: la suma se redondea UNA sola vez (3 × 10,000/12 = 2,500.00,
@@ -291,4 +343,84 @@ export function computePayrollLineBreakdown(input: PayrollLineBreakdownInput): P
     provisions,
     employerCost,
   };
+}
+
+/* ── Reforma legal: validación pura (prompt-nomina-config.md Fase 2) ────────── */
+
+export type LegalRatesInput = {
+  inssIntegralLaboral: number;
+  inssIntegralPatronalLt50: number;
+  inssIntegralPatronalGte50: number;
+  inssIvmRpLaboral: number;
+  inssIvmRpPatronalLt50: number;
+  inssIvmRpPatronalGte50: number;
+  inssEmployerSizeThreshold: number;
+  inatecRate: number;
+  irTableAnnual: readonly IrBracket[];
+  legalBasis: string;
+};
+
+const RATE_FIELD_LABELS: [keyof LegalRatesInput, string][] = [
+  ["inssIntegralLaboral", "INSS laboral (Integral)"],
+  ["inssIntegralPatronalLt50", "INSS patronal Integral, empresa <50"],
+  ["inssIntegralPatronalGte50", "INSS patronal Integral, empresa ≥50"],
+  ["inssIvmRpLaboral", "INSS laboral (IVM-RP)"],
+  ["inssIvmRpPatronalLt50", "INSS patronal IVM-RP, empresa <50"],
+  ["inssIvmRpPatronalGte50", "INSS patronal IVM-RP, empresa ≥50"],
+  ["inatecRate", "INATEC"],
+];
+
+/**
+ * Valida una reforma legal completa ANTES de guardarla — nunca deja que un
+ * error de tipeo (una tasa fuera de rango, una base de la tabla IR
+ * descuadrada) llegue a afectar un cálculo de planilla real. Lista de
+ * errores en español; vacía si todo está bien. Pura — sin DB, así que
+ * también corre en el navegador para la vista previa antes de enviar.
+ */
+export function validateLegalRates(input: LegalRatesInput): string[] {
+  const errors: string[] = [];
+
+  for (const [field, label] of RATE_FIELD_LABELS) {
+    const value = input[field] as number;
+    if (!Number.isFinite(value) || value < 0 || value >= 1) {
+      errors.push(`${label}: la tasa debe estar entre 0 y 1 (ej. 0.07 para 7%).`);
+    }
+  }
+
+  if (!Number.isInteger(input.inssEmployerSizeThreshold) || input.inssEmployerSizeThreshold < 1) {
+    errors.push("El umbral de tamaño de empresa debe ser un número entero mayor o igual a 1.");
+  }
+
+  if (!input.irTableAnnual || input.irTableAnnual.length === 0) {
+    errors.push("La tabla de IR anual no puede estar vacía.");
+  } else {
+    if (input.irTableAnnual[0].from !== 0) {
+      errors.push("El primer tramo de la tabla de IR debe empezar en 0.");
+    }
+    for (let i = 0; i < input.irTableAnnual.length; i++) {
+      const bracket = input.irTableAnnual[i];
+      if (!Number.isFinite(bracket.rate) || bracket.rate < 0 || bracket.rate >= 1) {
+        errors.push(`Tramo ${i + 1} de IR: la tasa debe estar entre 0 y 1.`);
+      }
+      if (i > 0) {
+        const prev = input.irTableAnnual[i - 1];
+        if (!(bracket.from > prev.from)) {
+          errors.push(`Tramo ${i + 1} de IR: "desde" debe ser mayor que el del tramo anterior.`);
+        }
+        // Consistencia de la base: cada tramo se deriva del anterior. Sin
+        // esto, un error de tipeo en una base descuadraría el IR de toda la
+        // planilla sin que nadie lo note hasta cerrar el mes.
+        const expectedBase = prev.base + (bracket.from - prev.from) * prev.rate;
+        if (Math.abs(bracket.base - expectedBase) > 0.01) {
+          errors.push(`Tramo ${i + 1} de IR: la base (${bracket.base}) no es consistente con el tramo anterior — debería ser ${round2(expectedBase)}.`);
+        }
+      }
+    }
+  }
+
+  if (!input.legalBasis || input.legalBasis.trim().length < 3) {
+    errors.push("La base legal debe tener al menos 3 caracteres.");
+  }
+
+  return errors;
 }

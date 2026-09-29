@@ -98,6 +98,16 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message.startsWith("REPAIR_PREVIEW_STALE:")) {
       return errJson("REPAIR_PREVIEW_STALE", error.message.replace(/^REPAIR_PREVIEW_STALE:\s?/, ""), 409);
     }
+    // prompt-nomina-config.md Fase 2.4 — crear/borrar una versión de tasas
+    // legales que afecte un mes con planilla ya POSTED. Mismo código para
+    // los dos casos: la regla es la misma ("un período cerrado no se
+    // reabre"), solo cambia si viene de un POST o un DELETE.
+    if (error.message === "LEGAL_RATES_PERIOD_ALREADY_POSTED") {
+      return errJson("LEGAL_RATES_PERIOD_ALREADY_POSTED", "Ya hay una planilla posteada en ese mes o en uno posterior — una reforma retroactiva sobre meses cerrados no se hace desde acá.", 409);
+    }
+    if (error.message === "LEGAL_RATES_VERSION_EXISTS") {
+      return errJson("LEGAL_RATES_VERSION_EXISTS", "Ya existe una versión de tasas legales para ese mes. Para corregirla, bórrala y creá una nueva.", 409);
+    }
     if (error.message === "INJECTION_PREVIEW_STALE") {
       return errJson("INJECTION_PREVIEW_STALE", "El costo del inventario cambió desde que se generó el preview. Vuelve a calcular antes de completar el lote.", 409);
     }

@@ -2014,6 +2014,28 @@ model PayrollRateConfig {
   updatedAt              DateTime           @updatedAt
 }
 
+/// Versión de las tasas legales de nómina. Rige desde effectiveFrom (primer
+/// día de mes, UTC) hasta la siguiente versión. Sin ninguna versión aplicable
+/// rigen las constantes de payroll-nicaragua.ts (valores actuales).
+model PayrollLegalRateVersion {
+  id                        String   @id @default(cuid())
+  effectiveFrom             DateTime @unique
+  inssIntegralLaboral       Decimal  @db.Decimal(6, 4)
+  inssIntegralPatronalLt50  Decimal  @db.Decimal(6, 4)
+  inssIntegralPatronalGte50 Decimal  @db.Decimal(6, 4)
+  inssIvmRpLaboral          Decimal  @db.Decimal(6, 4)
+  inssIvmRpPatronalLt50     Decimal  @db.Decimal(6, 4)
+  inssIvmRpPatronalGte50    Decimal  @db.Decimal(6, 4)
+  inssEmployerSizeThreshold Int
+  inatecRate                Decimal  @db.Decimal(6, 4)
+  /// IrBracket[]
+  irTableAnnual             Json
+  /// p.ej. "Decreto 06-2019"
+  legalBasis                String
+  createdByUserId           String?
+  createdAt                 DateTime @default(now())
+}
+
 /// Ledger de vacaciones: cada entrada es un evento REAL con fecha (gozadas =
 /// descansadas, o pagadas en dinero) — reemplaza el contador suelto que antes
 /// vivía en Employee (vacationDaysTaken), que dependía de que alguien lo

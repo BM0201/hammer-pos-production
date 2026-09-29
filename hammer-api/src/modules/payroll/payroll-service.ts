@@ -562,7 +562,10 @@ export async function calculatePayrollRun(
     throw new Error("INVALID_INPUT: La nomina de este periodo ya fue posteada");
   }
 
-  const [result, rates] = await Promise.all([calculateMonthlyPayroll(year, month, branchId), getPayrollRates()]);
+  // prompt-nomina-config.md Fase 2.3 — se pasa el período de ESTA corrida
+  // (no el mes actual): una planilla de marzo recalculada en mayo debe usar
+  // las tasas legales vigentes en marzo, no las de hoy.
+  const [result, rates] = await Promise.all([calculateMonthlyPayroll(year, month, branchId), getPayrollRates({ year, month })]);
   const run = existing
     ? await prisma.payrollRun.update({
         where: { id: existing.id },
