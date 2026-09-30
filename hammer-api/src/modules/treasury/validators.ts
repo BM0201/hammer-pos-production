@@ -232,3 +232,11 @@ export const adjustCustodyBalanceSchema = z.object({
   amount: z.coerce.number().positive(),
   reason: z.string().min(10).max(300),
 });
+
+// prompt-tesoreria-sin-transito.md Fase 1.5 — branchId obligatorio: una
+// custodia legacy de Master puede tener plata de varias sucursales.
+export const returnCustodyToRetainedSchema = z.object({
+  branchId: z.string().cuid(),
+  amount: z.coerce.number().positive(),
+  reason: z.string().min(10).max(300),
+});

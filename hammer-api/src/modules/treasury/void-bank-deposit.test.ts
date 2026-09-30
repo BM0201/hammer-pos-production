@@ -15,21 +15,37 @@ const CUSTODY_ACCOUNT_ID = "acc-custody-1";
 const DEPOSIT_ID = "deposit-1";
 const ACTOR_USER_ID = "user-1";
 
-type FakeAccount = { id: string; openingBalance: number; openingBalanceAt: Date | null; currencyCode: string };
+const SAFE_ACCOUNT_ID = "acc-safe-1";
+
+type FakeAccount = { id: string; type: "BANK" | "CUSTODY" | "SAFE"; openingBalance: number; openingBalanceAt: Date | null; currencyCode: string };
 type FakeDeposit = {
   id: string;
   bankAccountId: string;
   branchId: string;
   amount: Prisma.Decimal;
+  source: "CUSTODY" | "DIRECT_FROM_RETAINED";
   voidedAt: Date | null;
   voidedByUserId: string | null;
   voidReason: string | null;
 };
 
-function buildFakeTx(opts: { depositAmount: number; bankOpeningBalance: number; alreadyVoided?: boolean; withConfirmedOutEntry?: boolean }) {
+function buildFakeTx(opts: {
+  depositAmount: number;
+  bankOpeningBalance: number;
+  alreadyVoided?: boolean;
+  withConfirmedOutEntry?: boolean;
+  source?: "CUSTODY" | "DIRECT_FROM_RETAINED";
+  // prompt-tesoreria-sin-transito.md Fase 1.4 — de qué tipo de cuenta salió
+  // el DEPOSIT_CONFIRMED OUT: CUSTODY (default) o SAFE (depósito directo
+  // que sí tenía caja fuerte — no necesita el drenaje de vuelta a cero).
+  sourceAccountType?: "CUSTODY" | "SAFE";
+}) {
+  const sourceAccountType = opts.sourceAccountType ?? "CUSTODY";
+  const sourceAccountId = sourceAccountType === "SAFE" ? SAFE_ACCOUNT_ID : CUSTODY_ACCOUNT_ID;
   const accounts = new Map<string, FakeAccount>([
-    [BANK_ACCOUNT_ID, { id: BANK_ACCOUNT_ID, openingBalance: opts.bankOpeningBalance, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO" }],
-    [CUSTODY_ACCOUNT_ID, { id: CUSTODY_ACCOUNT_ID, openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO" }],
+    [BANK_ACCOUNT_ID, { id: BANK_ACCOUNT_ID, type: "BANK", openingBalance: opts.bankOpeningBalance, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO" }],
+    [CUSTODY_ACCOUNT_ID, { id: CUSTODY_ACCOUNT_ID, type: "CUSTODY", openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO" }],
+    [SAFE_ACCOUNT_ID, { id: SAFE_ACCOUNT_ID, type: "SAFE", openingBalance: 0, openingBalanceAt: new Date("2026-01-01"), currencyCode: "NIO" }],
   ]);
   const deposits = new Map<string, FakeDeposit>([
     [DEPOSIT_ID, {
@@ -37,6 +53,7 @@ function buildFakeTx(opts: { depositAmount: number; bankOpeningBalance: number; 
       bankAccountId: BANK_ACCOUNT_ID,
       branchId: "branch-1",
       amount: new Prisma.Decimal(opts.depositAmount),
+      source: opts.source ?? "CUSTODY",
       voidedAt: opts.alreadyVoided ? new Date("2026-01-02") : null,
       voidedByUserId: opts.alreadyVoided ? "user-0" : null,
       voidReason: opts.alreadyVoided ? "motivo anterior" : null,
@@ -44,9 +61,9 @@ function buildFakeTx(opts: { depositAmount: number; bankOpeningBalance: number; 
   ]);
   const treasuryEntries: Array<Record<string, unknown>> = [];
   // La pata DEPOSIT_CONFIRMED OUT que ya existía cuando se confirmó el
-  // depósito — voidBankDepositTx la busca para saber de qué custodia salió.
+  // depósito — voidBankDepositTx la busca para saber de qué cuenta salió.
   if (opts.withConfirmedOutEntry !== false) {
-    treasuryEntries.push({ id: "seed-1", accountId: CUSTODY_ACCOUNT_ID, direction: "OUT", amount: opts.depositAmount, entryType: "DEPOSIT_CONFIRMED", bankDepositId: DEPOSIT_ID });
+    treasuryEntries.push({ id: "seed-1", accountId: sourceAccountId, direction: "OUT", amount: opts.depositAmount, entryType: "DEPOSIT_CONFIRMED", bankDepositId: DEPOSIT_ID });
   }
   let entryCounter = 0;
 
@@ -149,4 +166,40 @@ test("el saldo del banco puede quedar negativo — anular NUNCA se bloquea por s
 
   assert.equal(result.bankBalanceWentNegative, true);
   assert.equal(treasuryEntries.filter((e) => e.entryType === "RECONCILIATION").length, 2, "la reversión se escribe igual");
+});
+
+// ─── prompt-tesoreria-sin-transito.md Fase 1.4 — depósito directo ─────────
+
+test("LA QUE IMPORTA — anular un depósito DIRECT_FROM_RETAINED que pasó por CUSTODY (sin SAFE): drena la custodia de vuelta a CERO, no la deja con remanente", async () => {
+  const { tx, treasuryEntries } = buildFakeTx({ depositAmount: 600, bankOpeningBalance: 10000, source: "DIRECT_FROM_RETAINED", sourceAccountType: "CUSTODY" });
+
+  const result = await voidBankDepositTx(tx, { bankDepositId: DEPOSIT_ID, reason: "Anulación de depósito directo de prueba", actorUserId: ACTOR_USER_ID });
+
+  assert.ok(result.custodyDrainEntryId, "debe existir el segundo paso que drena la custodia");
+  const custodyIn = treasuryEntries.find((e) => e.accountId === CUSTODY_ACCOUNT_ID && e.direction === "IN");
+  const custodyOut = treasuryEntries.find((e) => e.accountId === CUSTODY_ACCOUNT_ID && e.direction === "OUT" && e.id === result.custodyDrainEntryId);
+  assert.equal(Number(custodyIn?.amount), 600, "la reversión banco→custodia entra igual que siempre");
+  assert.equal(Number(custodyOut?.amount), 600, "pero se drena de nuevo — neto cero, nunca queda 'en tránsito'");
+  assert.equal(custodyOut?.entryType, "RECONCILIATION");
+  assert.equal(custodyOut?.transferId, null, "el drenaje no es una transferencia — no hay a dónde va la plata (como adjustCustodyBalanceTx)");
+});
+
+test("anular un depósito DIRECT_FROM_RETAINED que salió de la SAFE: un solo paso, sin drenaje — la SAFE se queda con el saldo real", async () => {
+  const { tx, treasuryEntries } = buildFakeTx({ depositAmount: 600, bankOpeningBalance: 10000, source: "DIRECT_FROM_RETAINED", sourceAccountType: "SAFE" });
+
+  const result = await voidBankDepositTx(tx, { bankDepositId: DEPOSIT_ID, reason: "Anulación de depósito directo de prueba", actorUserId: ACTOR_USER_ID });
+
+  assert.equal(result.custodyDrainEntryId, null, "sin custodia de por medio, no hay nada que drenar");
+  const safeIn = treasuryEntries.find((e) => e.accountId === SAFE_ACCOUNT_ID && e.direction === "IN");
+  assert.equal(Number(safeIn?.amount), 600);
+  const safeDrain = treasuryEntries.find((e) => e.accountId === SAFE_ACCOUNT_ID && e.direction === "OUT" && e.entryType === "RECONCILIATION");
+  assert.equal(safeDrain, undefined, "la SAFE guarda retenido real — se queda con el saldo, no se drena (la única OUT es la sembrada del depósito original)");
+});
+
+test("un depósito CUSTODY clásico (source por default) nunca drena — sigue siendo el comportamiento de siempre", async () => {
+  const { tx } = buildFakeTx({ depositAmount: 600, bankOpeningBalance: 10000, source: "CUSTODY" });
+
+  const result = await voidBankDepositTx(tx, { bankDepositId: DEPOSIT_ID, reason: "Anulación de depósito clásico de prueba", actorUserId: ACTOR_USER_ID });
+
+  assert.equal(result.custodyDrainEntryId, null);
 });

@@ -275,6 +275,13 @@ export type BranchCashPosition = {
  * sendCashOutToCustody / la declaración de cierre, que corren ANTES de que
  * exista un BankDeposit), por la sucursal de la cuenta — que con la
  * custodia por (persona, sucursal) de 1.1 ya es la correcta.
+ *
+ * prompt-tesoreria-sin-transito.md Fase 1.2 (fix) — un BankDeposit
+ * source=DIRECT_FROM_RETAINED ya NO cuenta acá: ese depósito no es un
+ * evento de "algo salió de la sucursal hacia custodia/banco todavía sin
+ * resolver", es una resta directa del acumulado (getAccumulatedRetainedTx),
+ * así que nunca "limpia" el corte. Solo un depósito CUSTODY (el clásico,
+ * enviado con alguien y confirmado después) sigue moviéndolo.
  */
 async function getLastDepositCutoff(db: Prisma.TransactionClient | typeof prisma, branchId: string): Promise<Date | null> {
   const lastDispatchOrConfirm = await db.treasuryEntry.findFirst({
@@ -282,7 +289,7 @@ async function getLastDepositCutoff(db: Prisma.TransactionClient | typeof prisma
       entryType: { in: ["DEPOSIT_DISPATCH", "DEPOSIT_CONFIRMED"] },
       account: { type: "CUSTODY" },
       OR: [
-        { bankDeposit: { branchId } },
+        { bankDeposit: { branchId, source: "CUSTODY" } },
         { bankDepositId: null, account: { branchId } },
       ],
     },
@@ -302,6 +309,15 @@ async function getLastDepositCutoff(db: Prisma.TransactionClient | typeof prisma
  * validación. getLastDepositCutoff y getActiveRetainedCashExpenses ya
  * aceptaban un `db` inyectable; lo único que faltaba pasar era el
  * findMany de declaraciones, antes fijo al cliente global.
+ *
+ * prompt-tesoreria-sin-transito.md Fase 1.2 (fix) — dos términos nuevos,
+ * ambos desde el MISMO corte que ya usan declaraciones/gastos (un reset
+ * real del corte los vuelve irrelevantes, ya están "fuera" del acumulado
+ * por construcción): los depósitos directos (DIRECT_FROM_RETAINED, no
+ * anulados) restan — es plata que salió de la sucursal sin pasar por
+ * custodia; los ajustes manuales (RetainedCashAdjustment) suman o restan
+ * según su signo — típicamente un remanente legacy de custodia que vuelve
+ * al acumulado (returnCustodyToRetainedTx).
  */
 export async function getAccumulatedRetainedTx(
   db: Prisma.TransactionClient | typeof prisma,
@@ -309,20 +325,40 @@ export async function getAccumulatedRetainedTx(
 ): Promise<{ accumulatedAmount: number; oldestRetainedAt: Date | null }> {
   const lastDispatchOrConfirmAt = await getLastDepositCutoff(db, branchId);
 
-  const retainedDeclarations = await db.cashDestinationDeclaration.findMany({
-    where: {
-      branchId,
-      retainAwaitingDepositPortion: { gt: 0 },
-      ...(lastDispatchOrConfirmAt ? { createdAt: { gt: lastDispatchOrConfirmAt } } : {}),
-    },
-    select: { retainAwaitingDepositPortion: true, createdAt: true },
-    orderBy: { createdAt: "asc" },
-  });
+  const [retainedDeclarations, cashExpensesSinceCutoff, directDepositsSinceCutoff, adjustmentsSinceCutoff] = await Promise.all([
+    db.cashDestinationDeclaration.findMany({
+      where: {
+        branchId,
+        retainAwaitingDepositPortion: { gt: 0 },
+        ...(lastDispatchOrConfirmAt ? { createdAt: { gt: lastDispatchOrConfirmAt } } : {}),
+      },
+      select: { retainAwaitingDepositPortion: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    getActiveRetainedCashExpenses(branchId, lastDispatchOrConfirmAt, db),
+    db.bankDeposit.findMany({
+      where: {
+        branchId,
+        source: "DIRECT_FROM_RETAINED",
+        voidedAt: null,
+        ...(lastDispatchOrConfirmAt ? { depositedAt: { gt: lastDispatchOrConfirmAt } } : {}),
+      },
+      select: { amount: true },
+    }),
+    db.retainedCashAdjustment.findMany({
+      where: {
+        branchId,
+        ...(lastDispatchOrConfirmAt ? { createdAt: { gt: lastDispatchOrConfirmAt } } : {}),
+      },
+      select: { amount: true },
+    }),
+  ]);
 
-  const cashExpensesSinceCutoff = await getActiveRetainedCashExpenses(branchId, lastDispatchOrConfirmAt, db);
   const totalDeclared = retainedDeclarations.reduce((sum, d) => sum + Number(d.retainAwaitingDepositPortion), 0);
   const totalCashExpenses = cashExpensesSinceCutoff.reduce((sum, e) => sum + e.amount, 0);
-  const accumulatedAmount = round2(Math.max(0, totalDeclared - totalCashExpenses));
+  const totalDirectDeposits = directDepositsSinceCutoff.reduce((sum, d) => sum + Number(d.amount), 0);
+  const totalAdjustments = adjustmentsSinceCutoff.reduce((sum, a) => sum + Number(a.amount), 0);
+  const accumulatedAmount = round2(Math.max(0, totalDeclared - totalCashExpenses - totalDirectDeposits + totalAdjustments));
   const oldestRetainedAt = retainedDeclarations[0]?.createdAt ?? null;
 
   return { accumulatedAmount, oldestRetainedAt };

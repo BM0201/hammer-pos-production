@@ -245,10 +245,17 @@ function buildFakeRetainedDb(opts: {
   declarations: Array<{ retainAwaitingDepositPortion: number; createdAt: Date }>;
   cashExpenseEntries?: Array<{ occurredAt: Date; amount: number; expensePaymentId: string }>;
   activeExpenseIds?: string[];
+  // prompt-tesoreria-sin-transito.md Fase 1.2 — los dos términos nuevos de
+  // getAccumulatedRetainedTx. Vacíos por default: preserva exactamente el
+  // comportamiento de los tests ya existentes, que no los conocían.
+  directDeposits?: Array<{ amount: number; depositedAt: Date }>;
+  adjustments?: Array<{ amount: number; createdAt: Date }>;
 }) {
   const declarations = opts.declarations;
   const cashExpenseEntries = opts.cashExpenseEntries ?? [];
   const activeExpenseIds = new Set(opts.activeExpenseIds ?? cashExpenseEntries.map((e) => e.expensePaymentId));
+  const directDeposits = opts.directDeposits ?? [];
+  const adjustments = opts.adjustments ?? [];
 
   const db = {
     treasuryEntry: {
@@ -267,6 +274,14 @@ function buildFakeRetainedDb(opts: {
     operatingExpense: {
       findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.filter((id) => activeExpenseIds.has(id)).map((id) => ({ id })),
+    },
+    bankDeposit: {
+      findMany: async ({ where }: { where: { depositedAt?: { gt: Date } } }) =>
+        directDeposits.filter((d) => !where.depositedAt || d.depositedAt > where.depositedAt.gt),
+    },
+    retainedCashAdjustment: {
+      findMany: async ({ where }: { where: { createdAt?: { gt: Date } } }) =>
+        adjustments.filter((a) => !where.createdAt || a.createdAt > where.createdAt.gt),
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
@@ -319,6 +334,63 @@ test("getAccumulatedRetainedTx: nunca da negativo aunque los gastos superen lo d
   assert.equal(result.accumulatedAmount, 0);
 });
 
+// prompt-tesoreria-sin-transito.md Fase 1.2 (fix) — los dos términos nuevos
+// de getAccumulatedRetainedTx, directo (sin pasar por getLastDepositCutoff).
+
+test("LA QUE IMPORTA — un depósito directo (DIRECT_FROM_RETAINED, no anulado) resta del acumulado", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [{ retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-01") }],
+    directDeposits: [{ amount: 600, depositedAt: new Date("2026-01-02") }],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 400, "1000 declarado - 600 depositado directo = 400, sin pasar por custodia");
+});
+
+test("(doc) — dos depósitos directos (600 y 400) sobre un acumulado de 1000: queda en 0", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [{ retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-01") }],
+    directDeposits: [
+      { amount: 600, depositedAt: new Date("2026-01-02") },
+      { amount: 400, depositedAt: new Date("2026-01-03") },
+    ],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 0, "1000 - 600 - 400 = 0 — un tercer depósito de cualquier monto positivo ya se rechazaría en depositBranchCashDirectTx");
+});
+
+test("un ajuste positivo (RetainedCashAdjustment) suma al acumulado — el caso de devolver un remanente legacy de custodia", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [{ retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-01") }],
+    adjustments: [{ amount: 250, createdAt: new Date("2026-01-03") }],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 1250);
+});
+
+test("un ajuste negativo resta del acumulado, con signo — no hace falta un segundo camino para restar", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [{ retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-01") }],
+    adjustments: [{ amount: -300, createdAt: new Date("2026-01-03") }],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 700);
+});
+
+test("depósito directo Y ajuste juntos, nunca da negativo", async () => {
+  const db = buildFakeRetainedDb({
+    cutoffEntry: null,
+    declarations: [{ retainAwaitingDepositPortion: 500, createdAt: new Date("2026-01-01") }],
+    directDeposits: [{ amount: 500, depositedAt: new Date("2026-01-02") }],
+    adjustments: [{ amount: -100, createdAt: new Date("2026-01-03") }],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-1");
+  assert.equal(result.accumulatedAmount, 0, "500 - 500 - 100 sería -100, pero nunca es negativo");
+});
+
 test("getAccumulatedRetainedTx: NUNCA consulta CashSession — la gaveta abierta no puede colarse en el resultado (fix Bug 1)", async () => {
   const db = buildFakeRetainedDb({
     cutoffEntry: null,
@@ -345,28 +417,33 @@ type CutoffCandidate = {
   accountType: "CUSTODY" | "BANK";
   accountBranchId: string | null;
   bankDepositBranchId?: string; // undefined = sin BankDeposit todavía
+  // prompt-tesoreria-sin-transito.md Fase 1.2 — solo importa cuando
+  // bankDepositBranchId está definido (si no hay BankDeposit, no hay
+  // source que mirar). Default "CUSTODY": los candidatos existentes de
+  // antes de esta fase representan depósitos clásicos.
+  bankDepositSource?: "CUSTODY" | "DIRECT_FROM_RETAINED";
 };
 
 function buildFakeCutoffAttributionDb(opts: { cutoffCandidates: CutoffCandidate[]; declarations: Array<{ retainAwaitingDepositPortion: number; createdAt: Date }> }) {
   const db = {
     treasuryEntry: {
       // Reproduce el where real de getLastDepositCutoff: entryType in [...],
-      // account.type = CUSTODY, y el OR de bankDeposit.branchId / (sin
-      // depósito + account.branchId) — no una función fake que ignora el
-      // where, para probar la atribución de verdad.
+      // account.type = CUSTODY, y el OR de bankDeposit.{branchId,source} /
+      // (sin depósito + account.branchId) — no una función fake que ignora
+      // el where, para probar la atribución de verdad.
       findFirst: async ({ where }: {
         where: {
           entryType: { in: string[] };
           account: { type: string };
-          OR: Array<{ bankDeposit?: { branchId: string }; bankDepositId?: null; account?: { branchId: string } }>;
+          OR: Array<{ bankDeposit?: { branchId: string; source: string }; bankDepositId?: null; account?: { branchId: string } }>;
         };
       }) => {
-        const branchViaDeposit = where.OR.find((c) => c.bankDeposit !== undefined)?.bankDeposit?.branchId;
+        const viaDeposit = where.OR.find((c) => c.bankDeposit !== undefined)?.bankDeposit;
         const branchViaAccount = where.OR.find((c) => c.bankDepositId === null)?.account?.branchId;
         const matches = opts.cutoffCandidates
           .filter((c) => where.entryType.in.includes(c.entryType) && c.accountType === where.account.type)
           .filter((c) =>
-            (c.bankDepositBranchId !== undefined && c.bankDepositBranchId === branchViaDeposit) ||
+            (c.bankDepositBranchId !== undefined && c.bankDepositBranchId === viaDeposit?.branchId && (c.bankDepositSource ?? "CUSTODY") === viaDeposit?.source) ||
             (c.bankDepositBranchId === undefined && c.accountBranchId === branchViaAccount),
           )
           .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
@@ -379,6 +456,8 @@ function buildFakeCutoffAttributionDb(opts: { cutoffCandidates: CutoffCandidate[
         opts.declarations.filter((d) => !where.createdAt || d.createdAt > where.createdAt.gt),
     },
     operatingExpense: { findMany: async () => [] },
+    bankDeposit: { findMany: async () => [] },
+    retainedCashAdjustment: { findMany: async () => [] },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
   return db;
@@ -424,4 +503,34 @@ test("un despacho SIN depósito todavía (sendCashOutToCustody) mueve el corte p
   });
   const resultB = await getAccumulatedRetainedTx(db, "branch-B");
   assert.equal(resultB.accumulatedAmount, 0, "sin BankDeposit, se atribuye por la cuenta — que con la custodia por (persona,sucursal) de 1.1 ya es la correcta");
+});
+
+// prompt-tesoreria-sin-transito.md Fase 1.2 (fix) — LOS DOS del test que
+// pide el doc: un depósito DIRECT_FROM_RETAINED no mueve el corte; uno
+// CUSTODY sí. Ya no basta con la sucursal — el source también importa.
+
+test("LA QUE IMPORTA — un despacho ligado a un BankDeposit DIRECT_FROM_RETAINED NO mueve el corte (ese depósito resta directo del acumulado, no 'limpia' nada)", async () => {
+  const db = buildFakeCutoffAttributionDb({
+    cutoffCandidates: [
+      { entryType: "DEPOSIT_DISPATCH", occurredAt: new Date("2026-01-10"), accountType: "CUSTODY", accountBranchId: "branch-B", bankDepositBranchId: "branch-B", bankDepositSource: "DIRECT_FROM_RETAINED" },
+    ],
+    declarations: [
+      { retainAwaitingDepositPortion: 5000, createdAt: new Date("2026-01-05") },
+    ],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-B");
+  assert.equal(result.accumulatedAmount, 5000, "un depósito directo no mueve el corte — su resta pasa por otro término (bankDeposit.findMany), no por acá");
+});
+
+test("el mismo despacho, pero source CUSTODY (el depósito clásico): SÍ mueve el corte", async () => {
+  const db = buildFakeCutoffAttributionDb({
+    cutoffCandidates: [
+      { entryType: "DEPOSIT_DISPATCH", occurredAt: new Date("2026-01-10"), accountType: "CUSTODY", accountBranchId: "branch-B", bankDepositBranchId: "branch-B", bankDepositSource: "CUSTODY" },
+    ],
+    declarations: [
+      { retainAwaitingDepositPortion: 5000, createdAt: new Date("2026-01-05") },
+    ],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-B");
+  assert.equal(result.accumulatedAmount, 0, "un depósito CUSTODY sí mueve el corte, igual que siempre");
 });

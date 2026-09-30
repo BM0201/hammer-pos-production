@@ -407,6 +407,7 @@ model Branch {
   depositPolicy               BranchDepositPolicy?
   cashDepositPostponements    CashDepositPostponement[]
   timberPricingConfig         TimberPricingConfig?
+  retainedCashAdjustments     RetainedCashAdjustment[]
 }
 
 model User {
@@ -445,6 +446,7 @@ model User {
   carriedCashDeposits         CashDestinationDeclaration[] @relation("CashDestinationDepositCarrier")
   heldTreasuryAccounts        TreasuryAccount[]            @relation("TreasuryAccountHolder")
   createdTreasuryEntries      TreasuryEntry[]              @relation("TreasuryEntryCreatedBy")
+  createdRetainedCashAdjustments RetainedCashAdjustment[]   @relation("RetainedCashAdjustmentCreatedBy")
   createdExchangeRates        ExchangeRate[]               @relation("ExchangeRateCreatedBy")
   openedOperationalDays       OperationalDay[]             @relation("OperationalDayOpenedBy")
   sweptOperationalDays        OperationalDay[]             @relation("OperationalDaySweptBy")
@@ -3639,20 +3641,39 @@ enum TreasuryCardType {
   CREDIT
 }
 
+/// prompt-tesoreria-sin-transito.md Fase 1.1 — CUSTODY es el depósito
+/// clásico (alguien lo llevó físicamente y Master confirma después, o el
+/// depósito directo viejo que pasaba por la custodia de Master sin
+/// distinguirse). DIRECT_FROM_RETAINED es el depósito directo desde la
+/// pantalla de Tesorería: sale directo del retenido de la sucursal (caja
+/// fuerte o, sin caja fuerte, custodia con saldo neto cero) y NUNCA mueve
+/// el corte de getLastDepositCutoff — se resta directo del acumulado
+/// (getAccumulatedRetainedTx) para que Tesorería nunca lo muestre "en
+/// tránsito".
+enum BankDepositSource {
+  CUSTODY
+  DIRECT_FROM_RETAINED
+}
+
 /// Depósito confirmado — una de las dos fuentes del saldo esperado de una
 /// cuenta (§2.2): saldo esperado = depósitos confirmados + transferencias
 /// recibidas a esa cuenta. La resolución de "efectivo esperando depósito"
 /// hacia "ya depositado" pasa por acá.
 model BankDeposit {
-  id                String    @id @default(cuid())
+  id                String            @id @default(cuid())
   bankAccountId     String
   branchId          String
   amount            Decimal
-  depositedAt       DateTime  @default(now())
+  depositedAt       DateTime          @default(now())
   confirmedByUserId String
   referenceNumber   String?
   notes             String?
-  createdAt         DateTime  @default(now())
+  createdAt         DateTime          @default(now())
+  /// prompt-tesoreria-sin-transito.md Fase 1.1 — default CUSTODY: los
+  /// depósitos existentes (incluidos los directos viejos que pasaban por
+  /// custodia) conservan su semántica de siempre, sin backfill — sus
+  /// acumulados históricos no cambian.
+  source            BankDepositSource @default(CUSTODY)
   /// prompt-tesoreria-depositos.md Fase 3 — anular un depósito (voidBankDeposit,
   /// treasury/service.ts) NO lo borra: lo marca. El corte de
   /// getAccumulatedRetainedTx no se mueve; el monto vuelve a la custodia de
@@ -3674,6 +3695,32 @@ model BankDeposit {
 
   @@index([branchId, depositedAt])
   @@index([bankAccountId, depositedAt])
+}
+
+/// prompt-tesoreria-sin-transito.md Fase 1.1 — ajuste manual del acumulado
+/// retenido de una sucursal: positivo = vuelve al acumulado (p.ej.
+/// returnCustodyToRetainedTx devolviendo un remanente legacy de custodia),
+/// negativo = sale sin ser un depósito ni un gasto retenido. Entra en
+/// getAccumulatedRetainedTx igual que una declaración, con el mismo corte.
+model RetainedCashAdjustment {
+  id               String   @id @default(cuid())
+  branchId         String
+  /// Con signo — nunca se infiere del contexto, así una lectura del valor
+  /// solo (sin saber de dónde vino) ya dice para qué lado mueve el acumulado.
+  amount           Decimal
+  reason           String
+  /// Si vino de devolver un remanente de custodia (returnCustodyToRetainedTx).
+  custodyAccountId String?
+  /// Si vino de anular un depósito directo (reservado para uso futuro —
+  /// voidBankDepositTx de hoy no crea un ajuste, ver Fase 1.4).
+  bankDepositId    String?
+  createdByUserId  String
+  createdAt        DateTime @default(now())
+
+  branch    Branch @relation(fields: [branchId], references: [id])
+  createdBy User   @relation("RetainedCashAdjustmentCreatedBy", fields: [createdByUserId], references: [id])
+
+  @@index([branchId, createdAt])
 }
 
 /// Una decisión de "hoy no se deposita, se queda en caja hasta mañana" —

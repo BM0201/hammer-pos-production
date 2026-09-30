@@ -995,6 +995,18 @@ export type VoidBankDepositInput = {
  * El cuerpo transaccional de voidBankDeposit (abajo), separado del wrapper
  * para poder probarlo con un tx en memoria — mismo patrón que
  * confirmBankDepositTx/depositBranchCashDirectTx.
+ *
+ * prompt-tesoreria-sin-transito.md Fase 1.4 — un depósito CUSTODY (el
+ * clásico) se revierte igual que siempre: banco → la cuenta de donde salió,
+ * sin más. Un depósito DIRECT_FROM_RETAINED que pasó por la caja fuerte
+ * (SAFE) también — ahí sí se queda, la SAFE guarda retenido real. Pero uno
+ * que pasó por custodia (sin SAFE, saldo neto cero por diseño — 1.3) NO
+ * puede quedar con saldo después de anular: eso reintroduciría el
+ * remanente "en tránsito" que 1.3 eliminó. Ese caso necesita un segundo
+ * paso — drenar la custodia de nuevo (RECONCILIATION OUT, como el ajuste
+ * de custodia) — para volver a neto cero. Con voidedAt marcado, 1.2 deja de
+ * restar este depósito del acumulado: la sucursal lo recupera sola, sin
+ * necesitar un RetainedCashAdjustment.
  */
 export async function voidBankDepositTx(tx: Prisma.TransactionClient, input: VoidBankDepositInput) {
   const reason = input.reason.trim();
@@ -1011,17 +1023,19 @@ export async function voidBankDepositTx(tx: Prisma.TransactionClient, input: Voi
     throw new Error("BANK_DEPOSIT_ALREADY_VOIDED");
   }
 
-  // De qué custodia salió: la pata DEPOSIT_CONFIRMED OUT de este mismo
+  // De qué cuenta salió: la pata DEPOSIT_CONFIRMED OUT de este mismo
   // depósito (dos filas comparten bankDepositId — ver el comentario del
   // modelo BankDeposit). Sin esa pata (dato imposible salvo corrupción),
-  // no hay a dónde devolver la plata.
+  // no hay a dónde devolver la plata. Puede ser una CUSTODY o, en el camino
+  // sin custodia de un depósito directo (1.3), una SAFE.
   const confirmedOut = await tx.treasuryEntry.findFirst({
     where: { bankDepositId: input.bankDepositId, entryType: "DEPOSIT_CONFIRMED", direction: "OUT" },
     select: { accountId: true },
   });
   if (!confirmedOut) {
-    throw new Error("VALIDATION_ERROR: no se encontró la custodia de origen de este depósito");
+    throw new Error("VALIDATION_ERROR: no se encontró la cuenta de origen de este depósito");
   }
+  const sourceAccount = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: confirmedOut.accountId }, select: { type: true } });
 
   const amount = Number(deposit.amount);
   const bankBalanceBefore = await getTreasuryAccountBalanceTx(tx, deposit.bankAccountId);
@@ -1042,6 +1056,21 @@ export async function voidBankDepositTx(tx: Prisma.TransactionClient, input: Voi
     createdByUserId: input.actorUserId,
   });
 
+  let custodyDrainEntryId: string | null = null;
+  if (deposit.source === "DIRECT_FROM_RETAINED" && sourceAccount.type === "CUSTODY") {
+    const drainEntry = await createTreasuryEntryTx(tx, {
+      accountId: confirmedOut.accountId,
+      direction: "OUT",
+      amount,
+      entryType: "RECONCILIATION",
+      counterpartyType: "ADJUSTMENT",
+      bankDepositId: deposit.id,
+      notes: `Anulación de depósito directo (vuelve al acumulado, no a custodia): ${reason}`,
+      createdByUserId: input.actorUserId,
+    });
+    custodyDrainEntryId = drainEntry.id;
+  }
+
   const updated = await tx.bankDeposit.update({
     where: { id: deposit.id },
     data: { voidedAt: new Date(), voidedByUserId: input.actorUserId, voidReason: reason },
@@ -1054,6 +1083,7 @@ export async function voidBankDepositTx(tx: Prisma.TransactionClient, input: Voi
     amount,
     bankBalanceBefore: bankBalanceBefore.balance,
     bankBalanceWentNegative,
+    custodyDrainEntryId,
   };
 }
 
@@ -1083,6 +1113,10 @@ export async function voidBankDeposit(input: VoidBankDepositInput) {
       transferId: result.transferId,
       bankBalanceBeforeVoid: result.bankBalanceBefore,
       bankBalanceWentNegative: result.bankBalanceWentNegative,
+      // prompt-tesoreria-sin-transito.md Fase 1.4 — poblado solo cuando el
+      // depósito directo pasó por custodia (no SAFE): la segunda pata que
+      // la devuelve a neto cero.
+      custodyDrainEntryId: result.custodyDrainEntryId,
     },
   });
 
@@ -1162,6 +1196,95 @@ export async function adjustCustodyBalance(input: AdjustCustodyBalanceInput) {
   });
 
   return { entryId: result.entryId };
+}
+
+export type ReturnCustodyToRetainedInput = {
+  custodyAccountId: string;
+  branchId: string;
+  amount: number;
+  reason: string;
+  actorUserId: string;
+};
+
+/**
+ * prompt-tesoreria-sin-transito.md Fase 1.5 — limpia lo que ya quedó "en
+ * tránsito" por depósitos directos legacy (antes de esta fase, el depósito
+ * directo despachaba el acumulado completo a la custodia de Master — ver
+ * depositBranchCashDirectTx). El monto sale de la custodia (RECONCILIATION
+ * OUT, igual que adjustCustodyBalanceTx — no hay a dónde transferirlo, esa
+ * plata nunca dejó la sucursal de verdad) y entra de nuevo al acumulado vía
+ * un RetainedCashAdjustment positivo, que getAccumulatedRetainedTx (1.2) ya
+ * suma. `branchId` es obligatorio y explícito — una custodia legacy de
+ * Master puede tener plata de varias sucursales mezclada, así que no se
+ * infiere de la cuenta.
+ */
+export async function returnCustodyToRetainedTx(tx: Prisma.TransactionClient, input: ReturnCustodyToRetainedInput) {
+  if (input.amount <= 0) {
+    throw new Error("VALIDATION_ERROR: el monto debe ser mayor que 0");
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 10) {
+    throw new Error("VALIDATION_ERROR: el motivo debe tener al menos 10 caracteres");
+  }
+
+  // Lock de fila: mismo patrón que adjustCustodyBalanceTx.
+  await tx.$queryRaw`SELECT id FROM "TreasuryAccount" WHERE id = ${input.custodyAccountId} FOR UPDATE`;
+
+  const account = await tx.treasuryAccount.findUniqueOrThrow({ where: { id: input.custodyAccountId } });
+  if (account.type !== "CUSTODY") {
+    throw new Error("VALIDATION_ERROR: solo aplica a cuentas de custodia");
+  }
+
+  const balance = await getTreasuryAccountBalanceTx(tx, input.custodyAccountId);
+  if (input.amount > balance.balance + 0.01) {
+    throw new Error(`VALIDATION_ERROR: el monto (C$${input.amount}) supera el saldo de la custodia (C$${balance.balance})`);
+  }
+
+  const entry = await createTreasuryEntryTx(tx, {
+    accountId: input.custodyAccountId,
+    direction: "OUT",
+    amount: input.amount,
+    entryType: "RECONCILIATION",
+    counterpartyType: "ADJUSTMENT",
+    notes: `Devuelto al acumulado de sucursal: ${reason}`,
+    createdByUserId: input.actorUserId,
+  });
+
+  const adjustment = await tx.retainedCashAdjustment.create({
+    data: {
+      branchId: input.branchId,
+      amount: input.amount,
+      reason,
+      custodyAccountId: input.custodyAccountId,
+      createdByUserId: input.actorUserId,
+    },
+  });
+
+  return { entryId: entry.id, adjustmentId: adjustment.id, balanceBefore: balance.balance };
+}
+
+export async function returnCustodyToRetained(input: ReturnCustodyToRetainedInput) {
+  const result = await prisma.$transaction((tx) => returnCustodyToRetainedTx(tx, input));
+
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    branchId: input.branchId,
+    module: "treasury",
+    action: "CUSTODY_RETURNED_TO_RETAINED",
+    entityType: "TreasuryAccount",
+    entityId: input.custodyAccountId,
+    metadataJson: {
+      custodyAccountId: input.custodyAccountId,
+      branchId: input.branchId,
+      amount: input.amount,
+      reason: input.reason.trim(),
+      balanceBefore: result.balanceBefore,
+      entryId: result.entryId,
+      adjustmentId: result.adjustmentId,
+    },
+  });
+
+  return { entryId: result.entryId, adjustmentId: result.adjustmentId };
 }
 
 // ─── Liquidación de tarjeta (prompt-tesoreria-cerrar-circuito.md H-1) ─────
@@ -1346,16 +1469,25 @@ export async function assertCashDepositTargetTx(tx: Prisma.TransactionClient, ba
  * cash-monitor.ts) — antes se resolvía afuera sin lock, así que dos
  * depósitos concurrentes pasaban los dos la validación.
  *
- * Con el guard de abajo, amount nunca supera accumulatedAmount — así que lo
- * que se despacha a custodia es siempre accumulatedAmount completo (ya no
- * hace falta max(amount, accumulatedAmount)): sigue siendo necesario
- * despachar el acumulado COMPLETO y no solo `amount`, porque
- * getAccumulatedRetainedTx corta por TIEMPO (último DEPOSIT_DISPATCH/
- * DEPOSIT_CONFIRMED), no por monto — despachar solo `amount` en un depósito
- * parcial igual movería el corte y dejaría accumulatedAmount en 0 con plata
- * todavía sin depositar. El remanente (accumulatedAmount - amount) se queda
- * en la custodia del actor como "en tránsito", igual que ya maneja
- * confirmBankDeposit cuando confirma menos de lo que hay en custodia.
+ * prompt-tesoreria-sin-transito.md Fase 1.3 (fix) — Tesorería es el punto
+ * final: el retenido de una sucursal solo se DEPOSITA, nunca pasa a "en
+ * tránsito". Antes se despachaba el ACUMULADO COMPLETO a la custodia de
+ * Master (porque getLastDepositCutoff cortaba por tiempo, no por monto, y
+ * despachar solo `amount` habría "limpiado" el resto del acumulado sin
+ * depositarlo) — en un depósito parcial, la diferencia quedaba sentada en
+ * la custodia de Master como remainderInCustody, mostrándose "en tránsito"
+ * en la pantalla que se supone es el destino final. Con
+ * source=DIRECT_FROM_RETAINED, getLastDepositCutoff ignora por completo
+ * estos depósitos (ver cash-monitor.ts) — el corte ya no depende de
+ * despachar el acumulado entero, así que acá solo se mueve `amount`, nunca
+ * un remanente. Dos caminos, ninguno deja plata sentada:
+ *   - con caja fuerte (SAFE) activa en la sucursal: SAFE → banco directo,
+ *     un solo paso, sin custodia. Si el saldo de la SAFE no alcanza, se
+ *     permite igual (histórico incompleto conocido — hallazgo lateral del
+ *     doc) y queda anotado en el audit log.
+ *   - sin SAFE: pasa por la custodia de Master, pero con saldo neto CERO —
+ *     entra y sale en el mismo instante (mismo occurredAt en las dos
+ *     patas), nunca queda ahí sentado ni un segundo lógico.
  */
 export async function depositBranchCashDirectTx(
   tx: Prisma.TransactionClient,
@@ -1370,14 +1502,6 @@ export async function depositBranchCashDirectTx(
 
   await assertCashDepositTargetTx(tx, input.bankAccountId);
 
-  const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.actorUserId, branchId: input.branchId });
-
-  // prompt-tesoreria-custodia-sucursal.md Fase 1.2 (fix) — el BankDeposit se
-  // crea ANTES del DEPOSIT_DISPATCH para poder ligar bankDepositId en la
-  // misma escritura. Sin ese enlace, getLastDepositCutoff no tenía forma de
-  // saber de qué sucursal era este despacho salvo por la custodia (que con
-  // una persona multi-sucursal podía ser la de otra) — el despacho queda
-  // atado a BankDeposit.branchId, que siempre fue correcto.
   const deposit = await tx.bankDeposit.create({
     data: {
       bankAccountId: input.bankAccountId,
@@ -1386,38 +1510,67 @@ export async function depositBranchCashDirectTx(
       confirmedByUserId: input.actorUserId,
       referenceNumber: input.referenceNumber ?? null,
       notes: input.notes ?? null,
+      source: "DIRECT_FROM_RETAINED",
     },
   });
 
-  const dispatchAmount = round2(accumulatedAmount);
-  await createTreasuryEntryTx(tx, {
-    accountId: custody.id,
-    direction: "IN",
-    amount: dispatchAmount,
-    entryType: "DEPOSIT_DISPATCH",
-    counterpartyType: "INTERNAL",
-    bankDepositId: deposit.id,
-    notes: "Depósito directo desde efectivo retenido de sucursal",
-    createdByUserId: input.actorUserId,
-  });
+  const safe = await findSafeAccountForBranch(tx, input.branchId);
+  let custodyAccountId: string | null = null;
+  let safeBalanceBefore: number | null = null;
+  let transferId: string;
 
-  const { transferId } = await createInternalTransferTx(tx, {
-    fromAccountId: custody.id,
-    toAccountId: input.bankAccountId,
-    fromAmount: input.amount,
-    entryType: "DEPOSIT_CONFIRMED",
-    counterpartyType: "INTERNAL",
-    bankDepositId: deposit.id,
-    reference: input.referenceNumber ?? null,
-    notes: input.notes ?? null,
-    createdByUserId: input.actorUserId,
-  });
+  if (safe) {
+    const safeBalance = await getTreasuryAccountBalanceTx(tx, safe.id);
+    safeBalanceBefore = safeBalance.balance;
+    const result = await createInternalTransferTx(tx, {
+      fromAccountId: safe.id,
+      toAccountId: input.bankAccountId,
+      fromAmount: input.amount,
+      entryType: "DEPOSIT_CONFIRMED",
+      counterpartyType: "INTERNAL",
+      bankDepositId: deposit.id,
+      reference: input.referenceNumber ?? null,
+      notes: input.notes ?? null,
+      createdByUserId: input.actorUserId,
+    });
+    transferId = result.transferId;
+  } else {
+    const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.actorUserId, branchId: input.branchId });
+    custodyAccountId = custody.id;
+    // Mismo instante para las dos patas — entra y sale sin quedar sentado
+    // ni un segundo lógico (ver el doc-comment de arriba).
+    const occurredAt = new Date();
+    await createTreasuryEntryTx(tx, {
+      accountId: custody.id,
+      direction: "IN",
+      amount: input.amount,
+      entryType: "DEPOSIT_DISPATCH",
+      counterpartyType: "INTERNAL",
+      bankDepositId: deposit.id,
+      occurredAt,
+      notes: "Depósito directo desde efectivo retenido de sucursal",
+      createdByUserId: input.actorUserId,
+    });
+    const result = await createInternalTransferTx(tx, {
+      fromAccountId: custody.id,
+      toAccountId: input.bankAccountId,
+      fromAmount: input.amount,
+      entryType: "DEPOSIT_CONFIRMED",
+      counterpartyType: "INTERNAL",
+      bankDepositId: deposit.id,
+      occurredAt,
+      reference: input.referenceNumber ?? null,
+      notes: input.notes ?? null,
+      createdByUserId: input.actorUserId,
+    });
+    transferId = result.transferId;
+  }
 
   return {
     deposit,
     transferId,
-    custodyAccountId: custody.id,
-    remainderInCustody: round2(dispatchAmount - input.amount),
+    custodyAccountId,
+    safeBalanceBefore,
   };
 }
 
@@ -1453,10 +1606,14 @@ export async function depositBranchCashDirect(input: DirectDepositInput) {
       branchId: input.branchId,
       bankAccountId: input.bankAccountId,
       amount: input.amount,
-      custodyAccountId: result.custodyAccountId,
       accumulatedBefore: result.accumulatedBefore,
-      remainderLeftInCustody: result.remainderInCustody,
       transferId: result.transferId,
+      // prompt-tesoreria-sin-transito.md Fase 1.3 — cuál de los dos caminos
+      // usó este depósito: custodyAccountId (sin SAFE, saldo neto cero) o
+      // safeBalanceBefore (con SAFE — null si venía sin saldo suficiente
+      // igual se permitió, ver el doc-comment de depositBranchCashDirectTx).
+      custodyAccountId: result.custodyAccountId,
+      safeBalanceBefore: result.safeBalanceBefore,
     },
   });
 
