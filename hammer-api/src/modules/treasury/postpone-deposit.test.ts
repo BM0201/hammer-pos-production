@@ -82,9 +82,16 @@ function createFakeTx(opts: {
         postponements.filter((p) => p.branchId === where.branchId && (!where.createdAt || p.createdAt.getTime() > where.createdAt.gt.getTime())).length,
     },
     treasuryEntry: {
-      findFirst: async ({ where }: { where: { entryType: { in: string[] }; account: { branchId: string; type: string } } }) => {
+      // prompt-tesoreria-custodia-sucursal.md Fase 1.3 — getLastDepositCutoff
+      // ahora atribuye por BankDeposit.branchId cuando hay depósito, y por
+      // account.branchId cuando no. Este archivo solo posponía (nunca hubo
+      // un BankDeposit todavía en sus escenarios): las entradas sembradas acá
+      // representan despachos SIN depósito, así que solo importa la segunda
+      // rama del OR (bankDepositId null + account.branchId).
+      findFirst: async ({ where }: { where: { entryType: { in: string[] }; account: { type: string }; OR: Array<{ account?: { branchId: string } }> } }) => {
+        const noDepositBranch = where.OR.find((c) => c.account?.branchId !== undefined)?.account?.branchId;
         const matches = treasuryEntries
-          .filter((e) => where.entryType.in.includes(e.entryType) && e.branchId === where.account.branchId && e.accountType === where.account.type)
+          .filter((e) => where.entryType.in.includes(e.entryType) && e.accountType === where.account.type && e.branchId === noDepositBranch)
           .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
         return matches[0] ? { occurredAt: matches[0].occurredAt } : null;
       },

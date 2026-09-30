@@ -303,3 +303,98 @@ test("getAccumulatedRetainedTx: NUNCA consulta CashSession — la gaveta abierta
   const result = await getAccumulatedRetainedTx(db, "branch-1");
   assert.equal(result.accumulatedAmount, 1000, "el acumulado sale solo de lo retenido, nunca de la gaveta");
 });
+
+// ── prompt-tesoreria-custodia-sucursal.md Fase 1.3 (fix) ────────────────
+//
+// getLastDepositCutoff (privada) solo se puede probar a través de
+// getAccumulatedRetainedTx — acá el fake SÍ evalúa el where real (a
+// diferencia de buildFakeRetainedDb de arriba, que solo devuelve un
+// cutoffEntry fijo): la prueba que importa es que una entrada con
+// bankDeposit de OTRA sucursal no mueve el corte de esta.
+
+type CutoffCandidate = {
+  entryType: "DEPOSIT_DISPATCH" | "DEPOSIT_CONFIRMED";
+  occurredAt: Date;
+  accountType: "CUSTODY" | "BANK";
+  accountBranchId: string | null;
+  bankDepositBranchId?: string; // undefined = sin BankDeposit todavía
+};
+
+function buildFakeCutoffAttributionDb(opts: { cutoffCandidates: CutoffCandidate[]; declarations: Array<{ retainAwaitingDepositPortion: number; createdAt: Date }> }) {
+  const db = {
+    treasuryEntry: {
+      // Reproduce el where real de getLastDepositCutoff: entryType in [...],
+      // account.type = CUSTODY, y el OR de bankDeposit.branchId / (sin
+      // depósito + account.branchId) — no una función fake que ignora el
+      // where, para probar la atribución de verdad.
+      findFirst: async ({ where }: {
+        where: {
+          entryType: { in: string[] };
+          account: { type: string };
+          OR: Array<{ bankDeposit?: { branchId: string }; bankDepositId?: null; account?: { branchId: string } }>;
+        };
+      }) => {
+        const branchViaDeposit = where.OR.find((c) => c.bankDeposit !== undefined)?.bankDeposit?.branchId;
+        const branchViaAccount = where.OR.find((c) => c.bankDepositId === null)?.account?.branchId;
+        const matches = opts.cutoffCandidates
+          .filter((c) => where.entryType.in.includes(c.entryType) && c.accountType === where.account.type)
+          .filter((c) =>
+            (c.bankDepositBranchId !== undefined && c.bankDepositBranchId === branchViaDeposit) ||
+            (c.bankDepositBranchId === undefined && c.accountBranchId === branchViaAccount),
+          )
+          .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+        return matches[0] ? { occurredAt: matches[0].occurredAt } : null;
+      },
+      findMany: async () => [],
+    },
+    cashDestinationDeclaration: {
+      findMany: async ({ where }: { where: { createdAt?: { gt: Date } } }) =>
+        opts.declarations.filter((d) => !where.createdAt || d.createdAt > where.createdAt.gt),
+    },
+    operatingExpense: { findMany: async () => [] },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+  return db;
+}
+
+test("LA QUE IMPORTA — una entrada con BankDeposit de OTRA sucursal no mueve el corte de esta sucursal", async () => {
+  // Custodia legacy de Master, históricamente branchId=A: un depósito
+  // directo para B queda registrado con bankDeposit.branchId=B (gracias a
+  // 1.2), aunque la custodia física sea la de A.
+  const db = buildFakeCutoffAttributionDb({
+    cutoffCandidates: [
+      { entryType: "DEPOSIT_DISPATCH", occurredAt: new Date("2026-01-10"), accountType: "CUSTODY", accountBranchId: "branch-A", bankDepositBranchId: "branch-B" },
+    ],
+    declarations: [
+      { retainAwaitingDepositPortion: 5000, createdAt: new Date("2026-01-05") }, // branch-A: antes del despacho para B, pero el corte de A no se mueve
+    ],
+  });
+  const resultA = await getAccumulatedRetainedTx(db, "branch-A");
+  assert.equal(resultA.accumulatedAmount, 5000, "el acumulado de A NO baja por un despacho que en realidad era para B");
+});
+
+test("LA QUE IMPORTA — el mismo despacho SÍ mueve el corte de la sucursal a la que realmente pertenece (BankDeposit.branchId)", async () => {
+  const db = buildFakeCutoffAttributionDb({
+    cutoffCandidates: [
+      { entryType: "DEPOSIT_DISPATCH", occurredAt: new Date("2026-01-10"), accountType: "CUSTODY", accountBranchId: "branch-A", bankDepositBranchId: "branch-B" },
+    ],
+    declarations: [
+      { retainAwaitingDepositPortion: 5000, createdAt: new Date("2026-01-05") }, // branch-B: antes del despacho, ya no cuenta
+    ],
+  });
+  const resultB = await getAccumulatedRetainedTx(db, "branch-B");
+  assert.equal(resultB.accumulatedAmount, 0, "el acumulado de B SÍ baja — el despacho era suyo de verdad, aunque la custodia sea de A");
+});
+
+test("un despacho SIN depósito todavía (sendCashOutToCustody) mueve el corte por la sucursal de la CUENTA, no por BankDeposit", async () => {
+  const db = buildFakeCutoffAttributionDb({
+    cutoffCandidates: [
+      { entryType: "DEPOSIT_DISPATCH", occurredAt: new Date("2026-01-10"), accountType: "CUSTODY", accountBranchId: "branch-B" }, // bankDepositBranchId undefined: aún no hay BankDeposit
+    ],
+    declarations: [
+      { retainAwaitingDepositPortion: 3000, createdAt: new Date("2026-01-05") },
+    ],
+  });
+  const resultB = await getAccumulatedRetainedTx(db, "branch-B");
+  assert.equal(resultB.accumulatedAmount, 0, "sin BankDeposit, se atribuye por la cuenta — que con la custodia por (persona,sucursal) de 1.1 ya es la correcta");
+});

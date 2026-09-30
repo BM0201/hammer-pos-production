@@ -143,6 +143,17 @@ test("depósito COMPLETO: se despacha exactamente el acumulado, no queda remanen
   assert.equal(Number(dispatchEntry?.amount), 1000, "el monto despachado a custodia debe cubrir el acumulado completo");
 });
 
+test("LA QUE IMPORTA (prompt-tesoreria-custodia-sucursal.md 1.2) — el despacho del depósito directo lleva bankDepositId, ligado a SU BankDeposit", async () => {
+  const { tx, entries } = createFakeTx({ accounts: [BANK], users: [ACTOR] });
+  const result = await depositBranchCashDirectTx(
+    tx,
+    { branchId: "branch-masaya", bankAccountId: "bank-1", amount: 1000, actorUserId: "user-1" },
+    /* accumulatedAmount */ 1000,
+  );
+  const dispatchEntry = entries.find((e) => e.entryType === "DEPOSIT_DISPATCH");
+  assert.equal(dispatchEntry?.bankDepositId, result.deposit.id, "el DEPOSIT_DISPATCH debe quedar atado al BankDeposit recién creado, no huérfano");
+});
+
 test("depósito PARCIAL: igual se despacha el acumulado completo a custodia (el corte se limpia), pero el remanente no depositado queda registrado ahí — no desaparece", async () => {
   const { tx, entries } = createFakeTx({ accounts: [BANK], users: [ACTOR] });
   const result = await depositBranchCashDirectTx(

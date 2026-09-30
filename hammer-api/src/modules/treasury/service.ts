@@ -302,13 +302,23 @@ export async function createInternalTransferTx(tx: Prisma.TransactionClient, inp
 // ─── Autocreación de cuentas no-bancarias ─────────────────────────────────
 
 /**
- * Una cuenta CUSTODY por persona — se autocrea la primera vez que alguien
- * declara "entregar" o "a depositar" (prompt-libro-mayor-tesoreria.md §3).
- * Pedirle a Master que precargue una fila por empleado antes de poder
- * declarar sería pedir un dato que todavía no hace falta.
+ * prompt-tesoreria-custodia-sucursal.md Fase 1.1 (fix) — una cuenta CUSTODY
+ * por (persona, sucursal), no por persona sola. Antes el código era
+ * `CUSTODY-{holderUserId}`: la PRIMERA sucursal con la que alguien
+ * despachaba fijaba el branchId para siempre, y cualquier depósito
+ * posterior para OTRA sucursal cayera en esa misma cuenta — el corte de
+ * getLastDepositCutoff se movía para la sucursal equivocada (o no se movía
+ * para la correcta), y el depósito directo se podía repetir sin que el
+ * acumulado de la sucursal real bajara nunca. Se autocrea la primera vez
+ * que alguien declara "entregar" o "a depositar" para esa sucursal
+ * (prompt-libro-mayor-tesoreria.md §3).
+ *
+ * Las cuentas legacy (código sin sucursal) NO se tocan — ni se renombran
+ * ni se migran saldos: siguen listándose y pudiéndose confirmar/recibir/
+ * ajustar como hoy, solo dejan de recibir despachos NUEVOS.
  */
 export async function findOrCreateCustodyAccountTx(tx: Prisma.TransactionClient, input: { holderUserId: string; branchId: string | null }) {
-  const code = `CUSTODY-${input.holderUserId}`;
+  const code = `CUSTODY-${input.holderUserId}-${input.branchId ?? "CENTRAL"}`;
   const existing = await tx.treasuryAccount.findUnique({ where: { code } });
   if (existing) return existing;
 
@@ -1362,17 +1372,12 @@ export async function depositBranchCashDirectTx(
 
   const custody = await findOrCreateCustodyAccountTx(tx, { holderUserId: input.actorUserId, branchId: input.branchId });
 
-  const dispatchAmount = round2(accumulatedAmount);
-  await createTreasuryEntryTx(tx, {
-    accountId: custody.id,
-    direction: "IN",
-    amount: dispatchAmount,
-    entryType: "DEPOSIT_DISPATCH",
-    counterpartyType: "INTERNAL",
-    notes: "Depósito directo desde efectivo retenido de sucursal",
-    createdByUserId: input.actorUserId,
-  });
-
+  // prompt-tesoreria-custodia-sucursal.md Fase 1.2 (fix) — el BankDeposit se
+  // crea ANTES del DEPOSIT_DISPATCH para poder ligar bankDepositId en la
+  // misma escritura. Sin ese enlace, getLastDepositCutoff no tenía forma de
+  // saber de qué sucursal era este despacho salvo por la custodia (que con
+  // una persona multi-sucursal podía ser la de otra) — el despacho queda
+  // atado a BankDeposit.branchId, que siempre fue correcto.
   const deposit = await tx.bankDeposit.create({
     data: {
       bankAccountId: input.bankAccountId,
@@ -1382,6 +1387,18 @@ export async function depositBranchCashDirectTx(
       referenceNumber: input.referenceNumber ?? null,
       notes: input.notes ?? null,
     },
+  });
+
+  const dispatchAmount = round2(accumulatedAmount);
+  await createTreasuryEntryTx(tx, {
+    accountId: custody.id,
+    direction: "IN",
+    amount: dispatchAmount,
+    entryType: "DEPOSIT_DISPATCH",
+    counterpartyType: "INTERNAL",
+    bankDepositId: deposit.id,
+    notes: "Depósito directo desde efectivo retenido de sucursal",
+    createdByUserId: input.actorUserId,
   });
 
   const { transferId } = await createInternalTransferTx(tx, {

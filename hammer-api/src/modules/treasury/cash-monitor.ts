@@ -256,12 +256,27 @@ export type BranchCashPosition = {
  * getBranchCashPosition y postponeCashDeposit (§7, "consecutivas desde el
  * mismo corte") usen EXACTAMENTE la misma consulta — dos criterios de corte
  * distintos serían dos fuentes de verdad sobre lo mismo.
+ *
+ * prompt-tesoreria-custodia-sucursal.md Fase 1.3 (fix) — antes se atribuía
+ * por account.branchId (la sucursal de la CUSTODIA), no por la sucursal
+ * real del depósito: una custodia multi-sucursal (persona que despacha
+ * para más de una) movía el corte de la sucursal equivocada. Ahora se
+ * atribuye por BankDeposit.branchId cuando la entrada ya tiene depósito
+ * (DEPOSIT_CONFIRMED siempre lo tiene; DEPOSIT_DISPATCH del depósito
+ * directo también, desde 1.2) y, sin depósito todavía (el despacho de
+ * sendCashOutToCustody / la declaración de cierre, que corren ANTES de que
+ * exista un BankDeposit), por la sucursal de la cuenta — que con la
+ * custodia por (persona, sucursal) de 1.1 ya es la correcta.
  */
 async function getLastDepositCutoff(db: Prisma.TransactionClient | typeof prisma, branchId: string): Promise<Date | null> {
   const lastDispatchOrConfirm = await db.treasuryEntry.findFirst({
     where: {
       entryType: { in: ["DEPOSIT_DISPATCH", "DEPOSIT_CONFIRMED"] },
-      account: { branchId, type: "CUSTODY" },
+      account: { type: "CUSTODY" },
+      OR: [
+        { bankDeposit: { branchId } },
+        { bankDepositId: null, account: { branchId } },
+      ],
     },
     orderBy: { occurredAt: "desc" },
     select: { occurredAt: true },
@@ -326,6 +341,13 @@ export async function getBranchCashPosition(branchId: string, now: Date = new Da
   const cashInDrawerToday = Number(openSession?.expectedCashAmount ?? 0);
 
   // "En tránsito": saldo de las cuentas CUSTODY de la sucursal.
+  //
+  // prompt-tesoreria-custodia-sucursal.md Fase 1.5 — con la custodia por
+  // (persona, sucursal) de 1.1, esto ya atribuye bien TODO lo nuevo. Una
+  // cuenta legacy (código sin sucursal, de antes del fix) puede seguir
+  // mezclando efectivo despachado para más de una sucursal bajo un solo
+  // branchId — no se intenta repartir ese saldo: no hay forma de saber, sin
+  // adivinar, cuánto de él corresponde a cada sucursal.
   let inTransitAmount = 0;
   if (custodyAccounts.length > 0) {
     const [inAgg, outAgg] = await Promise.all([
