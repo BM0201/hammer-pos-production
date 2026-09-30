@@ -777,8 +777,15 @@ function CashPositionRowItem({
           </p>
         </div>
         <div className="shrink-0 text-right">
-          <p className="text-xs text-[var(--color-text-muted)]">Para depositar</p>
-          <p className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{money(position.pendingDeposit)}</p>
+          <p className="text-xs text-[var(--color-text-muted)]">Depositable ahora</p>
+          <p className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{money(position.directDepositAvailable)}</p>
+          {/* prompt-tesoreria-custodia-sucursal.md Fase 2 — lo que dice acá
+              tiene que coincidir con lo que DirectDepositSheet realmente deja
+              depositar (directDepositAvailable, nunca pendingDeposit, que
+              incluye la gaveta abierta). */}
+          {position.cashInDrawerToday > 0.01 && (
+            <p className="text-[0.6875rem] text-[var(--color-text-soft)]">Incluye caja abierta: {money(position.pendingDeposit)}</p>
+          )}
           {position.pendingDepositNote && <p className="text-[0.6875rem] italic text-[var(--color-text-soft)]">{position.pendingDepositNote}</p>}
         </div>
       </button>

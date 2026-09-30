@@ -177,15 +177,21 @@ test("Prueba 1 (doc): hoy=0, acumulado=100, sin fondo → amount:100, floorConfi
   assert.equal(result.floorConfigured, false);
 });
 
-test("Prueba 2 (doc): fondo configurado en 150 (>= el total) → amount:0, floorConfigured:true", () => {
+// prompt-tesoreria-custodia-sucursal.md Fase 2 (fix) — Prueba 2 y 3 cambian
+// de valor esperado: la versión anterior consagraba la resta doble del
+// fondo (lo restaba de gaveta+acumulado, no solo de la gaveta). Con
+// cashInDrawerToday=0 en ambas, el fondo ya no tiene nada de la gaveta que
+// descontar — el acumulado, que YA excluye el fondo desde que se declaró,
+// sale completo.
+test("Prueba 2 (doc, corregida): fondo mayor que la gaveta (que está en 0) — no come del acumulado, amount:100", () => {
   const result = computeAmountToDeposit({ cashInDrawerToday: 0, accumulatedAmount: 100, cashFloor: 150 });
-  assert.equal(result.amount, 0);
+  assert.equal(result.amount, 100);
   assert.equal(result.floorConfigured, true);
 });
 
-test("Prueba 3 (doc): fondo en 30 → amount:70", () => {
+test("Prueba 3 (doc, corregida): fondo en 30 pero la gaveta está en 0 — el fondo no toca el acumulado, amount:100", () => {
   const result = computeAmountToDeposit({ cashInDrawerToday: 0, accumulatedAmount: 100, cashFloor: 30 });
-  assert.equal(result.amount, 70);
+  assert.equal(result.amount, 100);
   assert.equal(result.floorConfigured, true);
 });
 
@@ -194,9 +200,30 @@ test("computeAmountToDeposit: suma SIEMPRE los dos términos, hoy y acumulado ju
   assert.equal(result.amount, 17000);
 });
 
-test("computeAmountToDeposit: el resultado nunca es negativo aunque el fondo supere el total", () => {
+// prompt-tesoreria-custodia-sucursal.md Fase 2 (fix) — antes esperaba 0
+// (resta doble: (10+5)-10000 truncado en 0, comiéndose también el
+// acumulado). Ahora el fondo solo puede comerse la gaveta (10 → 0); el
+// acumulado (5) nunca se toca, así que el resultado es 5, no 0.
+test("computeAmountToDeposit: el fondo nunca hace que el resultado baje del acumulado, aunque supere la gaveta muchas veces", () => {
   const result = computeAmountToDeposit({ cashInDrawerToday: 10, accumulatedAmount: 5, cashFloor: 10000 });
-  assert.equal(result.amount, 0);
+  assert.equal(result.amount, 5);
+});
+
+// prompt-tesoreria-custodia-sucursal.md Fase 2 — los tres casos exactos del
+// doc, con el monto real que reportó el síntoma en producción (588,435.90).
+test("LA QUE IMPORTA (doc) — acumulado 588,435.90, gaveta 0, fondo 400 → 588,435.90 (el mismo síntoma reportado)", () => {
+  const result = computeAmountToDeposit({ cashInDrawerToday: 0, accumulatedAmount: 588_435.90, cashFloor: 400 });
+  assert.equal(result.amount, 588_435.90);
+});
+
+test("(doc) — acumulado 0, gaveta 1,000, fondo 400 → 600", () => {
+  const result = computeAmountToDeposit({ cashInDrawerToday: 1000, accumulatedAmount: 0, cashFloor: 400 });
+  assert.equal(result.amount, 600);
+});
+
+test("(doc) — acumulado 500, gaveta 300, fondo 400 → 500 (la gaveta no alcanza el fondo, aporta 0)", () => {
+  const result = computeAmountToDeposit({ cashInDrawerToday: 300, accumulatedAmount: 500, cashFloor: 400 });
+  assert.equal(result.amount, 500);
 });
 
 // ── prompt-tesoreria-depositos.md Fase 1 (fix Bug 1) ────────────────────

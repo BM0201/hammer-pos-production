@@ -32,6 +32,14 @@ function round2(value: number): number {
  * dentro de getBranchCashPosition, donde un futuro cambio en el orden de
  * los términos no tenía ningún test que lo pescara.
  *
+ * prompt-tesoreria-custodia-sucursal.md Fase 2 (fix) — el fondo de caja
+ * SOLO se descuenta de la gaveta abierta, nunca del acumulado:
+ * accumulatedAmount YA excluye el fondo (decomposeRetainedAmount lo separa
+ * en cashFundPortion/awaitingDepositPortion al declarar — el acumulado que
+ * llega acá es awaitingDepositPortion). Restarlo de nuevo sobre
+ * `gaveta + acumulado` lo descontaba dos veces, achicando "Para depositar"
+ * por debajo de lo que en verdad se podía depositar.
+ *
  * cashFloor null = sin configurar: se muestra el total completo, nunca se
  * inventa un descuento (floorConfigured en false dispara la nota "sin fondo
  * configurado" en la interfaz).
@@ -41,11 +49,11 @@ export function computeAmountToDeposit(input: {
   accumulatedAmount: number;
   cashFloor: number | null;
 }): { amount: number; floorConfigured: boolean } {
-  const total = round2(input.cashInDrawerToday + input.accumulatedAmount);
   if (input.cashFloor === null) {
-    return { amount: total, floorConfigured: false };
+    return { amount: round2(input.cashInDrawerToday + input.accumulatedAmount), floorConfigured: false };
   }
-  return { amount: Math.max(0, round2(total - input.cashFloor)), floorConfigured: true };
+  const drawerAboveFloor = Math.max(0, round2(input.cashInDrawerToday - input.cashFloor));
+  return { amount: round2(input.accumulatedAmount + drawerAboveFloor), floorConfigured: true };
 }
 
 /* ── §2.2 · La proyección — pura, sin DB ─────────────────────────────── */
