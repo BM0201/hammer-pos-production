@@ -12,6 +12,7 @@ import toast from "react-hot-toast";
 import { STATE_META, type CashPosition, type CashIndicatorState } from "@/components/navigation/cash-indicator-panel";
 import { CashAccumulationBar } from "@/components/finance/cash-accumulation-bar";
 import { money, formatBankAccountOption } from "@/lib/format";
+import { treasuryVisibleState } from "@/lib/treasury-visible-state";
 
 // Fase 5 (prompt-flujo-velocidad.md): los 3 sheets se controlan por `open`
 // pero se montan siempre (para animar su cierre) — igual se benefician de
@@ -107,7 +108,14 @@ type DepositSummary = {
 const STATE_PRIORITY: Record<CashIndicatorState, number> = {
   CRITICAL: 0, OVERDUE: 1, READY: 2, APPROACHING: 3, ACCUMULATING: 4, IN_TRANSIT_ONLY: 5, CLEAR: 6,
 };
-const FLAGGED_STATES = new Set<CashIndicatorState>(["APPROACHING", "READY", "OVERDUE", "CRITICAL", "IN_TRANSIT_ONLY"]);
+// prompt-tesoreria-sin-transito.md Fase 2 — SOLO en esta pantalla, vía
+// treasuryVisibleState (lib/treasury-visible-state.ts): IN_TRANSIT_ONLY se
+// ve como CLEAR. Tesorería es el punto final del retenido — el tránsito es
+// del día, ya no se muestra acá. No toca computeCashIndicatorState
+// (backend) ni las vistas del día (cash-indicator-panel.tsx,
+// cash-accumulation-bar.tsx, money-week), donde ese estado sigue siendo
+// información real y visible.
+const FLAGGED_STATES = new Set<CashIndicatorState>(["APPROACHING", "READY", "OVERDUE", "CRITICAL"]);
 
 /**
  * prompt-libro-mayor-tesoreria.md §6 — la pantalla lidera con el dinero
@@ -262,18 +270,17 @@ export default function TreasuryPage() {
         <Button variant="ghost" size="sm" loading={loading} onClick={() => void load()} icon={<RefreshCcw className="h-3.5 w-3.5" />}>Actualizar</Button>
       </div>
 
-      {/* 6.1 · Posición */}
+      {/* 6.1 · Posición — prompt-tesoreria-sin-transito.md Fase 2: Tesorería es
+          el punto final, el retenido solo se deposita. "En tránsito" es del
+          día (Caja, Destino del efectivo, Operación del día) — acá ya no se
+          muestra. El grid queda en 3 columnas. */}
       {position && (
         <Card className="p-4">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <PositionTile icon={Landmark} label="Bancos" data={position.banks} rate={position.latestExchangeRate} />
             <PositionTile icon={Wallet} label="Por liquidar" data={position.settlement} rate={position.latestExchangeRate} />
             <PositionTile icon={Vault} label="Caja fuerte" data={position.safe} rate={position.latestExchangeRate} />
-            <PositionTile icon={Users} label="En tránsito" data={position.custody} rate={position.latestExchangeRate} amber />
           </div>
-          <p className="mt-3 text-[0.6875rem] text-[var(--color-text-soft)]">
-            &quot;En tránsito&quot; es plata en manos de una persona, sin destino confirmado todavía. No incluye las gavetas abiertas — eso vive en Caja, no en Tesorería (§1).
-          </p>
           {position.accountsPendingOpening.length > 0 && (
             <p className="mt-2 rounded-lg bg-[var(--color-warning-50)] px-3 py-2 text-xs text-[var(--color-warning-700)]">
               {position.accountsPendingOpening.length} cuenta(s) sin saldo de apertura declarado — su saldo de abajo es solo el movimiento desde que se cargaron, no el real. Configuración → cargar apertura.
@@ -299,13 +306,13 @@ export default function TreasuryPage() {
               <h2 className="text-sm font-semibold text-[var(--color-text)]">Efectivo por sucursal</h2>
             </div>
             {(() => {
-              const urgentCount = cashPositions.filter((r) => FLAGGED_STATES.has(r.position.state)).length;
+              const urgentCount = cashPositions.filter((r) => FLAGGED_STATES.has(treasuryVisibleState(r.position.state))).length;
               return urgentCount > 0 ? <Badge variant="warning">{urgentCount} necesitan atención</Badge> : null;
             })()}
           </div>
           <div className="space-y-1.5">
             {[...cashPositions]
-              .sort((a, b) => STATE_PRIORITY[a.position.state] - STATE_PRIORITY[b.position.state])
+              .sort((a, b) => STATE_PRIORITY[treasuryVisibleState(a.position.state)] - STATE_PRIORITY[treasuryVisibleState(b.position.state)])
               .map((row) => (
                 <CashPositionRowItem
                   key={row.branch.id}
@@ -415,7 +422,7 @@ export default function TreasuryPage() {
       )}
 
       {/* Confirmación de depósitos — Pantalla 4 */}
-      <DepositConfirmationPanel bankAccounts={bankAccountsOnly} onConfirmed={() => void load()} />
+      <DepositConfirmationPanel bankAccounts={bankAccountsOnly} branches={branches} onConfirmed={() => void load()} />
 
       {/* §5 · Entradas por cuenta, en un rango */}
       <EntriesByAccountPanel branches={branches} />
@@ -674,18 +681,17 @@ function TreasuryTotalsBar({ cashPositions, depositSummary }: { cashPositions: C
       (acc, row) => ({
         accumulated: acc.accumulated + row.position.accumulatedAmount,
         pendingDeposit: acc.pendingDeposit + row.position.pendingDeposit,
-        inTransit: acc.inTransit + row.position.inTransitAmount,
       }),
-      { accumulated: 0, pendingDeposit: 0, inTransit: 0 },
+      { accumulated: 0, pendingDeposit: 0 },
     );
   }, [cashPositions]);
 
   return (
     <Card className="p-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {/* prompt-tesoreria-sin-transito.md Fase 2 — sin la tarjeta "En tránsito": Tesorería es el punto final. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <TotalTile label="Total acumulado" value={totals.accumulated} />
         <TotalTile label="Total para depositar" value={totals.pendingDeposit} amber={totals.pendingDeposit > 0} />
-        <TotalTile label="En tránsito" value={totals.inTransit} amber={totals.inTransit > 0} />
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
           <div className="text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Depositado (mes)</div>
           <p className="mt-1 text-xl font-bold tabular-nums text-[var(--color-text)]">{money(depositSummary?.deposited.total ?? 0)}</p>
@@ -751,7 +757,7 @@ function CashPositionRowItem({
   onDeposit: () => void;
   refreshKey: number;
 }) {
-  const meta = STATE_META[position.state];
+  const meta = STATE_META[treasuryVisibleState(position.state)];
   return (
     <div
       className={[
@@ -771,9 +777,9 @@ function CashPositionRowItem({
                 que nadie se entere (Parte 3). */}
             {consecutivePostponements > 0 && <Badge variant="warning">Pospuesto {consecutivePostponements}x</Badge>}
           </div>
+          {/* prompt-tesoreria-sin-transito.md Fase 2 — sin "En tránsito": Tesorería es el punto final, ese dato vive en Caja/Operación del día. */}
           <p className="text-xs text-[var(--color-text-muted)]">
             En caja hoy {money(position.cashInDrawerToday)} · Acumulado {money(position.accumulatedAmount)}
-            {position.inTransitAmount > 0.01 ? ` · En tránsito ${money(position.inTransitAmount)}` : ""}
           </p>
         </div>
         <div className="shrink-0 text-right">
@@ -1407,6 +1413,83 @@ function AdjustCustodyBalanceModal({ custody, onClose, onAdjusted }: { custody: 
   );
 }
 
+/**
+ * prompt-tesoreria-sin-transito.md Fase 1.5/2 — limpia un remanente legacy
+ * en custodia (de un depósito directo de antes de esta fase): sale de la
+ * custodia y vuelve al acumulado retenido de la sucursal elegida. branchId
+ * es obligatorio y explícito porque una custodia legacy de Master puede
+ * tener plata de varias sucursales mezclada — no se puede inferir de la
+ * cuenta.
+ */
+function ReturnCustodyToRetainedModal({ custody, branches, onClose, onReturned }: { custody: CustodyRow; branches: Branch[]; onClose: () => void; onReturned: () => void }) {
+  const [branchId, setBranchId] = useState(custody.account.branch?.id ?? "");
+  const [amount, setAmount] = useState(custody.balance.balance.toFixed(2));
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const amountNumber = Number(amount) || 0;
+  const overCap = amountNumber > custody.balance.balance + 0.01;
+  const canConfirm = Boolean(branchId) && amountNumber > 0 && !overCap && reason.trim().length >= 10;
+
+  async function submit() {
+    if (!canConfirm) return;
+    setSaving(true);
+    try {
+      const res = await apiFetch(`/api/master/treasury/custody-accounts/${custody.account.id}/return-to-retained`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branchId, amount: amountNumber, reason: reason.trim() }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo devolver el remanente al acumulado.");
+      toast.success("Devuelto al acumulado de la sucursal.");
+      onReturned();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo devolver el remanente al acumulado.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
+        <h3 className="text-sm font-semibold text-[var(--color-text)]">Devolver al acumulado</h3>
+        <p className="text-xs text-[var(--color-text-muted)]">{custody.account.holderUser?.fullName ?? custody.account.accountAlias} · Saldo actual {money(custody.balance.balance)}</p>
+        <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
+          Sucursal a la que vuelve
+          <select className="hm-input mt-1 w-full" value={branchId} onChange={(e) => setBranchId(e.target.value)} required>
+            <option value="">Selecciona una sucursal…</option>
+            {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </label>
+        <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
+          Monto a devolver (tope: el saldo)
+          <Input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className={overCap ? "border-[var(--color-danger-400)]" : ""} />
+          {overCap && <p className="mt-1 text-[0.6875rem] font-semibold text-[var(--color-danger-600)]">No puede superar el saldo ({money(custody.balance.balance)}).</p>}
+        </label>
+        <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
+          Motivo (obligatorio, mínimo 10 caracteres)
+          <textarea
+            className="hm-input mt-1 w-full"
+            rows={3}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Ej. Remanente de un depósito directo de antes de la custodia por sucursal."
+          />
+        </label>
+        <p className="rounded-lg border border-[var(--color-info-200)] bg-[var(--color-info-50)] px-3 py-2 text-xs text-[var(--color-info-700)]">
+          Esto no es un depósito — la plata no se mueve a ningún banco. Solo corrige el acumulado retenido de la sucursal elegida.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancelar</Button>
+          <Button variant="secondary" size="sm" onClick={() => void submit()} disabled={!canConfirm} loading={saving}>Devolver al acumulado</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OpeningBalanceForm({ accountId, onSaved, onCancel }: { accountId: string; onSaved: () => void; onCancel: () => void }) {
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -1460,6 +1543,8 @@ type CustodyRow = {
   balance: TreasuryAccountBalance;
   /** Cuenta declarada por el cajero al despachar (DEPOSIT_DISPATCH más reciente) — prefill de A.6. */
   intendedBankAccountId: string | null;
+  /** prompt-tesoreria-sin-transito.md Fase 1.5/2 — solo una custodia legacy (de antes de la custodia por sucursal) puede tener un remanente de un depósito directo viejo. */
+  isLegacyCustody: boolean;
 };
 
 /**
@@ -1468,11 +1553,12 @@ type CustodyRow = {
  * pruebas 6-7). Si confirma menos de lo que hay en custodia, el resto se
  * queda ahí — no se ajusta solo.
  */
-function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts: BankAccount[]; onConfirmed: () => void }) {
+function DepositConfirmationPanel({ bankAccounts, branches, onConfirmed }: { bankAccounts: BankAccount[]; branches: Branch[]; onConfirmed: () => void }) {
   const [custodies, setCustodies] = useState<CustodyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<CustodyRow | null>(null);
   const [adjusting, setAdjusting] = useState<CustodyRow | null>(null);
+  const [returning, setReturning] = useState<CustodyRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1494,10 +1580,11 @@ function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts:
 
   return (
     <Card className="p-4">
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-1 flex items-center gap-2">
         <Users className="h-4 w-4 text-[var(--color-master-600)]" />
-        <h2 className="text-sm font-semibold text-[var(--color-text)]">Depósitos en tránsito, esperando confirmación</h2>
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Enviado desde caja, por confirmar</h2>
       </div>
+      <p className="mb-3 text-xs text-[var(--color-text-muted)]">Efectivo que un cajero despachó hoy con alguien. Confirmalo cuando llegue al banco.</p>
       {loading ? (
         <p className="py-4 text-center text-sm text-[var(--color-text-muted)]">Cargando…</p>
       ) : (
@@ -1510,6 +1597,9 @@ function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts:
                   <p className="text-xs text-[var(--color-text-muted)]">{row.account.branch?.name ?? "Central"} · Enviado {money(row.balance.balance)}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  {row.isLegacyCustody && (
+                    <Button variant="ghost" size="sm" onClick={() => setReturning(row)}>Devolver al acumulado</Button>
+                  )}
                   <Button variant="ghost" size="sm" onClick={() => setAdjusting(row)}>Ajustar saldo</Button>
                   <Button variant="secondary" size="sm" onClick={() => setSelected(row)}>Confirmar</Button>
                 </div>
@@ -1523,6 +1613,14 @@ function DepositConfirmationPanel({ bankAccounts, onConfirmed }: { bankAccounts:
           custody={adjusting}
           onClose={() => setAdjusting(null)}
           onAdjusted={() => { setAdjusting(null); void load(); onConfirmed(); }}
+        />
+      )}
+      {returning && (
+        <ReturnCustodyToRetainedModal
+          custody={returning}
+          branches={branches}
+          onClose={() => setReturning(null)}
+          onReturned={() => { setReturning(null); void load(); onConfirmed(); }}
         />
       )}
       {selected && (

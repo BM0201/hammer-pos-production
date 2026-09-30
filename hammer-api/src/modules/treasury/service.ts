@@ -1621,10 +1621,27 @@ export async function depositBranchCashDirect(input: DirectDepositInput) {
 }
 
 /**
+ * prompt-tesoreria-custodia-sucursal.md Fase 1.1 — código nuevo:
+ * CUSTODY-{userId}-{branchId|CENTRAL} (3 segmentos); código legacy (de
+ * antes de esa fase): CUSTODY-{userId} (2 segmentos, sin sucursal). Un cuid
+ * nunca lleva guiones, así que separar por "-" es seguro.
+ */
+function isLegacyCustodyCode(code: string | null): boolean {
+  return (code ?? "").split("-").length < 3;
+}
+
+/**
  * §6.1/Pantalla 4 — cuentas CUSTODY con saldo > 0: lo que hay "en tránsito"
  * a la espera de que alguien lo confirme. intendedBankAccountId viene de la
  * DEPOSIT_DISPATCH más reciente de cada custodia — el prefill de A.6 para
  * el formulario de confirmación (Master ve qué cuenta declaró el cajero).
+ *
+ * prompt-tesoreria-sin-transito.md Fase 2 — isLegacyCustody: solo las
+ * custodias de ANTES de la custodia-por-sucursal pueden tener un remanente
+ * de un depósito directo viejo sentado ahí (desde Fase 1.3 de este mismo
+ * doc, un depósito directo nunca deja saldo en una custodia — entra y sale
+ * neto cero). Con eso la UI ofrece "Devolver al acumulado" solo donde
+ * puede hacer falta.
  */
 export async function listCustodyAccountsWithBalance(branchId?: string | null) {
   const accounts = await prisma.treasuryAccount.findMany({
@@ -1640,7 +1657,7 @@ export async function listCustodyAccountsWithBalance(branchId?: string | null) {
         select: { intendedBankAccountId: true },
       }),
     ]);
-    return { account, balance, intendedBankAccountId: latestDispatch?.intendedBankAccountId ?? null };
+    return { account, balance, intendedBankAccountId: latestDispatch?.intendedBankAccountId ?? null, isLegacyCustody: isLegacyCustodyCode(account.code) };
   }));
   return withBalance.filter((row) => row.balance.balance > 0.01);
 }
