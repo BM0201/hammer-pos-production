@@ -258,6 +258,11 @@ function buildFakeRetainedDb(opts: {
   const adjustments = opts.adjustments ?? [];
 
   const db = {
+    // prompt-tesoreria-sin-transito.md v2 Commit 1 — getLastDepositCutoff
+    // ahora lee el switchAt antes de buscar el corte. null = "sin fila",
+    // switchAt se asume "ahora": no cambia estos tests, que ya ignoran el
+    // where real de treasuryEntry.findFirst (ver findFirst de abajo).
+    systemSetting: { findUnique: async () => null },
     treasuryEntry: {
       // getLastDepositCutoff (DEPOSIT_DISPATCH/DEPOSIT_CONFIRMED) y
       // getActiveRetainedCashExpenses (EXPENSE/SAFE) comparten esta misma
@@ -424,17 +429,29 @@ type CutoffCandidate = {
   bankDepositSource?: "CUSTODY" | "DIRECT_FROM_RETAINED";
 };
 
-function buildFakeCutoffAttributionDb(opts: { cutoffCandidates: CutoffCandidate[]; declarations: Array<{ retainAwaitingDepositPortion: number; createdAt: Date }> }) {
+function buildFakeCutoffAttributionDb(opts: {
+  cutoffCandidates: CutoffCandidate[];
+  declarations: Array<{ retainAwaitingDepositPortion: number; createdAt: Date }>;
+  // prompt-tesoreria-sin-transito.md v2 Commit 1 — undefined = sin fila en
+  // SystemSetting, getRetainedModelSwitchAt asume "ahora" (no filtra nada
+  // de los fixtures, todos fechados en el pasado real).
+  switchAt?: Date;
+}) {
   const db = {
+    systemSetting: {
+      findUnique: async () => (opts.switchAt ? { value: opts.switchAt.toISOString() } : null),
+    },
     treasuryEntry: {
       // Reproduce el where real de getLastDepositCutoff: entryType in [...],
-      // account.type = CUSTODY, y el OR de bankDeposit.{branchId,source} /
-      // (sin depósito + account.branchId) — no una función fake que ignora
-      // el where, para probar la atribución de verdad.
+      // account.type = CUSTODY, occurredAt < switchAt, y el OR de
+      // bankDeposit.{branchId,source} / (sin depósito + account.branchId) —
+      // no una función fake que ignora el where, para probar la atribución
+      // (y ahora también el congelamiento) de verdad.
       findFirst: async ({ where }: {
         where: {
           entryType: { in: string[] };
           account: { type: string };
+          occurredAt: { lt: Date };
           OR: Array<{ bankDeposit?: { branchId: string; source: string }; bankDepositId?: null; account?: { branchId: string } }>;
         };
       }) => {
@@ -442,6 +459,7 @@ function buildFakeCutoffAttributionDb(opts: { cutoffCandidates: CutoffCandidate[
         const branchViaAccount = where.OR.find((c) => c.bankDepositId === null)?.account?.branchId;
         const matches = opts.cutoffCandidates
           .filter((c) => where.entryType.in.includes(c.entryType) && c.accountType === where.account.type)
+          .filter((c) => c.occurredAt < where.occurredAt.lt)
           .filter((c) =>
             (c.bankDepositBranchId !== undefined && c.bankDepositBranchId === viaDeposit?.branchId && (c.bankDepositSource ?? "CUSTODY") === viaDeposit?.source) ||
             (c.bankDepositBranchId === undefined && c.accountBranchId === branchViaAccount),
@@ -533,4 +551,57 @@ test("el mismo despacho, pero source CUSTODY (el depósito clásico): SÍ mueve 
   });
   const result = await getAccumulatedRetainedTx(db, "branch-B");
   assert.equal(result.accumulatedAmount, 0, "un depósito CUSTODY sí mueve el corte, igual que siempre");
+});
+
+// ── prompt-tesoreria-sin-transito.md v2 Commit 1 — corte congelado en switchAt ──
+//
+// "Tesorería es el punto final": lo que pasa en una caja abierta del día
+// nunca debe volver a mover el saldo de Tesorería después del cambio de
+// modelo. Los tres casos exactos que pide el doc.
+
+test("(v2) — tesorería 1,000 + sendCashOutToCustody de 500 DESPUÉS de switchAt → sigue en 1,000, el despacho no mueve el corte", async () => {
+  const switchAt = new Date("2026-02-01T00:00:00Z");
+  const db = buildFakeCutoffAttributionDb({
+    switchAt,
+    cutoffCandidates: [
+      // sendCashOutToCustody, DESPUÉS del cambio de modelo.
+      { entryType: "DEPOSIT_DISPATCH", occurredAt: new Date("2026-02-05T00:00:00Z"), accountType: "CUSTODY", accountBranchId: "branch-B" },
+    ],
+    declarations: [
+      { retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-15") },
+    ],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-B");
+  assert.equal(result.accumulatedAmount, 1000, "el despacho de después del switch queda fuera de la búsqueda del corte (occurredAt < switchAt)");
+});
+
+test("(v2) — lo mismo con confirmBankDeposit (DEPOSIT_CONFIRMED) de ese envío, también DESPUÉS de switchAt → sigue en 1,000", async () => {
+  const switchAt = new Date("2026-02-01T00:00:00Z");
+  const db = buildFakeCutoffAttributionDb({
+    switchAt,
+    cutoffCandidates: [
+      { entryType: "DEPOSIT_CONFIRMED", occurredAt: new Date("2026-02-06T00:00:00Z"), accountType: "CUSTODY", accountBranchId: "branch-B", bankDepositBranchId: "branch-B", bankDepositSource: "CUSTODY" },
+    ],
+    declarations: [
+      { retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-15") },
+    ],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-B");
+  assert.equal(result.accumulatedAmount, 1000, "la confirmación también queda fuera — ninguna acción de caja/confirmación vuelve a mover el corte tras el switch");
+});
+
+test("(v2) — un despacho ANTERIOR a switchAt sigue cortando como hoy (el histórico queda intacto)", async () => {
+  const switchAt = new Date("2026-02-01T00:00:00Z");
+  const db = buildFakeCutoffAttributionDb({
+    switchAt,
+    cutoffCandidates: [
+      { entryType: "DEPOSIT_DISPATCH", occurredAt: new Date("2026-01-20T00:00:00Z"), accountType: "CUSTODY", accountBranchId: "branch-B" },
+    ],
+    declarations: [
+      { retainAwaitingDepositPortion: 1000, createdAt: new Date("2026-01-15") }, // antes del despacho, no cuenta
+      { retainAwaitingDepositPortion: 300, createdAt: new Date("2026-01-25") }, // después del despacho, sí cuenta
+    ],
+  });
+  const result = await getAccumulatedRetainedTx(db, "branch-B");
+  assert.equal(result.accumulatedAmount, 300, "el despacho de antes del switch sigue funcionando como corte, igual que siempre");
 });

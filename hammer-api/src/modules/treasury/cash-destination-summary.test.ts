@@ -111,6 +111,12 @@ function createFakeTx(opts: {
       findUnique: async ({ where }: { where: { branchId: string } }) =>
         opts.policy && opts.policy.branchId === where.branchId ? { maxDaysHolding: opts.policy.maxDaysHolding } : null,
     },
+    // prompt-tesoreria-sin-transito.md v2 Commit 1 — getLastDepositCutoff
+    // ahora lee el switchAt (SystemSetting) antes de buscar el corte. null
+    // = sin fila, se asume "ahora" (no cambia ningún test de este archivo).
+    systemSetting: {
+      findUnique: async () => null,
+    },
   };
 
   return { tx: tx as unknown as Prisma.TransactionClient };

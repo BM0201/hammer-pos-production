@@ -257,6 +257,24 @@ export type BranchCashPosition = {
   policy: { thresholdAmount: number; maxDaysHolding: number } | null;
 };
 
+const RETAINED_MODEL_SWITCH_SETTING_KEY = "treasury.retainedModelSwitchAt";
+
+/**
+ * Sin cache TTL a propósito (a diferencia de cost-chain-config.ts/
+ * cash-tolerance-config.ts): esto mueve dinero, y una fila que cambiara
+ * sin que el TTL haya vencido dejaría el corte calculando contra un
+ * switchAt viejo por hasta un minuto — "leerla una vez por request" se
+ * cumple porque getLastDepositCutoff ya se llama una sola vez por
+ * sucursal/request en el camino normal (getAccumulatedRetainedTx), no
+ * porque se cachee entre requests. Sin la fila (migración no aplicada
+ * todavía, entorno de test), se asume "ahora": el comportamiento no
+ * cambia respecto a hoy, porque nada puede tener occurredAt en el futuro.
+ */
+async function getRetainedModelSwitchAt(db: Prisma.TransactionClient | typeof prisma): Promise<Date> {
+  const row = await db.systemSetting.findUnique({ where: { key: RETAINED_MODEL_SWITCH_SETTING_KEY } });
+  return row ? new Date(row.value) : new Date();
+}
+
 /**
  * Corte de "acumulado": la fecha del último evento que sacó plata retenida
  * de la sucursal (se despachó a custodia o se confirmó un depósito) —
@@ -282,12 +300,36 @@ export type BranchCashPosition = {
  * resolver", es una resta directa del acumulado (getAccumulatedRetainedTx),
  * así que nunca "limpia" el corte. Solo un depósito CUSTODY (el clásico,
  * enviado con alguien y confirmado después) sigue moviéndolo.
+ *
+ * prompt-tesoreria-sin-transito.md v2 Commit 1 — REGLA DE NEGOCIO: cliente
+ * → CAJA → (cierre) → TESORERÍA → depósito. Lo que pasa en una caja
+ * ABIERTA, del día (sendCashOutToCustody, confirmBankDeposit sobre ese
+ * envío, y por transitividad confirmCustodyReceipt — aunque ese usa
+ * entryType HANDOVER, que este where ya no mira) NUNCA debe volver a
+ * cambiar el saldo de Tesorería una vez que el modelo "sin tránsito" está
+ * en marcha — ese movimiento es del día, se resuelve en Caja/Destino del
+ * efectivo/Operación del día, no acá.
+ *
+ * Por eso, desde SystemSetting["treasury.retainedModelSwitchAt"] (poblada
+ * por la migración de este commit con NOW() al aplicarse — "el cambio de
+ * modelo"), solo se consideran eventos con occurredAt < switchAt: el corte
+ * queda CONGELADO en lo último que pasó antes del cambio, y ningún
+ * DEPOSIT_DISPATCH/DEPOSIT_CONFIRMED nuevo vuelve a moverlo. El histórico
+ * ANTERIOR a switchAt sigue exactamente igual que antes (el criterio viejo,
+ * intacto, sin tocar).
+ *
+ * A partir de ahí, Tesorería = cierres (retainAwaitingDepositPortion) −
+ * depósitos DIRECT_FROM_RETAINED no anulados − gastos con retenido ±
+ * RetainedCashAdjustment (getAccumulatedRetainedTx, sin cambios de fórmula
+ * — lo único que cambia acá es de dónde arranca a contar).
  */
 async function getLastDepositCutoff(db: Prisma.TransactionClient | typeof prisma, branchId: string): Promise<Date | null> {
+  const switchAt = await getRetainedModelSwitchAt(db);
   const lastDispatchOrConfirm = await db.treasuryEntry.findFirst({
     where: {
       entryType: { in: ["DEPOSIT_DISPATCH", "DEPOSIT_CONFIRMED"] },
       account: { type: "CUSTODY" },
+      occurredAt: { lt: switchAt },
       OR: [
         { bankDeposit: { branchId, source: "CUSTODY" } },
         { bankDepositId: null, account: { branchId } },
