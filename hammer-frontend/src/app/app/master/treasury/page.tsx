@@ -13,6 +13,7 @@ import { STATE_META, type CashPosition, type CashIndicatorState } from "@/compon
 import { CashAccumulationBar } from "@/components/finance/cash-accumulation-bar";
 import { money, formatBankAccountOption } from "@/lib/format";
 import { treasuryVisibleState } from "@/lib/treasury-visible-state";
+import { computeTreasuryTotals } from "@/lib/treasury-totals";
 
 // Fase 5 (prompt-flujo-velocidad.md): los 3 sheets se controlan por `open`
 // pero se montan siempre (para animar su cierre) — igual se benefician de
@@ -676,15 +677,10 @@ function ExchangeRatePanel({ latestExchangeRate, onSaved }: { latestExchangeRate
 function TreasuryTotalsBar({ cashPositions, depositSummary }: { cashPositions: CashPositionRow[]; depositSummary: DepositSummary | null }) {
   const [showByAccount, setShowByAccount] = useState(false);
 
-  const totals = useMemo(() => {
-    return cashPositions.reduce(
-      (acc, row) => ({
-        accumulated: acc.accumulated + row.position.accumulatedAmount,
-        pendingDeposit: acc.pendingDeposit + row.position.pendingDeposit,
-      }),
-      { accumulated: 0, pendingDeposit: 0 },
-    );
-  }, [cashPositions]);
+  // prompt-tesoreria-sin-transito.md v2 Commit 2 — "Total para depositar"
+  // suma directDepositAvailable, nunca pendingDeposit (esa incluye la
+  // gaveta abierta — caja, no Tesorería).
+  const totals = useMemo(() => computeTreasuryTotals(cashPositions.map((row) => row.position)), [cashPositions]);
 
   return (
     <Card className="p-4">
@@ -777,22 +773,23 @@ function CashPositionRowItem({
                 que nadie se entere (Parte 3). */}
             {consecutivePostponements > 0 && <Badge variant="warning">Pospuesto {consecutivePostponements}x</Badge>}
           </div>
-          {/* prompt-tesoreria-sin-transito.md Fase 2 — sin "En tránsito": Tesorería es el punto final, ese dato vive en Caja/Operación del día. */}
+          {/* prompt-tesoreria-sin-transito.md v2 Commit 2 — sin "En caja hoy":
+              lo que pasa en una caja abierta del día nunca cambia el saldo de
+              Tesorería. "En tesorería" y "Acumulado" coinciden hoy
+              (directDepositAvailable es identidad sobre accumulatedAmount),
+              pero son conceptos distintos — separados por si algún día dejan
+              de coincidir. */}
           <p className="text-xs text-[var(--color-text-muted)]">
-            En caja hoy {money(position.cashInDrawerToday)} · Acumulado {money(position.accumulatedAmount)}
+            En tesorería {money(position.directDepositAvailable)} · Acumulado {money(position.accumulatedAmount)}
           </p>
         </div>
         <div className="shrink-0 text-right">
           <p className="text-xs text-[var(--color-text-muted)]">Depositable ahora</p>
           <p className="font-mono text-base font-bold tabular-nums text-[var(--color-text)]">{money(position.directDepositAvailable)}</p>
-          {/* prompt-tesoreria-custodia-sucursal.md Fase 2 — lo que dice acá
-              tiene que coincidir con lo que DirectDepositSheet realmente deja
-              depositar (directDepositAvailable, nunca pendingDeposit, que
-              incluye la gaveta abierta). */}
-          {position.cashInDrawerToday > 0.01 && (
-            <p className="text-[0.6875rem] text-[var(--color-text-soft)]">Incluye caja abierta: {money(position.pendingDeposit)}</p>
-          )}
-          {position.pendingDepositNote && <p className="text-[0.6875rem] italic text-[var(--color-text-soft)]">{position.pendingDepositNote}</p>}
+          {/* prompt-tesoreria-sin-transito.md v2 Commit 2 — sin "Incluye caja
+              abierta" (pendingDeposit) ni pendingDepositNote ("sin fondo
+              configurado"): el fondo es de caja, no de Tesorería. */}
+          <p className="text-[0.6875rem] text-[var(--color-text-soft)]">Para depositar: {money(position.directDepositAvailable)}</p>
         </div>
       </button>
 
@@ -1454,7 +1451,7 @@ function ReturnCustodyToRetainedModal({ custody, branches, onClose, onReturned }
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-md space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
-        <h3 className="text-sm font-semibold text-[var(--color-text)]">Devolver al acumulado</h3>
+        <h3 className="text-sm font-semibold text-[var(--color-text)]">Devolver a Tesorería</h3>
         <p className="text-xs text-[var(--color-text-muted)]">{custody.account.holderUser?.fullName ?? custody.account.accountAlias} · Saldo actual {money(custody.balance.balance)}</p>
         <label className="block text-xs font-semibold text-[var(--color-text-muted)]">
           Sucursal a la que vuelve
@@ -1483,7 +1480,7 @@ function ReturnCustodyToRetainedModal({ custody, branches, onClose, onReturned }
         </p>
         <div className="flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancelar</Button>
-          <Button variant="secondary" size="sm" onClick={() => void submit()} disabled={!canConfirm} loading={saving}>Devolver al acumulado</Button>
+          <Button variant="secondary" size="sm" onClick={() => void submit()} disabled={!canConfirm} loading={saving}>Devolver a Tesorería</Button>
         </div>
       </div>
     </div>
@@ -1598,7 +1595,7 @@ function DepositConfirmationPanel({ bankAccounts, branches, onConfirmed }: { ban
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {row.isLegacyCustody && (
-                    <Button variant="ghost" size="sm" onClick={() => setReturning(row)}>Devolver al acumulado</Button>
+                    <Button variant="ghost" size="sm" onClick={() => setReturning(row)}>Devolver a Tesorería</Button>
                   )}
                   <Button variant="ghost" size="sm" onClick={() => setAdjusting(row)}>Ajustar saldo</Button>
                   <Button variant="secondary" size="sm" onClick={() => setSelected(row)}>Confirmar</Button>
