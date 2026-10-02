@@ -67,7 +67,32 @@ export function calculateTargetMarginPrice(
   return raw.div(multiple).ceil().mul(multiple);
 }
 
-export type RecipeInputLine = { quantity: Prisma.Decimal | number; wacSaleUnit: Prisma.Decimal | number };
+/**
+ * prompt-produccion-materiales.md Fase 2 — merma esperada en la
+ * planificación: un multiplicador que ya cubre el "cantidad planeada"
+ * normal se infla por 1/(1−wastePercent) para que lo reservado/sugerido
+ * alcance aunque se pierda la merma típica de esta receta. Sin wastePercent
+ * configurado (o fuera de (0,1), dato corrupto), el multiplicador no cambia
+ * — "cuando la receta lo tiene", nunca inventa una merma que nadie fijó.
+ */
+export function applyWasteFactor(multiplier: Prisma.Decimal, wastePercent: Prisma.Decimal | number | null | undefined): Prisma.Decimal {
+  if (wastePercent == null) return multiplier;
+  const waste = new Prisma.Decimal(wastePercent);
+  if (waste.lte(0) || waste.gte(1)) return multiplier;
+  return multiplier.div(new Prisma.Decimal(1).sub(waste));
+}
+
+export type RecipeInputLine = {
+  quantity: Prisma.Decimal | number;
+  wacSaleUnit: Prisma.Decimal | number;
+  /**
+   * prompt-produccion-materiales.md Fase 2 — lo que REALMENTE se consumió de
+   * este insumo (actualInputs del cierre), si se capturó. Sin esto (null/
+   * undefined), la línea sigue exactamente el comportamiento de Fase 1:
+   * consumo = quantity × multiplicador real.
+   */
+  actualQuantity?: Prisma.Decimal | number | null;
+};
 
 export type BatchCostSummary = CostBreakdown & {
   standardMaterialsCost: Prisma.Decimal;
@@ -76,6 +101,16 @@ export type BatchCostSummary = CostBreakdown & {
   variancePct: Prisma.Decimal | null;
   /** unidadesBuenas / (unidadesBuenas + unidadesMalas) — null si no se intentó nada. */
   yieldPct: Prisma.Decimal | null;
+  /**
+   * Fase 2 — Σ (actualQuantity − estándar-para-lo-que-se-intentó) × WAC, solo
+   * sobre las líneas con actualQuantity capturado. Aísla la eficiencia de
+   * materiales (¿se gastó más/menos insumo de lo que la receta pide PARA LO
+   * QUE REALMENTE SE INTENTÓ HACER?) de la variancia de rendimiento — las dos
+   * comparan contra bases distintas a propósito, ver yieldVariancePct.
+   */
+  materialVarianceCost: Prisma.Decimal;
+  /** yieldPct (real) − targetYieldPct (recipe.yieldPercent) — null sin meta configurada o sin intento. */
+  yieldVariancePct: Prisma.Decimal | null;
 };
 
 /**
@@ -99,6 +134,8 @@ export function computeBatchCostSummary(params: {
   /** processingCostPerBatch: monto fijo si overheadMode=FIXED, fracción 0-1 si PCT_MAT. */
   overheadValue: Prisma.Decimal | number | null;
   targetMarginPct?: Prisma.Decimal | number | null;
+  /** Fase 2 — recipe.yieldPercent, la meta contra la que se compara el rendimiento real. */
+  targetYieldPct?: Prisma.Decimal | number | null;
 }): BatchCostSummary {
   const expectedQuantity = new Prisma.Decimal(params.recipeExpectedQuantity);
   const plannedQuantity = new Prisma.Decimal(params.plannedQuantity);
@@ -109,14 +146,25 @@ export function computeBatchCostSummary(params: {
   const realMultiplier = expectedQuantity.gt(0) ? totalAttempted.div(expectedQuantity) : new Prisma.Decimal(0);
   const standardMultiplier = expectedQuantity.gt(0) ? plannedQuantity.div(expectedQuantity) : new Prisma.Decimal(0);
 
-  const materialsCost = params.inputLines.reduce(
-    (sum, line) => sum.add(new Prisma.Decimal(line.quantity).mul(realMultiplier).mul(line.wacSaleUnit)),
-    new Prisma.Decimal(0),
-  );
+  // Fase 2 — "estándar para lo que se intentó": misma base que el consumo
+  // real (realMultiplier), no la base de planificación (standardMultiplier)
+  // — esto es lo que hace que materialVarianceCost aísle eficiencia de
+  // materiales, sin mezclarla con "se planificó distinto de lo que se hizo".
+  const standardQtyForAttempted = (line: RecipeInputLine) => new Prisma.Decimal(line.quantity).mul(realMultiplier);
+
+  const materialsCost = params.inputLines.reduce((sum, line) => {
+    const qty = line.actualQuantity != null ? new Prisma.Decimal(line.actualQuantity) : standardQtyForAttempted(line);
+    return sum.add(qty.mul(line.wacSaleUnit));
+  }, new Prisma.Decimal(0));
   const standardMaterialsCost = params.inputLines.reduce(
     (sum, line) => sum.add(new Prisma.Decimal(line.quantity).mul(standardMultiplier).mul(line.wacSaleUnit)),
     new Prisma.Decimal(0),
   );
+  const materialVarianceCost = params.inputLines.reduce((sum, line) => {
+    if (line.actualQuantity == null) return sum;
+    const variance = new Prisma.Decimal(line.actualQuantity).sub(standardQtyForAttempted(line));
+    return sum.add(variance.mul(line.wacSaleUnit));
+  }, new Prisma.Decimal(0));
 
   const laborCost = new Prisma.Decimal(params.laborCost);
   let overheadCost = new Prisma.Decimal(0);
@@ -141,6 +189,9 @@ export function computeBatchCostSummary(params: {
     ? costs.unitCost.div(standardUnitCost).sub(1)
     : null;
   const yieldPct = totalAttempted.gt(0) ? producedGoodQuantity.div(totalAttempted) : null;
+  const yieldVariancePct = yieldPct != null && params.targetYieldPct != null
+    ? yieldPct.sub(new Prisma.Decimal(params.targetYieldPct))
+    : null;
 
-  return { ...costs, standardMaterialsCost, standardUnitCost, variancePct, yieldPct };
+  return { ...costs, standardMaterialsCost, standardUnitCost, variancePct, yieldPct, materialVarianceCost, yieldVariancePct };
 }

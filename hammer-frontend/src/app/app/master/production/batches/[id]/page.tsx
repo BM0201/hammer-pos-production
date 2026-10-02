@@ -55,7 +55,7 @@ type Batch = {
   reversalReason: string | null;
   notes: string | null;
   createdAt: string;
-  recipe: { id: string; name: string; code: string; targetMarginPct: number | null; updatedAt: string; finishedProduct: InputProduct };
+  recipe: { id: string; name: string; code: string; targetMarginPct: number | null; updatedAt: string; finishedProduct: InputProduct; secondGradeProduct: InputProduct | null };
   branch: { id: string; code: string; name: string };
   createdBy: { id: string; fullName: string };
   inputs: BatchInput[];
@@ -65,7 +65,8 @@ type InjectionPreview = {
   batchId: string;
   batchNumber: string;
   pricePolicy: string;
-  lines: Array<{ inputProductId: string; productName: string; productSku: string; neededQuantity: number; unit: string; wacSaleUnit: number; lineCost: number; hasEnoughStock: boolean }>;
+  consumptionMode: string;
+  lines: Array<{ inputProductId: string; productName: string; productSku: string; standardQuantity: number; neededQuantity: number; unit: string; wacSaleUnit: number; lineCost: number; hasEnoughStock: boolean }>;
   materialsCost: number;
   laborCost: number;
   overheadCost: number;
@@ -74,6 +75,8 @@ type InjectionPreview = {
   standardUnitCost: number;
   variancePct: number | null;
   yieldPct: number | null;
+  materialVarianceCost: number;
+  yieldVariancePct: number | null;
   warnings: string[];
   inject: {
     before: { unitCost: number | null; standardSalePrice: number | null; branchCost: number | null; branchPrice: number | null };
@@ -104,6 +107,11 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   const [preview, setPreview] = useState<InjectionPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [completing, setCompleting] = useState(false);
+  // prompt-produccion-materiales.md Fase 2 — consumo real: vacío = todo
+  // estándar (comportamiento idéntico a antes de esta fase). Solo entra una
+  // clave cuando el usuario de verdad edita esa fila.
+  const [actualOverrides, setActualOverrides] = useState<Record<string, string>>({});
+  const [secondGradeQty, setSecondGradeQty] = useState("0");
 
   const [showReverseForm, setShowReverseForm] = useState(false);
   const [reverseReason, setReverseReason] = useState("");
@@ -124,6 +132,8 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
         setBatch(data);
         setProducedGood(data.producedGoodQuantity != null ? String(data.producedGoodQuantity) : String(data.plannedQuantity));
         setProducedBad(data.producedBadQuantity != null ? String(data.producedBadQuantity) : "0");
+        setActualOverrides({});
+        setSecondGradeQty("0");
       } catch {
         if (!cancelled) showToast("error", "No se pudo cargar el lote.");
       } finally {
@@ -134,6 +144,12 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   }, [loadBatch]);
 
   const canClose = batch ? ["DRAFT", "PLANNED", "IN_PROGRESS"].includes(batch.status) : false;
+
+  // Fase 2 — solo las filas que el usuario de verdad tocó entran como
+  // actualInputs; el resto sigue consumiendo el estándar (ver backend).
+  const actualInputsPayload = Object.entries(actualOverrides)
+    .filter(([, v]) => v.trim() !== "")
+    .map(([inputProductId, v]) => ({ inputProductId, actualQuantity: Number(v) }));
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -147,7 +163,11 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       try {
         const res = await apiFetch(`/api/master/production/batches/${id}/injection-preview`, {
           method: "POST",
-          body: JSON.stringify({ producedGoodQuantity: good, producedBadQuantity: bad }),
+          body: JSON.stringify({
+            producedGoodQuantity: good,
+            producedBadQuantity: bad,
+            ...(actualInputsPayload.length > 0 ? { actualInputs: actualInputsPayload } : {}),
+          }),
         });
         if (!res.ok) { setPreview(null); return; }
         setPreview(unwrapApiData(await res.json()) as InjectionPreview);
@@ -158,7 +178,8 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       }
     }, 400);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [id, batch, canClose, producedGood, producedBad]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- actualInputsPayload se deriva de actualOverrides, listado abajo
+  }, [id, batch, canClose, producedGood, producedBad, actualOverrides]);
 
   async function changeStatus(newStatus: string) {
     setActionLoading(true);
@@ -190,6 +211,8 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           producedGoodQuantity: Number(producedGood || 0),
           producedBadQuantity: Number(producedBad || 0),
           expectedHash: preview.hash,
+          ...(actualInputsPayload.length > 0 ? { actualInputs: actualInputsPayload } : {}),
+          ...(batch?.recipe.secondGradeProduct ? { secondGradeQuantity: Number(secondGradeQty || 0) } : {}),
         }),
       });
       const raw = await res.json().catch(() => null);
@@ -288,9 +311,26 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                   <input type="number" min="0" step="any" value={producedBad} onChange={(e) => setProducedBad(e.target.value)} className="hm-input mt-1 w-full text-right" />
                 </label>
               </div>
-              <div className="hm-alert hm-alert-info mt-3">
-                🧨 Las unidades malas se rompen y se reusan en el proceso — <b>sin movimiento de inventario</b>. Solo cuentan para el rendimiento del lote.
-              </div>
+              {batch.recipe.secondGradeProduct ? (
+                <label className="mt-3 block">
+                  <span className="text-[11px] font-semibold uppercase text-[var(--color-text-muted)]">
+                    ¿Cuántas malas sirven como segunda ({batch.recipe.secondGradeProduct.name})?
+                  </span>
+                  <input
+                    type="number" min="0" max={producedBad || 0} step="any"
+                    value={secondGradeQty}
+                    onChange={(e) => setSecondGradeQty(e.target.value)}
+                    className="hm-input mt-1 w-full text-right"
+                  />
+                  <span className="mt-1 block text-[11px] text-[var(--color-text-soft)]">
+                    Entran como stock de {batch.recipe.secondGradeProduct.name} sin restar del costo de las buenas. El resto de las malas sigue siendo desperdicio.
+                  </span>
+                </label>
+              ) : (
+                <div className="hm-alert hm-alert-info mt-3">
+                  🧨 Las unidades malas se rompen y se reusan en el proceso — <b>sin movimiento de inventario</b>. Solo cuentan para el rendimiento del lote.
+                </div>
+              )}
               <div className="mt-2 flex justify-between text-[12.5px]">
                 <span className="text-[var(--color-text-muted)]">Rendimiento</span>
                 <b className="hm-num" style={{ color: yieldPct != null && yieldPct >= 0.9 ? "var(--color-success-700)" : "var(--color-warning-700)" }}>{pct(yieldPct)}</b>
@@ -303,19 +343,52 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             )}
             <Card noPadding>
-              <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2.5"><b className="text-[12.5px]">Consumo estándar (automático)</b></div>
+              <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2.5 flex items-center justify-between">
+                <b className="text-[12.5px]">Consumo de insumos</b>
+                {preview?.consumptionMode === "ACTUAL" && (
+                  <span className="text-[11px] font-semibold text-[var(--color-warning-700)]">Consumo real capturado</span>
+                )}
+              </div>
               <table className="hm-sheet-table">
+                <thead>
+                  <tr>
+                    <th>Insumo</th>
+                    <th className="hm-num">Estándar</th>
+                    <th className="hm-num">Real</th>
+                    <th className="hm-num">Costo</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {(preview?.lines ?? batch.inputs.map((bi) => ({ inputProductId: bi.inputProduct.id, productName: bi.inputProduct.name, neededQuantity: bi.plannedQuantity, unit: bi.unit, lineCost: 0 }))).map((line) => (
-                    <tr key={line.inputProductId}>
-                      <td>{line.productName}</td>
-                      <td className="hm-num">{qty(line.neededQuantity)} {line.unit}</td>
-                      <td className="hm-num">{previewLoading ? "…" : money(line.lineCost)}</td>
-                    </tr>
-                  ))}
+                  {batch.inputs.map((bi) => {
+                    const line = preview?.lines.find((l) => l.inputProductId === bi.inputProduct.id);
+                    const standardQuantity = line?.standardQuantity ?? bi.plannedQuantity;
+                    const overrideValue = actualOverrides[bi.inputProduct.id] ?? "";
+                    const displayedReal = overrideValue !== "" ? Number(overrideValue) : standardQuantity;
+                    // prompt-produccion-materiales.md Fase 2 — si la diferencia
+                    // entre lo real y lo estándar supera ±10%, se resalta la fila.
+                    const diffPct = standardQuantity > 0 ? Math.abs(displayedReal - standardQuantity) / standardQuantity : 0;
+                    return (
+                      <tr key={bi.inputProduct.id} style={diffPct > 0.1 ? { backgroundColor: "var(--color-warning-50)" } : undefined}>
+                        <td>{bi.inputProduct.name}</td>
+                        <td className="hm-num text-[var(--color-text-soft)]">{qty(standardQuantity)} {bi.unit}</td>
+                        <td className="hm-num">
+                          <div className="flex items-center justify-end gap-1">
+                            <input
+                              type="number" min="0" step="any"
+                              value={overrideValue !== "" ? overrideValue : standardQuantity.toFixed(2)}
+                              onChange={(e) => setActualOverrides((prev) => ({ ...prev, [bi.inputProduct.id]: e.target.value }))}
+                              className="hm-input w-24 text-right"
+                            />
+                            <span>{bi.unit}</span>
+                          </div>
+                        </td>
+                        <td className="hm-num">{previewLoading ? "…" : money(line?.lineCost ?? 0)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
-                  <tr><td colSpan={2}>Materiales (WAC del sistema)</td><td className="hm-num">{previewLoading ? "…" : money(preview?.materialsCost)}</td></tr>
+                  <tr><td colSpan={3}>Materiales (WAC del sistema)</td><td className="hm-num">{previewLoading ? "…" : money(preview?.materialsCost)}</td></tr>
                 </tfoot>
               </table>
             </Card>
@@ -329,6 +402,12 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               <div className="flex justify-between"><dt className="text-[var(--color-text-muted)]">Overhead</dt><dd className="hm-num font-semibold">{money(preview?.overheadCost ?? 0)}</dd></div>
               <div className="flex justify-between border-t border-[var(--color-border)] pt-1.5"><dt className="text-[var(--color-text-muted)]">Costo total del lote</dt><dd className="hm-num font-bold">{money(preview?.totalCost)}</dd></div>
               <div className="flex justify-between"><dt className="text-[var(--color-text-muted)]">Costo unitario real (÷ {producedGood || 0} buenas)</dt><dd className="hm-num font-bold text-[14px]">{money(preview?.unitCost)}</dd></div>
+              {preview?.consumptionMode === "ACTUAL" && (
+                <div className="flex justify-between"><dt className="text-[var(--color-text-muted)]">Variancia de materiales (real − estándar)</dt><dd className="hm-num font-semibold" style={{ color: (preview.materialVarianceCost ?? 0) > 0 ? "var(--color-danger-700)" : "var(--color-success-700)" }}>{money(preview.materialVarianceCost)}</dd></div>
+              )}
+              {preview?.yieldVariancePct != null && (
+                <div className="flex justify-between"><dt className="text-[var(--color-text-muted)]">Variancia de rendimiento (vs. meta de la receta)</dt><dd className="hm-num font-semibold" style={{ color: preview.yieldVariancePct >= 0 ? "var(--color-success-700)" : "var(--color-warning-700)" }}>{preview.yieldVariancePct >= 0 ? "+" : ""}{pct(preview.yieldVariancePct)}</dd></div>
+              )}
             </dl>
 
             <div className="hm-section-rule mt-4">Se inyecta al producto terminado</div>

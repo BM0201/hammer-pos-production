@@ -13,7 +13,7 @@ import { buildProductSearchWhere } from "@/modules/catalog/product-search";
 import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { resolveCostChain } from "@/modules/catalog/effective-pricing";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
-import { calculateBatchCosts, calculateTargetMarginPrice, computeBatchCostSummary } from "./calculations";
+import { calculateBatchCosts, calculateTargetMarginPrice, computeBatchCostSummary, applyWasteFactor } from "./calculations";
 import { reserveBatchInputsTx, releaseBatchInputsTx, getProductionReservedBaseQtyTx, type ReservationResult } from "./reservations";
 import type {
   CreateRecipeInput,
@@ -125,6 +125,7 @@ export async function getRecipeById(id: string) {
     where: { id },
     include: {
       finishedProduct: { select: { id: true, sku: true, name: true, unit: true } },
+      secondGradeProduct: { select: { id: true, sku: true, name: true, unit: true } },
       inputs: {
         include: {
           inputProduct: { select: { id: true, sku: true, name: true, unit: true } },
@@ -169,6 +170,11 @@ export async function createRecipe(input: CreateRecipeInput & { actorUserId: str
     await validateRecipeInputUnitTx(prisma, { inputProductId: i.inputProductId, unit: i.unit });
   }
 
+  if (input.secondGradeProductId) {
+    const secondGradeProduct = await prisma.product.findUnique({ where: { id: input.secondGradeProductId } });
+    if (!secondGradeProduct) throw new Error("INVALID_INPUT: Producto de segunda calidad no encontrado");
+  }
+
   const recipe = await prisma.productionRecipe.create({
     data: {
       name: input.name.trim(),
@@ -187,6 +193,7 @@ export async function createRecipe(input: CreateRecipeInput & { actorUserId: str
       overheadMode: input.overheadMode,
       processingCostPerBatch: input.processingCostPerBatch ?? null,
       notes: input.notes ?? null,
+      secondGradeProductId: input.secondGradeProductId ?? null,
       createdByUserId: input.actorUserId,
       inputs: {
         create: input.inputs.map((i) => ({
@@ -231,6 +238,11 @@ export async function updateRecipe(
     }
   }
 
+  if (input.secondGradeProductId) {
+    const secondGradeProduct = await prisma.product.findUnique({ where: { id: input.secondGradeProductId } });
+    if (!secondGradeProduct) throw new Error("INVALID_INPUT: Producto de segunda calidad no encontrado");
+  }
+
   const recipe = await prisma.$transaction(async (tx) => {
     if (input.inputs) {
       await tx.productionRecipeInput.deleteMany({ where: { recipeId: id } });
@@ -263,6 +275,7 @@ export async function updateRecipe(
         processingCostPerBatch: input.processingCostPerBatch,
         isActive: input.isActive,
         notes: input.notes,
+        secondGradeProductId: input.secondGradeProductId,
       },
       include: {
         finishedProduct: { select: { id: true, sku: true, name: true } },
@@ -486,6 +499,7 @@ export async function getBatchById(id: string) {
       recipe: {
         include: {
           finishedProduct: { select: { id: true, sku: true, name: true, unit: true } },
+          secondGradeProduct: { select: { id: true, sku: true, name: true, unit: true } },
           inputs: {
             include: {
               inputProduct: { select: { id: true, sku: true, name: true, unit: true } },
@@ -518,7 +532,12 @@ export async function createBatch(input: CreateBatchInput & { actorUserId: strin
   if (!branch) throw new Error("INVALID_INPUT: Sucursal no encontrada");
 
   const batchNumber = await generateBatchNumber();
-  const multiplier = new Prisma.Decimal(input.plannedQuantity).div(recipe.expectedQuantity);
+  const baseMultiplier = new Prisma.Decimal(input.plannedQuantity).div(recipe.expectedQuantity);
+  // prompt-produccion-materiales.md Fase 2 — la foto de insumos reserva de
+  // más si la receta tiene merma esperada, para no quedarse corta cuando
+  // esa merma realmente ocurre. El batch.plannedQuantity (output) NO se
+  // infla — solo lo que se reserva de cada insumo.
+  const multiplier = applyWasteFactor(baseMultiplier, recipe.wastePercent);
 
   const batch = await prisma.productionBatch.create({
     data: {
@@ -828,10 +847,14 @@ export type ProductionInjectionPreview = {
   batchId: string;
   batchNumber: string;
   pricePolicy: string;
+  consumptionMode: string;
   lines: Array<{
     inputProductId: string;
     productName: string;
     productSku: string;
+    /** Fase 2 — el consumo TEÓRICO (receta × multiplicador), siempre calculado, para comparar contra neededQuantity. */
+    standardQuantity: number;
+    /** Lo que de verdad se va a consumir: actualInputs si se capturó para este insumo, si no, igual a standardQuantity. */
     neededQuantity: number;
     unit: string;
     wacSaleUnit: number;
@@ -848,6 +871,8 @@ export type ProductionInjectionPreview = {
   standardUnitCost: number;
   variancePct: number | null;
   yieldPct: number | null;
+  materialVarianceCost: number;
+  yieldVariancePct: number | null;
   warnings: string[];
   inject: { before: ProductionCostInjectionSnapshot; after: ProductionCostInjectionSnapshot; priceApprovalRequired: boolean };
   hash: string;
@@ -862,7 +887,14 @@ export type ProductionInjectionPreview = {
  */
 export async function buildProductionInjectionPreview(
   db: DbClient,
-  params: { batchId: string; producedGoodQuantity: number; producedBadQuantity: number },
+  params: {
+    batchId: string;
+    producedGoodQuantity: number;
+    producedBadQuantity: number;
+    /** Fase 2 — consumo real por insumo, capturado al cerrar. Sin esto (o para
+     * los insumos que no aparecen acá), el consumo es el estándar de siempre. */
+    actualInputs?: Array<{ inputProductId: string; actualQuantity: number }>;
+  },
 ): Promise<ProductionInjectionPreview> {
   const batch = await db.productionBatch.findUnique({
     where: { id: params.batchId },
@@ -915,16 +947,25 @@ export async function buildProductionInjectionPreview(
     ? batch.recipe.laborCostPerBatch
     : new Prisma.Decimal(0);
 
+  // Fase 2 — consumo real por insumo (actualInputs), si se capturó.
+  const actualByProduct = new Map((params.actualInputs ?? []).map((a) => [a.inputProductId, a.actualQuantity]));
+  const consumptionMode = actualByProduct.size > 0 ? "ACTUAL" : "STANDARD";
+
   const summary = computeBatchCostSummary({
     recipeExpectedQuantity: basisQuantity,
     plannedQuantity: batch.plannedQuantity,
     producedGoodQuantity: params.producedGoodQuantity,
     producedBadQuantity: params.producedBadQuantity,
-    inputLines: resolved.lines.map((l) => ({ quantity: l.recipeQtyPerBatch, wacSaleUnit: l.wacSaleUnit })),
+    inputLines: resolved.lines.map((l) => ({
+      quantity: l.recipeQtyPerBatch,
+      wacSaleUnit: l.wacSaleUnit,
+      actualQuantity: actualByProduct.get(l.inputProductId) ?? null,
+    })),
     laborCost: laborCostValue,
     overheadMode: batch.recipe.overheadMode,
     overheadValue: batch.recipe.processingCostPerBatch,
     targetMarginPct: batch.recipe.targetMarginPct,
+    targetYieldPct: batch.recipe.yieldPercent,
   });
 
   const totalAttempted = params.producedGoodQuantity + params.producedBadQuantity;
@@ -933,11 +974,14 @@ export async function buildProductionInjectionPreview(
     : new Prisma.Decimal(0);
 
   const lines = resolved.lines.map((l) => {
-    const neededQuantity = new Prisma.Decimal(l.recipeQtyPerBatch).mul(realMultiplier);
+    const standardQuantity = new Prisma.Decimal(l.recipeQtyPerBatch).mul(realMultiplier);
+    const actualOverride = actualByProduct.get(l.inputProductId);
+    const neededQuantity = actualOverride != null ? new Prisma.Decimal(actualOverride) : standardQuantity;
     return {
       inputProductId: l.inputProductId,
       productName: l.productName,
       productSku: l.productSku,
+      standardQuantity: standardQuantity.toNumber(),
       neededQuantity: neededQuantity.toNumber(),
       unit: l.unit,
       wacSaleUnit: l.wacSaleUnit.toNumber(),
@@ -949,7 +993,7 @@ export async function buildProductionInjectionPreview(
 
   for (const line of lines) {
     if (!line.hasEnoughStock) {
-      warnings.push(`Stock insuficiente de ${line.productSku} para el consumo estándar (${line.neededQuantity.toFixed(2)} ${line.unit}).`);
+      warnings.push(`Stock insuficiente de ${line.productSku} para el consumo ${line.neededQuantity === line.standardQuantity ? "estándar" : "real"} (${line.neededQuantity.toFixed(2)} ${line.unit}).`);
     }
   }
 
@@ -1000,6 +1044,7 @@ export async function buildProductionInjectionPreview(
     batchId: batch.id,
     batchNumber: batch.batchNumber,
     pricePolicy: batch.pricePolicy,
+    consumptionMode,
     lines,
     materialsCost: summary.materialsCost.toNumber(),
     laborCost: summary.laborCost.toNumber(),
@@ -1010,6 +1055,8 @@ export async function buildProductionInjectionPreview(
     standardUnitCost: summary.standardUnitCost.toNumber(),
     variancePct: summary.variancePct?.toNumber() ?? null,
     yieldPct: summary.yieldPct?.toNumber() ?? null,
+    materialVarianceCost: summary.materialVarianceCost.toNumber(),
+    yieldVariancePct: summary.yieldVariancePct?.toNumber() ?? null,
     warnings,
     inject: { before, after, priceApprovalRequired },
     hash,
@@ -1018,7 +1065,7 @@ export async function buildProductionInjectionPreview(
 
 export async function getBatchInjectionPreview(
   batchId: string,
-  input: { producedGoodQuantity: number; producedBadQuantity: number },
+  input: { producedGoodQuantity: number; producedBadQuantity: number; actualInputs?: Array<{ inputProductId: string; actualQuantity: number }> },
 ): Promise<ProductionInjectionPreview> {
   return buildProductionInjectionPreview(prisma, { batchId, ...input });
 }
@@ -1061,10 +1108,22 @@ export async function completeBatchTx(
     throw new Error("BATCH_ALREADY_PROCESSED");
   }
 
+  // prompt-produccion-materiales.md Fase 2 — segunda calidad: validar ANTES
+  // de tocar nada (ante la duda, bloquear) — nunca más que las malas
+  // declaradas, y solo si la receta de verdad tiene un producto de segunda.
+  const secondGradeQuantity = input.secondGradeQuantity ?? 0;
+  if (secondGradeQuantity > 0 && !batch.recipe.secondGradeProductId) {
+    throw new Error("VALIDATION_ERROR: Esta receta no tiene un producto de segunda calidad configurado.");
+  }
+  if (secondGradeQuantity > input.producedBadQuantity) {
+    throw new Error("VALIDATION_ERROR: Las unidades de segunda no pueden superar las unidades malas declaradas.");
+  }
+
   const preview = await buildProductionInjectionPreview(tx, {
     batchId: id,
     producedGoodQuantity: input.producedGoodQuantity,
     producedBadQuantity: input.producedBadQuantity,
+    actualInputs: input.actualInputs,
   });
 
   if (preview.hash !== input.expectedHash) {
@@ -1089,6 +1148,7 @@ export async function completeBatchTx(
       await tx.productionBatchInput.update({
         where: { id: existingInput.id },
         data: {
+          standardQuantity: line.standardQuantity,
           actualQuantity: line.neededQuantity,
           unitCost: line.wacSaleUnit,
           totalCost: line.lineCost,
@@ -1096,6 +1156,7 @@ export async function completeBatchTx(
       });
     }
     if (line.neededQuantity > 0) {
+      const isActualOverride = line.neededQuantity !== line.standardQuantity;
       await createInventoryMovementTx(tx, {
         actorUserId: input.actorUserId,
         branchId: batch.branchId,
@@ -1105,7 +1166,7 @@ export async function completeBatchTx(
         unitCost: line.wacSaleUnit,
         referenceType: "ProductionBatch",
         referenceId: batch.id,
-        notes: `Consumo estándar lote ${batch.batchNumber}`,
+        notes: `Consumo ${isActualOverride ? "real" : "estándar"} lote ${batch.batchNumber}`,
       });
       inputsConsumed += 1;
     }
@@ -1149,6 +1210,39 @@ export async function completeBatchTx(
     warnings.push("Lote completado con pérdida total: insumos consumidos, sin producto terminado.");
   }
 
+  // prompt-produccion-materiales.md Fase 2 — segunda calidad: las malas
+  // aprovechables entran como stock del producto de segunda, SIN restar del
+  // costo de las buenas (unitCost de arriba ya se calculó sin tocar esto).
+  // Costo nominal (no literal 0): createInventoryMovementTx rechaza toda
+  // entrada a costo 0 (ZERO_COST_INBOUND) salvo la restauración EXPLICIT de
+  // una reversión de venta, que no es este caso.
+  if (secondGradeQuantity > 0 && batch.recipe.secondGradeProductId) {
+    const SECOND_GRADE_NOMINAL_UNIT_COST = 0.01;
+    await createInventoryMovementTx(tx, {
+      actorUserId: input.actorUserId,
+      branchId: batch.branchId,
+      productId: batch.recipe.secondGradeProductId,
+      movementType: "PRODUCTION_OUTPUT",
+      quantity: secondGradeQuantity,
+      unitCost: SECOND_GRADE_NOMINAL_UNIT_COST,
+      referenceType: "ProductionBatch",
+      referenceId: batch.id,
+      notes: `Segunda calidad lote ${batch.batchNumber}`,
+    });
+    outputsCreated += 1;
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.actorUserId,
+        branchId: batch.branchId,
+        module: "production",
+        action: "BATCH_SECOND_GRADE",
+        entityType: "ProductionBatch",
+        entityId: batch.id,
+        metadataJson: { secondGradeProductId: batch.recipe.secondGradeProductId, secondGradeQuantity } as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
   const updateResult = await tx.productionBatch.updateMany({
     where: { id, status: batch.status },
     data: {
@@ -1165,6 +1259,9 @@ export async function completeBatchTx(
       standardUnitCost: preview.standardUnitCost,
       priceApprovalRequired: injection.priceApprovalRequired,
       laborEntries: input.laborEntries.length > 0 ? (input.laborEntries as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+      consumptionMode: preview.consumptionMode,
+      materialVarianceCost: preview.consumptionMode === "ACTUAL" ? preview.materialVarianceCost : null,
+      yieldVariancePct: preview.yieldVariancePct,
       completedAt: new Date(),
       startedAt: batch.startedAt ?? new Date(),
     },
@@ -1190,6 +1287,8 @@ export async function completeBatchTx(
     standardUnitCost: preview.standardUnitCost,
     variancePct: preview.variancePct,
     yieldPct: preview.yieldPct,
+    materialVarianceCost: preview.consumptionMode === "ACTUAL" ? preview.materialVarianceCost : null,
+    yieldVariancePct: preview.yieldVariancePct,
     inventoryMovements: { inputsConsumed, outputsCreated },
     injection,
     warnings,
@@ -1478,7 +1577,11 @@ export async function calculateCost(input: CalculateCostInput) {
   });
   if (!recipe) throw new Error("INVALID_INPUT: Receta no encontrada");
 
-  const multiplier = new Prisma.Decimal(input.plannedQuantity).div(recipe.expectedQuantity);
+  // prompt-produccion-materiales.md Fase 2 — merma esperada: el preview de
+  // planificación ya avisa que hará falta más insumo del que la receta
+  // pide a secas, si la receta tiene wastePercent configurado.
+  const baseMultiplier = new Prisma.Decimal(input.plannedQuantity).div(recipe.expectedQuantity);
+  const multiplier = applyWasteFactor(baseMultiplier, recipe.wastePercent);
   const { lines, totalCost } = await computeStandardMaterialsLinesTx(prisma, {
     branchId: input.branchId,
     multiplier,

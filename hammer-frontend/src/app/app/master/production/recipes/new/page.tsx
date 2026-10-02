@@ -121,6 +121,9 @@ export default function NewRecipePage() {
   const [processingCostPerBatch, setProcessingCostPerBatch] = useState("");
   const [laborCostPerBatch, setLaborCostPerBatch] = useState("");
   const [inputs, setInputs] = useState<RecipeInputRow[]>([emptyInput()]);
+  // prompt-produccion-materiales.md Fase 2 — opcional: si se configura, el
+  // cierre de lote pregunta cuántas unidades malas sirven como esta segunda.
+  const [secondGradeProductId, setSecondGradeProductId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -207,6 +210,7 @@ export default function NewRecipePage() {
         wastePercent: wastePercent ? Number(wastePercent) / 100 : null,
         processingCostPerBatch: processingCostPerBatch ? Number(processingCostPerBatch) : null,
         laborCostPerBatch: laborCostPerBatch ? Number(laborCostPerBatch) : null,
+        secondGradeProductId: secondGradeProductId || null,
         inputs: inputs.filter((row) => row.inputProductId).map((row) => ({
           inputProductId: row.inputProductId,
           quantity: Number(row.quantity),
@@ -360,6 +364,19 @@ export default function NewRecipePage() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-semibold text-[var(--color-text)]">Producto de segunda calidad (opcional)</h2>
+              {secondGradeProductId && (
+                <button type="button" onClick={() => setSecondGradeProductId("")} className="text-xs font-semibold text-[var(--color-danger-600)] hover:underline">Quitar</button>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-[var(--color-text-muted)]">Si se configura, al cerrar un lote se puede marcar cuántas unidades malas sirven como esta segunda — entran a stock sin restar del costo de las buenas.</p>
+            <div className="mt-4">
+              <ProductPicker label="Producto de segunda" products={products} value={secondGradeProductId} onChange={setSecondGradeProductId} placeholder="Buscar producto de segunda..." />
             </div>
           </section>
         </div>

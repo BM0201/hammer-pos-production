@@ -8,6 +8,7 @@ import {
 } from "@/modules/inventory/unit-conversion";
 import { resolveCostChain } from "@/modules/catalog/effective-pricing";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
+import { applyWasteFactor } from "@/modules/production/calculations";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -181,7 +182,10 @@ export async function evaluateRecipeAvailability(input: { branchId: string; reci
       getSaleStockAndCost(input.branchId, recipeInput.inputProductId),
       getPolicy(input.branchId, recipeInput.inputProductId),
     ]);
-    const requiredQtyPerBatch = recipeInput.quantity;
+    // prompt-produccion-materiales.md Fase 2 — merma esperada: si la receta
+    // tiene wastePercent, la recomendación pide de más para no sugerir un
+    // lote que en la práctica se queda corto de insumo por la merma normal.
+    const requiredQtyPerBatch = applyWasteFactor(new Prisma.Decimal(recipeInput.quantity), recipe.wastePercent).toNumber();
     const requiredTotal = requiredQtyPerBatch * batches;
     const targetStock = Math.max(policy.targetStock, policy.reorderPoint, policy.minStock);
     const excessQty = Math.max(0, stock - targetStock);

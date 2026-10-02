@@ -259,7 +259,7 @@ test("LA QUE IMPORTA — doble completeBatch (doble click/reintento): el segundo
     recipeInputs: [{ inputProductId: INPUT_PRODUCT_ID, quantity: 5, unit: "KILO" }],
   });
 
-  const completeInput = { producedGoodQuantity: 100, producedBadQuantity: 0, laborEntries: [], expectedHash: "", actorUserId: "user-1" };
+  const completeInput = { producedGoodQuantity: 100, producedBadQuantity: 0, laborEntries: [], expectedHash: "", secondGradeQuantity: 0, actorUserId: "user-1" };
 
   // Primer llamado: necesita el hash real del preview — se calcula pidiendo
   // el preview primero (como hace la ruta real: injection-preview -> complete).
@@ -298,7 +298,7 @@ test("LA QUE IMPORTA — el lote consume según SU PROPIA foto de insumos, no la
   // Con la foto (5) y multiplicador 100/100=1, se consume 5 — NUNCA 8.
   assert.equal(preview.lines[0].neededQuantity, 5, "el preview ya calcula sobre la foto, no sobre la receta editada");
 
-  await completeBatchTx(tx, BATCH_ID, { producedGoodQuantity: 100, producedBadQuantity: 0, laborEntries: [], expectedHash: preview.hash, actorUserId: "user-1" });
+  await completeBatchTx(tx, BATCH_ID, { producedGoodQuantity: 100, producedBadQuantity: 0, laborEntries: [], expectedHash: preview.hash, secondGradeQuantity: 0, actorUserId: "user-1" });
 
   const consumed = movements.find((m) => m.movementType === "PRODUCTION_CONSUME");
   assert.equal(consumed?.quantity.toNumber(), 5, "el consumo real también usa la foto (5), no la receta actual (8)");

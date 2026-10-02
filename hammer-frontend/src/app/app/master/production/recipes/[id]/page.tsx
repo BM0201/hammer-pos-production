@@ -36,6 +36,7 @@ type Recipe = {
   overheadMode: string;
   processingCostPerBatch: number | null;
   finishedProduct: { id: string; sku: string; name: string; unit: string };
+  secondGradeProduct: { id: string; sku: string; name: string; unit: string } | null;
   inputs: Array<{ id: string; inputProductId: string; quantity: number; unit: string; inputProduct: { id: string; sku: string; name: string; unit: string } }>;
 };
 
@@ -211,6 +212,7 @@ export default function RecipeDetailPage() {
               <div className="flex justify-between"><dt className="text-[var(--color-text-muted)]">Merma esperada</dt><dd className="font-semibold">{pct(recipe.wastePercent)} · se rompe y reusa</dd></div>
               <div className="flex justify-between"><dt className="text-[var(--color-text-muted)]">Mano de obra</dt><dd className="font-semibold">{recipe.laborEnabled ? money(recipe.laborCostPerBatch) : "Desactivada (0)"}</dd></div>
               <div className="flex justify-between"><dt className="text-[var(--color-text-muted)]">Overhead</dt><dd className="font-semibold">{OVERHEAD_MODE_LABEL[recipe.overheadMode] ?? recipe.overheadMode}</dd></div>
+              <div className="flex justify-between"><dt className="text-[var(--color-text-muted)]">Producto de segunda calidad</dt><dd className="font-semibold">{recipe.secondGradeProduct ? recipe.secondGradeProduct.name : "No configurado"}</dd></div>
             </dl>
           </Card>
         </div>

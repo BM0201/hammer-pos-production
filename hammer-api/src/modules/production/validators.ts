@@ -57,6 +57,10 @@ export const createRecipeSchema = z.object({
   overheadMode: overheadModeSchema.default("NONE"),
   processingCostPerBatch: z.number().min(0).optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
+  // prompt-produccion-materiales.md Fase 2 — producto "segunda"/quebrado
+  // opcional: las unidades malas aprovechables entran como stock de ESTE
+  // producto al cerrar, sin restar del costo de las buenas.
+  secondGradeProductId: z.string().cuid().optional().nullable(),
   inputs: z.array(recipeInputSchema).min(1, "Se requiere al menos un insumo"),
 });
 
@@ -76,6 +80,7 @@ export const updateRecipeSchema = z.object({
   processingCostPerBatch: z.number().min(0).optional().nullable(),
   isActive: z.boolean().optional(),
   notes: z.string().max(1000).optional().nullable(),
+  secondGradeProductId: z.string().cuid().optional().nullable(),
   inputs: z.array(recipeInputSchema).min(1).optional(),
 });
 
@@ -112,6 +117,14 @@ const laborEntrySchema = z.object({
   hours: z.number().min(0),
 });
 
+// prompt-produccion-materiales.md Fase 2 — consumo REAL de un insumo,
+// capturado al cerrar (opcional; sin esto, el insumo sigue consumiendo el
+// estándar, comportamiento idéntico a antes de esta fase).
+const actualInputSchema = z.object({
+  inputProductId: z.string().cuid(),
+  actualQuantity: z.number().min(0),
+});
+
 export const completeBatchSchema = z.object({
   // Auditoría 2026-07-22 (ALTO Producción): .positive() rechazaba una pérdida
   // total (todo el insumo consumido, cero unidades buenas producidas) — el
@@ -128,6 +141,11 @@ export const completeBatchSchema = z.object({
   // coincide y el cierre se rechaza en vez de inyectar un costo obsoleto.
   expectedHash: z.string().min(1, "Se requiere el preview de inyección vigente"),
   priceOverrideReason: z.string().max(500).optional().nullable(),
+  actualInputs: z.array(actualInputSchema).optional(),
+  // Cuántas de las producedBadQuantity sirven como segunda calidad (solo
+  // tiene efecto si la receta tiene secondGradeProductId) — nunca más que
+  // las malas declaradas, validado en el servidor (ver completeBatch).
+  secondGradeQuantity: z.number().min(0).optional().default(0),
 });
 
 export const calculateCostSchema = z.object({
@@ -143,6 +161,7 @@ export const reverseBatchSchema = z.object({
 export const injectionPreviewSchema = z.object({
   producedGoodQuantity: z.number().min(0),
   producedBadQuantity: z.number().min(0).default(0),
+  actualInputs: z.array(actualInputSchema).optional(),
 });
 
 export type CreateRecipeInput = z.infer<typeof createRecipeSchema>;

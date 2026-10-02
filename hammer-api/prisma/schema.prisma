@@ -848,6 +848,7 @@ model Product {
   recipesAsOutput            ProductionRecipe[]          @relation("RecipeOutput")
   recipesAsInput             ProductionRecipeInput[]     @relation("RecipeInput")
   batchInputs                ProductionBatchInput[]      @relation("BatchInput")
+  recipesAsSecondGrade       ProductionRecipe[]          @relation("RecipeSecondGrade")
   brainDecisions             BrainDecision[]
   replenishmentDraftItems    ReplenishmentDraftItem[]    @relation("ReplenishmentDraftItemProduct")
 
@@ -2973,6 +2974,14 @@ model ProductionRecipe {
   yieldPercent    Decimal? /// rendimiento esperado; 1 = 100%
   wastePercent    Decimal? /// merma esperada; 0.05 = 5%
 
+  /// prompt-produccion-materiales.md Fase 2 — producto "segunda"/quebrado
+  /// opcional: si está seteado y el cierre deja producedBadQuantity > 0, el
+  /// formulario pregunta cuántas malas sirven como segunda. Esas entran como
+  /// PRODUCTION_OUTPUT de ESTE producto (costo 0 o configurable), sin restar
+  /// del costo de las buenas — el resto de las malas sigue siendo desperdicio.
+  secondGradeProductId String?
+  secondGradeProduct   Product? @relation("RecipeSecondGrade", fields: [secondGradeProductId], references: [id])
+
   /// Producción v2 Fase 1 — mano de obra es C$0 por defecto (el trabajador ya está en
   /// planilla). Si se activa, contribuye laborCostPerBatch (monto fijo) al costo del lote.
   laborEnabled      Boolean  @default(false)
@@ -3045,6 +3054,16 @@ model ProductionBatch {
   standardUnitCost      Decimal?
   standardMaterialsCost Decimal?
 
+  /// prompt-produccion-materiales.md Fase 2 — STANDARD (comportamiento de
+  /// siempre: sin actualInputs, el consumo es el teórico) o ACTUAL (se
+  /// capturó consumo real por insumo al cerrar).
+  consumptionMode String @default("STANDARD")
+  /// Σ(actualQuantity − estándar-para-lo-intentado) × WAC — solo con
+  /// consumptionMode=ACTUAL. Null si no se capturó consumo real.
+  materialVarianceCost Decimal?
+  /// yieldPct (real) − recipe.yieldPercent (meta) — null sin meta configurada.
+  yieldVariancePct     Decimal?
+
   /// Producción v2 Fase 3 — política de precio al cerrar. RECALC_TARGET_MARGIN (default) |
   /// KEEP_CURRENT | APPROVAL_IF_DELTA.
   pricePolicy           String  @default("RECALC_TARGET_MARGIN")
@@ -3088,7 +3107,14 @@ model ProductionBatchInput {
   inputProduct   Product @relation("BatchInput", fields: [inputProductId], references: [id])
 
   plannedQuantity Float /// 50 bolsas planeadas
-  actualQuantity  Float? /// 52 bolsas reales consumidas (= consumo estándar, lo calcula el servidor)
+  actualQuantity  Float? /// lo que de verdad se consumió — real (actualInputs) o, sin eso, el estándar
+  /// prompt-produccion-materiales.md Fase 2 — el consumo TEÓRICO (cantidad
+  /// receta × multiplicador), SIEMPRE calculado y guardado al cerrar, para
+  /// poder comparar contra actualQuantity aunque éste sea el real. Antes de
+  /// Fase 2, actualQuantity ERA este mismo número (no existía un "real"
+  /// separado) — standardQuantity es nuevo, actualQuantity no cambia de
+  /// significado para los lotes ya cerrados (consumptionMode=STANDARD).
+  standardQuantity Float?
   unit            String /// "bolsa"
 
   /// Producción v2 Fase 2 — cuánto de plannedQuantity está reservado (aparta stock)
