@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money as formatMoney, qty, fmtRatioPercent } from "@/lib/format";
+import { money as formatMoney, qty, fmtRatioPercent, fmtDateNumeric } from "@/lib/format";
 
 /**
  * Producción v2 Fase 6 — "Cerrar lote" (mockup vista 3, LA MÁS IMPORTANTE).
@@ -55,7 +55,7 @@ type Batch = {
   reversalReason: string | null;
   notes: string | null;
   createdAt: string;
-  recipe: { id: string; name: string; code: string; targetMarginPct: number | null; finishedProduct: InputProduct };
+  recipe: { id: string; name: string; code: string; targetMarginPct: number | null; updatedAt: string; finishedProduct: InputProduct };
   branch: { id: string; code: string; name: string };
   createdBy: { id: string; fullName: string };
   inputs: BatchInput[];
@@ -236,6 +236,12 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
   const yieldPct = preview?.yieldPct ?? (batch.producedGoodQuantity != null && batch.producedBadQuantity != null && (batch.producedGoodQuantity + batch.producedBadQuantity) > 0
     ? batch.producedGoodQuantity / (batch.producedGoodQuantity + batch.producedBadQuantity)
     : null);
+  // prompt-produccion-materiales.md Fase 1 — mientras el lote no esté
+  // COMPLETED consume según SU PROPIA foto de insumos (batch.inputs), no la
+  // receta de hoy; esto es solo para que quien cierra sepa por qué el
+  // consumo mostrado puede no coincidir con la receta actual si alguien la
+  // editó después de crear este lote.
+  const recipeChangedAfterCreation = new Date(batch.recipe.updatedAt).getTime() > new Date(batch.createdAt).getTime();
 
   return (
     <section className="max-w-5xl space-y-4">
@@ -291,6 +297,11 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             </Card>
 
+            {recipeChangedAfterCreation && (
+              <div className="hm-alert hm-alert-info text-[12.5px]">
+                Esta receta se editó después de crear este lote — este lote usa la receta como estaba el {fmtDateNumeric(batch.createdAt)}.
+              </div>
+            )}
             <Card noPadding>
               <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2.5"><b className="text-[12.5px]">Consumo estándar (automático)</b></div>
               <table className="hm-sheet-table">

@@ -43,8 +43,14 @@ const DEFAULT_PRODUCTION_PRICING_CONFIG: ProductionPricingConfig = {
   priceRoundingMultiple: new Prisma.Decimal(1),
 };
 
-export async function getProductionPricingConfig(): Promise<ProductionPricingConfig> {
-  const cfg = await prisma.productionPricingConfig.findFirst({ orderBy: { updatedAt: "desc" } });
+/**
+ * `db` opcional (default: el singleton `prisma`) — prompt-produccion-
+ * materiales.md Fase 1: completeBatchTx/buildProductionInjectionPreview
+ * necesitan poder llamarla con un `tx` fake para ser testeables sin una DB
+ * real (mismo patrón que isWacDrivesCostChainEnabled).
+ */
+export async function getProductionPricingConfig(db: DbClient = prisma): Promise<ProductionPricingConfig> {
+  const cfg = await db.productionPricingConfig.findFirst({ orderBy: { updatedAt: "desc" } });
   if (!cfg) return DEFAULT_PRODUCTION_PRICING_CONFIG;
   return {
     defaultTargetMarginPct: cfg.defaultTargetMarginPct,
@@ -553,15 +559,28 @@ export async function createBatch(input: CreateBatchInput & { actorUserId: strin
   return batch;
 }
 
-export async function updateBatch(
+/**
+ * prompt-produccion-materiales.md Fase 1 (fix Bug 1) — mismo patrón que
+ * completeBatchTx/reverseBatchTx: antes, el estado se leía y validaba sin
+ * lock, la reserva/liberación corría en SU PROPIA transacción aparte, y el
+ * update final de status/plannedQuantity/notes/pricePolicy era una llamada
+ * suelta fuera de cualquier transacción — tres pasos no atómicos donde dos
+ * updateBatch concurrentes (p.ej. "Planificar" con doble click) podían
+ * reservar dos veces o pisarse el status. Ahora todo vive en un solo
+ * $transaction con el lock primero.
+ */
+export async function updateBatchTx(
+  tx: Prisma.TransactionClient,
   id: string,
   input: UpdateBatchInput & { actorUserId: string },
 ) {
-  const existing = await prisma.productionBatch.findUnique({ where: { id } });
+  await tx.$queryRaw`SELECT id FROM "ProductionBatch" WHERE id = ${id} FOR UPDATE`;
+
+  const existing = await tx.productionBatch.findUnique({ where: { id } });
   if (!existing) throw new Error("BATCH_NOT_FOUND");
 
   if (existing.status === "COMPLETED" || existing.status === "CANCELLED" || existing.status === "REVERSED") {
-    throw new Error("INVALID_TRANSITION");
+    throw new Error("BATCH_ALREADY_PROCESSED");
   }
 
   if (input.status) {
@@ -580,10 +599,10 @@ export async function updateBatch(
   // insumo (el faltante no bloquea, solo se reporta). Cancelar libera.
   let reservation: ReservationResult[] | null = null;
   if (input.status === "PLANNED" || (input.status === "IN_PROGRESS" && existing.status === "DRAFT")) {
-    reservation = await prisma.$transaction((tx) => reserveBatchInputsTx(tx, { batchId: id, branchId: existing.branchId }));
+    reservation = await reserveBatchInputsTx(tx, { batchId: id, branchId: existing.branchId });
   }
   if (input.status === "CANCELLED") {
-    await prisma.$transaction((tx) => releaseBatchInputsTx(tx, id));
+    await releaseBatchInputsTx(tx, id);
   }
 
   const updateData: Prisma.ProductionBatchUpdateInput = {};
@@ -597,25 +616,39 @@ export async function updateBatch(
     if (input.status === "CANCELLED") updateData.cancelledAt = new Date();
   }
 
-  const batch = await prisma.productionBatch.update({
-    where: { id },
+  const updateResult = await tx.productionBatch.updateMany({
+    where: { id, status: existing.status },
     data: updateData,
+  });
+  if (updateResult.count === 0) throw new Error("BATCH_ALREADY_PROCESSED");
+
+  const batch = await tx.productionBatch.findUniqueOrThrow({
+    where: { id },
     include: {
       recipe: { select: { id: true, name: true, code: true } },
       branch: { select: { id: true, code: true, name: true } },
     },
   });
 
-  await logAuditEvent({
-    actorUserId: input.actorUserId,
-    module: "production",
-    action: "BATCH_UPDATE",
-    entityType: "ProductionBatch",
-    entityId: batch.id,
-    metadataJson: { status: batch.status, reservation },
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      module: "production",
+      action: "BATCH_UPDATE",
+      entityType: "ProductionBatch",
+      entityId: batch.id,
+      metadataJson: { status: batch.status, reservation } as unknown as Prisma.InputJsonValue,
+    },
   });
 
   return { ...batch, reservation };
+}
+
+export async function updateBatch(
+  id: string,
+  input: UpdateBatchInput & { actorUserId: string },
+) {
+  return prisma.$transaction((tx) => updateBatchTx(tx, id, input));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -687,6 +720,11 @@ export async function applyProductionCostsTx(
     roundingMultiple: Prisma.Decimal;
     priceApprovalDeltaPct: Prisma.Decimal;
     priceOverrideReason?: string | null;
+    /** prompt-produccion-materiales.md Fase 1 — qué lote disparó esta inyección,
+     * para que reverseBatch pueda encontrar SU PROPIO evento (antes no había
+     * forma de distinguir el before/after de este lote del de otro lote del
+     * mismo producto) y decidir si restaurar antes es seguro. */
+    batchId?: string | null;
   },
 ): Promise<{ before: ProductionCostInjectionSnapshot; after: ProductionCostInjectionSnapshot; priceApprovalRequired: boolean }> {
   const [productBefore, branchSettingBefore] = await Promise.all([
@@ -779,7 +817,7 @@ export async function applyProductionCostsTx(
       action: "PRODUCTION_COST_INJECTED",
       entityType: "Product",
       entityId: input.finishedProductId,
-      metadataJson: { before, after, pricePolicy: input.pricePolicy, priceApprovalRequired } as unknown as Prisma.InputJsonValue,
+      metadataJson: { before, after, pricePolicy: input.pricePolicy, priceApprovalRequired, batchId: input.batchId ?? null } as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -830,17 +868,46 @@ export async function buildProductionInjectionPreview(
     where: { id: params.batchId },
     include: {
       recipe: { include: { finishedProduct: true, inputs: { include: { inputProduct: true } } } },
+      inputs: { include: { inputProduct: true } },
     },
   });
   if (!batch) throw new Error("BATCH_NOT_FOUND");
 
+  const warnings: string[] = [];
+
+  // prompt-produccion-materiales.md Fase 1 (fix Bug 2) — el lote consume
+  // según SU PROPIA foto de insumos (batch.inputs, congelada al crearlo),
+  // no según la receta de HOY (batch.recipe.inputs): si la receta se edita
+  // con el lote abierto, antes reservaba una cosa y consumía otra.
+  // basisQuantity es el denominador de "cantidad por unidad de producto" —
+  // con la foto, eso es batch.plannedQuantity (bi.plannedQuantity ya es
+  // "cantidad total para este lote", no "por expectedQuantity de receta"),
+  // así que recipeExpectedQuantity=plannedQuantity dentro de
+  // computeBatchCostSummary da standardMultiplier=1 y aplica el real/estándar
+  // correctamente sobre la cantidad ya escalada de la foto.
+  // Lotes viejos sin foto (creados antes de este fix): fallback a la receta
+  // actual, con advertencia — es lo único que hay.
+  const usingSnapshot = batch.inputs.length > 0;
+  if (!usingSnapshot) {
+    warnings.push("Este lote no tiene una foto de insumos guardada (se creó antes de esta corrección) — se usa la receta actual, que puede no coincidir con lo reservado.");
+  }
+  const costInputs = usingSnapshot
+    ? batch.inputs.map((bi) => ({ inputProductId: bi.inputProductId, quantity: bi.plannedQuantity, unit: bi.unit, inputProduct: bi.inputProduct }))
+    : batch.recipe.inputs;
+  const basisQuantity = usingSnapshot ? batch.plannedQuantity : batch.recipe.expectedQuantity;
+
+  // Mientras el lote no esté COMPLETED, editar la receta no lo afecta: la
+  // mano de obra/overhead SÍ se leen de la receta de hoy (no están
+  // congelados en ninguna foto — son configuración del lote, no insumos
+  // reservados), a diferencia de los insumos de arriba.
+  //
   // WAC/stock actual de cada insumo, sin escalar (multiplicador=1) — el
   // núcleo puro computeBatchCostSummary aplica los multiplicadores
   // real/estándar sobre esta misma lectura, una sola vez.
   const resolved = await computeStandardMaterialsLinesTx(db, {
     branchId: batch.branchId,
     multiplier: new Prisma.Decimal(1),
-    recipeInputs: batch.recipe.inputs,
+    recipeInputs: costInputs,
     excludeBatchId: batch.id,
   });
 
@@ -849,7 +916,7 @@ export async function buildProductionInjectionPreview(
     : new Prisma.Decimal(0);
 
   const summary = computeBatchCostSummary({
-    recipeExpectedQuantity: batch.recipe.expectedQuantity,
+    recipeExpectedQuantity: basisQuantity,
     plannedQuantity: batch.plannedQuantity,
     producedGoodQuantity: params.producedGoodQuantity,
     producedBadQuantity: params.producedBadQuantity,
@@ -861,8 +928,8 @@ export async function buildProductionInjectionPreview(
   });
 
   const totalAttempted = params.producedGoodQuantity + params.producedBadQuantity;
-  const realMultiplier = new Prisma.Decimal(batch.recipe.expectedQuantity).gt(0)
-    ? new Prisma.Decimal(totalAttempted).div(batch.recipe.expectedQuantity)
+  const realMultiplier = new Prisma.Decimal(basisQuantity).gt(0)
+    ? new Prisma.Decimal(totalAttempted).div(basisQuantity)
     : new Prisma.Decimal(0);
 
   const lines = resolved.lines.map((l) => {
@@ -880,14 +947,13 @@ export async function buildProductionInjectionPreview(
     };
   });
 
-  const warnings: string[] = [];
   for (const line of lines) {
     if (!line.hasEnoughStock) {
       warnings.push(`Stock insuficiente de ${line.productSku} para el consumo estándar (${line.neededQuantity.toFixed(2)} ${line.unit}).`);
     }
   }
 
-  const pricingConfig = await getProductionPricingConfig();
+  const pricingConfig = await getProductionPricingConfig(db);
   const [productBefore, branchSettingBefore] = await Promise.all([
     db.product.findUnique({ where: { id: batch.recipe.finishedProductId }, select: { standardSalePrice: true } }),
     db.branchProductSetting.findUnique({
@@ -966,20 +1032,36 @@ export async function getBatchInjectionPreview(
  * 4. Crea PRODUCTION_OUTPUT e inyecta costo/precio SIEMPRE (Fase 3).
  * 5. Congela costo estándar vs real para la variancia (Fase 5).
  */
-export async function completeBatch(
+/**
+ * prompt-produccion-materiales.md Fase 1 (fix Bug 1) — el cuerpo
+ * transaccional, separado del wrapper para poder probarlo con un tx fake
+ * (mismo patrón que depositBranchCashDirectTx/sendCashOutToCustodyTx en
+ * treasury). TODO esto vive ahora DENTRO del lock: antes el estado se leía
+ * y validaba FUERA de cualquier transacción, y el update final no era
+ * condicional — un doble click o un reintento de red pasaba las dos veces
+ * la validación y consumía/inyectaba dos veces. El SELECT...FOR UPDATE
+ * serializa un segundo completeBatchTx concurrente contra el mismo id: se
+ * bloquea hasta que el primero confirma, y entonces su propia relectura del
+ * estado (ya COMPLETED) lo rechaza antes de tocar nada. El updateMany final
+ * es la segunda red de seguridad (mismo patrón que voidBankDepositTx).
+ */
+export async function completeBatchTx(
+  tx: Prisma.TransactionClient,
   id: string,
   input: CompleteBatchInput & { actorUserId: string },
 ) {
-  const batch = await prisma.productionBatch.findUnique({
+  await tx.$queryRaw`SELECT id FROM "ProductionBatch" WHERE id = ${id} FOR UPDATE`;
+
+  const batch = await tx.productionBatch.findUnique({
     where: { id },
     include: { recipe: { include: { finishedProduct: true, inputs: true } }, inputs: true },
   });
   if (!batch) throw new Error("BATCH_NOT_FOUND");
   if (batch.status !== "IN_PROGRESS" && batch.status !== "DRAFT" && batch.status !== "PLANNED") {
-    throw new Error("INVALID_TRANSITION");
+    throw new Error("BATCH_ALREADY_PROCESSED");
   }
 
-  const preview = await buildProductionInjectionPreview(prisma, {
+  const preview = await buildProductionInjectionPreview(tx, {
     batchId: id,
     producedGoodQuantity: input.producedGoodQuantity,
     producedBadQuantity: input.producedBadQuantity,
@@ -996,133 +1078,153 @@ export async function completeBatch(
     throw new Error("INVALID_INPUT: El costo unitario producido debe ser mayor a 0.");
   }
 
-  const pricingConfig = await getProductionPricingConfig();
+  const pricingConfig = await getProductionPricingConfig(tx);
 
-  const result = await prisma.$transaction(async (tx) => {
-    const warnings = [...preview.warnings];
-    let inputsConsumed = 0;
+  const warnings = [...preview.warnings];
+  let inputsConsumed = 0;
 
-    for (const line of preview.lines) {
-      const existingInput = batch.inputs.find((bi) => bi.inputProductId === line.inputProductId);
-      if (existingInput) {
-        await tx.productionBatchInput.update({
-          where: { id: existingInput.id },
-          data: {
-            actualQuantity: line.neededQuantity,
-            unitCost: line.wacSaleUnit,
-            totalCost: line.lineCost,
-          },
-        });
-      }
-      if (line.neededQuantity > 0) {
-        await createInventoryMovementTx(tx, {
-          actorUserId: input.actorUserId,
-          branchId: batch.branchId,
-          productId: line.inputProductId,
-          movementType: "PRODUCTION_CONSUME",
-          quantity: line.neededQuantity,
+  for (const line of preview.lines) {
+    const existingInput = batch.inputs.find((bi) => bi.inputProductId === line.inputProductId);
+    if (existingInput) {
+      await tx.productionBatchInput.update({
+        where: { id: existingInput.id },
+        data: {
+          actualQuantity: line.neededQuantity,
           unitCost: line.wacSaleUnit,
-          referenceType: "ProductionBatch",
-          referenceId: batch.id,
-          notes: `Consumo estándar lote ${batch.batchNumber}`,
-        });
-        inputsConsumed += 1;
-      }
+          totalCost: line.lineCost,
+        },
+      });
     }
-
-    // La reserva planificada se convierte en consumo real — se libera.
-    await releaseBatchInputsTx(tx, batch.id);
-
-    let outputsCreated = 0;
-    let injection = preview.inject;
-    if (input.producedGoodQuantity > 0) {
+    if (line.neededQuantity > 0) {
       await createInventoryMovementTx(tx, {
         actorUserId: input.actorUserId,
         branchId: batch.branchId,
-        productId: batch.recipe.finishedProductId,
-        movementType: "PRODUCTION_OUTPUT",
-        quantity: input.producedGoodQuantity,
-        unitCost: preview.unitCost,
+        productId: line.inputProductId,
+        movementType: "PRODUCTION_CONSUME",
+        quantity: line.neededQuantity,
+        unitCost: line.wacSaleUnit,
         referenceType: "ProductionBatch",
         referenceId: batch.id,
-        notes: `Producción lote ${batch.batchNumber}`,
+        notes: `Consumo estándar lote ${batch.batchNumber}`,
       });
-      outputsCreated += 1;
-
-      injection = await applyProductionCostsTx(tx, {
-        actorUserId: input.actorUserId,
-        branchId: batch.branchId,
-        finishedProductId: batch.recipe.finishedProductId,
-        unitCostSaleUnit: new Prisma.Decimal(preview.unitCost),
-        pricePolicy: batch.pricePolicy,
-        targetMarginPct: batch.recipe.targetMarginPct,
-        roundingMultiple: pricingConfig.priceRoundingMultiple,
-        priceApprovalDeltaPct: pricingConfig.priceApprovalDeltaPct,
-        priceOverrideReason: input.priceOverrideReason,
-      });
-      if (injection.priceApprovalRequired) {
-        warnings.push("El precio recalculado se desvía del actual más del umbral configurado — requiere aprobación.");
-      }
-    } else {
-      warnings.push("Lote completado con pérdida total: insumos consumidos, sin producto terminado.");
+      inputsConsumed += 1;
     }
+  }
 
-    const updatedBatch = await tx.productionBatch.update({
-      where: { id },
-      data: {
-        status: "COMPLETED",
-        producedGoodQuantity: input.producedGoodQuantity,
-        producedBadQuantity: input.producedBadQuantity,
-        materialsCost: preview.materialsCost,
-        laborCost: preview.laborCost,
-        overheadCost: preview.overheadCost,
-        totalCost: preview.totalCost,
-        unitCost: preview.unitCost,
-        suggestedPrice: injection.after.branchPrice,
-        standardMaterialsCost: preview.standardMaterialsCost,
-        standardUnitCost: preview.standardUnitCost,
-        priceApprovalRequired: injection.priceApprovalRequired,
-        laborEntries: input.laborEntries.length > 0 ? (input.laborEntries as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
-        completedAt: new Date(),
-        startedAt: batch.startedAt ?? new Date(),
-      },
-      include: {
-        recipe: { include: { finishedProduct: { select: { id: true, sku: true, name: true } } } },
-        branch: { select: { id: true, code: true, name: true } },
-        inputs: { include: { inputProduct: { select: { id: true, sku: true, name: true } } } },
-      },
-    });
+  // La reserva planificada se convierte en consumo real — se libera.
+  await releaseBatchInputsTx(tx, batch.id);
 
-    return {
-      ok: true,
-      batchId: updatedBatch.id,
-      statusAfter: updatedBatch.status,
-      producedQuantity: input.producedGoodQuantity,
-      totalInputCost: preview.materialsCost,
+  let outputsCreated = 0;
+  let injection = preview.inject;
+  if (input.producedGoodQuantity > 0) {
+    await createInventoryMovementTx(tx, {
+      actorUserId: input.actorUserId,
+      branchId: batch.branchId,
+      productId: batch.recipe.finishedProductId,
+      movementType: "PRODUCTION_OUTPUT",
+      quantity: input.producedGoodQuantity,
       unitCost: preview.unitCost,
+      referenceType: "ProductionBatch",
+      referenceId: batch.id,
+      notes: `Producción lote ${batch.batchNumber}`,
+    });
+    outputsCreated += 1;
+
+    injection = await applyProductionCostsTx(tx, {
+      actorUserId: input.actorUserId,
+      branchId: batch.branchId,
+      finishedProductId: batch.recipe.finishedProductId,
+      unitCostSaleUnit: new Prisma.Decimal(preview.unitCost),
+      pricePolicy: batch.pricePolicy,
+      targetMarginPct: batch.recipe.targetMarginPct,
+      roundingMultiple: pricingConfig.priceRoundingMultiple,
+      priceApprovalDeltaPct: pricingConfig.priceApprovalDeltaPct,
+      priceOverrideReason: input.priceOverrideReason,
+      batchId: batch.id,
+    });
+    if (injection.priceApprovalRequired) {
+      warnings.push("El precio recalculado se desvía del actual más del umbral configurado — requiere aprobación.");
+    }
+  } else {
+    warnings.push("Lote completado con pérdida total: insumos consumidos, sin producto terminado.");
+  }
+
+  const updateResult = await tx.productionBatch.updateMany({
+    where: { id, status: batch.status },
+    data: {
+      status: "COMPLETED",
+      producedGoodQuantity: input.producedGoodQuantity,
+      producedBadQuantity: input.producedBadQuantity,
+      materialsCost: preview.materialsCost,
+      laborCost: preview.laborCost,
+      overheadCost: preview.overheadCost,
+      totalCost: preview.totalCost,
+      unitCost: preview.unitCost,
+      suggestedPrice: injection.after.branchPrice,
+      standardMaterialsCost: preview.standardMaterialsCost,
       standardUnitCost: preview.standardUnitCost,
-      variancePct: preview.variancePct,
-      yieldPct: preview.yieldPct,
-      inventoryMovements: { inputsConsumed, outputsCreated },
-      injection,
-      warnings,
-      batch: updatedBatch,
-    };
+      priceApprovalRequired: injection.priceApprovalRequired,
+      laborEntries: input.laborEntries.length > 0 ? (input.laborEntries as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+      completedAt: new Date(),
+      startedAt: batch.startedAt ?? new Date(),
+    },
   });
+  if (updateResult.count === 0) throw new Error("BATCH_ALREADY_PROCESSED");
+
+  const updatedBatch = await tx.productionBatch.findUniqueOrThrow({
+    where: { id },
+    include: {
+      recipe: { include: { finishedProduct: { select: { id: true, sku: true, name: true } } } },
+      branch: { select: { id: true, code: true, name: true } },
+      inputs: { include: { inputProduct: { select: { id: true, sku: true, name: true } } } },
+    },
+  });
+
+  return {
+    ok: true,
+    batchId: updatedBatch.id,
+    statusAfter: updatedBatch.status,
+    producedQuantity: input.producedGoodQuantity,
+    totalInputCost: preview.materialsCost,
+    unitCost: preview.unitCost,
+    standardUnitCost: preview.standardUnitCost,
+    variancePct: preview.variancePct,
+    yieldPct: preview.yieldPct,
+    inventoryMovements: { inputsConsumed, outputsCreated },
+    injection,
+    warnings,
+    batch: updatedBatch,
+  };
+}
+
+/**
+ * Completa un lote de producción:
+ * 1. Exige el hash de un preview de inyección fresco ("nadie inyecta sin ver").
+ * 2. Consume según la foto de insumos del lote (receta × multiplicador, al
+ *    WAC del sistema — nunca un costo/cantidad enviado por el cliente).
+ * 3. Libera la reserva del lote (se convierte en consumo real).
+ * 4. Crea PRODUCTION_OUTPUT e inyecta costo/precio SIEMPRE (Fase 3).
+ * 5. Congela costo estándar vs real para la variancia (Fase 5).
+ */
+export async function completeBatch(
+  id: string,
+  input: CompleteBatchInput & { actorUserId: string },
+) {
+  const result = await prisma.$transaction((tx) => completeBatchTx(tx, id, input));
 
   await logAuditEvent({
     actorUserId: input.actorUserId,
     module: "production",
     action: "BATCH_COMPLETE",
     entityType: "ProductionBatch",
-    entityId: batch.id,
+    entityId: result.batchId,
     metadataJson: {
-      batchNumber: batch.batchNumber,
+      batchNumber: result.batch.batchNumber,
       producedGood: input.producedGoodQuantity,
       producedBad: input.producedBadQuantity,
-      totalCost: preview.totalCost,
-      unitCost: preview.unitCost,
-      variancePct: preview.variancePct,
+      totalCost: result.batch.totalCost,
+      unitCost: result.unitCost,
+      variancePct: result.variancePct,
     },
   });
   if (input.producedBadQuantity > 0) {
@@ -1131,8 +1233,8 @@ export async function completeBatch(
       module: "production",
       action: "BATCH_WASTE",
       entityType: "ProductionBatch",
-      entityId: batch.id,
-      metadataJson: { wasteQuantity: input.producedBadQuantity, batchNumber: batch.batchNumber },
+      entityId: result.batchId,
+      metadataJson: { wasteQuantity: input.producedBadQuantity, batchNumber: result.batch.batchNumber },
     });
   }
   if (input.producedGoodQuantity <= 0) {
@@ -1141,8 +1243,8 @@ export async function completeBatch(
       module: "production",
       action: "BATCH_TOTAL_LOSS",
       entityType: "ProductionBatch",
-      entityId: batch.id,
-      metadataJson: { batchNumber: batch.batchNumber },
+      entityId: result.batchId,
+      metadataJson: { batchNumber: result.batch.batchNumber },
     });
   }
 
@@ -1166,94 +1268,203 @@ export function assertBatchReversible(status: string): void {
   if (status !== "COMPLETED") throw new Error("ONLY_COMPLETED_BATCHES_CAN_BE_REVERSED");
 }
 
-export async function reverseBatch(
+/**
+ * prompt-produccion-materiales.md Fase 1 (fix Bug 3) — devuelve el costo y
+ * precio del producto terminado al valor de ANTES de que este lote los
+ * inyectara, pero SOLO si ningún lote posterior ya volvió a inyectar algo
+ * nuevo (restaurar encima de eso le borraría un cambio legítimo). El
+ * "before" sale del propio evento PRODUCTION_COST_INJECTED de este lote —
+ * applyProductionCostsTx ahora lo marca con batchId (ver arriba) porque el
+ * entityId del audit log es el Product, compartido por todos los lotes que
+ * alguna vez tocaron ese producto; sin el batchId no había forma de saber
+ * cuál "before" era el de ESTE lote.
+ */
+async function restoreProductionCostTx(
+  tx: Prisma.TransactionClient,
+  input: { batchId: string; branchId: string; finishedProductId: string },
+): Promise<{ restored: boolean; warning: string | null }> {
+  const myInjection = await tx.auditLog.findFirst({
+    where: {
+      module: "production",
+      action: "PRODUCTION_COST_INJECTED",
+      entityType: "Product",
+      entityId: input.finishedProductId,
+      metadataJson: { path: ["batchId"], equals: input.batchId },
+    },
+    orderBy: { occurredAt: "desc" },
+  });
+  if (!myInjection) return { restored: false, warning: null };
+
+  const laterInjection = await tx.auditLog.findFirst({
+    where: {
+      module: "production",
+      action: "PRODUCTION_COST_INJECTED",
+      entityType: "Product",
+      entityId: input.finishedProductId,
+      branchId: input.branchId,
+      occurredAt: { gt: myInjection.occurredAt },
+    },
+  });
+  if (laterInjection) {
+    return { restored: false, warning: "Precio/costo no restaurado: hubo lotes posteriores." };
+  }
+
+  const meta = myInjection.metadataJson as unknown as { before: ProductionCostInjectionSnapshot };
+  const before = meta.before;
+
+  // standardSalePrice es NOT NULL en Product — before.standardSalePrice solo
+  // sale null si el producto no existía en ese momento (no debería pasar:
+  // es el mismo producto que este lote terminó, tiene que existir), así que
+  // sin antes válido no hay nada sensato que restaurar ahí.
+  if (before.standardSalePrice != null) {
+    await tx.product.update({
+      where: { id: input.finishedProductId },
+      data: { standardSalePrice: new Prisma.Decimal(before.standardSalePrice) },
+    });
+  }
+  await tx.branchProductSetting.upsert({
+    where: { branchId_productId: { branchId: input.branchId, productId: input.finishedProductId } },
+    create: {
+      branchId: input.branchId,
+      productId: input.finishedProductId,
+      branchCost: before.branchCost != null ? new Prisma.Decimal(before.branchCost) : null,
+      branchPrice: before.branchPrice != null ? new Prisma.Decimal(before.branchPrice) : null,
+    },
+    update: {
+      branchCost: before.branchCost != null ? new Prisma.Decimal(before.branchCost) : null,
+      branchPrice: before.branchPrice != null ? new Prisma.Decimal(before.branchPrice) : null,
+    },
+  });
+  await tx.auditLog.create({
+    data: {
+      branchId: input.branchId,
+      module: "production",
+      action: "PRODUCTION_COST_RESTORED",
+      entityType: "Product",
+      entityId: input.finishedProductId,
+      metadataJson: { batchId: input.batchId, restoredTo: before } as unknown as Prisma.InputJsonValue,
+    },
+  });
+  return { restored: true, warning: null };
+}
+
+/**
+ * prompt-produccion-materiales.md Fase 1 (fix Bug 1) — el cuerpo
+ * transaccional, separado del wrapper para poder probarlo con un tx fake
+ * (mismo patrón que completeBatchTx arriba). Mismo lock + relectura +
+ * update condicional.
+ */
+export async function reverseBatchTx(
+  tx: Prisma.TransactionClient,
   id: string,
   input: ReverseBatchInput & { actorUserId: string },
 ) {
-  const batch = await prisma.productionBatch.findUnique({
+  await tx.$queryRaw`SELECT id FROM "ProductionBatch" WHERE id = ${id} FOR UPDATE`;
+
+  const batch = await tx.productionBatch.findUnique({
     where: { id },
     include: { recipe: { include: { finishedProduct: true } }, inputs: true },
   });
   if (!batch) throw new Error("BATCH_NOT_FOUND");
   assertBatchReversible(batch.status);
 
-  const result = await prisma.$transaction(async (tx) => {
-    // 1. Retirar el producto terminado que se había agregado.
-    if (batch.producedGoodQuantity != null && new Prisma.Decimal(batch.producedGoodQuantity).gt(0)) {
-      const finishedShared = await getSharedInventoryBalance(tx, {
-        branchId: batch.branchId,
-        productId: batch.recipe.finishedProductId,
-      });
-      const availableSaleQty = finishedShared.conversion && finishedShared.balance
-        ? convertBaseQtyToSaleQty({ baseQuantity: finishedShared.balance.quantityOnHand, conversionFactor: finishedShared.conversion.conversionFactor })
-        : (finishedShared.balance?.quantityOnHand ?? new Prisma.Decimal(0));
-      if (availableSaleQty.lt(batch.producedGoodQuantity)) {
-        throw new Error("INSUFFICIENT_STOCK_TO_REVERSE: El producto terminado ya no tiene suficiente stock para revertir (fue vendido o trasladado).");
-      }
-      await createInventoryMovementTx(tx, {
-        actorUserId: input.actorUserId,
-        branchId: batch.branchId,
-        productId: batch.recipe.finishedProductId,
-        movementType: "PRODUCTION_REVERSAL_OUT",
-        quantity: batch.producedGoodQuantity,
-        unitCost: batch.unitCost ? Number(batch.unitCost) : 0,
-        referenceType: "ProductionBatch",
-        referenceId: batch.id,
-        notes: `Reversión lote ${batch.batchNumber}: retiro de producto terminado`,
-      });
-    }
-
-    // 2. Devolver los insumos consumidos.
-    for (const bi of batch.inputs) {
-      if (bi.actualQuantity == null || new Prisma.Decimal(bi.actualQuantity).lte(0)) continue;
-      await createInventoryMovementTx(tx, {
-        actorUserId: input.actorUserId,
-        branchId: batch.branchId,
-        productId: bi.inputProductId,
-        movementType: "PRODUCTION_REVERSAL_IN",
-        quantity: bi.actualQuantity,
-        unitCost: bi.unitCost ? Number(bi.unitCost) : 0,
-        referenceType: "ProductionBatch",
-        referenceId: batch.id,
-        notes: `Reversión lote ${batch.batchNumber}: devolución de insumo`,
-      });
-    }
-
-    const updated = await tx.productionBatch.update({
-      where: { id },
-      data: {
-        status: "REVERSED",
-        reversedAt: new Date(),
-        reversedByUserId: input.actorUserId,
-        reversalReason: input.reason,
-      },
-      include: {
-        recipe: { select: { id: true, name: true, code: true } },
-        branch: { select: { id: true, code: true, name: true } },
-      },
+  // 1. Retirar el producto terminado que se había agregado.
+  if (batch.producedGoodQuantity != null && new Prisma.Decimal(batch.producedGoodQuantity).gt(0)) {
+    const finishedShared = await getSharedInventoryBalance(tx, {
+      branchId: batch.branchId,
+      productId: batch.recipe.finishedProductId,
     });
-
-    await tx.auditLog.create({
-      data: {
-        actorUserId: input.actorUserId,
-        branchId: batch.branchId,
-        module: "production",
-        action: "BATCH_REVERSED",
-        entityType: "ProductionBatch",
-        entityId: batch.id,
-        metadataJson: {
-          batchNumber: batch.batchNumber,
-          reason: input.reason,
-          producedGoodQuantity: batch.producedGoodQuantity,
-          inputsReturned: batch.inputs.length,
-        } as unknown as Prisma.InputJsonValue,
-      },
+    const availableSaleQty = finishedShared.conversion && finishedShared.balance
+      ? convertBaseQtyToSaleQty({ baseQuantity: finishedShared.balance.quantityOnHand, conversionFactor: finishedShared.conversion.conversionFactor })
+      : (finishedShared.balance?.quantityOnHand ?? new Prisma.Decimal(0));
+    if (availableSaleQty.lt(batch.producedGoodQuantity)) {
+      throw new Error("INSUFFICIENT_STOCK_TO_REVERSE: El producto terminado ya no tiene suficiente stock para revertir (fue vendido o trasladado).");
+    }
+    await createInventoryMovementTx(tx, {
+      actorUserId: input.actorUserId,
+      branchId: batch.branchId,
+      productId: batch.recipe.finishedProductId,
+      movementType: "PRODUCTION_REVERSAL_OUT",
+      quantity: batch.producedGoodQuantity,
+      unitCost: batch.unitCost ? Number(batch.unitCost) : 0,
+      referenceType: "ProductionBatch",
+      referenceId: batch.id,
+      notes: `Reversión lote ${batch.batchNumber}: retiro de producto terminado`,
     });
+  }
 
-    return updated;
+  // 2. Devolver los insumos consumidos.
+  for (const bi of batch.inputs) {
+    if (bi.actualQuantity == null || new Prisma.Decimal(bi.actualQuantity).lte(0)) continue;
+    await createInventoryMovementTx(tx, {
+      actorUserId: input.actorUserId,
+      branchId: batch.branchId,
+      productId: bi.inputProductId,
+      movementType: "PRODUCTION_REVERSAL_IN",
+      quantity: bi.actualQuantity,
+      unitCost: bi.unitCost ? Number(bi.unitCost) : 0,
+      referenceType: "ProductionBatch",
+      referenceId: batch.id,
+      notes: `Reversión lote ${batch.batchNumber}: devolución de insumo`,
+    });
+  }
+
+  // 3. Restaurar costo/precio si nadie inyectó después (fix Bug 3).
+  let priceRestoreWarning: string | null = null;
+  if (batch.producedGoodQuantity != null && new Prisma.Decimal(batch.producedGoodQuantity).gt(0)) {
+    const { warning } = await restoreProductionCostTx(tx, {
+      batchId: batch.id,
+      branchId: batch.branchId,
+      finishedProductId: batch.recipe.finishedProductId,
+    });
+    priceRestoreWarning = warning;
+  }
+
+  const updateResult = await tx.productionBatch.updateMany({
+    where: { id, status: batch.status },
+    data: {
+      status: "REVERSED",
+      reversedAt: new Date(),
+      reversedByUserId: input.actorUserId,
+      reversalReason: input.reason,
+    },
+  });
+  if (updateResult.count === 0) throw new Error("BATCH_ALREADY_PROCESSED");
+
+  const updated = await tx.productionBatch.findUniqueOrThrow({
+    where: { id },
+    include: {
+      recipe: { select: { id: true, name: true, code: true } },
+      branch: { select: { id: true, code: true, name: true } },
+    },
   });
 
-  return result;
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: batch.branchId,
+      module: "production",
+      action: "BATCH_REVERSED",
+      entityType: "ProductionBatch",
+      entityId: batch.id,
+      metadataJson: {
+        batchNumber: batch.batchNumber,
+        reason: input.reason,
+        producedGoodQuantity: batch.producedGoodQuantity,
+        inputsReturned: batch.inputs.length,
+        priceRestoreWarning,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return { ...updated, warnings: priceRestoreWarning ? [priceRestoreWarning] : [] };
+}
+
+export async function reverseBatch(
+  id: string,
+  input: ReverseBatchInput & { actorUserId: string },
+) {
+  return prisma.$transaction((tx) => reverseBatchTx(tx, id, input));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

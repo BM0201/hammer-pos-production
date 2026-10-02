@@ -120,6 +120,13 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "ONLY_COMPLETED_BATCHES_CAN_BE_REVERSED") {
       return errJson("CONFLICT", "Solo un lote completado puede revertirse.", 409);
     }
+    // prompt-produccion-materiales.md Fase 1 — completeBatch/reverseBatch/
+    // updateBatch bloquean la fila (FOR UPDATE) y la transición es
+    // condicional (updateMany where status=<esperado>); count=0 es un doble
+    // click o un reintento que ya se procesó.
+    if (error.message === "BATCH_ALREADY_PROCESSED") {
+      return errJson("BATCH_ALREADY_PROCESSED", "Este lote ya fue procesado por otra acción — recargá la página.", 409);
+    }
     if (error.message.startsWith("INSUFFICIENT_STOCK_TO_REVERSE:")) {
       return errJson("INSUFFICIENT_STOCK_TO_REVERSE", error.message.replace(/^INSUFFICIENT_STOCK_TO_REVERSE:\s?/, ""), 409);
     }
