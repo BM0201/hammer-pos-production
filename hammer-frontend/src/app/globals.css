@@ -932,6 +932,24 @@ select.hm-input {
   .hm-table tbody td:last-child {
     border-bottom: 0;
   }
+
+  /* Opt-in: una celda con data-label muestra su encabezado al apilarse,
+     para que "180" o "C$18.00" no queden sin saber qué son. */
+  .hm-table tbody td[data-label] {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    text-align: right;
+  }
+  .hm-table tbody td[data-label]::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+  }
 }
 .hm-stat::before {
   content: "";

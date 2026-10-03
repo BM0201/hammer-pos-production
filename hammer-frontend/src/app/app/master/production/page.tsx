@@ -1,33 +1,104 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
-  Boxes,
+  CheckCircle2,
+  ChevronRight,
   ClipboardList,
   Factory,
-  PackageSearch,
+  PackageX,
   Plus,
   ReceiptText,
-  TrendingUp,
+  RefreshCcw,
+  Tag,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { money as formatMoney, qty2, fmtDateNumeric, fmtRatioPercent } from "@/lib/format";
+import { fmtDateNumeric, fmtRatioPercent, money, qty2 } from "@/lib/format";
+import { PageHeader } from "@/components/ui/page-header";
+import { Badge } from "@/components/ui/badge";
+import { components } from "@/styles/design-system";
+import {
+  INCOMPLETE_RECIPE_REASON,
+  RECOMMENDATION_TYPE,
+  batchStatus,
+  recommendationPriority,
+  type Tone,
+} from "@/lib/production-labels";
+import { PERIOD_PRESETS, formatPeriodRange, resolvePeriod, type PeriodPreset } from "@/lib/production-period";
 
 /**
- * prompt-produccion-materiales.md Fase 3 — el dashboard real: antes, los
- * KPIs se calculaban en el cliente con los últimos 80 lotes (ni siquiera
- * garantizaba cubrir el período que el usuario creía ver), "Costo unitario
- * promedio" mezclaba productos distintos sin ponderar por cantidad, e
- * "Insumos críticos" en realidad contaba recetas, no insumos. Ahora todo
- * eso sale de /api/master/production/dashboard, calculado en el servidor
- * por sucursal y período.
+ * Hub de Producción de Materiales. UI adoptada de un diseño alterno
+ * (hub-produccion.patch) construido contra una versión previa del backend;
+ * el cálculo server-side (dashboard por sucursal/período, costo ponderado,
+ * recomendaciones con demanda real/BUY_INSTEAD/merma) es el de
+ * prompt-produccion-materiales.md Fases 3-4, sin tocar.
  */
 
-type BatchSummary = {
+/* ── Tipos: espejo de GET /api/master/production/dashboard ─────────────── */
+
+type BranchRef = { id: string; code?: string; name: string };
+type ProductRef = { id: string; name: string; unit?: string | null };
+
+type ShortInput = { productId: string; productName: string; unit: string; planned: number; reserved: number; missing: number };
+
+type Dashboard = {
+  period: { from: string; to: string };
+  totals: {
+    completedBatches: number;
+    producedValue: number;
+    lossValue: number;
+    avgYieldPct: number | null;
+    reversedBatches: number;
+    openBatches: number;
+    openBatchesWithShortInputs: number;
+  };
+  producedByProduct: Array<{
+    productId: string;
+    productName: string;
+    sku: string;
+    unit: string | null;
+    batchCount: number;
+    goodQuantity: number;
+    badQuantity: number;
+    weightedYieldPct: number | null;
+    targetYieldPct: number | null;
+    weightedUnitCost: number | null;
+    currentPrice: number | null;
+    marginAtCurrentPrice: number | null;
+  }>;
+  materialVarianceCostTotal: number;
+  attention: {
+    openBatches: Array<{
+      id: string;
+      batchNumber: string;
+      status: string;
+      plannedQuantity: number;
+      createdAt: string;
+      startedAt: string | null;
+      branch: BranchRef;
+      recipe: { id: string; name: string };
+      product: ProductRef;
+      shortInputs: ShortInput[];
+    }>;
+    priceApprovals: Array<{
+      id: string;
+      batchNumber: string;
+      completedAt: string | null;
+      unitCost: number | null;
+      suggestedPrice: number | null;
+      branch: BranchRef;
+      product: ProductRef;
+    }>;
+    incompleteRecipes: Array<{ recipeId: string; recipeName: string; recipeCode: string; reason: string }>;
+  };
+};
+
+type RecentBatch = {
   id: string;
   batchNumber: string;
   status: string;
@@ -40,18 +111,7 @@ type BatchSummary = {
   branch: { id: string; code: string; name: string };
 };
 
-type RecipeSummary = {
-  id: string;
-  name: string;
-  code: string;
-  isActive: boolean;
-  expectedQuantity: number;
-  expectedUnit: string;
-  targetMarginPct: number | null;
-};
-
-type Branch = { id: string; code: string; name: string };
-type ProductionRecommendation = {
+type Recommendation = {
   id: string;
   branchId: string;
   targetProductId: string;
@@ -63,184 +123,312 @@ type ProductionRecommendation = {
   daysOfStockRemaining: number | null;
   recipeId: string;
   recipeName: string;
-  recipeType: string;
-  recipeFamily: string;
-  inputSummary: Array<{ productName: string; excessQty: number; availableStock: number; requiredQtyPerBatch: number }>;
   suggestedBatches: number;
   expectedOutputQty: number;
   estimatedUnitCost: number | null;
   buyCost: number | null;
-  priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+  priority: string;
   recommendationType: string;
-  message: string;
   warnings: string[];
   recommendedActions: string[];
 };
 
-type ProducedByProduct = {
-  productId: string;
-  productName: string;
-  goodQuantity: number;
-  badQuantity: number;
-  weightedYieldPct: number | null;
-  weightedUnitCost: number | null;
-  targetYieldPct: number | null;
-  batchCount: number;
-  currentPrice: number | null;
-  marginAtCurrentPrice: number | null;
-};
-type IncompleteRecipe = { recipeId: string; recipeName: string; recipeCode: string; reason: "NO_INPUTS" | "INVALID_EXPECTED_QUANTITY" | "ZERO_COST_INPUT" };
-type BlockingInput = { productId: string; productName: string; shortfall: number; batchCount: number };
-type ProductionDashboard = {
-  period: { from: string; to: string };
-  batchesByStatus: Record<string, number>;
-  producedByProduct: ProducedByProduct[];
-  materialVarianceCostTotal: number;
-  blockingInputs: BlockingInput[];
-  incompleteRecipes: IncompleteRecipe[];
+type AttentionItem = {
+  key: string;
+  tone: Tone;
+  Icon: LucideIcon;
+  title: string;
+  detail: string;
+  meta?: ReactNode;
+  href: string;
+  rank: number;
 };
 
-const STATUS: Record<string, { label: string; tone: "neutral" | "info" | "warning" | "success" | "danger" }> = {
-  DRAFT: { label: "Borrador", tone: "neutral" },
-  PLANNED: { label: "Planificado", tone: "info" },
-  IN_PROGRESS: { label: "En proceso", tone: "warning" },
-  COMPLETED: { label: "Completado", tone: "success" },
-  CANCELLED: { label: "Cancelado", tone: "danger" },
-  REVERSED: { label: "Revertido", tone: "danger" },
-};
-const STATUS_TONE_CLASS: Record<string, string> = {
-  neutral: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]",
-  info: "bg-[var(--color-info-50)] text-[var(--color-info-700)]",
+/* ── Utilidades de presentación ─────────────────────────────────────────── */
+
+const ALL_BRANCHES = "";
+const RECENT_BATCHES_LIMIT = 10;
+
+const TONE_ICON: Record<Tone, string> = {
+  danger: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]",
   warning: "bg-[var(--color-warning-50)] text-[var(--color-warning-700)]",
   success: "bg-[var(--color-success-50)] text-[var(--color-success-700)]",
-  danger: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]",
-};
-const PRIORITY_TONE_CLASS: Record<string, string> = {
-  URGENT: "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]",
-  HIGH: "bg-[var(--color-warning-50)] text-[var(--color-warning-700)]",
-  MEDIUM: "bg-[var(--color-info-50)] text-[var(--color-info-700)]",
-  LOW: "bg-[var(--color-info-50)] text-[var(--color-info-700)]",
-};
-const INCOMPLETE_REASON_LABEL: Record<string, string> = {
-  NO_INPUTS: "Receta activa sin insumos.",
-  INVALID_EXPECTED_QUANTITY: "Cantidad esperada inválida (0 o menos).",
-  ZERO_COST_INPUT: "Un insumo no tiene costo efectivo en esta sucursal.",
+  info: "bg-[var(--color-info-50)] text-[var(--color-info-700)]",
+  neutral: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]",
 };
 
-const money = (value: number | null | undefined) => value == null ? "-" : formatMoney(value);
-const num = (value: number | null | undefined) => value == null ? "-" : qty2(value);
-const pct = fmtRatioPercent;
-type KpiItem = { label: string; value: string | number; Icon: LucideIcon };
+const qtyWithUnit = (value: number | null | undefined, unit?: string | null) =>
+  value == null ? "—" : `${qty2(value)}${unit ? ` ${unit}` : ""}`;
 
-function EmptyState({ title, body }: { title: string; body: string }) {
+const moneyOrDash = (value: number | null | undefined) => (value == null ? "—" : money(value));
+
+function sinceLabel(iso: string, now: number): string {
+  const days = Math.floor((now - new Date(iso).getTime()) / 86_400_000);
+  if (days <= 0) return "hoy";
+  if (days === 1) return "ayer";
+  return `hace ${days} días`;
+}
+
+/*
+ * globals.css trae `a { color: inherit }` sin capa, y en Tailwind 4 eso le
+ * gana a cualquier utilidad de color (que vive en @layer utilities). Por eso
+ * el color del texto de los <Link> va con `!` — sin eso, los enlaces y los
+ * botones-enlace salen en el color del texto heredado.
+ */
+const LINK_TEXT: Record<"primary" | "secondary" | "ghost", string> = {
+  primary: "!text-white",
+  secondary: "!text-[var(--color-text)]",
+  ghost: "!text-[var(--color-text-secondary)]",
+};
+const linkButton = (variant: "primary" | "secondary" | "ghost", size: "sm" | "md" = "md") =>
+  `${components.button.base} ${components.button[variant]} ${components.button.sizes[size]} ${LINK_TEXT[variant]}`;
+const TEXT_LINK = "font-semibold !text-[var(--color-master-700)] hover:underline";
+
+/**
+ * Ordena lo que necesita atención: insumos faltantes primero (frena
+ * producción), luego precios por aprobar (afecta venta), recetas
+ * incompletas y, al final, lotes abiertos sin problema (seguimiento).
+ */
+function buildAttentionItems(dashboard: Dashboard, now: number): AttentionItem[] {
+  const items: AttentionItem[] = [];
+
+  for (const batch of dashboard.attention.openBatches) {
+    const status = batchStatus(batch.status);
+    const since = sinceLabel(batch.startedAt ?? batch.createdAt, now);
+    if (batch.shortInputs.length > 0) {
+      items.push({
+        key: `short-${batch.id}`,
+        tone: "danger",
+        Icon: PackageX,
+        title: `${batch.batchNumber} · ${batch.product.name}`,
+        detail: `Faltan ${batch.shortInputs.map((input) => `${input.productName} (${qtyWithUnit(input.missing, input.unit)})`).join(", ")}`,
+        meta: <Badge variant={status.tone}>{status.label}</Badge>,
+        href: `/app/master/production/batches/${batch.id}`,
+        rank: 0,
+      });
+    } else {
+      items.push({
+        key: `open-${batch.id}`,
+        tone: batch.status === "DRAFT" ? "neutral" : "info",
+        Icon: Factory,
+        title: `${batch.batchNumber} · ${batch.product.name}`,
+        detail: `${qtyWithUnit(batch.plannedQuantity, batch.product.unit)} planificadas en ${batch.branch.name} · ${batch.status === "DRAFT" ? "sin reservar insumos" : since}`,
+        meta: <Badge variant={status.tone}>{status.label}</Badge>,
+        href: `/app/master/production/batches/${batch.id}`,
+        rank: 3,
+      });
+    }
+  }
+
+  for (const approval of dashboard.attention.priceApprovals) {
+    items.push({
+      key: `price-${approval.id}`,
+      tone: "warning",
+      Icon: Tag,
+      title: `Precio por aprobar · ${approval.product.name}`,
+      detail: `Lote ${approval.batchNumber} en ${approval.branch.name}: costo ${moneyOrDash(approval.unitCost)}, precio sugerido ${moneyOrDash(approval.suggestedPrice)}`,
+      href: `/app/master/production/batches/${approval.id}`,
+      rank: 1,
+    });
+  }
+
+  for (const recipe of dashboard.attention.incompleteRecipes) {
+    items.push({
+      key: `recipe-${recipe.recipeId}`,
+      tone: "warning",
+      Icon: ClipboardList,
+      title: `Receta incompleta · ${recipe.recipeName}`,
+      detail: `${recipe.recipeCode}: ${INCOMPLETE_RECIPE_REASON[recipe.reason] ?? recipe.reason}`,
+      href: `/app/master/production/recipes/${recipe.recipeId}`,
+      rank: 2,
+    });
+  }
+
+  return items.sort((a, b) => a.rank - b.rank);
+}
+
+/* ── Piezas de UI ───────────────────────────────────────────────────────── */
+
+function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={`rounded-md bg-[var(--color-surface-alt)] motion-safe:animate-pulse ${className}`} aria-hidden="true" />;
+}
+
+function SectionError({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-alt)] px-4 py-5">
-      <p className="text-sm font-semibold text-[var(--color-text)]">{title}</p>
-      <p className="mt-1 text-sm text-[var(--color-text-muted)]">{body}</p>
+    <div className="flex flex-col items-start gap-3 rounded-xl border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-4 text-sm text-[var(--color-danger-700)] sm:flex-row sm:items-center sm:justify-between">
+      <p>{message}</p>
+      <button type="button" onClick={onRetry} className={linkButton("secondary", "sm")}>
+        <RefreshCcw className="h-3.5 w-3.5" aria-hidden="true" /> Reintentar
+      </button>
     </div>
   );
 }
 
-/** Primer y último día del mes en curso, como "YYYY-MM-DD" (horario local del navegador). */
-function currentMonthRange(): { from: string; to: string } {
-  const now = new Date();
-  const first = new Date(now.getFullYear(), now.getMonth(), 1);
-  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-  return { from: iso(first), to: iso(last) };
+function Panel({ title, description, action, children, className = "" }: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`flex min-w-0 flex-col rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)] ${className}`}>
+      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--color-border)] px-5 py-4">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-[var(--color-text)] [text-wrap:balance]">{title}</h2>
+          {description && <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">{description}</p>}
+        </div>
+        {action}
+      </header>
+      {children}
+    </section>
+  );
 }
 
-export default function ProductionDashboardPage() {
+function Stat({ label, value, hint, tone }: { label: string; value: string; hint?: ReactNode; tone?: Tone }) {
+  const valueColor = tone === "danger"
+    ? "text-[var(--color-danger-700)]"
+    : tone === "warning"
+      ? "text-[var(--color-warning-700)]"
+      : "text-[var(--color-text)]";
+  return (
+    <div className="flex min-w-0 flex-col gap-1 bg-[var(--color-surface)] px-5 py-4">
+      <p className="text-sm text-[var(--color-text-muted)]">{label}</p>
+      <p className={`text-2xl font-bold tabular-nums tracking-[-0.02em] ${valueColor}`}>{value}</p>
+      {hint && <p className="text-xs text-[var(--color-text-soft)]">{hint}</p>}
+    </div>
+  );
+}
+
+function ShowMore({ total, shown, expanded, onToggle }: { total: number; shown: number; expanded: boolean; onToggle: () => void }) {
+  if (total <= shown && !expanded) return null;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="w-full border-t border-[var(--color-border)] px-5 py-3 text-left text-sm font-semibold text-[var(--color-master-700)] transition-colors hover:bg-[var(--color-surface-alt)]"
+    >
+      {expanded ? "Mostrar menos" : `Ver ${total - shown} más`}
+    </button>
+  );
+}
+
+/* ── Página ─────────────────────────────────────────────────────────────── */
+
+const ATTENTION_PREVIEW = 6;
+const RECOMMENDATION_PREVIEW = 4;
+
+export default function ProductionHubPage() {
   const router = useRouter();
-  const [batches, setBatches] = useState<BatchSummary[]>([]);
-  const [recipes, setRecipes] = useState<RecipeSummary[]>([]);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [selectedBranchId, setSelectedBranchId] = useState("");
-  const [period, setPeriod] = useState(currentMonthRange);
-  const [dashboard, setDashboard] = useState<ProductionDashboard | null>(null);
-  const [dashboardLoading, setDashboardLoading] = useState(false);
-  const [recommendations, setRecommendations] = useState<ProductionRecommendation[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [branches, setBranches] = useState<BranchRef[]>([]);
+  const [branchId, setBranchId] = useState(ALL_BRANCHES);
+  const [preset, setPreset] = useState<PeriodPreset>("THIS_MONTH");
+
+  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const [recentBatches, setRecentBatches] = useState<RecentBatch[]>([]);
+  const [recentLoading, setRecentLoading] = useState(true);
+
+  const [recommendationBranchId, setRecommendationBranchId] = useState("");
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
-  const [creatingRecommendationId, setCreatingRecommendationId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+  const [creatingId, setCreatingId] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const [attentionExpanded, setAttentionExpanded] = useState(false);
+  const [recommendationsExpanded, setRecommendationsExpanded] = useState(false);
+
+  // Se fija al cargar el tablero, no en cada render: "hace N días" estable.
+  const [now, setNow] = useState(() => Date.now());
+  const period = useMemo(() => resolvePeriod(preset, new Date(now)), [preset, now]);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const [batchRes, recipeRes, branchRes] = await Promise.all([
-          apiFetch("/api/master/production/batches?limit=80"),
-          apiFetch("/api/master/production/recipes"),
-          apiFetch("/api/branches"),
-        ]);
-        if (!batchRes.ok || !recipeRes.ok) throw new Error("No se pudo cargar produccion.");
-        const batchData = unwrapApiData(await batchRes.json()) as BatchSummary[];
-        const recipeData = unwrapApiData(await recipeRes.json()) as RecipeSummary[];
-        const branchData = branchRes.ok ? unwrapApiData(await branchRes.json()) as Branch[] : [];
-        if (!cancelled) {
-          setBatches(batchData);
-          setRecipes(recipeData);
-          const branchList = Array.isArray(branchData) ? branchData : [];
-          setBranches(branchList);
-          setSelectedBranchId((current) => current || branchList[0]?.id || "");
-        }
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Error desconocido");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+    apiFetch("/api/branches")
+      .then(async (res) => (res.ok ? (unwrapApiData(await res.json()) as BranchRef[]) : []))
+      .then((list) => {
+        if (cancelled) return;
+        const safe = Array.isArray(list) ? list : [];
+        setBranches(safe);
+        setRecommendationBranchId((current) => current || safe[0]?.id || "");
+      })
+      .catch(() => { if (!cancelled) setBranches([]); });
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    if (!selectedBranchId) {
-      setRecommendations([]);
-      return;
-    }
-    (async () => {
-      setRecommendationsLoading(true);
-      try {
-        const res = await apiFetch(`/api/master/production/recommendations?branchId=${encodeURIComponent(selectedBranchId)}`);
-        if (!res.ok) throw new Error("No se pudieron cargar recomendaciones.");
-        const data = unwrapApiData(await res.json()) as { recommendations?: ProductionRecommendation[] };
-        if (!cancelled) setRecommendations(data.recommendations ?? []);
-      } catch {
-        if (!cancelled) setRecommendations([]);
-      } finally {
-        if (!cancelled) setRecommendationsLoading(false);
-      }
-    })();
+    setDashboardLoading(true);
+    setDashboardError(null);
+    const params = new URLSearchParams({ from: period.from.toISOString(), to: period.to.toISOString() });
+    if (branchId) params.set("branchId", branchId);
+    apiFetch(`/api/master/production/dashboard?${params.toString()}`)
+      .then(async (res) => {
+        const raw = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar el tablero de producción.");
+        if (!cancelled) setDashboard(unwrapApiData(raw) as Dashboard);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setDashboardError(error instanceof Error ? error.message : "No se pudo cargar el tablero de producción.");
+      })
+      .finally(() => { if (!cancelled) setDashboardLoading(false); });
     return () => { cancelled = true; };
-  }, [selectedBranchId]);
+  }, [branchId, period, reloadKey]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!selectedBranchId) {
-      setDashboard(null);
+    setRecentLoading(true);
+    const params = new URLSearchParams({ limit: String(RECENT_BATCHES_LIMIT) });
+    if (branchId) params.set("branchId", branchId);
+    apiFetch(`/api/master/production/batches?${params.toString()}`)
+      .then(async (res) => (res.ok ? (unwrapApiData(await res.json()) as RecentBatch[]) : []))
+      .then((list) => { if (!cancelled) setRecentBatches(Array.isArray(list) ? list : []); })
+      .catch(() => { if (!cancelled) setRecentBatches([]); })
+      .finally(() => { if (!cancelled) setRecentLoading(false); });
+    return () => { cancelled = true; };
+  }, [branchId, reloadKey]);
+
+  // Las recomendaciones son por sucursal: con un filtro activo se usa ese;
+  // con "Todas", el selector propio del panel.
+  const effectiveRecommendationBranch = branchId || recommendationBranchId;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!effectiveRecommendationBranch) {
+      setRecommendations([]);
       return;
     }
-    (async () => {
-      setDashboardLoading(true);
-      try {
-        const params = new URLSearchParams({ branchId: selectedBranchId, from: period.from, to: period.to });
-        const res = await apiFetch(`/api/master/production/dashboard?${params.toString()}`);
-        if (!res.ok) throw new Error("No se pudo cargar el dashboard de producción.");
-        if (!cancelled) setDashboard(unwrapApiData(await res.json()) as ProductionDashboard);
-      } catch {
-        if (!cancelled) setDashboard(null);
-      } finally {
-        if (!cancelled) setDashboardLoading(false);
-      }
-    })();
+    setRecommendationsLoading(true);
+    setRecommendationsError(null);
+    apiFetch(`/api/master/production/recommendations?branchId=${encodeURIComponent(effectiveRecommendationBranch)}`)
+      .then(async (res) => {
+        const raw = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudieron cargar las recomendaciones.");
+        const data = unwrapApiData(raw) as { recommendations?: Recommendation[] };
+        if (!cancelled) setRecommendations(data.recommendations ?? []);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setRecommendations([]);
+          setRecommendationsError(error instanceof Error ? error.message : "No se pudieron cargar las recomendaciones.");
+        }
+      })
+      .finally(() => { if (!cancelled) setRecommendationsLoading(false); });
     return () => { cancelled = true; };
-  }, [selectedBranchId, period.from, period.to]);
+  }, [effectiveRecommendationBranch, reloadKey]);
 
-  const createSuggestedBatch = async (recommendation: ProductionRecommendation) => {
-    setCreatingRecommendationId(recommendation.id);
-    setError(null);
+  const reload = useCallback(() => {
+    setNow(Date.now());
+    setReloadKey((key) => key + 1);
+  }, []);
+
+  const createSuggestedBatch = async (recommendation: Recommendation) => {
+    setCreatingId(recommendation.id);
+    setCreateError(null);
     try {
       const res = await apiFetch("/api/master/production/recommendations/create-batch", {
         method: "POST",
@@ -249,317 +437,413 @@ export default function ProductionDashboardPage() {
           recipeId: recommendation.recipeId,
           suggestedBatches: recommendation.suggestedBatches,
           targetProductId: recommendation.targetProductId,
-          notes: `Lote sugerido: ${recommendation.message}`,
+          notes: `Lote sugerido: ${recommendation.targetProductName}, faltaban ${qty2(recommendation.targetShortageQty)}.`,
         }),
       });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => null);
-        throw new Error(errData?.error?.message ?? errData?.message ?? "No se pudo crear el lote sugerido.");
-      }
-      const created = unwrapApiData(await res.json()) as { id: string };
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo crear el lote sugerido.");
+      const created = unwrapApiData(raw) as { id: string };
       router.push(`/app/master/production/batches/${created.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error desconocido");
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "No se pudo crear el lote sugerido.");
     } finally {
-      setCreatingRecommendationId(null);
+      setCreatingId(null);
     }
   };
 
-  const inProcess = batches.filter((batch) => batch.status === "IN_PROGRESS" || batch.status === "PLANNED");
-  const activeRecipes = recipes.filter((recipe) => recipe.isActive);
+  const attentionItems = useMemo(() => (dashboard ? buildAttentionItems(dashboard, now) : []), [dashboard, now]);
+  const visibleAttention = attentionExpanded ? attentionItems : attentionItems.slice(0, ATTENTION_PREVIEW);
+  const sortedRecommendations = useMemo(
+    () => [...recommendations].sort((a, b) => recommendationPriority(b.priority).rank - recommendationPriority(a.priority).rank),
+    [recommendations],
+  );
+  const visibleRecommendations = recommendationsExpanded ? sortedRecommendations : sortedRecommendations.slice(0, RECOMMENDATION_PREVIEW);
 
-  const totalGoodQuantity = useMemo(() => (dashboard?.producedByProduct ?? []).reduce((sum, p) => sum + p.goodQuantity, 0), [dashboard]);
-  const overallYieldPct = useMemo(() => {
-    const rows = dashboard?.producedByProduct ?? [];
-    const good = rows.reduce((sum, p) => sum + p.goodQuantity, 0);
-    const total = rows.reduce((sum, p) => sum + p.goodQuantity + p.badQuantity, 0);
-    return total > 0 ? good / total : null;
-  }, [dashboard]);
-  const openBatchCount = (dashboard?.batchesByStatus.PLANNED ?? 0) + (dashboard?.batchesByStatus.IN_PROGRESS ?? 0);
-
-  const priorities = [
-    ...inProcess.slice(0, 3).map((batch) => ({ label: batch.batchNumber, detail: `${batch.recipe.name} en ${batch.branch.name}`, tone: "warning" as const })),
-    ...(dashboard?.incompleteRecipes ?? []).slice(0, 3).map((r) => ({ label: r.recipeCode, detail: INCOMPLETE_REASON_LABEL[r.reason] ?? r.reason, tone: "danger" as const })),
-  ];
+  const totals = dashboard?.totals;
+  const lossShare = totals && totals.producedValue > 0 ? totals.lossValue / totals.producedValue : null;
+  const branchName = branchId ? branches.find((branch) => branch.id === branchId)?.name : null;
 
   return (
-    <section className="space-y-6">
-      <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
-        <div className="flex flex-col gap-5 bg-gradient-to-r from-[var(--color-master-900)] via-[var(--color-master-700)] to-[var(--color-success-700)] px-5 py-6 text-white lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-3xl">
-            <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-white/12">
-              <Factory className="h-6 w-6" />
-            </div>
-            <h1 className="text-3xl font-bold tracking-normal">Produccion de Materiales</h1>
-            <p className="mt-2 text-sm text-white/80">Recetas, insumos, costos y lotes para fabricar productos.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link href="/app/master/production/batches/new" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-[var(--color-master-900)] hover:bg-white/90"><Plus className="h-4 w-4" />Nuevo lote</Link>
-            <Link href="/app/master/production/recipes/new" className="inline-flex items-center gap-2 rounded-lg bg-white/12 px-3 py-2 text-sm font-semibold text-white ring-1 ring-white/25 hover:bg-white/18"><Plus className="h-4 w-4" />Crear receta</Link>
-            <Link href="/app/master/production/recipes" className="inline-flex items-center gap-2 rounded-lg bg-white/12 px-3 py-2 text-sm font-semibold text-white ring-1 ring-white/25 hover:bg-white/18"><ReceiptText className="h-4 w-4" />Recetas / Materiales</Link>
-            <Link href="/app/master/catalog/products" className="inline-flex items-center gap-2 rounded-lg bg-white/12 px-3 py-2 text-sm font-semibold text-white ring-1 ring-white/25 hover:bg-white/18"><PackageSearch className="h-4 w-4" />Catalogo de productos</Link>
-          </div>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Producción de materiales"
+        description="Qué se fabricó, qué está trabado y qué conviene producir, con costos reales de cada lote."
+        actions={(
+          <>
+            <Link href="/app/master/production/recipes" className={linkButton("ghost")}>
+              <ReceiptText className="h-4 w-4" aria-hidden="true" /> Recetas
+            </Link>
+            <Link href="/app/master/production/recipes/new" className={linkButton("secondary")}>
+              <Plus className="h-4 w-4" aria-hidden="true" /> Nueva receta
+            </Link>
+            <Link href="/app/master/production/batches/new" className={linkButton("primary")}>
+              <Plus className="h-4 w-4" aria-hidden="true" /> Nuevo lote
+            </Link>
+          </>
+        )}
+      />
 
-      {error && <div className="rounded-lg border border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-3 text-sm text-[var(--color-danger-700)]">{error}</div>}
-
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3 shadow-sm">
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-[var(--color-text-muted)]">Sucursal</span>
-          <select value={selectedBranchId} onChange={(event) => setSelectedBranchId(event.target.value)} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
-            {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} - {branch.name}</option>)}
-          </select>
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-[var(--color-text-muted)]">Desde</span>
-          <input type="date" value={period.from} onChange={(event) => setPeriod((p) => ({ ...p, from: event.target.value }))} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm" />
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-[var(--color-text-muted)]">Hasta</span>
-          <input type="date" value={period.to} onChange={(event) => setPeriod((p) => ({ ...p, to: event.target.value }))} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm" />
-        </label>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        {([
-          { label: "Recetas activas", value: activeRecipes.length, Icon: ClipboardList },
-          { label: "Lotes abiertos", value: dashboardLoading ? "…" : openBatchCount, Icon: Factory },
-          { label: "Producido (periodo)", value: dashboardLoading ? "…" : num(totalGoodQuantity), Icon: Boxes },
-          { label: "Rendimiento real", value: dashboardLoading ? "…" : (overallYieldPct != null ? pct(overallYieldPct) : "-"), Icon: TrendingUp },
-          { label: "Variancia de materiales", value: dashboardLoading ? "…" : money(dashboard?.materialVarianceCostTotal ?? 0), Icon: TrendingUp },
-          { label: "Insumos bloqueando", value: dashboardLoading ? "…" : (dashboard?.blockingInputs.length ?? 0), Icon: AlertTriangle },
-        ] satisfies KpiItem[]).map(({ label, value, Icon }) => (
-          <div key={label} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase text-[var(--color-text-muted)]">{label}</p>
-              <Icon className="h-4 w-4 text-[var(--color-master-600)]" />
-            </div>
-            <p className="mt-2 text-2xl font-bold text-[var(--color-text)]">{String(value)}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-[var(--color-text)]">Recomendaciones de produccion</h2>
-            <p className="text-sm text-[var(--color-text-muted)]">Detecta productos bajos que pueden fabricarse desde insumos disponibles o excedentes.</p>
-          </div>
-        </div>
-
-        {recommendationsLoading ? (
-          <p className="mt-4 text-sm text-[var(--color-text-muted)]">Buscando oportunidades de produccion...</p>
-        ) : recommendations.length === 0 ? (
-          <div className="mt-4">
-            <EmptyState title="Sin recomendaciones por ahora" body="Cuando falte un producto y exista una receta viable con insumos disponibles, aparecera aqui." />
-          </div>
-        ) : (
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {recommendations.slice(0, 6).map((recommendation) => {
-              const input = recommendation.inputSummary[0];
-              const canCreate = recommendation.suggestedBatches > 0
-                && recommendation.recommendedActions.includes("CREATE_PRODUCTION_BATCH")
-                && recommendation.recommendationType !== "NOT_ENOUGH_INPUTS"
-                && recommendation.recommendationType !== "REVIEW_RECIPE";
+      {/* Filtros */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
+            <span>Sucursal</span>
+            <select
+              value={branchId}
+              onChange={(event) => setBranchId(event.target.value)}
+              className="hm-input min-w-[12rem] py-2"
+            >
+              <option value={ALL_BRANCHES}>Todas las sucursales</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>{branch.name}</option>
+              ))}
+            </select>
+          </label>
+          <div role="radiogroup" aria-label="Período" className="flex w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-1 sm:inline-flex sm:w-auto">
+            {PERIOD_PRESETS.map((option) => {
+              const active = option.value === preset;
               return (
-                <div key={recommendation.id} className="rounded-lg border border-[var(--color-border)] p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase text-[var(--color-text-muted)]">Falta</p>
-                      <h3 className="mt-1 text-base font-bold text-[var(--color-text)]">{recommendation.targetProductName}</h3>
-                      <p className="text-xs text-[var(--color-text-muted)]">{recommendation.targetSku} · Stock actual: {num(recommendation.targetStockOnHand)} · Falta: {num(recommendation.targetShortageQty)}</p>
-                      {recommendation.dailySalesVelocity > 0 && (
-                        <p className="text-xs text-[var(--color-text-muted)]">
-                          Venta: {num(recommendation.dailySalesVelocity)}/día
-                          {recommendation.daysOfStockRemaining != null && ` · ${num(recommendation.daysOfStockRemaining)} días de stock restantes`}
-                        </p>
-                      )}
-                    </div>
-                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${PRIORITY_TONE_CLASS[recommendation.priority]}`}>
-                      {recommendation.priority}
-                    </span>
-                  </div>
-                  <div className="mt-3 rounded-lg bg-[var(--color-surface-alt)] p-3 text-sm">
-                    <p><span className="font-semibold">Receta:</span> {recommendation.recipeName}</p>
-                    <p><span className="font-semibold">Tipo/familia:</span> {recommendation.recipeType} · {recommendation.recipeFamily}</p>
-                    {input && <p><span className="font-semibold">Insumo disponible:</span> {input.productName}, exceso {num(input.excessQty)} / stock {num(input.availableStock)}</p>}
-                    {recommendation.recommendationType === "BUY_INSTEAD" ? (
-                      <p className="font-semibold text-[var(--color-warning-700)]">Comprar sale {money(recommendation.buyCost)} vs. producir {money(recommendation.estimatedUnitCost)}</p>
-                    ) : (
-                      <>
-                        <p><span className="font-semibold">Sugerencia:</span> producir {num(recommendation.expectedOutputQty)} unidades</p>
-                        <p><span className="font-semibold">Costo estimado:</span> {money(recommendation.estimatedUnitCost)} por unidad</p>
-                      </>
-                    )}
-                  </div>
-                  {recommendation.warnings.length > 0 && (
-                    <div className="mt-3 rounded-lg bg-[var(--color-warning-50)] p-2 text-xs text-[var(--color-warning-700)]">
-                      {recommendation.warnings.map((warning) => <p key={warning}>{warning}</p>)}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    disabled={!canCreate || creatingRecommendationId === recommendation.id}
-                    onClick={() => createSuggestedBatch(recommendation)}
-                    className="mt-3 rounded-lg bg-[var(--color-master-600)] px-3 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {creatingRecommendationId === recommendation.id ? "Creando..." : "Crear lote sugerido"}
-                  </button>
-                </div>
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setPreset(option.value)}
+                  className={`flex-auto whitespace-nowrap rounded-lg px-2 py-1.5 text-[0.8125rem] font-medium sm:px-3 sm:text-sm transition-colors duration-150 sm:flex-none ${
+                    active
+                      ? "bg-[var(--color-master-50)] text-[var(--color-master-700)]"
+                      : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  }`}
+                >
+                  {option.label}
+                </button>
               );
             })}
           </div>
-        )}
+        </div>
+        <div className="flex items-center gap-3 text-sm text-[var(--color-text-muted)]">
+          <span className="tabular-nums">{formatPeriodRange(period.from, period.to)}</span>
+          <button type="button" onClick={reload} className={linkButton("ghost", "sm")} aria-label="Actualizar tablero">
+            <RefreshCcw className={`h-3.5 w-3.5 ${dashboardLoading ? "motion-safe:animate-spin" : ""}`} aria-hidden="true" /> Actualizar
+          </button>
+        </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[0.95fr_1.35fr]">
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-sm">
-          <h2 className="text-base font-semibold text-[var(--color-text)]">Prioridades de produccion</h2>
-          <div className="mt-4 space-y-3">
-            {loading ? <p className="text-sm text-[var(--color-text-muted)]">Cargando prioridades...</p> : priorities.length === 0 ? (
-              <EmptyState title="Sin prioridades pendientes" body="Cuando existan lotes en proceso o recetas incompletas apareceran aqui." />
-            ) : priorities.map((item) => (
-              <div key={`${item.label}-${item.detail}`} className="flex items-start gap-3 rounded-lg border border-[var(--color-border)] px-3 py-3">
-                <span className={`mt-1 h-2.5 w-2.5 rounded-full ${item.tone === "danger" ? "bg-[var(--color-danger-500)]" : "bg-[var(--color-warning-500)]"}`} />
-                <div>
-                  <p className="text-sm font-semibold text-[var(--color-text)]">{item.label}</p>
-                  <p className="text-sm text-[var(--color-text-muted)]">{item.detail}</p>
-                </div>
+      {dashboardError && <SectionError message={dashboardError} onRetry={reload} />}
+
+      {/* Resumen del período: una sola banda, no una grilla de tarjetas */}
+      <section aria-label="Resumen del período" className="overflow-hidden rounded-xl border border-[var(--color-border)] shadow-[var(--shadow-card)]">
+        <div className="grid grid-cols-1 gap-px bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-5">
+          {dashboardLoading && !dashboard ? (
+            Array.from({ length: 5 }, (_, index) => (
+              <div key={index} className="space-y-2 bg-[var(--color-surface)] px-5 py-4">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-7 w-24" />
+                <Skeleton className="h-3 w-32" />
               </div>
-            ))}
-          </div>
+            ))
+          ) : totals ? (
+            <>
+              <Stat
+                label="Lotes completados"
+                value={String(totals.completedBatches)}
+                hint={totals.reversedBatches > 0
+                  ? `${totals.reversedBatches} revertido${totals.reversedBatches === 1 ? "" : "s"} en el período`
+                  : branchName ? `en ${branchName}` : "en todas las sucursales"}
+              />
+              <Stat label="Valor producido" value={money(totals.producedValue)} hint="Costo total de lo fabricado" />
+              <Stat
+                label="Perdido en unidades malas"
+                value={money(totals.lossValue)}
+                tone={totals.lossValue > 0 ? "warning" : undefined}
+                hint={lossShare != null ? `${fmtRatioPercent(lossShare)} del valor producido` : "Sin producción en el período"}
+              />
+              <Stat
+                label="Rendimiento promedio"
+                value={fmtRatioPercent(totals.avgYieldPct)}
+                hint="Unidades buenas sobre intentadas, por lote"
+              />
+              <Stat
+                label="Lotes abiertos"
+                value={String(totals.openBatches)}
+                tone={totals.openBatchesWithShortInputs > 0 ? "danger" : undefined}
+                hint={totals.openBatchesWithShortInputs > 0
+                  ? `${totals.openBatchesWithShortInputs} con insumos faltantes`
+                  : totals.openBatches > 0 ? "Todos con insumos reservados" : "Ninguno en curso"}
+              />
+            </>
+          ) : null}
         </div>
+      </section>
 
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-sm">
-          <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-            <h2 className="text-base font-semibold text-[var(--color-text)]">Ultimos lotes</h2>
-            <Link href="/app/master/production/batches" className="text-sm font-medium text-[var(--color-master-600)] hover:underline">Ver todos</Link>
-          </div>
-          {loading ? <p className="p-5 text-sm text-[var(--color-text-muted)]">Cargando lotes...</p> : batches.length === 0 ? (
-            <div className="p-4"><EmptyState title="No hay lotes creados" body="Crea un lote desde una receta activa para validar insumos, producir y registrar Kardex." /></div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="hm-table w-full text-sm">
-                <thead className="bg-[var(--color-surface-alt)] text-xs uppercase text-[var(--color-text-muted)]">
-                  <tr>
-                    <th className="px-4 py-3 text-left">Lote</th>
-                    <th className="px-4 py-3 text-left">Receta</th>
-                    <th className="px-4 py-3 text-left">Producto terminado</th>
-                    <th className="px-4 py-3 text-center">Estado</th>
-                    <th className="px-4 py-3 text-right">Cantidad</th>
-                    <th className="px-4 py-3 text-right">Costo unitario</th>
-                    <th className="px-4 py-3 text-left">Fecha</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--color-border)]">
-                  {batches.slice(0, 8).map((batch) => {
-                    const st = STATUS[batch.status] ?? { label: batch.status, tone: "neutral" as const };
-                    return (
-                      <tr key={batch.id} className="hover:bg-[var(--color-surface-alt)]">
-                        <td className="px-4 py-3"><Link href={`/app/master/production/batches/${batch.id}` as never} className="font-semibold text-[var(--color-master-600)] hover:underline">{batch.batchNumber}</Link></td>
-                        <td className="px-4 py-3 text-[var(--color-text)]">{batch.recipe.name}</td>
-                        <td className="px-4 py-3 text-[var(--color-text-muted)]">{batch.recipe.code}</td>
-                        <td className="px-4 py-3 text-center"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${STATUS_TONE_CLASS[st.tone]}`}>{st.label}</span></td>
-                        <td className="px-4 py-3 text-right">{num(batch.producedGoodQuantity ?? batch.plannedQuantity)}</td>
-                        <td className="px-4 py-3 text-right">{money(batch.unitCost)}</td>
-                        <td className="px-4 py-3 text-[var(--color-text-muted)]">{fmtDateNumeric(batch.completedAt ?? batch.createdAt)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+      <div className="grid gap-6 lg:grid-cols-5">
+        {/* Necesita atención */}
+        <Panel
+          className="lg:col-span-3"
+          title="Necesita atención"
+          description="Insumos faltantes, precios por aprobar, recetas incompletas y lotes en curso."
+          action={attentionItems.length > 0 ? <Badge variant="neutral">{attentionItems.length}</Badge> : undefined}
+        >
+          {dashboardLoading && !dashboard ? (
+            <div className="space-y-4 p-5">
+              {Array.from({ length: 4 }, (_, index) => (
+                <div key={index} className="flex items-center gap-3">
+                  <Skeleton className="h-9 w-9 rounded-full" />
+                  <div className="flex-1 space-y-2"><Skeleton className="h-4 w-2/3" /><Skeleton className="h-3 w-1/2" /></div>
+                </div>
+              ))}
             </div>
+          ) : attentionItems.length === 0 ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 py-10 text-center">
+              <CheckCircle2 className="h-8 w-8 text-[var(--color-success-600)]" aria-hidden="true" />
+              <p className="font-semibold text-[var(--color-text)]">Todo en orden</p>
+              <p className="max-w-sm text-sm text-[var(--color-text-muted)]">No hay lotes trabados, precios por aprobar ni recetas incompletas.</p>
+            </div>
+          ) : (
+            <>
+              <ul className="divide-y divide-[var(--color-border)]">
+                {visibleAttention.map((item, index) => (
+                  <li
+                    key={item.key}
+                    className="motion-safe:animate-[fadeInUp_280ms_var(--ease-out-strong)_both]"
+                    style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}
+                  >
+                    <Link
+                      href={item.href as never}
+                      className="group flex items-start gap-3 px-5 py-3.5 transition-colors duration-150 hover:bg-[var(--color-surface-alt)] focus-visible:bg-[var(--color-surface-alt)] focus-visible:outline-none"
+                    >
+                      <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${TONE_ICON[item.tone]}`}>
+                        <item.Icon className="h-4 w-4" aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-[var(--color-text)]">{item.title}</span>
+                        <span className="mt-0.5 block text-sm text-[var(--color-text-muted)]">{item.detail}</span>
+                      </span>
+                      {item.meta && <span className="hidden shrink-0 sm:block">{item.meta}</span>}
+                      <ChevronRight className="mt-2 h-4 w-4 shrink-0 text-[var(--color-text-soft)] transition-transform duration-150 group-hover:translate-x-0.5" aria-hidden="true" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+              <ShowMore
+                total={attentionItems.length}
+                shown={ATTENTION_PREVIEW}
+                expanded={attentionExpanded}
+                onToggle={() => setAttentionExpanded((value) => !value)}
+              />
+            </>
           )}
-        </div>
+        </Panel>
+
+        {/* Qué conviene producir */}
+        <Panel
+          className="lg:col-span-2"
+          title="Qué conviene producir"
+          description="Productos por debajo de su nivel que se pueden fabricar con una receta activa."
+          action={!branchId && branches.length > 0 ? (
+            <select
+              value={recommendationBranchId}
+              onChange={(event) => setRecommendationBranchId(event.target.value)}
+              className="hm-input w-auto py-1.5 text-sm"
+              aria-label="Sucursal para recomendaciones"
+            >
+              {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+            </select>
+          ) : undefined}
+        >
+          {createError && <div className="px-5 pt-4"><SectionError message={createError} onRetry={() => setCreateError(null)} /></div>}
+          {recommendationsError ? (
+            <div className="p-5"><SectionError message={recommendationsError} onRetry={reload} /></div>
+          ) : recommendationsLoading ? (
+            <div className="space-y-4 p-5">
+              {Array.from({ length: 3 }, (_, index) => (
+                <div key={index} className="space-y-2"><Skeleton className="h-4 w-1/2" /><Skeleton className="h-3 w-3/4" /><Skeleton className="h-8 w-28" /></div>
+              ))}
+            </div>
+          ) : !effectiveRecommendationBranch ? (
+            <p className="px-5 py-10 text-center text-sm text-[var(--color-text-muted)]">No hay sucursales disponibles.</p>
+          ) : sortedRecommendations.length === 0 ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 py-10 text-center">
+              <Factory className="h-8 w-8 text-[var(--color-text-soft)]" aria-hidden="true" />
+              <p className="font-semibold text-[var(--color-text)]">Nada que producir por ahora</p>
+              <p className="max-w-xs text-sm text-[var(--color-text-muted)]">Aparece aquí cuando un producto baja de su punto de reorden y tiene una receta viable.</p>
+            </div>
+          ) : (
+            <>
+              <ul className="divide-y divide-[var(--color-border)]">
+                {visibleRecommendations.map((rec) => {
+                  const priority = recommendationPriority(rec.priority);
+                  const canCreate = rec.suggestedBatches > 0 && rec.recommendedActions.includes("CREATE_PRODUCTION_BATCH");
+                  const isBuyInstead = rec.recommendationType === "BUY_INSTEAD";
+                  return (
+                    <li key={rec.id} className="space-y-2.5 px-5 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-[var(--color-text)]">{rec.targetProductName}</p>
+                          <p className="text-xs text-[var(--color-text-muted)]">
+                            Hay {qty2(rec.targetStockOnHand)} · faltan <span className="font-semibold text-[var(--color-text-secondary)]">{qty2(rec.targetShortageQty)}</span>
+                            {rec.dailySalesVelocity > 0 && (
+                              <> · {qty2(rec.dailySalesVelocity)}/día{rec.daysOfStockRemaining != null && ` · ${qty2(rec.daysOfStockRemaining)}d de stock`}</>
+                            )}
+                          </p>
+                        </div>
+                        <Badge variant={priority.tone}>{priority.label}</Badge>
+                      </div>
+                      {isBuyInstead ? (
+                        <p className="text-sm font-semibold text-[var(--color-warning-700)]">
+                          Comprar sale {moneyOrDash(rec.buyCost)} vs. producir {moneyOrDash(rec.estimatedUnitCost)}
+                        </p>
+                      ) : (
+                        <p className="text-sm text-[var(--color-text-secondary)]">
+                          {canCreate ? (
+                            <>Producir <span className="font-semibold tabular-nums">{qty2(rec.expectedOutputQty)}</span> con «{rec.recipeName}»
+                              {rec.estimatedUnitCost != null && <> a <span className="tabular-nums">{money(rec.estimatedUnitCost)}</span> c/u</>}</>
+                          ) : (
+                            <>{RECOMMENDATION_TYPE[rec.recommendationType] ?? rec.recommendationType} para «{rec.recipeName}»</>
+                          )}
+                        </p>
+                      )}
+                      {rec.warnings.length > 0 && (
+                        <p className="flex items-start gap-1.5 text-xs text-[var(--color-warning-700)]">
+                          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                          <span>{rec.warnings.join(" ")}</span>
+                        </p>
+                      )}
+                      {canCreate && !isBuyInstead && (
+                        <button
+                          type="button"
+                          disabled={creatingId !== null}
+                          onClick={() => createSuggestedBatch(rec)}
+                          className={linkButton("secondary", "sm")}
+                        >
+                          {creatingId === rec.id ? "Creando…" : `Crear lote (${rec.suggestedBatches})`}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <ShowMore
+                total={sortedRecommendations.length}
+                shown={RECOMMENDATION_PREVIEW}
+                expanded={recommendationsExpanded}
+                onToggle={() => setRecommendationsExpanded((value) => !value)}
+              />
+            </>
+          )}
+        </Panel>
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-sm">
-        <h2 className="text-base font-semibold text-[var(--color-text)]">Por producto (periodo seleccionado)</h2>
-        {dashboardLoading ? (
-          <p className="mt-4 text-sm text-[var(--color-text-muted)]">Calculando...</p>
+      {/* Producción por producto */}
+      <Panel title="Producción por producto" description="Costo unitario ponderado por cantidad; el margen es contra el precio vigente.">
+        {dashboardLoading && !dashboard ? (
+          <div className="space-y-3 p-5">{Array.from({ length: 3 }, (_, index) => <Skeleton key={index} className="h-6 w-full" />)}</div>
         ) : !dashboard || dashboard.producedByProduct.length === 0 ? (
-          <div className="mt-4"><EmptyState title="Sin produccion en este periodo" body="Los productos aparecen aqui cuando se completan lotes en el rango de fechas elegido." /></div>
+          <p className="px-5 py-10 text-center text-sm text-[var(--color-text-muted)]">Sin producción completada en este período.</p>
         ) : (
-          <div className="mt-4 overflow-x-auto">
+          <div className="overflow-x-auto">
             <table className="hm-table w-full text-sm">
-              <thead className="bg-[var(--color-surface-alt)] text-xs uppercase text-[var(--color-text-muted)]">
+              <thead>
                 <tr>
-                  <th className="px-3 py-2 text-left">Producto</th>
-                  <th className="px-3 py-2 text-right">Buenas</th>
-                  <th className="px-3 py-2 text-right">Malas</th>
-                  <th className="px-3 py-2 text-right">Rendimiento</th>
-                  <th className="px-3 py-2 text-right">Meta</th>
-                  <th className="px-3 py-2 text-right">Costo unitario ponderado</th>
-                  <th className="px-3 py-2 text-right">Precio actual</th>
-                  <th className="px-3 py-2 text-right">Margen</th>
+                  <th className="px-5 py-3 text-left">Producto</th>
+                  <th className="px-4 py-3 text-right">Lotes</th>
+                  <th className="px-4 py-3 text-right">Buenas</th>
+                  <th className="px-4 py-3 text-right">Malas</th>
+                  <th className="px-4 py-3 text-right">Rendimiento</th>
+                  <th className="px-4 py-3 text-right">Costo unitario</th>
+                  <th className="px-4 py-3 text-right">Precio</th>
+                  <th className="px-5 py-3 text-right">Margen</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[var(--color-border)]">
-                {dashboard.producedByProduct.map((row) => (
-                  <tr key={row.productId}>
-                    <td className="px-3 py-2 font-semibold text-[var(--color-text)]">{row.productName}</td>
-                    <td className="px-3 py-2 text-right">{num(row.goodQuantity)}</td>
-                    <td className="px-3 py-2 text-right">{num(row.badQuantity)}</td>
-                    <td className="px-3 py-2 text-right">{row.weightedYieldPct != null ? pct(row.weightedYieldPct) : "-"}</td>
-                    <td className="px-3 py-2 text-right text-[var(--color-text-muted)]">{row.targetYieldPct != null ? pct(row.targetYieldPct) : "-"}</td>
-                    <td className="px-3 py-2 text-right">{money(row.weightedUnitCost)}</td>
-                    <td className="px-3 py-2 text-right">{money(row.currentPrice)}</td>
-                    <td className="px-3 py-2 text-right" style={{ color: row.marginAtCurrentPrice != null && row.marginAtCurrentPrice > 0 ? "var(--color-success-700)" : "var(--color-danger-700)" }}>
-                      {row.marginAtCurrentPrice != null ? pct(row.marginAtCurrentPrice) : "-"}
-                    </td>
-                  </tr>
-                ))}
+              <tbody>
+                {dashboard.producedByProduct.map((row) => {
+                  const belowTarget = row.weightedYieldPct != null && row.targetYieldPct != null && row.weightedYieldPct < row.targetYieldPct;
+                  const marginColor = row.marginAtCurrentPrice == null
+                    ? "text-[var(--color-text-soft)]"
+                    : row.marginAtCurrentPrice < 0 ? "text-[var(--color-danger-700)] font-semibold" : "text-[var(--color-text)]";
+                  return (
+                    <tr key={row.productId}>
+                      <td className="px-5 py-3">
+                        <p className="font-semibold text-[var(--color-text)]">{row.productName}</p>
+                        <p className="text-xs text-[var(--color-text-soft)]">{row.sku}</p>
+                      </td>
+                      <td data-label="Lotes" className="px-4 py-3 text-right tabular-nums">{row.batchCount}</td>
+                      <td data-label="Buenas" className="px-4 py-3 text-right tabular-nums">{qtyWithUnit(row.goodQuantity, row.unit)}</td>
+                      <td data-label="Malas" className="px-4 py-3 text-right tabular-nums">{row.badQuantity > 0 ? qty2(row.badQuantity) : "—"}</td>
+                      <td data-label="Rendimiento" className="px-4 py-3 text-right tabular-nums">
+                        <span>
+                          <span className={belowTarget ? "font-semibold text-[var(--color-warning-700)]" : "text-[var(--color-text)]"}>{fmtRatioPercent(row.weightedYieldPct)}</span>
+                          {row.targetYieldPct != null && <span className="block text-xs text-[var(--color-text-soft)]">meta {fmtRatioPercent(row.targetYieldPct)}</span>}
+                        </span>
+                      </td>
+                      <td data-label="Costo unitario" className="px-4 py-3 text-right tabular-nums">{moneyOrDash(row.weightedUnitCost)}</td>
+                      <td data-label="Precio" className="px-4 py-3 text-right tabular-nums">{moneyOrDash(row.currentPrice)}</td>
+                      <td data-label="Margen" className={`px-5 py-3 text-right tabular-nums ${marginColor}`}>{fmtRatioPercent(row.marginAtCurrentPrice)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
-      </div>
+      </Panel>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-sm">
-          <h2 className="text-base font-semibold text-[var(--color-text)]">Recetas incompletas</h2>
-          {dashboardLoading ? (
-            <p className="mt-4 text-sm text-[var(--color-text-muted)]">Calculando...</p>
-          ) : !dashboard || dashboard.incompleteRecipes.length === 0 ? (
-            <div className="mt-4"><EmptyState title="Todas las recetas activas están completas" body="Sin insumos, cantidad esperada inválida o insumo sin costo." /></div>
-          ) : (
-            <div className="mt-4 space-y-2">
-              {dashboard.incompleteRecipes.map((r) => (
-                <div key={r.recipeId} className="flex items-start gap-3 rounded-lg border border-[var(--color-border)] px-3 py-2">
-                  <span className="mt-1 h-2.5 w-2.5 rounded-full bg-[var(--color-danger-500)]" />
-                  <div>
-                    <p className="text-sm font-semibold text-[var(--color-text)]">{r.recipeName} <span className="font-mono text-xs text-[var(--color-text-muted)]">{r.recipeCode}</span></p>
-                    <p className="text-sm text-[var(--color-text-muted)]">{INCOMPLETE_REASON_LABEL[r.reason] ?? r.reason}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-sm">
-          <h2 className="text-base font-semibold text-[var(--color-text)]">Insumos que bloquean lotes</h2>
-          <p className="text-sm text-[var(--color-text-muted)]">Lotes PLANIFICADOS o EN PROCESO con reserva insuficiente — hace falta comprar o trasladar.</p>
-          {dashboardLoading ? (
-            <p className="mt-4 text-sm text-[var(--color-text-muted)]">Calculando...</p>
-          ) : !dashboard || dashboard.blockingInputs.length === 0 ? (
-            <div className="mt-4"><EmptyState title="Sin insumos bloqueando" body="Todos los lotes abiertos tienen su insumo completamente reservado." /></div>
-          ) : (
-            <div className="mt-4 space-y-2">
-              {dashboard.blockingInputs.map((b) => (
-                <div key={b.productId} className="flex items-center justify-between rounded-lg border border-[var(--color-border)] px-3 py-2">
-                  <div>
-                    <p className="text-sm font-semibold text-[var(--color-text)]">{b.productName}</p>
-                    <p className="text-xs text-[var(--color-text-muted)]">{b.batchCount} lote{b.batchCount === 1 ? "" : "s"} afectado{b.batchCount === 1 ? "" : "s"}</p>
-                  </div>
-                  <span className="font-mono text-sm font-bold text-[var(--color-warning-700)]">Faltan {num(b.shortfall)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </section>
+      {/* Lotes recientes */}
+      <Panel
+        title="Lotes recientes"
+        action={<Link href="/app/master/production/batches" className={`text-sm ${TEXT_LINK}`}>Ver todos los lotes</Link>}
+      >
+        {recentLoading ? (
+          <div className="space-y-3 p-5">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-6 w-full" />)}</div>
+        ) : recentBatches.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 px-5 py-10 text-center">
+            <p className="text-sm text-[var(--color-text-muted)]">Todavía no hay lotes. Crea uno desde una receta activa.</p>
+            <Link href="/app/master/production/batches/new" className={linkButton("secondary", "sm")}><Plus className="h-3.5 w-3.5" aria-hidden="true" /> Nuevo lote</Link>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="hm-table w-full text-sm">
+              <thead>
+                <tr>
+                  <th className="px-5 py-3 text-left">Lote</th>
+                  <th className="px-4 py-3 text-left">Receta</th>
+                  <th className="px-4 py-3 text-left">Sucursal</th>
+                  <th className="px-4 py-3 text-left">Estado</th>
+                  <th className="px-4 py-3 text-right">Cantidad</th>
+                  <th className="px-4 py-3 text-right">Costo unitario</th>
+                  <th className="px-5 py-3 text-right">Fecha</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentBatches.map((batch) => {
+                  const status = batchStatus(batch.status);
+                  const done = batch.status === "COMPLETED" || batch.status === "REVERSED";
+                  return (
+                    <tr key={batch.id}>
+                      <td className="px-5 py-3">
+                        <Link href={`/app/master/production/batches/${batch.id}` as never} className={TEXT_LINK}>{batch.batchNumber}</Link>
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-[var(--color-text)]">{batch.recipe.name}</p>
+                        <p className="text-xs text-[var(--color-text-soft)]">{batch.recipe.code}</p>
+                      </td>
+                      <td data-label="Sucursal" className="px-4 py-3 text-[var(--color-text-secondary)]">{batch.branch.name}</td>
+                      <td data-label="Estado" className="px-4 py-3"><Badge variant={status.tone}>{status.label}</Badge></td>
+                      <td data-label="Cantidad" className="px-4 py-3 text-right tabular-nums">
+                        {done && batch.producedGoodQuantity != null
+                          ? <>{qty2(batch.producedGoodQuantity)} <span className="text-[var(--color-text-soft)]">/ {qty2(batch.plannedQuantity)}</span></>
+                          : qty2(batch.plannedQuantity)}
+                      </td>
+                      <td data-label="Costo unitario" className="px-4 py-3 text-right tabular-nums">{moneyOrDash(batch.unitCost)}</td>
+                      <td data-label="Fecha" className="px-5 py-3 text-right tabular-nums text-[var(--color-text-muted)]">{fmtDateNumeric(batch.completedAt ?? batch.createdAt)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </div>
   );
 }

@@ -18,6 +18,8 @@ export type DashboardBatch = {
   status: string;
   finishedProductId: string;
   finishedProductName: string;
+  finishedProductSku?: string;
+  finishedProductUnit?: string | null;
   producedGoodQuantity: number | null;
   producedBadQuantity: number | null;
   totalCost: number | null;
@@ -35,6 +37,8 @@ export function aggregateBatchesByStatus(batches: Array<{ status: string }>): Re
 export type ProducedByProduct = {
   productId: string;
   productName: string;
+  sku: string;
+  unit: string | null;
   goodQuantity: number;
   badQuantity: number;
   /** Σ(buenas) / Σ(intentadas) de ESTE producto — null si no se intentó nada. */
@@ -50,6 +54,8 @@ export function aggregateProducedByProduct(batches: DashboardBatch[]): ProducedB
   const completed = batches.filter((b) => b.status === "COMPLETED");
   const byProduct = new Map<string, {
     productName: string;
+    sku: string;
+    unit: string | null;
     goodQuantity: number;
     badQuantity: number;
     totalCost: number;
@@ -60,6 +66,8 @@ export function aggregateProducedByProduct(batches: DashboardBatch[]): ProducedB
   for (const batch of completed) {
     const row = byProduct.get(batch.finishedProductId) ?? {
       productName: batch.finishedProductName,
+      sku: batch.finishedProductSku ?? "",
+      unit: batch.finishedProductUnit ?? null,
       goodQuantity: 0,
       badQuantity: 0,
       totalCost: 0,
@@ -79,6 +87,8 @@ export function aggregateProducedByProduct(batches: DashboardBatch[]): ProducedB
     return {
       productId,
       productName: row.productName,
+      sku: row.sku,
+      unit: row.unit,
       goodQuantity: row.goodQuantity,
       badQuantity: row.badQuantity,
       weightedYieldPct: totalAttempted > 0 ? row.goodQuantity / totalAttempted : null,
@@ -134,6 +144,70 @@ export function findBlockingInputs(
   return Array.from(byProduct.entries())
     .map(([productId, row]) => ({ productId, ...row }))
     .sort((a, b) => b.shortfall - a.shortfall);
+}
+
+export type PeriodValueTotals = {
+  /** Σ costo total de los lotes COMPLETED del período (C$). */
+  producedValue: number;
+  /** Σ costo × malas/intentadas, por lote — valor que representó la merma (C$). */
+  lossValue: number;
+  /** Promedio del rendimiento POR LOTE (buenas/intentadas) — complementa aggregateProducedByProduct, que pondera por producto, no por lote. null sin lotes con intentos. */
+  avgYieldPct: number | null;
+};
+
+/**
+ * Reconciliación con hub-produccion.patch (UI adoptada, backend propio) —
+ * "Valor producido"/"Perdido en unidades malas"/"Rendimiento promedio" de la
+ * banda de resumen: tres números que NO se obtienen de aggregateProducedByProduct
+ * (que agrupa por producto) sino de los mismos lotes del período, sin agrupar.
+ */
+export function computePeriodValueTotals(batches: DashboardBatch[]): PeriodValueTotals {
+  const completed = batches.filter((b) => b.status === "COMPLETED");
+  let producedValue = 0;
+  let lossValue = 0;
+  let yieldSum = 0;
+  let yieldCount = 0;
+  for (const batch of completed) {
+    const good = Math.max(0, batch.producedGoodQuantity ?? 0);
+    const bad = Math.max(0, batch.producedBadQuantity ?? 0);
+    const attempted = good + bad;
+    const cost = batch.totalCost ?? 0;
+    producedValue += cost;
+    if (attempted > 0) {
+      lossValue += cost * (bad / attempted);
+      yieldSum += good / attempted;
+      yieldCount += 1;
+    }
+  }
+  return {
+    producedValue,
+    lossValue,
+    avgYieldPct: yieldCount > 0 ? yieldSum / yieldCount : null,
+  };
+}
+
+export type ShortInput = { productId: string; productName: string; unit: string; planned: number; reserved: number; missing: number };
+
+/**
+ * Insumos sin reservar del todo, para UN lote — mismo criterio de faltante
+ * que findBlockingInputs (plannedQuantity − reservedQuantity), sin agregar
+ * entre lotes: esto alimenta el feed "Necesita atención" por lote (adoptado
+ * de hub-produccion.patch), findBlockingInputs sigue siendo la vista
+ * agregada por insumo.
+ */
+export function shortInputsForBatch(
+  inputs: Array<{ inputProductId: string; inputProductName: string; plannedQuantity: number; reservedQuantity: number; unit: string }>,
+): ShortInput[] {
+  return inputs
+    .map((i) => ({
+      productId: i.inputProductId,
+      productName: i.inputProductName,
+      unit: i.unit,
+      planned: i.plannedQuantity,
+      reserved: i.reservedQuantity,
+      missing: Math.max(0, i.plannedQuantity - i.reservedQuantity),
+    }))
+    .filter((i) => i.missing > 0.0001);
 }
 
 export type IncompleteRecipe = {

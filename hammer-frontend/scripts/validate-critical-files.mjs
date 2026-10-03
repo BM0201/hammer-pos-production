@@ -170,7 +170,7 @@ mustContain(
 );
 mustContain(
   "app/app/master/production/page.tsx",
-  ["Factory", "BatchSummary"],
+  ["Factory", "ProductionHubPage", "/api/master/production/dashboard"],
   "/app/master/production es el panel 'Produccion Materiales' (lotes). No debe ser la página de Recetas (production/recipes).",
 );
 mustContain(

@@ -6,6 +6,8 @@ import {
   aggregateInputConsumption,
   findBlockingInputs,
   findIncompleteRecipes,
+  computePeriodValueTotals,
+  shortInputsForBatch,
 } from "@/modules/production/dashboard-aggregation";
 
 /**
@@ -115,4 +117,35 @@ test("findIncompleteRecipes: detecta sin insumos, expectedQuantity<=0, e insumo 
   assert.equal(result.find((r) => r.recipeId === "r2")?.reason, "INVALID_EXPECTED_QUANTITY");
   assert.equal(result.find((r) => r.recipeId === "r3")?.reason, "ZERO_COST_INPUT");
   assert.ok(!result.some((r) => r.recipeId === "r4"));
+});
+
+// prompt-produccion-materiales.md — reconciliación con hub-produccion.patch
+// (UI adoptada, backend propio): computePeriodValueTotals/shortInputsForBatch
+// alimentan la banda de resumen y el feed "Necesita atención" por lote.
+
+test("computePeriodValueTotals: valor producido, pérdida por malas y rendimiento promedio POR LOTE", () => {
+  const totals = computePeriodValueTotals([
+    { status: "COMPLETED", finishedProductId: "p1", finishedProductName: "Bloque", producedGoodQuantity: 950, producedBadQuantity: 50, totalCost: 10_000, recipeYieldPercent: null },
+    { status: "COMPLETED", finishedProductId: "p2", finishedProductName: "Adoquín", producedGoodQuantity: 100, producedBadQuantity: 0, totalCost: 2_000, recipeYieldPercent: null },
+  ]);
+  assert.equal(totals.producedValue, 12_000);
+  assert.equal(totals.lossValue, 500, "10,000 * 50/1000 = 500; el segundo lote no tuvo malas");
+  assert.equal(totals.avgYieldPct, (0.95 + 1) / 2, "promedio POR LOTE (0.95 y 1.0), no ponderado por producto");
+});
+
+test("computePeriodValueTotals: ignora lotes no COMPLETED y lotes sin intentos", () => {
+  const totals = computePeriodValueTotals([
+    { status: "PLANNED", finishedProductId: "p1", finishedProductName: "Bloque", producedGoodQuantity: null, producedBadQuantity: null, totalCost: null, recipeYieldPercent: null },
+  ]);
+  assert.deepEqual(totals, { producedValue: 0, lossValue: 0, avgYieldPct: null });
+});
+
+test("shortInputsForBatch: solo los insumos con reservado < planeado, nunca agregado entre lotes", () => {
+  const result = shortInputsForBatch([
+    { inputProductId: "cem", inputProductName: "Cemento", plannedQuantity: 50, reservedQuantity: 30, unit: "bolsa" },
+    { inputProductId: "are", inputProductName: "Arena", plannedQuantity: 10, reservedQuantity: 10, unit: "m3" },
+  ]);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].productId, "cem");
+  assert.equal(result[0].missing, 20);
 });
