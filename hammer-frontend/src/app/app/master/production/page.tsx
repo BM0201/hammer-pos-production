@@ -59,6 +59,8 @@ type ProductionRecommendation = {
   targetSku: string;
   targetStockOnHand: number;
   targetShortageQty: number;
+  dailySalesVelocity: number;
+  daysOfStockRemaining: number | null;
   recipeId: string;
   recipeName: string;
   recipeType: string;
@@ -67,6 +69,7 @@ type ProductionRecommendation = {
   suggestedBatches: number;
   expectedOutputQty: number;
   estimatedUnitCost: number | null;
+  buyCost: number | null;
   priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
   recommendationType: string;
   message: string;
@@ -366,6 +369,12 @@ export default function ProductionDashboardPage() {
                       <p className="text-xs font-semibold uppercase text-[var(--color-text-muted)]">Falta</p>
                       <h3 className="mt-1 text-base font-bold text-[var(--color-text)]">{recommendation.targetProductName}</h3>
                       <p className="text-xs text-[var(--color-text-muted)]">{recommendation.targetSku} · Stock actual: {num(recommendation.targetStockOnHand)} · Falta: {num(recommendation.targetShortageQty)}</p>
+                      {recommendation.dailySalesVelocity > 0 && (
+                        <p className="text-xs text-[var(--color-text-muted)]">
+                          Venta: {num(recommendation.dailySalesVelocity)}/día
+                          {recommendation.daysOfStockRemaining != null && ` · ${num(recommendation.daysOfStockRemaining)} días de stock restantes`}
+                        </p>
+                      )}
                     </div>
                     <span className={`rounded-full px-2 py-1 text-xs font-semibold ${PRIORITY_TONE_CLASS[recommendation.priority]}`}>
                       {recommendation.priority}
@@ -375,8 +384,14 @@ export default function ProductionDashboardPage() {
                     <p><span className="font-semibold">Receta:</span> {recommendation.recipeName}</p>
                     <p><span className="font-semibold">Tipo/familia:</span> {recommendation.recipeType} · {recommendation.recipeFamily}</p>
                     {input && <p><span className="font-semibold">Insumo disponible:</span> {input.productName}, exceso {num(input.excessQty)} / stock {num(input.availableStock)}</p>}
-                    <p><span className="font-semibold">Sugerencia:</span> producir {num(recommendation.expectedOutputQty)} unidades</p>
-                    <p><span className="font-semibold">Costo estimado:</span> {money(recommendation.estimatedUnitCost)} por unidad</p>
+                    {recommendation.recommendationType === "BUY_INSTEAD" ? (
+                      <p className="font-semibold text-[var(--color-warning-700)]">Comprar sale {money(recommendation.buyCost)} vs. producir {money(recommendation.estimatedUnitCost)}</p>
+                    ) : (
+                      <>
+                        <p><span className="font-semibold">Sugerencia:</span> producir {num(recommendation.expectedOutputQty)} unidades</p>
+                        <p><span className="font-semibold">Costo estimado:</span> {money(recommendation.estimatedUnitCost)} por unidad</p>
+                      </>
+                    )}
                   </div>
                   {recommendation.warnings.length > 0 && (
                     <div className="mt-3 rounded-lg bg-[var(--color-warning-50)] p-2 text-xs text-[var(--color-warning-700)]">
