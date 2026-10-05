@@ -5,6 +5,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { isMaster } from "@/modules/rbac/guards";
 import { can, CAPABILITIES } from "@/modules/rbac/policies";
 import { getCurrentPrices, type CurrentPriceSource, type CurrentPricesSort } from "@/modules/pricing/current-prices-service";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 const VALID_PRICE_SOURCES: readonly CurrentPriceSource[] = ["BRANCH", "STANDARD", "FUSION_DERIVED", "MISSING"];
 const VALID_SORTS: readonly CurrentPricesSort[] = ["name", "marginAsc", "price", "lastUpdate"];
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
     const pageParam = url.searchParams.get("page");
     const limitParam = url.searchParams.get("limit");
     const page = pageParam ? Math.max(1, Number(pageParam) || 1) : undefined;
-    const limit = limitParam ? Math.min(200, Math.max(1, Number(limitParam) || 50)) : undefined;
+    const limit = limitParam ? parseListLimit(limitParam, { default: 50 }) : undefined;
 
     const result = await getCurrentPrices({
       branchId,

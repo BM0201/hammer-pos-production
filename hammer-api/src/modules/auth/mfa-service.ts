@@ -50,10 +50,29 @@ export async function createMfaPendingToken(userId: string): Promise<string> {
   return token;
 }
 
+/**
+ * prompt-seguridad-basica.md Fase 3.2 — dos submits concurrentes con el
+ * MISMO pendingToken pasaban el chequeo de expiración y ambos intentaban
+ * `delete({where:{id}})`: el segundo encontraba la fila ya borrada por el
+ * primero y Prisma lanzaba P2025 sin manejar (500 en vez del 401 normal de
+ * token inválido). `deleteMany` no lanza si no matchea nada — count=0 es la
+ * misma señal que "ya no existe", así que el segundo intento recibe
+ * exactamente el mismo resultado que un token expirado. `db` inyectable
+ * solo para poder testear sin una base real (los delegados reales de
+ * Prisma no son mockeables con t.mock.method por cómo exponen sus métodos).
+ */
+type MfaPendingTokenDb = {
+  mfaPendingToken: {
+    findUnique(args: { where: { token: string }; select: { id: true; userId: true; expiresAt: true } }): Promise<{ id: string; userId: string; expiresAt: Date } | null>;
+    deleteMany(args: { where: { id: string } }): Promise<{ count: number }>;
+  };
+};
+
 export async function consumeMfaPendingToken(
   token: string,
+  db: MfaPendingTokenDb = prisma,
 ): Promise<string | null> {
-  const row = await prisma.mfaPendingToken.findUnique({
+  const row = await db.mfaPendingToken.findUnique({
     where: { token },
     select: { id: true, userId: true, expiresAt: true },
   });
@@ -62,8 +81,8 @@ export async function consumeMfaPendingToken(
     return null;
   }
 
-  // Consume (single use)
-  await prisma.mfaPendingToken.delete({ where: { id: row.id } });
+  const deleted = await db.mfaPendingToken.deleteMany({ where: { id: row.id } });
+  if (deleted.count === 0) return null;
   return row.userId;
 }
 

@@ -51,6 +51,8 @@ type Overview = {
   usersMissingMfa: UserMissingMfa[];
   failedLogins24h: number;
   criticalActions: CriticalAction[];
+  /** prompt-seguridad-basica.md Fase 3.3 — false = Upstash no configurado, el rate limiter general falla abierto (sin límite real). */
+  apiRateLimiterConfigured: boolean;
 };
 
 type RetentionRule = {
@@ -197,6 +199,21 @@ export default function SecurityCenterPage() {
           Actualizar
         </button>
       </div>
+
+      {/* Upstash no configurado — el rate limiter general falla abierto */}
+      {overview && !overview.apiRateLimiterConfigured && (
+        <div className="erp-card flex items-start gap-3 border border-red-300 bg-red-50 p-4">
+          <ShieldAlert className="h-5 w-5 flex-shrink-0 text-red-600" />
+          <div>
+            <p className="text-sm font-semibold text-red-800">Rate limiting general deshabilitado</p>
+            <p className="text-xs text-red-700">
+              UPSTASH_REDIS_REST_URL/TOKEN no están configurados. El límite general de requests por API
+              (público/mutaciones/analytics/importación) está fallando abierto — sin límite real. El login
+              conserva su propio límite (no depende de Upstash).
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Alert count cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

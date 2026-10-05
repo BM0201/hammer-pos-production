@@ -9,6 +9,7 @@ import {
   listReplenishmentDrafts,
   createReplenishmentDraft,
 } from "@/modules/inventory/replenishment-draft-service";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 const createSchema = z.object({
   branchId: z.string().cuid(),
@@ -27,7 +28,7 @@ export async function GET(req: NextRequest) {
     const drafts = await listReplenishmentDrafts({
       branchId: searchParams.get("branchId") || undefined,
       status: searchParams.get("status") || undefined,
-      limit: Number(searchParams.get("limit") ?? 50),
+      limit: parseListLimit(searchParams.get("limit"), { default: 50 }),
     });
     return ok(drafts);
   } catch (error) {

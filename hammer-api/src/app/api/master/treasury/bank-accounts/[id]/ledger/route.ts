@@ -3,6 +3,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { getTreasuryAccountLedger } from "@/modules/treasury/service";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 /** Pantalla 6.3 — fecha · concepto · movimiento · saldo, con saldo corriente. */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -23,7 +24,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // en la query, se comporta igual que antes (todo el rango de una vez).
     const pageRaw = url.searchParams.get("page");
     const limitRaw = url.searchParams.get("limit");
-    const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
+    const limit = limitRaw ? parseListLimit(limitRaw, { default: 200 }) : undefined;
     const page = pageRaw ? Math.max(1, parseInt(pageRaw, 10)) : 1;
     const pagination = limit ? { skip: (page - 1) * limit, take: limit } : undefined;
 

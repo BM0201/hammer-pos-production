@@ -6,6 +6,7 @@ import { createBatchSchema } from "@/modules/production/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created, validationFail } from "@/lib/api/response";
+import { parseListLimit } from "@/lib/api/list-limit";
 import type { ProductionBatchStatus } from "@prisma/client";
 
 export async function GET(request: Request) {
@@ -18,13 +19,11 @@ export async function GET(request: Request) {
     const status = url.searchParams.get("status") as ProductionBatchStatus | null;
     const branchId = url.searchParams.get("branchId") ?? undefined;
     const recipeId = url.searchParams.get("recipeId") ?? undefined;
-    const limit = url.searchParams.get("limit");
-
     const batches = await getBatches({
       status: status ?? undefined,
       branchId,
       recipeId,
-      limit: limit ? parseInt(limit, 10) : undefined,
+      limit: parseListLimit(url.searchParams.get("limit"), { default: 50 }),
     });
 
     return ok(batches);

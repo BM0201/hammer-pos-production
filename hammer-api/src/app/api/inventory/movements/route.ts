@@ -11,6 +11,7 @@ import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { calculateSuggestedPriceForProduct } from "@/modules/pricing/service";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created, fail } from "@/lib/api/response";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 export async function GET(request: Request) {
   try {
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
     const productId = searchParams.get("productId") ?? undefined;
     const movementType = searchParams.get("movementType") as InventoryMovementType | null;
     const page = Number(searchParams.get("page") ?? 1);
-    const limit = Number(searchParams.get("limit") ?? 30);
+    const limit = parseListLimit(searchParams.get("limit"), { default: 30 });
     const dateFrom = searchParams.get("dateFrom") ?? undefined;
     const dateTo = searchParams.get("dateTo") ?? undefined;
     const search = searchParams.get("search") ?? undefined;

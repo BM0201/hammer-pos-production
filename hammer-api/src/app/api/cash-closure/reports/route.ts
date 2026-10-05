@@ -4,6 +4,7 @@ import { assertAuthenticated } from "@/modules/auth/access";
 import { assertFinanceAccess } from "@/modules/security/rbac-helpers";
 import { getClosureReports } from "@/modules/cash-closure/service";
 import { fail, ok } from "@/lib/api/response";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 // GET: Fetch closure reports (MASTER only)
 export async function GET(request: NextRequest) {
@@ -17,7 +18,7 @@ export async function GET(request: NextRequest) {
     const startDate = request.nextUrl.searchParams.get("startDate") ?? undefined;
     const endDate = request.nextUrl.searchParams.get("endDate") ?? undefined;
     const page = parseInt(request.nextUrl.searchParams.get("page") ?? "1", 10);
-    const limit = parseInt(request.nextUrl.searchParams.get("limit") ?? "50", 10);
+    const limit = parseListLimit(request.nextUrl.searchParams.get("limit"), { default: 50 });
 
     const result = await getClosureReports({ branchId, startDate, endDate, page, limit });
 

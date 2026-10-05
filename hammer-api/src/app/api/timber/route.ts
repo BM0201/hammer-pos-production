@@ -7,6 +7,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { z } from "zod";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created, fail } from "@/lib/api/response";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 /** GET /api/timber — List timber products with optional filters */
 export async function GET(request: Request) {
@@ -27,7 +28,7 @@ export async function GET(request: Request) {
     const search = url.searchParams.get("search") ?? undefined;
     const branchId = url.searchParams.get("branchId") ?? undefined;
     const page = parseInt(url.searchParams.get("page") ?? "1", 10);
-    const limit = parseInt(url.searchParams.get("limit") ?? "20", 10);
+    const limit = parseListLimit(url.searchParams.get("limit"), { default: 20 });
 
     const result = await listTimberProducts({ timberType, search, branchId, page, limit });
     return ok(result);

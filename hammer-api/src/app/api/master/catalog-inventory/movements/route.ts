@@ -4,6 +4,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { ok, fail } from "@/lib/api/response";
 import { listInventoryMovementsPaginated } from "@/modules/inventory/service";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
       productId: searchParams.get("productId") ?? undefined,
       movementType: movementType ?? undefined,
       page: Number(searchParams.get("page") ?? 1),
-      limit: Number(searchParams.get("limit") ?? 30),
+      limit: parseListLimit(searchParams.get("limit"), { default: 30 }),
       dateFrom: searchParams.get("dateFrom") ?? undefined,
       dateTo: searchParams.get("dateTo") ?? undefined,
       search: searchParams.get("search") ?? undefined,

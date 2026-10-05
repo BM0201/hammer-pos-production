@@ -4,6 +4,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toApiErrorResponse } from "@/lib/api/errors";
 import { ok } from "@/lib/api/response";
 import { listReorderAlerts, getReorderAlertCounts } from "@/modules/reorder/service";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 /** GET /api/master/reorder/alerts — list reorder alerts with optional filters */
 export async function GET(req: NextRequest) {
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
       status: url.searchParams.get("status") ?? undefined,
       alertType: url.searchParams.get("alertType") ?? undefined,
       productId: url.searchParams.get("productId") ?? undefined,
-      limit: parseInt(url.searchParams.get("limit") ?? "100"),
+      limit: parseListLimit(url.searchParams.get("limit"), { default: 100 }),
       offset: parseInt(url.searchParams.get("offset") ?? "0"),
     });
 

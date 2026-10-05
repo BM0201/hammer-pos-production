@@ -3,6 +3,7 @@ import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { toHttpErrorResponse } from "@/lib/http";
 import { listDiscountSuggestions } from "@/modules/discounts/service";
 import { ok } from "@/lib/api/response";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 export async function GET(request: Request) {
   try {
@@ -11,8 +12,7 @@ export async function GET(request: Request) {
     assertMaster(session);
 
     const url = new URL(request.url);
-    const limit = Number(url.searchParams.get("limit") ?? "24");
-    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(50, limit)) : 24;
+    const safeLimit = parseListLimit(url.searchParams.get("limit"), { default: 24, max: 50 });
     const data = await listDiscountSuggestions(safeLimit);
     return ok(data);
   } catch (err) {

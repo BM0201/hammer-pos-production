@@ -12,6 +12,7 @@ import { unauthorized, forbidden, ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { isMaster } from "@/modules/rbac/guards";
 import { getAlertCounts, listSecurityAlerts } from "@/modules/security/alerts-service";
+import { isApiRateLimiterConfigured } from "@/modules/security/api-rate-limiter";
 
 const CRITICAL_ROLES = ["MASTER", "OWNER", "SYSTEM_ADMIN"];
 const HOURS_24 = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -88,5 +89,9 @@ export async function GET() {
     usersMissingMfa,
     failedLogins24h: failedLogins,
     criticalActions,
+    // prompt-seguridad-basica.md Fase 3.3 — si Upstash no está configurado,
+    // el rate limiter general falla abierto (sin límite real) de forma
+    // silenciosa; esto lo hace visible en el Security Center.
+    apiRateLimiterConfigured: isApiRateLimiterConfigured(),
   });
 }

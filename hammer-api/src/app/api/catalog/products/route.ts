@@ -9,6 +9,7 @@ import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
 import { ok, okCached, created, fail } from "@/lib/api/response";
 import { withQueryInstrumentation } from "@/lib/query-instrumentation";
+import { parseListLimit } from "@/lib/api/list-limit";
 
 // Auditoría 2026-08-03: globalCost/averageCost/lastPurchaseCost/branchCost/
 // weightedAverageCost/effectiveCost/costSource viajaban siempre en la
@@ -81,7 +82,10 @@ async function handleGet(request: Request) {
     const isActive = isActiveParam === null ? undefined : isActiveParam === "true";
     const topSelling = searchParams.get("topSelling") === "true";
     const limitParam = searchParams.get("limit");
-    const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+    // listProducts() ya por defecto usa 1000 (búsqueda del catálogo sin
+    // paginar) cuando no se pasa limit — ese techo se conserva; solo se
+    // sanea un valor explícito inválido/negativo/gigante.
+    const limit = limitParam ? parseListLimit(limitParam, { default: 1000, max: 1000 }) : undefined;
     const branchId = searchParams.get("branchId") ?? undefined;
     // Opt-in: solo el POS lo activa. El resto de las pantallas (catálogo,
     // reposición, órdenes de compra, recetas, etc.) siguen viendo todo,

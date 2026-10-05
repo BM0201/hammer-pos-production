@@ -141,9 +141,17 @@ export async function checkApiRateLimit(
   if (!limiter) {
     if (!_warnedNotConfigured) {
       _warnedNotConfigured = true;
-      console.warn(
-        "[api-rate-limiter] UPSTASH_REDIS_REST_URL/TOKEN no configurados. Rate limiting general deshabilitado (fail-open).",
-      );
+      const message =
+        "[api-rate-limiter] UPSTASH_REDIS_REST_URL/TOKEN no configurados. Rate limiting general deshabilitado (fail-open).";
+      // prompt-seguridad-basica.md Fase 3.3 — en producción esto es un hueco
+      // de seguridad real (no solo un dev sin .env), no un warning de rutina:
+      // sube a console.error (una vez por instancia) para que no se pierda
+      // entre el ruido normal de logs.
+      if (process.env.NODE_ENV === "production") {
+        console.error(message);
+      } else {
+        console.warn(message);
+      }
     }
     return { allowed: true };
   }
