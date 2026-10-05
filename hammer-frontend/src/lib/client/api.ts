@@ -46,6 +46,15 @@ export interface ApiFetchOptions extends Omit<RequestInit, "headers"> {
    * actual, por ejemplo datos decorativos de la pantalla pública de login.
    */
   suppressAuthRedirect?: boolean;
+  /**
+   * prompt-seguridad-basica.md Fase 2 — por defecto, apiFetch deduplica
+   * mutaciones IDÉNTICAS en vuelo (mismo método+URL+body): un doble click
+   * que dispara dos requests antes de que la primera responda comparte la
+   * MISMA respuesta en vez de pegarle al servidor dos veces. Pasar true solo
+   * cuando dos llamadas con el mismo cuerpo son legítimamente independientes
+   * (poco común).
+   */
+  allowDuplicate?: boolean;
 }
 
 export type ApiSuccess<T> = {
@@ -92,11 +101,41 @@ export function unwrapApiData<T>(payload: ApiResponse<T> | T): T {
   return payload as T;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Deduplicación de mutaciones en vuelo (prompt-seguridad-basica.md Fase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Clave pura para deduplicar una mutación en vuelo — exportada para poder
+ * testearla sin red. `null` significa "nunca deduplicar esta llamada":
+ * métodos seguros (GET/HEAD), o un body que no se puede serializar barato
+ * y sin riesgo (FormData/Blob/ArrayBuffer/stream) — mejor no deduplicar que
+ * arriesgar un falso-positivo comparando referencias de objeto.
+ */
+export function buildMutationDedupeKey(
+  method: string,
+  url: string,
+  body: BodyInit | null | undefined,
+): string | null {
+  const m = method.toUpperCase();
+  if (m === "GET" || m === "HEAD") return null;
+  if (body == null) return `${m} ${url}`;
+  if (typeof body === "string") return `${m} ${url}\n${body}`;
+  return null;
+}
+
+/** Promesas de mutaciones actualmente en vuelo, por clave de deduplicación. */
+const _inFlightMutations = new Map<string, Promise<Response>>();
+
 /**
  * `apiFetch` — drop-in replacement for `fetch()` that:
  *  1. Automatically attaches the `x-csrf-token` header to mutating requests.
  *  2. On a 403 with `reason === "INVALID_CSRF_TOKEN"`, refreshes the CSRF
  *     token and retries the request **once**.
+ *  3. Deduplica mutaciones IDÉNTICAS en vuelo (mismo método+URL+body): un
+ *     doble click/reintento antes de que la primera respuesta llegue
+ *     comparte la MISMA respuesta (clonada por llamador) en vez de disparar
+ *     la operación dos veces contra el servidor.
  *
  * Safe methods (GET / HEAD / OPTIONS) skip CSRF handling entirely.
  */
@@ -104,8 +143,45 @@ export async function apiFetch(
   url: string,
   options: ApiFetchOptions = {},
 ): Promise<Response> {
-  const { suppressAuthRedirect = false, ...fetchOptions } = options;
+  const { suppressAuthRedirect = false, allowDuplicate = false, ...fetchOptions } = options;
   const method = (fetchOptions.method ?? "GET").toUpperCase();
+
+  const dedupeKey = allowDuplicate ? null : buildMutationDedupeKey(method, url, fetchOptions.body ?? null);
+  if (!dedupeKey) {
+    return performApiFetch(url, fetchOptions, method, suppressAuthRedirect);
+  }
+
+  let promise = _inFlightMutations.get(dedupeKey);
+  if (!promise) {
+    promise = performApiFetch(url, fetchOptions, method, suppressAuthRedirect);
+    _inFlightMutations.set(dedupeKey, promise);
+    // Limpia la entrada al asentarse (éxito o error) — nunca deja un registro
+    // colgado que bloquearía reintentos legítimos futuros. La propia promesa
+    // devuelta al llamador original no se toca acá (su rechazo sigue siendo
+    // responsabilidad de quien llamó a apiFetch).
+    promise
+      .finally(() => {
+        if (_inFlightMutations.get(dedupeKey) === promise) {
+          _inFlightMutations.delete(dedupeKey);
+        }
+      })
+      .catch(() => {});
+  }
+
+  // TODOS los llamadores (incluido el que disparó el fetch real) reciben un
+  // clone — nunca la respuesta original sin clonar. Así el orden en que cada
+  // llamador lee el body (json()/text()) no puede romper el clone() de otro:
+  // clonar una Response no leída es seguro sin importar cuántas veces se haga.
+  const shared = await promise;
+  return shared.clone();
+}
+
+async function performApiFetch(
+  url: string,
+  fetchOptions: Omit<ApiFetchOptions, "suppressAuthRedirect" | "allowDuplicate">,
+  method: string,
+  suppressAuthRedirect: boolean,
+): Promise<Response> {
   const isSafe = ["GET", "HEAD", "OPTIONS"].includes(method);
   const pathname = typeof window === "undefined" ? url : new URL(url, window.location.origin).pathname;
   const requiresCsrf = !isSafe && !PUBLIC_MUTATION_PATHS.has(pathname);
