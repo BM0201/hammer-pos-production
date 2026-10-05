@@ -121,19 +121,29 @@ export async function getEmployeeLoan(id: string) {
   });
 }
 
-export async function updateEmployeeLoan(id: string, input: UpdateEmployeeLoanInput, actorUserId?: string) {
+/**
+ * prompt-seguridad-basica.md Fase 1 — mismo patrón lock+CAS que el resto del
+ * módulo. `status` es un campo string ("ACTIVE"|"PAID"|"CANCELLED"), no un
+ * enum, pero el CAS funciona igual.
+ */
+export async function updateEmployeeLoanTx(
+  tx: Prisma.TransactionClient,
+  id: string,
+  input: UpdateEmployeeLoanInput,
+  actorUserId?: string,
+) {
   if (input.installmentAmount !== undefined && input.installmentAmount !== null) {
     assertPositiveAmount(input.installmentAmount, "installmentAmount");
   }
 
-  const existing = await prisma.employeeLoan.findUnique({ where: { id } });
-  if (!existing) throw new Error("EMPLOYEE_LOAN_NOT_FOUND");
-  if (existing.status !== "ACTIVE") {
-    throw new Error("INVALID_INPUT: Solo se pueden editar prestamos activos");
-  }
+  await tx.$queryRaw`SELECT id FROM "EmployeeLoan" WHERE id = ${id} FOR UPDATE`;
 
-  const loan = await prisma.employeeLoan.update({
-    where: { id },
+  const existing = await tx.employeeLoan.findUnique({ where: { id } });
+  if (!existing) throw new Error("EMPLOYEE_LOAN_NOT_FOUND");
+  if (existing.status !== "ACTIVE") throw new Error("ALREADY_PROCESSED");
+
+  const updateResult = await tx.employeeLoan.updateMany({
+    where: { id, status: "ACTIVE" },
     data: {
       ...(input.installmentAmount !== undefined
         ? { installmentAmount: input.installmentAmount === null ? null : toDecimal(input.installmentAmount) }
@@ -143,6 +153,11 @@ export async function updateEmployeeLoan(id: string, input: UpdateEmployeeLoanIn
         : {}),
       ...(input.notes !== undefined ? { notes: input.notes?.trim() || null } : {}),
     },
+  });
+  if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+
+  const loan = await tx.employeeLoan.findUniqueOrThrow({
+    where: { id },
     include: {
       employee: { select: { id: true, fullName: true, position: true } },
       branch: { select: { id: true, code: true, name: true } },
@@ -150,29 +165,112 @@ export async function updateEmployeeLoan(id: string, input: UpdateEmployeeLoanIn
     },
   });
 
-  await logAuditEvent({
-    actorUserId,
-    branchId: loan.branchId,
-    module: "payroll",
-    action: "employee_loan.updated",
-    entityType: "EmployeeLoan",
-    entityId: loan.id,
-    metadataJson: input,
+  await tx.auditLog.create({
+    data: {
+      actorUserId: actorUserId ?? null,
+      branchId: loan.branchId,
+      module: "payroll",
+      action: "employee_loan.updated",
+      entityType: "EmployeeLoan",
+      entityId: loan.id,
+      metadataJson: input as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return loan;
+}
+
+export async function updateEmployeeLoan(id: string, input: UpdateEmployeeLoanInput, actorUserId?: string) {
+  return prisma.$transaction((tx) => updateEmployeeLoanTx(tx, id, input, actorUserId));
+}
+
+export async function cancelEmployeeLoanTx(tx: Prisma.TransactionClient, id: string, actorUserId?: string) {
+  await tx.$queryRaw`SELECT id FROM "EmployeeLoan" WHERE id = ${id} FOR UPDATE`;
+
+  const existing = await tx.employeeLoan.findUnique({ where: { id } });
+  if (!existing) throw new Error("EMPLOYEE_LOAN_NOT_FOUND");
+  if (existing.status !== "ACTIVE") throw new Error("ALREADY_PROCESSED");
+
+  const updateResult = await tx.employeeLoan.updateMany({
+    where: { id, status: "ACTIVE" },
+    data: { status: "CANCELLED" },
+  });
+  if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+
+  const loan = await tx.employeeLoan.findUniqueOrThrow({
+    where: { id },
+    include: {
+      employee: { select: { id: true, fullName: true, position: true } },
+      branch: { select: { id: true, code: true, name: true } },
+      installments: { orderBy: { createdAt: "desc" }, take: 12 },
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: actorUserId ?? null,
+      branchId: loan.branchId,
+      module: "payroll",
+      action: "employee_loan.cancelled",
+      entityType: "EmployeeLoan",
+      entityId: loan.id,
+      metadataJson: { outstandingBalance: loan.outstandingBalance.toString() } as unknown as Prisma.InputJsonValue,
+    },
   });
 
   return loan;
 }
 
 export async function cancelEmployeeLoan(id: string, actorUserId?: string) {
-  const existing = await prisma.employeeLoan.findUnique({ where: { id } });
+  return prisma.$transaction((tx) => cancelEmployeeLoanTx(tx, id, actorUserId));
+}
+
+/**
+ * prompt-seguridad-basica.md Fase 1 — esto YA corría dentro de su propia
+ * transacción, pero sin FOR UPDATE: dos pagos concurrentes leían el MISMO
+ * outstandingBalance y cada uno restaba desde ahí — un pago se perdía
+ * (lost update) aunque las dos cuotas (EmployeeLoanInstallment) quedaran
+ * creadas. El lock serializa: el segundo pago, tras obtener el lock, lee el
+ * balance YA actualizado por el primero.
+ */
+export async function registerManualLoanPaymentTx(
+  tx: Prisma.TransactionClient,
+  id: string,
+  amount: number,
+  actorUserId?: string,
+) {
+  assertPositiveAmount(amount, "amount");
+
+  await tx.$queryRaw`SELECT id FROM "EmployeeLoan" WHERE id = ${id} FOR UPDATE`;
+
+  const existing = await tx.employeeLoan.findUnique({ where: { id } });
   if (!existing) throw new Error("EMPLOYEE_LOAN_NOT_FOUND");
   if (existing.status !== "ACTIVE") {
-    throw new Error("INVALID_INPUT: Solo se pueden cancelar prestamos activos");
+    throw new Error("INVALID_INPUT: Solo se pueden registrar pagos en prestamos activos");
   }
 
-  const loan = await prisma.employeeLoan.update({
+  const currentBalance = Number(existing.outstandingBalance);
+  const paymentAmount = Math.min(amount, currentBalance);
+  const nextBalance = Math.max(0, currentBalance - paymentAmount);
+  const now = new Date();
+
+  await tx.employeeLoanInstallment.create({
+    data: {
+      loanId: existing.id,
+      dueYear: now.getFullYear(),
+      dueMonth: now.getMonth() + 1,
+      amount: toDecimal(paymentAmount),
+      status: "PAID",
+      deductedAt: now,
+    },
+  });
+
+  const loan = await tx.employeeLoan.update({
     where: { id },
-    data: { status: "CANCELLED" },
+    data: {
+      outstandingBalance: toDecimal(nextBalance),
+      status: nextBalance <= 0 ? "PAID" : "ACTIVE",
+    },
     include: {
       employee: { select: { id: true, fullName: true, position: true } },
       branch: { select: { id: true, code: true, name: true } },
@@ -180,68 +278,21 @@ export async function cancelEmployeeLoan(id: string, actorUserId?: string) {
     },
   });
 
-  await logAuditEvent({
-    actorUserId,
-    branchId: loan.branchId,
-    module: "payroll",
-    action: "employee_loan.cancelled",
-    entityType: "EmployeeLoan",
-    entityId: loan.id,
-    metadataJson: { outstandingBalance: loan.outstandingBalance.toString() },
+  await tx.auditLog.create({
+    data: {
+      actorUserId: actorUserId ?? null,
+      branchId: loan.branchId,
+      module: "payroll",
+      action: "employee_loan.manual_payment",
+      entityType: "EmployeeLoan",
+      entityId: loan.id,
+      metadataJson: { amount: paymentAmount, outstandingBalance: nextBalance } as unknown as Prisma.InputJsonValue,
+    },
   });
 
   return loan;
 }
 
 export async function registerManualLoanPayment(id: string, amount: number, actorUserId?: string) {
-  assertPositiveAmount(amount, "amount");
-
-  return prisma.$transaction(async (tx) => {
-    const existing = await tx.employeeLoan.findUnique({ where: { id } });
-    if (!existing) throw new Error("EMPLOYEE_LOAN_NOT_FOUND");
-    if (existing.status !== "ACTIVE") {
-      throw new Error("INVALID_INPUT: Solo se pueden registrar pagos en prestamos activos");
-    }
-
-    const currentBalance = Number(existing.outstandingBalance);
-    const paymentAmount = Math.min(amount, currentBalance);
-    const nextBalance = Math.max(0, currentBalance - paymentAmount);
-    const now = new Date();
-
-    await tx.employeeLoanInstallment.create({
-      data: {
-        loanId: existing.id,
-        dueYear: now.getFullYear(),
-        dueMonth: now.getMonth() + 1,
-        amount: toDecimal(paymentAmount),
-        status: "PAID",
-        deductedAt: now,
-      },
-    });
-
-    const loan = await tx.employeeLoan.update({
-      where: { id },
-      data: {
-        outstandingBalance: toDecimal(nextBalance),
-        status: nextBalance <= 0 ? "PAID" : "ACTIVE",
-      },
-      include: {
-        employee: { select: { id: true, fullName: true, position: true } },
-        branch: { select: { id: true, code: true, name: true } },
-        installments: { orderBy: { createdAt: "desc" }, take: 12 },
-      },
-    });
-
-    await logAuditEvent({
-      actorUserId,
-      branchId: loan.branchId,
-      module: "payroll",
-      action: "employee_loan.manual_payment",
-      entityType: "EmployeeLoan",
-      entityId: loan.id,
-      metadataJson: { amount: paymentAmount, outstandingBalance: nextBalance },
-    });
-
-    return loan;
-  });
+  return prisma.$transaction((tx) => registerManualLoanPaymentTx(tx, id, amount, actorUserId));
 }

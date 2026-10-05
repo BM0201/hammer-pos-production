@@ -529,70 +529,101 @@ export async function createPurchaseOrder(input: CreatePOInput, db: Prisma.Trans
   return po;
 }
 
-/* ── Approve (adds to inventory) ── */
-export async function approvePurchaseOrder(id: string, userId: string) {
-  const po = await prisma.purchaseOrder.findUnique({
+/**
+ * prompt-seguridad-basica.md Fase 1 — ya tenía un CAS (updateMany
+ * where:status=DRAFT) pero el `findUnique` inicial corría fuera de la
+ * transacción y sin lock, y el error de count=0 usaba un código propio del
+ * módulo. Se agrega el lock (defensa primaria: serializa el segundo intento
+ * contra el primero) y se estandariza a ALREADY_PROCESSED (igual que
+ * traslados/producción), sin cambiar el comportamiento ya correcto.
+ */
+export async function approvePurchaseOrderTx(tx: Prisma.TransactionClient, id: string, userId: string) {
+  await tx.$queryRaw`SELECT id FROM "PurchaseOrder" WHERE id = ${id} FOR UPDATE`;
+
+  const po = await tx.purchaseOrder.findUnique({
     where: { id },
     include: { lines: { include: { product: true } }, branch: true, supplierRef: true },
   });
-
   if (!po) throw new Error("NOT_FOUND");
-  if (po.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden aprobar pedidos en estado BORRADOR");
+  if (po.status !== "DRAFT") throw new Error("ALREADY_PROCESSED");
 
-  const result = await prisma.$transaction(async (tx) => {
-    const updated = await tx.purchaseOrder.updateMany({
-      where: { id, status: "DRAFT" },
-      data: { status: "APPROVED" },
-    });
-    if (updated.count === 0) {
-      throw new Error("INVALID_INPUT: El pedido ya no esta en estado BORRADOR");
-    }
-
-    return tx.purchaseOrder.findUniqueOrThrow({ where: { id } });
+  const updated = await tx.purchaseOrder.updateMany({
+    where: { id, status: "DRAFT" },
+    data: { status: "APPROVED" },
   });
+  if (updated.count === 0) throw new Error("ALREADY_PROCESSED");
 
-  await logAuditEvent({
-    actorUserId: userId,
-    branchId: po.branchId,
-    module: "purchase-orders",
-    action: "PURCHASE_ORDER_APPROVED",
-    entityType: "PurchaseOrder",
-    entityId: po.id,
-    metadataJson: {
-      orderNumber: po.orderNumber,
-      total: po.total.toString(),
-      linesCount: po.lines.length,
-      branchCode: po.branch.code,
-      previousStatus: po.status,
-      newStatus: "APPROVED",
-      approvedAt: new Date().toISOString(),
+  await tx.auditLog.create({
+    data: {
+      actorUserId: userId,
+      branchId: po.branchId,
+      module: "purchase-orders",
+      action: "PURCHASE_ORDER_APPROVED",
+      entityType: "PurchaseOrder",
+      entityId: po.id,
+      metadataJson: {
+        orderNumber: po.orderNumber,
+        total: po.total.toString(),
+        linesCount: po.lines.length,
+        branchCode: po.branch.code,
+        previousStatus: po.status,
+        newStatus: "APPROVED",
+        approvedAt: new Date().toISOString(),
+      } as unknown as Prisma.InputJsonValue,
     },
   });
 
-  return result;
+  return tx.purchaseOrder.findUniqueOrThrow({ where: { id } });
 }
 
-export async function receivePurchaseOrder(id: string, userId: string, input: ReceivePurchaseOrderInput = {}) {
-  const po = await prisma.purchaseOrder.findUnique({
+/* ── Approve (adds to inventory) ── */
+export async function approvePurchaseOrder(id: string, userId: string) {
+  return prisma.$transaction((tx) => approvePurchaseOrderTx(tx, id, userId));
+}
+
+/**
+ * prompt-seguridad-basica.md Fase 1 — PurchaseOrderStatus NO tiene un estado
+ * "PARTIALLY_RECEIVED": una recepción parcial deja la orden en APROBADO, el
+ * mismo estado que antes. Un CAS sobre el status (APPROVED→APPROVED) NO
+ * frena por sí solo una segunda recepción parcial concurrente — lo que
+ * realmente lo frena es recalcular `pendingByProduct` (y todo lo que
+ * depende de él: `defaultItems`/`requestedItems`/`totalReceiveQty`/
+ * `freightPerUnit`) DESPUÉS del lock, leyendo `previousMovements` con `tx`
+ * (no con `prisma`): el segundo intento, una vez que obtiene el lock, ve
+ * los movimientos YA insertados por el primero y calcula "pendiente"
+ * correctamente. El Tesorería ya bloquea esta misma fila FOR UPDATE al
+ * pagar un pedido (treasury/service.ts), así que este lock también
+ * serializa recepción contra pago.
+ */
+export async function receivePurchaseOrderTx(
+  tx: Prisma.TransactionClient,
+  id: string,
+  userId: string,
+  input: ReceivePurchaseOrderInput = {},
+) {
+  await tx.$queryRaw`SELECT id FROM "PurchaseOrder" WHERE id = ${id} FOR UPDATE`;
+
+  const po = await tx.purchaseOrder.findUnique({
     where: { id },
     include: { lines: { include: { product: true } }, branch: true },
   });
 
   if (!po) throw new Error("NOT_FOUND");
-  if (po.status === "RECEIVED") throw new Error("INVALID_INPUT: Este pedido ya fue recibido completamente");
+  if (po.status === "RECEIVED") throw new Error("ALREADY_PROCESSED");
   if (po.status !== "APPROVED") throw new Error("INVALID_INPUT: Solo se pueden recibir pedidos en estado APROBADO");
   if (input.branchId && input.branchId !== po.branchId) throw new Error("INVALID_INPUT: La sucursal de recepcion no coincide con el pedido");
+  const statusAtLock = po.status;
 
   const lineStockResolutions = await Promise.all(po.lines.map(async (line) => ({
     lineId: line.id,
     productId: line.productId,
-    ...(await resolveInventoryProductForMovement(prisma, line.productId)),
+    ...(await resolveInventoryProductForMovement(tx, line.productId)),
   })));
   const stockResolutionByProductId = new Map(lineStockResolutions.map((row) => [row.productId, row]));
   const stockResolutionByLineId = new Map(lineStockResolutions.map((row) => [row.lineId, row]));
   const inventoryProductIds = Array.from(new Set(lineStockResolutions.map((row) => row.inventoryProductId)));
 
-  const previousMovements = await prisma.inventoryMovement.groupBy({
+  const previousMovements = await tx.inventoryMovement.groupBy({
     by: ["productId"],
     where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN", productId: { in: inventoryProductIds } },
     _sum: { quantity: true },
@@ -625,7 +656,7 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
   const otherPerUnit = totalReceiveQty > 0 ? nonNegative(input.otherChargesAmount) / totalReceiveQty : 0;
   const warnings: string[] = [];
 
-  const result = await prisma.$transaction(async (tx) => {
+  {
     const receivedLines = [];
 
     for (const item of requestedItems) {
@@ -676,7 +707,7 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
           });
 
       const pricing = await getEffectiveProductPricing(tx, { branchId: po.branchId, productId: line.productId });
-      const policy = await resolvePolicyForProduct({ branchId: po.branchId, productId: line.productId });
+      const policy = await resolvePolicyForProduct({ branchId: po.branchId, productId: line.productId }, tx);
       const effectivePrice = pricing.effectivePrice === null ? null : Number(pricing.effectivePrice);
       const effectiveCost = pricing.effectiveCost === null ? null : Number(pricing.effectiveCost);
       const margin = effectivePrice === null ? null : marginPercent(effectivePrice, effectiveCost);
@@ -782,45 +813,60 @@ export async function receivePurchaseOrder(id: string, userId: string, input: Re
         ? new Date(Date.now() + po.paymentTermDaysSnapshot * 24 * 60 * 60 * 1000)
         : new Date()
     );
-    await tx.purchaseOrder.update({
-      where: { id },
-      data: { status: fullyReceived ? "RECEIVED" : "APPROVED", dueDate },
+    const newStatus = fullyReceived ? "RECEIVED" : "APPROVED";
+    const updateResult = await tx.purchaseOrder.updateMany({
+      where: { id, status: statusAtLock },
+      data: { status: newStatus, dueDate },
+    });
+    if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+
+    const statusAfter = fullyReceived ? "RECEIVED" : "PARTIALLY_RECEIVED";
+
+    await tx.auditLog.create({
+      data: {
+        actorUserId: userId,
+        branchId: po.branchId,
+        module: "purchase-orders",
+        action: "PURCHASE_ORDER_RECEIVED",
+        entityType: "PurchaseOrder",
+        entityId: po.id,
+        metadataJson: {
+          orderNumber: po.orderNumber,
+          total: po.total.toString(),
+          linesCount: receivedLines.length,
+          branchCode: po.branch.code,
+          statusAfter,
+          warnings,
+          supplierId: po.supplierId,
+          supplierName: po.supplierNameSnapshot ?? po.supplier ?? null,
+        } as unknown as Prisma.InputJsonValue,
+      },
     });
 
     return {
       ok: true,
       purchaseOrderId: po.id,
-      statusAfter: fullyReceived ? "RECEIVED" : "PARTIALLY_RECEIVED",
+      statusAfter,
       receivedLines,
       warnings,
     };
-  });
-
-  await logAuditEvent({
-    actorUserId: userId,
-    branchId: po.branchId,
-    module: "purchase-orders",
-    action: "PURCHASE_ORDER_RECEIVED",
-    entityType: "PurchaseOrder",
-    entityId: po.id,
-    metadataJson: {
-      orderNumber: po.orderNumber,
-      total: po.total.toString(),
-      linesCount: result.receivedLines.length,
-      branchCode: po.branch.code,
-      statusAfter: result.statusAfter,
-      warnings: result.warnings,
-      supplierId: po.supplierId,
-      supplierName: po.supplierNameSnapshot ?? po.supplier ?? null,
-    },
-  });
-
-  return result;
+  }
 }
 
-/* ── Cancel ── */
-export async function cancelPurchaseOrder(id: string, userId: string) {
-  const po = await prisma.purchaseOrder.findUnique({
+export async function receivePurchaseOrder(id: string, userId: string, input: ReceivePurchaseOrderInput = {}) {
+  return prisma.$transaction((tx) => receivePurchaseOrderTx(tx, id, userId, input));
+}
+
+/**
+ * prompt-seguridad-basica.md Fase 1 — mismo patrón lock+CAS. El conteo de
+ * `receivedMovements` es informativo (va al audit log), no participa de la
+ * condición de carrera: se lee DESPUÉS del lock para que el mensaje de
+ * advertencia refleje el estado real al momento de cancelar.
+ */
+export async function cancelPurchaseOrderTx(tx: Prisma.TransactionClient, id: string, userId: string) {
+  await tx.$queryRaw`SELECT id FROM "PurchaseOrder" WHERE id = ${id} FOR UPDATE`;
+
+  const po = await tx.purchaseOrder.findUnique({
     where: { id },
     include: {
       branch: { select: { id: true, code: true, name: true } },
@@ -828,37 +874,46 @@ export async function cancelPurchaseOrder(id: string, userId: string) {
     },
   });
   if (!po) throw new Error("NOT_FOUND");
-  if (!["DRAFT", "APPROVED"].includes(po.status)) throw new Error("INVALID_INPUT: Solo se pueden cancelar pedidos en borrador o aprobados");
-  const receivedMovements = await prisma.inventoryMovement.count({
+  if (!["DRAFT", "APPROVED"].includes(po.status)) throw new Error("ALREADY_PROCESSED");
+
+  const receivedMovements = await tx.inventoryMovement.count({
     where: { referenceType: "PurchaseOrder", referenceId: po.id, movementType: "PURCHASE_IN" },
   });
 
-  const result = await prisma.purchaseOrder.update({
-    where: { id },
+  const updateResult = await tx.purchaseOrder.updateMany({
+    where: { id, status: po.status },
     data: { status: "CANCELLED" },
   });
+  if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
 
-  await logAuditEvent({
-    actorUserId: userId,
-    branchId: po.branchId,
-    module: "purchase-orders",
-    action: "PURCHASE_ORDER_CANCELLED",
-    entityType: "PurchaseOrder",
-    entityId: po.id,
-    metadataJson: {
-      orderNumber: po.orderNumber,
+  await tx.auditLog.create({
+    data: {
+      actorUserId: userId,
       branchId: po.branchId,
-      branchCode: po.branch.code,
-      supplier: po.supplier,
-      total: po.total.toString(),
-      linesCount: po.lines.length,
-      cancelledByUserId: userId,
-      previousStatus: po.status,
-      newStatus: "CANCELLED",
-      receivedMovements,
-      warning: receivedMovements > 0 ? "Pedido con recepciones parciales; se cancela solo el pendiente." : null,
+      module: "purchase-orders",
+      action: "PURCHASE_ORDER_CANCELLED",
+      entityType: "PurchaseOrder",
+      entityId: po.id,
+      metadataJson: {
+        orderNumber: po.orderNumber,
+        branchId: po.branchId,
+        branchCode: po.branch.code,
+        supplier: po.supplier,
+        total: po.total.toString(),
+        linesCount: po.lines.length,
+        cancelledByUserId: userId,
+        previousStatus: po.status,
+        newStatus: "CANCELLED",
+        receivedMovements,
+        warning: receivedMovements > 0 ? "Pedido con recepciones parciales; se cancela solo el pendiente." : null,
+      } as unknown as Prisma.InputJsonValue,
     },
   });
 
-  return result;
+  return tx.purchaseOrder.findUniqueOrThrow({ where: { id } });
+}
+
+/* ── Cancel ── */
+export async function cancelPurchaseOrder(id: string, userId: string) {
+  return prisma.$transaction((tx) => cancelPurchaseOrderTx(tx, id, userId));
 }

@@ -1,6 +1,5 @@
 import { Prisma, PayrollDisbursementPeriod, PayrollDisbursementStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { logAuditEvent } from "@/modules/audit/service";
 import { tryApplyPayrollCashOutNow } from "@/modules/payroll/payroll-cash-sync";
 import { splitNetPayBiweekly } from "@/modules/payroll/biweekly-split";
 import { paydayFor } from "@/modules/payroll/payday-calendar";
@@ -119,12 +118,23 @@ export async function getDisbursementPeriodsForMonth(
  * el libro de gastos. La utilidad real ya lo toma del desembolso PAID
  * (finance/service.ts) y la salida física la registra payroll-cash-sync.
  */
-export async function payDisbursementsForPeriod(
+/**
+ * prompt-seguridad-basica.md Fase 1 — antes, el loop hacía un `update`
+ * incondicional por fila: repetir "Pagar todo" (doble clic o reintento de
+ * red) pagaba dos veces el mismo desembolso. Cada fila usa su PROPIA
+ * `updateMany` CAS (where status=PENDING); si otra ejecución ya la pagó,
+ * `count===0` y se salta en silencio (sin error) — así repetir la acción
+ * completa sigue siendo seguro: las filas ya pagadas no se tocan, las que
+ * faltan se pagan. No hace falta un lock explícito aparte: el propio
+ * `updateMany` sobre un id puntual ya bloquea esa fila a nivel de Postgres.
+ */
+export async function payDisbursementsForPeriodTx(
+  tx: Prisma.TransactionClient,
   payrollRunId: string,
   period: "FIRST_HALF" | "SECOND_HALF",
   actorUserId: string,
-): Promise<{ paid: number; cashSync: Array<{ branchId: string; applied: boolean; appliedGroups?: number; reason?: string }> }> {
-  const run = await prisma.payrollRun.findUnique({ where: { id: payrollRunId } });
+): Promise<{ paidIds: string[]; affectedBranchIds: string[] }> {
+  const run = await tx.payrollRun.findUnique({ where: { id: payrollRunId } });
   if (!run) throw new Error("PAYROLL_RUN_NOT_FOUND");
   if (run.status !== "POSTED") {
     throw new Error(
@@ -135,30 +145,27 @@ export async function payDisbursementsForPeriod(
   const periodEnum =
     period === "FIRST_HALF" ? PayrollDisbursementPeriod.FIRST_HALF : PayrollDisbursementPeriod.SECOND_HALF;
 
-  const disbursements = await prisma.payrollDisbursement.findMany({
+  const disbursements = await tx.payrollDisbursement.findMany({
     where: { payrollRunId, period: periodEnum, status: PayrollDisbursementStatus.PENDING },
-    include: { employee: { select: { id: true, fullName: true } } },
   });
 
-  if (disbursements.length === 0) {
-    return { paid: 0, cashSync: [] };
-  }
-
   const now = new Date();
-  let paid = 0;
+  const paidIds: string[] = [];
+  const affectedBranchIds = new Set<string>();
 
-  await prisma.$transaction(async (tx) => {
-    for (const d of disbursements) {
-      await tx.payrollDisbursement.update({
-        where: { id: d.id },
-        data: {
-          status: PayrollDisbursementStatus.PAID,
-          paidAt: now,
-          paidByUserId: actorUserId,
-        },
-      });
+  for (const d of disbursements) {
+    const updateResult = await tx.payrollDisbursement.updateMany({
+      where: { id: d.id, status: PayrollDisbursementStatus.PENDING },
+      data: {
+        status: PayrollDisbursementStatus.PAID,
+        paidAt: now,
+        paidByUserId: actorUserId,
+      },
+    });
+    if (updateResult.count === 0) continue;
 
-      await logAuditEvent({
+    await tx.auditLog.create({
+      data: {
         actorUserId,
         branchId: d.branchId,
         module: "payroll",
@@ -171,21 +178,37 @@ export async function payDisbursementsForPeriod(
           amount: Number(d.amount),
           employeeId: d.employeeId,
           scheduledDate: d.scheduledDate,
-        },
-      });
+        } as unknown as Prisma.InputJsonValue,
+      },
+    });
 
-      paid++;
-    }
-  });
+    paidIds.push(d.id);
+    affectedBranchIds.add(d.branchId);
+  }
+
+  return { paidIds, affectedBranchIds: [...affectedBranchIds] };
+}
+
+export async function payDisbursementsForPeriod(
+  payrollRunId: string,
+  period: "FIRST_HALF" | "SECOND_HALF",
+  actorUserId: string,
+): Promise<{ paid: number; cashSync: Array<{ branchId: string; applied: boolean; appliedGroups?: number; reason?: string }> }> {
+  const { paidIds, affectedBranchIds } = await prisma.$transaction((tx) =>
+    payDisbursementsForPeriodTx(tx, payrollRunId, period, actorUserId),
+  );
+
+  if (paidIds.length === 0) {
+    return { paid: 0, cashSync: [] };
+  }
 
   // Intentar aplicar a caja inmediatamente en cada sucursal afectada
-  const affectedBranchIds = [...new Set(disbursements.map((d) => d.branchId))];
   const cashSyncResults = await Promise.all(
     affectedBranchIds.map((branchId) => tryApplyPayrollCashOutNow(branchId, actorUserId)),
   );
 
   return {
-    paid,
+    paid: paidIds.length,
     cashSync: affectedBranchIds.map((branchId, i) => ({ branchId, ...cashSyncResults[i] })),
   };
 }

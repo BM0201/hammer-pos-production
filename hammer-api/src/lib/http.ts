@@ -127,6 +127,13 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "BATCH_ALREADY_PROCESSED") {
       return errJson("BATCH_ALREADY_PROCESSED", "Este lote ya fue procesado por otra acción — recargá la página.", 409);
     }
+    // prompt-seguridad-basica.md Fase 1 — código genérico (no uno distinto
+    // por módulo) para el mismo patrón lock+CAS aplicado a traslados,
+    // compras y planilla: el segundo intento sobre una operación que ya
+    // cambió de estado recibe esto, no un 500 ni un 400 de validación.
+    if (error.message === "ALREADY_PROCESSED") {
+      return errJson("ALREADY_PROCESSED", "Esta operación ya se procesó. Actualizá la pantalla.", 409);
+    }
     if (error.message.startsWith("INSUFFICIENT_STOCK_TO_REVERSE:")) {
       return errJson("INSUFFICIENT_STOCK_TO_REVERSE", error.message.replace(/^INSUFFICIENT_STOCK_TO_REVERSE:\s?/, ""), 409);
     }

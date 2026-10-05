@@ -1,4 +1,4 @@
-import { ApprovalStatus, ApprovalType } from "@prisma/client";
+import { ApprovalStatus, ApprovalType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import type { CreateApprovalInput, ListApprovalInput, ResolveApprovalInput } from "@/modules/approvals/types";
@@ -93,43 +93,65 @@ export const approvalService: ApprovalService = {
   },
 
   async resolveRequest(input) {
-    const request = await prisma.approvalRequest.findUniqueOrThrow({
-      where: { id: input.requestId },
-    });
+    return prisma.$transaction((tx) => resolveRequestTx(tx, input));
+  },
+};
 
-    try {
-      assertNoSelfApproval(request.requestedByUserId, input.actorUserId);
-    } catch (error) {
-      await logAuditEvent({
+/**
+ * prompt-seguridad-basica.md Fase 1, hallazgo del barrido — esta es la
+ * compuerta GENÉRICA detrás de STOCK_ADJUSTMENT/DISPATCH_OVERRIDE/
+ * RETAINED_CASH_EXPENSE/PRICE_OVERRIDE (ver app/api/approvals/[id]/route.ts):
+ * antes leía fuera de transacción y actualizaba sin condición — un doble
+ * click en "Aprobar" pasaba el chequeo de estado dos veces y la ruta
+ * ejecutaba la acción real (ajuste de inventario, despacho forzado, gasto de
+ * caja retenida, override de precio) DOS VECES, aunque esas funciones
+ * downstream ya estuvieran endurecidas por su cuenta — el defecto estaba acá,
+ * un nivel más arriba. Mismo patrón lock+CAS que el resto de este módulo.
+ */
+export async function resolveRequestTx(tx: Prisma.TransactionClient, input: ResolveApprovalInput) {
+  await tx.$queryRaw`SELECT id FROM "ApprovalRequest" WHERE id = ${input.requestId} FOR UPDATE`;
+
+  const request = await tx.approvalRequest.findUniqueOrThrow({
+    where: { id: input.requestId },
+  });
+
+  try {
+    assertNoSelfApproval(request.requestedByUserId, input.actorUserId);
+  } catch (error) {
+    await tx.auditLog.create({
+      data: {
         actorUserId: input.actorUserId,
         branchId: request.branchId,
         module: "approvals",
         action: "APPROVAL_SELF_REVIEW_DENIED",
         entityType: "ApprovalRequest",
         entityId: request.id,
-        metadataJson: {
-          reason: "SELF_APPROVAL_BLOCKED",
-        },
-      });
-      throw error;
-    }
-
-    if (request.status !== ApprovalStatus.REQUESTED && request.status !== ApprovalStatus.UNDER_REVIEW) {
-      throw new Error("APPROVAL_ALREADY_RESOLVED");
-    }
-
-    const nextStatus = input.decision === "APPROVE" ? ApprovalStatus.APPROVED : ApprovalStatus.REJECTED;
-    const updated = await prisma.approvalRequest.update({
-      where: { id: input.requestId },
-      data: {
-        status: nextStatus,
-        resolvedByUserId: input.actorUserId,
-        resolvedAt: new Date(),
-        resolutionNotes: input.resolutionNotes ?? null,
+        metadataJson: { reason: "SELF_APPROVAL_BLOCKED" } as unknown as Prisma.InputJsonValue,
       },
     });
+    throw error;
+  }
 
-    await logAuditEvent({
+  if (request.status !== ApprovalStatus.REQUESTED && request.status !== ApprovalStatus.UNDER_REVIEW) {
+    throw new Error("APPROVAL_ALREADY_RESOLVED");
+  }
+
+  const nextStatus = input.decision === "APPROVE" ? ApprovalStatus.APPROVED : ApprovalStatus.REJECTED;
+  const updateResult = await tx.approvalRequest.updateMany({
+    where: { id: input.requestId, status: request.status },
+    data: {
+      status: nextStatus,
+      resolvedByUserId: input.actorUserId,
+      resolvedAt: new Date(),
+      resolutionNotes: input.resolutionNotes ?? null,
+    },
+  });
+  if (updateResult.count === 0) throw new Error("APPROVAL_ALREADY_RESOLVED");
+
+  const updated = await tx.approvalRequest.findUniqueOrThrow({ where: { id: input.requestId } });
+
+  await tx.auditLog.create({
+    data: {
       actorUserId: input.actorUserId,
       branchId: updated.branchId,
       module: "approvals",
@@ -139,9 +161,9 @@ export const approvalService: ApprovalService = {
       metadataJson: {
         decision: input.decision,
         status: updated.status,
-      },
-    });
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
 
-    return { requestId: updated.id, status: updated.status };
-  },
-};
+  return { requestId: updated.id, status: updated.status };
+}

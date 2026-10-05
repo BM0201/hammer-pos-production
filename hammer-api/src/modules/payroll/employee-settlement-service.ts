@@ -16,7 +16,6 @@
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { logAuditEvent } from "@/modules/audit/service";
 import { aguinaldoAccrued, indemnizacionPayout, vacationDaysAccrued, vacationPayout } from "./prestaciones-sociales";
 import { vacationDaysTakenByEmployee } from "./employee-vacation-service";
 
@@ -51,7 +50,23 @@ function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
-export async function settleEmployee(employeeId: string, input: SettleEmployeeInput, actorUserId?: string) {
+/**
+ * prompt-seguridad-basica.md Fase 1 — Employee no tiene un campo "status":
+ * ROLLOVER mantiene isActive=true (solo cambia lastLiquidationAt), así que un
+ * CAS plano `where:{isActive:true}` NO frena un doble-ROLLOVER concurrente —
+ * hace falta anclar también `lastLiquidationAt` al valor leído BAJO EL LOCK.
+ * TERMINATION sí pone isActive=false, así que ahí `where:{isActive:true}`
+ * alcanza. El lock (FOR UPDATE) serializa el segundo intento contra el
+ * primero; todas las lecturas (empleado, préstamos activos, vacaciones
+ * tomadas) se mueven DESPUÉS del lock para que el segundo intento calcule
+ * sobre el estado YA actualizado por el primero.
+ */
+export async function settleEmployeeTx(
+  tx: Prisma.TransactionClient,
+  employeeId: string,
+  input: SettleEmployeeInput,
+  actorUserId?: string,
+) {
   if (!SETTLEMENT_KINDS.includes(input.kind)) {
     throw new Error("INVALID_INPUT: kind debe ser ROLLOVER o TERMINATION");
   }
@@ -62,9 +77,12 @@ export async function settleEmployee(employeeId: string, input: SettleEmployeeIn
     throw new Error("INVALID_INPUT: causal invalida");
   }
 
-  const employee = await prisma.employee.findUnique({ where: { id: employeeId } });
+  await tx.$queryRaw`SELECT id FROM "Employee" WHERE id = ${employeeId} FOR UPDATE`;
+
+  const employee = await tx.employee.findUnique({ where: { id: employeeId } });
   if (!employee) throw new Error("EMPLOYEE_NOT_FOUND");
-  if (!employee.isActive) throw new Error("INVALID_INPUT: el trabajador ya esta inactivo");
+  if (!employee.isActive) throw new Error("ALREADY_PROCESSED");
+  const lastLiquidationAtAtLock = employee.lastLiquidationAt;
 
   const at = new Date();
   const anchor = employee.lastLiquidationAt ?? employee.startDate;
@@ -74,8 +92,8 @@ export async function settleEmployee(employeeId: string, input: SettleEmployeeIn
 
   const daysAccrued = vacationDaysAccrued(anchor, at);
   const [daysTakenMap, activeLoans] = await Promise.all([
-    vacationDaysTakenByEmployee([employeeId]),
-    prisma.employeeLoan.findMany({ where: { employeeId, status: "ACTIVE", outstandingBalance: { gt: 0 } } }),
+    vacationDaysTakenByEmployee([employeeId], tx),
+    tx.employeeLoan.findMany({ where: { employeeId, status: "ACTIVE", outstandingBalance: { gt: 0 } } }),
   ]);
   const daysTaken = daysTakenMap.get(employeeId) ?? 0;
   const vacationDaysBalance = Math.max(0, round2(daysAccrued - daysTaken));
@@ -88,80 +106,90 @@ export async function settleEmployee(employeeId: string, input: SettleEmployeeIn
 
   const totalPaid = Math.max(0, round2(aguinaldo + vacationValue + indemnizacion - loanOutstanding));
 
-  const settlement = await prisma.$transaction(async (tx) => {
-    if (vacationDaysBalance > 0) {
-      await tx.vacationEntry.create({
-        data: {
-          employeeId,
-          date: at,
-          days: vacationDaysBalance,
-          kind: "PAGADAS",
-          notes: input.kind === "ROLLOVER" ? "Liquidación y recontratación inmediata" : "Liquidación por baja",
-          createdByUserId: actorUserId ?? null,
-        },
-      });
-    }
-
-    for (const loan of activeLoans) {
-      const amount = Number(loan.outstandingBalance);
-      await tx.employeeLoanInstallment.create({
-        data: {
-          loanId: loan.id,
-          dueYear: at.getFullYear(),
-          dueMonth: at.getMonth() + 1,
-          amount: new Prisma.Decimal(amount),
-          status: "PAID",
-          deductedAt: at,
-        },
-      });
-      await tx.employeeLoan.update({ where: { id: loan.id }, data: { outstandingBalance: 0, status: "PAID" } });
-    }
-
-    const created = await tx.employeeSettlement.create({
+  if (vacationDaysBalance > 0) {
+    await tx.vacationEntry.create({
       data: {
         employeeId,
-        kind: input.kind,
-        causal: input.kind === "TERMINATION" ? input.causal : null,
         date: at,
-        aguinaldoPaid: new Prisma.Decimal(aguinaldo),
-        vacationDaysPaid: new Prisma.Decimal(vacationDaysBalance),
-        vacationValuePaid: new Prisma.Decimal(vacationValue),
-        indemnizacionPaid: new Prisma.Decimal(indemnizacion),
-        loanDeduction: new Prisma.Decimal(loanOutstanding),
-        totalPaid: new Prisma.Decimal(totalPaid),
-        notes: input.notes ?? null,
+        days: vacationDaysBalance,
+        kind: "PAGADAS",
+        notes: input.kind === "ROLLOVER" ? "Liquidación y recontratación inmediata" : "Liquidación por baja",
         createdByUserId: actorUserId ?? null,
       },
     });
+  }
 
-    if (input.kind === "ROLLOVER") {
-      await tx.employee.update({ where: { id: employeeId }, data: { lastLiquidationAt: at } });
-    } else {
-      await tx.employee.update({ where: { id: employeeId }, data: { isActive: false, endDate: at } });
-    }
+  for (const loan of activeLoans) {
+    const amount = Number(loan.outstandingBalance);
+    await tx.employeeLoanInstallment.create({
+      data: {
+        loanId: loan.id,
+        dueYear: at.getFullYear(),
+        dueMonth: at.getMonth() + 1,
+        amount: new Prisma.Decimal(amount),
+        status: "PAID",
+        deductedAt: at,
+      },
+    });
+    await tx.employeeLoan.update({ where: { id: loan.id }, data: { outstandingBalance: 0, status: "PAID" } });
+  }
 
-    return created;
-  });
-
-  await logAuditEvent({
-    actorUserId: actorUserId ?? undefined,
-    branchId: employee.branchId,
-    module: "payroll",
-    action: input.kind === "ROLLOVER" ? "employee.rollover_liquidation" : "employee.termination_liquidation",
-    entityType: "Employee",
-    entityId: employeeId,
-    metadataJson: {
-      causal: input.causal ?? null,
-      aguinaldo,
-      vacationDaysBalance,
-      vacationValue,
-      indemnizacion,
-      loanOutstanding,
-      totalPaid,
+  const created = await tx.employeeSettlement.create({
+    data: {
+      employeeId,
+      kind: input.kind,
+      causal: input.kind === "TERMINATION" ? input.causal : null,
+      date: at,
+      aguinaldoPaid: new Prisma.Decimal(aguinaldo),
+      vacationDaysPaid: new Prisma.Decimal(vacationDaysBalance),
+      vacationValuePaid: new Prisma.Decimal(vacationValue),
+      indemnizacionPaid: new Prisma.Decimal(indemnizacion),
+      loanDeduction: new Prisma.Decimal(loanOutstanding),
+      totalPaid: new Prisma.Decimal(totalPaid),
+      notes: input.notes ?? null,
+      createdByUserId: actorUserId ?? null,
     },
   });
 
-  return settlement;
+  if (input.kind === "ROLLOVER") {
+    const updateResult = await tx.employee.updateMany({
+      where: { id: employeeId, isActive: true, lastLiquidationAt: lastLiquidationAtAtLock },
+      data: { lastLiquidationAt: at },
+    });
+    if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+  } else {
+    const updateResult = await tx.employee.updateMany({
+      where: { id: employeeId, isActive: true },
+      data: { isActive: false, endDate: at },
+    });
+    if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+  }
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: actorUserId ?? null,
+      branchId: employee.branchId,
+      module: "payroll",
+      action: input.kind === "ROLLOVER" ? "employee.rollover_liquidation" : "employee.termination_liquidation",
+      entityType: "Employee",
+      entityId: employeeId,
+      metadataJson: {
+        causal: input.causal ?? null,
+        aguinaldo,
+        vacationDaysBalance,
+        vacationValue,
+        indemnizacion,
+        loanOutstanding,
+        totalPaid,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return created;
+}
+
+export async function settleEmployee(employeeId: string, input: SettleEmployeeInput, actorUserId?: string) {
+  return prisma.$transaction((tx) => settleEmployeeTx(tx, employeeId, input, actorUserId));
 }
 
 /** Historial de liquidaciones de un empleado (para el drawer). */

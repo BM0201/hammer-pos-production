@@ -6,6 +6,7 @@
  * por período de aniversario laboral (vacationPeriodsToDate) menos la suma de
  * este ledger — auditable: se sabe CUÁNDO y QUÉ pasó, no un número suelto.
  */
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 
@@ -76,9 +77,12 @@ export async function listVacationEntries(employeeId: string) {
 }
 
 /** Total de días consumidos (gozados + pagados) por empleado — para el saldo. */
-export async function vacationDaysTakenByEmployee(employeeIds: string[]): Promise<Map<string, number>> {
+export async function vacationDaysTakenByEmployee(
+  employeeIds: string[],
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<Map<string, number>> {
   if (employeeIds.length === 0) return new Map();
-  const grouped = await prisma.vacationEntry.groupBy({
+  const grouped = await db.vacationEntry.groupBy({
     by: ["employeeId"],
     where: { employeeId: { in: employeeIds } },
     _sum: { days: true },

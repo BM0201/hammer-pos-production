@@ -1303,6 +1303,14 @@ export async function cancelSaleOrderTx(
   tx: Prisma.TransactionClient,
   input: { orderId: string; actorUserId: string; reason: string; cashRefundHandling?: CashRefundHandling | null },
 ) {
+  // prompt-seguridad-basica.md Fase 1, hallazgo del barrido src/modules — el
+  // cancel DIRECTO de Master (sin pasar por SaleCancellation/approval) no
+  // tenía ningún lock ni CAS: un doble click revertía inventario y anulaba
+  // pagos dos veces. executeSaleCancellation (sales-returns/service.ts) ya
+  // serializa a nivel de SaleCancellation.status, pero este path directo no
+  // tenía protección propia. El lock serializa ambos callers por igual.
+  await tx.$queryRaw`SELECT id FROM "SaleOrder" WHERE id = ${input.orderId} FOR UPDATE`;
+
   const order = await tx.saleOrder.findUnique({
     where: { id: input.orderId },
     include: {
@@ -1516,8 +1524,8 @@ export async function cancelSaleOrderTx(
   // ── 3) Cambio de estado a CANCELLED ──────────────────────────────────
   const cancelledAt = new Date();
   const cancellationNote = `[ANULADA ${cancelledAt.toISOString()}] ${input.reason}`;
-  const updatedOrder = await tx.saleOrder.update({
-    where: { id: order.id },
+  const cancelUpdateResult = await tx.saleOrder.updateMany({
+    where: { id: order.id, status: order.status },
     data: {
       status: SaleOrderStatus.CANCELLED,
       // Sella el momento REAL de la anulación: el resumen del día filtra por
@@ -1527,6 +1535,8 @@ export async function cancelSaleOrderTx(
       notes: order.notes ? `${order.notes}\n${cancellationNote}` : cancellationNote,
     },
   });
+  if (cancelUpdateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+  const updatedOrder = await tx.saleOrder.findUniqueOrThrow({ where: { id: order.id } });
 
   // ── 4) Refrescar resumen del día operativo ───────────────────────────
   for (const dayId of operationalDayIds) {

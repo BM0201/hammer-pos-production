@@ -77,13 +77,16 @@ export async function listBranchCategoryPricingPolicies({ branchId }: { branchId
   };
 }
 
-export async function getCategoryPricingPolicy(input: { branchId: string; categoryId: string }) {
-  const policy = await prisma.branchCategoryPricingPolicy.findUnique({
+export async function getCategoryPricingPolicy(
+  input: { branchId: string; categoryId: string },
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+) {
+  const policy = await db.branchCategoryPricingPolicy.findUnique({
     where: { branchId_categoryId: { branchId: input.branchId, categoryId: input.categoryId } },
     include: { category: { select: { code: true, name: true } } },
   });
   if (policy) return toDto(policy);
-  const category = await prisma.category.findUnique({ where: { id: input.categoryId }, select: { code: true, name: true } });
+  const category = await db.category.findUnique({ where: { id: input.categoryId }, select: { code: true, name: true } });
   return toDto(null, category ?? undefined, input.branchId, input.categoryId);
 }
 
@@ -156,12 +159,15 @@ export async function createDefaultPoliciesForBranch(input: { branchId: string; 
   return { created, skipped };
 }
 
-export async function resolvePolicyForProduct(input: { branchId: string; productId: string }) {
-  const product = await prisma.product.findUniqueOrThrow({
+export async function resolvePolicyForProduct(
+  input: { branchId: string; productId: string },
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+) {
+  const product = await db.product.findUniqueOrThrow({
     where: { id: input.productId },
     select: { categoryId: true, category: { select: { code: true, name: true } } },
   });
-  const policy = await getCategoryPricingPolicy({ branchId: input.branchId, categoryId: product.categoryId });
+  const policy = await getCategoryPricingPolicy({ branchId: input.branchId, categoryId: product.categoryId }, db);
   return {
     categoryId: product.categoryId,
     categoryName: product.category.name,

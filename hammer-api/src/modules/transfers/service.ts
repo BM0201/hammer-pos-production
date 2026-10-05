@@ -131,48 +131,82 @@ export async function createTransfer(input: CreateTransferInput, db: Prisma.Tran
   return transfer;
 }
 
-export async function approveTransfer(id: string, userId: string) {
-  const transfer = await prisma.transfer.findUnique({
+/**
+ * prompt-seguridad-basica.md Fase 1 — el cuerpo transaccional, separado del
+ * wrapper para poder probarlo con un tx fake (mismo patrón que
+ * completeBatchTx/reverseBatchTx en production/service.ts). El lock
+ * (FOR UPDATE) serializa un doble clic/reintento: el segundo, una vez que
+ * obtiene el lock, relee el estado YA actualizado por el primero y lo
+ * rechaza antes de tocar nada. El updateMany final es la segunda red de
+ * seguridad.
+ */
+export async function approveTransferTx(tx: Prisma.TransactionClient, id: string, userId: string) {
+  await tx.$queryRaw`SELECT id FROM "Transfer" WHERE id = ${id} FOR UPDATE`;
+
+  const transfer = await tx.transfer.findUnique({
     where: { id },
     include: { lines: true, fromBranch: true, toBranch: true },
   });
   if (!transfer) throw new Error("NOT_FOUND");
-  if (transfer.status !== "DRAFT") throw new Error("INVALID_INPUT: Solo se pueden aprobar traslados en DRAFT");
+  if (transfer.status !== "DRAFT") throw new Error("ALREADY_PROCESSED");
 
-  const result = await prisma.transfer.update({
-    where: { id },
+  const updateResult = await tx.transfer.updateMany({
+    where: { id, status: "DRAFT" },
     data: { status: "APPROVED", approvedByUserId: userId, approvedAt: new Date() },
   });
+  if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
 
-  await logAuditEvent({
-    actorUserId: userId,
-    branchId: transfer.fromBranchId,
-    module: "transfers",
-    action: "TRANSFER_APPROVED",
-    entityType: "Transfer",
-    entityId: transfer.id,
-    metadataJson: {
-      transferNumber: transfer.transferNumber,
-      previousStatus: transfer.status,
-      newStatus: "APPROVED",
-      linesCount: transfer.lines.length,
-      fromBranch: transfer.fromBranch.code,
-      toBranch: transfer.toBranch.code,
+  await tx.auditLog.create({
+    data: {
+      actorUserId: userId,
+      branchId: transfer.fromBranchId,
+      module: "transfers",
+      action: "TRANSFER_APPROVED",
+      entityType: "Transfer",
+      entityId: transfer.id,
+      metadataJson: {
+        transferNumber: transfer.transferNumber,
+        previousStatus: transfer.status,
+        newStatus: "APPROVED",
+        linesCount: transfer.lines.length,
+        fromBranch: transfer.fromBranch.code,
+        toBranch: transfer.toBranch.code,
+      } as unknown as Prisma.InputJsonValue,
     },
   });
 
-  return result;
+  return tx.transfer.findUniqueOrThrow({ where: { id } });
 }
 
-export async function dispatchTransfer(id: string, userId: string, options: { allowAutoOpen?: boolean } = {}) {
-  const transfer = await prisma.transfer.findUnique({
+export async function approveTransfer(id: string, userId: string) {
+  return prisma.$transaction((tx) => approveTransferTx(tx, id, userId));
+}
+
+/**
+ * prompt-seguridad-basica.md Fase 1 — antes, transfer se leía FUERA de la
+ * transacción: dos despachos concurrentes veían las mismas quantityDispatched
+ * "pendientes" y cada uno sacaba stock por esa misma cantidad — doble
+ * TRANSFER_OUT. Ahora todo (el pre-chequeo de stock, el movimiento y el
+ * update final) vive DESPUÉS del lock, sobre una relectura fresca: el
+ * segundo despacho, una vez que obtiene el lock, ve el estado YA
+ * actualizado por el primero y se rechaza antes de mover nada.
+ */
+export async function dispatchTransferTx(
+  tx: Prisma.TransactionClient,
+  id: string,
+  userId: string,
+  options: { allowAutoOpen?: boolean } = {},
+) {
+  await tx.$queryRaw`SELECT id FROM "Transfer" WHERE id = ${id} FOR UPDATE`;
+
+  const transfer = await tx.transfer.findUnique({
     where: { id },
     include: { lines: { include: { product: true } }, fromBranch: true, toBranch: true },
   });
   if (!transfer) throw new Error("NOT_FOUND");
-  if (transfer.status !== "APPROVED") throw new Error("INVALID_INPUT: Solo se pueden despachar traslados aprobados");
+  if (transfer.status !== "APPROVED") throw new Error("ALREADY_PROCESSED");
 
-  const result = await prisma.$transaction(async (tx) => {
+  {
     for (const line of transfer.lines) {
       const pendingDispatch = Number(line.quantityRequested) - Number(line.quantityDispatched);
       if (pendingDispatch <= 0) continue;
@@ -219,28 +253,53 @@ export async function dispatchTransfer(id: string, userId: string, options: { al
         data: { quantityDispatched: line.quantityRequested },
       });
     }
+  }
 
-    return tx.transfer.update({
-      where: { id },
-      data: { status: "IN_TRANSIT", dispatchedAt: new Date() },
-    });
+  const updateResult = await tx.transfer.updateMany({
+    where: { id, status: "APPROVED" },
+    data: { status: "IN_TRANSIT", dispatchedAt: new Date() },
+  });
+  if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: userId,
+      branchId: transfer.fromBranchId,
+      module: "transfers",
+      action: "TRANSFER_DISPATCHED",
+      entityType: "Transfer",
+      entityId: transfer.id,
+      metadataJson: { transferNumber: transfer.transferNumber, previousStatus: transfer.status, newStatus: "IN_TRANSIT" } as unknown as Prisma.InputJsonValue,
+    },
   });
 
-  await logAuditEvent({
-    actorUserId: userId,
-    branchId: transfer.fromBranchId,
-    module: "transfers",
-    action: "TRANSFER_DISPATCHED",
-    entityType: "Transfer",
-    entityId: transfer.id,
-    metadataJson: { transferNumber: transfer.transferNumber, previousStatus: transfer.status, newStatus: "IN_TRANSIT" },
-  });
-
-  return result;
+  return tx.transfer.findUniqueOrThrow({ where: { id } });
 }
 
-export async function receiveTransfer(id: string, userId: string, input: ReceiveTransferInput = {}) {
-  const transfer = await prisma.transfer.findUnique({
+export async function dispatchTransfer(id: string, userId: string, options: { allowAutoOpen?: boolean } = {}) {
+  return prisma.$transaction((tx) => dispatchTransferTx(tx, id, userId, options));
+}
+
+/**
+ * prompt-seguridad-basica.md Fase 1 — recepción parcial: el status NO
+ * siempre cambia (IN_TRANSIT/PARTIALLY_RECEIVED pueden seguir igual si la
+ * recepción es parcial), así que un CAS sobre el status NO alcanza por sí
+ * solo para frenar una segunda recepción concurrente. Lo que realmente lo
+ * frena es recalcular `items`/`totalReceiveQty`/`pending` DESPUÉS del lock,
+ * sobre una relectura fresca: el segundo intento, una vez que obtiene el
+ * lock, ve las cantidades YA recibidas por el primero y calcula "pendiente"
+ * correctamente (o rechaza si ya no queda nada pendiente, o si la cantidad
+ * pedida ya no cabe en lo que falta).
+ */
+export async function receiveTransferTx(
+  tx: Prisma.TransactionClient,
+  id: string,
+  userId: string,
+  input: ReceiveTransferInput = {},
+) {
+  await tx.$queryRaw`SELECT id FROM "Transfer" WHERE id = ${id} FOR UPDATE`;
+
+  const transfer = await tx.transfer.findUnique({
     where: { id },
     include: { lines: { include: { product: true } }, fromBranch: true, toBranch: true },
   });
@@ -248,6 +307,7 @@ export async function receiveTransfer(id: string, userId: string, input: Receive
   if (!["IN_TRANSIT", "PARTIALLY_RECEIVED"].includes(transfer.status)) {
     throw new Error("INVALID_INPUT: Solo se pueden recibir traslados en transito");
   }
+  const statusAtLock = transfer.status;
 
   const defaultItems: ReceiveTransferItem[] = transfer.lines
     .map((line) => ({
@@ -263,7 +323,7 @@ export async function receiveTransfer(id: string, userId: string, input: Receive
   const receivedLines: Array<Record<string, unknown>> = [];
   const warnings: string[] = [];
 
-  const result = await prisma.$transaction(async (tx) => {
+  {
     for (const item of items) {
       const line = transfer.lines.find((candidate) => candidate.productId === item.productId || candidate.id === item.transferLineId);
       if (!line) throw new Error(`INVALID_INPUT: Producto ${item.productId} no pertenece al traslado`);
@@ -342,29 +402,55 @@ export async function receiveTransfer(id: string, userId: string, input: Receive
       });
     }
 
-    const freshLines = await tx.transferLine.findMany({ where: { transferId: transfer.id } });
-    const fullyReceived = freshLines.every((line) => line.quantityReceived.gte(line.quantityDispatched));
-    return tx.transfer.update({
-      where: { id },
-      data: { status: fullyReceived ? "RECEIVED" : "PARTIALLY_RECEIVED", receivedAt: fullyReceived ? new Date() : transfer.receivedAt },
-    });
+  }
+
+  const freshLines = await tx.transferLine.findMany({ where: { transferId: transfer.id } });
+  const fullyReceived = freshLines.every((line) => line.quantityReceived.gte(line.quantityDispatched));
+  const newStatus = fullyReceived ? "RECEIVED" : "PARTIALLY_RECEIVED";
+
+  const updateResult = await tx.transfer.updateMany({
+    where: { id, status: statusAtLock },
+    data: { status: newStatus, receivedAt: fullyReceived ? new Date() : transfer.receivedAt },
+  });
+  if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: userId,
+      branchId: transfer.toBranchId,
+      module: "transfers",
+      action: "TRANSFER_RECEIVED",
+      entityType: "Transfer",
+      entityId: transfer.id,
+      metadataJson: {
+        transferNumber: transfer.transferNumber,
+        statusAfter: newStatus,
+        receivedLines,
+        warnings,
+      } as unknown as Prisma.InputJsonValue,
+    },
   });
 
-  await logAuditEvent({
-    actorUserId: userId,
-    branchId: transfer.toBranchId,
-    module: "transfers",
-    action: "TRANSFER_RECEIVED",
-    entityType: "Transfer",
-    entityId: transfer.id,
-    metadataJson: { transferNumber: transfer.transferNumber, statusAfter: result.status, receivedLines, warnings },
-  });
-
-  return { ok: true, transferId: transfer.id, statusAfter: result.status, receivedLines, warnings };
+  return { ok: true, transferId: transfer.id, statusAfter: newStatus, receivedLines, warnings };
 }
 
-export async function cancelTransfer(id: string, userId: string) {
-  const transfer = await prisma.transfer.findUnique({
+export async function receiveTransfer(id: string, userId: string, input: ReceiveTransferInput = {}) {
+  return prisma.$transaction((tx) => receiveTransferTx(tx, id, userId, input));
+}
+
+/**
+ * prompt-seguridad-basica.md Fase 1 — mismo patrón: lock + relectura +
+ * transición condicional. El motivo de negocio específico (no cancelar un
+ * traslado en tránsito) se conserva tal cual; el genérico "no está en
+ * DRAFT/APPROVED" pasa a ALREADY_PROCESSED para ser consistente con el
+ * resto de funciones de este módulo — cubre el doble-cancel de forma
+ * natural, ya que el segundo intento, tras obtener el lock, ve
+ * status=CANCELLED.
+ */
+export async function cancelTransferTx(tx: Prisma.TransactionClient, id: string, userId: string) {
+  await tx.$queryRaw`SELECT id FROM "Transfer" WHERE id = ${id} FOR UPDATE`;
+
+  const transfer = await tx.transfer.findUnique({
     where: { id },
     include: {
       fromBranch: { select: { id: true, code: true, name: true } },
@@ -377,32 +463,39 @@ export async function cancelTransfer(id: string, userId: string) {
     throw new Error("INVALID_INPUT: No se puede cancelar un traslado en transito; requiere flujo de retorno");
   }
   if (!["DRAFT", "APPROVED"].includes(transfer.status)) {
-    throw new Error("INVALID_INPUT: Solo se pueden cancelar traslados en borrador o aprobados");
+    throw new Error("ALREADY_PROCESSED");
   }
 
-  const result = await prisma.transfer.update({
-    where: { id },
+  const updateResult = await tx.transfer.updateMany({
+    where: { id, status: transfer.status },
     data: { status: "CANCELLED" },
   });
+  if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
 
-  await logAuditEvent({
-    actorUserId: userId,
-    branchId: transfer.fromBranchId,
-    module: "transfers",
-    action: "TRANSFER_CANCELLED",
-    entityType: "Transfer",
-    entityId: transfer.id,
-    metadataJson: {
-      transferNumber: transfer.transferNumber,
+  await tx.auditLog.create({
+    data: {
+      actorUserId: userId,
       branchId: transfer.fromBranchId,
-      fromBranchCode: transfer.fromBranch.code,
-      toBranchCode: transfer.toBranch.code,
-      linesCount: transfer.lines.length,
-      cancelledByUserId: userId,
-      previousStatus: transfer.status,
-      newStatus: "CANCELLED",
+      module: "transfers",
+      action: "TRANSFER_CANCELLED",
+      entityType: "Transfer",
+      entityId: transfer.id,
+      metadataJson: {
+        transferNumber: transfer.transferNumber,
+        branchId: transfer.fromBranchId,
+        fromBranchCode: transfer.fromBranch.code,
+        toBranchCode: transfer.toBranch.code,
+        linesCount: transfer.lines.length,
+        cancelledByUserId: userId,
+        previousStatus: transfer.status,
+        newStatus: "CANCELLED",
+      } as unknown as Prisma.InputJsonValue,
     },
   });
 
-  return result;
+  return tx.transfer.findUniqueOrThrow({ where: { id } });
+}
+
+export async function cancelTransfer(id: string, userId: string) {
+  return prisma.$transaction((tx) => cancelTransferTx(tx, id, userId));
 }
