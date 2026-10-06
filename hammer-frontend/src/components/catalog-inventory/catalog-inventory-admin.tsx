@@ -9,7 +9,7 @@ import toast from "react-hot-toast";
 import {
   AlertTriangle, BarChart3, Boxes, Building2, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
   CheckCircle2, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Merge, Package, Pencil,
-  Plus, RefreshCcw, Save, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
+  Plus, RefreshCcw, Save, ScanLine, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -1127,6 +1127,18 @@ export function CatalogInventoryAdmin() {
       {/* ════════════ TAB: PRODUCTOS (con edición inline) ════════════ */}
       {data && tab === "products" ? (
         <>
+        {/* prompt-alta-productos-qr.md Fase 2 — alta en serie con lector
+            USB/Bluetooth (escribe el código como teclado + Enter): pantalla
+            aparte porque el flujo es secuencial (código → ¿existe? →
+            guardar → siguiente código), no encaja en este formulario de un
+            solo producto a la vez. */}
+        <Link
+          href={"/app/master/catalog/products/quick-add" as Route}
+          className="inline-flex items-center gap-2 self-start rounded-lg border border-[var(--color-master-300)] bg-[var(--color-master-50)] px-4 py-2 text-sm font-semibold text-[var(--color-master-700)] hover:bg-[var(--color-master-100)]"
+        >
+          <ScanLine className="h-4 w-4" />
+          Alta rápida con escáner
+        </Link>
         {/* ── Panel para crear producto manual ── */}
         <Card noPadding>
           <div className="hm-card-header-green">
