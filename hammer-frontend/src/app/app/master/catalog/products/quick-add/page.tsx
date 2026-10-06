@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 import Link from "next/link";
 import type { Route } from "next";
 import toast from "react-hot-toast";
-import { ArrowLeft, Check, Loader2, Package, QrCode, ScanLine } from "lucide-react";
+import { ArrowLeft, Check, Loader2, Package, Printer, QrCode, ScanLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSubmitting } from "@/lib/client/use-submitting";
+import { useSession } from "@/lib/client/session";
+import { getActiveBranchId } from "@/lib/client/active-branch";
+import { printProductLabels } from "@/lib/client/print-product-labels";
 import { money } from "@/lib/format";
 import {
   decideQuickAddStep,
@@ -98,6 +101,8 @@ export default function QuickAddProductPage() {
   const [form, setForm] = useState<FormState>(() => defaultForm(null));
   const [sessionRows, setSessionRows] = useState<SessionRow[]>([]);
   const [submitting, runSubmit] = useSubmitting();
+  const [printing, setPrinting] = useState(false);
+  const sessionState = useSession();
 
   const codeInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -263,6 +268,32 @@ export default function QuickAddProductPage() {
 
   function toggleSessionRowPrint(id: string) {
     setSessionRows((prev) => prev.map((row) => (row.id === id ? { ...row, printLabel: !row.printLabel } : row)));
+  }
+
+  const marked = sessionRows.filter((row) => row.printLabel && row.barcode);
+
+  async function handlePrintMarked() {
+    if (sessionState.status !== "authenticated") {
+      toast.error("No se pudo determinar la sucursal para la etiqueta.");
+      return;
+    }
+    const branchId = getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId);
+    if (!branchId) {
+      toast.error("No tenés una sucursal asignada para imprimir.");
+      return;
+    }
+    setPrinting(true);
+    try {
+      const result = await printProductLabels({
+        products: marked.map((row) => ({ id: row.id, name: row.name, sku: row.sku, barcode: row.barcode, standardSalePrice: row.standardSalePrice })),
+        branchId,
+      });
+      if (result.printed > 0) toast.success(`${result.printed} etiqueta(s) enviada(s) a imprimir.`);
+    } catch {
+      toast.error("No se pudieron generar las etiquetas.");
+    } finally {
+      setPrinting(false);
+    }
   }
 
   return (
@@ -472,6 +503,16 @@ export default function QuickAddProductPage() {
             <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>
               Registrados en esta sesión ({sessionRows.length})
             </h2>
+            <Button
+              variant="secondary"
+              className="h-9"
+              icon={<Printer className="h-4 w-4" />}
+              onClick={() => void handlePrintMarked()}
+              disabled={printing || marked.length === 0}
+              loading={printing}
+            >
+              Imprimir etiquetas ({marked.length})
+            </Button>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">

@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   Calculator,
   History,
+  Printer,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +27,9 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { useSession } from "@/lib/client/session";
+import { getActiveBranchId } from "@/lib/client/active-branch";
+import { printProductLabels } from "@/lib/client/print-product-labels";
 import { money, qty, fmtDateTime } from "@/lib/format";
 
 // Fase 5 (prompt-flujo-velocidad.md): las 3 pestañas más pesadas de esta
@@ -59,6 +63,7 @@ export type ProductDetail = {
     unit: string;
     isActive: boolean;
     standardSalePrice: string;
+    barcode: string | null;
     category?: { name: string };
     inventoryBalances: Array<{
       id: string;
@@ -138,6 +143,8 @@ export function Product360({ productId }: { productId: string }) {
   const [data, setData] = useState<ProductDetail | null>(null);
   const [tab, setTab] = useState<Tab>("general");
   const [error, setError] = useState("");
+  const [printingLabel, setPrintingLabel] = useState(false);
+  const sessionState = useSession();
 
   useEffect(() => {
     fetch(`/api/master/catalog-inventory/products/${productId}`, { cache: "no-store" })
@@ -171,6 +178,49 @@ export function Product360({ productId }: { productId: string }) {
   const totalStock = product.inventoryBalances.reduce((s, i) => s + Number(i.quantityOnHand), 0);
   const totalValue = product.inventoryBalances.reduce((s, i) => s + Number(i.inventoryValue), 0);
 
+  async function handlePrintLabel() {
+    if (sessionState.status !== "authenticated") {
+      toast.error("No se pudo determinar la sucursal para la etiqueta.");
+      return;
+    }
+    const branchId = getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId);
+    if (!branchId) {
+      toast.error("No tenés una sucursal asignada para imprimir.");
+      return;
+    }
+
+    let barcode = product.barcode;
+    if (!barcode) {
+      const confirmed = window.confirm(
+        `"${product.name}" no tiene código de fábrica. ¿Generar un código interno (HMR-${product.sku}) para poder imprimir la etiqueta?`,
+      );
+      if (!confirmed) return;
+      try {
+        const res = await apiFetch(`/api/catalog/products/${product.id}/internal-barcode`, { method: "POST" });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(body?.error?.message ?? "No se pudo generar el código interno.");
+        const updated = unwrapApiData(body) as { barcode: string };
+        barcode = updated.barcode;
+        setData((prev) => (prev ? { ...prev, product: { ...prev.product, barcode: updated.barcode } } : prev));
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "No se pudo generar el código interno.");
+        return;
+      }
+    }
+
+    setPrintingLabel(true);
+    try {
+      await printProductLabels({
+        products: [{ id: product.id, name: product.name, sku: product.sku, barcode, standardSalePrice: Number(product.standardSalePrice) }],
+        branchId,
+      });
+    } catch {
+      toast.error("No se pudo generar la etiqueta.");
+    } finally {
+      setPrintingLabel(false);
+    }
+  }
+
   return (
     <section className="space-y-6 animate-fade-in-up">
       {/* ── Volver + Header ── */}
@@ -193,9 +243,21 @@ export function Product360({ productId }: { productId: string }) {
               {product.category?.name ?? "Sin categoría"} · {product.unit}
             </p>
           </div>
-          <Badge variant={product.isActive ? "success" : "warning"}>
-            {product.isActive ? "Activo" : "Inactivo"}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Printer className="h-4 w-4" />}
+              onClick={() => void handlePrintLabel()}
+              disabled={printingLabel}
+              loading={printingLabel}
+            >
+              {product.barcode ? "Imprimir etiqueta" : "Generar código y etiqueta"}
+            </Button>
+            <Badge variant={product.isActive ? "success" : "warning"}>
+              {product.isActive ? "Activo" : "Inactivo"}
+            </Badge>
+          </div>
         </div>
       </div>
 
