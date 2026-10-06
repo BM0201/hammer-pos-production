@@ -1813,7 +1813,7 @@ export async function getActiveRetainedCashExpenses(
 
 // ─── Declaración de destino del efectivo al cerrar caja (§1) ──────────────
 
-export async function declareCashDestination(input: {
+type DeclareCashDestinationInput = {
   cashSessionId: string;
   branchId: string;
   declaredByUserId: string;
@@ -1825,7 +1825,9 @@ export async function declareCashDestination(input: {
   retainAmount: number;
   awaitingDepositLocation: RetainedCashLocation;
   notes?: string | null;
-}) {
+};
+
+export async function declareCashDestination(input: DeclareCashDestinationInput) {
   if (input.handOverAmount < 0 || input.depositAmount < 0 || input.retainAmount < 0) {
     throw new Error("VALIDATION_ERROR: los montos no pueden ser negativos");
   }
@@ -1850,7 +1852,23 @@ export async function declareCashDestination(input: {
     }
   }
 
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction((tx) => declareCashDestinationTx(tx, input));
+}
+
+/**
+ * prompt-seguridad-basica.md (seguimiento) — CashDestinationDeclaration no
+ * existe todavía para la primera declaración de una sesión, así que no hay
+ * fila propia que bloquear con FOR UPDATE; se bloquea la CashSession (que sí
+ * existe siempre) para serializar dos declaraciones concurrentes de la
+ * MISMA sesión. Esto cierra tanto la carrera create-vs-create (primera
+ * declaración real) como la update-vs-update (reemplazo de una declaración
+ * auto-defaulted) — ninguna de las dos viola necesariamente el unique de
+ * cashSessionId (upsert/ON CONFLICT no siempre lanza P2002), así que el
+ * lock es la defensa real; el catch de P2002 más abajo queda como respaldo.
+ */
+export async function declareCashDestinationTx(tx: Prisma.TransactionClient, input: DeclareCashDestinationInput) {
+    await tx.$queryRaw`SELECT id FROM "CashSession" WHERE id = ${input.cashSessionId} FOR UPDATE`;
+
     const session = await tx.cashSession.findUniqueOrThrow({ where: { id: input.cashSessionId } });
     if (session.status !== "CLOSED") {
       throw new Error("CASH_SESSION_NOT_CLOSED: la declaración de destino se hace sobre una sesión ya cerrada");
@@ -1906,33 +1924,49 @@ export async function declareCashDestination(input: {
     };
     // upsert, no create: si había una auto-defaulted (existing.isAutoDefaulted
     // === true, ver arriba) la declaración real la reemplaza en la misma fila.
-    const declaration = await tx.cashDestinationDeclaration.upsert({
-      where: { cashSessionId: input.cashSessionId },
-      create: { cashSessionId: input.cashSessionId, ...data },
-      update: data,
-    });
+    // El lock de arriba ya debería hacer esto inalcanzable, pero si algo lo
+    // esquivara, el P2002 del unique de cashSessionId se traduce al mismo
+    // ALREADY_PROCESSED que el resto de este módulo, no un 500/409 genérico.
+    let declaration;
+    try {
+      declaration = await tx.cashDestinationDeclaration.upsert({
+        where: { cashSessionId: input.cashSessionId },
+        create: { cashSessionId: input.cashSessionId, ...data },
+        update: data,
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new Error("ALREADY_PROCESSED");
+      }
+      throw error;
+    }
 
     await writeDeclarationLedgerEntriesTx(tx, declaration, input.declaredByUserId);
 
-    await logAuditEvent({
-      actorUserId: input.declaredByUserId,
-      branchId: input.branchId,
-      module: "treasury",
-      action: existing ? "CASH_DESTINATION_DECLARED_OVER_AUTO_DEFAULT" : "CASH_DESTINATION_DECLARED",
-      entityType: "CashDestinationDeclaration",
-      entityId: declaration.id,
-      metadataJson: {
-        cashSessionId: input.cashSessionId,
-        handOverAmount: input.handOverAmount,
-        depositAmount: input.depositAmount,
-        retainAmount: input.retainAmount,
-        retainCashFundPortion: decomposition.cashFundPortion,
-        retainAwaitingDepositPortion: decomposition.awaitingDepositPortion,
+    // Auditoría movida de logAuditEvent (global, no transaccional) a
+    // tx.auditLog.create: con el lock+CAS de arriba, dejar la auditoría
+    // fuera de la transacción era la única pieza de esta función que no
+    // quedaba atómica con el resto — mismo patrón que el resto del módulo.
+    await tx.auditLog.create({
+      data: {
+        actorUserId: input.declaredByUserId,
+        branchId: input.branchId,
+        module: "treasury",
+        action: existing ? "CASH_DESTINATION_DECLARED_OVER_AUTO_DEFAULT" : "CASH_DESTINATION_DECLARED",
+        entityType: "CashDestinationDeclaration",
+        entityId: declaration.id,
+        metadataJson: {
+          cashSessionId: input.cashSessionId,
+          handOverAmount: input.handOverAmount,
+          depositAmount: input.depositAmount,
+          retainAmount: input.retainAmount,
+          retainCashFundPortion: decomposition.cashFundPortion,
+          retainAwaitingDepositPortion: decomposition.awaitingDepositPortion,
+        } as unknown as Prisma.InputJsonValue,
       },
     });
 
     return declaration;
-  });
 }
 
 /**
@@ -2679,46 +2713,66 @@ export async function executeApprovedRetainedCashExpense(input: {
  * así queda ligado al original) y marca el OperatingExpense inactivo. El
  * acumulado retenido vuelve a subir por la misma vía por la que bajó.
  */
-export async function voidRetainedCashExpense(input: { expenseId: string; actorUserId: string; reason: string }) {
+/**
+ * prompt-seguridad-basica.md (seguimiento) — sin lock ni CAS: una doble
+ * anulación concurrente podía pasar el chequeo `isActive` dos veces y
+ * escribir DOS asientos de reversión para el mismo gasto. Ahora bloquea la
+ * fila (FOR UPDATE), relee isActive BAJO el lock, y el `updateMany`
+ * condicional corre ANTES de tocar tesorería: el asiento de reversión solo
+ * se crea si este intento realmente ganó la desactivación (count===1). El
+ * segundo intento recibe ALREADY_PROCESSED sin escribir nada.
+ */
+export async function voidRetainedCashExpenseTx(
+  tx: Prisma.TransactionClient,
+  input: { expenseId: string; actorUserId: string; reason: string },
+) {
   if (!input.reason?.trim()) throw new Error("VALIDATION_ERROR: se requiere una razón de anulación");
 
-  return prisma.$transaction(async (tx) => {
-    const expense = await tx.operatingExpense.findUniqueOrThrow({ where: { id: input.expenseId } });
-    if (!expense.isActive) throw new Error("VALIDATION_ERROR: este gasto ya está anulado");
+  await tx.$queryRaw`SELECT id FROM "OperatingExpense" WHERE id = ${input.expenseId} FOR UPDATE`;
 
-    const originalEntry = await tx.treasuryEntry.findUnique({ where: { expensePaymentId: input.expenseId } });
-    if (!originalEntry) throw new Error("VALIDATION_ERROR: este gasto no tiene una entrada de tesorería asociada (no se pagó con efectivo retenido)");
+  const expense = await tx.operatingExpense.findUniqueOrThrow({ where: { id: input.expenseId } });
+  if (!expense.isActive) throw new Error("ALREADY_PROCESSED");
 
-    const reversal = await createTreasuryEntryTx(tx, {
-      accountId: originalEntry.accountId,
-      direction: "IN",
-      entryType: "RECONCILIATION",
-      counterpartyType: "ADJUSTMENT",
-      amount: Number(originalEntry.amount),
-      reference: originalEntry.reference,
-      notes: `Anulación: ${input.reason}`,
-      createdByUserId: input.actorUserId,
-    });
+  const originalEntry = await tx.treasuryEntry.findUnique({ where: { expensePaymentId: input.expenseId } });
+  if (!originalEntry) throw new Error("VALIDATION_ERROR: este gasto no tiene una entrada de tesorería asociada (no se pagó con efectivo retenido)");
 
-    await tx.operatingExpense.update({ where: { id: input.expenseId }, data: { isActive: false } });
-
-    await tx.auditLog.create({
-      data: {
-        actorUserId: input.actorUserId,
-        branchId: expense.branchId,
-        module: "treasury",
-        action: "RETAINED_CASH_EXPENSE_VOIDED",
-        entityType: "OperatingExpense",
-        entityId: expense.id,
-        metadataJson: {
-          reason: input.reason,
-          originalTreasuryEntryId: originalEntry.id,
-          reversalTreasuryEntryId: reversal.id,
-          amount: originalEntry.amount.toString(),
-        },
-      },
-    });
-
-    return { expenseId: expense.id, reversalTreasuryEntryId: reversal.id };
+  const updateResult = await tx.operatingExpense.updateMany({
+    where: { id: input.expenseId, isActive: true },
+    data: { isActive: false },
   });
+  if (updateResult.count === 0) throw new Error("ALREADY_PROCESSED");
+
+  const reversal = await createTreasuryEntryTx(tx, {
+    accountId: originalEntry.accountId,
+    direction: "IN",
+    entryType: "RECONCILIATION",
+    counterpartyType: "ADJUSTMENT",
+    amount: Number(originalEntry.amount),
+    reference: originalEntry.reference,
+    notes: `Anulación: ${input.reason}`,
+    createdByUserId: input.actorUserId,
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: expense.branchId,
+      module: "treasury",
+      action: "RETAINED_CASH_EXPENSE_VOIDED",
+      entityType: "OperatingExpense",
+      entityId: expense.id,
+      metadataJson: {
+        reason: input.reason,
+        originalTreasuryEntryId: originalEntry.id,
+        reversalTreasuryEntryId: reversal.id,
+        amount: originalEntry.amount.toString(),
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return { expenseId: expense.id, reversalTreasuryEntryId: reversal.id };
+}
+
+export async function voidRetainedCashExpense(input: { expenseId: string; actorUserId: string; reason: string }) {
+  return prisma.$transaction((tx) => voidRetainedCashExpenseTx(tx, input));
 }

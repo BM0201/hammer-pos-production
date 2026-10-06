@@ -10,6 +10,7 @@ import { isMaster } from "@/modules/rbac/guards";
 import { requireCsrf } from "@/modules/security/csrf";
 import { toHttpErrorResponse } from "@/lib/http";
 import { listSecurityAlerts, updateAlertStatus } from "@/modules/security/alerts-service";
+import { parseListLimit } from "@/lib/api/list-limit";
 import type { AlertSeverity, AlertStatus } from "@prisma/client";
 
 export async function GET(req: Request) {
@@ -21,7 +22,9 @@ export async function GET(req: Request) {
   const status = url.searchParams.get("status") as AlertStatus | null;
   const severity = url.searchParams.get("severity") as AlertSeverity | null;
   const type = url.searchParams.get("type") ?? undefined;
-  const limit = Math.min(Number(url.searchParams.get("limit") ?? "50"), 200);
+  // prompt-seguridad-basica.md (seguimiento) — Math.min(Number(raw), 200)
+  // daba NaN con un valor no numérico (Math.min(NaN, 200) === NaN).
+  const limit = parseListLimit(url.searchParams.get("limit"), { default: 50, max: 200 });
   const offset = Number(url.searchParams.get("offset") ?? "0");
 
   const result = await listSecurityAlerts({
