@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
+import { normalizeScannedCode, buildInternalBarcode } from "@/modules/catalog/barcode";
 import { resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { formatDualStock, convertBaseQtyToSaleQty, convertBaseUnitCostToSaleUnitCost, getProductStockConversion } from "@/modules/inventory/unit-conversion";
@@ -555,6 +556,95 @@ export async function checkSkuAvailable(sku: string, excludeProductId?: string) 
   return { available: false, normalizedSku: normalized, existingProductId: existing.id, existingProductName: existing.name };
 }
 
+export type ProductByCodeMatch = "barcode" | "sku" | null;
+
+export type ProductByCodeResult = {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  unit: string;
+  standardSalePrice: Prisma.Decimal;
+  isActive: boolean;
+  category: { id: string; code: string; name: string };
+};
+
+function selectProductByCode(db: Prisma.TransactionClient | typeof prisma, where: Prisma.ProductWhereUniqueInput) {
+  return db.product.findUnique({
+    where,
+    select: {
+      id: true,
+      name: true,
+      sku: true,
+      barcode: true,
+      unit: true,
+      standardSalePrice: true,
+      isActive: true,
+      category: { select: { id: true, code: true, name: true } },
+    },
+  });
+}
+
+/**
+ * prompt-alta-productos-qr.md Fase 1 — coincidencia EXACTA (nunca difusa:
+ * un código parecido no es el mismo producto) contra barcode primero, sku
+ * después. El código se normaliza con la MISMA regla que lib/scanner.ts
+ * (trim + sin espacios) antes de comparar.
+ */
+export async function findProductByCode(
+  rawCode: string,
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<{ product: ProductByCodeResult | null; matchedBy: ProductByCodeMatch }> {
+  const code = normalizeScannedCode(rawCode);
+  if (!code) return { product: null, matchedBy: null };
+
+  const byBarcode = await selectProductByCode(db, { barcode: code });
+  if (byBarcode) return { product: byBarcode, matchedBy: "barcode" };
+
+  const bySku = await selectProductByCode(db, { sku: code });
+  if (bySku) return { product: bySku, matchedBy: "sku" };
+
+  return { product: null, matchedBy: null };
+}
+
+/**
+ * prompt-alta-productos-qr.md Fase 1 — código interno (HMR-<sku>) para
+ * productos sin código de fábrica. Solo se asigna si el producto NO tiene
+ * barcode todavía; si ya tiene uno, se rechaza sin tocarlo (el llamador lo
+ * traduce a 409).
+ */
+export async function assignInternalBarcode(
+  productId: string,
+  actorUserId: string,
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+) {
+  const product = await db.product.findUniqueOrThrow({
+    where: { id: productId },
+    select: { id: true, sku: true, barcode: true },
+  });
+  if (product.barcode) {
+    throw new Error("BARCODE_ALREADY_SET: el producto ya tiene un código de barras.");
+  }
+
+  const barcode = buildInternalBarcode(product.sku);
+  const updated = await db.product.update({
+    where: { id: productId },
+    data: { barcode },
+    select: { id: true, name: true, sku: true, barcode: true },
+  });
+
+  await logAuditEvent({
+    actorUserId,
+    module: "catalog",
+    action: "PRODUCT_INTERNAL_BARCODE_ASSIGNED",
+    entityType: "Product",
+    entityId: updated.id,
+    metadataJson: { barcode },
+  });
+
+  return updated;
+}
+
 /**
  * Preview auto-generated SKU for a product name + category.
  */
@@ -591,6 +681,29 @@ export async function suggestProductSku(input: { productName: string; categoryId
   };
 }
 
+/**
+ * prompt-alta-productos-qr.md Fase 1 — el P2002 crudo de Product.barcode
+ * salía como el CONFLICT genérico de http.ts (sin decir cuál producto ya
+ * tiene ese código). `existingProduct` viaja en el error para que la UI de
+ * alta rápida pueda ofrecer "Ver producto" sin una segunda consulta.
+ */
+export class BarcodeAlreadyExistsError extends Error {
+  constructor(
+    message: string,
+    public readonly existingProduct: { id: string; name: string; sku: string; barcode: string },
+  ) {
+    super(message);
+    this.name = "BarcodeAlreadyExistsError";
+  }
+}
+
+function isBarcodeUniqueViolation(error: Prisma.PrismaClientKnownRequestError): boolean {
+  const target = error.meta?.target;
+  if (Array.isArray(target)) return target.includes("barcode");
+  if (typeof target === "string") return target.includes("barcode");
+  return false;
+}
+
 export async function createProduct(input: {
   sku?: string | null;
   barcode?: string | null;
@@ -624,19 +737,36 @@ export async function createProduct(input: {
   });
   if (!sku) throw new Error("VALIDATION_ERROR: no se pudo generar un SKU valido.");
 
-  const product = await prisma.product.create({
-    data: {
-      sku,
-      barcode: input.barcode ?? null,
-      name: input.name.trim(),
-      description: input.description ?? null,
-      categoryId: input.categoryId,
-      unit: input.unit.trim(),
-      allowsFraction: input.allowsFraction,
-      standardSalePrice: new Prisma.Decimal(input.standardSalePrice),
-      isTimber: input.isTimber,
-    },
-  });
+  let product;
+  try {
+    product = await prisma.product.create({
+      data: {
+        sku,
+        barcode: input.barcode ?? null,
+        name: input.name.trim(),
+        description: input.description ?? null,
+        categoryId: input.categoryId,
+        unit: input.unit.trim(),
+        allowsFraction: input.allowsFraction,
+        standardSalePrice: new Prisma.Decimal(input.standardSalePrice),
+        isTimber: input.isTimber,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && isBarcodeUniqueViolation(error) && input.barcode) {
+      const existing = await prisma.product.findUnique({
+        where: { barcode: input.barcode },
+        select: { id: true, name: true, sku: true, barcode: true },
+      });
+      if (existing?.barcode) {
+        throw new BarcodeAlreadyExistsError(
+          `Ya existe un producto con el código "${input.barcode}" (${existing.name}).`,
+          { id: existing.id, name: existing.name, sku: existing.sku, barcode: existing.barcode },
+        );
+      }
+    }
+    throw error;
+  }
 
   await logAuditEvent({
     actorUserId: input.actorUserId,

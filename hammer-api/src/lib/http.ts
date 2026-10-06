@@ -5,11 +5,11 @@ import { isCsrfError } from "@/modules/security/csrf";
 
 /**
  * Convert errors to appropriate HTTP responses using standard contract.
- * Returns: { ok: false, error: { code, message } }
+ * Returns: { ok: false, error: { code, message, details? } }
  */
-function errJson(code: string, message: string, status: number) {
+function errJson(code: string, message: string, status: number, details?: unknown) {
   return NextResponse.json(
-    { ok: false, error: { code, message } },
+    { ok: false, error: details === undefined ? { code, message } : { code, message, details } },
     { status },
   );
 }
@@ -45,6 +45,15 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.name === "WacValidationError") {
       return errJson(code, error.message, 422);
     }
+  }
+
+  // prompt-alta-productos-qr.md Fase 1 — P2002 sobre Product.barcode salía
+  // como el CONFLICT genérico de más abajo (sin decir CUÁL producto ya
+  // tiene ese código). createProduct ya hizo el lookup async antes de
+  // llegar acá (este mapper es síncrono) y lo adjunta en `existingProduct`.
+  if (error instanceof Error && error.name === "BarcodeAlreadyExistsError") {
+    const existingProduct = (error as unknown as { existingProduct: unknown }).existingProduct;
+    return errJson("BARCODE_ALREADY_EXISTS", error.message, 409, existingProduct);
   }
 
   if (error instanceof MissingDatabaseUrlError || isDatabaseConnectionError(error)) {
