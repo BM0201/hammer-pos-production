@@ -408,6 +408,7 @@ model Branch {
   cashDepositPostponements    CashDepositPostponement[]
   timberPricingConfig         TimberPricingConfig?
   retainedCashAdjustments     RetainedCashAdjustment[]
+  priceUpdateLines            PriceUpdateLine[]
 }
 
 model User {
@@ -493,6 +494,8 @@ model User {
   approvedReplenishmentDrafts ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
   cashDepositPostponements    CashDepositPostponement[]
   intendedCashHandovers       TreasuryEntry[]              @relation("TreasuryEntryIntendedRecipient")
+  createdPriceUpdateBatches   PriceUpdateBatch[]           @relation("PriceUpdateBatchCreatedBy")
+  appliedPriceUpdateBatches   PriceUpdateBatch[]           @relation("PriceUpdateBatchAppliedBy")
 
   @@index([globalRole, isActive])
 }
@@ -798,6 +801,110 @@ model BranchCategoryPricingPolicy {
   @@index([categoryId])
 }
 
+/// prompt-carga-precios.md — carga de trabajo de actualización masiva de
+/// precios: junta productos cuyo precio debe cambiar (Bandeja, Precios
+/// vigentes, Excel) en un borrador que se revisa y aplica como una unidad,
+/// con reversión.
+enum PriceUpdateBatchStatus {
+  DRAFT
+  APPLYING
+  APPLIED
+  PARTIAL
+  CANCELLED
+}
+
+enum PriceUpdateBatchTarget {
+  BRANCHES
+  GENERAL
+}
+
+enum PriceUpdateBatchSource {
+  MANUAL
+  TRAY
+  FILE
+  REVERT
+}
+
+enum PriceUpdateLineStatus {
+  PENDING
+  APPLIED
+  CONFLICT
+  BLOCKED
+  SKIPPED
+}
+
+model PriceUpdateBatch {
+  id              String                 @id @default(cuid())
+  /// Correlativo legible "CP-000001" — sequence es la fuente numérica, code
+  /// es el formateado (único por separado para no acoplar el formato al dato).
+  code            String                 @unique
+  sequence        Int                    @unique
+  status          PriceUpdateBatchStatus @default(DRAFT)
+  target          PriceUpdateBatchTarget
+  /// Vacío si target=GENERAL — una o varias sucursales si target=BRANCHES.
+  branchIds       String[]
+  source          PriceUpdateBatchSource
+  reason          String
+  /// Si esta carga es una reversión, apunta a la carga original.
+  revertsBatchId  String?
+  createdByUserId String
+  appliedByUserId String?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  appliedAt       DateTime?
+
+  createdBy    User               @relation("PriceUpdateBatchCreatedBy", fields: [createdByUserId], references: [id])
+  appliedBy    User?              @relation("PriceUpdateBatchAppliedBy", fields: [appliedByUserId], references: [id])
+  revertsBatch PriceUpdateBatch?  @relation("PriceUpdateBatchReverts", fields: [revertsBatchId], references: [id])
+  revertedBy   PriceUpdateBatch[] @relation("PriceUpdateBatchReverts")
+  lines        PriceUpdateLine[]
+
+  @@index([status])
+  @@index([createdByUserId])
+}
+
+model PriceUpdateLine {
+  id      String @id @default(cuid())
+  batchId String
+
+  productId String
+  /// null si el destino de la carga es GENERAL (standardSalePrice).
+  branchId  String?
+
+  /// Foto tomada al crear/agregar la línea — nunca se recalcula salvo que
+  /// se edite newPrice; applyBatch SIEMPRE revalida contra el estado VIVO.
+  costSnapshot          Decimal?
+  currentPriceSnapshot  Decimal?
+  priceSourceSnapshot   String
+
+  newPrice Decimal?
+
+  status  PriceUpdateLineStatus @default(PENDING)
+  message String?
+
+  /// Si esta línea vino de una decisión de la Bandeja — se cierra (no se
+  /// re-aplica) cuando la línea se aplica.
+  trayDecisionId String?
+
+  appliedPreviousPrice Decimal?
+  appliedAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  batch   PriceUpdateBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  product Product          @relation(fields: [productId], references: [id])
+  branch  Branch?          @relation(fields: [branchId], references: [id])
+
+  // (batchId, productId, COALESCE(branchId, '')) es único de verdad — ver el
+  // índice de expresión creado a mano en la migración: Postgres trata NULL
+  // como distinto de NULL en un @@unique normal, así que dos líneas GENERAL
+  // del mismo producto en la misma carga NO quedarían bloqueadas por esto.
+  @@index([status])
+  @@index([productId])
+  @@index([batchId])
+}
+
 model Product {
   id                  String    @id @default(cuid())
   sku                 String    @unique
@@ -851,6 +958,7 @@ model Product {
   recipesAsSecondGrade       ProductionRecipe[]          @relation("RecipeSecondGrade")
   brainDecisions             BrainDecision[]
   replenishmentDraftItems    ReplenishmentDraftItem[]    @relation("ReplenishmentDraftItemProduct")
+  priceUpdateLines           PriceUpdateLine[]
 
   @@index([abcClassification])
   @@index([rotationIndex])

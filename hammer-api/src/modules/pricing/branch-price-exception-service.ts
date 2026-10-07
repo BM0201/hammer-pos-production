@@ -44,7 +44,7 @@ export type BranchPriceExceptionResult = {
  * marginPercent, etc. son responsabilidad de cada llamador, en la MISMA
  * transacción, si hacen falta.
  */
-export type PriceChangeOrigin = "catalogo" | "fusion" | "importacion_excel" | "bandeja_precios" | "calculadora" | "saldo_inicial";
+export type PriceChangeOrigin = "catalogo" | "fusion" | "importacion_excel" | "bandeja_precios" | "calculadora" | "saldo_inicial" | "carga_precios";
 
 export async function setBranchPriceTx(
   tx: Prisma.TransactionClient,
