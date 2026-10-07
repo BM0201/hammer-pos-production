@@ -1,10 +1,12 @@
 /**
  * prompt-alta-productos-qr.md Fase 2 — lógica pura de la pantalla de alta
  * rápida con escáner/lector: qué pantalla mostrar tras consultar by-code,
- * el debounce de "mismo código repetido" (igual que lib/scanner.ts, el
- * lector de cámara — todavía no implementado), y los defaults recordados
- * entre altas de la misma sesión (categoría/unidad/permite fracción).
+ * y los defaults recordados entre altas de la misma sesión (categoría/
+ * unidad/permite fracción). El debounce de "mismo código repetido" ahora
+ * vive en lib/scanner.ts (lo comparte con el lector de cámara) — se
+ * re-exporta acá para no romper los imports existentes.
  */
+export { shouldIgnoreRepeatedCode, SCAN_REPEAT_DEBOUNCE_MS } from "@/lib/scanner";
 
 export type QuickAddProductMatch = {
   id: string;
@@ -44,22 +46,6 @@ export function decideQuickAddStep(input: {
     return { kind: "FOUND", product: input.response.product, matchedBy: input.response.matchedBy };
   }
   return { kind: "NOT_FOUND", code: input.code };
-}
-
-/**
- * Mismo criterio de "ignorar repetido" que lib/scanner.ts: el MISMO código
- * leído/tecleado dos veces dentro de la ventana de debounce se ignora (un
- * doble Enter accidental, o un lector que dispara dos veces) — un código
- * DISTINTO, o el mismo código después de la ventana, nunca se ignora.
- */
-export function shouldIgnoreRepeatedCode(
-  code: string,
-  now: number,
-  last: { code: string; at: number } | null,
-  debounceMs = 1500,
-): boolean {
-  if (!last) return false;
-  return last.code === code && now - last.at < debounceMs;
 }
 
 export type RememberedProductDefaults = {
