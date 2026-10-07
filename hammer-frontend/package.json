@@ -22,28 +22,28 @@
     "security:audit": "npm audit --omit=dev"
   },
   "dependencies": {
-    "@zxing/browser": "^0.1.5",
-    "@zxing/library": "^0.21.3",
-    "lucide-react": "1.7.0",
+    "@zxing/browser": "^0.2.1",
+    "@zxing/library": "^0.23.0",
+    "lucide-react": "1.52.0",
     "next": "15.5.18",
     "qrcode": "^1.5.4",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-hot-toast": "^2.6.0",
-    "recharts": "^3.8.1"
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-hot-toast": "^2.6.1",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
-    "@tailwindcss/postcss": "4.3.0",
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/postcss": "4.3.3",
     "@types/node": "22.19.19",
     "@types/qrcode": "^1.5.6",
-    "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "eslint": "9.39.2",
     "eslint-config-next": "15.5.18",
-    "knip": "^6.34.0",
-    "tailwindcss": "4.1.18",
-    "tsx": "^4.22.4",
+    "knip": "^6.39.0",
+    "tailwindcss": "4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3"
   },
   "engines": {
