@@ -4,13 +4,15 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 import Link from "next/link";
 import type { Route } from "next";
 import toast from "react-hot-toast";
-import { ArrowLeft, Check, Loader2, Package, Printer, QrCode, ScanLine } from "lucide-react";
+import { ArrowLeft, Camera, Check, Loader2, Package, Printer, QrCode, ScanLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { CameraScanner } from "@/components/scanner/camera-scanner";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSubmitting } from "@/lib/client/use-submitting";
 import { useSession } from "@/lib/client/session";
+import { useCameraAvailable } from "@/lib/client/use-camera-available";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { printProductLabels } from "@/lib/client/print-product-labels";
 import { money } from "@/lib/format";
@@ -25,10 +27,11 @@ import {
 
 /**
  * prompt-alta-productos-qr.md Fase 2 — alta en serie con lector USB/
- * Bluetooth (escribe el código como teclado + Enter). El botón de cámara
- * (CameraScanner en modo continuo) queda FUERA de esta pantalla hasta que
- * exista el prompt del lector de cámara (components/scanner/camera-scanner.tsx,
- * lib/scanner.ts) — decisión explícita para no inventar esa pieza.
+ * Bluetooth (escribe el código como teclado + Enter) O con la cámara
+ * (CameraScanner, modo continuo — botón solo visible si useCameraAvailable).
+ * Las dos entran por el MISMO camino: lookupCode(código), con el mismo
+ * debounce de 1.5s (shouldIgnoreRepeatedCode) para ignorar una lectura
+ * repetida entre cuadros continuos.
  */
 
 type Category = { id: string; code: string; name: string; isActive: boolean };
@@ -103,6 +106,8 @@ export default function QuickAddProductPage() {
   const [submitting, runSubmit] = useSubmitting();
   const [printing, setPrinting] = useState(false);
   const sessionState = useSession();
+  const cameraAvailable = useCameraAvailable();
+  const [showCamera, setShowCamera] = useState(false);
 
   const codeInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -350,7 +355,32 @@ export default function QuickAddProductPage() {
             >
               Sin código — generar QR
             </Button>
+            {cameraAvailable && (
+              <Button
+                variant={showCamera ? "primary" : "ghost"}
+                className="h-11"
+                icon={<Camera className="h-4 w-4" />}
+                onClick={() => setShowCamera((v) => !v)}
+                disabled={step?.kind === "NOT_FOUND"}
+              >
+                {showCamera ? "Ocultar cámara" : "Usar cámara"}
+              </Button>
+            )}
           </div>
+          {/* Modo continuo: se oculta mientras el formulario de alta está
+              abierto (el campo Código queda bloqueado) y reaparece solo al
+              volver a escanear (resetToScan) — mismo criterio que el
+              bloqueo del input de arriba. */}
+          {cameraAvailable && showCamera && step?.kind !== "NOT_FOUND" && (
+            <CameraScanner
+              className="max-w-sm"
+              onClose={() => setShowCamera(false)}
+              onDecode={(rawText) => {
+                setCode(rawText);
+                void lookupCode(rawText);
+              }}
+            />
+          )}
         </div>
       </Card>
 
