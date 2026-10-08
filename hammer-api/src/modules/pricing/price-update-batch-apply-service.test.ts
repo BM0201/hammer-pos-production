@@ -116,6 +116,11 @@ function createStore(opts: { batch: FakeBatch; products: FakeProduct[]; settings
         return found;
       },
     },
+    // Fase 4.2 (prompt-brain-centro-decisiones.md) — closeLinkedTrayDecisionTx
+    // ahora también deja una entrada de bitácora al cerrar como RESOLVED/EXECUTION.
+    brainDecisionActionLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => data,
+    },
     auditLog: {
       create: async ({ data }: { data: { action: string; metadataJson: unknown } }) => {
         auditLogs.push({ action: data.action, metadataJson: data.metadataJson });
@@ -204,7 +209,7 @@ test("LA QUE IMPORTA — reanudación: una tanda solo toca las líneas PENDING, 
   assert.equal(liveSettings.find((s) => s.productId === "p5")?.branchPrice?.toNumber(), 550, "la línea PENDING sí se aplica");
 });
 
-test("LA QUE IMPORTA — una línea con trayDecisionId cierra la decisión de Bandeja (EXECUTED) sin volver a aplicar el precio por ese camino", async () => {
+test("LA QUE IMPORTA — una línea con trayDecisionId cierra la decisión de Bandeja (RESOLVED/EXECUTION) sin volver a aplicar el precio por ese camino", async () => {
   const batch: FakeBatch = { id: "b5", code: "CP-000005", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const products: FakeProduct[] = [{ id: "p6", sku: "SKU-6", isActive: true, standardSalePrice: d(600), averageCost: d(70), globalCost: null, lastPurchaseCost: null }];
   const lines: FakeLine[] = [{ id: "l6", batchId: "b5", productId: "p6", branchId: BRANCH, costSnapshot: d(70), currentPriceSnapshot: d(600), priceSourceSnapshot: "STANDARD", newPrice: d(650), status: "PENDING", message: null, trayDecisionId: "decision-1", appliedPreviousPrice: null, appliedAt: null }];
@@ -214,8 +219,10 @@ test("LA QUE IMPORTA — una línea con trayDecisionId cierra la decisión de Ba
   await applyLineChunkTx(tx, batch, ["l6"], ACTOR);
 
   assert.equal(lines[0].status, "APPLIED");
-  const decision = decisions[0];
-  assert.equal(decision.status, "EXECUTED");
+  const decision = decisions[0] as unknown as { status: string; resolvedByUserId: string | null; resolutionSource: string | null; resolutionNote: string | null; executedEntityType: string | null; executedEntityId: string | null; actionResultJson: unknown };
+  assert.equal(decision.status, "RESOLVED", "ya no EXECUTED — ese estado ahora es propio de runBrainDecision (Brain ejecutando algo él mismo)");
+  assert.equal(decision.resolutionSource, "EXECUTION");
+  assert.match(decision.resolutionNote ?? "", /CP-000005/);
   assert.equal(decision.resolvedByUserId, ACTOR);
   assert.equal(decision.executedEntityType, "Product");
   assert.equal(decision.executedEntityId, "p6");

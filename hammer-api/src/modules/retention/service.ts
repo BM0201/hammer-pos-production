@@ -57,7 +57,12 @@ type SweepRule = {
 };
 
 // Estados "cerrados" — un registro abierto/en curso nunca se purga aunque sea viejo.
+// prompt-brain-centro-decisiones.md Fase 4.4 — RESOLVED (nuevo: "Ya lo
+// resolví" humano, y el cierre automático del SCHEDULED_SCAN) es tan
+// cerrado como EXECUTED/DISMISSED/EXPIRED — sin esto, una decisión resuelta
+// nunca se purgaba porque el estado nuevo no estaba en esta lista.
 const BRAIN_CLOSED_STATUSES: BrainDecisionStatus[] = [
+  BrainDecisionStatus.RESOLVED,
   BrainDecisionStatus.EXECUTED,
   BrainDecisionStatus.DISMISSED,
   BrainDecisionStatus.EXPIRED,

@@ -105,20 +105,35 @@ async function closeLinkedTrayDecisionTx(
   decisionId: string,
   actionResult: { branchId: string | null; productId: string; previousPrice: number | null; newPrice: number },
   actorUserId: string,
+  batchCode: string,
 ): Promise<void> {
   await tx.$queryRaw`SELECT id FROM "BrainDecision" WHERE id = ${decisionId} FOR UPDATE`;
   const decision = await tx.brainDecision.findUnique({ where: { id: decisionId } });
   if (!decision || decision.status !== "OPEN") return; // ya resuelta por otro camino — nada que cerrar
 
+  // prompt-brain-centro-decisiones.md Fase 4.2 — RESOLVED/EXECUTION (no
+  // EXECUTED, que ahora es el estado propio de runBrainDecision).
+  const note = `Aplicado en carga ${batchCode}`;
   await tx.brainDecision.update({
     where: { id: decisionId },
     data: {
-      status: "EXECUTED",
+      status: "RESOLVED",
       resolvedAt: new Date(),
       resolvedByUserId: actorUserId,
+      resolutionSource: "EXECUTION",
+      resolutionNote: note,
       executedEntityType: "Product",
       executedEntityId: actionResult.productId,
       actionResultJson: actionResult as unknown as Prisma.InputJsonValue,
+    },
+  });
+  await tx.brainDecisionActionLog.create({
+    data: {
+      decisionId,
+      actorUserId,
+      action: "RESOLVED",
+      note,
+      metadataJson: { reason: "EXECUTION", source: "carga_precios", batchCode } as unknown as Prisma.InputJsonValue,
     },
   });
 }
@@ -143,7 +158,7 @@ type ChunkLine = {
  */
 export async function applyLineChunkTx(
   tx: Prisma.TransactionClient,
-  batch: Pick<PriceUpdateBatch, "target" | "reason" | "source">,
+  batch: Pick<PriceUpdateBatch, "target" | "reason" | "source" | "code">,
   lineIds: string[],
   actorUserId: string,
 ): Promise<void> {
@@ -247,6 +262,7 @@ export async function applyLineChunkTx(
         line.trayDecisionId,
         { branchId: line.branchId, productId: line.productId, previousPrice: previousPrice != null ? Number(previousPrice) : null, newPrice: newPriceDecimal != null ? Number(newPriceDecimal) : 0 },
         actorUserId,
+        batch.code,
       );
     }
   }

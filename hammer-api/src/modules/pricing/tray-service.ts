@@ -309,15 +309,32 @@ export async function applyOneTrayDecisionTx(
     warnings,
   );
 
+  // prompt-brain-centro-decisiones.md Fase 4.2 — RESOLVED/EXECUTION, no
+  // EXECUTED: "EXECUTED" ahora es el estado de runBrainDecision (el motor
+  // de Brain ejecutó algo él mismo); esto es un camino DISTINTO — el precio
+  // se aplicó desde la Bandeja de precios, no desde Brain — así que se
+  // cierra como una resolución con fuente EXECUTION, igual que lo deja la
+  // Carga de precios (price-update-batch-apply-service.ts).
   await tx.brainDecision.update({
     where: { id: decisionId },
     data: {
-      status: "EXECUTED",
+      status: "RESOLVED",
       resolvedAt: new Date(),
       resolvedByUserId: input.actorUserId,
+      resolutionSource: "EXECUTION",
+      resolutionNote: "Aplicado desde la Bandeja de precios",
       executedEntityType: "Product",
       executedEntityId: proposed.productId,
       actionResultJson: applyResult as unknown as Prisma.InputJsonValue,
+    },
+  });
+  await tx.brainDecisionActionLog.create({
+    data: {
+      decisionId,
+      actorUserId: input.actorUserId,
+      action: "RESOLVED",
+      note: "Aplicado desde la Bandeja de precios",
+      metadataJson: { reason: "EXECUTION", source: "pricing-tray" } as unknown as Prisma.InputJsonValue,
     },
   });
 

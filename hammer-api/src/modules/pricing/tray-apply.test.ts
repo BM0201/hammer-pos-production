@@ -51,6 +51,11 @@ function createFakeTx(opts: { decisions?: FakeDecision[]; settings?: FakeSetting
         return existing;
       },
     },
+    // Fase 4.2 (prompt-brain-centro-decisiones.md) — applyOneTrayDecisionTx
+    // ahora también deja una entrada de bitácora al cerrar como RESOLVED/EXECUTION.
+    brainDecisionActionLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => data,
+    },
     branchProductSetting: {
       findUnique: async ({ where }: { where: { branchId_productId: { branchId: string; productId: string } } }) => {
         const key = `${where.branchId_productId.branchId}:${where.branchId_productId.productId}`;

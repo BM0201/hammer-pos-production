@@ -57,6 +57,7 @@ export async function calculateOperationalSummaryTx(
     autoClosedPendingReviewCount,
     pendingDispatchCount,
     criticalBrainDecisionCount,
+    lastBrainScanRun,
     expectedCashTotal,
     expectedCashPendingReviewTotal,
     countedCashTotal,
@@ -68,13 +69,26 @@ export async function calculateOperationalSummaryTx(
     tx.cashSession.count({ where: { operationalDayId: day.id, status: CashSessionStatus.OPEN } }),
     tx.cashSession.count({ where: { operationalDayId: day.id, status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW, requiresReview: true } }),
     tx.dispatchTicket.count({ where: { branchId: day.branchId, status: { in: ["PENDING", "IN_PROGRESS"] }, createdAt: { gte: start, lt: end } } }),
+    // prompt-brain-centro-decisiones.md Fase 4.1 — PENDIENTES de verdad, no
+    // "creadas hoy": antes, una crítica detectada el día N pero todavía
+    // abierta el día N+5 no aparecía en el checklist de N+5 (el filtro
+    // createdAt la dejaba fuera). Pendiente = sigue en la bandeja, sin
+    // importar cuándo se detectó por primera vez.
     tx.brainDecision.count({
       where: {
         branchId: day.branchId,
         status: { in: ["OPEN", "APPROVED", "MANUAL_REVIEW", "FAILED"] },
         severity: { in: [BrainDecisionSeverity.CRITICAL, BrainDecisionSeverity.HIGH] },
-        createdAt: { gte: start, lt: end },
       },
+    }),
+    // El último escaneo OK/PARTIAL de esta sucursal O global (branchId null
+    // = corrió para todas) — si no hay uno reciente, el check de abajo no
+    // puede confiar en que criticalBrainDecisionCount==0 signifique "todo
+    // bien" en vez de "nadie miró".
+    tx.brainScanRun.findFirst({
+      where: { status: { not: "RUNNING" }, OR: [{ branchId: day.branchId }, { branchId: null }] },
+      orderBy: { startedAt: "desc" },
+      select: { finishedAt: true },
     }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id, status: { not: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW } }, _sum: { expectedCashAmount: true } }),
     tx.cashSession.aggregate({ where: { operationalDayId: day.id, status: CashSessionStatus.AUTO_CLOSED_PENDING_REVIEW }, _sum: { expectedCashAmount: true } }),
@@ -266,6 +280,7 @@ export async function calculateOperationalSummaryTx(
     autoClosedPendingReviewCount,
     pendingDispatchCount,
     criticalBrainDecisionCount,
+    brainLastScanFinishedAt: lastBrainScanRun?.finishedAt ?? null,
     paymentsByMethod: salesSummary.paymentsByMethod,
     cashSessions: cashSessions.map((session) => ({
       id: session.id,
@@ -372,10 +387,26 @@ export async function closeOrphanedCashSessionsForDayTx(tx: Prisma.TransactionCl
  * confirmar el día. confirmOperationalDay (day-lifecycle.ts) exige nota si
  * hay algún ítem en ATTENTION, pero nunca rechaza la confirmación por sí sola.
  */
+const BRAIN_STALE_HOURS = 2;
+
+type ChecklistSummaryInput = Pick<
+  Awaited<ReturnType<typeof calculateOperationalSummaryTx>>,
+  "openCashSessionsCount" | "autoClosedPendingReviewCount" | "pendingPaymentTotal" | "pendingDispatchCount" | "criticalBrainDecisionCount" | "cashDifferenceTotal" | "brainLastScanFinishedAt"
+>;
+
 export function buildChecklist(
-  summary: Awaited<ReturnType<typeof calculateOperationalSummaryTx>>,
+  summary: ChecklistSummaryInput,
   cashDifferenceToleranceAmount: number,
+  now: Date = new Date(),
 ): OperationalDayChecklist {
+  // prompt-brain-centro-decisiones.md Fase 4.1 — sin escaneo reciente, el
+  // conteo en 0 no es información ("nadie miró"), así que el check no
+  // puede marcar OK solo porque criticalBrainDecisionCount sea 0.
+  const brainHoursSinceLastScan = summary.brainLastScanFinishedAt
+    ? (now.getTime() - summary.brainLastScanFinishedAt.getTime()) / (60 * 60 * 1000)
+    : Infinity;
+  const brainScanStale = brainHoursSinceLastScan > BRAIN_STALE_HOURS;
+
   const items: ChecklistItem[] = [
     {
       key: "open_cash_sessions",
@@ -410,8 +441,9 @@ export function buildChecklist(
     {
       key: "critical_brain",
       label: "Decisiones criticas de Brain",
-      status: summary.criticalBrainDecisionCount > 0 ? "ATTENTION" : "OK",
+      status: brainScanStale || summary.criticalBrainDecisionCount > 0 ? "ATTENTION" : "OK",
       count: summary.criticalBrainDecisionCount,
+      message: brainScanStale ? `Brain no revisó en las últimas ${BRAIN_STALE_HOURS} horas.` : undefined,
     },
     {
       key: "cash_difference",
@@ -752,12 +784,13 @@ export async function getLiveBlockers(): Promise<{
         prisma.dispatchTicket.count({
           where: { branchId: branch.id, status: { in: ["PENDING", "IN_PROGRESS"] }, createdAt: { gte: start, lt: end } },
         }),
+        // Fase 4.1 — mismo fix que calculateOperationalSummaryTx: pendiente de
+        // verdad (sigue abierta), no "creada hoy".
         prisma.brainDecision.count({
           where: {
             branchId: branch.id,
             status: { in: ["OPEN", "APPROVED", "MANUAL_REVIEW", "FAILED"] },
             severity: { in: [BrainDecisionSeverity.CRITICAL, BrainDecisionSeverity.HIGH] },
-            createdAt: { gte: start, lt: end },
           },
         }),
       ]);
