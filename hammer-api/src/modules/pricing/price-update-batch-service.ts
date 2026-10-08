@@ -20,8 +20,9 @@ import {
  * prompt-carga-precios.md Fase 1 — carga de trabajo de actualización masiva
  * de precios: borrador por producto×destino, vista previa con bloqueos/
  * avisos. La aplicación atómica vive en price-update-batch-apply-service.ts
- * (Fase 2) — este archivo es DRAFT only (crear/editar/previsualizar/
- * cancelar), nunca escribe un precio real.
+ * (Fase 2, que reusa snapshotForBranch/snapshotForGeneral de acá) — este
+ * archivo es DRAFT only (crear/editar/previsualizar/cancelar), nunca
+ * escribe un precio real.
  */
 
 export type CreateDraftItem = { productId: string; newPrice?: number | null; trayDecisionId?: string | null };
@@ -35,7 +36,7 @@ export type CreateDraftInput = {
   actorUserId: string;
 };
 
-type LineSnapshot = {
+export type LineSnapshot = {
   cost: number | null;
   price: number | null;
   /** "BRANCH" | "STANDARD" | "FUSION_DERIVED" | "MISSING" */
@@ -55,7 +56,7 @@ async function nextBatchCodeTx(tx: Prisma.TransactionClient): Promise<{ code: st
  * Precios vigentes (getEffectiveProductPricingBatch), nunca una segunda
  * resolución de costo/precio.
  */
-async function snapshotForBranch(
+export async function snapshotForBranch(
   tx: Prisma.TransactionClient,
   branchId: string,
   productIds: string[],
@@ -95,7 +96,7 @@ async function snapshotForBranch(
  * hace falta resolver el costo exacto del canónico para una línea que de
  * todas formas va a quedar BLOCKED.
  */
-async function snapshotForGeneral(
+export async function snapshotForGeneral(
   tx: Prisma.TransactionClient,
   productIds: string[],
 ): Promise<Map<string, LineSnapshot>> {
