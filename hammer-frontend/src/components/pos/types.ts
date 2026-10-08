@@ -5,6 +5,11 @@ export type ProductRow = {
   id: string;
   sku: string;
   barcode: string | null;
+  // prompt-codigos-y-duplicados.md Fase 1 — todos los códigos del producto
+  // (principal + secundarios: otro proveedor, empaque nuevo). `barcode`
+  // sigue siendo el principal — este es el set completo para resolver un
+  // escaneo de cualquiera de ellos sin pedir de vuelta al servidor.
+  barcodes?: string[];
   name: string;
   categoryName?: string | null;
   standardSalePrice: string;

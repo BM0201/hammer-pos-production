@@ -14,6 +14,7 @@ export function toCachedProduct(row: ProductRow): CachedProduct {
     sku: row.sku,
     name: row.name,
     barcode: row.barcode,
+    barcodes: row.barcodes,
     categoryName: row.categoryName,
     effectivePrice: price === null || price === undefined ? null : Number(price),
     unit: row.unit ?? "UND",

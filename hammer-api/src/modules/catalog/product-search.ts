@@ -12,7 +12,7 @@ import { Prisma } from "@prisma/client";
  */
 
 /** Campos que los distintos consumidores pueden combinar en la búsqueda. */
-export type SearchableField = "sku" | "name" | "barcode" | "code" | "category.name" | "category.code";
+export type SearchableField = "sku" | "name" | "barcode" | "code" | "category.name" | "category.code" | "barcodes.code";
 
 /**
  * Parte la búsqueda en palabras: recorta espacios, separa por espacios en
@@ -34,6 +34,11 @@ function fieldContainsClause(field: SearchableField, token: string): Record<stri
   }
   const relation = field.slice(0, dotIndex);
   const subField = field.slice(dotIndex + 1);
+  // Relaciones a-muchos (barcodes: ProductBarcode[]) necesitan `some` —
+  // a diferencia de category (a-uno), que anida directo.
+  if (relation === "barcodes") {
+    return { [relation]: { some: { [subField]: { contains: token, mode: "insensitive" } } } };
+  }
   return { [relation]: { [subField]: { contains: token, mode: "insensitive" } } };
 }
 

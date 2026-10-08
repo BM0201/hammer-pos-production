@@ -48,3 +48,13 @@ export const updateProductSchema = z.object({
   // (PRICE_DEVIATES_FROM_FUSION), mismo patrón que allowHighUnitCost.
   overridePriceConfirmed: z.boolean().optional(),
 });
+
+// prompt-codigos-y-duplicados.md Fase 1 — varios códigos por producto.
+export const addProductBarcodeSchema = z.object({
+  code: z.string().min(1).max(64),
+  kind: z.enum(["FACTORY", "INTERNAL", "SUPPLIER"]),
+});
+
+export const moveProductBarcodeSchema = z.object({
+  toProductId: z.string().cuid(),
+});

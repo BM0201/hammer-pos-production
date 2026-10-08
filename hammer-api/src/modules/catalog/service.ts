@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { normalizeScannedCode, buildInternalBarcode } from "@/modules/catalog/barcode";
+import { BarcodeAlreadyExistsError } from "@/modules/catalog/barcode-errors";
+import { addBarcode, replacePrimaryBarcode, classifyBackfillBarcode } from "@/modules/catalog/product-barcode-service";
 import { resolveEffectivePricingFromParts } from "@/modules/catalog/effective-pricing";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { formatDualStock, convertBaseQtyToSaleQty, convertBaseUnitCostToSaleUnitCost, getProductStockConversion } from "@/modules/inventory/unit-conversion";
@@ -79,6 +81,10 @@ type CatalogProductWithBranchPricing = {
     weightedAverageCost: Prisma.Decimal;
   }>;
   category?: { id: string; code?: string; name: string } | null;
+  // prompt-codigos-y-duplicados.md Fase 1 — todos los códigos del producto
+  // (principal + secundarios), para que el caché del POS pueda resolver un
+  // escaneo de cualquiera de ellos sin pedir de vuelta al servidor.
+  barcodes?: Array<{ code: string }>;
 };
 
 type StockGroupMemberRow = {
@@ -289,7 +295,8 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
   // sin convertir el WAC por factor— y se descartaba entera: `effective` ya
   // pisaba todos sus campos de precio/costo al spreadearse después. Cómputo
   // duplicado sin efecto observable; se borra en vez de "arreglarse".
-  const { branchProductSettings: _branchProductSettings, inventoryBalances: _inventoryBalances, ...productData } = product;
+  const { branchProductSettings: _branchProductSettings, inventoryBalances: _inventoryBalances, barcodes: barcodeRows, ...productData } = product;
+  const barcodes = barcodeRows?.map((b) => b.code) ?? [];
 
   const dualStock = conversion && balance
     ? formatDualStock({
@@ -341,6 +348,7 @@ export function mapSingleProductWithBranchInventory<TProduct extends CatalogProd
     ...productData,
     ...effective,
     categoryName: product.category?.name ?? null,
+    barcodes,
     stockOnHand: displaySaleStock,
     availableStock: displaySaleStock,
     availableBaseStock: balance?.quantityOnHand.toNumber() ?? fallbackQty,
@@ -480,7 +488,7 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
 
   if (params.q) {
     andClauses.push(
-      buildProductSearchWhere<Prisma.ProductWhereInput>(params.q, ["sku", "name", "barcode", "category.name", "category.code"]),
+      buildProductSearchWhere<Prisma.ProductWhereInput>(params.q, ["sku", "name", "barcode", "barcodes.code", "category.name", "category.code"]),
     );
   }
 
@@ -500,6 +508,11 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
     where,
     include: {
       category: true,
+      // prompt-codigos-y-duplicados.md Fase 1 — todos los códigos del
+      // producto, no solo el principal (Product.barcode), para que el
+      // catálogo/POS resuelvan un escaneo o muestren el chip "+N códigos"
+      // sin una consulta aparte.
+      barcodes: { select: { code: true }, orderBy: { isPrimary: "desc" } },
       ...(params.branchId
         ? {
             branchProductSettings: {
@@ -526,7 +539,9 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
     return params.group ? groupProductsByFamily(ranked) : ranked;
   }
 
-  if (!params.branchId) return finalize(products);
+  if (!params.branchId) {
+    return finalize(products.map((p) => ({ ...p, barcodes: p.barcodes.map((b) => b.code) })));
+  }
 
   const mapped = await batchMapProductsWithBranchInventory(products, params.branchId);
   if (!params.inStockOnly) return finalize(mapped);
@@ -556,7 +571,12 @@ export async function checkSkuAvailable(sku: string, excludeProductId?: string) 
   return { available: false, normalizedSku: normalized, existingProductId: existing.id, existingProductName: existing.name };
 }
 
-export type ProductByCodeMatch = "barcode" | "sku" | null;
+// "merged_alias" — prompt-codigos-y-duplicados.md Fase 3 (unificación de
+// duplicados): un código que pertenecía a un producto ya fusionado debe
+// seguir resolviendo al producto VIVO con este matchedBy. Hueco dejado a
+// propósito — todavía no existe Product.mergedIntoProductId ni nada que lo
+// produzca.
+export type ProductByCodeMatch = "barcode" | "sku" | "merged_alias" | null;
 
 export type ProductByCodeResult = {
   id: string;
@@ -598,11 +618,26 @@ export async function findProductByCode(
   const code = normalizeScannedCode(rawCode);
   if (!code) return { product: null, matchedBy: null };
 
-  const byBarcode = await selectProductByCode(db, { barcode: code });
-  if (byBarcode) return { product: byBarcode, matchedBy: "barcode" };
+  // prompt-codigos-y-duplicados.md Fase 1 — ProductBarcode es la fuente de
+  // verdad para TODOS los códigos de un producto (principal + secundarios:
+  // otro proveedor, empaque nuevo). Se busca acá PRIMERO, no solo contra
+  // Product.barcode (que ahora es nada más el espejo del principal), para
+  // que un código secundario también resuelva al producto correcto.
+  const byBarcodeTable = await db.productBarcode.findUnique({
+    where: { code },
+    select: { productId: true },
+  });
+  if (byBarcodeTable) {
+    const product = await selectProductByCode(db, { id: byBarcodeTable.productId });
+    if (product) return { product, matchedBy: "barcode" };
+  }
 
   const bySku = await selectProductByCode(db, { sku: code });
   if (bySku) return { product: bySku, matchedBy: "sku" };
+
+  // Fase 3 (prompt-codigos-y-duplicados.md) — acá va la resolución por
+  // alias de un producto ya FUSIONADO (Product.mergedIntoProductId), con
+  // matchedBy:"merged_alias". Todavía no existe esa tabla/campo.
 
   return { product: null, matchedBy: null };
 }
@@ -620,29 +655,21 @@ export async function assignInternalBarcode(
 ) {
   const product = await db.product.findUniqueOrThrow({
     where: { id: productId },
-    select: { id: true, sku: true, barcode: true },
+    select: { id: true, name: true, sku: true, barcode: true },
   });
   if (product.barcode) {
     throw new Error("BARCODE_ALREADY_SET: el producto ya tiene un código de barras.");
   }
 
+  // prompt-codigos-y-duplicados.md Fase 1 — ya no escribe Product.barcode
+  // directo: delega en addBarcode (product-barcode-service.ts), que crea la
+  // fila en ProductBarcode (kind INTERNAL, principal porque es la primera) y
+  // refleja el mirror en Product.barcode en el mismo golpe, auditando
+  // adentro del `db` recibido.
   const barcode = buildInternalBarcode(product.sku);
-  const updated = await db.product.update({
-    where: { id: productId },
-    data: { barcode },
-    select: { id: true, name: true, sku: true, barcode: true },
-  });
+  const created = await addBarcode({ productId, rawCode: barcode, kind: "INTERNAL", actorUserId }, db);
 
-  await logAuditEvent({
-    actorUserId,
-    module: "catalog",
-    action: "PRODUCT_INTERNAL_BARCODE_ASSIGNED",
-    entityType: "Product",
-    entityId: updated.id,
-    metadataJson: { barcode },
-  });
-
-  return updated;
+  return { id: product.id, name: product.name, sku: product.sku, barcode: created.code };
 }
 
 /**
@@ -681,21 +708,7 @@ export async function suggestProductSku(input: { productName: string; categoryId
   };
 }
 
-/**
- * prompt-alta-productos-qr.md Fase 1 — el P2002 crudo de Product.barcode
- * salía como el CONFLICT genérico de http.ts (sin decir cuál producto ya
- * tiene ese código). `existingProduct` viaja en el error para que la UI de
- * alta rápida pueda ofrecer "Ver producto" sin una segunda consulta.
- */
-export class BarcodeAlreadyExistsError extends Error {
-  constructor(
-    message: string,
-    public readonly existingProduct: { id: string; name: string; sku: string; barcode: string },
-  ) {
-    super(message);
-    this.name = "BarcodeAlreadyExistsError";
-  }
-}
+export { BarcodeAlreadyExistsError };
 
 function isBarcodeUniqueViolation(error: Prisma.PrismaClientKnownRequestError): boolean {
   const target = error.meta?.target;
@@ -739,18 +752,34 @@ export async function createProduct(input: {
 
   let product;
   try {
-    product = await prisma.product.create({
-      data: {
-        sku,
-        barcode: input.barcode ?? null,
-        name: input.name.trim(),
-        description: input.description ?? null,
-        categoryId: input.categoryId,
-        unit: input.unit.trim(),
-        allowsFraction: input.allowsFraction,
-        standardSalePrice: new Prisma.Decimal(input.standardSalePrice),
-        isTimber: input.isTimber,
-      },
+    // prompt-codigos-y-duplicados.md Fase 1 — ProductBarcode es la fuente de
+    // verdad para el scan (findProductByCode ya no mira Product.barcode
+    // directo); un producto creado con código tiene que nacer con su fila en
+    // ProductBarcode en la MISMA transacción, o quedaría invisible al
+    // escanearlo. addBarcode hace su propio chequeo de duplicados contra esa
+    // tabla — el catch de P2002 de abajo sigue siendo el de Product.barcode
+    // (dispara primero, dentro de product.create).
+    product = await prisma.$transaction(async (tx) => {
+      const created = await tx.product.create({
+        data: {
+          sku,
+          barcode: input.barcode ?? null,
+          name: input.name.trim(),
+          description: input.description ?? null,
+          categoryId: input.categoryId,
+          unit: input.unit.trim(),
+          allowsFraction: input.allowsFraction,
+          standardSalePrice: new Prisma.Decimal(input.standardSalePrice),
+          isTimber: input.isTimber,
+        },
+      });
+      if (input.barcode?.trim()) {
+        await addBarcode(
+          { productId: created.id, rawCode: input.barcode, kind: classifyBackfillBarcode(input.barcode).kind, actorUserId: input.actorUserId },
+          tx,
+        );
+      }
+      return created;
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && isBarcodeUniqueViolation(error) && input.barcode) {
@@ -1099,7 +1128,6 @@ export async function updateProduct(productId: string, input: {
       where: { id: productId },
       data: {
         sku: nextSku,
-        barcode: input.barcode,
         name: input.name?.trim(),
         description: input.description,
         categoryId: input.categoryId,
@@ -1110,6 +1138,17 @@ export async function updateProduct(productId: string, input: {
         ...globalCostFields,
       },
     });
+
+    // prompt-codigos-y-duplicados.md Fase 1 — ya no se escribe Product.barcode
+    // directo acá: se delega en replacePrimaryBarcode (product-barcode-service.ts),
+    // que valida duplicados contra OTRO producto (BarcodeAlreadyExistsError)
+    // y mantiene ProductBarcode como fuente de verdad. El objeto devuelto
+    // refleja el barcode FINAL (no el de antes de este golpe).
+    let finalBarcode = updated.barcode;
+    if (input.barcode !== undefined) {
+      const result = await replacePrimaryBarcode(productId, input.barcode, input.actorUserId, tx);
+      finalBarcode = result.code;
+    }
 
     let canonicalUpdate: { productId: string; sku: string; newCost: number } | null = null;
     if (costRedirect) {
@@ -1126,7 +1165,7 @@ export async function updateProduct(productId: string, input: {
       };
     }
 
-    return { product: updated, canonicalUpdate };
+    return { product: { ...updated, barcode: finalBarcode }, canonicalUpdate };
   });
 
   await logAuditEvent({
@@ -1348,6 +1387,7 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
   const fetchTake = params.inStockOnly && params.branchId ? Math.min(Math.max(limit * 5, 50), 500) : limit;
   const include = {
     category: true,
+    barcodes: { select: { code: true }, orderBy: { isPrimary: "desc" as const } },
     ...(params.branchId
       ? {
           branchProductSettings: {
@@ -1360,7 +1400,7 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
           },
         }
       : {}),
-  };
+  } satisfies Prisma.ProductInclude;
 
   // Get the top-selling product IDs by aggregating sale order lines
   const topLines = await prisma.saleOrderLine.groupBy({
@@ -1378,7 +1418,7 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
       orderBy: { name: "asc" },
       take: fetchTake,
     });
-    if (!params.branchId) return fallbackProducts;
+    if (!params.branchId) return fallbackProducts.map((p) => ({ ...p, barcodes: p.barcodes.map((b) => b.code) }));
     const mappedFallback = await batchMapProductsWithBranchInventory(fallbackProducts, params.branchId);
     return params.inStockOnly
       ? mappedFallback.filter((p) => (p.availableSaleStock ?? 0) > 0).slice(0, limit)
@@ -1398,7 +1438,7 @@ export async function getTopSellingProducts(params: { limit?: number; isActive?:
   const idOrder = new Map(productIds.map((id, idx) => [id, idx]));
   products.sort((a, b) => (idOrder.get(a.id) ?? 99) - (idOrder.get(b.id) ?? 99));
 
-  if (!params.branchId) return products;
+  if (!params.branchId) return products.map((p) => ({ ...p, barcodes: p.barcodes.map((b) => b.code) }));
   const mapped = await batchMapProductsWithBranchInventory(products, params.branchId);
   return params.inStockOnly
     ? mapped.filter((p) => (p.availableSaleStock ?? 0) > 0).slice(0, limit)

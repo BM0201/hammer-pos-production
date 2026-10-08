@@ -21,6 +21,10 @@ type SearchableItem = {
   name: string;
   sku: string;
   barcode?: string | null;
+  // prompt-codigos-y-duplicados.md Fase 1 — códigos secundarios (otro
+  // proveedor, empaque nuevo), para que la búsqueda offline del POS
+  // encuentre el producto por cualquiera de ellos, no solo el principal.
+  barcodes?: string[];
   categoryName?: string | null;
 };
 
@@ -30,8 +34,11 @@ export function matchesAllTokens(item: SearchableItem, tokens: string[]): boolea
   const name = item.name.toUpperCase();
   const sku = item.sku.toUpperCase();
   const barcode = (item.barcode ?? "").toUpperCase();
+  const otherBarcodes = (item.barcodes ?? []).map((b) => b.toUpperCase());
   const categoryName = (item.categoryName ?? "").toUpperCase();
-  return tokens.every((token) => name.includes(token) || sku.includes(token) || barcode.includes(token) || categoryName.includes(token));
+  return tokens.every((token) =>
+    name.includes(token) || sku.includes(token) || barcode.includes(token) || otherBarcodes.some((b) => b.includes(token)) || categoryName.includes(token),
+  );
 }
 
 /**

@@ -431,6 +431,26 @@ const DESCRIPTORS: Record<string, Descriptor> = {
     label: "desactivó un producto",
     headline: () => [seg("desactivó un producto (tiene historial asociado)")],
   },
+  PRODUCT_BARCODE_ADDED: {
+    sensitive: false,
+    label: "agregó un código de barras",
+    headline: (e) => [seg("agregó el código "), seg(str(e.metadataJson?.code as string), true)],
+  },
+  PRODUCT_BARCODE_PRIMARY_SET: {
+    sensitive: false,
+    label: "cambió el código principal",
+    headline: (e) => [seg("marcó "), seg(str(e.metadataJson?.code as string), true), seg(" como código principal")],
+  },
+  PRODUCT_BARCODE_REMOVED: {
+    sensitive: false,
+    label: "quitó un código de barras",
+    headline: (e) => [seg("quitó el código "), seg(str(e.metadataJson?.code as string), true)],
+  },
+  PRODUCT_BARCODE_MOVED: {
+    sensitive: false,
+    label: "movió un código a otro producto",
+    headline: (e) => [seg("movió el código "), seg(str(e.metadataJson?.code as string), true), seg(" a otro producto")],
+  },
   CATEGORY_CREATE: {
     sensitive: false,
     label: "creó una categoría",

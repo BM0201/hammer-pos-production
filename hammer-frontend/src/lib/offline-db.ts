@@ -70,6 +70,9 @@ export type CachedProduct = {
   sku: string;
   name: string;
   barcode?: string | null;
+  // prompt-codigos-y-duplicados.md Fase 1 — todos los códigos del producto
+  // (principal + secundarios), para resolver un escaneo offline sin red.
+  barcodes?: string[];
   categoryName?: string | null;
   effectivePrice: number | null;
   unit: string;

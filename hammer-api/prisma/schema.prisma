@@ -445,70 +445,71 @@ model User {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  userBranchRoles             UserBranchRole[]
-  openedSessions              CashSession[]                @relation("CashSessionOpenedBy")
-  closedSessions              CashSession[]                @relation("CashSessionClosedBy")
-  reviewedCashSessions        CashSession[]                @relation("CashSessionReviewedBy")
-  cashSessionOperators        CashSessionOperator[]        @relation("CashSessionOperatorUser")
-  assignedCashOperators       CashSessionOperator[]        @relation("CashSessionOperatorAssignedBy")
-  createdCashMovements        CashMovement[]               @relation("CashMovementCreatedBy")
-  approvedCashMovements       CashMovement[]               @relation("CashMovementApprovedBy")
-  confirmedBankDeposits       BankDeposit[]
-  declaredCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationDeclaredBy")
-  handOverCashDestinations    CashDestinationDeclaration[] @relation("CashDestinationHandOverUser")
-  carriedCashDeposits         CashDestinationDeclaration[] @relation("CashDestinationDepositCarrier")
-  heldTreasuryAccounts        TreasuryAccount[]            @relation("TreasuryAccountHolder")
-  createdTreasuryEntries      TreasuryEntry[]              @relation("TreasuryEntryCreatedBy")
-  createdRetainedCashAdjustments RetainedCashAdjustment[]   @relation("RetainedCashAdjustmentCreatedBy")
-  createdExchangeRates        ExchangeRate[]               @relation("ExchangeRateCreatedBy")
-  openedOperationalDays       OperationalDay[]             @relation("OperationalDayOpenedBy")
-  sweptOperationalDays        OperationalDay[]             @relation("OperationalDaySweptBy")
-  reviewedOperationalDays     OperationalDay[]             @relation("OperationalDayReviewedBy")
-  createdOrders               SaleOrder[]                  @relation("SaleOrderCreatedBy")
-  requestedSaleCancellations  SaleCancellation[]           @relation("SaleCancellationRequestedBy")
-  approvedSaleCancellations   SaleCancellation[]           @relation("SaleCancellationApprovedBy")
-  requestedSaleReturns        SaleReturn[]                 @relation("SaleReturnRequestedBy")
-  approvedSaleReturns         SaleReturn[]                 @relation("SaleReturnApprovedBy")
-  postedRefunds               Refund[]                     @relation("RefundPostedBy")
-  approvedRefunds             Refund[]                     @relation("RefundApprovedBy")
-  createdCreditNotes          CreditNote[]                 @relation("CreditNoteCreatedBy")
-  approvedCreditNotes         CreditNote[]                 @relation("CreditNoteApprovedBy")
-  payments                    Payment[]
-  preparedDispatchTickets     DispatchTicket[]             @relation("DispatchPreparedBy")
-  dispatchTickets             DispatchTicket[]             @relation("DispatchProcessedBy")
-  requestedApprovals          ApprovalRequest[]            @relation("ApprovalRequestedBy")
-  resolvedApprovals           ApprovalRequest[]            @relation("ApprovalResolvedBy")
-  requestedTransfers          Transfer[]                   @relation("TransferRequestedBy")
-  approvedTransfers           Transfer[]                   @relation("TransferApprovedBy")
-  auditLogs                   AuditLog[]
-  purchaseOrders              PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
-  createdDiscounts            Discount[]                   @relation("DiscountCreatedBy")
-  updatedBranchRoleConfigs    BranchRoleConfig[]           @relation("BranchRoleConfigUpdatedBy")
-  updatedSystemSettings       SystemSetting[]              @relation("SystemSettingUpdatedBy")
-  createdTransportServices    TransportService[]           @relation("TransportServiceCreatedBy")
-  updatedBranchModuleConfigs  BranchModuleConfig[]         @relation("BranchModuleConfigUpdatedBy")
-  updatedReorderPolicies      StockReorderPolicy[]         @relation("ReorderPolicyUpdatedBy")
-  resolvedReorderAlerts       ReorderAlert[]               @relation("ReorderAlertResolvedBy")
-  reviewedSuggestionBatches   ReorderSuggestionBatch[]     @relation("SuggestionBatchReviewedBy")
-  createdRecipes              ProductionRecipe[]           @relation("RecipeCreator")
-  createdBatches              ProductionBatch[]            @relation("BatchCreator")
-  userPermissions             UserPermission[]
-  grantedPermissions          UserPermission[]             @relation("PermissionGrantedBy")
-  registeredManualInvoices    SaleOrder[]                  @relation("ManualInvoiceRegisteredBy")
-  documentPrintLogs           DocumentPrintLog[]           @relation("DocumentPrintedBy")
-  createdDocumentTemplates    DocumentTemplate[]           @relation("DocumentTemplateCreatedBy")
-  resolvedBrainDecisions      BrainDecision[]              @relation("BrainDecisionResolvedBy")
-  brainDecisionActionLogs     BrainDecisionActionLog[]     @relation("BrainDecisionActionActor")
-  legacyBrainDecisions        BrainDecision[]              @relation("BrainDecisionLegacyUser")
-  targetedBrainDecisions      BrainDecision[]              @relation("BrainDecisionTargetUser")
-  brainScanRuns               BrainScanRun[]
-  presences                   UserPresence[]
-  createdReplenishmentDrafts  ReplenishmentDraft[]         @relation("ReplenishmentDraftCreatedBy")
-  approvedReplenishmentDrafts ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
-  cashDepositPostponements    CashDepositPostponement[]
-  intendedCashHandovers       TreasuryEntry[]              @relation("TreasuryEntryIntendedRecipient")
-  createdPriceUpdateBatches   PriceUpdateBatch[]           @relation("PriceUpdateBatchCreatedBy")
-  appliedPriceUpdateBatches   PriceUpdateBatch[]           @relation("PriceUpdateBatchAppliedBy")
+  userBranchRoles                UserBranchRole[]
+  openedSessions                 CashSession[]                @relation("CashSessionOpenedBy")
+  closedSessions                 CashSession[]                @relation("CashSessionClosedBy")
+  reviewedCashSessions           CashSession[]                @relation("CashSessionReviewedBy")
+  cashSessionOperators           CashSessionOperator[]        @relation("CashSessionOperatorUser")
+  assignedCashOperators          CashSessionOperator[]        @relation("CashSessionOperatorAssignedBy")
+  createdCashMovements           CashMovement[]               @relation("CashMovementCreatedBy")
+  approvedCashMovements          CashMovement[]               @relation("CashMovementApprovedBy")
+  confirmedBankDeposits          BankDeposit[]
+  declaredCashDestinations       CashDestinationDeclaration[] @relation("CashDestinationDeclaredBy")
+  handOverCashDestinations       CashDestinationDeclaration[] @relation("CashDestinationHandOverUser")
+  carriedCashDeposits            CashDestinationDeclaration[] @relation("CashDestinationDepositCarrier")
+  heldTreasuryAccounts           TreasuryAccount[]            @relation("TreasuryAccountHolder")
+  createdTreasuryEntries         TreasuryEntry[]              @relation("TreasuryEntryCreatedBy")
+  createdRetainedCashAdjustments RetainedCashAdjustment[]     @relation("RetainedCashAdjustmentCreatedBy")
+  createdExchangeRates           ExchangeRate[]               @relation("ExchangeRateCreatedBy")
+  openedOperationalDays          OperationalDay[]             @relation("OperationalDayOpenedBy")
+  sweptOperationalDays           OperationalDay[]             @relation("OperationalDaySweptBy")
+  reviewedOperationalDays        OperationalDay[]             @relation("OperationalDayReviewedBy")
+  createdOrders                  SaleOrder[]                  @relation("SaleOrderCreatedBy")
+  requestedSaleCancellations     SaleCancellation[]           @relation("SaleCancellationRequestedBy")
+  approvedSaleCancellations      SaleCancellation[]           @relation("SaleCancellationApprovedBy")
+  requestedSaleReturns           SaleReturn[]                 @relation("SaleReturnRequestedBy")
+  approvedSaleReturns            SaleReturn[]                 @relation("SaleReturnApprovedBy")
+  postedRefunds                  Refund[]                     @relation("RefundPostedBy")
+  approvedRefunds                Refund[]                     @relation("RefundApprovedBy")
+  createdCreditNotes             CreditNote[]                 @relation("CreditNoteCreatedBy")
+  approvedCreditNotes            CreditNote[]                 @relation("CreditNoteApprovedBy")
+  payments                       Payment[]
+  preparedDispatchTickets        DispatchTicket[]             @relation("DispatchPreparedBy")
+  dispatchTickets                DispatchTicket[]             @relation("DispatchProcessedBy")
+  requestedApprovals             ApprovalRequest[]            @relation("ApprovalRequestedBy")
+  resolvedApprovals              ApprovalRequest[]            @relation("ApprovalResolvedBy")
+  requestedTransfers             Transfer[]                   @relation("TransferRequestedBy")
+  approvedTransfers              Transfer[]                   @relation("TransferApprovedBy")
+  auditLogs                      AuditLog[]
+  purchaseOrders                 PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
+  createdDiscounts               Discount[]                   @relation("DiscountCreatedBy")
+  updatedBranchRoleConfigs       BranchRoleConfig[]           @relation("BranchRoleConfigUpdatedBy")
+  updatedSystemSettings          SystemSetting[]              @relation("SystemSettingUpdatedBy")
+  createdTransportServices       TransportService[]           @relation("TransportServiceCreatedBy")
+  updatedBranchModuleConfigs     BranchModuleConfig[]         @relation("BranchModuleConfigUpdatedBy")
+  updatedReorderPolicies         StockReorderPolicy[]         @relation("ReorderPolicyUpdatedBy")
+  resolvedReorderAlerts          ReorderAlert[]               @relation("ReorderAlertResolvedBy")
+  reviewedSuggestionBatches      ReorderSuggestionBatch[]     @relation("SuggestionBatchReviewedBy")
+  createdRecipes                 ProductionRecipe[]           @relation("RecipeCreator")
+  createdBatches                 ProductionBatch[]            @relation("BatchCreator")
+  userPermissions                UserPermission[]
+  grantedPermissions             UserPermission[]             @relation("PermissionGrantedBy")
+  registeredManualInvoices       SaleOrder[]                  @relation("ManualInvoiceRegisteredBy")
+  documentPrintLogs              DocumentPrintLog[]           @relation("DocumentPrintedBy")
+  createdDocumentTemplates       DocumentTemplate[]           @relation("DocumentTemplateCreatedBy")
+  resolvedBrainDecisions         BrainDecision[]              @relation("BrainDecisionResolvedBy")
+  brainDecisionActionLogs        BrainDecisionActionLog[]     @relation("BrainDecisionActionActor")
+  legacyBrainDecisions           BrainDecision[]              @relation("BrainDecisionLegacyUser")
+  targetedBrainDecisions         BrainDecision[]              @relation("BrainDecisionTargetUser")
+  brainScanRuns                  BrainScanRun[]
+  createdProductBarcodes         ProductBarcode[]
+  presences                      UserPresence[]
+  createdReplenishmentDrafts     ReplenishmentDraft[]         @relation("ReplenishmentDraftCreatedBy")
+  approvedReplenishmentDrafts    ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
+  cashDepositPostponements       CashDepositPostponement[]
+  intendedCashHandovers          TreasuryEntry[]              @relation("TreasuryEntryIntendedRecipient")
+  createdPriceUpdateBatches      PriceUpdateBatch[]           @relation("PriceUpdateBatchCreatedBy")
+  appliedPriceUpdateBatches      PriceUpdateBatch[]           @relation("PriceUpdateBatchAppliedBy")
 
   @@index([globalRole, isActive])
 }
@@ -889,9 +890,9 @@ model PriceUpdateLine {
 
   /// Foto tomada al crear/agregar la línea — nunca se recalcula salvo que
   /// se edite newPrice; applyBatch SIEMPRE revalida contra el estado VIVO.
-  costSnapshot          Decimal?
-  currentPriceSnapshot  Decimal?
-  priceSourceSnapshot   String
+  costSnapshot         Decimal?
+  currentPriceSnapshot Decimal?
+  priceSourceSnapshot  String
 
   newPrice Decimal?
 
@@ -975,6 +976,7 @@ model Product {
   brainDecisions             BrainDecision[]
   replenishmentDraftItems    ReplenishmentDraftItem[]    @relation("ReplenishmentDraftItemProduct")
   priceUpdateLines           PriceUpdateLine[]
+  barcodes                   ProductBarcode[]
 
   @@index([abcClassification])
   @@index([rotationIndex])
@@ -987,6 +989,31 @@ model Product {
   // pg_trgm cada tecleo en el buscador es un seq scan de toda la tabla.
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([sku(ops: raw("gin_trgm_ops"))], type: Gin)
+}
+
+enum ProductBarcodeKind {
+  FACTORY
+  INTERNAL
+  SUPPLIER
+}
+
+/// prompt-codigos-y-duplicados.md Fase 1 — varios códigos por producto (otro
+/// proveedor, empaque nuevo, el HMR- interno y el de fábrica). Product.barcode
+/// se mantiene como copia del principal (POS/caché/etiquetas/búsqueda no
+/// cambian); esta tabla es la fuente de verdad, Product.barcode un espejo.
+model ProductBarcode {
+  id              String             @id @default(cuid())
+  productId       String
+  code            String             @unique
+  kind            ProductBarcodeKind
+  isPrimary       Boolean            @default(false)
+  createdAt       DateTime           @default(now())
+  createdByUserId String?
+
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
 }
 
 model ProductStockGroup {
@@ -2694,10 +2721,10 @@ model AuditLog {
 }
 
 model BrainDecision {
-  id                 String                @id @default(cuid())
+  id                 String                 @id @default(cuid())
   category           BrainDecisionCategory
   severity           BrainDecisionSeverity
-  status             BrainDecisionStatus   @default(OPEN)
+  status             BrainDecisionStatus    @default(OPEN)
   title              String
   description        String
   recommendation     String
@@ -2716,12 +2743,12 @@ model BrainDecision {
   proposedActionJson Json?
   evidenceJson       Json?
   sourceJson         Json?
-  fingerprint        String                @unique
-  idempotencyKey     String?               @unique
-  firstDetectedAt    DateTime              @default(now())
-  lastDetectedAt     DateTime              @default(now())
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
+  fingerprint        String                 @unique
+  idempotencyKey     String?                @unique
+  firstDetectedAt    DateTime               @default(now())
+  lastDetectedAt     DateTime               @default(now())
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
   expiresAt          DateTime?
   resolvedAt         DateTime?
   resolvedByUserId   String?
@@ -3220,7 +3247,7 @@ model ProductionBatch {
   /// prompt-produccion-materiales.md Fase 2 — STANDARD (comportamiento de
   /// siempre: sin actualInputs, el consumo es el teórico) o ACTUAL (se
   /// capturó consumo real por insumo al cerrar).
-  consumptionMode String @default("STANDARD")
+  consumptionMode      String   @default("STANDARD")
   /// Σ(actualQuantity − estándar-para-lo-intentado) × WAC — solo con
   /// consumptionMode=ACTUAL. Null si no se capturó consumo real.
   materialVarianceCost Decimal?
@@ -3269,8 +3296,8 @@ model ProductionBatchInput {
   inputProductId String
   inputProduct   Product @relation("BatchInput", fields: [inputProductId], references: [id])
 
-  plannedQuantity Float /// 50 bolsas planeadas
-  actualQuantity  Float? /// lo que de verdad se consumió — real (actualInputs) o, sin eso, el estándar
+  plannedQuantity  Float /// 50 bolsas planeadas
+  actualQuantity   Float? /// lo que de verdad se consumió — real (actualInputs) o, sin eso, el estándar
   /// prompt-produccion-materiales.md Fase 2 — el consumo TEÓRICO (cantidad
   /// receta × multiplicador), SIEMPRE calculado y guardado al cerrar, para
   /// poder comparar contra actualQuantity aunque éste sea el real. Antes de
@@ -3278,7 +3305,7 @@ model ProductionBatchInput {
   /// separado) — standardQuantity es nuevo, actualQuantity no cambia de
   /// significado para los lotes ya cerrados (consumptionMode=STANDARD).
   standardQuantity Float?
-  unit            String /// "bolsa"
+  unit             String /// "bolsa"
 
   /// Producción v2 Fase 2 — cuánto de plannedQuantity está reservado (aparta stock)
   /// mientras el lote está PLANNED/IN_PROGRESS. 0 cuando no hay reserva activa.
@@ -4075,16 +4102,16 @@ model TreasuryEntry {
   purchaseOrderId String?
   supplierId      String?
 
-  account       TreasuryAccount  @relation("TreasuryEntryAccount", fields: [accountId], references: [id])
+  account             TreasuryAccount  @relation("TreasuryEntryAccount", fields: [accountId], references: [id])
   intendedBankAccount TreasuryAccount? @relation("TreasuryEntryIntendedBank", fields: [intendedBankAccountId], references: [id])
   intendedRecipient   User?            @relation("TreasuryEntryIntendedRecipient", fields: [intendedRecipientUserId], references: [id])
-  cashMovement  CashMovement?   @relation(fields: [cashMovementId], references: [id])
-  paymentTender PaymentTender?  @relation(fields: [paymentTenderId], references: [id])
-  bankDeposit   BankDeposit?    @relation(fields: [bankDepositId], references: [id])
-  card          TreasuryCard?   @relation(fields: [cardId], references: [id])
-  createdBy     User            @relation("TreasuryEntryCreatedBy", fields: [createdByUserId], references: [id])
-  purchaseOrder PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id])
-  supplier      Supplier?       @relation(fields: [supplierId], references: [id])
+  cashMovement        CashMovement?    @relation(fields: [cashMovementId], references: [id])
+  paymentTender       PaymentTender?   @relation(fields: [paymentTenderId], references: [id])
+  bankDeposit         BankDeposit?     @relation(fields: [bankDepositId], references: [id])
+  card                TreasuryCard?    @relation(fields: [cardId], references: [id])
+  createdBy           User             @relation("TreasuryEntryCreatedBy", fields: [createdByUserId], references: [id])
+  purchaseOrder       PurchaseOrder?   @relation(fields: [purchaseOrderId], references: [id])
+  supplier            Supplier?        @relation(fields: [supplierId], references: [id])
 
   @@index([accountId, occurredAt, createdAt])
   @@index([transferId])
