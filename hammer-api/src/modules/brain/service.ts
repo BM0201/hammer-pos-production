@@ -9,7 +9,7 @@ import {
   riskScoreFor,
   severityRank,
 } from "@/modules/brain/scoring";
-import { getDecisionCatalogEntry, formatEvidence } from "@/modules/brain/decision-catalog";
+import { getDecisionCatalogEntry, formatEvidence, labelForActionLog } from "@/modules/brain/decision-catalog";
 import { KNOWN_DETECTOR_KEYS } from "@/modules/brain/detector-registry";
 import type { BrainDecisionDraft, BrainDecisionFilters, BrainScanResult, BrainDetectorLimits, BrainScanScope } from "@/modules/brain/types";
 
@@ -94,6 +94,15 @@ function enrichDecision(decision: DecisionWithRelations) {
     cta: catalogEntry.cta,
     href,
     evidence: formatEvidence(decision.evidenceJson),
+    // Fase 2.5/3.5 — historial en español, no el código crudo (REOPENED, etc).
+    history: decision.actionLogs.map((log) => ({
+      id: log.id,
+      action: log.action,
+      actionLabel: labelForActionLog(log.action),
+      note: log.note,
+      actorName: log.actor?.fullName ?? log.actor?.username ?? null,
+      createdAt: log.createdAt,
+    })),
   };
 }
 

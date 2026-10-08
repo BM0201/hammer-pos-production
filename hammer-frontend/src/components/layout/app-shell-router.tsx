@@ -44,7 +44,7 @@ const SECTION_META: Record<string, { title: string; subtitle: string }> = {
   branches: { title: "Sucursales", subtitle: "Estructura, estado y configuracion operativa." },
   users: { title: "Usuarios", subtitle: "Roles, accesos y membresias por sucursal." },
   "catalog-inventory": { title: "Catalogo e Inventario", subtitle: "Productos, precios, costos, existencias e importaciones." },
-  brain: { title: "Brain", subtitle: "Bandeja de decisiones, recomendaciones y ejecuciones." },
+  brain: { title: "Centro de Decisiones", subtitle: "Qué necesita tu atención hoy, en qué sucursal y dónde se resuelve." },
   reports: { title: "Reportes", subtitle: "Indicadores y consultas para seguimiento gerencial." },
   approvals: { title: "Aprobaciones", subtitle: "Solicitudes pendientes, evidencia y resoluciones." },
   audit: { title: "Auditoria", subtitle: "Bitacora de cambios y actividad sensible." },

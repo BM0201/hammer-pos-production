@@ -262,6 +262,28 @@ const KNOWN_EVIDENCE_LABELS: Record<string, { label: string; format: EvidenceFor
   amounts: { label: "Montos", format: "text" },
 };
 
+/** Fase 2.5/3.5 — historial en español: una entrada por `action` de BrainDecisionActionLog. Un código sin mapear se humaniza igual que una clave de evidencia desconocida — nunca el código crudo. */
+export const ACTION_LOG_LABELS: Record<string, string> = {
+  CREATED: "Detectada",
+  UPDATED: "Actualizada",
+  REOPENED: "Volvió a aparecer",
+  RESOLVED: "Marcada resuelta",
+  DISMISSED: "Descartada (no aplica)",
+  SNOOZED: "Pospuesta",
+  EXPIRED: "Expiró sin resolución",
+  APPROVED: "Aprobada",
+  MANUAL_REVIEW_REQUIRED: "Marcada para revisión manual",
+  EXECUTION_STARTED: "Empezó a ejecutarse",
+  EXECUTED: "Ejecutada",
+  EXECUTION_INCOMPLETE: "No se pudo ejecutar — faltaron datos",
+  FAILED: "Falló al ejecutar",
+};
+
+export function labelForActionLog(action: string): string {
+  if (ACTION_LOG_LABELS[action]) return ACTION_LOG_LABELS[action];
+  return action.charAt(0) + action.slice(1).toLowerCase().replace(/_/g, " ");
+}
+
 export type FormattedEvidenceItem = { key: string; label: string; value: unknown; format: EvidenceFormat };
 
 /** Cada clave de evidenceJson con su etiqueta — conocida (español) o humanizada de la clave misma. Nunca JSON crudo. */
