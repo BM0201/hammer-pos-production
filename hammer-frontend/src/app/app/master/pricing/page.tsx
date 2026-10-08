@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2, ReceiptText, Search, HelpCircle, Flame } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2, ReceiptText, Search, HelpCircle, Flame, ClipboardList } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { PricingCalculatorPanel } from "@/components/pricing/pricing-calculator-panel";
 import { CategoryPoliciesPanel } from "@/components/pricing/category-policies-panel";
 import { PricingConfigPanel } from "@/components/pricing/pricing-config-panel";
+import { PriceLoadTab, type LoadSeed } from "@/components/pricing/price-load-tab";
 import toast from "react-hot-toast";
 import { money, fmtDatePadded } from "@/lib/format";
 
@@ -23,10 +24,11 @@ import { money, fmtDatePadded } from "@/lib/format";
  * y piden elegir una.
  */
 
-type ZoneTab = "tray" | "current" | "calculator" | "policies" | "config";
+type ZoneTab = "tray" | "current" | "loads" | "calculator" | "policies" | "config";
 const ZONE_TABS: Array<{ key: ZoneTab; label: string; icon: typeof Inbox }> = [
   { key: "tray", label: "Bandeja", icon: Inbox },
   { key: "current", label: "Precios vigentes", icon: ReceiptText },
+  { key: "loads", label: "Carga de precios", icon: ClipboardList },
   { key: "calculator", label: "Calculadora", icon: Calculator },
   { key: "policies", label: "Políticas", icon: SlidersHorizontal },
   { key: "config", label: "Configuración", icon: Settings },
@@ -48,6 +50,10 @@ export default function PricingZonePage() {
   const [branchId, setBranchId] = useState(searchParams.get("branchId") ?? "");
   const initialProductId = searchParams.get("productId") ?? undefined;
   const [branches, setBranches] = useState<Branch[]>([]);
+  // Puente Precios vigentes → Carga de precios: "Agregar a carga" desde la
+  // tabla de vigentes siembra esta pestaña con los productos ya elegidos,
+  // en vez de obligar a buscarlos de nuevo.
+  const [loadSeed, setLoadSeed] = useState<LoadSeed | null>(null);
 
   useEffect(() => {
     apiFetch("/api/branches").then((r) => (r.ok ? r.json() : null)).then((raw) => { if (raw) setBranches(unwrapApiData(raw) as Branch[]); }).catch(() => {});
@@ -80,7 +86,12 @@ export default function PricingZonePage() {
     router.replace(`${pathname}?${params}` as Parameters<typeof router.replace>[0], { scroll: false });
   }
 
-  const needsBranch = activeTab !== "tray";
+  const needsBranch = activeTab !== "tray" && activeTab !== "loads";
+
+  function sendSelectionToLoads(seed: LoadSeed) {
+    setLoadSeed(seed);
+    selectTab("loads");
+  }
 
   return (
     <section className="space-y-6 pb-24">
@@ -136,7 +147,10 @@ export default function PricingZonePage() {
             />
           )}
           {activeTab === "current" && (
-            <CurrentPricesTab branchId={branchId} onOpenCalculator={openCalculatorFor} />
+            <CurrentPricesTab branchId={branchId} onOpenCalculator={openCalculatorFor} onSendToLoads={sendSelectionToLoads} />
+          )}
+          {activeTab === "loads" && (
+            <PriceLoadTab branches={branches} seed={loadSeed} onSeedConsumed={() => setLoadSeed(null)} />
           )}
           {activeTab === "calculator" && <PricingCalculatorPanel branchId={branchId} initialProductId={initialProductId} />}
           {activeTab === "policies" && <CategoryPoliciesPanel branchId={branchId} />}
@@ -895,7 +909,7 @@ const PRICE_SOURCE_CHIP_LABEL: Record<CurrentPriceSource, string> = {
   MISSING: "sin precio",
 };
 
-function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; onOpenCalculator: (productId: string) => void }) {
+function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branchId: string; onOpenCalculator: (productId: string) => void; onSendToLoads: (seed: LoadSeed) => void }) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<CurrentPricesResponse | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -905,6 +919,12 @@ function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; on
   const [priceSourceFilter, setPriceSourceFilter] = useState<CurrentPriceSource | "">("");
   const [sort, setSort] = useState<CurrentPricesSort>("name");
   const [page, setPage] = useState(1);
+  // Puente a "Carga de precios" — selección de esta página, no de todo el
+  // filtro (ver prompt-carga-precios.md, reporte de cierre: "seleccionar
+  // todos los N del filtro" quedó fuera de alcance para no arriesgar un
+  // truncado silencioso si el filtro trae más productos que el límite de
+  // una sola página).
+  const [selectedForLoad, setSelectedForLoad] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQ(q), 350);
@@ -932,6 +952,7 @@ function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; on
       const raw = await res.json();
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudieron cargar los precios vigentes.");
       setData(unwrapApiData(raw) as CurrentPricesResponse);
+      setSelectedForLoad(new Set());
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudieron cargar los precios vigentes.");
     } finally {
@@ -1048,6 +1069,7 @@ function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; on
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--color-border)] text-left text-xs text-[var(--color-text-muted)]">
+                  <th className="px-3 py-2"></th>
                   <th className="px-3 py-2">Producto</th>
                   <th className="px-3 py-2">Categoría</th>
                   <th className="px-3 py-2 text-right">Costo</th>
@@ -1072,6 +1094,18 @@ function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; on
                       onClick={() => onOpenCalculator(row.productId)}
                       title="Abrir en la calculadora"
                     >
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedForLoad.has(row.productId)}
+                          onChange={() => setSelectedForLoad((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(row.productId)) next.delete(row.productId); else next.add(row.productId);
+                            return next;
+                          })}
+                          aria-label={`Seleccionar ${row.name} para carga de precios`}
+                        />
+                      </td>
                       <td className="px-3 py-2.5">
                         <span className="block truncate font-medium text-[var(--color-text)]">{row.name}</span>
                         <span className="block text-xs text-[var(--color-text-soft)]">{row.sku}</span>
@@ -1133,6 +1167,24 @@ function CurrentPricesTab({ branchId, onOpenCalculator }: { branchId: string; on
             </div>
           )}
         </Card>
+      )}
+
+      {selectedForLoad.size > 0 && data && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 shadow-2xl md:pl-[calc(var(--sidebar-width,0px)+1rem)]">
+          <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+            <span className="text-sm text-[var(--color-text-muted)]">{selectedForLoad.size} producto{selectedForLoad.size === 1 ? "" : "s"} seleccionado{selectedForLoad.size === 1 ? "" : "s"}</span>
+            <Button
+              type="button"
+              variant="primary"
+              onClick={() => onSendToLoads({
+                branchId,
+                products: data.rows.filter((r) => selectedForLoad.has(r.productId)).map((r) => ({ productId: r.productId, sku: r.sku, name: r.name })),
+              })}
+            >
+              Agregar a carga de precios ({selectedForLoad.size})
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );
