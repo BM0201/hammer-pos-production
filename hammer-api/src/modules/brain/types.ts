@@ -5,7 +5,9 @@ import type {
   Prisma,
 } from "@prisma/client";
 
-export type BrainScanMode = "QUICK_SCAN" | "OPERATIONAL_DAY_SCAN" | "ENTITY_SCAN" | "DEEP_SCAN" | "REPAIR_SCAN";
+export type BrainScanMode = "SCHEDULED_SCAN" | "QUICK_SCAN" | "OPERATIONAL_DAY_SCAN" | "ENTITY_SCAN" | "DEEP_SCAN" | "REPAIR_SCAN";
+
+export type BrainScanTrigger = "SCHEDULED" | "MANUAL" | "PRICING_REFRESH";
 
 export type BrainScanScope = {
   branchId?: string;
@@ -68,6 +70,18 @@ export type BrainDecisionDraft = {
   sourceJson?: Prisma.InputJsonValue | null;
   fingerprintParts: Array<string | number | boolean | null | undefined>;
   expiresAt?: Date | null;
+  /** Estampado por engine.ts antes de persistir — la `key` del detector que la emitió. Habilita el cierre automático. */
+  detectorKey?: string;
+};
+
+export type BrainScanDetectorSummary = {
+  key: string;
+  category: BrainDecisionCategory;
+  ok: boolean;
+  count: number;
+  capped: boolean;
+  ms: number | null;
+  error?: string;
 };
 
 export type BrainScanResult = {

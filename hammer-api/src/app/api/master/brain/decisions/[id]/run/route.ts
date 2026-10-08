@@ -2,10 +2,11 @@ import { fail, ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { getCurrentSession } from "@/modules/auth/service";
-import { dismissBrainDecision } from "@/modules/brain/service";
-import { dismissDecisionSchema } from "@/modules/brain/validators";
+import { runBrainDecision } from "@/modules/brain/service";
+import { decisionNoteSchema } from "@/modules/brain/validators";
 import { requireCsrf } from "@/modules/security/csrf";
 
+/** prompt-brain-centro-decisiones.md Fase 1.6 — "Ejecutar": reemplaza el par aprobar→ejecutar (approve/execute siguen vivos por compatibilidad, pero la pantalla nueva solo llama acá). */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const session = await getCurrentSession();
@@ -14,10 +15,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     assertMaster(session);
 
     const { id } = await context.params;
-    const parsed = dismissDecisionSchema.safeParse(await request.json().catch(() => ({})));
-    if (!parsed.success) return fail("VALIDATION_ERROR", "El motivo es obligatorio para descartar.", 400, parsed.error.flatten());
+    const parsed = decisionNoteSchema.safeParse(await request.json().catch(() => ({})));
+    if (!parsed.success) return fail("VALIDATION_ERROR", "Datos invalidos.", 400, parsed.error.flatten());
 
-    const data = await dismissBrainDecision(id, session.userId, parsed.data.note);
+    const data = await runBrainDecision(id, session.userId, parsed.data.note);
     return ok(data);
   } catch (error) {
     return toHttpErrorResponse(error);

@@ -9,6 +9,11 @@ const severityWeight: Record<BrainDecisionSeverity, number> = {
   INFO: 10,
 };
 
+/** prompt-brain-centro-decisiones.md Fase 1.5 — comparar severidades ("¿la nueva es MÁS grave que con la que se descartó?"), reusando el mismo peso que ya pondera riskScoreFor en vez de inventar una segunda escala. */
+export function severityRank(severity: BrainDecisionSeverity): number {
+  return severityWeight[severity];
+}
+
 export function makeDecisionFingerprint(parts: Array<string | number | boolean | null | undefined>) {
   return createHash("sha256")
     .update(parts.map((part) => String(part ?? "")).join("|"))

@@ -143,6 +143,11 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message === "ALREADY_PROCESSED") {
       return errJson("ALREADY_PROCESSED", "Esta operación ya se procesó. Actualizá la pantalla.", 409);
     }
+    // prompt-brain-centro-decisiones.md Fase 1.3 — candado de BrainScanRun
+    // (runningLock único): ya hay un escaneo corriendo.
+    if (error.message === "BRAIN_SCAN_RUNNING") {
+      return errJson("BRAIN_SCAN_RUNNING", "Ya hay un escaneo en curso.", 409);
+    }
     if (error.message.startsWith("INSUFFICIENT_STOCK_TO_REVERSE:")) {
       return errJson("INSUFFICIENT_STOCK_TO_REVERSE", error.message.replace(/^INSUFFICIENT_STOCK_TO_REVERSE:\s?/, ""), 409);
     }

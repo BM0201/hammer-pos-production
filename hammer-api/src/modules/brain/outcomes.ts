@@ -1,15 +1,24 @@
-import { BrainDecisionCategory } from "@prisma/client";
+import { BrainDecisionCategory, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+
+type Db = Prisma.TransactionClient | typeof prisma;
 
 function n(value: unknown) {
   if (value === null || value === undefined) return 0;
   return Number(value);
 }
 
-export async function evaluateExecutedDecisions(input: { now?: Date; limit?: number } = {}) {
+/**
+ * Fase 1.7 — `outcomes: { none: {} }` solo tiene sentido ahora que
+ * runBrainDecision/executeBrainDecision ya NO crean un outcome al
+ * ejecutar (antes creaban uno con successScore:50 de inmediato, así que
+ * esta condición nunca volvía a ser cierta para nada ejecutado por el
+ * camino normal — esta función quedaba muerta para su propósito real).
+ */
+export async function evaluateExecutedDecisions(input: { now?: Date; limit?: number } = {}, db: Db = prisma) {
   const now = input.now ?? new Date();
   const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-  const decisions = await prisma.brainDecision.findMany({
+  const decisions = await db.brainDecision.findMany({
     where: {
       status: "EXECUTED",
       category: { in: [BrainDecisionCategory.REORDER, BrainDecisionCategory.PRICING, BrainDecisionCategory.DISPATCH, BrainDecisionCategory.CASH] },
@@ -24,10 +33,13 @@ export async function evaluateExecutedDecisions(input: { now?: Date; limit?: num
   for (const decision of decisions) {
     const expectedImpact = n(decision.impactAmount);
     let actualImpact: number | null = null;
-    let successScore = 50;
+    // Fase 1.7 — sin medida real, null (no un 50 inventado). Hoy solo
+    // REORDER tiene una forma de medir impacto real (unidades vendidas
+    // después); el resto queda sin successScore hasta que exista una.
+    let successScore: number | null = null;
 
     if (decision.category === BrainDecisionCategory.REORDER && decision.productId) {
-      const units = await prisma.saleOrderLine.aggregate({
+      const units = await db.saleOrderLine.aggregate({
         where: {
           productId: decision.productId,
           saleOrder: {
@@ -41,7 +53,7 @@ export async function evaluateExecutedDecisions(input: { now?: Date; limit?: num
       successScore = actualImpact > 0 ? Math.min(100, 55 + actualImpact * 3) : 35;
     }
 
-    await prisma.brainDecisionOutcome.create({
+    await db.brainDecisionOutcome.create({
       data: {
         decisionId: decision.id,
         measuredAt: now,

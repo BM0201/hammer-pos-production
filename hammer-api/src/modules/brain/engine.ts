@@ -1,4 +1,5 @@
 import { BrainDecisionCategory, Prisma, type BrainDecisionSeverity } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 import { refreshAllInsights } from "@/modules/ai-insights/service";
 import { detectCashDecisions } from "@/modules/brain/detectors/cash-detector";
 import { detectDispatchDecisions } from "@/modules/brain/detectors/dispatch-detector";
@@ -11,8 +12,8 @@ import { detectPurchasingDecisions } from "@/modules/brain/detectors/purchasing-
 import { detectSecurityDecisions } from "@/modules/brain/detectors/security-detector";
 import { detectSystemDecisions } from "@/modules/brain/detectors/system-detector";
 import { riskScoreFor } from "@/modules/brain/scoring";
-import { persistBrainDecisions } from "@/modules/brain/service";
-import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
+import { persistBrainDecisions, autoResolveNotRedetected, acquireScanRunLockTx, shouldAutoCloseAfterScan } from "@/modules/brain/service";
+import type { BrainDecisionDraft, BrainDetectorContext, BrainScanResult, BrainScanDetectorSummary } from "@/modules/brain/types";
 import type { ScanBrainInput } from "@/modules/brain/validators";
 
 const QUICK_SCAN_CATEGORIES = new Set<BrainDecisionCategory>([
@@ -64,7 +65,11 @@ function managuaDayRangeUtc(ymd: string) {
 }
 
 function validateScanInput(input: ScanBrainInput) {
-  const mode = input.mode ?? "QUICK_SCAN";
+  // SCHEDULED_SCAN (cron cada hora, "Escanear ahora" y el refresh de
+  // Precios) es el default ahora — antes era QUICK_SCAN. Los otros 5 modos
+  // ("avanzados") siguen existiendo para diagnóstico puntual (Fase 2 los
+  // deja detrás de SYSTEM_ADMIN en la ruta).
+  const mode = input.mode ?? "SCHEDULED_SCAN";
   if (mode === "ENTITY_SCAN" && !input.saleOrderId && !input.cashSessionId && !input.productId && !input.operationalDayId) {
     throw new Error("INVALID_INPUT: ENTITY_SCAN requiere saleOrderId, cashSessionId, productId u operationalDayId.");
   }
@@ -86,6 +91,7 @@ function detectorAllowedForMode(category: BrainDecisionCategory, mode: string) {
   if (mode === "ENTITY_SCAN") return ENTITY_SCAN_CATEGORIES.has(category);
   if (mode === "REPAIR_SCAN") return REPAIR_SCAN_CATEGORIES.has(category);
   if (mode === "OPERATIONAL_DAY_SCAN") return OPERATIONAL_DAY_SCAN_CATEGORIES.has(category);
+  // SCHEDULED_SCAN y DEEP_SCAN: todos los detectores, sin filtro de categoría.
   return true;
 }
 
@@ -130,103 +136,178 @@ async function detectLegacyAiInsightDecisions(ctx: BrainDetectorContext): Promis
       title: item.title,
       description: item.description,
       recommendation: "Revisar la evidencia del insight y aprobar una accion operativa si aplica.",
-      confidenceScore: 0.68,
-      riskScore: riskScoreFor(severity, 0.68),
+      branchId: ctx.branchId ?? null,
+      // B.11 — sin branchId el mismo insight de dos sucursales se pisaba
+      // (mismo fingerprint); confidenceScore ya no es fijo (null: la
+      // pantalla no debe mostrar "Confianza" para algo que nunca se midió).
+      confidenceScore: null,
+      riskScore: riskScoreFor(severity, 75),
       proposedActionType: "REVIEW_LEGACY_AI_INSIGHT",
       evidenceJson: item as unknown as Prisma.InputJsonValue,
       sourceJson: { detector: "ai-insights", legacyId: item.id, generatedAt: summary.generatedAt },
-      fingerprintParts: ["ai-insights", item.category, item.id],
+      fingerprintParts: ["ai-insights", ctx.branchId ?? "ALL", item.category, item.id],
     } satisfies BrainDecisionDraft;
   });
 }
 
 export async function runBrainScan(input: ScanBrainInput & { actorUserId?: string }) {
   const mode = validateScanInput(input);
-  const days = mode === "QUICK_SCAN" ? 1 : input.days ?? 30;
-  const now = input.now && process.env.NODE_ENV !== "production" ? new Date(input.now) : new Date();
-  const businessDate = input.businessDate ?? (mode === "QUICK_SCAN" ? managuaBusinessDate(now) : undefined);
-  const businessRange = businessDate ? managuaDayRangeUtc(businessDate) : null;
-  const dateFrom = input.dateFrom ? new Date(input.dateFrom) : businessRange?.start ?? new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-  const dateTo = input.dateTo ? new Date(input.dateTo) : businessRange?.end ?? now;
-  const limits = {
-    maxIssues: input.maxIssues ?? (mode === "QUICK_SCAN" ? 50 : 150),
-    maxEntities: input.maxEntities ?? (mode === "QUICK_SCAN" ? 250 : 1000),
-    timeoutMs: input.timeoutMs ?? (mode === "QUICK_SCAN" ? 5000 : 15000),
-  };
-  const ctx: BrainDetectorContext = {
-    branchId: input.branchId,
-    businessDate,
-    operationalDayId: input.operationalDayId,
-    cashSessionId: input.cashSessionId,
-    saleOrderId: input.saleOrderId,
-    productId: input.productId,
-    detector: input.detector,
-    mode,
-    days,
-    now,
-    since: dateFrom,
-    dateFrom,
-    dateTo,
-    dryRun: input.dryRun,
-    limits,
-    scope: {
+  const trigger = input.trigger ?? "MANUAL";
+  const scanRunId = await acquireScanRunLockTx(prisma, { mode, trigger, branchId: input.branchId, actorUserId: input.actorUserId });
+  const scanStartedAt = new Date();
+
+  try {
+    const days = mode === "QUICK_SCAN" ? 1 : mode === "SCHEDULED_SCAN" ? 30 : input.days ?? 30;
+    const now = input.now && process.env.NODE_ENV !== "production" ? new Date(input.now) : new Date();
+    const businessDate = input.businessDate ?? (mode === "QUICK_SCAN" ? managuaBusinessDate(now) : undefined);
+    const businessRange = businessDate ? managuaDayRangeUtc(businessDate) : null;
+    const dateFrom = input.dateFrom ? new Date(input.dateFrom) : businessRange?.start ?? new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const dateTo = input.dateTo ? new Date(input.dateTo) : businessRange?.end ?? now;
+    const limits = {
+      maxIssues: input.maxIssues ?? (mode === "QUICK_SCAN" ? 50 : 150),
+      maxEntities: input.maxEntities ?? (mode === "QUICK_SCAN" ? 250 : 1000),
+      timeoutMs: input.timeoutMs ?? (mode === "QUICK_SCAN" ? 5000 : 15000),
+    };
+    const ctx: BrainDetectorContext = {
       branchId: input.branchId,
       businessDate,
       operationalDayId: input.operationalDayId,
       cashSessionId: input.cashSessionId,
       saleOrderId: input.saleOrderId,
       productId: input.productId,
-      category: input.category,
-      severity: input.severity,
       detector: input.detector,
+      mode,
+      days,
+      now,
+      since: dateFrom,
       dateFrom,
       dateTo,
-      mode,
-    },
-  };
+      dryRun: input.dryRun,
+      limits,
+      scope: {
+        branchId: input.branchId,
+        businessDate,
+        operationalDayId: input.operationalDayId,
+        cashSessionId: input.cashSessionId,
+        saleOrderId: input.saleOrderId,
+        productId: input.productId,
+        category: input.category,
+        severity: input.severity,
+        detector: input.detector,
+        dateFrom,
+        dateTo,
+        mode,
+      },
+    };
 
-  const detectors: Array<{ key: string; category: BrainDecisionCategory; run: () => Promise<BrainDecisionDraft[]> }> = [
-    { key: "inventory-detector", category: BrainDecisionCategory.INVENTORY, run: () => detectInventoryDecisions(ctx) },
-    { key: "wac-health-detector", category: BrainDecisionCategory.INVENTORY, run: () => detectWacHealthDecisions(ctx) },
-    { key: "reorder-detector", category: BrainDecisionCategory.REORDER, run: () => detectReorderDecisions(ctx) },
-    { key: "pricing-detector", category: BrainDecisionCategory.PRICING, run: () => detectPricingDecisions(ctx) },
-    { key: "cash-detector", category: BrainDecisionCategory.CASH, run: () => detectCashDecisions(ctx) },
-    { key: "sales-detector", category: BrainDecisionCategory.SALES, run: () => detectSalesDecisions(ctx) },
-    { key: "dispatch-detector", category: BrainDecisionCategory.DISPATCH, run: () => detectDispatchDecisions(ctx) },
-    { key: "purchasing-detector", category: BrainDecisionCategory.PURCHASING, run: () => detectPurchasingDecisions(ctx) },
-    { key: "security-detector", category: BrainDecisionCategory.SECURITY, run: () => detectSecurityDecisions(ctx) },
-    { key: "system-detector", category: BrainDecisionCategory.SYSTEM, run: () => detectSystemDecisions(ctx) },
-    { key: "ai-insights", category: BrainDecisionCategory.AUDIT, run: () => detectLegacyAiInsightDecisions(ctx) },
-  ].filter((detector) =>
-    (!input.category || detector.category === input.category)
-    && (!input.detector || detector.key === input.detector)
-    && detectorAllowedForMode(detector.category, mode)
-  );
+    const detectors: Array<{ key: string; category: BrainDecisionCategory; run: () => Promise<BrainDecisionDraft[]> }> = [
+      { key: "inventory-detector", category: BrainDecisionCategory.INVENTORY, run: () => detectInventoryDecisions(ctx) },
+      { key: "wac-health-detector", category: BrainDecisionCategory.INVENTORY, run: () => detectWacHealthDecisions(ctx) },
+      { key: "reorder-detector", category: BrainDecisionCategory.REORDER, run: () => detectReorderDecisions(ctx) },
+      { key: "pricing-detector", category: BrainDecisionCategory.PRICING, run: () => detectPricingDecisions(ctx) },
+      { key: "cash-detector", category: BrainDecisionCategory.CASH, run: () => detectCashDecisions(ctx) },
+      { key: "sales-detector", category: BrainDecisionCategory.SALES, run: () => detectSalesDecisions(ctx) },
+      { key: "dispatch-detector", category: BrainDecisionCategory.DISPATCH, run: () => detectDispatchDecisions(ctx) },
+      { key: "purchasing-detector", category: BrainDecisionCategory.PURCHASING, run: () => detectPurchasingDecisions(ctx) },
+      { key: "security-detector", category: BrainDecisionCategory.SECURITY, run: () => detectSecurityDecisions(ctx) },
+      { key: "system-detector", category: BrainDecisionCategory.SYSTEM, run: () => detectSystemDecisions(ctx) },
+      { key: "ai-insights", category: BrainDecisionCategory.AUDIT, run: () => detectLegacyAiInsightDecisions(ctx) },
+    ].filter((detector) =>
+      (!input.category || detector.category === input.category)
+      && (!input.detector || detector.key === input.detector)
+      && detectorAllowedForMode(detector.category, mode)
+    );
 
-  const settled = await Promise.allSettled(
-    detectors.map((detector) => withTimeout(detector.run(), limits.timeoutMs, detector.key))
-  );
-  const errors = settled.flatMap((result, index) => result.status === "rejected"
-    ? [{ detector: detectors[index].key, message: result.reason instanceof Error ? result.reason.message : String(result.reason) }]
-    : []);
+    const timedRuns = await Promise.allSettled(
+      detectors.map(async (detector) => {
+        const startedAt = Date.now();
+        const drafts = await withTimeout(detector.run(), limits.timeoutMs, detector.key);
+        return { drafts, ms: Date.now() - startedAt };
+      })
+    );
 
-  // J: collect all results before capping so we can emit a partial-scan warning
-  const allResults = settled
-    .flatMap((result) => result.status === "fulfilled" ? result.value : [])
-    .filter((draft) => !input.severity || draft.severity === input.severity)
-    .filter((draft) => mode !== "QUICK_SCAN" || ["CRITICAL", "HIGH"].includes(draft.severity));
+    // Tope POR DETECTOR, no global — antes un solo slice(0, maxIssues) sobre
+    // la lista combinada podía dejar a un detector entero sin nada si otro
+    // producía muchos hallazgos primero.
+    const detectorSummaries: BrainScanDetectorSummary[] = [];
+    const allDrafts: Array<BrainDecisionDraft & { detectorKey: string }> = [];
 
-  const partialWarning = allResults.length > limits.maxIssues
-    ? [{ detector: "engine", message: `SCAN_PARTIAL: ${allResults.length} hallazgos detectados; se procesaron solo los primeros ${limits.maxIssues}. Use filtros mas especificos o reduzca el rango de fechas.` }]
-    : [];
+    timedRuns.forEach((result, index) => {
+      const detector = detectors[index];
+      if (result.status === "rejected") {
+        detectorSummaries.push({
+          key: detector.key,
+          category: detector.category,
+          ok: false,
+          count: 0,
+          capped: false,
+          ms: null,
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+        return;
+      }
+      const filtered = result.value.drafts
+        .filter((draft) => !input.severity || draft.severity === input.severity)
+        .filter((draft) => mode !== "QUICK_SCAN" || ["CRITICAL", "HIGH"].includes(draft.severity));
+      const capped = filtered.length > limits.maxIssues;
+      const kept = filtered.slice(0, limits.maxIssues);
+      for (const draft of kept) allDrafts.push({ ...draft, detectorKey: detector.key });
+      detectorSummaries.push({ key: detector.key, category: detector.category, ok: true, count: kept.length, capped, ms: result.value.ms });
+    });
 
-  const detectorResults = allResults.slice(0, limits.maxIssues);
+    const persistResult = await persistBrainDecisions(allDrafts, input.actorUserId, {
+      dryRun: input.dryRun,
+      force: input.force,
+      scannedCategories: detectors.map((detector) => detector.category),
+      scope: ctx.scope,
+      limits,
+    });
 
-  return persistBrainDecisions(detectorResults, input.actorUserId, {
-    dryRun: input.dryRun,
-    force: input.force,
-    scannedCategories: detectors.map((detector) => detector.category),
-    scope: ctx.scope,
-    limits,
-  }).then((result) => ({ ...result, errors: [...result.errors, ...errors, ...partialWarning] }));
+    let autoResolved = 0;
+    if (!input.dryRun) {
+      for (const summary of detectorSummaries) {
+        if (!shouldAutoCloseAfterScan(mode, summary)) continue;
+        autoResolved += await autoResolveNotRedetected({
+          detectorKey: summary.key,
+          branchId: ctx.branchId,
+          scanStartedAt,
+        });
+      }
+    }
+
+    const hasErrors = detectorSummaries.some((d) => !d.ok);
+    const hasCapped = detectorSummaries.some((d) => d.capped);
+    const finalStatus = hasErrors ? "PARTIAL" : hasCapped ? "PARTIAL" : "OK";
+    await prisma.brainScanRun.update({
+      where: { id: scanRunId },
+      data: {
+        status: finalStatus,
+        finishedAt: new Date(),
+        runningLock: null,
+        detectorsJson: detectorSummaries as unknown as Prisma.InputJsonValue,
+        created: persistResult.created,
+        updated: persistResult.updated,
+        reopened: persistResult.reopened,
+        autoResolved,
+        skipped: persistResult.skipped,
+      },
+    });
+
+    const partialWarning = detectorSummaries
+      .filter((d) => d.capped)
+      .map((d) => ({ detector: d.key, message: `SCAN_PARTIAL: ${d.key} produjo más de ${limits.maxIssues} hallazgos; se procesaron solo los primeros ${limits.maxIssues}.` }));
+
+    return {
+      ...persistResult,
+      autoResolved,
+      scanRunId,
+      errors: [...persistResult.errors, ...partialWarning],
+    } satisfies BrainScanResult & { autoResolved: number; scanRunId: string };
+  } catch (error) {
+    await prisma.brainScanRun.update({
+      where: { id: scanRunId },
+      data: { status: "FAILED", finishedAt: new Date(), runningLock: null },
+    }).catch(() => {});
+    throw error;
+  }
 }

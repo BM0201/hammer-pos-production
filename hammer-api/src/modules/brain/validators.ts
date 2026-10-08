@@ -35,7 +35,8 @@ export const decisionFiltersSchema = z.object({
 });
 
 export const scanBrainSchema = z.object({
-  mode: z.enum(["QUICK_SCAN", "OPERATIONAL_DAY_SCAN", "ENTITY_SCAN", "DEEP_SCAN", "REPAIR_SCAN"]).optional(),
+  mode: z.enum(["SCHEDULED_SCAN", "QUICK_SCAN", "OPERATIONAL_DAY_SCAN", "ENTITY_SCAN", "DEEP_SCAN", "REPAIR_SCAN"]).optional(),
+  trigger: z.enum(["SCHEDULED", "MANUAL", "PRICING_REFRESH"]).optional(),
   branchId: z.string().min(1).optional(),
   businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   operationalDayId: z.string().min(1).optional(),
@@ -60,8 +61,22 @@ export const decisionNoteSchema = z.object({
   note: z.string().max(1000).optional(),
 });
 
+// Fase 1.6 — "No aplica" pide motivo obligatorio: sin esto, en seis meses
+// nadie sabe por qué se descartó (mismo criterio que setBranchPriceTx para
+// una excepción de precio).
+export const dismissDecisionSchema = z.object({
+  note: z.string().trim().min(3, "El motivo es obligatorio para descartar (mínimo 3 caracteres).").max(1000),
+});
+
 export const snoozeDecisionSchema = decisionNoteSchema.extend({
   until: z.string().datetime().optional(),
+  days: z.number().int().min(1).max(90).optional(),
+});
+
+export const bulkDecisionSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(200),
+  action: z.enum(["resolve", "dismiss", "snooze"]),
+  note: z.string().max(1000).optional(),
   days: z.number().int().min(1).max(90).optional(),
 });
 

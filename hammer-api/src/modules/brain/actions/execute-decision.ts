@@ -5,6 +5,23 @@ import { prisma } from "@/lib/prisma";
 import { syncCashSessionSnapshotTx } from "@/modules/cash-session/service";
 import { refreshOperationalDaySummaryTx } from "@/modules/operations/service";
 
+/**
+ * prompt-brain-centro-decisiones.md Fase 1.2 — única lista de tipos que ESTE
+ * archivo de verdad ejecuta (no los de "revisión confirmada" más abajo, que
+ * no hacen nada operativo). decision-catalog.ts la importa en vez de copiar
+ * los mismos 6 strings aparte; un test de cobertura (decision-catalog.test.ts)
+ * escanea las ramas de ejecución real de este archivo con regex y falla si
+ * esta lista alguna vez se desincroniza del `if` real de abajo.
+ */
+export const EXECUTABLE_ACTION_TYPES = [
+  "CREATE_PURCHASE_ORDER_DRAFT",
+  "CREATE_TRANSFER_DRAFT",
+  "CONVERT_REORDER_ALERT_TO_PURCHASE",
+  "CONVERT_REORDER_ALERT_TO_TRANSFER",
+  "RECALCULATE_CASH_SESSION",
+  "REFRESH_OPERATIONAL_DAY",
+] as const;
+
 type ExecuteInput = {
   decisionId: string;
   idempotencyKey: string;

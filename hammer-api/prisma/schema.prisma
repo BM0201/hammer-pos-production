@@ -183,6 +183,17 @@ enum BrainDecisionStatus {
   SNOOZED
   EXPIRED
   FAILED
+  /// prompt-brain-centro-decisiones.md Fase 1 — "Ya lo resolví" humano y el
+  /// cierre automático de lo que un escaneo ya no re-detecta. Distinto de
+  /// EXECUTED (el motor hizo algo) y de DISMISSED (alguien dijo que no aplica).
+  RESOLVED
+}
+
+enum BrainScanRunStatus {
+  RUNNING
+  OK
+  PARTIAL
+  FAILED
 }
 
 enum BrainDecisionCategory {
@@ -409,6 +420,7 @@ model Branch {
   timberPricingConfig         TimberPricingConfig?
   retainedCashAdjustments     RetainedCashAdjustment[]
   priceUpdateLines            PriceUpdateLine[]
+  brainScanRuns               BrainScanRun[]
 }
 
 model User {
@@ -489,6 +501,7 @@ model User {
   brainDecisionActionLogs     BrainDecisionActionLog[]     @relation("BrainDecisionActionActor")
   legacyBrainDecisions        BrainDecision[]              @relation("BrainDecisionLegacyUser")
   targetedBrainDecisions      BrainDecision[]              @relation("BrainDecisionTargetUser")
+  brainScanRuns               BrainScanRun[]
   presences                   UserPresence[]
   createdReplenishmentDrafts  ReplenishmentDraft[]         @relation("ReplenishmentDraftCreatedBy")
   approvedReplenishmentDrafts ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
@@ -2712,6 +2725,13 @@ model BrainDecision {
   expiresAt          DateTime?
   resolvedAt         DateTime?
   resolvedByUserId   String?
+  /// Qué detector la emitió (la `key` del motor) — habilita el cierre automático "lo que este detector ya no ve, se cierra".
+  detectorKey        String?
+  /// "USER" | "AUTO" | "EXECUTION" — quién/qué la cerró como RESOLVED (o EXECUTED). Ver brain/service.ts.
+  resolutionSource   String?
+  resolutionNote     String?
+  /// Severidad al momento de "No aplica" — una reaparición con severidad IGUAL o MENOR no reabre sola.
+  dismissedSeverity  BrainDecisionSeverity?
 
   branch     Branch?                  @relation(fields: [branchId], references: [id])
   product    Product?                 @relation(fields: [productId], references: [id])
@@ -2729,6 +2749,38 @@ model BrainDecision {
   @@index([idempotencyKey])
   @@index([createdAt])
   @@index([priorityScore])
+  @@index([detectorKey])
+}
+
+/// prompt-brain-centro-decisiones.md Fase 1.1 — registro real de cada
+/// escaneo (antes "último escaneo" se deducía de las decisiones mismas).
+/// `runningLock` es el candado: solo un valor no nulo ("brain") puede
+/// existir a la vez gracias al @unique — Postgres trata cada NULL como
+/// distinto, así que muchas filas con runningLock:null conviven sin problema.
+model BrainScanRun {
+  id            String             @id @default(cuid())
+  mode          String
+  trigger       String
+  /// null = todas las sucursales.
+  branchId      String?
+  startedAt     DateTime           @default(now())
+  finishedAt    DateTime?
+  status        BrainScanRunStatus @default(RUNNING)
+  runningLock   String?            @unique
+  detectorsJson Json?
+  created       Int                @default(0)
+  updated       Int                @default(0)
+  reopened      Int                @default(0)
+  autoResolved  Int                @default(0)
+  skipped       Int                @default(0)
+  actorUserId   String?
+
+  branch Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([startedAt])
+  @@index([branchId])
 }
 
 model BrainDecisionActionLog {
