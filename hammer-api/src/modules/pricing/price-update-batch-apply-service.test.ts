@@ -32,7 +32,7 @@ type FakeLine = {
   newPrice: Prisma.Decimal | null; status: string; message: string | null; trayDecisionId: string | null;
   appliedPreviousPrice: Prisma.Decimal | null; appliedAt: Date | null;
 };
-type FakeBatch = { id: string; code: string; status: string; target: "BRANCHES" | "GENERAL"; branchIds: string[]; reason: string; appliedByUserId: string | null; appliedAt: Date | null };
+type FakeBatch = { id: string; code: string; status: string; target: "BRANCHES" | "GENERAL"; branchIds: string[]; reason: string; source: "MANUAL" | "TRAY" | "FILE" | "REVERT"; appliedByUserId: string | null; appliedAt: Date | null };
 type FakeDecision = { id: string; category: string; status: string; resolvedAt: Date | null; resolvedByUserId: string | null; executedEntityType: string | null; executedEntityId: string | null; actionResultJson: unknown };
 
 function createStore(opts: { batch: FakeBatch; products: FakeProduct[]; settings?: FakeSetting[]; lines: FakeLine[]; decisions?: FakeDecision[] }) {
@@ -129,7 +129,7 @@ function createStore(opts: { batch: FakeBatch; products: FakeProduct[]; settings
 }
 
 test("LA QUE IMPORTA — doble aplicación: la segunda da ALREADY_PROCESSED, el precio se escribe una sola vez", async () => {
-  const batch: FakeBatch = { id: "b1", code: "CP-000001", status: "DRAFT", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b1", code: "CP-000001", status: "DRAFT", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const products: FakeProduct[] = [{ id: "p1", sku: "SKU-1", isActive: true, standardSalePrice: d(100), averageCost: d(50), globalCost: null, lastPurchaseCost: null }];
   const lines: FakeLine[] = [{ id: "l1", batchId: "b1", productId: "p1", branchId: BRANCH, costSnapshot: d(50), currentPriceSnapshot: d(100), priceSourceSnapshot: "STANDARD", newPrice: d(120), status: "PENDING", message: null, trayDecisionId: null, appliedPreviousPrice: null, appliedAt: null }];
   const { tx, settings } = createStore({ batch, products, lines });
@@ -150,7 +150,7 @@ test("LA QUE IMPORTA — doble aplicación: la segunda da ALREADY_PROCESSED, el 
 });
 
 test("LA QUE IMPORTA — el precio vigente cambió desde el borrador: la línea queda CONFLICT, sin pisar nada", async () => {
-  const batch: FakeBatch = { id: "b2", code: "CP-000002", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b2", code: "CP-000002", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const products: FakeProduct[] = [{ id: "p2", sku: "SKU-2", isActive: true, standardSalePrice: d(200), averageCost: d(80), globalCost: null, lastPurchaseCost: null }];
   // Alguien declaró un precio de excepción (250) DESPUÉS de que esta línea se armó con la foto de 200.
   const settings: FakeSetting[] = [{ branchId: BRANCH, productId: "p2", branchPrice: d(250), branchCost: null, priceSource: "MANUAL", priceExceptionReason: "otro cambio", priceExceptionAt: new Date(), lastPriceUpdateAt: new Date(), priceUpdatedByUserId: "otro-user" }];
@@ -165,7 +165,7 @@ test("LA QUE IMPORTA — el precio vigente cambió desde el borrador: la línea 
 });
 
 test("LA QUE IMPORTA — el costo subió después de la vista previa: BLOCKED al aplicar, no en el borrador", async () => {
-  const batch: FakeBatch = { id: "b3", code: "CP-000003", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b3", code: "CP-000003", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const products: FakeProduct[] = [{ id: "p3", sku: "SKU-3", isActive: true, standardSalePrice: d(300), averageCost: d(90), globalCost: null, lastPurchaseCost: null }];
   const lines: FakeLine[] = [{ id: "l3", batchId: "b3", productId: "p3", branchId: BRANCH, costSnapshot: d(90), currentPriceSnapshot: d(300), priceSourceSnapshot: "STANDARD", newPrice: d(100), status: "PENDING", message: null, trayDecisionId: null, appliedPreviousPrice: null, appliedAt: null }];
   const { tx, products: liveProducts } = createStore({ batch, products, lines });
@@ -180,7 +180,7 @@ test("LA QUE IMPORTA — el costo subió después de la vista previa: BLOCKED al
 });
 
 test("LA QUE IMPORTA — reanudación: una tanda solo toca las líneas PENDING, nunca una ya APPLIED", async () => {
-  const batch: FakeBatch = { id: "b4", code: "CP-000004", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b4", code: "CP-000004", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const products: FakeProduct[] = [
     { id: "p4", sku: "SKU-4", isActive: true, standardSalePrice: d(400), averageCost: d(40), globalCost: null, lastPurchaseCost: null },
     { id: "p5", sku: "SKU-5", isActive: true, standardSalePrice: d(500), averageCost: d(60), globalCost: null, lastPurchaseCost: null },
@@ -205,7 +205,7 @@ test("LA QUE IMPORTA — reanudación: una tanda solo toca las líneas PENDING, 
 });
 
 test("LA QUE IMPORTA — una línea con trayDecisionId cierra la decisión de Bandeja (EXECUTED) sin volver a aplicar el precio por ese camino", async () => {
-  const batch: FakeBatch = { id: "b5", code: "CP-000005", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b5", code: "CP-000005", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const products: FakeProduct[] = [{ id: "p6", sku: "SKU-6", isActive: true, standardSalePrice: d(600), averageCost: d(70), globalCost: null, lastPurchaseCost: null }];
   const lines: FakeLine[] = [{ id: "l6", batchId: "b5", productId: "p6", branchId: BRANCH, costSnapshot: d(70), currentPriceSnapshot: d(600), priceSourceSnapshot: "STANDARD", newPrice: d(650), status: "PENDING", message: null, trayDecisionId: "decision-1", appliedPreviousPrice: null, appliedAt: null }];
   const decisions: FakeDecision[] = [{ id: "decision-1", category: "PRICING", status: "OPEN", resolvedAt: null, resolvedByUserId: null, executedEntityType: null, executedEntityId: null, actionResultJson: null }];
@@ -223,7 +223,7 @@ test("LA QUE IMPORTA — una línea con trayDecisionId cierra la decisión de Ba
 });
 
 test("una decisión de Bandeja ya resuelta por otro camino se deja como está — no se pisa su resolución", async () => {
-  const batch: FakeBatch = { id: "b6", code: "CP-000006", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b6", code: "CP-000006", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const products: FakeProduct[] = [{ id: "p7", sku: "SKU-7", isActive: true, standardSalePrice: d(700), averageCost: d(10), globalCost: null, lastPurchaseCost: null }];
   const lines: FakeLine[] = [{ id: "l7", batchId: "b6", productId: "p7", branchId: BRANCH, costSnapshot: d(10), currentPriceSnapshot: d(700), priceSourceSnapshot: "STANDARD", newPrice: d(720), status: "PENDING", message: null, trayDecisionId: "decision-2", appliedPreviousPrice: null, appliedAt: null }];
   const resolvedAt = new Date("2026-02-02T00:00:00Z");
@@ -238,7 +238,7 @@ test("una decisión de Bandeja ya resuelta por otro camino se deja como está �
 });
 
 test("destino GENERAL: aplica vía setStandardSalePriceTx, no vía branchProductSetting", async () => {
-  const batch: FakeBatch = { id: "b7", code: "CP-000007", status: "APPLYING", target: "GENERAL", branchIds: [], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b7", code: "CP-000007", status: "APPLYING", target: "GENERAL", branchIds: [], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const products: FakeProduct[] = [{ id: "p8", sku: "SKU-8", isActive: true, standardSalePrice: d(800), averageCost: d(20), globalCost: null, lastPurchaseCost: null }];
   const lines: FakeLine[] = [{ id: "l8", batchId: "b7", productId: "p8", branchId: null, costSnapshot: d(20), currentPriceSnapshot: d(800), priceSourceSnapshot: "STANDARD", newPrice: d(850), status: "PENDING", message: null, trayDecisionId: null, appliedPreviousPrice: null, appliedAt: null }];
   const { tx, products: liveProducts, settings } = createStore({ batch, products, lines });
@@ -251,8 +251,22 @@ test("destino GENERAL: aplica vía setStandardSalePriceTx, no vía branchProduct
   assert.equal(settings.length, 0, "GENERAL nunca toca BranchProductSetting");
 });
 
+test("LA QUE IMPORTA — reversión: una línea con newPrice=0 en un batch source=REVERT escribe branchPrice:null (vuelve a seguir el general), no un precio de 0", async () => {
+  const batch: FakeBatch = { id: "b11", code: "CP-000011", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Reversión de CP-000001", source: "REVERT", appliedByUserId: null, appliedAt: null };
+  const products: FakeProduct[] = [{ id: "p13", sku: "SKU-13", isActive: true, standardSalePrice: d(900), averageCost: d(30), globalCost: null, lastPurchaseCost: null }];
+  // Esta sucursal SÍ tenía una excepción (la carga original la puso) — revertir la quita.
+  const settings: FakeSetting[] = [{ branchId: BRANCH, productId: "p13", branchPrice: d(950), branchCost: null, priceSource: "MANUAL", priceExceptionReason: "Ajuste de precios", priceExceptionAt: new Date(), lastPriceUpdateAt: new Date(), priceUpdatedByUserId: ACTOR }];
+  const lines: FakeLine[] = [{ id: "l13", batchId: "b11", productId: "p13", branchId: BRANCH, costSnapshot: d(30), currentPriceSnapshot: d(950), priceSourceSnapshot: "BRANCH", newPrice: d(0), status: "PENDING", message: null, trayDecisionId: null, appliedPreviousPrice: null, appliedAt: null }];
+  const { tx, settings: liveSettings } = createStore({ batch, products, settings, lines });
+
+  await applyLineChunkTx(tx, batch, ["l13"], ACTOR);
+
+  assert.equal(lines[0].status, "APPLIED", "no queda BLOCKED por 'precio <= 0' — el sentinel de reversión se maneja antes de classifyLine");
+  assert.equal(liveSettings.find((s) => s.productId === "p13")?.branchPrice, null, "vuelve a seguir el precio general, no queda en 0");
+});
+
 test("finalizeBatchTx: todo APPLIED → el batch cierra APPLIED y audita totales", async () => {
-  const batch: FakeBatch = { id: "b8", code: "CP-000008", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b8", code: "CP-000008", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const lines: FakeLine[] = [
     { id: "l9", batchId: "b8", productId: "p9", branchId: BRANCH, costSnapshot: null, currentPriceSnapshot: null, priceSourceSnapshot: "STANDARD", newPrice: null, status: "APPLIED", message: null, trayDecisionId: null, appliedPreviousPrice: null, appliedAt: new Date() },
   ];
@@ -267,7 +281,7 @@ test("finalizeBatchTx: todo APPLIED → el batch cierra APPLIED y audita totales
 });
 
 test("finalizeBatchTx: con una línea BLOCKED entre las demás APPLIED → PARTIAL", async () => {
-  const batch: FakeBatch = { id: "b9", code: "CP-000009", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b9", code: "CP-000009", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const lines: FakeLine[] = [
     { id: "l10", batchId: "b9", productId: "p10", branchId: BRANCH, costSnapshot: null, currentPriceSnapshot: null, priceSourceSnapshot: "STANDARD", newPrice: null, status: "APPLIED", message: null, trayDecisionId: null, appliedPreviousPrice: null, appliedAt: new Date() },
     { id: "l11", batchId: "b9", productId: "p11", branchId: BRANCH, costSnapshot: null, currentPriceSnapshot: null, priceSourceSnapshot: "STANDARD", newPrice: null, status: "BLOCKED", message: "bloqueada", trayDecisionId: null, appliedPreviousPrice: null, appliedAt: null },
@@ -279,7 +293,7 @@ test("finalizeBatchTx: con una línea BLOCKED entre las demás APPLIED → PARTI
 });
 
 test("finalizeBatchTx: todavía hay PENDING → no cierra el batch (no debería llamarse así, pero es un no-op seguro)", async () => {
-  const batch: FakeBatch = { id: "b10", code: "CP-000010", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", appliedByUserId: null, appliedAt: null };
+  const batch: FakeBatch = { id: "b10", code: "CP-000010", status: "APPLYING", target: "BRANCHES", branchIds: [BRANCH], reason: "Ajuste de precios", source: "MANUAL", appliedByUserId: null, appliedAt: null };
   const lines: FakeLine[] = [
     { id: "l12", batchId: "b10", productId: "p12", branchId: BRANCH, costSnapshot: null, currentPriceSnapshot: null, priceSourceSnapshot: "STANDARD", newPrice: null, status: "PENDING", message: null, trayDecisionId: null, appliedPreviousPrice: null, appliedAt: null },
   ];

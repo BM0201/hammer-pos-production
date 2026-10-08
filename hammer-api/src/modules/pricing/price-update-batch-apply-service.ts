@@ -143,7 +143,7 @@ type ChunkLine = {
  */
 export async function applyLineChunkTx(
   tx: Prisma.TransactionClient,
-  batch: Pick<PriceUpdateBatch, "target" | "reason">,
+  batch: Pick<PriceUpdateBatch, "target" | "reason" | "source">,
   lineIds: string[],
   actorUserId: string,
 ): Promise<void> {
@@ -191,16 +191,25 @@ export async function applyLineChunkTx(
       continue;
     }
 
-    const classification = classifyLine(
-      {
-        newPrice: line.newPrice != null ? Number(line.newPrice) : null,
-        costSnapshot: live?.cost ?? null,
-        currentPriceSnapshot: liveCurrentPrice,
-        priceSourceSnapshot: live?.priceSource ?? "MISSING",
-        productIsActive: live?.productIsActive ?? false,
-      },
-      { minMarginPercent: null }, // el aviso de margen ya se mostró/aceptó antes de aplicar — acá solo importa bloquear o no
-    );
+    // Sentinel de price-update-revert-service.ts — ver el mismo comentario
+    // en createDraftTx (price-update-batch-service.ts). Al aplicar, esto
+    // escribe branchPrice:null (vuelve a seguir el general) en vez de un
+    // precio positivo; el chequeo de conflicto de arriba ya corrió igual
+    // que para cualquier otra línea.
+    const isRevertToGeneral = batch.source === "REVERT" && line.newPrice != null && Number(line.newPrice) === 0;
+
+    const classification = isRevertToGeneral
+      ? ({ status: "PENDING", warnings: [], marginNew: null, changePercent: null } as const)
+      : classifyLine(
+          {
+            newPrice: line.newPrice != null ? Number(line.newPrice) : null,
+            costSnapshot: live?.cost ?? null,
+            currentPriceSnapshot: liveCurrentPrice,
+            priceSourceSnapshot: live?.priceSource ?? "MISSING",
+            productIsActive: live?.productIsActive ?? false,
+          },
+          { minMarginPercent: null }, // el aviso de margen ya se mostró/aceptó antes de aplicar — acá solo importa bloquear o no
+        );
 
     if (classification.status === "SKIPPED" || classification.status === "BLOCKED") {
       await tx.priceUpdateLine.updateMany({
@@ -210,15 +219,17 @@ export async function applyLineChunkTx(
       continue;
     }
 
-    // classification.status === "PENDING" acá exige newPrice != null y > 0 (classifyLine lo garantiza).
-    const newPriceDecimal = line.newPrice as Prisma.Decimal;
+    // classification.status === "PENDING" acá exige newPrice != null y > 0
+    // (classifyLine lo garantiza) — salvo el sentinel de reversión, que
+    // escribe null a propósito.
+    const newPriceDecimal: Prisma.Decimal | null = isRevertToGeneral ? null : (line.newPrice as Prisma.Decimal);
     const previousPrice = batch.target === "GENERAL"
-      ? (await setStandardSalePriceTx(tx, { productId: line.productId, newPrice: newPriceDecimal, actorUserId, origin: "carga_precios" })).previousPrice
+      ? (await setStandardSalePriceTx(tx, { productId: line.productId, newPrice: newPriceDecimal as Prisma.Decimal, actorUserId, origin: "carga_precios" })).previousPrice
       : (await setBranchPriceTx(tx, {
           branchId: line.branchId as string,
           productId: line.productId,
           branchPrice: newPriceDecimal,
-          exceptionReason: batch.reason,
+          exceptionReason: isRevertToGeneral ? null : batch.reason,
           priceSource: "MANUAL",
           actorUserId,
           origin: "carga_precios",
@@ -234,7 +245,7 @@ export async function applyLineChunkTx(
       await closeLinkedTrayDecisionTx(
         tx,
         line.trayDecisionId,
-        { branchId: line.branchId, productId: line.productId, previousPrice: previousPrice != null ? Number(previousPrice) : null, newPrice: Number(newPriceDecimal) },
+        { branchId: line.branchId, productId: line.productId, previousPrice: previousPrice != null ? Number(previousPrice) : null, newPrice: newPriceDecimal != null ? Number(newPriceDecimal) : 0 },
         actorUserId,
       );
     }

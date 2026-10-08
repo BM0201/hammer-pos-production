@@ -189,16 +189,25 @@ export async function createDraftTx(
       for (const branchId of destinations) {
         const snapshot = snapshotsByBranch.get(branchId ?? "")?.get(item.productId);
         const newPrice = item.newPrice ?? null;
-        const classified: ClassifyLineResult = classifyLine(
-          {
-            newPrice,
-            costSnapshot: snapshot?.cost ?? null,
-            currentPriceSnapshot: snapshot?.price ?? null,
-            priceSourceSnapshot: snapshot?.priceSource ?? "MISSING",
-            productIsActive: snapshot?.productIsActive ?? false,
-          },
-          { minMarginPercent: null },
-        );
+        // Sentinel de price-update-revert-service.ts: una línea de reversión
+        // (source REVERT) con newPrice=0 significa "esta sucursal no tenía
+        // excepción antes de la carga original — volver a seguir el precio
+        // general", no "un precio real de cero" (newPrice<=0 siempre se
+        // bloquearía). 0 es seguro como marca porque nunca es un precio
+        // válido de por sí.
+        const isRevertToGeneral = input.source === "REVERT" && newPrice === 0;
+        const classified: ClassifyLineResult = isRevertToGeneral
+          ? { status: "PENDING", warnings: [], marginNew: null, changePercent: null }
+          : classifyLine(
+              {
+                newPrice,
+                costSnapshot: snapshot?.cost ?? null,
+                currentPriceSnapshot: snapshot?.price ?? null,
+                priceSourceSnapshot: snapshot?.priceSource ?? "MISSING",
+                productIsActive: snapshot?.productIsActive ?? false,
+              },
+              { minMarginPercent: null },
+            );
 
         await tx.priceUpdateLine.create({
           data: {
@@ -450,8 +459,12 @@ export async function previewBatch(batchId: string): Promise<{
 
     // Una línea ya resuelta (APPLIED/CONFLICT/SKIPPED tras un apply previo)
     // se muestra TAL CUAL quedó — classifyLine es solo para lo que sigue
-    // pendiente de decidir.
-    const classification: ClassifyLineResult = line.status === "PENDING"
+    // pendiente de decidir. El sentinel de reversión (ver createDraftTx)
+    // va primero: una línea "volver al general" nunca debe mostrarse como
+    // bloqueada por "precio <= 0".
+    const classification: ClassifyLineResult = batch.source === "REVERT" && newPrice === 0
+      ? { status: "PENDING", warnings: [], marginNew: null, changePercent: null }
+      : line.status === "PENDING"
       ? classifyLine(
           {
             newPrice,

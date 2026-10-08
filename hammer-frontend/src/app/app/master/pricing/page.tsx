@@ -11,6 +11,7 @@ import { PricingCalculatorPanel } from "@/components/pricing/pricing-calculator-
 import { CategoryPoliciesPanel } from "@/components/pricing/category-policies-panel";
 import { PricingConfigPanel } from "@/components/pricing/pricing-config-panel";
 import { PriceLoadTab, type LoadSeed } from "@/components/pricing/price-load-tab";
+import { useSubmitting } from "@/lib/client/use-submitting";
 import toast from "react-hot-toast";
 import { money, fmtDatePadded } from "@/lib/format";
 
@@ -925,6 +926,7 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
   // truncado silencioso si el filtro trae más productos que el límite de
   // una sola página).
   const [selectedForLoad, setSelectedForLoad] = useState<Set<string>>(new Set());
+  const [downloading, runDownload] = useSubmitting();
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQ(q), 350);
@@ -975,6 +977,36 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
 
   function toggleSourceChip(source: CurrentPriceSource) {
     setPriceSourceFilter((prev) => (prev === source ? "" : source));
+  }
+
+  /** Fase 4 (prompt-carga-precios.md) — "Descargar lista para actualizar": mismos filtros de esta pantalla, .xlsx con una columna PrecioNuevo en blanco para llenar y volver a subir desde Carga de precios. */
+  async function downloadTemplate() {
+    await runDownload(async () => {
+      try {
+        const params = new URLSearchParams();
+        params.set("branchId", branchId);
+        if (categoryFilter) params.set("categoryId", categoryFilter);
+        if (debouncedQ) params.set("q", debouncedQ);
+        if (priceSourceFilter) params.set("priceSource", priceSourceFilter);
+        const res = await apiFetch(`/api/master/pricing/current/export?${params.toString()}`);
+        const raw = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo descargar la lista.");
+        const result = unwrapApiData(raw) as { filename: string; base64: string; rowCount: number };
+        const byteChars = atob(result.base64);
+        const bytes = new Uint8Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = result.filename;
+        link.click();
+        URL.revokeObjectURL(url);
+        toast.success(`Descargado — ${result.rowCount} producto${result.rowCount === 1 ? "" : "s"}.`);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "No se pudo descargar la lista.");
+      }
+    });
   }
 
   return (
@@ -1050,6 +1082,7 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
         {hasFilters && (
           <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>Quitar filtros</Button>
         )}
+        <Button type="button" variant="ghost" size="sm" onClick={() => void downloadTemplate()} loading={downloading}>Descargar lista para actualizar</Button>
       </div>
 
       {loading ? (

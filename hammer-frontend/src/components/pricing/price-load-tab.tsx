@@ -315,6 +315,12 @@ function PriceLoadNewForm({
   const [reason, setReason] = useState("");
   const [items, setItems] = useState<Map<string, ProductOption>>(new Map((seed?.products ?? []).map((p) => [p.productId, { id: p.productId, sku: p.sku, name: p.name }])));
   const [creating, runCreate] = useSubmitting();
+  // Fase 4 — "Desde archivo" reemplaza la lista de productos por un .xlsx/.csv;
+  // destino/motivo se comparten con el modo manual, el archivo decide los
+  // productos y sus precios nuevos.
+  const [sourceMode, setSourceMode] = useState<"MANUAL" | "FILE">("MANUAL");
+  const [file, setFile] = useState<File | null>(null);
+  const [importing, runImport] = useSubmitting();
 
   function toggleBranch(id: string) {
     setSelectedBranchIds((prev) => {
@@ -369,6 +375,49 @@ function PriceLoadNewForm({
     });
   }
 
+  function readFileAsBase64(f: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result.split(",")[1] ?? "");
+      };
+      reader.onerror = () => reject(reader.error ?? new Error("No se pudo leer el archivo."));
+      reader.readAsDataURL(f);
+    });
+  }
+
+  async function submitImport() {
+    if (reason.trim().length < 3) { toast.error("El motivo necesita al menos 3 caracteres."); return; }
+    if (target === "BRANCHES" && selectedBranchIds.size === 0) { toast.error("Elegí al menos una sucursal."); return; }
+    if (!file) { toast.error("Elegí un archivo."); return; }
+
+    await runImport(async () => {
+      try {
+        const fileBase64 = await readFileAsBase64(file);
+        const res = await apiFetch("/api/master/pricing/batches/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileBase64, target, branchIds: target === "BRANCHES" ? [...selectedBranchIds] : [], reason: reason.trim() }),
+        });
+        const raw = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo importar el archivo.");
+        const data = unwrapApiData(raw) as { batchId: string; code: string; totalRows: number; matched: number; unmatched: Array<{ rowNumber: number; sku: string }>; duplicates: Array<{ rowNumber: number }>; duplicateOfBatchCode: string | null };
+        if (data.duplicateOfBatchCode) {
+          toast(`Este archivo ya se había subido en ${data.duplicateOfBatchCode} — revisá si es a propósito.`, { icon: "⚠️", duration: 7000 });
+        }
+        const extra = [
+          data.unmatched.length > 0 ? `${data.unmatched.length} fila(s) sin producto` : null,
+          data.duplicates.length > 0 ? `${data.duplicates.length} fila(s) duplicada(s)` : null,
+        ].filter(Boolean).join(" · ");
+        toast.success(`Carga ${data.code} creada — ${data.matched} de ${data.totalRows} filas coincidieron.${extra ? ` (${extra})` : ""}`, { duration: 7000 });
+        onCreated(data.batchId);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "No se pudo importar el archivo.");
+      }
+    });
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2">
@@ -377,6 +426,20 @@ function PriceLoadNewForm({
       </div>
 
       <Card className="space-y-4 p-4">
+        <div>
+          <span className="mb-1.5 block text-xs font-medium text-[var(--color-text-muted)]">Origen</span>
+          <div className="flex gap-4 text-sm">
+            <label className="flex items-center gap-1.5">
+              <input type="radio" name="load-source-mode" checked={sourceMode === "MANUAL"} onChange={() => setSourceMode("MANUAL")} />
+              A mano
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="radio" name="load-source-mode" checked={sourceMode === "FILE"} onChange={() => setSourceMode("FILE")} />
+              Desde archivo
+            </label>
+          </div>
+        </div>
+
         <div>
           <span className="mb-1.5 block text-xs font-medium text-[var(--color-text-muted)]">Destino</span>
           <div className="flex gap-4 text-sm">
@@ -410,26 +473,46 @@ function PriceLoadNewForm({
           <textarea id="load-reason" className="hm-input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Por qué se hace esta carga de precios" />
         </div>
 
-        <div>
-          <span className="mb-1.5 block text-xs font-medium text-[var(--color-text-muted)]">Productos ({items.size})</span>
-          <ProductPicker onAdd={addItem} excludeIds={new Set(items.keys())} />
-          {items.size > 0 && (
-            <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto">
-              {[...items.values()].map((item) => (
-                <li key={item.id} className="flex items-center justify-between gap-2 rounded-lg bg-[var(--color-surface-alt)] px-3 py-1.5 text-sm">
-                  <span className="truncate">{item.name} <span className="text-[var(--color-text-soft)]">· {item.sku}</span></span>
-                  <button type="button" onClick={() => removeItem(item.id)} className="shrink-0 text-[var(--color-text-soft)] hover:text-[var(--color-danger-600)]" aria-label={`Quitar ${item.name}`}>
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        {sourceMode === "MANUAL" ? (
+          <div>
+            <span className="mb-1.5 block text-xs font-medium text-[var(--color-text-muted)]">Productos ({items.size})</span>
+            <ProductPicker onAdd={addItem} excludeIds={new Set(items.keys())} />
+            {items.size > 0 && (
+              <ul className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+                {[...items.values()].map((item) => (
+                  <li key={item.id} className="flex items-center justify-between gap-2 rounded-lg bg-[var(--color-surface-alt)] px-3 py-1.5 text-sm">
+                    <span className="truncate">{item.name} <span className="text-[var(--color-text-soft)]">· {item.sku}</span></span>
+                    <button type="button" onClick={() => removeItem(item.id)} className="shrink-0 text-[var(--color-text-soft)] hover:text-[var(--color-danger-600)]" aria-label={`Quitar ${item.name}`}>
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <div>
+            <label htmlFor="load-import-file" className="mb-1.5 block text-xs font-medium text-[var(--color-text-muted)]">Archivo (.xlsx o .csv, hasta 2000 filas)</label>
+            <input
+              id="load-import-file"
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hm-input h-11"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+            <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
+              Columnas por nombre (en cualquier orden): SKU o Código, y Precio Nuevo. El resultado siempre es un borrador para revisar, nunca se aplica solo.
+            </p>
+          </div>
+        )}
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button type="button" variant="ghost" onClick={onCancel} disabled={creating}>Cancelar</Button>
-          <Button type="button" variant="primary" onClick={() => void submit()} loading={creating}>Crear carga</Button>
+          <Button type="button" variant="ghost" onClick={onCancel} disabled={creating || importing}>Cancelar</Button>
+          {sourceMode === "MANUAL" ? (
+            <Button type="button" variant="primary" onClick={() => void submit()} loading={creating}>Crear carga</Button>
+          ) : (
+            <Button type="button" variant="primary" onClick={() => void submitImport()} loading={importing}>Importar</Button>
+          )}
         </div>
       </Card>
     </div>
@@ -464,6 +547,7 @@ function PriceLoadEditor({ batchId, branches, onBack }: { batchId: string; branc
   const [rounding, setRounding] = useState("NONE");
   const [applyingRule, runApplyRule] = useSubmitting();
   const [applyResult, setApplyResult] = useState<{ status: BatchStatus; totals: Record<string, number> } | null>(null);
+  const [reverting, runRevert] = useSubmitting();
 
   const dirtyRef = useRef<Map<string, number | null>>(new Map());
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -658,6 +742,23 @@ function PriceLoadEditor({ batchId, branches, onBack }: { batchId: string; branc
     }
   }
 
+  /** Reversión completa (no solo los conflictos) — crea un borrador nuevo con los precios de antes de esta carga; el usuario lo revisa y lo aplica aparte, igual que "Rehacer conflictos". */
+  async function revertBatch() {
+    if (!window.confirm("¿Revertir esta carga? Se crea un borrador nuevo con los precios de antes, que hay que revisar y aplicar.")) return;
+    await runRevert(async () => {
+      try {
+        const res = await apiFetch(`/api/master/pricing/batches/${batchId}/revert`, { method: "POST" });
+        const raw = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo revertir la carga.");
+        const data = unwrapApiData(raw) as { batchId: string; code: string };
+        toast.success(`Borrador de reversión ${data.code} creado — revisalo y aplicalo para que tome efecto.`, { duration: 7000 });
+        onBack();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "No se pudo revertir la carga.");
+      }
+    });
+  }
+
   if (loading || !preview) {
     return <p className="py-12 text-center text-sm text-[var(--color-text-muted)] animate-pulse">Cargando…</p>;
   }
@@ -678,6 +779,11 @@ function PriceLoadEditor({ batchId, branches, onBack }: { batchId: string; branc
       <Card className="space-y-1 p-4 text-sm">
         <p><span className="text-[var(--color-text-muted)]">Destino:</span> {branchLabel}</p>
         <p><span className="text-[var(--color-text-muted)]">Motivo:</span> {batch.reason}</p>
+        {(batch.status === "APPLIED" || batch.status === "PARTIAL") && (
+          <div className="pt-2">
+            <Button type="button" variant="secondary" size="sm" onClick={() => void revertBatch()} loading={reverting}>Revertir esta carga</Button>
+          </div>
+        )}
       </Card>
 
       {applyResult && (

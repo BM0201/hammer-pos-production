@@ -2,6 +2,7 @@ import { InventoryMovementType, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { readCsvContent, readExcelBase64 } from "@/modules/import-excel/excel-reader";
+import { buildHeaderIndex, pickByAlias } from "@/modules/import-excel/header-matcher";
 import { generateSkuForProduct, normalizeManualSku } from "@/modules/catalog/sku-generator";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
@@ -133,10 +134,6 @@ function normalizeImportType(importType: UnifiedImportType, destinationMode?: De
   return importType;
 }
 
-function normalizeHeader(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
 function toNumber(value: string | undefined) {
   if (!value?.trim()) return undefined;
   const parsed = Number(value.trim().replace(",", "."));
@@ -146,12 +143,8 @@ function toNumber(value: string | undefined) {
 async function readRows(input: Pick<PreviewInput, "fileContent" | "fileBase64">): Promise<RawRow[]> {
   const matrix = input.fileBase64 ? await readExcelBase64(input.fileBase64) : readCsvContent(input.fileContent ?? "");
   if (matrix.length < 2) return [];
-  const headers = matrix[0].map(normalizeHeader);
-  const index = new Map(headers.map((header, idx) => [header, idx]));
-  const pick = (cells: string[], names: string[]) => {
-    const idx = names.map((name) => index.get(name)).find((value) => value !== undefined);
-    return idx === undefined ? "" : cells[idx]?.trim() ?? "";
-  };
+  const index = buildHeaderIndex(matrix[0]);
+  const pick = (cells: string[], names: string[]) => pickByAlias(cells, index, names);
 
   return matrix.slice(1).map((cells, idx) => ({
     rowNumber: idx + 2,

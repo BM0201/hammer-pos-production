@@ -847,6 +847,8 @@ model PriceUpdateBatch {
   reason          String
   /// Si esta carga es una reversión, apunta a la carga original.
   revertsBatchId  String?
+  /// sha256 del archivo subido (source=FILE) — solo para avisar de un re-upload, nunca bloquea.
+  fileHash        String?
   createdByUserId String
   appliedByUserId String?
   createdAt       DateTime               @default(now())
@@ -861,6 +863,7 @@ model PriceUpdateBatch {
 
   @@index([status])
   @@index([createdByUserId])
+  @@index([fileHash])
 }
 
 model PriceUpdateLine {
