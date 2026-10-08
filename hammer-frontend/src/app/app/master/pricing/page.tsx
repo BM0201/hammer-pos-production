@@ -299,41 +299,32 @@ function PricingTrayTab({
    * ahora" dispara un escaneo real (POST /api/master/brain/scan), no solo
    * un refresh de lo que ya está guardado (eso es "Actualizar", arriba).
    *
-   * category=PRICING NO alcanza solo: pricing-detector no está en
-   * QUICK_SCAN_CATEGORIES ni en ENTITY_SCAN_CATEGORIES/REPAIR_SCAN_CATEGORIES/
-   * OPERATIONAL_DAY_SCAN_CATEGORIES (brain/engine.ts::detectorAllowedForMode)
-   * — el único modo que deja pasar cualquier categoría es DEEP_SCAN. Ese
-   * modo exige dateFrom/dateTo (validateScanInput), pero detectPricingDecisions
-   * nunca los lee (confirmado en brain/detectors/pricing-detector.ts — filtra
-   * todo por ctx.branchId, no por fecha): la ventana de 1 día de acá es solo
-   * para satisfacer la validación, no porque el detector la use.
-   *
-   * El filtro de categoría de PRODUCTO de esta pantalla (categoryFilter) NO
-   * se manda al scan — scanBrainSchema.category es BrainDecisionCategory
-   * (PRICING/CASH/...), no categoría de catálogo. No hace falta filtrar el
-   * resultado del scan a mano tampoco: load() ya vuelve a pedir la bandeja
-   * con ?categoryId=categoryFilter después de escanear, igual que cualquier
-   * otro refresh.
+   * prompt-brain-centro-decisiones.md Fase 2.6 — SCHEDULED_SCAN (no
+   * DEEP_SCAN): desde el rediseño de Brain, DEEP_SCAN/QUICK_SCAN/etc. son
+   * modos de diagnóstico avanzado que la ruta reserva a SYSTEM_ADMIN; un
+   * Master común ya no puede dispararlos. SCHEDULED_SCAN deja pasar
+   * cualquier categoría igual que antes dejaba DEEP_SCAN (brain/engine.ts,
+   * detectorAllowedForMode cae a `true` por default) y además cierra
+   * automáticamente lo que pricing-detector ya no vuelve a ver, así que
+   * este refresh también limpia bandeja vieja. trigger:"PRICING_REFRESH"
+   * identifica el origen en BrainScanRun sin inventar un modo nuevo.
    */
   async function recalcularAhora() {
     setScanning(true);
     try {
-      const now = new Date();
-      const dateFrom = new Date(now.getTime() - 24 * 60 * 60 * 1000);
       const res = await apiFetch("/api/master/brain/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           category: "PRICING",
           branchId: branchId || undefined,
-          mode: "DEEP_SCAN",
-          dateFrom: dateFrom.toISOString(),
-          dateTo: now.toISOString(),
-          // Default de DEEP_SCAN es 15s; detectPricingDecisions hace un
-          // await secuencial de checkStockGroupPricingHealth por cada grupo
-          // de fusión activo (hasta 200) además de las 3 consultas batch —
-          // margen extra para que una sucursal con muchas fusiones no corte
-          // el scan a la mitad (maxDuration de la ruta es 60s).
+          mode: "SCHEDULED_SCAN",
+          trigger: "PRICING_REFRESH",
+          // detectPricingDecisions hace un await secuencial de
+          // checkStockGroupPricingHealth por cada grupo de fusión activo
+          // (hasta 200) además de las 3 consultas batch — margen extra
+          // para que una sucursal con muchas fusiones no corte el scan a
+          // la mitad (maxDuration de la ruta es 60s).
           timeoutMs: 25000,
         }),
       });

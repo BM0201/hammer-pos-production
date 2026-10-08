@@ -1,13 +1,11 @@
-import { ok, fail } from "@/lib/api/response";
+import { fail, ok } from "@/lib/api/response";
 import { toHttpErrorResponse } from "@/lib/http";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { getCurrentSession } from "@/modules/auth/service";
-import { getBrainInboxSummary } from "@/modules/brain/inbox-service";
-import { z } from "zod";
+import { getBrainInbox } from "@/modules/brain/inbox-service";
+import { inboxFiltersSchema } from "@/modules/brain/validators";
 
-const querySchema = z.object({ branchId: z.string().min(1).optional() });
-
-/** prompt-brain-centro-decisiones.md Fase 2.4 — rehecho sin frases por palabra clave (ver getBrainInboxSummary). */
+/** prompt-brain-centro-decisiones.md Fase 2.1 — bandeja agrupada por tipo, armada con groupBy en la base. */
 export async function GET(request: Request) {
   try {
     const session = await getCurrentSession();
@@ -15,10 +13,11 @@ export async function GET(request: Request) {
     assertMaster(session);
 
     const url = new URL(request.url);
-    const parsed = querySchema.safeParse(Object.fromEntries(url.searchParams.entries()));
+    const parsed = inboxFiltersSchema.safeParse(Object.fromEntries(url.searchParams.entries()));
     if (!parsed.success) return fail("VALIDATION_ERROR", "Filtros invalidos.", 400, parsed.error.flatten());
 
-    return ok(await getBrainInboxSummary(parsed.data));
+    const data = await getBrainInbox(parsed.data);
+    return ok(data);
   } catch (error) {
     return toHttpErrorResponse(error);
   }

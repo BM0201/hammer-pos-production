@@ -81,3 +81,18 @@ export const bulkDecisionSchema = z.object({
 });
 
 export type ScanBrainInput = z.infer<typeof scanBrainSchema>;
+
+const DECISION_AREAS = ["PRICING", "CASH", "SALES", "INVENTORY", "REORDER", "PURCHASING", "DISPATCH", "PRODUCTION", "SECURITY", "SYSTEM"] as const;
+
+export const inboxFiltersSchema = z.object({
+  branchId: z.string().min(1).optional(),
+  area: z.enum(DECISION_AREAS).optional(),
+  status: z.enum(["PENDING", "SNOOZED", "RESOLVED", "DISMISSED"]).optional(),
+  q: z.string().max(120).optional(),
+  minSeverity: z.nativeEnum(BrainDecisionSeverity).optional(),
+});
+
+export const inboxItemsQuerySchema = inboxFiltersSchema.extend({
+  cursor: z.string().optional(),
+  limit: z.preprocess((value) => (value === undefined ? undefined : Number(value)), z.number().int().min(1).max(100).optional()),
+});

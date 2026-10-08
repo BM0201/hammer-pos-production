@@ -192,6 +192,13 @@ const AREA_BY_CATEGORY: Record<string, DecisionArea> = {
   SYSTEM: "SYSTEM",
 };
 
+/** Fase 2.1 — reverso del catálogo: qué `proposedActionType` caen en un área, para poder filtrar `/inbox?area=` por `proposedActionType: { in: [...] }` sin que "área" exista como columna. */
+export function getActionTypesForArea(area: DecisionArea): string[] {
+  return Object.entries(DECISION_CATALOG)
+    .filter(([, entry]) => entry.area === area)
+    .map(([type]) => type);
+}
+
 /** Tipo desconocido (prefijo REVIEW_ sin entry, o un detector nuevo sin catalogar todavía) → "Revisar", área por categoría, sin enlace — nunca un código crudo sin traducir. */
 export function getDecisionCatalogEntry(proposedActionType: string | null, category: string): DecisionCatalogEntry {
   if (proposedActionType && DECISION_CATALOG[proposedActionType]) return DECISION_CATALOG[proposedActionType];
