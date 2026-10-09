@@ -3,6 +3,7 @@
 import Link from "next/link";
 import type { Route } from "next";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
@@ -20,6 +21,7 @@ import {
   Calculator,
   History,
   Printer,
+  Barcode,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +49,12 @@ const WacHistoryTab = dynamic(() => import("@/components/catalog-inventory/wac-h
   loading: () => <p className="py-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</p>,
 });
 const PriceHistoryTab = dynamic(() => import("@/components/catalog-inventory/price-history-tab").then((m) => m.PriceHistoryTab), {
+  ssr: false,
+  loading: () => <p className="py-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</p>,
+});
+// prompt-codigos-y-duplicados.md Fase 2 — "Códigos" (varios códigos por
+// producto, Fase 1): mismo patrón diferido que las 3 pestañas de arriba.
+const ProductBarcodesTab = dynamic(() => import("@/components/catalog-inventory/product-barcodes-tab").then((m) => m.ProductBarcodesTab), {
   ssr: false,
   loading: () => <p className="py-8 text-center text-sm text-[var(--color-text-muted)]">Cargando…</p>,
 });
@@ -116,7 +124,7 @@ export type ProductDetail = {
     branch?: Branch | null;
   }>;
 };
-type Tab = "general" | "stock" | "movements" | "wacHistory" | "priceHistory" | "pricing" | "brain" | "audit";
+type Tab = "general" | "stock" | "movements" | "wacHistory" | "priceHistory" | "pricing" | "barcodes" | "brain" | "audit";
 
 // Los tipos de datos de Kardex/historial de costo/historial de precio y sus
 // helpers (movementLabel, MovementIcon, etc.) se movieron a
@@ -132,6 +140,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "wacHistory", label: "Historial de costo", icon: History },
   { id: "priceHistory", label: "Historial de precio", icon: Tag },
   { id: "pricing", label: "Precios y Costos", icon: DollarSign },
+  { id: "barcodes", label: "Códigos", icon: Barcode },
   { id: "brain", label: "Brain", icon: Brain },
   { id: "audit", label: "Auditoría", icon: ClipboardList },
 ];
@@ -139,9 +148,18 @@ const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
 /* ═══════════════════════════════════════════════════════════════════════════ */
 /* ── Main Component ── */
 /* ═══════════════════════════════════════════════════════════════════════════ */
+const TAB_IDS = new Set<Tab>(TABS.map((t) => t.id));
+
 export function Product360({ productId }: { productId: string }) {
   const [data, setData] = useState<ProductDetail | null>(null);
-  const [tab, setTab] = useState<Tab>("general");
+  const searchParams = useSearchParams();
+  // prompt-codigos-y-duplicados.md Fase 2 — "Códigos..." en
+  // catalog-inventory-admin.tsx enlaza directo a ?tab=barcodes; cualquier
+  // otro ?tab= con un valor válido también funciona (no solo ese caso).
+  const [tab, setTab] = useState<Tab>(() => {
+    const requested = searchParams.get("tab");
+    return requested && TAB_IDS.has(requested as Tab) ? (requested as Tab) : "general";
+  });
   const [error, setError] = useState("");
   const [printingLabel, setPrintingLabel] = useState(false);
   const sessionState = useSession();
@@ -430,6 +448,16 @@ export function Product360({ productId }: { productId: string }) {
 
           <BranchPricingBlock productId={product.id} standardSalePriceFallback={product.standardSalePrice} />
         </div>
+      )}
+
+      {/* ═══ CÓDIGOS TAB (Fase 2, prompt-codigos-y-duplicados.md) ═══ */}
+      {tab === "barcodes" && (
+        <ProductBarcodesTab
+          productId={product.id}
+          productName={product.name}
+          productSku={product.sku}
+          standardSalePrice={Number(product.standardSalePrice)}
+        />
       )}
 
       {/* ═══ BRAIN TAB ═══ */}

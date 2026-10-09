@@ -129,6 +129,9 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
   /* ── Shared includes for product queries ── */
   const productInclude = {
     category: { select: { id: true, name: true } },
+    // prompt-codigos-y-duplicados.md Fase 2 — chip "+N códigos" por fila y
+    // el filtro "Sin código" de abajo (matchesFilter).
+    barcodes: { select: { code: true }, orderBy: { isPrimary: "desc" as const } },
     inventoryBalances: {
       where: params.branchId ? { branchId: params.branchId } : undefined,
       include: { branch: { select: { id: true, code: true, name: true } } },
@@ -173,8 +176,13 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       return decimalToNumber(row.quantityOnHand) <= rp;
     });
     const branchSettings: any[] = product.branchProductSettings;
+    // prompt-codigos-y-duplicados.md Fase 2 — productInclude trae `barcodes`
+    // como filas {code} (forma cruda de Prisma); el frontend solo necesita
+    // la lista de códigos, igual que catalog/service.ts (Fase 1).
+    const barcodeRows: Array<{ code: string }> = product.barcodes ?? [];
     return {
       ...product,
+      barcodes: barcodeRows.map((b) => b.code),
       totalStock,
       branchesWithStock,
       inventoryValue: totalValue,
@@ -189,6 +197,12 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
       hasZeroStock: totalStock === 0,
       hasNegativeStock: productBalances.some((row: any) => decimalToNumber(row.quantityOnHand) < 0),
       hasNoCost,
+      // prompt-codigos-y-duplicados.md Fase 2 — Product.barcode es el
+      // espejo del código PRINCIPAL (product-barcode-service.ts); null
+      // significa que este producto no tiene ningún código, ni principal
+      // ni secundario (si tuviera uno, sería principal y el espejo no
+      // sería null).
+      hasNoCode: product.barcode === null,
       // hasNoPrice se queda igual con o sin sucursal — computeHasNoPrice ya
       // mira standardSalePrice, que es general y no depende de sucursal.
       hasNoPrice: computeHasNoPrice(
@@ -213,6 +227,7 @@ export async function getCatalogInventoryCenter(params: Partial<CatalogInventory
     if (params.filter === "NO_COST") return row.hasNoCost;
     if (params.filter === "NO_PRICE") return row.hasNoPrice;
     if (params.filter === "NO_BRANCH_PRICE") return Boolean(row.hasNoBranchPrice);
+    if (params.filter === "NO_CODE") return row.hasNoCode;
     return true;
   }
 

@@ -48,6 +48,9 @@ export type ProductRow = {
   id: string;
   sku: string;
   barcode?: string | null;
+  // prompt-codigos-y-duplicados.md Fase 2 — todos los códigos del producto
+  // (principal + secundarios), para el chip "+N códigos" de la fila.
+  barcodes?: string[];
   name: string;
   unit: string;
   isActive: boolean;
@@ -321,6 +324,10 @@ const FILTERS = [
   { value: "NEGATIVE_STOCK", label: "Stock negativo" },
   { value: "NO_COST", label: "Sin costo" },
   { value: "NO_PRICE", label: "Sin precio" },
+  // prompt-codigos-y-duplicados.md Fase 2 — producto sin ningún código de
+  // barras (ni principal ni secundario). Mismo mecanismo que el resto de
+  // estos filtros (?filter=, computado en memoria del lado del servidor).
+  { value: "NO_CODE", label: "Sin código" },
 ];
 
 
@@ -1132,13 +1139,26 @@ export function CatalogInventoryAdmin() {
             aparte porque el flujo es secuencial (código → ¿existe? →
             guardar → siguiente código), no encaja en este formulario de un
             solo producto a la vez. */}
-        <Link
-          href={"/app/master/catalog/products/quick-add" as Route}
-          className="inline-flex items-center gap-2 self-start rounded-lg border border-[var(--color-master-300)] bg-[var(--color-master-50)] px-4 py-2 text-sm font-semibold text-[var(--color-master-700)] hover:bg-[var(--color-master-100)]"
-        >
-          <ScanLine className="h-4 w-4" />
-          Alta rápida con escáner
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href={"/app/master/catalog/products/quick-add" as Route}
+            className="inline-flex items-center gap-2 self-start rounded-lg border border-[var(--color-master-300)] bg-[var(--color-master-50)] px-4 py-2 text-sm font-semibold text-[var(--color-master-700)] hover:bg-[var(--color-master-100)]"
+          >
+            <ScanLine className="h-4 w-4" />
+            Escanear productos
+          </Link>
+          {/* prompt-codigos-y-duplicados.md Fase 2 — mismo patrón que
+              onlyMissing/onToggleOnlyMissing de PricingPanel (NO_BRANCH_PRICE):
+              un toggle en la pestaña donde realmente importa, no otro valor
+              más perdido en el select genérico de la pestaña Existencias. */}
+          <Button
+            variant={filter === "NO_CODE" ? "primary" : "secondary"}
+            size="sm"
+            onClick={() => { setFilter((prev) => (prev === "NO_CODE" ? "" : "NO_CODE")); setPage(1); }}
+          >
+            {filter === "NO_CODE" ? "Mostrando: sin código" : "Sin código"}
+          </Button>
+        </div>
         {/* ── Panel para crear producto manual ── */}
         <Card noPadding>
           <div className="hm-card-header-green">
@@ -1393,6 +1413,28 @@ export function CatalogInventoryAdmin() {
                         </div>
                       ) : (
                         <span className="font-semibold">{product.sku}</span>
+                      )}
+                      {/* prompt-codigos-y-duplicados.md Fase 2 — no se agrega
+                          el código al editor inline (editDraft no lo toca):
+                          se gestiona desde la ficha, donde el historial y el
+                          chequeo de duplicados tienen contexto completo. */}
+                      {!isEditing && (
+                        <div className="mt-1 flex items-center gap-1.5 text-[0.68rem]">
+                          {product.barcode ? (
+                            <span className="rounded border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-[var(--color-text-muted)]">
+                              {product.barcode}
+                              {(product.barcodes?.length ?? 0) > 1 && ` +${(product.barcodes?.length ?? 1) - 1}`}
+                            </span>
+                          ) : (
+                            <span className="text-[var(--color-text-muted)]">Sin código</span>
+                          )}
+                          <Link
+                            href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes` as Route}
+                            className="font-medium text-[var(--color-info-600)] hover:underline"
+                          >
+                            Códigos…
+                          </Link>
+                        </div>
                       )}
                     </td>
                     <td>
