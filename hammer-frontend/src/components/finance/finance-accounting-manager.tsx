@@ -10,6 +10,7 @@ import {
 import { useSession } from "@/lib/client/session";
 import { canInAnyAssignedBranch, CAPABILITIES } from "@/modules/rbac/policies";
 import { ExpenseManager } from "@/components/expenses/expense-manager";
+import { ExpensesPeriodPanel } from "@/components/finance/expenses-period-panel";
 import { FinanceSummaryPanel } from "@/components/finance/finance-summary-panel";
 import { PayrollFinancePanel } from "@/components/finance/payroll-finance-panel";
 import { BanksTreasuryPanel } from "@/components/finance/banks-treasury-panel";
@@ -132,9 +133,18 @@ export function FinanceAccountingManager() {
       {/* Contenido por tab */}
       {activeTab === "summary" && <FinanceSummaryPanel />}
 
-      {/* Gastos operativos / Fletes reutilizan ExpenseManager (un tab a la vez
-          vía forcedTab; la barra interna se oculta). */}
-      {activeTab === "expenses" && <ExpenseManager forcedTab="expenses" hideTabBar />}
+      {/* prompt-gastos-semana-quincena.md Fase 3 — "Gastos operativos" ahora
+          abre primero el libro por período (día/semana/quincena/mes), que es
+          lo que responde "qué pasó" y "cuánto llevamos". La vista clásica
+          por mes (crear un gasto recurrente, ver el desglose del mes) sigue
+          disponible abajo, colapsada — ExpenseManager no se tocó, sigue
+          siendo el único lugar donde se da de alta un gasto RECURRING nuevo. */}
+      {activeTab === "expenses" && (
+        <div className="space-y-4">
+          <ExpensesPeriodPanel />
+          <ClassicExpensesSection />
+        </div>
+      )}
       {activeTab === "freight" && <ExpenseManager forcedTab="freight" hideTabBar />}
 
       {/* Planilla V2: el banner informativo (ahora descartable), el hero de costo
@@ -158,6 +168,28 @@ export function FinanceAccountingManager() {
             Ir a Reportes & KPIs <ArrowRight className="h-4 w-4" />
           </Link>
           {/* TODO(finance-extract): finance-reports-panel.tsx con export de gastos/planilla/utilidad. */}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Vista clásica por mes (dar de alta un gasto recurrente, ver el desglose del mes) — colapsada bajo el libro por período. */
+function ClassicExpensesSection() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg" style={{ border: "0.5px solid var(--color-border)" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold"
+        style={{ color: "var(--color-text-muted)" }}
+      >
+        Vista clásica por mes (dar de alta un gasto recurrente, desglose mensual)
+        <span>{open ? "Ocultar" : "Mostrar"}</span>
+      </button>
+      {open && (
+        <div className="px-4 pb-4">
+          <ExpenseManager forcedTab="expenses" hideTabBar />
         </div>
       )}
     </div>
