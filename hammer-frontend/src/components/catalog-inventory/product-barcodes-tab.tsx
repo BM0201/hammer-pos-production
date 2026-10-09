@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CameraScanner } from "@/components/scanner/camera-scanner";
 import { ProductCombobox, type ComboboxProduct } from "@/components/catalog-inventory/product-combobox";
+import { MergeWizard } from "@/components/catalog-inventory/duplicates-panel";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useCameraAvailable } from "@/lib/client/use-camera-available";
 import { useSession } from "@/lib/client/session";
@@ -38,11 +39,15 @@ export function ProductBarcodesTab({
   productId,
   productName,
   productSku,
+  productUnit,
+  productTotalStock,
   standardSalePrice,
 }: {
   productId: string;
   productName: string;
   productSku: string;
+  productUnit: string;
+  productTotalStock: number;
   standardSalePrice: number;
 }) {
   const [rows, setRows] = useState<ProductBarcodeRow[] | null>(null);
@@ -50,6 +55,7 @@ export function ProductBarcodesTab({
   const [addingKind, setAddingKind] = useState<BarcodeKind>("FACTORY");
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
+  const [showMergeWizard, setShowMergeWizard] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveTarget, setMoveTarget] = useState<ComboboxProduct | null>(null);
@@ -304,9 +310,8 @@ export function ProductBarcodesTab({
                   </Link>
                   <button
                     type="button"
-                    disabled
-                    title="Disponible próximamente — pantalla de unificación de duplicados"
-                    className="inline-flex h-8 cursor-not-allowed items-center rounded-lg border border-amber-200 bg-amber-100/50 px-3 text-xs font-medium text-amber-400"
+                    onClick={() => setShowMergeWizard(true)}
+                    className="inline-flex h-8 items-center rounded-lg border border-amber-300 bg-white px-3 text-xs font-medium text-amber-800 hover:bg-amber-100"
                   >
                     Son el mismo producto → Unificar
                   </button>
@@ -369,6 +374,21 @@ export function ProductBarcodesTab({
           </div>
         )}
       </Card>
+
+      {showMergeWizard && conflict && (
+        <MergeWizard
+          pair={{
+            // categoryId/createdAt no los usa MergeWizard (solo los necesita
+            // el detector de duplicados en lista) — placeholders inertes acá.
+            productA: { id: productId, sku: productSku, name: productName, categoryId: "", unit: productUnit, barcode: null, totalStock: productTotalStock, createdAt: new Date().toISOString() },
+            productB: { id: conflict.id, sku: conflict.sku, name: conflict.name, categoryId: "", unit: productUnit, barcode: conflict.barcode, totalStock: 0, createdAt: new Date().toISOString() },
+            similarity: 1,
+            suggestedPrimaryId: productId,
+          }}
+          onClose={() => setShowMergeWizard(false)}
+          onDone={() => { setShowMergeWizard(false); setConflict(null); void load(); }}
+        />
+      )}
     </div>
   );
 }

@@ -73,3 +73,10 @@ export const executeMergeSchema = z.object({
   confirmUnitMismatch: z.boolean().optional(),
   reason: z.string().max(500).optional(),
 });
+
+// prompt-codigos-y-duplicados.md Fase 4 — pantalla de posibles duplicados.
+export const dismissDuplicatePairSchema = z.object({
+  productAId: z.string().cuid(),
+  productBId: z.string().cuid(),
+  reason: z.string().max(500).optional(),
+});

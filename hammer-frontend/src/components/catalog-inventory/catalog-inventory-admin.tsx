@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   AlertTriangle, BarChart3, Boxes, Building2, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp,
-  CheckCircle2, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Merge, Package, Pencil,
+  CheckCircle2, Copy, DollarSign, Download, FileSpreadsheet, FileUp, History, Info, Loader2, Merge, Package, Pencil,
   Plus, RefreshCcw, Save, ScanLine, Search, Settings2, Shuffle, Sparkles, Tags, Trash2,
   TrendingUp, Wand2, X, Zap,
 } from "lucide-react";
@@ -40,6 +40,7 @@ const PricingPanel = dynamic(() => import("@/components/catalog-inventory/pricin
 const TransfersPanel = dynamic(() => import("@/components/catalog-inventory/transfers-panel").then((m) => m.TransfersPanel), { ssr: false });
 const ReplenishmentPanel = dynamic(() => import("@/components/catalog-inventory/replenishment-panel").then((m) => m.ReplenishmentPanel), { ssr: false });
 const AuditPanel = dynamic(() => import("@/components/catalog-inventory/audit-panel").then((m) => m.AuditPanel), { ssr: false });
+const DuplicatesPanel = dynamic(() => import("@/components/catalog-inventory/duplicates-panel").then((m) => m.DuplicatesPanel), { ssr: false });
 
 /* ───────────────────────── Types ───────────────────────── */
 export type Branch = { id: string; code: string; name: string };
@@ -295,7 +296,7 @@ function costSourceLabel(source: BranchPricingCostRow["costSource"], branchCode:
   }
 }
 
-type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "fusion" | "transfers" | "reorder" | "audit";
+type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "fusion" | "transfers" | "reorder" | "duplicates" | "audit";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "summary", label: "Resumen", icon: BarChart3 },
@@ -314,6 +315,10 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "fusion", label: "Fusiones", icon: Merge },
   { id: "transfers", label: "Transferencias", icon: Shuffle },
   { id: "reorder", label: "Reposicion", icon: Settings2 },
+  // prompt-codigos-y-duplicados.md Fase 4 — distinta de Fusiones (arriba):
+  // esto sugiere que DOS PRODUCTOS DISTINTOS son el mismo (error de alta),
+  // Fusiones es UN producto con varias presentaciones (factor real).
+  { id: "duplicates", label: "Duplicados", icon: Copy },
   { id: "audit", label: "Auditoria", icon: BarChart3 },
 ];
 
@@ -1609,6 +1614,7 @@ export function CatalogInventoryAdmin() {
       {tab === "fusion" ? <FusionPricingPanel /> : null}
       {data && tab === "transfers" ? <TransfersPanel branches={data.branches} /> : null}
       {data && tab === "reorder" ? <ReplenishmentPanel branches={data.branches} selectedBranchId={branchId} /> : null}
+      {data && tab === "duplicates" ? <DuplicatesPanel onMerged={() => void load()} /> : null}
       {data && tab === "audit" ? <AuditPanel logs={data.auditLogs} /> : null}
     </section>
   );

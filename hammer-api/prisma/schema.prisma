@@ -511,6 +511,7 @@ model User {
   brainScanRuns                  BrainScanRun[]
   createdProductBarcodes         ProductBarcode[]
   executedProductMerges          ProductMerge[]
+  dismissedProductDuplicates     ProductDuplicateDismissal[]
   presences                      UserPresence[]
   createdReplenishmentDrafts     ReplenishmentDraft[]         @relation("ReplenishmentDraftCreatedBy")
   approvedReplenishmentDrafts    ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
@@ -993,11 +994,13 @@ model Product {
   /// lo usa para que el SKU/código viejo siga resolviendo a A (matchedBy:
   /// "merged_alias"). ProductMerge es el registro completo de auditoría;
   /// este campo es solo el atajo rápido para esa resolución.
-  mergedIntoProductId String?
-  mergedInto          Product?       @relation("ProductMergeRedirect", fields: [mergedIntoProductId], references: [id], onDelete: SetNull)
-  mergedFrom          Product[]      @relation("ProductMergeRedirect")
-  mergesAsSurvivor    ProductMerge[] @relation("ProductMergeSurvivor")
-  mergeAsMerged       ProductMerge?  @relation("ProductMergeMerged")
+  mergedIntoProductId    String?
+  mergedInto             Product?                    @relation("ProductMergeRedirect", fields: [mergedIntoProductId], references: [id], onDelete: SetNull)
+  mergedFrom             Product[]                   @relation("ProductMergeRedirect")
+  mergesAsSurvivor       ProductMerge[]              @relation("ProductMergeSurvivor")
+  mergeAsMerged          ProductMerge?               @relation("ProductMergeMerged")
+  duplicateDismissalsAsA ProductDuplicateDismissal[] @relation("ProductDuplicateDismissalA")
+  duplicateDismissalsAsB ProductDuplicateDismissal[] @relation("ProductDuplicateDismissalB")
 
   @@index([abcClassification])
   @@index([rotationIndex])
@@ -1038,6 +1041,24 @@ model ProductMerge {
   executedBy       User    @relation(fields: [executedByUserId], references: [id])
 
   @@index([survivingProductId])
+}
+
+/// prompt-codigos-y-duplicados.md Fase 4 — pantalla de posibles duplicados.
+/// Un humano revisó el par (productAId, productBId — SIN orden, pairKey es
+/// la clave canónica, ver dismissedPairKey en duplicate-finder.ts) y dijo
+/// "no son el mismo producto" — no vuelve a aparecer como sugerencia.
+model ProductDuplicateDismissal {
+  id                String   @id @default(cuid())
+  productAId        String
+  productBId        String
+  pairKey           String   @unique
+  dismissedByUserId String
+  dismissedAt       DateTime @default(now())
+  reason            String?
+
+  productA    Product @relation("ProductDuplicateDismissalA", fields: [productAId], references: [id], onDelete: Cascade)
+  productB    Product @relation("ProductDuplicateDismissalB", fields: [productBId], references: [id], onDelete: Cascade)
+  dismissedBy User    @relation(fields: [dismissedByUserId], references: [id])
 }
 
 enum ProductBarcodeKind {

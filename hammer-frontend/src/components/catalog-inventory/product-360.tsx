@@ -456,6 +456,8 @@ export function Product360({ productId }: { productId: string }) {
           productId={product.id}
           productName={product.name}
           productSku={product.sku}
+          productUnit={product.unit}
+          productTotalStock={totalStock}
           standardSalePrice={Number(product.standardSalePrice)}
         />
       )}

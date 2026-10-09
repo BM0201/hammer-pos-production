@@ -92,7 +92,13 @@ export const MERGE_RELATION_POLICY: Record<string, MergeRelationPolicyEntry> = {
  * módulo escribe, no algo preexistente que fusionar). product-merge-
  * service.test.ts las excluye explícitamente al cruzar contra el DMMF.
  */
-export const MERGE_POLICY_EXCLUDED_RELATIONS = ["category", "mergedInto", "mergedFrom", "mergesAsSurvivor", "mergeAsMerged"];
+export const MERGE_POLICY_EXCLUDED_RELATIONS = [
+  "category", "mergedInto", "mergedFrom", "mergesAsSurvivor", "mergeAsMerged",
+  // prompt-codigos-y-duplicados.md Fase 4 — descartes de la pantalla de
+  // posibles duplicados: bookkeeping de ESA pantalla, no datos de negocio
+  // que una fusión real tenga que decidir qué hacer con ellos.
+  "duplicateDismissalsAsA", "duplicateDismissalsAsB",
+];
 
 /** relación → {delegate de Prisma, campo FK} — para el MOVE/CHOOSE/CLOSE genérico y sus conteos en el preview. */
 const RELATION_FK: Record<string, { delegate: string; fk: string }> = {
