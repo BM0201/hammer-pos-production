@@ -522,6 +522,9 @@ const MOV_LABELS: Record<string, { label: string; color: string; bg: string }> =
   PACKAGE_CLOSED:     { label: "Paquete cerrado",  color: "#6b7280", bg: "#f9fafb" },
   LOOSE_UNIT_SALE_OUT:{ label: "Unidad suelta −",  color: "#dc2626", bg: "#fef2f2" },
   LOOSE_ADJUSTMENT:   { label: "Ajuste suelto",    color: "#ea580c", bg: "#fff7ed" },
+  // prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
+  PRODUCT_MERGE_IN:   { label: "Unificación +",    color: "#2563eb", bg: "#eff6ff" },
+  PRODUCT_MERGE_OUT:  { label: "Unificación −",    color: "#ea580c", bg: "#fff7ed" },
 };
 function movKardexLabel(type: string) {
   return MOV_LABELS[type] ?? { label: type, color: "#6b7280", bg: "#f9fafb" };

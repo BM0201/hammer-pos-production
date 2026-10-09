@@ -571,11 +571,11 @@ export async function checkSkuAvailable(sku: string, excludeProductId?: string) 
   return { available: false, normalizedSku: normalized, existingProductId: existing.id, existingProductName: existing.name };
 }
 
-// "merged_alias" — prompt-codigos-y-duplicados.md Fase 3 (unificación de
-// duplicados): un código que pertenecía a un producto ya fusionado debe
-// seguir resolviendo al producto VIVO con este matchedBy. Hueco dejado a
-// propósito — todavía no existe Product.mergedIntoProductId ni nada que lo
-// produzca.
+// "merged_alias" — prompt-codigos-y-duplicados.md Fase 3: el SKU de un
+// producto ya fusionado (Product.mergedIntoProductId) resuelve al
+// producto VIVO con este matchedBy, no al fusionado (inactivo). Los
+// códigos de barra no necesitan este camino — se reasignan al vivo en el
+// momento de fusionar (product-merge-service.ts).
 export type ProductByCodeMatch = "barcode" | "sku" | "merged_alias" | null;
 
 export type ProductByCodeResult = {
@@ -596,6 +596,7 @@ function selectProductByCode(db: Prisma.TransactionClient | typeof prisma, where
       id: true,
       name: true,
       sku: true,
+      mergedIntoProductId: true,
       barcode: true,
       unit: true,
       standardSalePrice: true,
@@ -633,11 +634,17 @@ export async function findProductByCode(
   }
 
   const bySku = await selectProductByCode(db, { sku: code });
-  if (bySku) return { product: bySku, matchedBy: "sku" };
-
-  // Fase 3 (prompt-codigos-y-duplicados.md) — acá va la resolución por
-  // alias de un producto ya FUSIONADO (Product.mergedIntoProductId), con
-  // matchedBy:"merged_alias". Todavía no existe esa tabla/campo.
+  if (bySku) {
+    // Fase 3 — el SKU viejo de un producto ya FUSIONADO sigue resolviendo,
+    // pero al VIVO (A), no a B (que ya no se vende). Los códigos de barra
+    // de B ya se reasignaron a A al fusionar (product-merge-service.ts) —
+    // esto solo cubre el caso del SKU, que B conserva tal cual.
+    if (bySku.mergedIntoProductId) {
+      const survivor = await selectProductByCode(db, { id: bySku.mergedIntoProductId });
+      if (survivor) return { product: survivor, matchedBy: "merged_alias" };
+    }
+    return { product: bySku, matchedBy: "sku" };
+  }
 
   return { product: null, matchedBy: null };
 }

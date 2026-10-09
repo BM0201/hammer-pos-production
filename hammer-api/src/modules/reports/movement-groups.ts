@@ -61,6 +61,11 @@ export const MOVEMENT_TYPE_GROUP: Record<InventoryMovementType, MovementGroup> =
   PRODUCTION_REVERSAL_IN: "conteos",
   PRODUCTION_REVERSAL_OUT: "conteos",
   RETURN_OUT: "conteos",
+  // prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados:
+  // una corrección de catálogo, no una compra/venta/traslado real — misma
+  // naturaleza que ADJUSTMENT_IN/OUT.
+  PRODUCT_MERGE_IN: "conteos",
+  PRODUCT_MERGE_OUT: "conteos",
 
   SALE_OUT: "ventas",
   PACKAGE_SALE_OUT: "ventas",

@@ -58,3 +58,18 @@ export const addProductBarcodeSchema = z.object({
 export const moveProductBarcodeSchema = z.object({
   toProductId: z.string().cuid(),
 });
+
+// prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
+export const previewMergeSchema = z.object({
+  survivingProductId: z.string().cuid(),
+  mergedProductId: z.string().cuid(),
+  confirmUnitMismatch: z.boolean().optional(),
+});
+
+export const executeMergeSchema = z.object({
+  survivingProductId: z.string().cuid(),
+  mergedProductId: z.string().cuid(),
+  confirmedMergedSku: z.string().min(1),
+  confirmUnitMismatch: z.boolean().optional(),
+  reason: z.string().max(500).optional(),
+});

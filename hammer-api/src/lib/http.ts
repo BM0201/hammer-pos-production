@@ -174,6 +174,14 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message.startsWith("PRICE_DEVIATES_FROM_FUSION:")) {
       return errJson("PRICE_DEVIATES_FROM_FUSION", error.message.replace(/^PRICE_DEVIATES_FROM_FUSION:\s?/, ""), 409);
     }
+    // prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
+    // mergeProductsTx vuelve a correr previewMerge DENTRO de la transacción
+    // (nunca confía en un preview pedido antes); si ya no se puede ejecutar
+    // (otra fusión concurrente, un PO que se abrió mientras tanto, etc.) es
+    // un conflicto de estado, no un 400 de payload inválido.
+    if (error.message.startsWith("MERGE_BLOCKED:")) {
+      return errJson("MERGE_BLOCKED", error.message.replace(/^MERGE_BLOCKED:\s?/, ""), 409);
+    }
 
     // Cuentas por pagar (prompt-cxp.md, Fase 2) — recordAccountPaymentTx.
     if (error.message.startsWith("PURCHASE_OVERPAYMENT:")) {

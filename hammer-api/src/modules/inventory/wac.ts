@@ -8,6 +8,9 @@ const INBOUND_TYPES = new Set([
   "TIMBER_INTAKE_IN",
   "PRODUCTION_OUTPUT",
   "PRODUCTION_REVERSAL_IN",
+  // prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados: el
+  // stock entra al producto que sobrevive con este tipo.
+  "PRODUCT_MERGE_IN",
 ] as const);
 
 export function isInboundMovement(movementType: string): boolean {

@@ -171,6 +171,13 @@ enum InventoryMovementType {
   PRODUCTION_WASTE
   PRODUCTION_REVERSAL_IN /// Producción v2 Fase 4: devuelve al inventario un insumo consumido por un lote revertido
   PRODUCTION_REVERSAL_OUT /// Producción v2 Fase 4: retira el producto terminado agregado por un lote revertido
+  /// prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados:
+  /// el stock de B (el que se retira) sale con PRODUCT_MERGE_OUT y entra a
+  /// A (el que sobrevive) con PRODUCT_MERGE_IN, por sucursal, con
+  /// recalculateWeightedAverage igual que cualquier ADJUSTMENT_IN/OUT —
+  /// nunca un ajuste directo al balance que se salte el WAC.
+  PRODUCT_MERGE_OUT
+  PRODUCT_MERGE_IN
 }
 
 enum BrainDecisionStatus {
@@ -503,6 +510,7 @@ model User {
   targetedBrainDecisions         BrainDecision[]              @relation("BrainDecisionTargetUser")
   brainScanRuns                  BrainScanRun[]
   createdProductBarcodes         ProductBarcode[]
+  executedProductMerges          ProductMerge[]
   presences                      UserPresence[]
   createdReplenishmentDrafts     ReplenishmentDraft[]         @relation("ReplenishmentDraftCreatedBy")
   approvedReplenishmentDrafts    ReplenishmentDraft[]         @relation("ReplenishmentDraftApprovedBy")
@@ -978,8 +986,22 @@ model Product {
   priceUpdateLines           PriceUpdateLine[]
   barcodes                   ProductBarcode[]
 
+  /// prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
+  /// Un producto fusionado NUNCA se borra (su historial de ventas,
+  /// movimientos, etc. se queda intacto apuntándole a él) — queda
+  /// isActive=false y este campo apunta al producto VIVO. findProductByCode
+  /// lo usa para que el SKU/código viejo siga resolviendo a A (matchedBy:
+  /// "merged_alias"). ProductMerge es el registro completo de auditoría;
+  /// este campo es solo el atajo rápido para esa resolución.
+  mergedIntoProductId String?
+  mergedInto          Product?       @relation("ProductMergeRedirect", fields: [mergedIntoProductId], references: [id], onDelete: SetNull)
+  mergedFrom          Product[]      @relation("ProductMergeRedirect")
+  mergesAsSurvivor    ProductMerge[] @relation("ProductMergeSurvivor")
+  mergeAsMerged       ProductMerge?  @relation("ProductMergeMerged")
+
   @@index([abcClassification])
   @@index([rotationIndex])
+  @@index([mergedIntoProductId])
   // Fase 2 (prompt-flujo-velocidad.md): catálogo/POS filtran casi siempre
   // por isActive + ordenan/buscan por name; categoryId se usa en filtros de
   // categoría sueltos (reposición, reportes) sin pasar por isActive/name.
@@ -989,6 +1011,33 @@ model Product {
   // pg_trgm cada tecleo en el buscador es un seq scan de toda la tabla.
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([sku(ops: raw("gin_trgm_ops"))], type: Gin)
+}
+
+/// prompt-codigos-y-duplicados.md Fase 3 — registro de auditoría completo de
+/// una unificación. mergedProductId es @unique: un producto solo se puede
+/// fusionar UNA vez (no tiene sentido fusionar lo que ya está fusionado;
+/// si hace falta corregir, se corrige a mano, no con una segunda fusión
+/// encadenada). planJson guarda el preview ejecutado (conteos por relación,
+/// bloqueos ya resueltos) para poder auditar DESPUÉS qué se decidió mover,
+/// elegir o cerrar sin tener que reconstruirlo desde cero.
+model ProductMerge {
+  id                 String   @id @default(cuid())
+  survivingProductId String
+  mergedProductId    String   @unique
+  survivingSku       String
+  survivingName      String
+  mergedSku          String
+  mergedName         String
+  reason             String?
+  planJson           Json
+  executedByUserId   String
+  executedAt         DateTime @default(now())
+
+  survivingProduct Product @relation("ProductMergeSurvivor", fields: [survivingProductId], references: [id])
+  mergedProduct    Product @relation("ProductMergeMerged", fields: [mergedProductId], references: [id])
+  executedBy       User    @relation(fields: [executedByUserId], references: [id])
+
+  @@index([survivingProductId])
 }
 
 enum ProductBarcodeKind {

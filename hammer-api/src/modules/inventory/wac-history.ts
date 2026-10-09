@@ -42,6 +42,10 @@ const WAC_REPLAY_INBOUND = new Set<InventoryMovementType>([
   "PRODUCTION_REVERSAL_IN",
   "PACKAGE_IN",
   "LOOSE_UNIT_RETURN_IN",
+  // prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados:
+  // mismo efecto en el WAC que ADJUSTMENT_IN (createInventoryMovementTx la
+  // escribe exactamente igual, recalculateWeightedAverage incluido).
+  "PRODUCT_MERGE_IN",
 ]);
 
 const WAC_REPLAY_OUTBOUND = new Set<InventoryMovementType>([
@@ -54,6 +58,9 @@ const WAC_REPLAY_OUTBOUND = new Set<InventoryMovementType>([
   "PRODUCTION_REVERSAL_OUT",
   "PACKAGE_SALE_OUT",
   "LOOSE_UNIT_SALE_OUT",
+  // prompt-codigos-y-duplicados.md Fase 3 — mismo efecto en el WAC que
+  // ADJUSTMENT_OUT (el producto que se retira, B, pierde su stock).
+  "PRODUCT_MERGE_OUT",
 ]);
 
 export type WacHistoryMovementInput = {

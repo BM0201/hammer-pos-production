@@ -15,7 +15,7 @@ import { findProductByCode, assignInternalBarcode } from "@/modules/catalog/serv
  * saltarse el camino feliz por depender del prisma global.
  */
 
-type FakeProduct = { id: string; sku: string; barcode: string | null; name: string; isActive?: boolean };
+type FakeProduct = { id: string; sku: string; barcode: string | null; name: string; isActive?: boolean; mergedIntoProductId?: string | null };
 type FakeBarcode = { id: string; productId: string; code: string; kind: string; isPrimary: boolean; createdByUserId: string | null };
 
 function createCatalogFakeDb(products: FakeProduct[], barcodes: FakeBarcode[] = []) {
@@ -31,6 +31,7 @@ function createCatalogFakeDb(products: FakeProduct[], barcodes: FakeBarcode[] = 
       unit: "UNIDAD",
       standardSalePrice: new Prisma.Decimal(100),
       isActive: p.isActive ?? true,
+      mergedIntoProductId: p.mergedIntoProductId ?? null,
       category: { id: "cat-1", code: "GEN", name: "General" },
     };
   }
@@ -137,6 +138,23 @@ test("findProductByCode — coincide por un código SECUNDARIO (no principal)", 
   const result = await findProductByCode("2000000000000", db);
   assert.equal(result.matchedBy, "barcode");
   assert.equal(result.product?.id, "p6");
+});
+
+test("findProductByCode — SKU de un producto ya FUSIONADO resuelve al producto VIVO (merged_alias)", async () => {
+  const { db } = createCatalogFakeDb([
+    { id: "p7", sku: "GEN-0001", barcode: null, name: "Cemento Canal" },
+    { id: "p8", sku: "GEN-0099", barcode: null, name: "Cemento Canal (duplicado)", isActive: false, mergedIntoProductId: "p7" },
+  ]);
+  const result = await findProductByCode("GEN-0099", db);
+  assert.equal(result.matchedBy, "merged_alias");
+  assert.equal(result.product?.id, "p7", "resuelve al VIVO, no al fusionado");
+});
+
+test("findProductByCode — producto activo normal (sin fusión): sigue resolviendo por sku tal cual", async () => {
+  const { db } = createCatalogFakeDb([{ id: "p9", sku: "FER-0200", barcode: null, name: "Martillo" }]);
+  const result = await findProductByCode("FER-0200", db);
+  assert.equal(result.matchedBy, "sku");
+  assert.equal(result.product?.id, "p9");
 });
 
 test("assignInternalBarcode — producto que YA tiene barcode: rechaza sin tocarlo (sale antes de auditar/escribir)", async () => {
