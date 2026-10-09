@@ -800,6 +800,11 @@ async function syncPostedPayrollLineExpense(
         isActive: true,
         effectiveFrom: monthDate,
         effectiveTo: monthEnd,
+        // prompt-gastos-semana-quincena.md Fase 1 — defensivo: esta fila
+        // SIEMPRE es PAYROLL_SYNC (es la única escritora de isAutoCalculated+
+        // PAYROLL), pero se reafirma por si alguna vez quedó mal clasificada.
+        kind: "PAYROLL_SYNC",
+        paidAt: monthDate,
       },
     });
     return true;
@@ -816,6 +821,8 @@ async function syncPostedPayrollLineExpense(
       employeeId: line.employeeId,
       effectiveFrom: monthDate,
       effectiveTo: monthEnd,
+      kind: "PAYROLL_SYNC",
+      paidAt: monthDate,
     },
   });
   return true;

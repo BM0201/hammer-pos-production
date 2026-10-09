@@ -8,6 +8,7 @@ import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-servi
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { getActiveCashSession, syncCashSessionSnapshotTx, userCanOperateCashSessionTx } from "@/modules/cash-session/service";
 import { setBranchPriceTx } from "@/modules/pricing/branch-price-exception-service";
+import { conceptMatchesCategory } from "@/modules/pricing/expense-kind";
 
 /* ══════════════════════════════════════════════════════
  *  OPERATING EXPENSES
@@ -35,8 +36,24 @@ export async function createOperatingExpense(
   actorUserId: string,
   options: CreateOperatingExpenseOptions = {},
 ): Promise<CreateOperatingExpenseResult> {
+  if (input.conceptId) {
+    const concept = await prisma.expenseConcept.findUnique({ where: { id: input.conceptId }, select: { category: true } });
+    if (!concept || !conceptMatchesCategory(concept.category, input.category)) {
+      throw new Error("VALIDATION_ERROR: el concepto no corresponde a esa categoría.");
+    }
+  }
+
   const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
-  const effectiveTo = input.effectiveTo ? new Date(input.effectiveTo) : null;
+  const now = new Date();
+
+  // prompt-gastos-semana-quincena.md Fase 1 — registerCashMovement:true es
+  // SIEMPRE "estoy pagando esto hoy" (lo dispara /api/branch/expenses, que
+  // lo manda incondicional): PAID, con effectiveTo=effectiveFrom sin
+  // importar qué haya mandado el caller — un gasto pagado nunca es un rango
+  // de vigencia mensual, aunque no haya caja abierta para descontarlo.
+  const kindFields = options.registerCashMovement
+    ? { kind: "PAID" as const, effectiveTo: effectiveFrom, paidAt: now }
+    : { kind: "RECURRING" as const, effectiveTo: input.effectiveTo ? new Date(input.effectiveTo) : null, paidAt: null };
 
   const baseData = {
     branchId: input.branchId,
@@ -44,8 +61,11 @@ export async function createOperatingExpense(
     description: input.description,
     amount: new Prisma.Decimal(input.amount),
     effectiveFrom,
-    effectiveTo,
     createdByUserId: actorUserId,
+    conceptId: input.conceptId ?? null,
+    payee: input.payee ?? null,
+    receiptNumber: input.receiptNumber ?? null,
+    ...kindFields,
   };
 
   // Camino simple (presupuesto): sin egreso de caja.
@@ -196,11 +216,16 @@ export async function listExpensesByBranch(
   });
 }
 
-export async function getMonthlyExpensesByBranch(branchId: string): Promise<Prisma.Decimal> {
-  const expenses = await prisma.operatingExpense.findMany({
+export async function getMonthlyExpensesByBranch(branchId: string, db: typeof prisma = prisma): Promise<Prisma.Decimal> {
+  const expenses = await db.operatingExpense.findMany({
     where: {
       branchId,
       isActive: true,
+      // prompt-gastos-semana-quincena.md Fase 1 — presupuesto mensual: RECURRING
+      // (alquiler) y PAYROLL_SYNC (costo laboral del mes, siempre fue parte de
+      // este total) cuentan; PAID (un gasto puntual pagado en caja) no — ese es
+      // el bug de fondo (ver computeOperatingExpenses, finance/service.ts).
+      kind: { not: "PAID" },
       effectiveFrom: { lte: new Date() },
       OR: [
         { effectiveTo: null },
@@ -226,6 +251,7 @@ export async function getExpenseSummaryByBranch(branchId: string, db: typeof pri
     where: {
       branchId,
       isActive: true,
+      kind: { not: "PAID" },
       effectiveFrom: { lte: now },
       OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
     },
@@ -261,6 +287,7 @@ export async function getExpenseSummaryAllBranches(db: typeof prisma = prisma) {
       by: ["branchId", "category"],
       where: {
         isActive: true,
+        kind: { not: "PAID" },
         effectiveFrom: { lte: now },
         OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
       },

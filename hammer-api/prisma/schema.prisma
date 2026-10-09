@@ -2494,12 +2494,43 @@ enum ProrationMethod {
 }
 
 /// Monthly operating expense for a branch
+/// prompt-gastos-semana-quincena.md Fase 1 — distingue PRESUPUESTO
+/// (RECURRING: alquiler, un monto mensual que sigue vigente mes tras mes) de
+/// GASTO PAGADO (PAID: C$300 de limpieza hoy, un hecho puntual que nunca
+/// debió sumarse a los meses siguientes) y de la sincronización automática
+/// de planilla (PAYROLL_SYNC, su propio concepto — nunca se registra a
+/// mano). Toda consulta de "presupuesto mensual" filtra kind:RECURRING;
+/// expense-history y el libro de gastos por período usan PAID.
+enum ExpenseKind {
+  RECURRING
+  PAID
+  PAYROLL_SYNC
+}
+
+/// prompt-gastos-semana-quincena.md Fase 1 — concepto dentro de una
+/// categoría ("Transporte" ya no mezcla combustible, flete y reparación sin
+/// distinción). Administrado desde Finanzas (Fase 3); la semilla mínima se
+/// carga en la migración.
+model ExpenseConcept {
+  id        String          @id @default(cuid())
+  category  ExpenseCategory
+  name      String
+  isActive  Boolean         @default(true)
+  sortOrder Int             @default(0)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  expenses OperatingExpense[]
+
+  @@index([category, isActive])
+}
+
 model OperatingExpense {
   id               String          @id @default(cuid())
   branchId         String
   category         ExpenseCategory
   description      String
-  amount           Decimal /// Monthly amount in C$
+  amount           Decimal /// Monthly amount in C$ (RECURRING) o monto pagado (PAID)
   isActive         Boolean         @default(true)
   effectiveFrom    DateTime        @default(now())
   effectiveTo      DateTime?
@@ -2509,14 +2540,26 @@ model OperatingExpense {
   cashMovementId   String?         @unique /// Link to the CashMovement (EXPENSE_OUT) generated when the expense is actually paid from cash
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
+  /// Obligatorio a propósito (sin @default) — createOperatingExpense,
+  /// recordRetainedCashExpenseTx y syncPostedPayrollLineExpense son los
+  /// ÚNICOS 3 escritores; cada uno lo decide explícito, nunca un default
+  /// silencioso que vuelva a filtrar mal el presupuesto.
+  kind             ExpenseKind
+  conceptId        String?
+  payee            String? /// A quién se le pagó
+  receiptNumber    String? /// Número de factura o recibo
+  paidAt           DateTime? /// Fecha real del pago (PAID/PAYROLL_SYNC); null en RECURRING
 
-  branch       Branch        @relation(fields: [branchId], references: [id])
-  employee     Employee?     @relation(fields: [employeeId], references: [id])
-  cashMovement CashMovement? @relation(fields: [cashMovementId], references: [id])
+  branch       Branch          @relation(fields: [branchId], references: [id])
+  employee     Employee?       @relation(fields: [employeeId], references: [id])
+  cashMovement CashMovement?   @relation(fields: [cashMovementId], references: [id])
+  concept      ExpenseConcept? @relation(fields: [conceptId], references: [id], onDelete: SetNull)
 
   @@index([branchId, isActive])
   @@index([category])
   @@index([cashMovementId])
+  @@index([kind])
+  @@index([conceptId])
 }
 
 /// Pricing configuration per branch (margin, proration, estimated units)

@@ -245,10 +245,17 @@ async function computeInventoryProjection(branchId?: string | null) {
 async function computeOperatingExpenses(branchId: string | null, start: Date, end: Date) {
   const where: Prisma.OperatingExpenseWhereInput = {
     isActive: true,
+    // prompt-gastos-semana-quincena.md Fase 1 — ESTE es el presupuesto
+    // mensual configurado: RECURRING (alquiler) y PAYROLL_SYNC (costo
+    // laboral del mes — siempre fue una categoría más de este total, antes
+    // y después de este fix) cuentan. Un gasto puntual del POS (kind:PAID)
+    // ya NO entra acá — antes se sumaba como gasto de todos los meses
+    // siguientes (el bug de fondo de este doc).
+    kind: { not: "PAID" },
     ...(branchId ? { branchId } : {}),
     effectiveFrom: { lt: end },
-    // Cubre recurrentes sin fecha de fin y gastos puntuales (ej. nómina) con
-    // effectiveTo del día de pago.
+    // Cubre recurrentes sin fecha de fin y recurrentes con un effectiveTo
+    // futuro (ej. un presupuesto que se dio de baja a mitad de mes).
     OR: [{ effectiveTo: null }, { effectiveTo: { gte: start } }],
   };
   const [byCategoryRaw, byBranchRaw, branches] = await Promise.all([

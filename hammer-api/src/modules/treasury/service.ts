@@ -2599,6 +2599,13 @@ async function recordRetainedCashExpenseTx(
       effectiveFrom: today,
       effectiveTo: today,
       createdByUserId: input.actorUserId,
+      // prompt-gastos-semana-quincena.md Fase 1 — un desembolso puntual de
+      // efectivo retenido es PAID, nunca presupuesto; receiptNumber ya se
+      // pedía acá como receiptReference (obligatorio en esta vía) — se
+      // enhebra al campo nuevo en vez de dejarlo sin usar.
+      kind: "PAID",
+      paidAt: today,
+      receiptNumber: input.receiptReference,
     },
   });
 

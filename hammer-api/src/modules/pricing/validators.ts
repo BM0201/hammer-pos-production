@@ -36,6 +36,11 @@ export const createExpenseSchema = z.object({
   amount: z.number().positive("El monto debe ser mayor a 0"),
   effectiveFrom: z.string().optional(),
   effectiveTo: z.string().optional(),
+  // prompt-gastos-semana-quincena.md Fase 1 — concepto, beneficiario y
+  // recibo del gasto, todos opcionales.
+  conceptId: z.string().min(1).optional(),
+  payee: z.string().max(160).optional(),
+  receiptNumber: z.string().max(80).optional(),
 });
 
 export const updateExpenseSchema = z.object({

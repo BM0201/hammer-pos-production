@@ -62,9 +62,13 @@ export async function calculateDynamicPrice(
   const targetBranchId = branchId ?? relevantBalances[0]?.branchId;
   let opExpPerUnit = 0;
   if (targetBranchId && pricingConfig) {
+    // prompt-gastos-semana-quincena.md Fase 1 — antes sumaba TODO gasto
+    // activo sin ventana de vigencia ni filtro de kind: un gasto puntual del
+    // POS (kind:PAID) inflaba este prorrateo para siempre. RECURRING y
+    // PAYROLL_SYNC sí son presupuesto mensual real; PAID no.
     const totalExpenses = await prisma.operatingExpense.aggregate({
       _sum: { amount: true },
-      where: { branchId: targetBranchId, isActive: true },
+      where: { branchId: targetBranchId, isActive: true, kind: { not: "PAID" } },
     });
     const estimatedUnits = Number(pricingConfig.estimatedMonthlyUnits);
     // BUG FIX: Guard against division by zero when estimatedMonthlyUnits is 0

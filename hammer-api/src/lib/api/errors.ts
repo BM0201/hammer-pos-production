@@ -164,6 +164,14 @@ export function toApiErrorResponse(error: unknown) {
     return fail("INVALID_INPUT", message.replace("INVALID_INPUT: ", ""), 400);
   }
 
+  // prompt-gastos-semana-quincena.md Fase 1 — toHttpErrorResponse (lib/http.ts)
+  // ya traduce este prefijo en el resto del código; esta ruta usa
+  // toApiErrorResponse (archivo más viejo, otra convención) y no lo tenía —
+  // sin esto, createOperatingExpense's VALIDATION_ERROR caía al 500 genérico.
+  if (message?.startsWith("VALIDATION_ERROR:")) {
+    return fail("VALIDATION_ERROR", message.replace(/^VALIDATION_ERROR:\s?/, ""), 400);
+  }
+
   if (message === "INSUFFICIENT_STOCK" || message === "INSUFFICIENT_STOCK_AT_PAYMENT") {
     return conflict("Stock insuficiente");
   }
