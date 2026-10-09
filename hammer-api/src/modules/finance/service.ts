@@ -2,6 +2,10 @@ import { Prisma, PrismaClient, PaymentStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 import { listSupplierPayables } from "@/modules/purchase-orders/payables";
+import { isCountableTreasuryExpenseEntry, payrollEmployerCostPaid } from "@/modules/finance/expense-rules";
+import { getExpenseLedger, type ExpenseLedgerSource } from "@/modules/finance/expense-ledger";
+
+export { isCountableTreasuryExpenseEntry, payrollEmployerCostPaid };
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -328,22 +332,6 @@ async function computePayroll(branchId: string | null, year: number, month: numb
  *    OperatingExpense categorizadas PAYROLL pagadas desde caja. Así la nómina no
  *    se cuenta dos veces (una por la línea de planilla y otra como gasto de caja).
  */
-/**
- * Convierte un desembolso de planilla PAGADO (registrado al NETO) a costo
- * EMPRESA, escalando por employerCost/netPay de su PayrollLine. Si la línea
- * no tiene neto (>0) — p. ej. datos históricos — se usa el monto pagado tal cual.
- */
-function payrollEmployerCostPaid(d: {
-  amount: Prisma.Decimal;
-  payrollLine: { netPay: Prisma.Decimal; employerCost: Prisma.Decimal } | null;
-}): number {
-  const paidNet = num(d.amount);
-  const lineNet = num(d.payrollLine?.netPay);
-  const lineCost = num(d.payrollLine?.employerCost);
-  if (lineNet <= 0 || lineCost <= 0) return paidNet;
-  return paidNet * (lineCost / lineNet);
-}
-
 type TreasuryExpenseEntry = { amount: number; occurredAt: Date; branchId: string | null; kind: "BANK" | "RETAINED_CASH" };
 
 /**
@@ -394,6 +382,11 @@ type TreasuryExpenseEntry = { amount: number; occurredAt: Date; branchId: string
  * NO TOCAR esta exclusión sin entender esto primero: quien la revierta
  * infla el gasto y desinfla la utilidad dos veces, en silencio, para toda
  * orden de compra pagada.
+ *
+ * prompt-gastos-semana-quincena.md Fase 2.2 — movida a expense-rules.ts
+ * (misma lógica, cero cambios) para que expense-ledger.ts pueda reusar
+ * EXACTAMENTE esta regla sobre su propia consulta (select más rico) sin
+ * arriesgar que las dos un día decidan cosas distintas para la misma fila.
  */
 export async function fetchTreasuryExpenseEntries(
   branchId: string | null,
@@ -427,17 +420,7 @@ export async function fetchTreasuryExpenseEntries(
   const linkedById = new Map(linkedExpenses.map((e) => [e.id, e]));
 
   return entries
-    .filter((e) => {
-      // Fase 3 (prompt-cxp.md) — ver comentario grande arriba de la función.
-      if (e.purchaseOrderId) return false;
-      if (!e.expensePaymentId) return true;
-      const linked = linkedById.get(e.expensePaymentId);
-      // Sin el OperatingExpense (dato huérfano) se deja pasar — mismo
-      // criterio conservador que el resto del módulo: no inventar una
-      // exclusión que nadie puede verificar.
-      if (!linked) return true;
-      return linked.category !== "PAYROLL" && linked.isActive;
-    })
+    .filter((e) => isCountableTreasuryExpenseEntry(e, linkedById.get(e.expensePaymentId ?? "")))
     .map((e) => ({
       amount: num(e.amount),
       occurredAt: e.occurredAt,
@@ -446,26 +429,27 @@ export async function fetchTreasuryExpenseEntries(
     }));
 }
 
-async function computeRealPerformance(
+export async function computeRealPerformance(
   branchId: string | null,
   start: Date,
   end: Date,
   operatingExpenses: { monthlyTotal: number },
+  db: DbClient = prisma,
 ) {
   const branchFilter = branchId ? { branchId } : {};
-  const [payments, refunds, movements, branches, cashExpenseMovs, payrollDisbursed, treasuryExpenseEntries, purchasesPaidAgg, supplierPayables] = await Promise.all([
-    prisma.payment.findMany({
+  const [payments, refunds, movements, branches, expenseLedger, purchasesPaidAgg, supplierPayables] = await Promise.all([
+    db.payment.findMany({
       where: {
         paidAt: { gte: start, lt: end },
         ...paymentValidAsOfPeriodEnd(end, branchId),
       },
       select: { amount: true, saleOrder: { select: { branchId: true } } },
     }),
-    prisma.refund.findMany({
+    db.refund.findMany({
       where: { ...branchFilter, status: "POSTED", postedAt: { gte: start, lt: end } },
       select: { amount: true, branchId: true },
     }),
-    prisma.inventoryMovement.findMany({
+    db.inventoryMovement.findMany({
       where: {
         ...branchFilter,
         movementType: { in: [...SALE_OUT_TYPES, ...SELLABLE_RETURN_IN_TYPES] },
@@ -473,33 +457,17 @@ async function computeRealPerformance(
       },
       select: { quantity: true, unitCost: true, movementType: true, branchId: true },
     }),
-    prisma.branch.findMany({ select: { id: true, code: true, name: true } }),
-    // Gastos REALES pagados desde caja de sucursal (luz, agua, aceite, compras
-    // del momento…). Se excluyen los EXPENSE_OUT vinculados a desembolsos de
-    // planilla Y los de partidas OperatingExpense categorizadas PAYROLL: la
-    // planilla se cuenta aparte (a costo empresa) para no doble-contarla.
-    prisma.cashMovement.findMany({
-      where: {
-        type: "EXPENSE_OUT",
-        createdAt: { gte: start, lt: end },
-        payrollDisbursements: { none: {} },
-        operatingExpense: { isNot: { category: "PAYROLL" } },
-        ...(branchId ? { cashSession: { physicalCashBox: { branchId } } } : {}),
-      },
-      select: { amount: true, cashSession: { select: { physicalCashBox: { select: { branchId: true } } } } },
-    }),
-    // Planilla realmente desembolsada en el período (independiente de si salió
-    // por caja de sucursal o la pagó Master por otro medio). Se trae la línea
-    // para escalar el neto pagado a costo empresa (ver criterio arriba).
-    prisma.payrollDisbursement.findMany({
-      where: { status: "PAID", paidAt: { gte: start, lt: end }, ...(branchId ? { branchId } : {}) },
-      select: { amount: true, branchId: true, payrollLine: { select: { netPay: true, employerCost: true } } },
-    }),
-    fetchTreasuryExpenseEntries(branchId, start, end),
-    // prompt-cxp.md Fase 3 — purchasesPaid: lo que fetchTreasuryExpenseEntries
-    // excluyó de arriba (pagos de mercadería, ya no cuentan como gasto
-    // operativo) se cuenta acá aparte, como información de flujo de caja.
-    prisma.treasuryEntry.aggregate({
+    db.branch.findMany({ select: { id: true, code: true, name: true } }),
+    // prompt-gastos-semana-quincena.md Fase 2.2 — ÚNICA fuente de los gastos
+    // reales del período (caja + banco/retenido/comisión + planilla pagada a
+    // costo empresa): antes eran 3 consultas separadas acá Y otras 3 (casi)
+    // iguales en expense-ledger.ts para el libro — ahora las dos cuentan
+    // EXACTAMENTE lo mismo porque es LA MISMA consulta.
+    getExpenseLedger({ start, end, branchId, basis: "PAID" }, db),
+    // prompt-cxp.md Fase 3 — purchasesPaid: lo que el libro excluye (pagos de
+    // mercadería, ya no cuentan como gasto operativo) se cuenta acá aparte,
+    // como información de flujo de caja.
+    db.treasuryEntry.aggregate({
       where: {
         direction: "OUT",
         entryType: "SUPPLIER_PAYMENT",
@@ -512,7 +480,7 @@ async function computeRealPerformance(
     // payablesOpen: saldo pendiente a la fecha de CORTE (end), no "ahora" —
     // un período ya cerrado no debe moverse por un pago o recepción
     // posteriores (ver asOf en payables.ts).
-    listSupplierPayables({ branchId, onlyOpen: true, asOf: end }),
+    listSupplierPayables({ branchId, onlyOpen: true, asOf: end }, db),
   ]);
 
   const branchMeta = new Map(branches.map((b) => [b.id, { code: b.code, name: b.name }]));
@@ -538,17 +506,25 @@ async function computeRealPerformance(
     if ((SALE_OUT_TYPES as readonly string[]).includes(m.movementType)) acc(m.branchId).cogsOut += cost;
     else acc(m.branchId).cogsReturned += cost;
   }
-  for (const e of cashExpenseMovs) acc(e.cashSession.physicalCashBox.branchId).cashExpenses += num(e.amount);
-  for (const d of payrollDisbursed) acc(d.branchId).payrollPaid += payrollEmployerCostPaid(d);
+  // prompt-gastos-semana-quincena.md Fase 2.2 — cada fila del libro ya trae
+  // su `source`; se mapea a la MISMA forma de acumulador que antes (BANCO y
+  // COMISION_TARJETA siguen cayendo juntas en bankExpenses — la comisión de
+  // tarjeta ya era "BANK" antes de que el libro la distinguiera por nombre,
+  // esto no cambia ese total, solo de dónde sale).
   // Cuenta bancaria CENTRAL (branchId null, ej. SETTLEMENT/pagos generales) no
   // tiene una sucursal a la que atribuirse — cuenta en el total consolidado,
-  // fuera de todo byBranch. Solo puede pasar con kind=BANK: las cuentas SAFE
-  // siempre tienen branchId (findSafeAccountForBranch las exige).
+  // fuera de todo byBranch. Solo puede pasar con BANCO/COMISION_TARJETA: las
+  // cuentas SAFE siempre tienen branchId (findSafeAccountForBranch las exige).
   let unattributedBankExpenses = 0;
-  for (const e of treasuryExpenseEntries) {
-    if (!e.branchId) { unattributedBankExpenses += e.amount; continue; }
-    if (e.kind === "BANK") acc(e.branchId).bankExpenses += e.amount;
-    else acc(e.branchId).retainedCashExpenses += e.amount;
+  const BANK_SOURCES: ReadonlySet<ExpenseLedgerSource> = new Set(["BANCO", "COMISION_TARJETA"]);
+  for (const row of expenseLedger.rows) {
+    if (row.source === "CAJA") { acc(row.branchId!).cashExpenses += row.amount; continue; }
+    if (row.source === "PLANILLA") { acc(row.branchId!).payrollPaid += row.amount; continue; }
+    if (row.source === "EFECTIVO_RETENIDO") { acc(row.branchId!).retainedCashExpenses += row.amount; continue; }
+    if (BANK_SOURCES.has(row.source)) {
+      if (!row.branchId) { unattributedBankExpenses += row.amount; continue; }
+      acc(row.branchId).bankExpenses += row.amount;
+    }
   }
 
   const byBranch = [...perBranch.entries()]
