@@ -22,6 +22,14 @@ type PosCatalogPanelProps = {
   searchInputRef: { current: HTMLInputElement | null };
   isBusy: boolean;
   onAddProduct: (product: ProductRow) => void;
+  /**
+   * prompt-codigos-y-duplicados.md Fase 5 — Enter ya no agrega
+   * products[activeIndex] ?? products[0] localmente: el padre (branch-pos.tsx)
+   * tiene el contexto completo (si la lista está desactualizada, si hace
+   * falta consultar el servidor por un código que no está entre los
+   * primeros resultados) para decidir con resolvePosEnter.
+   */
+  onSearchEnter: () => void;
   onTabToTicket: () => void;
   onClearSearch: () => void;
 };
@@ -58,6 +66,7 @@ export function PosCatalogPanel({
   searchInputRef,
   isBusy,
   onAddProduct,
+  onSearchEnter,
   onTabToTicket,
   onClearSearch,
 }: PosCatalogPanelProps) {
@@ -74,8 +83,7 @@ export function PosCatalogPanel({
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      const selected = products[activeProductIndex] ?? products[0];
-      if (selected) onAddProduct(selected);
+      onSearchEnter();
       return;
     }
     if (event.key === "Tab" && !event.shiftKey) {

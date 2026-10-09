@@ -17,6 +17,12 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
   const [stockByProductId, setStockByProductId] = useState<Record<string, number>>({});
   const [activeProductIndex, setActiveProductIndex] = useState(0);
   const [catalogScrollTop, setCatalogScrollTop] = useState(0);
+  // prompt-codigos-y-duplicados.md Fase 5 — qué búsqueda corresponden
+  // REALMENTE los `products` ya renderizados (no `search`, que cambia con
+  // cada tecla/escaneo antes de que el debounce de 250ms dispare el fetch).
+  // resolvePosEnter lo usa para decidir "esperar" en vez de agregar el
+  // primer resultado de una lista que todavía es de la búsqueda anterior.
+  const [appliedQuery, setAppliedQuery] = useState("");
 
   // Stable refs — one instance per hook mount, never re-created on render.
   const searchRef = useRef("");
@@ -127,6 +133,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       setLoadingProducts(false);
       setShowingTopSelling(true);
       applySearchRows(topProductsRef.current);
+      setAppliedQuery("");
       return;
     }
 
@@ -141,6 +148,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       const matches = ranked.map(fromCachedProduct);
       setShowingTopSelling(false);
       applySearchRows(matches, groupProductsByFamily(matches));
+      setAppliedQuery(query);
       return;
     }
 
@@ -152,6 +160,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     if (cached) {
       setLoadingProducts(false);
       applySearchRows(cached.products, cached.groups);
+      setAppliedQuery(query);
       return;
     }
 
@@ -189,6 +198,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
       }
 
       applySearchRows(rows, groups);
+      setAppliedQuery(query);
     } catch (error) {
       // A cancelled request is expected — never surface it as an error.
       if (controller.signal.aborted || (error as { name?: string })?.name === "AbortError") {
@@ -250,6 +260,7 @@ export function usePosCatalog(branchId: string, onNotice: (msg: string) => void,
     setSearch,
     products,
     productGroups,
+    appliedQuery,
     loadingProducts,
     showingTopSelling,
     stockByProductId,

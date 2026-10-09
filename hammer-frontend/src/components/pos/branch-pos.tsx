@@ -24,6 +24,8 @@ import { apiFetch } from "@/lib/client/api";
 import { enqueueOfflineSale } from "@/lib/offline-db";
 import { money } from "@/lib/format";
 import { toCachedProduct } from "./product-cache";
+import { resolvePosEnter } from "@/lib/pos-enter-resolution";
+import type { ProductRow } from "./types";
 import "@/styles/responsive.css";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -84,7 +86,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
   } = usePosPrint(branchId, onNoticeError);
 
   const {
-    search, setSearch, products, productGroups, loadingProducts, showingTopSelling,
+    search, setSearch, products, productGroups, appliedQuery, loadingProducts, showingTopSelling,
     stockByProductId, activeProductIndex, setActiveProductIndex,
     catalogScrollTop, setCatalogScrollTop, catalogViewportRef, fetchStockForProduct,
   } = usePosCatalog(branchId, onNoticeError, isOffline);
@@ -231,6 +233,62 @@ export function BranchPos({ branchId }: { branchId: string }) {
   }, [activeCashSessionId, sessionState, offlineCart, branchId, refreshPendingCount, setNoticeTimed]);
 
   const isBusy = isMutatingOrder || isSubmittingPayment;
+
+  // Mismo camino que usaba el onAddProduct inline de PosCatalogPanel —
+  // extraído para que handleSearchEnter (abajo) también lo use al resolver
+  // ADD_EXACT/ADD_FUZZY_FIRST/el resultado de QUERY_BY_CODE.
+  const handleAddProductRow = useCallback((product: ProductRow) => {
+    if (isOffline) {
+      const added = offlineCart.addProduct(toCachedProduct(product));
+      if (!added) {
+        setNoticeTimed(`${product.name} no tiene precio de venta asignado en esta sucursal. Asignalo antes de venderlo.`, 10000);
+      }
+      return;
+    }
+    addProduct(product);
+  }, [isOffline, offlineCart, addProduct, setNoticeTimed]);
+
+  // prompt-codigos-y-duplicados.md Fase 5 — Enter en el buscador del POS ya
+  // no agrega siempre products[activeIndex] ?? products[0] (el primer
+  // resultado difuso): resolvePosEnter decide si hay una coincidencia EXACTA
+  // visible, si hace falta preguntarle al servidor por un código que no está
+  // en los primeros resultados, si hay que esperar (lista desactualizada por
+  // el debounce), o si de verdad es una búsqueda de texto normal.
+  const handleSearchEnter = useCallback(async () => {
+    const isListStale = search.trim().toLowerCase() !== appliedQuery.trim().toLowerCase();
+    const action = resolvePosEnter({ typedText: search, visibleProducts: products, activeIndex: activeProductIndex, isListStale });
+
+    if (action.kind === "WAIT") return;
+    if (action.kind === "ADD_EXACT" || action.kind === "ADD_FUZZY_FIRST") {
+      handleAddProductRow(action.product);
+      return;
+    }
+
+    // QUERY_BY_CODE — no está entre los primeros resultados de texto (o la
+    // lista todavía no se actualizó). Offline no hay con quién consultar:
+    // la búsqueda local YA recorrió todo el catálogo cacheado (sin el tope
+    // de 20 que tiene la búsqueda online), así que si no apareció ahí,
+    // de verdad no está.
+    if (isOffline) {
+      setNoticeTimed(`Código "${action.code}" no encontrado en el catálogo.`, 8000);
+      return;
+    }
+    try {
+      const params = new URLSearchParams({ q: action.code, isActive: "true", branchId, limit: "5", inStockOnly: "true" });
+      const res = await apiFetch(`/api/catalog/products?${params.toString()}`);
+      const json = (await res.json()) as { data?: ProductRow[] };
+      const candidates = json.data ?? [];
+      const exact = candidates.find((p) => p.barcode === action.code || p.sku.toUpperCase() === action.code.toUpperCase() || (p.barcodes ?? []).includes(action.code));
+      if (exact) {
+        handleAddProductRow(exact);
+      } else {
+        setNoticeTimed(`Código "${action.code}" no encontrado en el catálogo.`, 8000);
+      }
+    } catch {
+      setNoticeTimed("No se pudo consultar el código escaneado.", 8000);
+    }
+  }, [search, appliedQuery, products, activeProductIndex, isOffline, branchId, handleAddProductRow, setNoticeTimed]);
+
   const hasTicketLines = ticketLines.length > 0;
   const displayedTotalAmount = Number(order?.grandTotal ?? 0) + transportAmountValue;
   const orderStatusLabel = STATUS_LABELS[order?.status ?? "DRAFT"] ?? (order?.status ?? "Borrador");
@@ -342,14 +400,8 @@ export function BranchPos({ branchId }: { branchId: string }) {
             catalogViewportRef={catalogViewportRef}
             searchInputRef={searchInputRef}
             isBusy={isBusy}
-            onAddProduct={isOffline
-              ? (product) => {
-                  const added = offlineCart.addProduct(toCachedProduct(product));
-                  if (!added) {
-                    setNoticeTimed(`${product.name} no tiene precio de venta asignado en esta sucursal. Asignalo antes de venderlo.`, 10000);
-                  }
-                }
-              : addProduct}
+            onAddProduct={handleAddProductRow}
+            onSearchEnter={() => void handleSearchEnter()}
             onTabToTicket={() => ticketPanelRef.current?.focus()}
             onClearSearch={() => { setSearch(""); setNoticeTimed(""); }}
           />
