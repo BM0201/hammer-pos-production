@@ -1,9 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiFetch } from "@/lib/client/api";
+import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { canInBranch, CAPABILITIES } from "@/modules/rbac/policies";
+
+/** Mismo umbral que expense-alerts.ts (NO_RECEIPT_DEFAULT_THRESHOLD) — aviso no bloqueante, no validación de servidor. */
+const NO_RECEIPT_WARN_THRESHOLD = 1000;
+
+type ExpenseConceptOption = { id: string; name: string };
+
+/** prompt-gastos-semana-quincena.md Fase 4 — por qué salió este dinero (no es un gasto, pero igual hay que saber el motivo). */
+const CASH_OUT_REASONS: Array<{ key: string; label: string; reason: string }> = [
+  { key: "owner", label: "Retiro del dueño", reason: "Retiro de efectivo (dueño)" },
+  { key: "transfer", label: "Cambio a otra caja", reason: "Retiro de efectivo (cambio a otra caja)" },
+  { key: "other", label: "Otro", reason: "Retiro de efectivo (otro)" },
+];
 
 type CashMovement = {
   id: string;
@@ -96,18 +108,41 @@ export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId:
   const [detail, setDetail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
+  // Concepto/beneficiario/recibo (solo gastos) — Fase 4.
+  const [concepts, setConcepts] = useState<ExpenseConceptOption[]>([]);
+  const [conceptId, setConceptId] = useState("");
+  const [payee, setPayee] = useState("");
+  const [receiptNumber, setReceiptNumber] = useState("");
+  // Retiro (CASH_OUT): por qué salió este dinero, antes de pedir el monto.
+  const [cashOutReasonKey, setCashOutReasonKey] = useState<string | null>(null);
   // Aviso del presupuesto inteligente: el gasto quedó registrado, pero el
   // monto se salió de los valores normales de su categoría.
   const [lastWarning, setLastWarning] = useState("");
 
   const visiblePresets = MOVEMENT_PRESETS.filter((p) => (p.kind === "expense" ? canExpense : canMove));
+  const isCashOutPreset = Boolean(preset && preset.kind === "movement" && preset.type === "CASH_OUT");
+  const amt = parseFloat(amount);
+  const showNoReceiptWarning = preset?.kind === "expense" && !receiptNumber.trim() && !isNaN(amt) && amt > NO_RECEIPT_WARN_THRESHOLD;
 
   function resetForm() {
     setPreset(null);
     setAmount("");
     setDetail("");
     setFormError("");
+    setConceptId("");
+    setPayee("");
+    setReceiptNumber("");
+    setCashOutReasonKey(null);
   }
+
+  // Al elegir un botón de GASTO, trae los conceptos de esa categoría para el selector.
+  useEffect(() => {
+    if (!preset || preset.kind !== "expense") { setConcepts([]); return; }
+    apiFetch(`/api/branch/expense-concepts?branchId=${branchId}&category=${preset.category}`)
+      .then((r) => r.json())
+      .then((raw) => setConcepts((unwrapApiData(raw) as ExpenseConceptOption[]) ?? []))
+      .catch(() => setConcepts([]));
+  }, [preset, branchId]);
 
   const load = useCallback(async () => {
     const response = await apiFetch(`/api/cashier/v2/cash-movements?cashSessionId=${cashSessionId}`);
@@ -134,10 +169,17 @@ export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId:
       setFormError("Describe qué fue el gasto (mínimo 2 caracteres).");
       return;
     }
-    const description = preset.reason
+    const isCashOut = preset.kind === "movement" && preset.type === "CASH_OUT";
+    if (isCashOut && !cashOutReasonKey) {
+      setFormError("Elige por qué sale este dinero.");
+      return;
+    }
+    const cashOutReason = CASH_OUT_REASONS.find((r) => r.key === cashOutReasonKey);
+    const baseReason = isCashOut ? (cashOutReason?.reason ?? preset.reason) : preset.reason;
+    const description = baseReason
       ? trimmedDetail
-        ? `${preset.reason} — ${trimmedDetail}`
-        : preset.reason
+        ? `${baseReason} — ${trimmedDetail}`
+        : baseReason
       : trimmedDetail;
 
     setSubmitting(true);
@@ -148,7 +190,12 @@ export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId:
             await apiFetch("/api/branch/expenses", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ branchId, category: preset.category, description, amount: amt }),
+              body: JSON.stringify({
+                branchId, category: preset.category, description, amount: amt,
+                conceptId: conceptId || undefined,
+                payee: payee.trim() || undefined,
+                receiptNumber: receiptNumber.trim() || undefined,
+              }),
             })
           : await apiFetch("/api/cashier/v2/cash-movements", {
               method: "POST",
@@ -262,48 +309,103 @@ export function CashMovementsPanel({ cashSessionId, branchId }: { cashSessionId:
                 </button>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-1 text-xs">
-                  <span className="font-medium text-[var(--color-text-secondary)]">Monto (C$) *</span>
-                  <input
-                    className="hm-input rounded-lg text-base font-semibold"
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    placeholder="0.00"
-                    autoFocus
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    disabled={submitting}
-                  />
-                </label>
-                <label className="grid gap-1 text-xs">
-                  <span className="font-medium text-[var(--color-text-secondary)]">
-                    {preset.kind === "expense" && preset.requireDetail ? "¿Qué fue? *" : "Detalle (opcional)"}
-                  </span>
-                  <input
-                    className="hm-input rounded-lg text-sm"
-                    type="text"
-                    placeholder={`Ej: ${preset.hint}`}
-                    maxLength={160}
-                    value={detail}
-                    onChange={(e) => setDetail(e.target.value)}
-                    disabled={submitting}
-                  />
-                </label>
-              </div>
+              {/* Paso 2a (solo Retiro) — por qué sale este dinero, con escape hacia "esto es un gasto" */}
+              {isCashOutPreset && !cashOutReasonKey ? (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    {CASH_OUT_REASONS.map((r) => (
+                      <button
+                        key={r.key}
+                        type="button"
+                        onClick={() => setCashOutReasonKey(r.key)}
+                        className="rounded-lg border-[1.5px] border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-2.5 text-xs font-semibold text-[var(--color-text)] transition-colors hover:border-[var(--color-info-400)] hover:bg-[var(--color-surface-alt)]"
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                  {canExpense && (
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-[var(--color-warning-700)] hover:underline"
+                      onClick={resetForm}
+                    >
+                      Esto es un gasto → registrarlo como gasto
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="grid gap-1 text-xs">
+                      <span className="font-medium text-[var(--color-text-secondary)]">Monto (C$) *</span>
+                      <input
+                        className="hm-input rounded-lg text-base font-semibold"
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        placeholder="0.00"
+                        autoFocus
+                        value={amount}
+                        onChange={(e) => setAmount(e.target.value)}
+                        disabled={submitting}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs">
+                      <span className="font-medium text-[var(--color-text-secondary)]">
+                        {preset.kind === "expense" && preset.requireDetail ? "¿Qué fue? *" : "Detalle (opcional)"}
+                      </span>
+                      <input
+                        className="hm-input rounded-lg text-sm"
+                        type="text"
+                        placeholder={`Ej: ${preset.hint}`}
+                        maxLength={160}
+                        value={detail}
+                        onChange={(e) => setDetail(e.target.value)}
+                        disabled={submitting}
+                      />
+                    </label>
+                  </div>
 
-              {formError && (
-                <p className="text-xs text-[var(--color-danger-600)]">{formError}</p>
+                  {preset.kind === "expense" && (
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-medium text-[var(--color-text-secondary)]">Concepto (opcional)</span>
+                        <select className="hm-input rounded-lg text-sm" value={conceptId} onChange={(e) => setConceptId(e.target.value)} disabled={submitting}>
+                          <option value="">Sin concepto específico</option>
+                          {concepts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-medium text-[var(--color-text-secondary)]">Beneficiario (opcional)</span>
+                        <input className="hm-input rounded-lg text-sm" type="text" placeholder="A quién se le pagó" maxLength={160} value={payee} onChange={(e) => setPayee(e.target.value)} disabled={submitting} />
+                      </label>
+                      <label className="grid gap-1 text-xs">
+                        <span className="font-medium text-[var(--color-text-secondary)]">N° de recibo (opcional)</span>
+                        <input className="hm-input rounded-lg text-sm" type="text" placeholder="Factura o recibo" maxLength={80} value={receiptNumber} onChange={(e) => setReceiptNumber(e.target.value)} disabled={submitting} />
+                      </label>
+                    </div>
+                  )}
+
+                  {showNoReceiptWarning && (
+                    <p className="text-xs text-[var(--color-warning-700)]">
+                      ⚠️ Gastos sin recibo por más de C$ {NO_RECEIPT_WARN_THRESHOLD.toLocaleString("es-NI")} quedan marcados para revisión — se registra igual, solo avisamos.
+                    </p>
+                  )}
+
+                  {formError && (
+                    <p className="text-xs text-[var(--color-danger-600)]">{formError}</p>
+                  )}
+                  <button
+                    type="button"
+                    className="w-full rounded-lg bg-[var(--color-info-600)] hover:bg-[var(--color-info-700)] px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed sm:w-auto"
+                    onClick={submit}
+                    disabled={submitting}
+                  >
+                    {submitting ? "Guardando..." : `Guardar — ${preset.label.replace("…", "")}`}
+                  </button>
+                </>
               )}
-              <button
-                type="button"
-                className="w-full rounded-lg bg-[var(--color-info-600)] hover:bg-[var(--color-info-700)] px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed sm:w-auto"
-                onClick={submit}
-                disabled={submitting}
-              >
-                {submitting ? "Guardando..." : `Guardar — ${preset.label.replace("…", "")}`}
-              </button>
             </>
           )}
         </div>

@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
+import { useSession } from "@/lib/client/session";
+import { isMasterOrAbove } from "@/modules/rbac/role-routing";
 import { showToast } from "@/components/ui/toast";
 import { money, fmtDateTime } from "@/lib/format";
 import { getCategoryColor, withUnclassifiedLast } from "@/lib/finance-colors";
@@ -22,6 +24,7 @@ import {
   type ExpensePeriodReport, type PeriodKind, type ExpensePeriodBasis,
 } from "@/components/finance/expenses-period.types";
 import { ExpenseConceptsModal } from "@/components/finance/expense-concepts-modal";
+import { ClassifyCashOutModal } from "@/components/finance/classify-cash-out-modal";
 
 type Branch = { id: string; code: string; name: string };
 
@@ -64,6 +67,9 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const theme = useDocumentTheme();
+  const sessionState = useSession();
+  const isMaster = sessionState.status === "authenticated"
+    && isMasterOrAbove(sessionState.session.roleCode as string, sessionState.session.globalRoles as unknown as string[]);
 
   const urlState = useMemo(() => parsePeriodUrlState(searchParams), [searchParams]);
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -73,6 +79,7 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [rowsOffset, setRowsOffset] = useState(0);
   const [conceptsModalOpen, setConceptsModalOpen] = useState(false);
+  const [classifyCashOutOpen, setClassifyCashOutOpen] = useState(false);
 
   const effectiveBranchId = fixedBranchId ?? urlState.branchId;
 
@@ -270,19 +277,26 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
                 <AlertTriangle className="h-3.5 w-3.5" /> Qué pasó este período
               </p>
               <ul className="space-y-1">
-                {report.alerts.map((alert, i) => (
-                  <li key={i}>
-                    <button
-                      type="button"
-                      onClick={() => alert.category && setCategoryFilter(alert.category)}
-                      className="text-left text-xs hover:underline"
-                      style={{ color: "var(--color-text)" }}
-                      disabled={!alert.category}
-                    >
-                      {alert.message}
-                    </button>
-                  </li>
-                ))}
+                {report.alerts.map((alert, i) => {
+                  const isCashOutAlert = alert.code === "UNCLASSIFIED_CASH_OUT" && isMaster;
+                  const clickable = Boolean(alert.category) || isCashOutAlert;
+                  return (
+                    <li key={i}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isCashOutAlert) setClassifyCashOutOpen(true);
+                          else if (alert.category) setCategoryFilter(alert.category);
+                        }}
+                        className="text-left text-xs hover:underline"
+                        style={{ color: "var(--color-text)" }}
+                        disabled={!clickable}
+                      >
+                        {alert.message}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
@@ -451,6 +465,15 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
       )}
 
       {conceptsModalOpen && <ExpenseConceptsModal onClose={() => setConceptsModalOpen(false)} />}
+      {classifyCashOutOpen && report && (
+        <ClassifyCashOutModal
+          start={report.period.start}
+          end={report.period.end}
+          branchId={effectiveBranchId ?? null}
+          onClose={() => setClassifyCashOutOpen(false)}
+          onChanged={() => void load()}
+        />
+      )}
     </div>
   );
 }

@@ -104,6 +104,14 @@ export function toHttpErrorResponse(error: unknown) {
     if (error.message.startsWith("INVALID_INPUT:") || error.message.startsWith("VALIDATION_ERROR:")) {
       return errJson("VALIDATION_ERROR", error.message.replace(/^INVALID_INPUT:\s?/, "").replace(/^VALIDATION_ERROR:\s?/, ""), 400);
     }
+    // prompt-gastos-semana-quincena.md Fase 4 — prefijo CONFLICT: genérico (sin
+    // esto, un throw("CONFLICT: ...") caía al 500 genérico del fallback final en
+    // vez de un 409; mismo hueco que VALIDATION_ERROR tenía antes de la Fase 1.
+    // brain/service.ts ya lo usaba (EXECUTING) sin que nada lo atrapara — se
+    // beneficia igual de este fix, no es exclusivo de cash-out-classification.
+    if (error.message.startsWith("CONFLICT:")) {
+      return errJson("CONFLICT", error.message.replace(/^CONFLICT:\s?/, ""), 409);
+    }
     if (error.message.startsWith("REPAIR_PREVIEW_STALE:")) {
       return errJson("REPAIR_PREVIEW_STALE", error.message.replace(/^REPAIR_PREVIEW_STALE:\s?/, ""), 409);
     }

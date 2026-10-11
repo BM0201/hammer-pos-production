@@ -326,10 +326,15 @@ export async function getExpensePeriodReport(input: ExpensePeriodReportInput, db
     fetchPayrollBlock(db, period.start, period.end, branchId),
     fetchOutlierStats(db, branchId, period.start, input.outlierHistoryMonths ?? 6),
     fetchInternalFreightInformative(db, period.start, period.end, branchId),
+    // prompt-gastos-semana-quincena.md Fase 4 — reviewedAt:null excluye los
+    // que Master ya marcó "No es gasto" (dismissCashOutAsNotExpense); uno
+    // clasificado como gasto real (classifyCashOutAsExpense) ya no hace
+    // match aquí porque su `type` pasó a EXPENSE_OUT, no CASH_OUT.
     db.cashMovement.aggregate({
       where: {
         type: "CASH_OUT",
         createdAt: { gte: period.start, lt: period.end },
+        reviewedAt: null,
         ...(branchId ? { cashSession: { physicalCashBox: { branchId } } } : {}),
       },
       _sum: { amount: true },

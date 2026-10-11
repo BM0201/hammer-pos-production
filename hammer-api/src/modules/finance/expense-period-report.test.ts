@@ -48,8 +48,10 @@ function buildFakeDb(opts: {
     cashMovement: {
       findMany: async ({ where }: { where: { createdAt: { gte: Date; lt: Date } } }) =>
         (opts.cashMovements ?? []).filter((m) => inWindow(m, "createdAt", where.createdAt.gte, where.createdAt.lt)),
-      aggregate: async ({ where }: { where: { createdAt: { gte: Date; lt: Date } } }) => {
-        const matches = (opts.cashOutMovements ?? []).filter((m) => inWindow(m, "createdAt", where.createdAt.gte, where.createdAt.lt));
+      aggregate: async ({ where }: { where: { createdAt: { gte: Date; lt: Date }; reviewedAt?: null } }) => {
+        const matches = (opts.cashOutMovements ?? [])
+          .filter((m) => inWindow(m, "createdAt", where.createdAt.gte, where.createdAt.lt))
+          .filter((m) => !("reviewedAt" in where) || m.reviewedAt == null);
         const sum = matches.reduce((s, m) => s + Number(m.amount), 0);
         return { _sum: { amount: matches.length > 0 ? decimal(sum) : null }, _count: matches.length };
       },
@@ -220,4 +222,17 @@ test("Fase 2.4 — CASH_OUT sin clasificar: aparece en alertas y NO suma al tota
   const cashOutAlert = report.alerts.find((a) => a.code === "UNCLASSIFIED_CASH_OUT");
   assert.ok(cashOutAlert, "debe avisar que hay un CASH_OUT sin clasificar en el período");
   assert.match(cashOutAlert!.message, /2,000\.00/);
+});
+
+test("LA QUE IMPORTA — Fase 4: un CASH_OUT marcado 'No es gasto' (reviewedAt) ya NO aparece en la alerta", async () => {
+  const db = buildFakeDb({
+    cashOutMovements: [
+      { id: "co-1", amount: decimal(2000), createdAt: new Date("2026-10-06T12:00:00Z"), reviewedAt: new Date("2026-10-07T10:00:00Z") },
+    ],
+  });
+  const report = await getExpensePeriodReport(
+    { kind: "MONTH", anchorDate: new Date("2026-10-10T12:00:00Z"), branchId: "branch-1", basis: "PAID", rowsLimit: 50, rowsOffset: 0 },
+    db,
+  );
+  assert.ok(!report.alerts.some((a) => a.code === "UNCLASSIFIED_CASH_OUT"), "dismissCashOutAsNotExpense ya lo marcó revisado — la alerta no debe volver a contarlo");
 });

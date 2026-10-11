@@ -460,6 +460,7 @@ model User {
   assignedCashOperators          CashSessionOperator[]        @relation("CashSessionOperatorAssignedBy")
   createdCashMovements           CashMovement[]               @relation("CashMovementCreatedBy")
   approvedCashMovements          CashMovement[]               @relation("CashMovementApprovedBy")
+  reviewedCashMovements          CashMovement[]               @relation("CashMovementReviewedBy")
   confirmedBankDeposits          BankDeposit[]
   declaredCashDestinations       CashDestinationDeclaration[] @relation("CashDestinationDeclaredBy")
   handOverCashDestinations       CashDestinationDeclaration[] @relation("CashDestinationHandOverUser")
@@ -653,10 +654,19 @@ model CashMovement {
   createdByUserId  String
   approvedByUserId String?
   createdAt        DateTime         @default(now())
+  /// prompt-gastos-semana-quincena.md Fase 4 — un CASH_OUT (retiro genérico)
+  /// revisado por Master y marcado explícitamente "No es gasto" (vs.
+  /// clasificarlo como un gasto real, lo que en cambio vuelve `type`
+  /// EXPENSE_OUT y liga un OperatingExpense — ver cash-out-classification.ts).
+  /// Mismo nombrado que CashSession/OperationalDay (reviewedAt/reviewNote).
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  reviewNote       String?
 
   cashSession          CashSession           @relation(fields: [cashSessionId], references: [id])
   createdBy            User                  @relation("CashMovementCreatedBy", fields: [createdByUserId], references: [id])
   approvedBy           User?                 @relation("CashMovementApprovedBy", fields: [approvedByUserId], references: [id])
+  reviewedBy           User?                 @relation("CashMovementReviewedBy", fields: [reviewedByUserId], references: [id])
   payrollDisbursements PayrollDisbursement[]
   operatingExpense     OperatingExpense?
   treasuryEntry        TreasuryEntry?
@@ -666,6 +676,9 @@ model CashMovement {
   // (redundante como prefijo de este compuesto) — gastos/depósitos filtran
   // por type Y rango de fecha (reportes, P&L) casi siempre juntos.
   @@index([type, createdAt])
+  // Fase 4 (prompt-gastos-semana-quincena.md) — "CASH_OUT sin clasificar"
+  // filtra por type + reviewedAt (null) + rango de fecha.
+  @@index([type, reviewedAt, createdAt])
 }
 
 model OperationalDay {
