@@ -9,6 +9,9 @@ import {
 } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty, fmtDate, fmtDateTime } from "@/lib/format";
+import { useSubmitting } from "@/lib/client/use-submitting";
+import { BranchMatrix } from "@/components/multi-branch/branch-matrix";
+import { type MatrixLine, buildMatrixPayloadLines, buildBranchPreviews } from "@/lib/multi-branch-matrix";
 
 /* ══════════════════════════════════════════════════════════════
  * Tipos
@@ -735,6 +738,15 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
   const [modalLines, setModalLines] = useState<TransferLineForm[]>([]);
   const [modalProductSearch, setModalProductSearch] = useState("");
 
+  // Parte B.3 — "Enviar a varias sucursales": mismo modal, origen fijo, destinos en chips.
+  const [multiMode, setMultiMode] = useState(false);
+  const [multiToBranchIds, setMultiToBranchIds] = useState<string[]>([]);
+  const [multiLines, setMultiLines] = useState<MatrixLine[]>([]);
+  const [multiClientRequestId, setMultiClientRequestId] = useState("");
+  const [multiSubmitting, runMultiSubmit] = useSubmitting();
+  const [multiPreviewOpen, setMultiPreviewOpen] = useState(false);
+  const [originStockByProductId, setOriginStockByProductId] = useState<Record<string, number>>({});
+
   const centralBranchId = branches.find((b) => b.isDefaultSupplier)?.id ?? "";
 
   const fetchTransfers = useCallback(async () => {
@@ -777,8 +789,63 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
     setModalLines([]);
     setModalProductSearch("");
     setSelectedTransfer(null);
+    setMultiMode(false);
+    setMultiToBranchIds([]);
+    setMultiLines([]);
+    setMultiClientRequestId(crypto.randomUUID());
+    setMultiPreviewOpen(false);
     setShowModal(true);
   };
+
+  // Aviso de stock del origen — el backend vuelve a validar con lock al crear; esto es solo para corregir ANTES de enviar.
+  useEffect(() => {
+    if (!multiMode || !modalFromBranchId || multiLines.length === 0) { setOriginStockByProductId({}); return; }
+    let cancelled = false;
+    apiFetch(`/api/catalog/products?ids=${multiLines.map((l) => l.productId).join(",")}&branchId=${modalFromBranchId}`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const list = Array.isArray(unwrapApiData(json)) ? unwrapApiData(json) : [];
+        const stock: Record<string, number> = {};
+        for (const p of list) {
+          const balance = p.inventoryBalances?.find((b: { branchId: string }) => b.branchId === modalFromBranchId);
+          stock[p.id] = balance ? Number(balance.quantityOnHand) : 0;
+        }
+        setOriginStockByProductId(stock);
+      })
+      .catch(() => { if (!cancelled) setOriginStockByProductId({}); });
+    return () => { cancelled = true; };
+  }, [multiMode, modalFromBranchId, multiLines]);
+
+  async function handleMultiCreate() {
+    await runMultiSubmit(async () => {
+      try {
+        if (multiToBranchIds.length < 2) throw new Error("Elegí al menos 2 destinos");
+        const lines = buildMatrixPayloadLines(multiLines, multiToBranchIds);
+        if (lines.length === 0) throw new Error("Agregá al menos un producto con cantidad");
+        const res = await apiFetch("/api/transfers/groups", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientRequestId: multiClientRequestId,
+            fromBranchId: modalFromBranchId,
+            toBranchIds: multiToBranchIds,
+            notes: modalNotes || undefined,
+            lines: lines.map((l) => ({ productId: l.productId, quantity: l.quantity, overrides: l.overrides })),
+          }),
+        });
+        const raw = await res.json();
+        if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al crear los traslados");
+        const data = unwrapApiData(raw);
+        toast.success(`${data.transfers.length} traslado(s) creado(s)${data.skipped.length ? ` · ${data.skipped.length} destino(s) sin productos` : ""}`);
+        setShowModal(false);
+        setMultiPreviewOpen(false);
+        fetchTransfers();
+      } catch (error) {
+        toast.error(getErr(error, "Error al crear los traslados"));
+      }
+    });
+  }
 
   const openFromSuggestion = (opp: TransferOpportunity) => {
     setModalFromBranchId(centralBranchId || opp.fromBranchId);
@@ -1027,12 +1094,17 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
 
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-[rgb(28_25_23/0.45)] px-4 py-8">
-          <div className="w-full max-w-xl rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-modal)]">
+          <div className={`w-full rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-modal)] ${multiMode ? "max-w-4xl" : "max-w-xl"}`}>
             <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
               <h2 className="text-base font-bold text-[var(--color-text)]">Nuevo traslado entre sucursales</h2>
               <button onClick={() => setShowModal(false)} className="hm-icon-btn"><X className="h-4 w-4" /></button>
             </div>
             <div className="space-y-4 p-5">
+              <div className="flex gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 text-sm font-semibold">
+                <button type="button" onClick={() => setMultiMode(false)} className={`flex-1 rounded-lg px-3 py-2 ${!multiMode ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-secondary)]"}`}>Un destino</button>
+                <button type="button" onClick={() => setMultiMode(true)} className={`flex-1 rounded-lg px-3 py-2 ${multiMode ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-secondary)]"}`}>Enviar a varias sucursales</button>
+              </div>
+
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-xs font-medium text-[var(--color-text-secondary)]">Sucursal origen</label>
@@ -1041,55 +1113,106 @@ function TransitTab({ branchId, branches, products }: { branchId: string; branch
                     {branches.map((b) => <option key={b.id} value={b.id}>{b.isDefaultSupplier ? "★ " : ""}{b.code} — {b.name}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--color-text-secondary)]">Sucursal destino</label>
-                  <select value={modalToBranchId} onChange={(e) => setModalToBranchId(e.target.value)} className="hm-input w-full rounded-lg text-sm">
-                    <option value="">Seleccionar...</option>
-                    {branches.filter((b) => b.id !== modalFromBranchId).map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
-                  </select>
-                </div>
+                {!multiMode && (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-[var(--color-text-secondary)]">Sucursal destino</label>
+                    <select value={modalToBranchId} onChange={(e) => setModalToBranchId(e.target.value)} className="hm-input w-full rounded-lg text-sm">
+                      <option value="">Seleccionar...</option>
+                      {branches.filter((b) => b.id !== modalFromBranchId).map((b) => <option key={b.id} value={b.id}>{b.code} — {b.name}</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-[var(--color-text-secondary)]">Notas (opcional)</label>
                 <textarea value={modalNotes} onChange={(e) => setModalNotes(e.target.value)} rows={2} className="hm-input w-full rounded-lg text-sm" />
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-[var(--color-text-secondary)]">Buscar y agregar productos</label>
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-text-soft)]" />
-                  <input type="text" value={modalProductSearch} onChange={(e) => setModalProductSearch(e.target.value)} placeholder="SKU o nombre..." className="hm-input w-full rounded-lg pl-8 text-sm" />
-                </div>
-                {filteredProducts.length > 0 && (
-                  <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--color-border)]">
-                    {filteredProducts.map((p) => (
-                      <button key={p.id} type="button" onClick={() => addProductToModal(p.id)} disabled={modalLines.some((l) => l.productId === p.id)} className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)] disabled:opacity-40">
-                        <span><span className="font-mono font-semibold">{p.sku}</span> <span className="text-[var(--color-text-secondary)]">{p.name}</span></span>
-                        {modalLines.some((l) => l.productId === p.id) ? <CheckCircle className="h-3.5 w-3.5 text-[var(--color-success-500)]" /> : <Plus className="h-3.5 w-3.5 text-[var(--color-master-600)]" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {modalLines.length > 0 && (
-                <div className="divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)]">
-                  {modalLines.map((line, idx) => {
-                    const p = products.find((x) => x.id === line.productId);
-                    return (
-                      <div key={idx} className="flex items-center gap-3 px-3 py-2">
-                        <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{p?.name ?? line.productId}</p></div>
-                        <input type="number" min="0.01" value={line.quantity} onChange={(e) => updateModalLine(idx, e.target.value)} className="hm-input w-20 rounded-lg text-right text-sm" />
-                        <button onClick={() => removeModalLine(idx)} className="hm-icon-btn hm-icon-btn-danger"><X className="h-4 w-4" /></button>
+
+              {!multiMode ? (
+                <>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-[var(--color-text-secondary)]">Buscar y agregar productos</label>
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-text-soft)]" />
+                      <input type="text" value={modalProductSearch} onChange={(e) => setModalProductSearch(e.target.value)} placeholder="SKU o nombre..." className="hm-input w-full rounded-lg pl-8 text-sm" />
+                    </div>
+                    {filteredProducts.length > 0 && (
+                      <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--color-border)]">
+                        {filteredProducts.map((p) => (
+                          <button key={p.id} type="button" onClick={() => addProductToModal(p.id)} disabled={modalLines.some((l) => l.productId === p.id)} className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)] disabled:opacity-40">
+                            <span><span className="font-mono font-semibold">{p.sku}</span> <span className="text-[var(--color-text-secondary)]">{p.name}</span></span>
+                            {modalLines.some((l) => l.productId === p.id) ? <CheckCircle className="h-3.5 w-3.5 text-[var(--color-success-500)]" /> : <Plus className="h-3.5 w-3.5 text-[var(--color-master-600)]" />}
+                          </button>
+                        ))}
                       </div>
-                    );
-                  })}
-                </div>
+                    )}
+                  </div>
+                  {modalLines.length > 0 && (
+                    <div className="divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)]">
+                      {modalLines.map((line, idx) => {
+                        const p = products.find((x) => x.id === line.productId);
+                        return (
+                          <div key={idx} className="flex items-center gap-3 px-3 py-2">
+                            <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{p?.name ?? line.productId}</p></div>
+                            <input type="number" min="0.01" value={line.quantity} onChange={(e) => updateModalLine(idx, e.target.value)} className="hm-input w-20 rounded-lg text-right text-sm" />
+                            <button onClick={() => removeModalLine(idx)} className="hm-icon-btn hm-icon-btn-danger"><X className="h-4 w-4" /></button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="flex justify-end gap-2 border-t border-[var(--color-border)] pt-3">
+                    <button onClick={() => setShowModal(false)} className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">Cancelar</button>
+                    <button onClick={handleCreate} disabled={actionLoading === "create" || modalLines.length === 0} className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50">
+                      {actionLoading === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Crear traslado
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <BranchMatrix
+                    kind="TRANSFER"
+                    branches={branches.filter((b) => b.id !== modalFromBranchId)}
+                    selectedBranchIds={multiToBranchIds}
+                    onSelectedBranchIdsChange={setMultiToBranchIds}
+                    storageKey="hammer_matrix_branches_transfer"
+                    lines={multiLines}
+                    onLinesChange={setMultiLines}
+                    originStockByProductId={originStockByProductId}
+                  />
+
+                  {multiPreviewOpen && (
+                    <div className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface-muted)] p-3 text-sm">
+                      <p className="mb-2 font-semibold text-[var(--color-text)]">Se crearán {multiToBranchIds.length} traslado(s):</p>
+                      <ul className="space-y-1 text-[0.8125rem] text-[var(--color-text-secondary)]">
+                        {buildBranchPreviews(multiLines, multiToBranchIds, Object.fromEntries(branches.map((b) => [b.id, b.code]))).map((p) => (
+                          <li key={p.branchId}>
+                            <b>{p.label}</b> {p.linesCount} línea{p.linesCount === 1 ? "" : "s"} · {qty(p.unitsTotal)} unidades
+                            {p.skippedProductNames.length > 0 && <span className="text-[var(--color-text-muted)]"> (sin {p.skippedProductNames.join(", ")})</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 border-t border-[var(--color-border)] pt-3">
+                    <button onClick={() => setShowModal(false)} className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">Cancelar</button>
+                    {!multiPreviewOpen ? (
+                      <button
+                        onClick={() => setMultiPreviewOpen(true)}
+                        disabled={!modalFromBranchId || multiToBranchIds.length < 2 || multiLines.length === 0}
+                        className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50"
+                      >
+                        Vista previa
+                      </button>
+                    ) : (
+                      <button onClick={handleMultiCreate} disabled={multiSubmitting} className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50">
+                        {multiSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Confirmar {multiToBranchIds.length} traslado(s)
+                      </button>
+                    )}
+                  </div>
+                </>
               )}
-              <div className="flex justify-end gap-2 border-t border-[var(--color-border)] pt-3">
-                <button onClick={() => setShowModal(false)} className="rounded-lg border border-[var(--color-border)] px-4 py-2 text-sm font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">Cancelar</button>
-                <button onClick={handleCreate} disabled={actionLoading === "create" || modalLines.length === 0} className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] disabled:opacity-50">
-                  {actionLoading === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Crear traslado
-                </button>
-              </div>
             </div>
           </div>
         </div>

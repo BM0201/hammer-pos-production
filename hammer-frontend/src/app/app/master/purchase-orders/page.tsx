@@ -25,6 +25,9 @@ import { openPrintableDocument, recordPrintAudit } from "@/lib/printing";
 import { money, qty, fmtDate, fmtDateTime } from "@/lib/format";
 import { PayableStatusPanel } from "@/components/purchase-orders/payable-status-panel";
 import { ProductCombobox } from "@/components/catalog-inventory/product-combobox";
+import { useSubmitting } from "@/lib/client/use-submitting";
+import { BranchMatrix } from "@/components/multi-branch/branch-matrix";
+import { type MatrixLine, buildMatrixPayloadLines, buildBranchPreviews } from "@/lib/multi-branch-matrix";
 
 /* ── Types ── */
 type Product = { id: string; sku: string; name: string; unit: string };
@@ -97,6 +100,40 @@ type PurchaseOrder = {
 type Branch = { id: string; code: string; name: string };
 type PurchaseOrderLineForm = { productId: string; quantity: string; unitCostBeforeTax: string; taxRate: string };
 type DateRange = "" | "today" | "7d" | "30d";
+
+/* ── Parte B.3 — pedido multisucursal ── */
+type OrderTemplate = {
+  id: string;
+  name: string;
+  supplierId: string | null;
+  branchIds: string[];
+  lines: Array<{ productId: string; quantity: number; overrides?: Record<string, number>; unitCost?: number }>;
+};
+type ResolvedOrderTemplate = {
+  supplierId: string | null;
+  branchIds: string[];
+  lines: Array<{ productId: string; quantity: number; overrides?: Record<string, number>; unitCost?: number; sku: string; name: string }>;
+  removedProducts: Array<{ productId: string; reason: string }>;
+};
+type PurchaseOrderGroupSummary = {
+  id: string;
+  code: string;
+  createdAt: string;
+  supplier: { id: string; name: string } | null;
+  orders: Array<{ id: string; status: string; branch?: { code: string } }>;
+};
+type PurchaseOrderGroupDetail = {
+  id: string;
+  code: string;
+  createdAt: string;
+  supplier: { id: string; name: string } | null;
+  notes: string | null;
+  orders: Array<{
+    id: string; orderNumber: string; status: string; total: number;
+    branch: { id: string; code: string; name: string };
+    lines: Array<{ productId: string; quantity: number; receivedQuantity?: number; pendingQuantity?: number; product: Product }>;
+  }>;
+};
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -419,6 +456,25 @@ export default function PurchaseOrdersPage() {
   const [otherChargesAmount, setOtherChargesAmount] = useState("0");
   const [globalDiscountAmount, setGlobalDiscountAmount] = useState("0");
 
+  // Parte B.3 — "Una sucursal" (arriba) vs "Varias sucursales" (matriz).
+  const [createMode, setCreateMode] = useState<"SINGLE" | "MULTI">("SINGLE");
+  const [multiBranchIds, setMultiBranchIds] = useState<string[]>([]);
+  const [multiLines, setMultiLines] = useState<MatrixLine[]>([]);
+  const [multiExpectedDate, setMultiExpectedDate] = useState("");
+  const [multiClientRequestId, setMultiClientRequestId] = useState("");
+  const [multiPreviewOpen, setMultiPreviewOpen] = useState(false);
+  const [multiSubmitting, runMultiSubmit] = useSubmitting();
+  const [templates, setTemplates] = useState<OrderTemplate[]>([]);
+  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
+  const [showRepeatMenu, setShowRepeatMenu] = useState(false);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState("");
+  const [groups, setGroups] = useState<PurchaseOrderGroupSummary[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [selectedGroupDetail, setSelectedGroupDetail] = useState<PurchaseOrderGroupDetail | null>(null);
+  const [groupDetailLoading, setGroupDetailLoading] = useState(false);
+  const [groupActionLoading, setGroupActionLoading] = useState(false);
+
   const fetchOrders = useCallback(async () => {
     try {
       setLoading(true);
@@ -451,8 +507,19 @@ export default function PurchaseOrdersPage() {
     } catch { /* non-critical */ }
   }, []);
 
+  const fetchGroups = useCallback(async () => {
+    try {
+      const res = await apiFetch("/api/master/purchase-orders/groups?limit=10");
+      const raw = await res.json();
+      if (!res.ok) return;
+      const data = unwrapApiData(raw);
+      setGroups(Array.isArray(data?.groups) ? data.groups : []);
+    } catch { /* no-critical */ }
+  }, []);
+
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
   useEffect(() => { fetchMeta(); }, [fetchMeta]);
+  useEffect(() => { fetchGroups(); }, [fetchGroups]);
 
   const loadDetail = useCallback(async (id: string) => {
     try {
@@ -510,8 +577,177 @@ export default function PurchaseOrdersPage() {
     setOtherChargesAmount("0");
     setGlobalDiscountAmount("0");
     setFormLines([{ productId: "", quantity: "1", unitCostBeforeTax: "0", taxRate: "15" }]);
+    setCreateMode("SINGLE");
+    setMultiBranchIds([]);
+    setMultiLines([]);
+    setMultiExpectedDate("");
+    setMultiClientRequestId(crypto.randomUUID());
+    setMultiPreviewOpen(false);
     setShowModal(true);
   };
+
+  async function fetchTemplates() {
+    try {
+      const res = await apiFetch("/api/master/order-templates?kind=PURCHASE");
+      const raw = await res.json();
+      if (!res.ok) return;
+      setTemplates(Array.isArray(unwrapApiData(raw)) ? unwrapApiData(raw) : []);
+    } catch { /* no-critical */ }
+  }
+
+  async function applyTemplate(templateId: string) {
+    try {
+      const res = await apiFetch(`/api/master/order-templates/${templateId}/resolve`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? "Error al usar la plantilla");
+      const resolved = unwrapApiData(raw) as ResolvedOrderTemplate;
+      setMultiBranchIds(resolved.branchIds);
+      setFormSupplierId(resolved.supplierId ?? "");
+      setMultiLines(resolved.lines.map((l) => ({ productId: l.productId, sku: l.sku, name: l.name, cost: l.unitCost ?? null, forAll: l.quantity, overrides: l.overrides ?? {} })));
+      if (resolved.removedProducts.length > 0) toast.error(`${resolved.removedProducts.length} producto(s) de la plantilla ya no están disponibles y se omitieron.`);
+      setShowTemplateMenu(false);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al usar la plantilla"));
+    }
+  }
+
+  async function applyRepeatGroup(groupId: string) {
+    try {
+      const res = await apiFetch(`/api/master/purchase-orders/groups/${groupId}`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? "Error al repetir el pedido");
+      const detail = unwrapApiData(raw) as PurchaseOrderGroupDetail;
+      setMultiBranchIds(detail.orders.map((o) => o.branch.id));
+      setFormSupplierId(detail.supplier?.id ?? "");
+      const merged = new Map<string, MatrixLine>();
+      for (const order of detail.orders) {
+        for (const line of order.lines) {
+          const existing = merged.get(line.productId);
+          if (existing) {
+            existing.overrides[order.branch.id] = line.quantity;
+          } else {
+            merged.set(line.productId, { productId: line.productId, sku: line.product.sku, name: line.product.name, cost: null, forAll: line.quantity, overrides: {} });
+          }
+        }
+      }
+      setMultiLines(Array.from(merged.values()));
+      setShowRepeatMenu(false);
+      toast.success("Pedido anterior cargado — revisá cantidades antes de confirmar.");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al repetir el pedido"));
+    }
+  }
+
+  async function saveAsTemplate() {
+    try {
+      if (!saveTemplateName.trim()) throw new Error("Ponle un nombre a la plantilla");
+      const res = await apiFetch("/api/master/order-templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: saveTemplateName.trim(),
+          kind: "PURCHASE",
+          supplierId: formSupplierId || undefined,
+          branchIds: multiBranchIds,
+          lines: buildMatrixPayloadLines(multiLines, multiBranchIds),
+        }),
+      });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? "Error al guardar la plantilla");
+      toast.success("Plantilla guardada");
+      setSaveTemplateOpen(false);
+      setSaveTemplateName("");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al guardar la plantilla"));
+    }
+  }
+
+  async function handleMultiCreate() {
+    await runMultiSubmit(async () => {
+      try {
+        if (multiBranchIds.length < 2) throw new Error("Elegí al menos 2 sucursales");
+        const lines = buildMatrixPayloadLines(multiLines, multiBranchIds);
+        if (lines.length === 0) throw new Error("Agregá al menos un producto con cantidad");
+        const invalidCost = lines.find((l) => l.unitCost === undefined || l.unitCost < 0);
+        if (invalidCost) throw new Error("Revisá el costo de todos los productos");
+        const res = await apiFetch("/api/master/purchase-orders/groups", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientRequestId: multiClientRequestId,
+            branchIds: multiBranchIds,
+            supplierId: formSupplierId || undefined,
+            expectedDate: multiExpectedDate || undefined,
+            notes: formNotes || undefined,
+            lines: lines.map((l) => ({ productId: l.productId, unitCostBeforeTax: l.unitCost ?? 0, quantity: l.quantity, overrides: l.overrides })),
+          }),
+        });
+        const raw = await res.json();
+        if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "Error al crear el pedido multisucursal");
+        const data = unwrapApiData(raw);
+        toast.success(`Grupo ${data.group.code} creado: ${data.orders.length} pedido(s)${data.skipped.length ? ` · ${data.skipped.length} sucursal(es) sin productos` : ""}`);
+        setShowModal(false);
+        setMultiPreviewOpen(false);
+        fetchGroups();
+      } catch (error) {
+        toast.error(getErrorMessage(error, "Error al crear el pedido multisucursal"));
+      }
+    });
+  }
+
+  async function openGroupDetail(id: string) {
+    setSelectedGroupId(id);
+    setGroupDetailLoading(true);
+    try {
+      const res = await apiFetch(`/api/master/purchase-orders/groups/${id}`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? "Error al cargar el grupo");
+      setSelectedGroupDetail(unwrapApiData(raw) as PurchaseOrderGroupDetail);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al cargar el grupo"));
+      setSelectedGroupId(null);
+    } finally {
+      setGroupDetailLoading(false);
+    }
+  }
+
+  async function handleGroupApproveAll() {
+    if (!selectedGroupId) return;
+    setGroupActionLoading(true);
+    try {
+      const res = await apiFetch(`/api/master/purchase-orders/groups/${selectedGroupId}/approve`, { method: "POST" });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? "Error al aprobar");
+      const data = unwrapApiData(raw);
+      toast.success(`${data.approved.length} aprobado(s)${data.failed.length ? ` · ${data.failed.length} con error` : ""}`);
+      await openGroupDetail(selectedGroupId);
+      fetchOrders();
+      fetchGroups();
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al aprobar"));
+    } finally {
+      setGroupActionLoading(false);
+    }
+  }
+
+  async function handleGroupCancelPending() {
+    if (!selectedGroupId) return;
+    setGroupActionLoading(true);
+    try {
+      const res = await apiFetch(`/api/master/purchase-orders/groups/${selectedGroupId}/cancel`, { method: "POST" });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? "Error al cancelar");
+      const data = unwrapApiData(raw);
+      toast.success(`${data.cancelled.length} cancelado(s)${data.failed.length ? ` · ${data.failed.length} con error` : ""}`);
+      await openGroupDetail(selectedGroupId);
+      fetchOrders();
+      fetchGroups();
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error al cancelar"));
+    } finally {
+      setGroupActionLoading(false);
+    }
+  }
 
   const handleCreate = async () => {
     try {
@@ -1091,20 +1327,33 @@ export default function PurchaseOrdersPage() {
               Para inventario existente inicial, usa Existencias / Carga inicial. No crees pedidos falsos.
             </div>
 
+            <div className="flex gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-1 text-sm font-semibold">
+              <button type="button" onClick={() => setCreateMode("SINGLE")} className={`flex-1 rounded-lg px-3 py-2 ${createMode === "SINGLE" ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-secondary)]"}`}>Una sucursal</button>
+              <button type="button" onClick={() => setCreateMode("MULTI")} className={`flex-1 rounded-lg px-3 py-2 ${createMode === "MULTI" ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-secondary)]"}`}>Varias sucursales</button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Sucursal Destino</label>
-                <select
-                  value={formBranchId}
-                  onChange={(e) => setFormBranchId(e.target.value)}
-                  className="hm-input w-full rounded-lg text-sm"
-                >
-                  <option value="">Seleccionar...</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id}>{b.code} — {b.name}</option>
-                  ))}
-                </select>
-              </div>
+              {createMode === "SINGLE" && (
+                <div>
+                  <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Sucursal Destino</label>
+                  <select
+                    value={formBranchId}
+                    onChange={(e) => setFormBranchId(e.target.value)}
+                    className="hm-input w-full rounded-lg text-sm"
+                  >
+                    <option value="">Seleccionar...</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>{b.code} — {b.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {createMode === "MULTI" && (
+                <div>
+                  <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Fecha esperada (opcional)</label>
+                  <input type="date" value={multiExpectedDate} onChange={(e) => setMultiExpectedDate(e.target.value)} className="hm-input w-full rounded-lg text-sm" />
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Proveedor</label>
                 <div className="flex gap-2">
@@ -1205,6 +1454,7 @@ export default function PurchaseOrdersPage() {
               />
             </div>
 
+            {createMode === "SINGLE" && (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-4 space-y-3">
               <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
                 <DollarSign className="h-4 w-4" /> Configuracion de costos
@@ -1238,7 +1488,9 @@ export default function PurchaseOrdersPage() {
                 El flete y otros cargos se distribuyen entre lineas para calcular costo aterrizado. El modo por defecto incluye el IVA de compra en el costo real del producto.
               </p>
             </div>
+            )}
 
+            {createMode === "SINGLE" && (
             <div
               className="sticky top-0 z-10 grid gap-2 rounded-xl border border-[var(--color-border-strong)] p-3 shadow-sm backdrop-blur md:grid-cols-6"
               style={{ background: "color-mix(in srgb, var(--color-surface) 92%, transparent)" }}
@@ -1250,8 +1502,10 @@ export default function PurchaseOrdersPage() {
               <div className="text-xs"><span className="text-[var(--color-text-muted)]">Descuento</span><p className="hm-num font-bold text-[var(--color-danger-600)]">{money(parseFloat(globalDiscountAmount) || 0)}</p></div>
               <div className="text-xs"><span className="text-[var(--color-text-muted)]">Total estimado</span><p className="hm-num text-base font-extrabold">{money(formTotalPaid)}</p></div>
             </div>
+            )}
 
             {/* Lines */}
+            {createMode === "SINGLE" && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-[var(--color-text)]">Líneas del Pedido</h3>
@@ -1331,6 +1585,69 @@ export default function PurchaseOrdersPage() {
                 </div>
               </div>
             </div>
+            )}
+
+            {createMode === "MULTI" && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <button type="button" onClick={() => { setShowTemplateMenu((v) => !v); if (!showTemplateMenu) fetchTemplates(); }} className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">Usar plantilla ▾</button>
+                    {showTemplateMenu && (
+                      <div className="absolute z-10 mt-1 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-modal)]">
+                        {templates.length === 0 ? (
+                          <p className="p-3 text-xs text-[var(--color-text-muted)]">Sin plantillas guardadas.</p>
+                        ) : templates.map((t) => (
+                          <button key={t.id} type="button" onClick={() => applyTemplate(t.id)} className="block w-full px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)]">{t.name}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <button type="button" onClick={() => { setShowRepeatMenu((v) => !v); if (!showRepeatMenu) fetchGroups(); }} className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">Repetir anterior ▾</button>
+                    {showRepeatMenu && (
+                      <div className="absolute z-10 mt-1 w-64 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-modal)]">
+                        {groups.length === 0 ? (
+                          <p className="p-3 text-xs text-[var(--color-text-muted)]">Sin pedidos multisucursal previos.</p>
+                        ) : groups.map((g) => (
+                          <button key={g.id} type="button" onClick={() => applyRepeatGroup(g.id)} className="block w-full px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)]">{g.code} · {g.supplier?.name ?? "sin proveedor"} · {g.orders.length} pedido(s)</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button type="button" onClick={() => setSaveTemplateOpen((v) => !v)} className="rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">Guardar como plantilla</button>
+                </div>
+                {saveTemplateOpen && (
+                  <div className="flex gap-2">
+                    <input value={saveTemplateName} onChange={(e) => setSaveTemplateName(e.target.value)} placeholder="Nombre de la plantilla" className="hm-input flex-1 rounded-lg text-sm" />
+                    <button type="button" onClick={saveAsTemplate} className="rounded-lg bg-[var(--color-master-600)] px-3 py-2 text-xs font-semibold text-white">Guardar</button>
+                  </div>
+                )}
+
+                <BranchMatrix
+                  kind="PURCHASE"
+                  branches={branches}
+                  selectedBranchIds={multiBranchIds}
+                  onSelectedBranchIdsChange={setMultiBranchIds}
+                  storageKey="hammer_matrix_branches_purchase"
+                  lines={multiLines}
+                  onLinesChange={setMultiLines}
+                />
+
+                {multiPreviewOpen && (
+                  <div className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface-muted)] p-3 text-sm">
+                    <p className="mb-2 font-semibold text-[var(--color-text)]">Se crearán {multiBranchIds.length} pedido(s) de compra:</p>
+                    <ul className="space-y-1 text-[0.8125rem] text-[var(--color-text-secondary)]">
+                      {buildBranchPreviews(multiLines, multiBranchIds, Object.fromEntries(branches.map((b) => [b.id, b.code]))).map((p) => (
+                        <li key={p.branchId}>
+                          <b>{p.label}</b> {p.linesCount} línea{p.linesCount === 1 ? "" : "s"}{p.amount !== null ? ` · ${money(p.amount)}` : ""}
+                          {p.skippedProductNames.length > 0 && <span className="text-[var(--color-text-muted)]"> (sin {p.skippedProductNames.join(", ")})</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
             </div>{/* end p-6 */}
 
             <div className="flex justify-end gap-3 border-t border-[var(--color-border)] px-6 py-4 bg-[var(--color-surface-alt)]">
@@ -1341,14 +1658,112 @@ export default function PurchaseOrdersPage() {
                 <X className="h-4 w-4" />
                 Cancelar
               </button>
-              <button
-                onClick={handleCreate}
-                disabled={actionLoading === "create"}
-                className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-              >
-                {actionLoading === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
-                Crear Pedido
-              </button>
+              {createMode === "SINGLE" ? (
+                <button
+                  onClick={handleCreate}
+                  disabled={actionLoading === "create"}
+                  className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                >
+                  {actionLoading === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                  Crear Pedido
+                </button>
+              ) : !multiPreviewOpen ? (
+                <button
+                  onClick={() => setMultiPreviewOpen(true)}
+                  disabled={multiBranchIds.length < 2 || multiLines.length === 0}
+                  className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                >
+                  Vista previa
+                </button>
+              ) : (
+                <button
+                  onClick={handleMultiCreate}
+                  disabled={multiSubmitting}
+                  className="flex items-center gap-2 rounded-lg bg-[var(--color-master-600)] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[var(--color-master-700)] shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                >
+                  {multiSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingCart className="h-4 w-4" />}
+                  Confirmar {multiBranchIds.length} pedido(s)
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Parte B.3 — pedidos multisucursal */}
+      {groups.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="hm-section-rule">Pedidos multisucursal</h3>
+          <div className="rounded-xl border border-[var(--color-border-strong)] overflow-hidden">
+            <table className="hm-sheet-table">
+              <thead><tr><th>Grupo</th><th>Proveedor</th><th className="hm-num">Pedidos</th><th>Creado</th><th></th></tr></thead>
+              <tbody>
+                {groups.map((g) => (
+                  <tr key={g.id}>
+                    <td className="font-mono text-xs font-bold">{g.code}</td>
+                    <td className="text-sm">{g.supplier?.name ?? "—"}</td>
+                    <td className="hm-num">{g.orders.length}</td>
+                    <td className="text-xs text-[var(--color-text-muted)]">{fmtDateTime(g.createdAt)}</td>
+                    <td className="text-center"><button onClick={() => openGroupDetail(g.id)} className="hm-icon-btn" title="Ver detalle"><Eye className="h-4 w-4" /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {selectedGroupId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgb(28_25_23/0.45)] p-4" onClick={() => setSelectedGroupId(null)}>
+          <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-xl bg-[var(--color-surface)] border border-[var(--color-border-strong)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
+              <h2 className="text-base font-bold text-[var(--color-text)]">Grupo {selectedGroupDetail?.code ?? ""}</h2>
+              <button onClick={() => setSelectedGroupId(null)} className="hm-icon-btn"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-4 p-5">
+              {groupDetailLoading || !selectedGroupDetail ? (
+                <div className="flex items-center justify-center py-10"><Loader2 className="h-5 w-5 animate-spin text-[var(--color-master-500)]" /></div>
+              ) : (
+                <>
+                  <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
+                    <table className="hm-sheet-table">
+                      <thead>
+                        <tr>
+                          <th>Producto</th>
+                          {selectedGroupDetail.orders.map((o) => <th key={o.id} className="hm-num">{o.branch.code}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(new Map(selectedGroupDetail.orders.flatMap((o) => o.lines).map((l) => [l.productId, l.product])).values()).map((product) => (
+                          <tr key={product.id}>
+                            <td><span className="font-medium">{product.name}</span> <span className="ml-1 font-mono text-[0.68rem] text-[var(--color-text-muted)]">{product.sku}</span></td>
+                            {selectedGroupDetail.orders.map((o) => {
+                              const line = o.lines.find((l) => l.productId === product.id);
+                              return (
+                                <td key={o.id} className="hm-num text-xs">
+                                  {line ? <>{qty(line.quantity)}<div className="text-[0.65rem] text-[var(--color-text-muted)]">recib. {qty(line.receivedQuantity ?? 0)} · pend. {qty(line.pendingQuantity ?? 0)}</div></> : "—"}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedGroupDetail.orders.map((o) => (
+                      <button key={o.id} onClick={() => { setSelectedGroupId(null); setSelectedOrderId(o.id); }} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-semibold hover:bg-[var(--color-surface-alt)]">
+                        {o.branch.code} · {o.orderNumber} <StatusBadge status={o.status} />
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2 border-t border-[var(--color-border)] pt-3">
+                    <button onClick={handleGroupCancelPending} disabled={groupActionLoading} className="rounded-lg border border-[var(--color-danger-200)] px-4 py-2 text-sm font-semibold text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)] disabled:opacity-50">Cancelar las pendientes</button>
+                    <button onClick={handleGroupApproveAll} disabled={groupActionLoading} className="rounded-lg bg-[var(--color-success-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-success-700)] disabled:opacity-50">Aprobar todas</button>
+                    <button onClick={() => { setSelectedGroupId(null); openCreate(); setCreateMode("MULTI"); applyRepeatGroup(selectedGroupDetail.id); }} className="rounded-lg bg-[var(--color-master-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-master-700)]">Repetir pedido</button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

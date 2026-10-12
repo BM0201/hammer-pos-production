@@ -13,6 +13,9 @@ import { Input } from "@/components/ui/input";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty, fmtDateTime } from "@/lib/format";
 import { tokenize } from "@/lib/product-search";
+import { useSubmitting } from "@/lib/client/use-submitting";
+import { BranchMatrix } from "@/components/multi-branch/branch-matrix";
+import { type MatrixLine, buildMatrixPayloadLines } from "@/lib/multi-branch-matrix";
 import { Kpi, numberOrNull, buildBranchPricingCostRow, formatMoneyOrNd, formatMarginOrNd, marginBadgeVariant } from "@/components/catalog-inventory/catalog-inventory-admin";
 import type { Branch, Movement, Pagination, ProductRow, CenterData } from "@/components/catalog-inventory/catalog-inventory-admin";
 
@@ -74,6 +77,17 @@ function OpeningBalanceModal({
   const [showDropdown, setShowDropdown] = useState(false);
   const [lines, setLines] = useState<OpeningLine[]>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  // Parte B.3 — "Una sucursal" (todo lo de arriba, sin tocar) vs "Varias sucursales" (matriz).
+  const [createMode, setCreateMode] = useState<"SINGLE" | "MULTI">("SINGLE");
+  const [multiKind, setMultiKind] = useState<"OPENING_BALANCE" | "ADJUSTMENT_IN">("OPENING_BALANCE");
+  const [multiBranchIds, setMultiBranchIds] = useState<string[]>([]);
+  const [multiLines, setMultiLines] = useState<MatrixLine[]>([]);
+  const [multiClientRequestId] = useState(() => crypto.randomUUID());
+  const [multiSubmitting, runMultiSubmit] = useSubmitting();
+  const [multiIntakeId, setMultiIntakeId] = useState<string | null>(null);
+  const [multiResult, setMultiResult] = useState<Array<{ branchId: string; status: "DONE" | "FAILED"; error: string | null }>>([]);
+  const [retryingBranchId, setRetryingBranchId] = useState<string | null>(null);
 
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0];
 
@@ -273,6 +287,72 @@ function OpeningBalanceModal({
     }
   }
 
+  async function submitMulti() {
+    if (multiBranchIds.length < 2) { toast.error("Elegí al menos 2 sucursales."); return; }
+    if (!reason.trim() || reason.trim().length < 5) { toast.error("El motivo es obligatorio (mínimo 5 caracteres)."); return; }
+    const payloadLines = buildMatrixPayloadLines(multiLines, multiBranchIds);
+    if (payloadLines.length === 0) { toast.error("Agregá al menos un producto."); return; }
+    if (multiKind === "OPENING_BALANCE" && payloadLines.some((l) => l.unitCost === undefined || l.unitCost <= 0)) {
+      toast.error("Carga inicial necesita un costo mayor a 0 en todos los productos.");
+      return;
+    }
+    await runMultiSubmit(async () => {
+      try {
+        const res = await apiFetch("/api/inventory/multi-branch-intake", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clientRequestId: multiClientRequestId,
+            kind: multiKind,
+            reason: reason.trim(),
+            notes: notes.trim() || undefined,
+            branchIds: multiBranchIds,
+            lines: payloadLines.map((l) => ({ productId: l.productId, quantity: l.quantity, unitCost: l.unitCost, overrides: l.overrides })),
+          }),
+        });
+        const raw = await res.json();
+        if (!res.ok) throw new Error(raw.error?.message ?? raw.message ?? "No se pudo registrar el ingreso multisucursal.");
+        const data = unwrapApiData(raw);
+        setMultiIntakeId(data.intake.id);
+        setMultiResult(data.branches);
+        const failedCount = data.branches.filter((b: { status: string }) => b.status === "FAILED").length;
+        if (failedCount === 0) {
+          toast.success(`Ingreso completo en ${data.branches.length} sucursal(es).`);
+        } else {
+          toast.error(`${failedCount} sucursal(es) fallaron — revisá el motivo y reintentá.`);
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "No se pudo registrar el ingreso multisucursal.");
+      }
+    });
+  }
+
+  async function retryFailedBranches() {
+    if (!multiIntakeId) return;
+    setRetryingBranchId("*");
+    try {
+      const res = await apiFetch(`/api/inventory/multi-branch-intake/${multiIntakeId}/retry`, { method: "POST" });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw.error?.message ?? "No se pudo reintentar.");
+      const data = unwrapApiData(raw);
+      setMultiResult(data.branches);
+      const stillFailed = data.branches.filter((b: { status: string }) => b.status === "FAILED").length;
+      toast[stillFailed === 0 ? "success" : "error"](stillFailed === 0 ? "Todas las sucursales quedaron al día." : `${stillFailed} sucursal(es) siguen fallando.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo reintentar.");
+    } finally {
+      setRetryingBranchId(null);
+    }
+  }
+
+  function closeMultiResult() {
+    setMultiResult([]);
+    setMultiIntakeId(null);
+    setMultiLines([]);
+    onClose();
+    void onDone();
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <form
@@ -288,21 +368,38 @@ function OpeningBalanceModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          <div className="flex gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 text-sm font-semibold">
+            <button type="button" onClick={() => setCreateMode("SINGLE")} className={`flex-1 rounded-lg px-3 py-2 ${createMode === "SINGLE" ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-secondary)]"}`}>Una sucursal</button>
+            <button type="button" onClick={() => setCreateMode("MULTI")} className={`flex-1 rounded-lg px-3 py-2 ${createMode === "MULTI" ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-secondary)]"}`}>Varias sucursales</button>
+          </div>
+
           {/* Encabezado: sucursal + modo + motivo */}
           <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Sucursal</label>
-              <select className="hm-input w-full" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>
-                {branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Modo de carga</label>
-              <select className="hm-input w-full" value={mode} onChange={(e) => setMode(e.target.value as "SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK")}>
-                <option value="SET_PHYSICAL_STOCK">Fijar stock fisico final (recomendado)</option>
-                <option value="ADD_OPENING_STOCK">Sumar al stock actual</option>
-              </select>
-            </div>
+            {createMode === "SINGLE" ? (
+              <>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Sucursal</label>
+                  <select className="hm-input w-full" value={activeBranchId} onChange={(e) => onSelectBranch(e.target.value)}>
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Modo de carga</label>
+                  <select className="hm-input w-full" value={mode} onChange={(e) => setMode(e.target.value as "SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK")}>
+                    <option value="SET_PHYSICAL_STOCK">Fijar stock fisico final (recomendado)</option>
+                    <option value="ADD_OPENING_STOCK">Sumar al stock actual</option>
+                  </select>
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Tipo</label>
+                <select className="hm-input w-full" value={multiKind} onChange={(e) => setMultiKind(e.target.value as "OPENING_BALANCE" | "ADJUSTMENT_IN")}>
+                  <option value="OPENING_BALANCE">Carga inicial (necesita costo)</option>
+                  <option value="ADJUSTMENT_IN">Ajuste de entrada (usa el costo promedio ya existente)</option>
+                </select>
+              </div>
+            )}
             <div className="md:col-span-2">
               <label className="mb-1 block text-xs font-semibold text-[var(--color-text-muted)]">Motivo (obligatorio)</label>
               <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo de la carga inicial" />
@@ -313,6 +410,8 @@ function OpeningBalanceModal({
             </div>
           </div>
 
+          {createMode === "SINGLE" && (
+          <>
           {/* Buscador de productos — multi-select: el dropdown se queda abierto */}
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
             <div className="mb-2 flex items-center justify-between">
@@ -491,11 +590,62 @@ function OpeningBalanceModal({
               </ul>
             </div>
           ) : null}
+          </>
+          )}
+
+          {createMode === "MULTI" && (
+            <div className="space-y-3">
+              {multiResult.length === 0 ? (
+                <BranchMatrix
+                  kind="INTAKE"
+                  branches={branches}
+                  selectedBranchIds={multiBranchIds}
+                  onSelectedBranchIdsChange={setMultiBranchIds}
+                  storageKey="hammer_matrix_branches_intake"
+                  lines={multiLines}
+                  onLinesChange={setMultiLines}
+                />
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-[var(--color-text)]">Resultado por sucursal</p>
+                  <div className="divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)]">
+                    {multiResult.map((r) => {
+                      const branch = branches.find((b) => b.id === r.branchId);
+                      return (
+                        <div key={r.branchId} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                          <span className="font-medium">{branch?.code ?? r.branchId} — {branch?.name ?? ""}</span>
+                          {r.status === "DONE" ? (
+                            <Badge variant="success">Hecho</Badge>
+                          ) : (
+                            <div className="flex items-center gap-2 text-right">
+                              <span className="text-xs text-[var(--color-danger-600)]">{r.error}</span>
+                              <Button type="button" size="sm" variant="danger" loading={retryingBranchId === "*"} onClick={retryFailedBranches}>Reintentar</Button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 border-t border-[var(--color-border)] px-5 py-4">
-          <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
-          <Button type="submit" variant="success" loading={submitting} disabled={lines.length === 0} icon={<Check className="h-4 w-4" />}>Guardar carga inicial</Button>
+          {createMode === "SINGLE" ? (
+            <>
+              <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
+              <Button type="submit" variant="success" loading={submitting} disabled={lines.length === 0} icon={<Check className="h-4 w-4" />}>Guardar carga inicial</Button>
+            </>
+          ) : multiResult.length === 0 ? (
+            <>
+              <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
+              <Button type="button" variant="success" loading={multiSubmitting} disabled={multiBranchIds.length < 2 || multiLines.length === 0} onClick={submitMulti} icon={<Check className="h-4 w-4" />}>Registrar ingreso</Button>
+            </>
+          ) : (
+            <Button type="button" variant="success" onClick={closeMultiResult} icon={<Check className="h-4 w-4" />}>Cerrar</Button>
+          )}
         </div>
       </form>
     </div>
