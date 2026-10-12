@@ -371,6 +371,8 @@ export async function getPurchaseOrder(id: string) {
 type CreatePOInput = {
   userId: string;
   branchId: string;
+  /** Parte B.1 — null/undefined = orden normal; con valor, una de las N de un PurchaseOrderGroup. */
+  groupId?: string | null;
   supplierId?: string | null;
   supplier?: string;
   notes?: string;
@@ -470,6 +472,7 @@ export async function createPurchaseOrder(input: CreatePOInput, db: Prisma.Trans
       notes: input.notes || null,
       branchId: input.branchId,
       userId: input.userId,
+      groupId: input.groupId ?? null,
       // Cuentas por pagar (prompt-cxp.md, D1) — copiado del proveedor AHORA,
       // no leído en vivo después: si el proveedor cambia sus términos, las
       // compras ya creadas no se mueven. dueDate se calcula recién en la

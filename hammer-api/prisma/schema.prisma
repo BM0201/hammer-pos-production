@@ -490,6 +490,8 @@ model User {
   approvedTransfers              Transfer[]                   @relation("TransferApprovedBy")
   auditLogs                      AuditLog[]
   purchaseOrders                 PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
+  purchaseOrderGroups            PurchaseOrderGroup[]
+  orderTemplates                 OrderTemplate[]
   createdDiscounts               Discount[]                   @relation("DiscountCreatedBy")
   updatedBranchRoleConfigs       BranchRoleConfig[]           @relation("BranchRoleConfigUpdatedBy")
   updatedSystemSettings          SystemSetting[]              @relation("SystemSettingUpdatedBy")
@@ -2659,15 +2661,22 @@ model PurchaseOrder {
   /// entrega de mercadería, no la última.
   dueDate                 DateTime?
 
-  branch          Branch              @relation(fields: [branchId], references: [id])
-  createdBy       User                @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
-  supplierRef     Supplier?           @relation(fields: [supplierId], references: [id])
+  /// Parte B (prompt-completo-pendientes-2026-10.md) — null = orden normal,
+  /// de un solo formulario de siempre. No-null = una de las N órdenes que
+  /// salieron de UNA carga multisucursal (ver PurchaseOrderGroup).
+  groupId String?
+
+  branch          Branch               @relation(fields: [branchId], references: [id])
+  createdBy       User                 @relation("PurchaseOrderCreatedBy", fields: [userId], references: [id])
+  supplierRef     Supplier?            @relation(fields: [supplierId], references: [id])
+  group           PurchaseOrderGroup?  @relation(fields: [groupId], references: [id])
   lines           PurchaseOrderLine[]
   treasuryEntries TreasuryEntry[]
 
   @@index([branchId, status])
   @@index([supplierId])
   @@index([date])
+  @@index([groupId])
   @@index([dueDate])
 }
 
@@ -2699,6 +2708,56 @@ model PurchaseOrderLine {
 
   @@unique([purchaseOrderId, productId])
   @@index([purchaseOrderId])
+}
+
+/// Parte B.1 (prompt-completo-pendientes-2026-10.md) — "se carga una vez y
+/// se reparte a las sucursales elegidas": UNA carga produce N PurchaseOrder
+/// (una por sucursal elegida), cada una una orden normal de ahí en adelante
+/// (se aprueba/recibe/paga por sucursal, como siempre). clientRequestId lo
+/// genera la PANTALLA (no el servidor) — un doble clic o un reintento de
+/// red con el MISMO id nunca duplica el grupo (P2002 → devolver el existente).
+model PurchaseOrderGroup {
+  id              String   @id @default(cuid())
+  code            String   @unique /// "GP-000001"
+  sequence        Int      @unique
+  clientRequestId String   @unique
+  supplierId      String?
+  expectedDate    DateTime?
+  notes           String?
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  supplier  Supplier?       @relation(fields: [supplierId], references: [id])
+  createdBy User            @relation(fields: [createdByUserId], references: [id])
+  orders    PurchaseOrder[]
+}
+
+/// Parte B.1 — "lo que se pide siempre": una plantilla reusable de líneas
+/// (y, para compras, sucursales) para no volver a armar la misma carga
+/// multisucursal cada vez. `kind` decide dónde aparece ("Usar plantilla ▾").
+enum OrderTemplateKind {
+  PURCHASE
+  INTAKE
+  TRANSFER
+}
+
+model OrderTemplate {
+  id              String            @id @default(cuid())
+  name            String
+  kind            OrderTemplateKind
+  supplierId      String?
+  branchIds       String[]
+  /// [{ productId, quantity, overrides?: Record<branchId, quantity>, unitCost? }]
+  linesJson       Json
+  createdByUserId String
+  isActive        Boolean           @default(true)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  supplier  Supplier? @relation(fields: [supplierId], references: [id])
+  createdBy User      @relation(fields: [createdByUserId], references: [id])
+
+  @@index([kind, isActive])
 }
 
 model Supplier {
@@ -2733,6 +2792,8 @@ model Supplier {
   updatedAt              DateTime @updatedAt
 
   purchaseOrders          PurchaseOrder[]
+  purchaseOrderGroups     PurchaseOrderGroup[]
+  orderTemplates          OrderTemplate[]
   reorderPolicies         StockReorderPolicy[]     @relation("ReorderPolicyPreferredSupplier")
   replenishmentDraftItems ReplenishmentDraftItem[] @relation("ReplenishmentDraftItemSupplier")
   treasuryEntries         TreasuryEntry[]
