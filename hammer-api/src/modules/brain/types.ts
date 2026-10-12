@@ -48,6 +48,16 @@ export type BrainDetectorContext = {
   scope: BrainScanScope;
   limits: BrainDetectorLimits;
   dryRun?: boolean;
+  /**
+   * Parte A 1.2 — un detector llama esto cuando una consulta paginada
+   * (`paginateAll`) se quedó sin tiempo antes de agotar las filas reales:
+   * "pricing:branchProductSetting", "inventory:product"... El engine junta
+   * estas marcas en el resumen del detector (`truncated: string[]`) y
+   * `shouldAutoCloseAfterScan` ya no cierra nada si hay alguna — cerrar
+   * sobre una MUESTRA (no sobre el dominio completo) es lo que generaba el
+   * ciclo "se cierra sola → vuelve a aparecer" cada hora.
+   */
+  markTruncated: (source: string) => void;
 };
 
 export type BrainDecisionDraft = {
@@ -80,6 +90,8 @@ export type BrainScanDetectorSummary = {
   ok: boolean;
   count: number;
   capped: boolean;
+  /** Parte A 1.2 — consultas paginadas que se quedaron sin tiempo antes de leer todo el dominio. */
+  truncated: string[];
   ms: number | null;
   error?: string;
 };

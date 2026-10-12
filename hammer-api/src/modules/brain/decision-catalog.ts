@@ -131,6 +131,18 @@ const RAW_CATALOG: Record<string, DecisionCatalogEntry> = {
   REVIEW_PAYMENT_DUPLICATE: { label: "Posible pago duplicado", area: "CASH", resolution: "IN_MODULE", cta: "Abrir cierres", href: () => "/app/master/cash-closure-reports" },
   REQUIRE_CASH_REVIEW: { label: "Requiere revisión de caja", area: "CASH", resolution: "ACKNOWLEDGE", cta: "Ya lo revisé", href: () => "/app/master/cash-closure-reports" },
   REFRESH_OPERATIONAL_DAY: { label: "Refrescar resumen de Día Operativo", area: "CASH", resolution: "EXECUTABLE", cta: "Ejecutar", href: () => "/app/master/operations" },
+  // prompt-completo-pendientes-2026-10.md Parte A 1.1 — estos 4 tipos ya se
+  // emitían (cash-session/service.ts, treasury/service.ts) sin estar
+  // catalogados: caían en el fallback genérico "Revisar" sin enlace.
+  CASH_SESSION_CLOSE_DISCREPANCY: { label: "Descuadre al cerrar caja", area: "CASH", resolution: "ACKNOWLEDGE", cta: "Ya lo revisé", href: () => "/app/master/cash-closure-reports" },
+  REVIEW_BANK_DEPOSIT_SHORTFALL: { label: "Depósito corto vs. custodia", area: "CASH", resolution: "IN_MODULE", cta: "Abrir Tesorería", href: () => "/app/master/treasury" },
+  REVIEW_BANK_DEPOSIT_ACCOUNT_MISMATCH: { label: "Depósito en cuenta distinta a la declarada", area: "CASH", resolution: "IN_MODULE", cta: "Abrir Tesorería", href: () => "/app/master/treasury" },
+  REVIEW_CASH_EXPENSES_EXCEED_RETAINED: { label: "Gastos con efectivo retenido superan lo declarado", area: "CASH", resolution: "IN_MODULE", cta: "Abrir Tesorería", href: () => "/app/master/treasury" },
+  REVIEW_CASH_CANCELLATION_FOLLOWUP: { label: "Anulación con efectivo de caja cerrada", area: "CASH", resolution: "ACKNOWLEDGE", cta: "Ya lo revisé", href: () => "/app/master/cash-closure-reports" },
+
+  // ── Seguridad / cámaras ──
+  REVIEW_CAMERA_HEALTH: { label: "Cámara con falla", area: "SECURITY", resolution: "ACKNOWLEDGE", cta: "Ya lo revisé", href: () => "/app/master/cameras" },
+  REVIEW_CAMERA_INFRA_FAILURE: { label: "Caída de infraestructura de cámaras", area: "SECURITY", resolution: "ACKNOWLEDGE", cta: "Ya lo revisé", href: () => "/app/master/cameras" },
 
   // ── Ventas ──
   REVIEW_USER_DISCOUNTS: { label: "Descuentos de un usuario a revisar", area: "SALES", resolution: "IN_MODULE", cta: "Abrir Descuentos", href: () => "/app/master/discounts" },
@@ -178,7 +190,7 @@ for (const key of EXECUTABLE_ACTION_TYPES) {
 
 export const DECISION_CATALOG: Readonly<Record<string, DecisionCatalogEntry>> = RAW_CATALOG;
 
-const AREA_BY_CATEGORY: Record<string, DecisionArea> = {
+export const AREA_BY_CATEGORY: Record<string, DecisionArea> = {
   INVENTORY: "INVENTORY",
   REORDER: "REORDER",
   PRICING: "PRICING",
@@ -192,11 +204,32 @@ const AREA_BY_CATEGORY: Record<string, DecisionArea> = {
   SYSTEM: "SYSTEM",
 };
 
+/** Parte A 1.1 — nombre en español de cada área, para el grupo "Otros avisos de <área>" de la red de seguridad (inbox-service.ts). */
+export const AREA_LABELS: Record<DecisionArea, string> = {
+  PRICING: "precios",
+  CASH: "caja",
+  SALES: "ventas",
+  INVENTORY: "inventario",
+  REORDER: "reposición",
+  PURCHASING: "compras",
+  DISPATCH: "despacho",
+  PRODUCTION: "producción",
+  SECURITY: "seguridad",
+  SYSTEM: "sistema",
+};
+
 /** Fase 2.1 — reverso del catálogo: qué `proposedActionType` caen en un área, para poder filtrar `/inbox?area=` por `proposedActionType: { in: [...] }` sin que "área" exista como columna. */
 export function getActionTypesForArea(area: DecisionArea): string[] {
   return Object.entries(DECISION_CATALOG)
     .filter(([, entry]) => entry.area === area)
     .map(([type]) => type);
+}
+
+/** Parte A 1.3 — reverso de AREA_BY_CATEGORY: qué categorías (columna real) caen en un área, para que una decisión sin `proposedActionType` (agrupada por categoría, ver inbox-service.ts) también cuente al filtrar por área. */
+export function getCategoriesForArea(area: DecisionArea): string[] {
+  return Object.entries(AREA_BY_CATEGORY)
+    .filter(([, a]) => a === area)
+    .map(([category]) => category);
 }
 
 /** Tipo desconocido (prefijo REVIEW_ sin entry, o un detector nuevo sin catalogar todavía) → "Revisar", área por categoría, sin enlace — nunca un código crudo sin traducir. */
@@ -266,7 +299,12 @@ const KNOWN_EVIDENCE_LABELS: Record<string, { label: string; format: EvidenceFor
 export const ACTION_LOG_LABELS: Record<string, string> = {
   CREATED: "Detectada",
   UPDATED: "Actualizada",
-  REOPENED: "Volvió a aparecer",
+  // Parte A 1.1 — antes un humano reabriendo a mano y el motor
+  // redetectando la misma condición en el siguiente scan escribían el
+  // MISMO "REOPENED", así que hasReappeared (inbox-service.ts) no podía
+  // distinguir "alguien la reabrió" de "el detector la volvió a ver".
+  REOPENED: "Reabierta manualmente",
+  REDETECTED: "Volvió a aparecer",
   RESOLVED: "Marcada resuelta",
   DISMISSED: "Descartada (no aplica)",
   SNOOZED: "Pospuesta",

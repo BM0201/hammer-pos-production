@@ -2914,6 +2914,12 @@ model BrainScanRun {
   id            String             @id @default(cuid())
   mode          String
   trigger       String
+  /// prompt-completo-pendientes-2026-10.md Parte A 1.4 — null = corrida
+  /// COMPLETA (todos los detectores, lo único que debe contar para "¿ya
+  /// escaneó hoy?"). No-null = acotada a una sola categoría (ej. "Recalcular
+  /// ahora" de Precios: category:"PRICING" — ve solo ese detector, aunque
+  /// su `mode` sea el mismo SCHEDULED_SCAN que usa el cron completo).
+  category      BrainDecisionCategory?
   /// null = todas las sucursales.
   branchId      String?
   startedAt     DateTime           @default(now())

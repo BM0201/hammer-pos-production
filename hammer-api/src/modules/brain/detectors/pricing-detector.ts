@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { riskScoreFor, severityForMargin } from "@/modules/brain/scoring";
 import { simulatePriceChange } from "@/modules/brain/prediction/price-simulation";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
+import { paginateAll } from "@/modules/brain/pagination";
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { checkStockGroupPricingHealth, type FusionPricingIssueKind } from "@/modules/catalog/fusion-pricing-health";
 import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
@@ -79,34 +80,57 @@ export function escalateForTopMover(severity: BrainDecisionSeverity, isTopMover:
 export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
 
-  const [balances, branchSettings] = await Promise.all([
+  // Parte A 1.2 — pricing-detector alimenta la Bandeja de Precios: un
+  // `take` fijo sin paginar recortaba calladamente a una MUESTRA (que
+  // además cambiaba de corrida a corrida sin orderBy), así que el
+  // auto-cierre se disparaba sobre esa muestra, no sobre el dominio
+  // completo — de ahí el ciclo "se cierra sola → vuelve a aparecer" cada
+  // hora. Cada lectura paginada recibe su PROPIA ventana fresca (no una
+  // sola repartida al principio): si una consulta tarda más de la cuenta,
+  // no le come el tiempo a las que vienen después en la misma corrida.
+  const readDeadline = (fraction: number) => Date.now() + Math.floor(ctx.limits.timeoutMs * fraction);
+
+  const [{ rows: balances, truncated: balancesTruncated }, { rows: branchSettings, truncated: settingsTruncated }] = await Promise.all([
     // H: filter inactive products and inactive branches
-    prisma.inventoryBalance.findMany({
-      where: {
-        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
-        product: { is: { isActive: true } },
-        branch: { is: { isActive: true } },
-      },
-      include: {
-        branch: { select: { id: true, code: true, name: true } },
-        product: { select: { id: true, sku: true, name: true, standardSalePrice: true, updatedAt: true } },
-      },
-      take: 500,
-      orderBy: { updatedAt: "desc" },
-    }),
-    prisma.branchProductSetting.findMany({
-      where: {
-        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
-        product: { is: { isActive: true } },
-        branch: { is: { isActive: true } },
-      },
-      include: {
-        branch: { select: { id: true, code: true, name: true } },
-        product: { select: { id: true, sku: true, name: true, standardSalePrice: true, costUpdatedAt: true, averageCost: true, lastPurchaseCost: true } },
-      },
-      take: 1000,
-    }),
+    paginateAll(
+      (cursor) => prisma.inventoryBalance.findMany({
+        where: {
+          ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+          product: { is: { isActive: true } },
+          branch: { is: { isActive: true } },
+        },
+        include: {
+          branch: { select: { id: true, code: true, name: true } },
+          product: { select: { id: true, sku: true, name: true, standardSalePrice: true, updatedAt: true } },
+        },
+        take: 500,
+        orderBy: { id: "asc" },
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      }),
+      (row) => row.id,
+      { pageSize: 500, deadlineAt: readDeadline(0.4) },
+    ),
+    paginateAll(
+      (cursor) => prisma.branchProductSetting.findMany({
+        where: {
+          ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+          product: { is: { isActive: true } },
+          branch: { is: { isActive: true } },
+        },
+        include: {
+          branch: { select: { id: true, code: true, name: true } },
+          product: { select: { id: true, sku: true, name: true, standardSalePrice: true, costUpdatedAt: true, averageCost: true, lastPurchaseCost: true } },
+        },
+        take: 500,
+        orderBy: { id: "asc" },
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      }),
+      (row) => row.id,
+      { pageSize: 500, deadlineAt: readDeadline(0.4) },
+    ),
   ]);
+  if (balancesTruncated) ctx.markTruncated("pricing:inventoryBalance");
+  if (settingsTruncated) ctx.markTruncated("pricing:branchProductSetting");
 
   // Batch-prefetch pricing/policy/commercial intelligence for every (branchId, productId)
   // pair touched by this detector — both loops below used to call these once per item
@@ -527,19 +551,25 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     });
   }
 
-  const suspiciousCalculations = await prisma.productPricing.findMany({
-    where: {
-      ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
-      totalMonthlyExpenses: { gte: 5000 },
-      estimatedMonthlyUnits: { lt: 50 },
-    },
-    include: {
-      branch: { select: { id: true, code: true, name: true } },
-      product: { select: { id: true, sku: true, name: true } },
-    },
-    orderBy: { calculatedAt: "desc" },
-    take: 100,
-  });
+  const { rows: suspiciousCalculations, truncated: calcsTruncated } = await paginateAll(
+    (cursor) => prisma.productPricing.findMany({
+      where: {
+        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+        totalMonthlyExpenses: { gte: 5000 },
+        estimatedMonthlyUnits: { lt: 50 },
+      },
+      include: {
+        branch: { select: { id: true, code: true, name: true } },
+        product: { select: { id: true, sku: true, name: true } },
+      },
+      orderBy: { id: "asc" },
+      take: 500,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    }),
+    (row) => row.id,
+    { pageSize: 500, deadlineAt: readDeadline(0.2) },
+  );
+  if (calcsTruncated) ctx.markTruncated("pricing:productPricing");
 
   for (const calculation of suspiciousCalculations) {
     const purchaseCost = n(calculation.purchaseCost);
@@ -582,11 +612,18 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
   // vía el mismo motor (getEffectiveProductPricingBatch) — es la única
   // manera de que Brain vea el override desviado que "no rompe nada
   // visible" (el caso piedrín) o el costo de relleno del canónico.
-  const activeGroups = await prisma.productStockGroup.findMany({
-    where: { isActive: true },
-    select: { id: true, code: true, name: true },
-    take: 200,
-  });
+  const { rows: activeGroups, truncated: groupsTruncated } = await paginateAll(
+    (cursor) => prisma.productStockGroup.findMany({
+      where: { isActive: true },
+      select: { id: true, code: true, name: true },
+      orderBy: { id: "asc" },
+      take: 500,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    }),
+    (row) => row.id,
+    { pageSize: 500, deadlineAt: readDeadline(0.1) },
+  );
+  if (groupsTruncated) ctx.markTruncated("pricing:productStockGroup");
   const severityForFusionIssue = (kind: FusionPricingIssueKind) =>
     kind === "UNSELLABLE" || kind === "COST_BASIS_CONFLICT" || kind === "PLACEHOLDER_COST" ? "HIGH" : "MEDIUM";
   const titleForFusionIssue = (kind: FusionPricingIssueKind) =>

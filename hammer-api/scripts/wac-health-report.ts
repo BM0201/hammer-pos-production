@@ -45,6 +45,7 @@ async function main() {
     // la muestra recortada (take/maxEntities) que sí aplica el escaneo
     // rutinario de Brain para no pagar una consulta gigante en cada scan.
     limits: { maxIssues: 1_000_000, maxEntities: 1_000_000, timeoutMs: 300_000 },
+    markTruncated: (source) => console.warn(`[wac-health-report] truncado: ${source}`),
   };
 
   console.log(`=== Reporte de salud del WAC${branchCode ? ` — ${branchCode}` : " — todas las sucursales"} ===\n`);

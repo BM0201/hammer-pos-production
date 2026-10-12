@@ -81,12 +81,22 @@ export async function calculateOperationalSummaryTx(
         severity: { in: [BrainDecisionSeverity.CRITICAL, BrainDecisionSeverity.HIGH] },
       },
     }),
-    // El último escaneo OK/PARTIAL de esta sucursal O global (branchId null
-    // = corrió para todas) — si no hay uno reciente, el check de abajo no
-    // puede confiar en que criticalBrainDecisionCount==0 signifique "todo
-    // bien" en vez de "nadie miró".
+    // El último escaneo COMPLETO (status OK/PARTIAL — nunca FAILED;
+    // mode SCHEDULED_SCAN; category NULL, es decir, los 10 detectores, no
+    // uno solo) de esta sucursal O global (branchId null = corrió para
+    // todas) — si no hay uno reciente, el check de abajo no puede confiar
+    // en que criticalBrainDecisionCount==0 signifique "todo bien" en vez
+    // de "nadie miró". Antes esto aceptaba cualquier status!=RUNNING (un
+    // FAILED contaba igual) y cualquier corrida, incluyendo "Recalcular
+    // ahora" de Precios (mode:SCHEDULED_SCAN + category:"PRICING", que
+    // solo corre pricing-detector) como si fuera el escaneo completo.
     tx.brainScanRun.findFirst({
-      where: { status: { not: "RUNNING" }, OR: [{ branchId: day.branchId }, { branchId: null }] },
+      where: {
+        status: { in: ["OK", "PARTIAL"] },
+        mode: "SCHEDULED_SCAN",
+        category: null,
+        OR: [{ branchId: day.branchId }, { branchId: null }],
+      },
       orderBy: { startedAt: "desc" },
       select: { finishedAt: true },
     }),

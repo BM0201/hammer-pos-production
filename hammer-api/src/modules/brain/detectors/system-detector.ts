@@ -19,8 +19,10 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
       moduleConfig: true,
       printSettings: true,
     },
+    orderBy: { id: "asc" },
     take: 200,
   });
+  if (branches.length === 200) ctx.markTruncated("system:branch");
 
   for (const branch of branches) {
     if (branch.physicalCashBoxes.filter((box) => box.isActive).length === 0) {
@@ -146,8 +148,10 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
       physicalCashBox: { isActive: false, ...(ctx.branchId ? { branchId: ctx.branchId } : {}) },
     },
     include: { physicalCashBox: { include: { branch: true } } },
+    orderBy: { id: "asc" },
     take: 50,
   });
+  if (openInactiveBoxes.length === 50) ctx.markTruncated("system:cashSession-openInactive");
 
   for (const session of openInactiveBoxes) {
     decisions.push({
@@ -186,6 +190,7 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
           ...(ctx.branchId ? { saleOrder: { branchId: ctx.branchId } } : {}),
         },
         select: { id: true, quantity: true },
+        orderBy: { createdAt: "desc" },
         take: 20,
       },
       stockGroupMemberships: {
@@ -193,8 +198,10 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
         select: { stockGroupId: true },
       },
     },
+    orderBy: { id: "asc" },
     take: 200,
   });
+  if (ironProducts.length === 200) ctx.markTruncated("system:product-iron");
 
   const ironGroups = new Map<string, typeof ironProducts>();
   for (const product of ironProducts) {
@@ -265,8 +272,10 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
   const recipesMissingInputs = await prisma.productionRecipe.findMany({
     where: { isActive: true, inputs: { none: {} } },
     select: { id: true, code: true, name: true, finishedProductId: true },
+    orderBy: { id: "asc" },
     take: 50,
   });
+  if (recipesMissingInputs.length === 50) ctx.markTruncated("system:productionRecipe-missingInputs");
 
   for (const recipe of recipesMissingInputs) {
     decisions.push({
@@ -296,8 +305,10 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
       recipe: { select: { name: true, code: true } },
       branch: { select: { code: true, name: true } },
     },
+    orderBy: { startedAt: "asc" },
     take: 50,
   });
+  if (stuckBatches.length === 50) ctx.markTruncated("system:productionBatch-stuck");
 
   for (const batch of stuckBatches) {
     decisions.push({
@@ -341,6 +352,7 @@ export async function detectSystemDecisions(ctx: BrainDetectorContext): Promise<
     orderBy: { completedAt: "desc" },
     take: 100,
   });
+  if (belowCostBatches.length === 100) ctx.markTruncated("system:productionBatch-belowCost");
 
   for (const batch of belowCostBatches) {
     const setting = batch.recipe.finishedProduct.branchProductSettings.find((item) => item.branchId === batch.branchId);

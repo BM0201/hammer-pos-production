@@ -50,6 +50,7 @@ export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<Br
         saleOrder: ctx.branchId ? { branchId: ctx.branchId } : undefined,
       },
       select: { saleOrderId: true, method: true, amount: true, referenceNumber: true, paidAt: true },
+      orderBy: { paidAt: "desc" },
       take: Math.min(1000, ctx.limits.maxEntities),
     }),
     prisma.cashSession.findMany({
@@ -72,6 +73,11 @@ export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<Br
       orderBy: { openedAt: "desc" },
     }),
   ]);
+  // Parte A 1.2 — orderBy ya era determinista en las 4; solo faltaba el aviso.
+  if (closures.length === Math.min(100, ctx.limits.maxEntities)) ctx.markTruncated("cash:cashClosure");
+  if (discountedOrders.length === Math.min(500, ctx.limits.maxEntities)) ctx.markTruncated("cash:saleOrder-discounted");
+  if (payments.length === Math.min(1000, ctx.limits.maxEntities)) ctx.markTruncated("cash:payment");
+  if (scopedCashSessions.length === Math.min(200, ctx.limits.maxEntities)) ctx.markTruncated("cash:cashSession-scoped");
 
   const autoClosedSessions = await prisma.cashSession.findMany({
     where: {
@@ -86,6 +92,7 @@ export async function detectCashDecisions(ctx: BrainDetectorContext): Promise<Br
     take: 100,
     orderBy: { autoClosedAt: "asc" },
   });
+  if (autoClosedSessions.length === 100) ctx.markTruncated("cash:cashSession-autoClosed");
 
   for (const session of autoClosedSessions) {
     const hoursPending = session.autoClosedAt ? Math.round((ctx.now.getTime() - session.autoClosedAt.getTime()) / 36e5) : 0;

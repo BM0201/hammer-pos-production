@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DECISION_CATALOG, getDecisionCatalogEntry, formatEvidence } from "@/modules/brain/decision-catalog";
@@ -14,6 +14,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * `proposedActionType: "…"` literales de brain/detectors/*.ts + engine.ts
  * (insights heredados) y falla si alguno no tiene entrada en el catálogo.
  *
+ * Parte A 1.1 (prompt-completo-pendientes-2026-10.md) — esto SOLO miraba
+ * brain/detectors: cameras/service.ts y sales/service.ts (~l.1483) crean
+ * BrainDecision directo (brainDecision.create), fuera de todo detector, y
+ * nadie los cubría — así fue como la falla de cámaras y la anulación con
+ * efectivo de caja cerrada se quedaron sin proposedActionType sin que
+ * ningún test lo atrapara. Ahora recorre TODO src/modules, filtrado a los
+ * archivos que de verdad tocan BrainDecision (brainDecision.create/
+ * upsert, o persistBrainDecisions) — no cada archivo del proyecto.
+ *
  * Los tipos ARMADOS dinámicamente (template strings / ternarios — no un
  * string literal que el regex pueda leer solo) se verificaron a mano
  * leyendo cada detector (ver comentario de cada bloque abajo) y se
@@ -23,6 +32,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  */
 
 const DETECTORS_DIR = path.join(__dirname, "detectors");
+const MODULES_DIR = path.join(__dirname, "..");
+// raiseCashDiscrepancy (treasury/discrepancy-signals.ts) es un envoltorio
+// compartido sobre brainDecision.create: el literal `proposedActionType:
+// "…"` vive en el CALLER (treasury/service.ts, cash-session/service.ts),
+// no en discrepancy-signals.ts (que solo reenvía `signal.proposedActionType`,
+// una variable — nada que el regex pueda leer ahí). Sin este marcador,
+// esos dos archivos quedaban fuera del recorrido aunque sí escriben
+// literales reales.
+const BRAIN_DECISION_MARKERS = ["brainDecision.create", "brainDecision.upsert", "persistBrainDecisions(", "raiseCashDiscrepancy("];
 
 function literalActionTypesIn(source: string): string[] {
   const found: string[] = [];
@@ -34,6 +52,23 @@ function literalActionTypesIn(source: string): string[] {
 
 function allDetectorFiles(): string[] {
   return readdirSync(DETECTORS_DIR).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+}
+
+/** Recorre src/modules recursivo; devuelve rutas ABSOLUTAS de los .ts (sin .test.ts) que mencionan alguno de BRAIN_DECISION_MARKERS. */
+function allBrainDecisionWriterFiles(dir: string = MODULES_DIR): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const fullPath = path.join(dir, entry);
+    const stat = statSync(fullPath);
+    if (stat.isDirectory()) {
+      found.push(...allBrainDecisionWriterFiles(fullPath));
+      continue;
+    }
+    if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) continue;
+    const source = readFileSync(fullPath, "utf8");
+    if (BRAIN_DECISION_MARKERS.some((marker) => source.includes(marker))) found.push(fullPath);
+  }
+  return found;
 }
 
 // pricing-detector.ts:624 — `REVIEW_FUSION_${issue.kind}`, issue.kind: FusionPricingIssueKind
@@ -91,6 +126,22 @@ test("LA QUE IMPORTA — todo proposedActionType literal emitido por un detector
     }
   }
   assert.deepEqual(missing, [], `Tipos sin catalogar: ${missing.join(", ")}`);
+});
+
+test("LA QUE IMPORTA — Parte A 1.1: TODO src/modules, no solo brain/detectors — cualquier archivo que cree un BrainDecision (directo o vía persistBrainDecisions) con proposedActionType literal debe estar catalogado", () => {
+  const missing: string[] = [];
+  const files = allBrainDecisionWriterFiles();
+  const relative = files.map((f) => path.relative(MODULES_DIR, f));
+  for (const expected of ["cameras\\service.ts", "sales\\service.ts", "treasury\\service.ts", "cash-session\\service.ts", "brain\\engine.ts"]) {
+    assert.ok(relative.some((f) => f === expected || f === expected.replace(/\\/g, "/")), `sanity check: el recorrido debe encontrar ${expected} (no solo brain/detectors)`);
+  }
+  for (const file of files) {
+    const source = readFileSync(file, "utf8");
+    for (const actionType of literalActionTypesIn(source)) {
+      if (!DECISION_CATALOG[actionType]) missing.push(`${path.relative(MODULES_DIR, file)}: ${actionType}`);
+    }
+  }
+  assert.deepEqual(missing, [], `Tipos sin catalogar fuera de brain/detectors: ${missing.join(", ")}`);
 });
 
 test("LA QUE IMPORTA — los tipos armados dinámicamente (fusión, madera, ventas, producción, insight heredado) también están catalogados", () => {

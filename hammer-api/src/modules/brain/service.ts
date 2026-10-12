@@ -359,10 +359,13 @@ const STALE_SCAN_LOCK_MINUTES = 10;
  * STALE_SCAN_LOCK_MINUTES sin terminar, en cuyo caso se considera colgado,
  * se libera y se toma.
  */
-export async function acquireScanRunLockTx(db: Db, input: { mode: string; trigger: string; branchId?: string; actorUserId?: string }): Promise<string> {
+export async function acquireScanRunLockTx(
+  db: Db,
+  input: { mode: string; trigger: string; branchId?: string; actorUserId?: string; category?: BrainDecisionCategory },
+): Promise<string> {
   try {
     const run = await db.brainScanRun.create({
-      data: { mode: input.mode, trigger: input.trigger, branchId: input.branchId ?? null, actorUserId: input.actorUserId ?? null, runningLock: "brain" },
+      data: { mode: input.mode, trigger: input.trigger, branchId: input.branchId ?? null, actorUserId: input.actorUserId ?? null, category: input.category ?? null, runningLock: "brain" },
     });
     return run.id;
   } catch (error) {
@@ -373,7 +376,7 @@ export async function acquireScanRunLockTx(db: Db, input: { mode: string; trigge
     if (running && running.startedAt < staleThreshold) {
       await db.brainScanRun.update({ where: { id: running.id }, data: { status: "FAILED", finishedAt: new Date(), runningLock: null } });
       const run = await db.brainScanRun.create({
-        data: { mode: input.mode, trigger: input.trigger, branchId: input.branchId ?? null, actorUserId: input.actorUserId ?? null, runningLock: "brain" },
+        data: { mode: input.mode, trigger: input.trigger, branchId: input.branchId ?? null, actorUserId: input.actorUserId ?? null, category: input.category ?? null, runningLock: "brain" },
       });
       return run.id;
     }
@@ -434,9 +437,15 @@ export async function expireStaleBrainDecisions(now: Date = new Date(), db: Db =
  * cierra algo (QUICK/ENTITY/DEEP/REPAIR ven un pedazo, no alcanza para
  * decidir que algo "ya no está"); un detector con error o que llegó al
  * tope (capped) tampoco — no se puede confiar en que vio todo.
+ *
+ * prompt-completo-pendientes-2026-10.md Parte A 1.2 — tampoco cierra nada
+ * un detector `truncated` (alguna de sus consultas paginadas se quedó sin
+ * tiempo antes de leer todo el dominio): `capped` solo ve cuántas
+ * DECISIONES salieron, `truncated` es la red que faltaba para cuántas
+ * ENTIDADES se leyeron de verdad.
  */
-export function shouldAutoCloseAfterScan(mode: string, summary: { ok: boolean; capped: boolean }): boolean {
-  return mode === "SCHEDULED_SCAN" && summary.ok && !summary.capped;
+export function shouldAutoCloseAfterScan(mode: string, summary: { ok: boolean; capped: boolean; truncated: string[] }): boolean {
+  return mode === "SCHEDULED_SCAN" && summary.ok && !summary.capped && summary.truncated.length === 0;
 }
 
 /**
@@ -597,7 +606,10 @@ export async function persistBrainDecisions(
       await writeActionLog({
         decisionId: existing.id,
         actorUserId,
-        action: isReopened ? "REOPENED" : "UPDATED",
+        // Parte A 1.1 — esto es el MOTOR redetectando la misma condición en
+        // un scan posterior, no un humano reabriendo a mano (eso sigue
+        // siendo reopenBrainDecisionTx, más abajo, con su propio REOPENED).
+        action: isReopened ? "REDETECTED" : "UPDATED",
         beforeStatus: existing.status,
         afterStatus: nextStatus,
         metadataJson: { fingerprint, severityBefore: existing.severity, severityAfter: draft.severity },

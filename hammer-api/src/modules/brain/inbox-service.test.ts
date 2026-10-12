@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Prisma } from "@prisma/client";
-import { getBrainInbox, getBrainInboxSummary } from "@/modules/brain/inbox-service";
+import { getBrainInbox, getBrainInboxSummary, groupKeyFor, isUnknownGroupKey, categoryFromUnknownGroupKey, extractReferenceIds, entityLabelFor } from "@/modules/brain/inbox-service";
 
 /**
  * prompt-brain-centro-decisiones.md Fase 2 — tests requeridos: agrupación y
@@ -18,7 +18,8 @@ import { getBrainInbox, getBrainInboxSummary } from "@/modules/brain/inbox-servi
 
 type FakeDecision = {
   id: string;
-  proposedActionType: string;
+  proposedActionType: string | null;
+  category: string;
   severity: string;
   status: string;
   branchId: string | null;
@@ -29,7 +30,17 @@ type FakeDecision = {
   resolvedAt: Date | null;
 };
 
+/** Recursivo a propósito: buildWhere() ahora compone `AND: [{OR:[...]}, {OR:[...]}]` (área + búsqueda `q`) en vez de un solo `where.OR` plano. */
 function matchesWhere(d: FakeDecision, where: Record<string, unknown>): boolean {
+  if (where.AND) {
+    for (const clause of where.AND as Record<string, unknown>[]) {
+      if (!matchesWhere(d, clause)) return false;
+    }
+  }
+  if (where.OR) {
+    const or = where.OR as Record<string, unknown>[];
+    if (!or.some((clause) => matchesWhere(d, clause))) return false;
+  }
   if (where.status && typeof where.status === "object" && "in" in where.status) {
     if (!(where.status as { in: string[] }).in.includes(d.status)) return false;
   }
@@ -37,9 +48,15 @@ function matchesWhere(d: FakeDecision, where: Record<string, unknown>): boolean 
   if (where.severity && typeof where.severity === "object" && "in" in where.severity) {
     if (!(where.severity as { in: string[] }).in.includes(d.severity)) return false;
   }
+  if (where.proposedActionType === null && d.proposedActionType !== null) return false;
   if (where.proposedActionType && typeof where.proposedActionType === "object" && "in" in where.proposedActionType) {
-    if (!(where.proposedActionType as { in: string[] }).in.includes(d.proposedActionType)) return false;
+    if (d.proposedActionType === null || !(where.proposedActionType as { in: string[] }).in.includes(d.proposedActionType)) return false;
   }
+  if (typeof where.proposedActionType === "string" && d.proposedActionType !== where.proposedActionType) return false;
+  if (where.category && typeof where.category === "object" && "in" in where.category) {
+    if (!(where.category as { in: string[] }).in.includes(d.category)) return false;
+  }
+  if (typeof where.category === "string" && d.category !== where.category) return false;
   if (where.resolvedAt && typeof where.resolvedAt === "object" && "gte" in where.resolvedAt) {
     const gte = (where.resolvedAt as { gte: Date }).gte;
     if (!d.resolvedAt || d.resolvedAt < gte) return false;
@@ -73,7 +90,7 @@ function createFakeDb(decisions: FakeDecision[]) {
         const seen = new Set<string>();
         const result: FakeDecision[] = [];
         for (const d of matching) {
-          const key = `${d.proposedActionType}||${d.branchId}`;
+          const key = `${d.proposedActionType}||${d.category}||${d.branchId}`;
           if (seen.has(key)) continue;
           seen.add(key);
           result.push(d);
@@ -94,8 +111,10 @@ function createFakeDb(decisions: FakeDecision[]) {
   return db;
 }
 
-function fakeDecision(overrides: Partial<FakeDecision> & { id: string; proposedActionType: string }): FakeDecision {
+function fakeDecision(overrides: Partial<FakeDecision> & { id: string }): FakeDecision {
   return {
+    proposedActionType: null,
+    category: "SYSTEM",
     severity: "MEDIUM",
     status: "OPEN",
     branchId: null,
@@ -169,4 +188,85 @@ test("LA QUE IMPORTA — getBrainInboxSummary separa lo resuelto en 7 días por 
   assert.equal(summary.resolvedLast7Days.execution, 0);
   assert.equal(summary.criticalPending, 1);
   assert.equal(summary.totalPending, 1);
+});
+
+/* ── Parte A 1.1 — red de seguridad: una decisión sin proposedActionType ya no se descarta ── */
+
+test("Parte A 1.1 — groupKeyFor/isUnknownGroupKey/categoryFromUnknownGroupKey, ida y vuelta", () => {
+  assert.equal(groupKeyFor("REVIEW_PRICE_BELOW_COST", "PRICING"), "REVIEW_PRICE_BELOW_COST");
+  const key = groupKeyFor(null, "SECURITY");
+  assert.equal(isUnknownGroupKey(key), true);
+  assert.equal(categoryFromUnknownGroupKey(key), "SECURITY");
+  assert.equal(isUnknownGroupKey("REVIEW_PRICE_BELOW_COST"), false);
+});
+
+test("LA QUE IMPORTA — una decisión con proposedActionType null YA NO se descarta: aparece agrupada por categoría como 'Otros avisos de <área>'", async () => {
+  const db = createFakeDb([
+    fakeDecision({ id: "d1", proposedActionType: null, category: "SECURITY", severity: "HIGH", branchId: "b1", branch: { code: "B1", name: "Rivas" } }),
+    fakeDecision({ id: "d2", proposedActionType: "REVIEW_PURCHASE_ORDER", category: "PURCHASING", severity: "LOW" }),
+  ]);
+
+  const result = await getBrainInbox({}, db);
+
+  assert.equal(result.groups.length, 2, "antes esta decisión sin tipo se descartaba del todo — ahora cuenta como un grupo más");
+  const unknownGroup = result.groups.find((g) => isUnknownGroupKey(g.type));
+  assert.ok(unknownGroup, "debe existir el grupo sintético __CAT_SECURITY");
+  assert.equal(unknownGroup!.typeLabel, "Otros avisos de seguridad");
+  assert.equal(unknownGroup!.area, "SECURITY");
+  assert.equal(unknownGroup!.cta, "Ya lo revisé");
+  assert.equal(unknownGroup!.groupHref, null);
+  assert.equal(unknownGroup!.count, 1);
+});
+
+test("LA QUE IMPORTA — filtrar por área SECURITY sí incluye una decisión sin proposedActionType cuya categoría es SECURITY (antes el conteo de áreas y lo que se veía al hacer clic no coincidían)", async () => {
+  const db = createFakeDb([
+    fakeDecision({ id: "d1", proposedActionType: null, category: "SECURITY", severity: "HIGH" }),
+    fakeDecision({ id: "d2", proposedActionType: "REVIEW_PURCHASE_ORDER", category: "PURCHASING", severity: "LOW" }),
+  ]);
+
+  const all = await getBrainInbox({}, db);
+  const filtered = await getBrainInbox({ area: "SECURITY" }, db);
+
+  const securityAreaCount = all.areas.find((a) => a.area === "SECURITY")?.count ?? 0;
+  const securityFilteredCount = filtered.groups.reduce((sum, g) => sum + g.count, 0);
+  assert.equal(securityAreaCount, 1);
+  assert.equal(securityFilteredCount, 1, "el filtro por área debe traer la misma cantidad que el conteo de esa área");
+});
+
+test("Parte A 1.3 — groupHref usa el id REAL de la sucursal, no su código", async () => {
+  const db = createFakeDb([
+    fakeDecision({ id: "d1", proposedActionType: "REVIEW_PRICE_BELOW_COST", category: "PRICING", branchId: "branch-cuid-1", branch: { id: "branch-cuid-1", code: "RVS", name: "Rivas" } as never }),
+  ]);
+  const result = await getBrainInbox({}, db);
+  assert.equal(result.groups[0].groupHref, "/app/master/pricing?tab=tray&branchId=branch-cuid-1", "antes mandaba el CÓDIGO (RVS) a un parámetro que la pantalla de Precios lee como id");
+});
+
+/* ── Parte A 1.3 — entidad legible (batch, no N+1) ── */
+
+test("extractReferenceIds — lee cashSessionId de evidenceJson o, si no está, de sourceJson (sale-cancellation-followup no usa evidenceJson)", () => {
+  assert.deepEqual(extractReferenceIds({ evidenceJson: { cashSessionId: "cs-1" }, sourceJson: null }), { cashSessionId: "cs-1", saleOrderId: null });
+  assert.deepEqual(extractReferenceIds({ evidenceJson: null, sourceJson: { cashSessionId: "cs-2", orderId: "order-1" } }), { cashSessionId: "cs-2", saleOrderId: "order-1" });
+});
+
+test("entityLabelFor — con el lote resuelto, muestra el registro de caja o el número de orden real, no el cuid crudo", () => {
+  const cashLabels = new Map([["cs-1", "Caja C1 · abierta 05 oct, 08:00"]]);
+  const orderLabels = new Map([["order-1", "Orden V-000123"]]);
+
+  assert.equal(
+    entityLabelFor({ product: null, evidenceJson: { cashSessionId: "cs-1" }, sourceJson: null }, cashLabels, orderLabels),
+    "Caja C1 · abierta 05 oct, 08:00",
+  );
+  assert.equal(
+    entityLabelFor({ product: null, evidenceJson: { saleOrderId: "order-1" }, sourceJson: null }, cashLabels, orderLabels),
+    "Orden V-000123",
+  );
+  assert.equal(
+    entityLabelFor({ product: { sku: "FER-1", name: "Tornillo" }, evidenceJson: {}, sourceJson: null }, cashLabels, orderLabels),
+    "FER-1 · Tornillo",
+    "un producto siempre gana sobre caja/orden",
+  );
+  assert.equal(
+    entityLabelFor({ product: null, evidenceJson: {}, sourceJson: null }, cashLabels, orderLabels),
+    "Sin entidad puntual",
+  );
 });

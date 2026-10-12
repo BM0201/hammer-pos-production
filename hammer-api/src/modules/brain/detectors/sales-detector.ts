@@ -55,9 +55,12 @@ export async function detectSalesDecisions(ctx: BrainDetectorContext): Promise<B
           },
         },
       },
+      orderBy: { id: "asc" },
       take: Math.min(ctx.limits.maxEntities * 3, 3000),
     }),
   ]);
+  if (orders.length === ctx.limits.maxEntities) ctx.markTruncated("sales:saleOrder");
+  if (lines.length === Math.min(ctx.limits.maxEntities * 3, 3000)) ctx.markTruncated("sales:saleOrderLine");
 
   const auditLogs = orders.length
     ? await prisma.auditLog.findMany({
@@ -67,9 +70,11 @@ export async function detectSalesDecisions(ctx: BrainDetectorContext): Promise<B
           action: { in: ["SALE_ORDER_CANCELLED", "SALE_ORDER_VOIDED", "SALE_ORDER_CANCELLED_BY_MASTER"] },
         },
         select: { entityId: true, action: true, occurredAt: true },
+        orderBy: { occurredAt: "desc" },
         take: ctx.limits.maxEntities,
       })
     : [];
+  if (auditLogs.length === ctx.limits.maxEntities) ctx.markTruncated("sales:auditLog");
   const cancelledAuditByOrder = new Map(auditLogs.map((log) => [log.entityId, log]));
 
   for (const order of orders) {

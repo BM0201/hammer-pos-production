@@ -153,7 +153,7 @@ async function detectLegacyAiInsightDecisions(ctx: BrainDetectorContext): Promis
 export async function runBrainScan(input: ScanBrainInput & { actorUserId?: string }) {
   const mode = validateScanInput(input);
   const trigger = input.trigger ?? "MANUAL";
-  const scanRunId = await acquireScanRunLockTx(prisma, { mode, trigger, branchId: input.branchId, actorUserId: input.actorUserId });
+  const scanRunId = await acquireScanRunLockTx(prisma, { mode, trigger, branchId: input.branchId, actorUserId: input.actorUserId, category: input.category });
   const scanStartedAt = new Date();
 
   try {
@@ -184,6 +184,11 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
       dateTo,
       dryRun: input.dryRun,
       limits,
+      // No-op a propósito: este `ctx` base no se pasa directo a ningún
+      // detector (cada uno recibe su propia copia con un markTruncated real
+      // más abajo, para no mezclar las marcas de detectores que corren en
+      // paralelo dentro del mismo Promise.allSettled).
+      markTruncated: () => {},
       scope: {
         branchId: input.branchId,
         businessDate,
@@ -200,18 +205,18 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
       },
     };
 
-    const detectors: Array<{ key: string; category: BrainDecisionCategory; run: () => Promise<BrainDecisionDraft[]> }> = [
-      { key: "inventory-detector", category: BrainDecisionCategory.INVENTORY, run: () => detectInventoryDecisions(ctx) },
-      { key: "wac-health-detector", category: BrainDecisionCategory.INVENTORY, run: () => detectWacHealthDecisions(ctx) },
-      { key: "reorder-detector", category: BrainDecisionCategory.REORDER, run: () => detectReorderDecisions(ctx) },
-      { key: "pricing-detector", category: BrainDecisionCategory.PRICING, run: () => detectPricingDecisions(ctx) },
-      { key: "cash-detector", category: BrainDecisionCategory.CASH, run: () => detectCashDecisions(ctx) },
-      { key: "sales-detector", category: BrainDecisionCategory.SALES, run: () => detectSalesDecisions(ctx) },
-      { key: "dispatch-detector", category: BrainDecisionCategory.DISPATCH, run: () => detectDispatchDecisions(ctx) },
-      { key: "purchasing-detector", category: BrainDecisionCategory.PURCHASING, run: () => detectPurchasingDecisions(ctx) },
-      { key: "security-detector", category: BrainDecisionCategory.SECURITY, run: () => detectSecurityDecisions(ctx) },
-      { key: "system-detector", category: BrainDecisionCategory.SYSTEM, run: () => detectSystemDecisions(ctx) },
-      { key: "ai-insights", category: BrainDecisionCategory.AUDIT, run: () => detectLegacyAiInsightDecisions(ctx) },
+    const detectors: Array<{ key: string; category: BrainDecisionCategory; run: (detectorCtx: BrainDetectorContext) => Promise<BrainDecisionDraft[]> }> = [
+      { key: "inventory-detector", category: BrainDecisionCategory.INVENTORY, run: (c: BrainDetectorContext) => detectInventoryDecisions(c) },
+      { key: "wac-health-detector", category: BrainDecisionCategory.INVENTORY, run: (c: BrainDetectorContext) => detectWacHealthDecisions(c) },
+      { key: "reorder-detector", category: BrainDecisionCategory.REORDER, run: (c: BrainDetectorContext) => detectReorderDecisions(c) },
+      { key: "pricing-detector", category: BrainDecisionCategory.PRICING, run: (c: BrainDetectorContext) => detectPricingDecisions(c) },
+      { key: "cash-detector", category: BrainDecisionCategory.CASH, run: (c: BrainDetectorContext) => detectCashDecisions(c) },
+      { key: "sales-detector", category: BrainDecisionCategory.SALES, run: (c: BrainDetectorContext) => detectSalesDecisions(c) },
+      { key: "dispatch-detector", category: BrainDecisionCategory.DISPATCH, run: (c: BrainDetectorContext) => detectDispatchDecisions(c) },
+      { key: "purchasing-detector", category: BrainDecisionCategory.PURCHASING, run: (c: BrainDetectorContext) => detectPurchasingDecisions(c) },
+      { key: "security-detector", category: BrainDecisionCategory.SECURITY, run: (c: BrainDetectorContext) => detectSecurityDecisions(c) },
+      { key: "system-detector", category: BrainDecisionCategory.SYSTEM, run: (c: BrainDetectorContext) => detectSystemDecisions(c) },
+      { key: "ai-insights", category: BrainDecisionCategory.AUDIT, run: (c: BrainDetectorContext) => detectLegacyAiInsightDecisions(c) },
     ].filter((detector) =>
       (!input.category || detector.category === input.category)
       && (!input.detector || detector.key === input.detector)
@@ -220,9 +225,17 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
 
     const timedRuns = await Promise.allSettled(
       detectors.map(async (detector) => {
+        // Copia propia de ctx por detector — corren en paralelo (Promise.allSettled)
+        // compartiendo el mismo ctx base; un markTruncated compartido mezclaría las
+        // marcas de un detector con las de otro que termina a la vez.
+        const truncated: string[] = [];
+        const detectorCtx: BrainDetectorContext = {
+          ...ctx,
+          markTruncated: (source) => { if (!truncated.includes(source)) truncated.push(source); },
+        };
         const startedAt = Date.now();
-        const drafts = await withTimeout(detector.run(), limits.timeoutMs, detector.key);
-        return { drafts, ms: Date.now() - startedAt };
+        const drafts = await withTimeout(detector.run(detectorCtx), limits.timeoutMs, detector.key);
+        return { drafts, ms: Date.now() - startedAt, truncated };
       })
     );
 
@@ -241,6 +254,7 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
           ok: false,
           count: 0,
           capped: false,
+          truncated: [],
           ms: null,
           error: result.reason instanceof Error ? result.reason.message : String(result.reason),
         });
@@ -252,7 +266,7 @@ export async function runBrainScan(input: ScanBrainInput & { actorUserId?: strin
       const capped = filtered.length > limits.maxIssues;
       const kept = filtered.slice(0, limits.maxIssues);
       for (const draft of kept) allDrafts.push({ ...draft, detectorKey: detector.key });
-      detectorSummaries.push({ key: detector.key, category: detector.category, ok: true, count: kept.length, capped, ms: result.value.ms });
+      detectorSummaries.push({ key: detector.key, category: detector.category, ok: true, count: kept.length, capped, truncated: result.value.truncated, ms: result.value.ms });
     });
 
     const persistResult = await persistBrainDecisions(allDrafts, input.actorUserId, {

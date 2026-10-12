@@ -72,11 +72,16 @@ test("SNOOZED/FAILED/EXPIRED reabren igual que antes (sin cambios de comportamie
 
 /* ── shouldAutoCloseAfterScan — pura ── */
 
-test("LA QUE IMPORTA — shouldAutoCloseAfterScan: solo SCHEDULED_SCAN, con el detector ok y sin tope", () => {
-  assert.equal(shouldAutoCloseAfterScan("SCHEDULED_SCAN", { ok: true, capped: false }), true);
-  assert.equal(shouldAutoCloseAfterScan("SCHEDULED_SCAN", { ok: false, capped: false }), false, "detector con error no cierra nada");
-  assert.equal(shouldAutoCloseAfterScan("SCHEDULED_SCAN", { ok: true, capped: true }), false, "detector que llegó al tope no cierra nada — no vio todo");
-  assert.equal(shouldAutoCloseAfterScan("QUICK_SCAN", { ok: true, capped: false }), false, "un escaneo parcial (QUICK) nunca cierra nada");
+test("LA QUE IMPORTA — shouldAutoCloseAfterScan: solo SCHEDULED_SCAN, con el detector ok, sin tope y sin truncar", () => {
+  assert.equal(shouldAutoCloseAfterScan("SCHEDULED_SCAN", { ok: true, capped: false, truncated: [] }), true);
+  assert.equal(shouldAutoCloseAfterScan("SCHEDULED_SCAN", { ok: false, capped: false, truncated: [] }), false, "detector con error no cierra nada");
+  assert.equal(shouldAutoCloseAfterScan("SCHEDULED_SCAN", { ok: true, capped: true, truncated: [] }), false, "detector que llegó al tope no cierra nada — no vio todo");
+  assert.equal(shouldAutoCloseAfterScan("QUICK_SCAN", { ok: true, capped: false, truncated: [] }), false, "un escaneo parcial (QUICK) nunca cierra nada");
+  assert.equal(
+    shouldAutoCloseAfterScan("SCHEDULED_SCAN", { ok: true, capped: false, truncated: ["pricing:branchProductSetting"] }),
+    false,
+    "LA QUE IMPORTA — un detector truncado (vio una muestra, no el dominio completo) tampoco cierra nada",
+  );
 });
 
 /* ── Fake DB compartido para el resto de los tests ── */
@@ -263,6 +268,28 @@ test("re-detectada con la severidad CAMBIADA sí escribe una entrada de bitácor
   await persistBrainDecisions([draft({ severity: "CRITICAL", fingerprintParts: ["fp-1"] })], ACTOR, {}, db);
   assert.equal(actionLogs.length, 1);
   assert.equal(actionLogs[0].action, "UPDATED");
+});
+
+test("LA QUE IMPORTA — Parte A 1.1: el motor redetectando una DISMISSED con severidad más alta escribe REDETECTED, no REOPENED (eso queda solo para la acción humana)", async () => {
+  const { db, actionLogs, decisions } = createFakeDb({
+    decisions: [baseDecision({ id: "d1", fingerprint: FP1, status: "DISMISSED", severity: "MEDIUM", dismissedSeverity: "MEDIUM" })],
+  });
+
+  const result = await persistBrainDecisions([draft({ severity: "CRITICAL", fingerprintParts: ["fp-1"] })], ACTOR, {}, db);
+
+  assert.equal(result.reopened, 1);
+  assert.equal(decisions[0].status, "OPEN");
+  assert.equal(actionLogs.length, 1);
+  assert.equal(actionLogs[0].action, "REDETECTED", "el motor la volvió a ver, no fue una persona reabriéndola a mano");
+});
+
+test("Parte A 1.1: reopenBrainDecisionTx (acción humana) sigue escribiendo REOPENED, no REDETECTED", async () => {
+  const { db, actionLogs } = createFakeDb({
+    decisions: [baseDecision({ id: "d1", fingerprint: "fp-1", status: "DISMISSED", dismissedSeverity: "HIGH" })],
+  });
+  await reopenBrainDecisionTx(db, "d1", ACTOR);
+  assert.equal(actionLogs.length, 1);
+  assert.equal(actionLogs[0].action, "REOPENED");
 });
 
 test("un fingerprint nuevo crea una decisión y registra CREATED", async () => {

@@ -21,9 +21,15 @@ export async function detectSecurityDecisions(ctx: BrainDetectorContext): Promis
         ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
       },
       select: { actorUserId: true, action: true, branchId: true },
+      orderBy: { occurredAt: "desc" },
       take: 1000,
     }),
   ]);
+  // Parte A 1.2 — "el resto de los detectores: orderBy determinista en cada
+  // take y marcar truncado" (paginar es opcional para estos, a diferencia
+  // de pricing/inventory que sí recorren todo el dominio).
+  if (activeUsers.length === 500) ctx.markTruncated("security:user");
+  if (sensitiveAudits.length === 1000) ctx.markTruncated("security:auditLog");
 
   for (const user of activeUsers) {
     if (!user.globalRole && user.userBranchRoles.length === 0) {

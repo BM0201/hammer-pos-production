@@ -131,6 +131,7 @@ export async function detectWacHealthDecisions(ctx: BrainDetectorContext): Promi
     take: Math.min(1000, ctx.limits.maxEntities),
     orderBy: { updatedAt: "desc" },
   });
+  if (balances.length === Math.min(1000, ctx.limits.maxEntities)) ctx.markTruncated("wac-health:inventoryBalance");
   if (balances.length === 0) return decisions;
 
   const pairs = balances.map((b) => ({ branchId: b.branchId, productId: b.productId }));

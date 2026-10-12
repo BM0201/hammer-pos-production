@@ -47,6 +47,11 @@ export async function detectDispatchDecisions(ctx: BrainDetectorContext): Promis
       orderBy: { createdAt: "asc" },
     }),
   ]);
+  // Parte A 1.2 — las 3 ya tenían orderBy determinista; solo faltaba avisar
+  // cuando el take de verdad recorta (paginar es opcional para este detector).
+  if (lateTickets.length === 100) ctx.markTruncated("dispatch:dispatchTicket");
+  if (transportOrders.length === 100) ctx.markTruncated("dispatch:saleOrder");
+  if (pendingServices.length === 100) ctx.markTruncated("dispatch:transportService");
 
   for (const ticket of lateTickets) {
     decisions.push({

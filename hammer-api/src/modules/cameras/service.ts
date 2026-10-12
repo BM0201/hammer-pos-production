@@ -215,6 +215,10 @@ async function evaluateNotificationsAndDecisions(branchId: string, resolved: Res
         description: `Estado ${event.state} desde ${latest.changedAt.toISOString()}.`,
         recommendation: "Revisar la cámara y, si hace falta, avisar al proveedor del equipo o abrir la app del fabricante para confirmar que no se está perdiendo grabación.",
         branchId,
+        // prompt-completo-pendientes-2026-10.md Parte A 1.1 — sin esto la
+        // decisión existía (contaba en "Pendientes" y en el check del
+        // cierre del día) pero no aparecía en ningún grupo de la bandeja.
+        proposedActionType: "REVIEW_CAMERA_HEALTH",
         evidenceJson: { cameraId: event.cameraId, state: event.state, since: latest.changedAt.toISOString() },
         fingerprintParts: ["camera", "health", event.cameraId],
       }]);
@@ -237,6 +241,7 @@ async function evaluateNotificationsAndDecisions(branchId: string, resolved: Res
         description: `${event.affectedCameraIds.length} cámaras cayeron juntas en el mismo ciclo — probablemente un switch o segmento de red, no las cámaras individuales.`,
         recommendation: "Revisar el switch/segmento de red que alimenta estas cámaras antes de revisar cámara por cámara.",
         branchId,
+        proposedActionType: "REVIEW_CAMERA_INFRA_FAILURE",
         evidenceJson: { affectedCameraIds: event.affectedCameraIds, reason: event.reason },
         fingerprintParts: ["camera", "infra", branchId],
       }]);

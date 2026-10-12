@@ -1491,6 +1491,9 @@ export async function cancelSaleOrderTx(
             "Coordinar y documentar la devolución del efectivo fuera de la caja cerrada (o el ajuste contable equivalente).",
           branchId: order.branchId,
           impactAmount: new Prisma.Decimal(cashAmount),
+          // prompt-completo-pendientes-2026-10.md Parte A 1.1 — igual que
+          // las decisiones de cámaras: sin esto, invisible en la bandeja.
+          proposedActionType: "REVIEW_CASH_CANCELLATION_FOLLOWUP",
           fingerprint: `sale-cancellation-cash-followup:${order.id}:${cashSessionId}`,
           sourceJson: {
             orderId: order.id,

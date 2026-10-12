@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { riskScoreFor, severityForInventoryGap } from "@/modules/brain/scoring";
 import type { BrainDecisionDraft, BrainDetectorContext } from "@/modules/brain/types";
 import { parseWoodDimensions } from "@/modules/catalog/sku-generator";
+import { paginateAll } from "@/modules/brain/pagination";
 
 function n(value: Prisma.Decimal | number | null | undefined) {
   return Number(value ?? 0);
@@ -11,42 +12,62 @@ function n(value: Prisma.Decimal | number | null | undefined) {
 export async function detectInventoryDecisions(ctx: BrainDetectorContext): Promise<BrainDecisionDraft[]> {
   const decisions: BrainDecisionDraft[] = [];
 
-  const [balances, products, recentLines, recentOpeningMovements] = await Promise.all([
+  // Parte A 1.2 — mismo problema que pricing-detector: un `take: 500` sin
+  // paginar deja productos/balances fuera de la vista del detector sin que
+  // nada lo marque, y el auto-cierre podía disparar sobre esa muestra.
+  const readDeadline = (fraction: number) => Date.now() + Math.floor(ctx.limits.timeoutMs * fraction);
+
+  const [
+    { rows: balances, truncated: balancesTruncated },
+    { rows: products, truncated: productsTruncated },
+    recentLines,
+    recentOpeningMovements,
+  ] = await Promise.all([
     // H: filter inactive products so negative/zero-stock alerts are only for active items
-    prisma.inventoryBalance.findMany({
-      where: {
-        ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
-        product: { is: { isActive: true } },
-      },
-      include: {
-        branch: { select: { id: true, code: true, name: true } },
-        product: {
-          select: {
-            id: true,
-            sku: true,
-            name: true,
-            standardSalePrice: true,
-            isActive: true,
-            branchProductSettings: { select: { branchId: true, branchCost: true } },
+    paginateAll(
+      (cursor) => prisma.inventoryBalance.findMany({
+        where: {
+          ...(ctx.branchId ? { branchId: ctx.branchId } : {}),
+          product: { is: { isActive: true } },
+        },
+        include: {
+          branch: { select: { id: true, code: true, name: true } },
+          product: {
+            select: {
+              id: true,
+              sku: true,
+              name: true,
+              standardSalePrice: true,
+              isActive: true,
+              branchProductSettings: { select: { branchId: true, branchCost: true } },
+            },
           },
         },
-      },
-      take: 500,
-      orderBy: { updatedAt: "desc" },
-    }),
-    prisma.product.findMany({
-      where: { isActive: true, ...(ctx.branchId ? { inventoryBalances: { some: { branchId: ctx.branchId } } } : {}) },
-      select: {
-        id: true,
-        sku: true,
-        name: true,
-        standardSalePrice: true,
-        category: { select: { id: true, code: true, name: true } },
-        branchProductSettings: { select: { branchId: true, branchPrice: true } },
-      },
-      take: 500,
-      orderBy: { name: "asc" },
-    }),
+        take: 500,
+        orderBy: { id: "asc" },
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      }),
+      (row) => row.id,
+      { pageSize: 500, deadlineAt: readDeadline(0.35) },
+    ),
+    paginateAll(
+      (cursor) => prisma.product.findMany({
+        where: { isActive: true, ...(ctx.branchId ? { inventoryBalances: { some: { branchId: ctx.branchId } } } : {}) },
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+          standardSalePrice: true,
+          category: { select: { id: true, code: true, name: true } },
+          branchProductSettings: { select: { branchId: true, branchPrice: true } },
+        },
+        take: 500,
+        orderBy: { id: "asc" },
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      }),
+      (row) => row.id,
+      { pageSize: 500, deadlineAt: readDeadline(0.35) },
+    ),
     prisma.saleOrderLine.findMany({
       where: {
         saleOrder: {
@@ -68,6 +89,8 @@ export async function detectInventoryDecisions(ctx: BrainDetectorContext): Promi
       take: 500,
     }),
   ]);
+  if (balancesTruncated) ctx.markTruncated("inventory:inventoryBalance");
+  if (productsTruncated) ctx.markTruncated("inventory:product");
 
   const salesByBranchProduct = new Map<string, number>();
   const salesByProduct = new Map<string, number>();
