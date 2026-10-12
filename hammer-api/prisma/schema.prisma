@@ -1510,6 +1510,15 @@ model BranchProductSetting {
   /// herencia-gobierno.md).
   priceExceptionReason  String?
   priceExceptionAt      DateTime?
+  /// Parte C.1.2 (prompt-completo-pendientes-2026-10.md) — "mantener el
+  /// precio actual" desde la Bandeja: foto del precio/costo vigentes al
+  /// momento de la revisión, para que el detector no vuelva a abrir la
+  /// misma decisión mientras el costo no se mueva más de la tolerancia.
+  priceReviewedAt       DateTime?
+  priceReviewedPrice    Decimal?
+  priceReviewedCost     Decimal?
+  priceReviewedByUserId String?
+  priceReviewNote       String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 

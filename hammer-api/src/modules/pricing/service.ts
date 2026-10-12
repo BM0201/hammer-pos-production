@@ -720,7 +720,7 @@ export async function applyPriceAcrossBranches(
  * política — nunca bloquea a las que quedan bajo su mínimo, solo las
  * marca para que la interfaz las muestre en ámbar.
  */
-async function marginForAppliedPrice(branchId: string, productId: string, suggestedPrice: number): Promise<{ marginPercent: number | null; minMarginPercent: number | null }> {
+export async function marginForAppliedPrice(branchId: string, productId: string, suggestedPrice: number): Promise<{ marginPercent: number | null; minMarginPercent: number | null }> {
   try {
     const [effective, policy] = await Promise.all([
       getEffectiveProductPricing(prisma, { branchId, productId }),

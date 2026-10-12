@@ -1,7 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { writeActionLog } from "@/modules/brain/service";
-import { assertPriceApplicable, applySuggestedPriceTx } from "@/modules/pricing/service";
+import { assertPriceApplicable, applySuggestedPriceTx, applyPriceAcrossBranches, marginForAppliedPrice, type ApplyPriceBranchResult } from "@/modules/pricing/service";
+import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { setBranchPriceTx } from "@/modules/pricing/branch-price-exception-service";
+import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 
 /**
  * Fase 1 (prompt-motor-precios-lote-herencia-gobierno.md) — la bandeja de
@@ -244,8 +247,28 @@ export async function getPricingTray(
   return { rows, totals: computeTrayTotals(rows), unfilteredTotals };
 }
 
+/**
+ * C.1.1 (prompt-completo-pendientes-2026-10.md) — "la política sugiere y
+ * el dueño decide": qué número se terminó aplicando y por qué camino.
+ * `method` lo manda la pantalla (Fase 4); hasta que exista, el default es
+ * MANUAL si vino `price`, o SUGGESTED si no.
+ */
+export type PriceApplyMethod = "MANUAL" | "SUGGESTED" | "REALIZED_MARGIN" | "KEEP_GAIN_AMOUNT" | "KEEP_MARGIN_PCT" | "OTHER_BRANCH" | "POLICY_MIN";
+
+export type ApplyTrayItem = {
+  decisionId: string;
+  /** Si viene, se aplica ESE precio (elegido a mano o por un chip de referencia). Sin esto, se aplica el sugerido del motor, como antes. */
+  price?: number;
+  method?: PriceApplyMethod;
+  /** "Aplicar también en…" — otras sucursales que reciben el MISMO precio, cada una con su propia guarda de costo; una que falla no tumba las demás. */
+  alsoBranchIds?: string[];
+};
+
 export type ApplyTrayResult = {
-  applied: Array<{ decisionId: string; branchId: string; productId: string; previousPrice: number | null; newPrice: number }>;
+  applied: Array<{
+    decisionId: string; branchId: string; productId: string; previousPrice: number | null; newPrice: number;
+    alsoBranches?: ApplyPriceBranchResult[];
+  }>;
   failed: Array<{ decisionId: string; reason: string }>;
 };
 
@@ -256,28 +279,39 @@ export type ApplyTrayResult = {
  * checkbox es comodidad, no control — el payload se puede editar y este
  * endpoint escribe precios de venta, así que costLooksWrong se rechaza
  * ACÁ también, sin escribir nada, antes de tocar applySuggestedPriceTx.
+ *
+ * C.1.1 — atomicidad: `FOR UPDATE` + `updateMany` condicionado a OPEN,
+ * mismo idioma que price-update-batch-apply-service.ts (único lugar de
+ * este módulo que ya lo usaba). Doble envío → ALREADY_PROCESSED en el
+ * segundo, no una excepción genérica.
  */
 export async function applyOneTrayDecisionTx(
   tx: Prisma.TransactionClient,
   decisionId: string,
-  input: { reason?: string; actorUserId: string },
+  input: { reason?: string; actorUserId: string; price?: number; method?: PriceApplyMethod },
 ): Promise<{ branchId: string; productId: string; previousPrice: number | null; newPrice: number }> {
+  await tx.$queryRaw`SELECT id FROM "BrainDecision" WHERE id = ${decisionId} FOR UPDATE`;
   const decision = await tx.brainDecision.findUniqueOrThrow({ where: { id: decisionId } });
   if (decision.category !== "PRICING") throw new Error("DECISION_NOT_PRICING");
-  if (decision.status !== "OPEN") throw new Error("DECISION_NOT_OPEN");
+  if (decision.status !== "OPEN") throw new Error("ALREADY_PROCESSED");
 
   const evidence = decision.evidenceJson as Record<string, unknown> | null;
   if (evidence?.costLooksWrong === true) throw new Error("COST_REQUIRES_REVIEW");
 
   const proposed = decision.proposedActionJson as Record<string, unknown> | null;
-  if (
-    !proposed
-    || typeof proposed.suggestedPrice !== "number"
-    || typeof proposed.productId !== "string"
-    || typeof proposed.branchId !== "string"
-  ) {
+  if (!proposed || typeof proposed.productId !== "string" || typeof proposed.branchId !== "string") {
     throw new Error("DECISION_MISSING_SUGGESTED_PRICE");
   }
+  const suggestedByEngine = typeof proposed.suggestedPrice === "number" ? proposed.suggestedPrice : null;
+  const chosenPrice = input.price ?? suggestedByEngine;
+  if (chosenPrice === null || !(chosenPrice > 0)) throw new Error("DECISION_MISSING_SUGGESTED_PRICE");
+
+  // "Bajo el costo nunca se aplica, ni a mano" — el costo EFECTIVO de ESA
+  // sucursal, recalculado adentro de la transacción (no el de la decisión,
+  // que puede estar desactualizado si el costo cambió después de detectarla).
+  const effective = await getEffectiveProductPricing(tx, { branchId: proposed.branchId, productId: proposed.productId });
+  const effectiveCostNow = effective.effectiveCost === null ? null : Number(effective.effectiveCost);
+  assertPriceNotBelowCost({ price: chosenPrice, cost: effectiveCostNow });
 
   const snapshot = (proposed.calculationSnapshot ?? undefined) as Record<string, unknown> | undefined;
   const numField = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
@@ -285,11 +319,11 @@ export async function applyOneTrayDecisionTx(
     productId: proposed.productId,
     branchId: proposed.branchId,
     applyScope: "BRANCH" as const,
-    suggestedPrice: proposed.suggestedPrice,
+    suggestedPrice: chosenPrice,
     minPrice: numField(snapshot?.minPrice),
     maxPrice: numField(snapshot?.maxPrice) ?? null,
-    totalInternalCost: numField(snapshot?.totalInternalCost),
-    effectiveCost: numField(snapshot?.effectiveCost) ?? null,
+    totalInternalCost: numField(snapshot?.totalInternalCost) ?? (effectiveCostNow ?? undefined),
+    effectiveCost: effectiveCostNow ?? numField(snapshot?.effectiveCost) ?? null,
     marginPercent: numField(snapshot?.marginPercent),
     grossMarginPercent: numField(snapshot?.grossMarginPercent),
     markupPercent: numField(snapshot?.markupPercent),
@@ -309,32 +343,39 @@ export async function applyOneTrayDecisionTx(
     warnings,
   );
 
+  const method: PriceApplyMethod = input.method ?? (input.price !== undefined ? "MANUAL" : "SUGGESTED");
+  const resolutionNote = method === "MANUAL"
+    ? `Precio elegido a mano: C$ ${chosenPrice.toFixed(2)}${suggestedByEngine !== null ? ` (sugerido del motor: C$ ${suggestedByEngine.toFixed(2)})` : ""}`
+    : "Aplicado desde la Bandeja de precios";
+
   // prompt-brain-centro-decisiones.md Fase 4.2 — RESOLVED/EXECUTION, no
   // EXECUTED: "EXECUTED" ahora es el estado de runBrainDecision (el motor
   // de Brain ejecutó algo él mismo); esto es un camino DISTINTO — el precio
-  // se aplicó desde la Bandeja de precios, no desde Brain — así que se
-  // cierra como una resolución con fuente EXECUTION, igual que lo deja la
-  // Carga de precios (price-update-batch-apply-service.ts).
-  await tx.brainDecision.update({
-    where: { id: decisionId },
+  // se aplicó desde la Bandeja de precios, no desde Brain. USER cuando el
+  // dueño eligió el número a mano, EXECUTION cuando aplicó el sugerido tal
+  // cual (igual que lo deja la Carga de precios).
+  const updated = await tx.brainDecision.updateMany({
+    where: { id: decisionId, status: "OPEN" },
     data: {
       status: "RESOLVED",
       resolvedAt: new Date(),
       resolvedByUserId: input.actorUserId,
-      resolutionSource: "EXECUTION",
-      resolutionNote: "Aplicado desde la Bandeja de precios",
+      resolutionSource: method === "MANUAL" ? "USER" : "EXECUTION",
+      resolutionNote,
       executedEntityType: "Product",
       executedEntityId: proposed.productId,
-      actionResultJson: applyResult as unknown as Prisma.InputJsonValue,
+      actionResultJson: { ...applyResult, suggestedByEngine, chosenPrice, method } as unknown as Prisma.InputJsonValue,
     },
   });
+  if (updated.count === 0) throw new Error("ALREADY_PROCESSED");
+
   await tx.brainDecisionActionLog.create({
     data: {
       decisionId,
       actorUserId: input.actorUserId,
       action: "RESOLVED",
-      note: "Aplicado desde la Bandeja de precios",
-      metadataJson: { reason: "EXECUTION", source: "pricing-tray" } as unknown as Prisma.InputJsonValue,
+      note: resolutionNote,
+      metadataJson: { reason: method === "MANUAL" ? "USER" : "EXECUTION", source: "pricing-tray", suggestedByEngine, chosenPrice, method } as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -342,19 +383,72 @@ export async function applyOneTrayDecisionTx(
 }
 
 /**
+ * C.1.1 — "aplicar también en…": el MISMO precio en otras sucursales,
+ * cada una en su propia transacción (mismo principio que
+ * applyPriceAcrossBranches — una que falla no tumba las demás), con su
+ * propia guarda de costo. Las decisiones PRICING abiertas de ese producto
+ * en esa sucursal también se cierran: ya no están desactualizadas.
+ */
+export async function applyAlsoBranchPriceTx(
+  tx: Prisma.TransactionClient,
+  branchId: string,
+  productId: string,
+  price: number,
+  actorUserId: string,
+): Promise<{ previousPrice: Prisma.Decimal | null; setting: { branchPrice: Prisma.Decimal | null } }> {
+  const effective = await getEffectiveProductPricing(tx, { branchId, productId });
+  const effectiveCostNow = effective.effectiveCost === null ? null : Number(effective.effectiveCost);
+  assertPriceNotBelowCost({ price, cost: effectiveCostNow });
+
+  const result = await setBranchPriceTx(tx, {
+    branchId,
+    productId,
+    branchPrice: new Prisma.Decimal(price),
+    exceptionReason: "Aplicado también desde la Bandeja de precios",
+    priceSource: "CALCULATED",
+    actorUserId,
+    origin: "bandeja_precios",
+  });
+
+  await tx.brainDecision.updateMany({
+    where: { category: "PRICING", status: "OPEN", productId, branchId },
+    data: {
+      status: "RESOLVED",
+      resolvedAt: new Date(),
+      resolvedByUserId: actorUserId,
+      resolutionSource: "USER",
+      resolutionNote: "Precio igualado desde otra sucursal (Bandeja de precios)",
+    },
+  });
+
+  return result;
+}
+
+async function applyAlsoBranchPrice(branchId: string, productId: string, price: number, actorUserId: string) {
+  const { previousPrice } = await prisma.$transaction((tx) => applyAlsoBranchPriceTx(tx, branchId, productId, price, actorUserId));
+  const { marginPercent, minMarginPercent } = await marginForAppliedPrice(branchId, productId, price);
+  return { previousPrice: previousPrice === null ? null : Number(previousPrice), newPrice: price, marginPercent, minMarginPercent };
+}
+
+/**
  * §1.4 — POST /api/master/pricing/tray/apply. Cada decisión en SU PROPIA
  * transacción — si el producto 7 falla, los primeros 6 quedan aplicados.
  */
-export async function applyPricingTraySelection(input: { decisionIds: string[]; reason?: string; actorUserId: string }): Promise<ApplyTrayResult> {
+export async function applyPricingTraySelection(input: { items: ApplyTrayItem[]; reason?: string; actorUserId: string }): Promise<ApplyTrayResult> {
   const applied: ApplyTrayResult["applied"] = [];
   const failed: ApplyTrayResult["failed"] = [];
 
-  for (const decisionId of input.decisionIds) {
+  for (const item of input.items) {
     try {
-      const result = await prisma.$transaction((tx) => applyOneTrayDecisionTx(tx, decisionId, input));
+      const result = await prisma.$transaction((tx) => applyOneTrayDecisionTx(tx, item.decisionId, {
+        reason: input.reason,
+        actorUserId: input.actorUserId,
+        price: item.price,
+        method: item.method,
+      }));
 
       await writeActionLog({
-        decisionId,
+        decisionId: item.decisionId,
         actorUserId: input.actorUserId,
         action: "PRICE_APPLIED_FROM_TRAY",
         note: input.reason,
@@ -362,11 +456,138 @@ export async function applyPricingTraySelection(input: { decisionIds: string[]; 
         afterStatus: "EXECUTED",
       });
 
-      applied.push({ decisionId, ...result });
+      let alsoBranches: ApplyPriceBranchResult[] | undefined;
+      if (item.alsoBranchIds && item.alsoBranchIds.length > 0) {
+        const { results } = await applyPriceAcrossBranches(
+          item.alsoBranchIds,
+          result.newPrice,
+          (branchId) => applyAlsoBranchPrice(branchId, result.productId, result.newPrice, input.actorUserId),
+        );
+        alsoBranches = results;
+      }
+
+      applied.push({ decisionId: item.decisionId, ...result, ...(alsoBranches ? { alsoBranches } : {}) });
     } catch (error) {
-      failed.push({ decisionId, reason: error instanceof Error ? error.message : "UNKNOWN_ERROR" });
+      failed.push({ decisionId: item.decisionId, reason: error instanceof Error ? error.message : "UNKNOWN_ERROR" });
     }
   }
 
   return { applied, failed };
+}
+
+/**
+ * C.1.2 — "mantener el precio actual": el dueño revisó el precio y decide
+ * que está bien así, SIN aplicar ningún número nuevo. Solo tiene sentido
+ * para los dos tipos donde el precio en sí no está mal (política de
+ * margen, costo que cambió) — bajo el costo nunca se puede "mantener",
+ * hay que corregir precio o costo.
+ */
+const KEEPABLE_TYPES = new Set(["REVIEW_PRICE_MARGIN_POLICY", "COST_CHANGED_PRICE_STALE"]);
+
+export type KeepPriceResult = {
+  kept: string[];
+  rejected: Array<{ decisionId: string; reason: string }>;
+};
+
+export async function keepOneTrayPriceTx(
+  tx: Prisma.TransactionClient,
+  decisionId: string,
+  input: { note: string; actorUserId: string },
+): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM "BrainDecision" WHERE id = ${decisionId} FOR UPDATE`;
+  const decision = await tx.brainDecision.findUniqueOrThrow({ where: { id: decisionId } });
+  if (decision.category !== "PRICING") throw new Error("DECISION_NOT_PRICING");
+  if (decision.status !== "OPEN") throw new Error("ALREADY_PROCESSED");
+  if (!decision.proposedActionType || !KEEPABLE_TYPES.has(decision.proposedActionType)) {
+    throw new Error("NOT_KEEPABLE: Bajo el costo no se puede mantener: corregí el precio o el costo");
+  }
+  if (decision.branchId === null || decision.productId === null) throw new Error("DECISION_MISSING_SUGGESTED_PRICE");
+
+  const effective = await getEffectiveProductPricing(tx, { branchId: decision.branchId, productId: decision.productId });
+  const effectiveCostNow = effective.effectiveCost === null ? null : Number(effective.effectiveCost);
+  const evidence = decision.evidenceJson as Record<string, unknown> | null;
+  const currentPrice = num(evidence?.currentPrice ?? evidence?.effectivePrice ?? evidence?.price);
+
+  await tx.branchProductSetting.upsert({
+    where: { branchId_productId: { branchId: decision.branchId, productId: decision.productId } },
+    update: {
+      priceReviewedAt: new Date(),
+      priceReviewedPrice: currentPrice !== null ? new Prisma.Decimal(currentPrice) : null,
+      priceReviewedCost: effectiveCostNow !== null ? new Prisma.Decimal(effectiveCostNow) : null,
+      priceReviewedByUserId: input.actorUserId,
+      priceReviewNote: input.note,
+    },
+    create: {
+      branchId: decision.branchId,
+      productId: decision.productId,
+      priceReviewedAt: new Date(),
+      priceReviewedPrice: currentPrice !== null ? new Prisma.Decimal(currentPrice) : null,
+      priceReviewedCost: effectiveCostNow !== null ? new Prisma.Decimal(effectiveCostNow) : null,
+      priceReviewedByUserId: input.actorUserId,
+      priceReviewNote: input.note,
+    },
+  });
+
+  const resolutionNote = `Precio mantenido: ${input.note}`;
+  const updated = await tx.brainDecision.updateMany({
+    where: { id: decisionId, status: "OPEN" },
+    data: {
+      status: "RESOLVED",
+      resolvedAt: new Date(),
+      resolvedByUserId: input.actorUserId,
+      resolutionSource: "USER",
+      resolutionNote,
+    },
+  });
+  if (updated.count === 0) throw new Error("ALREADY_PROCESSED");
+
+  await tx.brainDecisionActionLog.create({
+    data: {
+      decisionId,
+      actorUserId: input.actorUserId,
+      action: "RESOLVED",
+      note: resolutionNote,
+      metadataJson: { reason: "USER", source: "pricing-tray-keep" } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  await tx.auditLog.create({
+    data: {
+      actorUserId: input.actorUserId,
+      branchId: decision.branchId,
+      module: "pricing",
+      action: "PRICE_REVIEW_KEPT",
+      entityType: "Product",
+      entityId: decision.productId,
+      metadataJson: {
+        productId: decision.productId,
+        branchId: decision.branchId,
+        decisionId,
+        note: input.note,
+        priceReviewedPrice: currentPrice,
+        priceReviewedCost: effectiveCostNow,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+/**
+ * §C.1.2 — POST /api/master/pricing/tray/keep. Cada decisión en su propia
+ * transacción, igual que applyPricingTraySelection — una que se rechaza
+ * (bajo el costo, o ya resuelta) no tumba las demás.
+ */
+export async function keepPricingTraySelection(input: { decisionIds: string[]; note: string; actorUserId: string }): Promise<KeepPriceResult> {
+  const kept: string[] = [];
+  const rejected: KeepPriceResult["rejected"] = [];
+
+  for (const decisionId of input.decisionIds) {
+    try {
+      await prisma.$transaction((tx) => keepOneTrayPriceTx(tx, decisionId, { note: input.note, actorUserId: input.actorUserId }));
+      kept.push(decisionId);
+    } catch (error) {
+      rejected.push({ decisionId, reason: error instanceof Error ? error.message : "UNKNOWN_ERROR" });
+    }
+  }
+
+  return { kept, rejected };
 }
