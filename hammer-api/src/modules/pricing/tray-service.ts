@@ -5,6 +5,7 @@ import { assertPriceApplicable, applySuggestedPriceTx, applyPriceAcrossBranches,
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { setBranchPriceTx } from "@/modules/pricing/branch-price-exception-service";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
+import { computeRealizedMarginBatch, computeUnits90dBatch, computeOtherBranchPricesBatch, realizedMarginUsable } from "@/modules/pricing/tray-context-service";
 
 /**
  * Fase 1 (prompt-motor-precios-lote-herencia-gobierno.md) — la bandeja de
@@ -88,6 +89,10 @@ export type PricingTrayRow = {
   /** Parte A (prompt-huecos-fase1-fase3-despliegue.md) — branchCost más de 2× el costo de referencia del producto: probablemente un error de tecleo, no un producto mal preciado. El precio sugerido se calculó sobre ese costo y hereda el error. */
   costLooksWrong: boolean;
   referenceCost: number | null;
+  /** Parte C.2 — margen REALMENTE vendido (90 días, ponderado por cantidad), unidades vendidas y precio en otras sucursales. Calculados EN LOTE para toda la página, no uno por fila. null = sin datos suficientes. */
+  realizedMarginPct: number | null;
+  units90d: number | null;
+  otherBranchPrices: { min: number; max: number; count: number } | null;
   /** evidenceJson tal cual lo dejó el detector — para la fila expandible (§1.5). No se recalcula nada, es lectura directa de lo que Brain ya evaluó. */
   evidence: Record<string, unknown>;
 };
@@ -189,11 +194,24 @@ export async function getPricingTray(
     : [];
   const lastUpdateByKey = new Map(settings.map((s) => [`${s.branchId}:${s.productId}`, s.lastPriceUpdateAt]));
 
+  // Parte C.2 — margen realizado, unidades 90d y precios en otras
+  // sucursales, EN LOTE para toda la página (una agregación cada uno, no
+  // una por fila).
+  const [realizedByKey, units90dByKey, otherBranchPricesByKey] = pairs.length > 0
+    ? await Promise.all([
+        computeRealizedMarginBatch(db, pairs),
+        computeUnits90dBatch(db, pairs),
+        computeOtherBranchPricesBatch(db, pairs),
+      ])
+    : [new Map(), new Map(), new Map()];
+
   const rows: PricingTrayRow[] = withTarget.map((d) => {
     const evidence = (d.evidenceJson ?? {}) as Record<string, unknown>;
     const proposed = (d.proposedActionJson ?? null) as Record<string, unknown> | null;
-    const rawLastUpdate = lastUpdateByKey.get(`${d.branchId}:${d.productId}`);
+    const key = `${d.branchId}:${d.productId}`;
+    const rawLastUpdate = lastUpdateByKey.get(key);
     const costLooksWrong = evidence.costLooksWrong === true;
+    const realized = realizedByKey.get(key) ?? null;
     return {
       decisionId: d.id,
       severity: d.severity,
@@ -216,6 +234,9 @@ export async function getPricingTray(
       applicable: proposed !== null && typeof proposed.suggestedPrice === "number" && !costLooksWrong,
       costLooksWrong,
       referenceCost: num(evidence.referenceCost),
+      realizedMarginPct: realizedMarginUsable(realized) ? realized.marginPct : null,
+      units90d: units90dByKey.get(key) ?? null,
+      otherBranchPrices: otherBranchPricesByKey.get(key) ?? null,
       evidence,
     };
   });

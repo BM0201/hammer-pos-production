@@ -47,6 +47,9 @@ export type CommercialPricingRecommendation = {
   riskLevel: CommercialRiskLevel;
   warnings: string[];
   recommendedActions: string[];
+  /** Parte C.2 (prompt-completo-pendientes-2026-10.md) — "de dónde sale el sugerido": el ajuste de la matriz ABC-XYZ SIN clamp/floor, para explicar "30% meta + 20% (CZ) = 50%" sin recalcular nada. */
+  targetMarginPercent: number;
+  marginDelta: number;
 };
 
 export type CommercialAlert = {
@@ -150,6 +153,18 @@ export function buildCommercialWarnings(input: CommercialIntelligenceInput, comb
   return warnings;
 }
 
+/** Parte C.2 — la frase que explica el ajuste del sugerido: "por baja rotación (CZ)". */
+const XYZ_ROTATION_LABEL: Record<XyzClass, string> = {
+  X: "alta rotación",
+  Y: "rotación media",
+  Z: "baja rotación",
+};
+
+export function describeAbcXyzClass(combinedClass: CombinedAbcXyzClass): string {
+  const xyz = combinedClass.charAt(1) as XyzClass;
+  return `${XYZ_ROTATION_LABEL[xyz]} (${combinedClass})`;
+}
+
 export function resolveCommercialPricingRecommendation(input: CommercialIntelligenceInput): CommercialPricingRecommendation {
   const policy = normalizePolicy(input.categoryPolicy);
   const classified = classifyProductAbcXyz(input);
@@ -199,6 +214,8 @@ export function resolveCommercialPricingRecommendation(input: CommercialIntellig
     riskLevel: rule.riskLevel,
     warnings,
     recommendedActions: rule.actions,
+    targetMarginPercent: policy.targetMarginPercent,
+    marginDelta: rule.marginDelta,
   };
 }
 

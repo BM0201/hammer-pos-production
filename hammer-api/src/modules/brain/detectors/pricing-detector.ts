@@ -268,6 +268,10 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
           costSource: effective.costSource,
           policyMinMarginPercent: minMargin,
           recommendedMarginPercent: commercial.recommendedMarginPercent,
+          // Parte C.2 (prompt-completo-pendientes-2026-10.md) — el ajuste
+          // CRUDO de la matriz ABC-XYZ (sin floor/clamp), para explicar
+          // "30% meta + 20% por baja rotación (CZ) = 50%" sin recalcular.
+          marginDelta: commercial.marginDelta,
           commercialClass: commercial.combinedClass,
           abcClass: commercial.abcClass,
           riskLevel: commercial.riskLevel,
@@ -542,6 +546,9 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
         policyMinMarginPercent: minMargin,
         priceSource: effective.priceSource,
         costSource: effective.costSource,
+        // Parte C.2 — mismo campo que REVIEW_PRICE_MARGIN_POLICY, para un
+        // desglose uniforme del sugerido sin ramificar por tipo de decisión.
+        marginDelta: commercial.marginDelta,
         commercialClass: commercial.combinedClass,
         abcClass: commercial.abcClass,
         stockAtRisk: stockQty,

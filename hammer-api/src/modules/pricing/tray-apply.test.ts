@@ -270,6 +270,9 @@ test("Prueba 5 — el total en riesgo excluye el impactAmount de las filas con c
     applicable: true,
     costLooksWrong: false,
     referenceCost: null,
+    realizedMarginPct: null,
+    units90d: null,
+    otherBranchPrices: null,
     evidence: {},
   };
   const doubtfulRow: PricingTrayRow = {

@@ -61,6 +61,13 @@ function makeFakeDb(decisions: FakeDecision[]) {
     branchProductSetting: {
       findMany: async () => [],
     },
+    // Parte C.2 — getPricingTray ahora también agrega realizedMarginPct/
+    // units90d/otherBranchPrices EN LOTE; estos tests no verifican esos
+    // campos (cubiertos aparte en tray-context-service.test.ts), así que
+    // alcanza con que la consulta no reviente.
+    saleOrderLine: {
+      findMany: async () => [],
+    },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
