@@ -383,6 +383,8 @@ model Branch {
   auditLogs                   AuditLog[]                    @relation("BranchAuditLogs")
   outgoingTransfers           Transfer[]                    @relation("TransferFromBranch")
   incomingTransfers           Transfer[]                    @relation("TransferToBranch")
+  transferGroups               TransferGroup[]
+  multiBranchIntakeBranches    MultiBranchIntakeBranch[]
   internalFreightOrigins      InternalFreightRoute[]        @relation("InternalFreightRouteOrigin")
   internalFreightDestinations InternalFreightRoute[]        @relation("InternalFreightRouteDestination")
   purchaseOrders              PurchaseOrder[]
@@ -492,6 +494,8 @@ model User {
   purchaseOrders                 PurchaseOrder[]              @relation("PurchaseOrderCreatedBy")
   purchaseOrderGroups            PurchaseOrderGroup[]
   orderTemplates                 OrderTemplate[]
+  transferGroups                 TransferGroup[]
+  multiBranchIntakes              MultiBranchIntake[]
   createdDiscounts               Discount[]                   @relation("DiscountCreatedBy")
   updatedBranchRoleConfigs       BranchRoleConfig[]           @relation("BranchRoleConfigUpdatedBy")
   updatedSystemSettings          SystemSetting[]              @relation("SystemSettingUpdatedBy")
@@ -1939,14 +1943,87 @@ model Transfer {
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
+  /// Parte B.3 — null = traslado normal. Con valor, uno de los N que
+  /// salieron de UN origen hacia varios destinos a la vez (TransferGroup).
+  groupId String?
+
   fromBranch           Branch                @relation("TransferFromBranch", fields: [fromBranchId], references: [id])
   toBranch             Branch                @relation("TransferToBranch", fields: [toBranchId], references: [id])
   requestedBy          User                  @relation("TransferRequestedBy", fields: [requestedByUserId], references: [id])
   approvedBy           User?                 @relation("TransferApprovedBy", fields: [approvedByUserId], references: [id])
+  group                TransferGroup?        @relation(fields: [groupId], references: [id])
   lines                TransferLine[]
   internalFreightTrips InternalFreightTrip[]
 
   @@index([fromBranchId, toBranchId, status])
+  @@index([groupId])
+}
+
+/// Parte B.3 — "de una bodega a varias": UN origen, N destinos, mismos
+/// productos/cantidades (con overrides). Cada Transfer resultante es normal
+/// de ahí en adelante — se despacha/recibe por traslado, como siempre.
+model TransferGroup {
+  id              String   @id @default(cuid())
+  code            String   @unique /// "TG-000001"
+  sequence        Int      @unique
+  clientRequestId String   @unique
+  fromBranchId    String
+  notes           String?
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  fromBranch Branch     @relation(fields: [fromBranchId], references: [id])
+  createdBy  User       @relation(fields: [createdByUserId], references: [id])
+  transfers  Transfer[]
+}
+
+enum MultiBranchIntakeKind {
+  OPENING_BALANCE
+  ADJUSTMENT_IN
+}
+
+enum MultiBranchIntakeBranchStatus {
+  PENDING
+  DONE
+  FAILED
+}
+
+/// Parte B.2 — "mismas líneas, cantidad por sucursal ajustable, reintento
+/// sin duplicar": UNA carga de inventario a varias sucursales a la vez. A
+/// diferencia de PurchaseOrderGroup (todo en una transacción, liviano, solo
+/// inserts), esto es UNA TRANSACCIÓN POR SUCURSAL — reusa createOpeningBalanceTx/
+/// createManualInventoryAdjustmentTx, que SÍ recalculan WAC/costo por línea
+/// (el mismo motivo por el que createOpeningBalanceBulk ya evita una sola
+/// transacción gigante: timeouts de función serverless en Vercel).
+model MultiBranchIntake {
+  id              String                 @id @default(cuid())
+  code            String                 @unique /// "IM-000001"
+  sequence        Int                    @unique
+  clientRequestId String                 @unique
+  kind            MultiBranchIntakeKind
+  reason          String
+  /// [{ productId, quantity, overrides?: Record<branchId, quantity>, unitCost? }]
+  linesJson       Json
+  createdByUserId String
+  createdAt       DateTime               @default(now())
+
+  createdBy User                      @relation(fields: [createdByUserId], references: [id])
+  branches  MultiBranchIntakeBranch[]
+}
+
+model MultiBranchIntakeBranch {
+  id          String                        @id @default(cuid())
+  intakeId    String
+  branchId    String
+  status      MultiBranchIntakeBranchStatus @default(PENDING)
+  error       String?
+  processedAt DateTime?
+
+  intake MultiBranchIntake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  branch Branch            @relation(fields: [branchId], references: [id])
+
+  @@unique([intakeId, branchId])
+  @@index([status])
 }
 
 model TransferLine {

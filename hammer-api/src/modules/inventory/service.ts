@@ -508,7 +508,7 @@ type ClosePackageInput = {
   reason?: string | null;
 };
 
-type ManualAdjustmentInput = {
+export type ManualAdjustmentInput = {
   actorUserId: string;
   branchId: string;
   productId: string;
@@ -530,7 +530,7 @@ type ManualAdjustmentInput = {
   physicalCount?: { closedPackageQuantity: number; looseUnitQuantity: number };
 };
 
-type OpeningBalanceInput = {
+export type OpeningBalanceInput = {
   actorUserId: string;
   branchId: string;
   productId: string;
@@ -547,7 +547,7 @@ type OpeningBalanceInput = {
   allowLargeWacJump?: boolean;
 };
 
-type OpeningBalanceTxOptions = {
+export type OpeningBalanceTxOptions = {
   referenceType?: string;
   referenceId?: string;
   auditAction?: string;
@@ -1550,8 +1550,24 @@ export async function closeStockPackage(input: ClosePackageInput) {
   });
 }
 
-export async function createManualInventoryAdjustment(input: ManualAdjustmentInput) {
-  return prisma.$transaction(async (tx) => {
+/**
+ * Parte B.2 (prompt-completo-pendientes-2026-10.md) — extraída de
+ * createManualInventoryAdjustment para poder llamarla dentro de la
+ * transacción POR SUCURSAL del ingreso multisucursal (createManualInventoryAdjustment
+ * siempre abría la suya, no se podía anidar ni reusar). Mismo cuerpo, cero
+ * cambios de lógica — ver createManualInventoryAdjustment más abajo.
+ */
+export type ManualAdjustmentTxOptions = {
+  /** Parte B.2 — para que el ingreso multisucursal pueda ver sus propios movimientos agrupados en el kardex, en vez de "MANUAL_ADJUSTMENT" genérico. */
+  referenceType?: string;
+  referenceId?: string;
+};
+
+export async function createManualInventoryAdjustmentTx(
+  tx: Prisma.TransactionClient,
+  input: ManualAdjustmentInput,
+  options: ManualAdjustmentTxOptions = {},
+) {
     const shared = await getSharedInventoryBalance(tx, { branchId: input.branchId, productId: input.productId });
     const conversion = shared.conversion;
 
@@ -1601,8 +1617,8 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
         movementType: netBaseDelta.gte(0) ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
         quantity: Number(netBaseDelta.abs()),
         unitCost: Number(baseWac),
-        referenceType: "MANUAL_ADJUSTMENT",
-        referenceId: `MANUAL-${Date.now()}`,
+        referenceType: options.referenceType ?? "MANUAL_ADJUSTMENT",
+        referenceId: options.referenceId ?? `MANUAL-${Date.now()}`,
         notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
         composition: { kind: "EXPLICIT", closedDelta, looseDelta },
       });
@@ -1745,8 +1761,8 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
       movementType,
       quantity: Number(movementQty),
       unitCost: Number(unitCost),
-      referenceType: "MANUAL_ADJUSTMENT",
-      referenceId: `MANUAL-${Date.now()}`,
+      referenceType: options.referenceType ?? "MANUAL_ADJUSTMENT",
+      referenceId: options.referenceId ?? `MANUAL-${Date.now()}`,
       composition: movementType === "ADJUSTMENT_OUT" && targetsLooseSide ? { kind: "BASE_AUTO" } : undefined,
       notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
     });
@@ -1802,7 +1818,10 @@ export async function createManualInventoryAdjustment(input: ManualAdjustmentInp
         saleUnit: conversion.saleUnit,
       }) : null,
     };
-  });
+}
+
+export async function createManualInventoryAdjustment(input: ManualAdjustmentInput) {
+  return prisma.$transaction((tx) => createManualInventoryAdjustmentTx(tx, input));
 }
 
 export async function createOpeningBalanceTx(

@@ -22,6 +22,8 @@ type CreateTransferInput = {
   toBranchId: string;
   notes?: string;
   lines: { productId: string; quantity: number }[];
+  /** Parte B.3 — null/undefined = traslado normal; con valor, uno de los N de un TransferGroup. */
+  groupId?: string | null;
 };
 
 type ReceiveTransferInput = {
@@ -98,6 +100,7 @@ export async function createTransfer(input: CreateTransferInput, db: Prisma.Tran
       requestedByUserId: input.userId,
       notes: input.notes || null,
       status: "DRAFT",
+      groupId: input.groupId ?? null,
       lines: {
         create: input.lines.map((line) => ({
           productId: line.productId,
