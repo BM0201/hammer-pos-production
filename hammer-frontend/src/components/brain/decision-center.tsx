@@ -9,7 +9,7 @@ import { useSubmitting } from "@/lib/client/use-submitting";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { money } from "@/lib/format";
-import { healthLineStatus, formatTimeAgo, buildInboxUrl, AREA_LABELS, STATUS_TAB_LABELS, type DecisionAction } from "@/lib/brain-ui";
+import { healthLineStatus, formatTimeAgo, buildInboxUrl, groupsNeedingItemLoad, AREA_LABELS, STATUS_TAB_LABELS, type DecisionAction } from "@/lib/brain-ui";
 import { DecisionGroupRow, type DecisionGroupData, type InboxItem } from "@/components/brain/decision-group";
 import { DecisionDrawer, type DecisionDetail } from "@/components/brain/decision-drawer";
 import { DismissReasonModal } from "@/components/brain/dismiss-reason-modal";
@@ -138,6 +138,19 @@ export function DecisionCenter() {
     });
   }, [inbox]);
 
+  // Parte A · Commit 2.1 — pide las filas de TODO lo que esté expandido
+  // cada vez que cambia `inbox` (incluye los críticos recién auto-
+  // expandidos arriba) o `expandedTypes` (el usuario abrió uno a mano).
+  // load() vacía itemsByType en cada recarga sin tocar expandedTypes —
+  // sin este efecto, un grupo que seguía "abierto" se quedaba sin filas
+  // después de cualquier acción o cambio de filtro.
+  useEffect(() => {
+    if (!inbox) return;
+    const toLoad = groupsNeedingItemLoad(expandedTypes, new Set(itemsByType.keys()));
+    for (const type of toLoad) void loadItemsFor(type);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- itemsByType/loadItemsFor fuera a propósito: loadItemsFor va rellenando itemsByType, que terminaría el loop solo si estuviera en las deps.
+  }, [inbox, expandedTypes]);
+
   async function loadItemsFor(type: string) {
     if (itemsByType.has(type) || loadingItemsFor.has(type)) return;
     setLoadingItemsFor((prev) => new Set(prev).add(type));
@@ -159,13 +172,25 @@ export function DecisionCenter() {
     }
   }
 
+  // El efecto de arriba (inbox/expandedTypes) pide las filas — no hace falta repetir la llamada acá.
   function toggleGroup(type: string) {
     setExpandedTypes((prev) => {
       const next = new Set(prev);
-      if (next.has(type)) next.delete(type); else { next.add(type); void loadItemsFor(type); }
+      if (next.has(type)) next.delete(type); else next.add(type);
       return next;
     });
-    if (!itemsByType.has(type)) void loadItemsFor(type);
+  }
+
+  // Parte A · Commit 2.2 — "Crear carga de precios" en un grupo de área
+  // PRICING: lleva los productId del grupo (y su sucursal, si aplica) a
+  // Precios › Carga de precios. loadSeed de esa pantalla es estado de
+  // React puro (no vive en la URL) — por eso la pantalla destino necesita
+  // leer y resolver ?seedProductIds= ella misma (ver pricing/page.tsx).
+  function createPriceLoad(group: DecisionGroupData) {
+    const params = new URLSearchParams({ tab: "loads", seedProductIds: group.productIds.join(",") });
+    const seedBranchId = branchId || group.branches[0]?.id;
+    if (seedBranchId) params.set("branchId", seedBranchId);
+    router.push(`/app/master/pricing?${params.toString()}` as Parameters<typeof router.push>[0]);
   }
 
   async function openDetail(id: string) {
@@ -297,19 +322,27 @@ export function DecisionCenter() {
 
   return (
     <section className="space-y-5 pb-10">
+      {/* Parte A · Commit 2.5 — el título "Centro de Decisiones" ya lo pone
+          el shell (app-shell-router.tsx); repetirlo acá era un <h1>
+          duplicado. Solo queda la línea de salud. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-[var(--color-text)]">Centro de Decisiones</h1>
           {health_ && (
-            <p className={`mt-1 flex items-center gap-1.5 text-xs ${healthColor}`}>
+            <p className={`flex items-center gap-1.5 text-xs ${healthColor}`}>
               <HealthIcon className="h-3.5 w-3.5" aria-hidden="true" />
               {health_.message}
               {health?.lastRun?.finishedAt && ` · último escaneo ${formatTimeAgo(new Date(health.lastRun.finishedAt))}`}
             </p>
           )}
         </div>
-        <div className="flex items-end gap-2">
-          <div className="w-[200px]">
+        {/* Parte A · Commit 2.4 — a 390px, el selector de sucursal (ancho
+            fijo de 200px) + el botón "Escanear ahora" en una sola fila sin
+            wrap sumaban más que el viewport y causaban scroll horizontal
+            de toda la página. w-full en móvil (el selector ya no fuerza
+            200px fijos) + flex-wrap en el contenedor para que, si no
+            caben, se acomoden en dos líneas en vez de desbordar. */}
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="w-full sm:w-[200px]">
             <label htmlFor="brain-branch" className="mb-1 flex items-center gap-1 text-xs text-[var(--color-text-muted)]"><Building2 className="h-3.5 w-3.5" />Sucursal</label>
             <select id="brain-branch" className="hm-input" value={branchId} onChange={(e) => { setBranchId(e.target.value); updateUrl({ branchId: e.target.value }); }}>
               <option value="">Todas las sucursales</option>
@@ -405,6 +438,7 @@ export function DecisionCenter() {
                   onRowAction={handleAction}
                   onBulkAction={(ids, action, extra) => void handleBulkAction(ids, action, extra)}
                   onOpenDetail={openDetail}
+                  onCreatePriceLoad={createPriceLoad}
                   actionBusyId={actionBusyId}
                 />
               ))}

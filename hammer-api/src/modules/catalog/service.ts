@@ -474,7 +474,7 @@ export function excludeDerivedStockGroupMembers(): Prisma.ProductWhereInput {
 // (este archivo importa de vuelta esa cache más abajo, en listProducts).
 export { branchProductScopeFilter } from "@/modules/catalog/branch-product-scope";
 
-export async function listProducts(params: { q?: string; isActive?: boolean; branchId?: string; limit?: number; inStockOnly?: boolean; group?: boolean }) {
+export async function listProducts(params: { q?: string; ids?: string[]; isActive?: boolean; branchId?: string; limit?: number; inStockOnly?: boolean; group?: boolean }) {
   const andClauses: Prisma.ProductWhereInput[] = [];
 
   // Fase 3 (prompt-flujo-velocidad.md): en vez de repetir las 4 condiciones
@@ -485,6 +485,12 @@ export async function listProducts(params: { q?: string; isActive?: boolean; bra
   // (inventory/service.ts, replenishment-service.ts, timber/service.ts) no
   // son la ruta de búsqueda del POS — se dejan con el filtro directo.
   if (params.branchId) andClauses.push({ id: { in: await getVisibleProductIdsForBranch(params.branchId) } });
+
+  // Parte A · Commit 2.2 (prompt-completo-pendientes-2026-10.md) — "Crear
+  // carga de precios" desde Brain llega con una lista cerrada de productId
+  // (?seedProductIds=), no una búsqueda de texto — un id IN directo, sin
+  // tocar la lógica de búsqueda existente.
+  if (params.ids && params.ids.length > 0) andClauses.push({ id: { in: params.ids } });
 
   if (params.q) {
     andClauses.push(

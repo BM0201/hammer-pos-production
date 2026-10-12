@@ -94,6 +94,41 @@ export default function PricingZonePage() {
     selectTab("loads");
   }
 
+  // Parte A · Commit 2.2 (prompt-completo-pendientes-2026-10.md) — "Crear
+  // carga de precios" desde el Centro de Decisiones llega como
+  // ?tab=loads&seedProductIds=id1,id2&branchId=... — a diferencia del
+  // puente de Precios vigentes (sendSelectionToLoads, estado de React
+  // puro), este SÍ cruza de página, así que tiene que venir por la URL.
+  // Se resuelve una sola vez (necesita sku/name que la URL no trae) y los
+  // params se limpian para que un refresh no vuelva a sembrar la misma carga.
+  useEffect(() => {
+    const seedProductIds = searchParams.get("seedProductIds");
+    if (!seedProductIds || activeTab !== "loads") return;
+    const ids = seedProductIds.split(",").map((id) => id.trim()).filter(Boolean);
+    if (ids.length === 0) return;
+
+    let cancelled = false;
+    apiFetch(`/api/catalog/products?ids=${ids.join(",")}&limit=${ids.length}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        const products = (unwrapApiData(raw) as Array<{ id: string; sku: string; name: string }>) ?? [];
+        if (products.length === 0) return;
+        setLoadSeed({
+          branchId: searchParams.get("branchId") ?? "",
+          products: products.map((p) => ({ productId: p.id, sku: p.sku, name: p.name })),
+        });
+      })
+      .catch(() => toast.error("No se pudieron cargar los productos para la carga de precios."));
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("seedProductIds");
+    router.replace(`${pathname}?${params}` as Parameters<typeof router.replace>[0], { scroll: false });
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo debe correr cuando llega seedProductIds; router/pathname/searchParams cambiarían por el propio replace de abajo.
+  }, [searchParams.get("seedProductIds")]);
+
   return (
     <section className="space-y-6 pb-24">
       <div className="flex flex-wrap items-center justify-between gap-4">

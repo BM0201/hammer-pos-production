@@ -24,6 +24,7 @@ type FakeDecision = {
   status: string;
   branchId: string | null;
   branch: { code: string; name: string } | null;
+  productId: string | null;
   impactAmount: number | null;
   createdAt: Date;
   resolutionSource: string | null;
@@ -45,6 +46,9 @@ function matchesWhere(d: FakeDecision, where: Record<string, unknown>): boolean 
     if (!(where.status as { in: string[] }).in.includes(d.status)) return false;
   }
   if (where.branchId !== undefined && d.branchId !== where.branchId) return false;
+  if (where.productId && typeof where.productId === "object" && "not" in where.productId && (where.productId as { not: null }).not === null) {
+    if (d.productId === null || d.productId === undefined) return false;
+  }
   if (where.severity && typeof where.severity === "object" && "in" in where.severity) {
     if (!(where.severity as { in: string[] }).in.includes(d.severity)) return false;
   }
@@ -85,12 +89,13 @@ function createFakeDb(decisions: FakeDecision[]) {
           return row;
         });
       },
-      findMany: async ({ where }: { where: Record<string, unknown> }) => {
+      findMany: async ({ where, distinct }: { where: Record<string, unknown>; distinct?: string[] }) => {
         const matching = decisions.filter((d) => matchesWhere(d, where));
+        if (!distinct) return matching;
         const seen = new Set<string>();
         const result: FakeDecision[] = [];
         for (const d of matching) {
-          const key = `${d.proposedActionType}||${d.category}||${d.branchId}`;
+          const key = distinct.map((field) => (d as unknown as Record<string, unknown>)[field]).join("||");
           if (seen.has(key)) continue;
           seen.add(key);
           result.push(d);
@@ -119,6 +124,7 @@ function fakeDecision(overrides: Partial<FakeDecision> & { id: string }): FakeDe
     status: "OPEN",
     branchId: null,
     branch: null,
+    productId: null,
     impactAmount: null,
     createdAt: new Date("2026-01-01"),
     resolutionSource: null,
@@ -239,6 +245,16 @@ test("Parte A 1.3 — groupHref usa el id REAL de la sucursal, no su código", a
   ]);
   const result = await getBrainInbox({}, db);
   assert.equal(result.groups[0].groupHref, "/app/master/pricing?tab=tray&branchId=branch-cuid-1", "antes mandaba el CÓDIGO (RVS) a un parámetro que la pantalla de Precios lee como id");
+});
+
+test("Parte A · Commit 2.2 — el grupo trae los productId distintos, para 'Crear carga de precios'", async () => {
+  const db = createFakeDb([
+    fakeDecision({ id: "d1", proposedActionType: "REVIEW_PRICE_BELOW_COST", category: "PRICING", productId: "p1" }),
+    fakeDecision({ id: "d2", proposedActionType: "REVIEW_PRICE_BELOW_COST", category: "PRICING", productId: "p2" }),
+    fakeDecision({ id: "d3", proposedActionType: "REVIEW_PRICE_BELOW_COST", category: "PRICING", productId: "p1" }), // mismo producto, otra decisión — no debe duplicarse
+  ]);
+  const result = await getBrainInbox({}, db);
+  assert.deepEqual([...result.groups[0].productIds].sort(), ["p1", "p2"]);
 });
 
 /* ── Parte A 1.3 — entidad legible (batch, no N+1) ── */

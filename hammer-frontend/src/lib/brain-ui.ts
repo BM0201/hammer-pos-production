@@ -96,6 +96,19 @@ export function actionsForDecision(input: { resolution: DecisionResolution; stat
   return ["ACKNOWLEDGE", "SNOOZE", "DISMISS"];
 }
 
+/**
+ * prompt-completo-pendientes-2026-10.md Parte A · Commit 2.1 — "los grupos
+ * críticos se abren vacíos": el efecto que los auto-expande no pedía sus
+ * filas, y cualquier recarga del inbox (load()) vacía itemsByType sin
+ * vaciar expandedTypes, así que un grupo que seguía "abierto" se quedaba
+ * sin filas después de cualquier acción o cambio de filtro. Esta es la
+ * decisión pura (qué tipos hay que pedir) — decision-center.tsx la llama
+ * cada vez que cambian `inbox` o `expandedTypes`.
+ */
+export function groupsNeedingItemLoad(expandedTypes: Iterable<string>, loadedTypes: ReadonlySet<string>): string[] {
+  return [...expandedTypes].filter((type) => !loadedTypes.has(type));
+}
+
 export type InboxUrlFilters = { branchId?: string; area?: string; status?: string; q?: string };
 
 /** Fase 3.3/3.4 — filtros de área/estado/búsqueda en la URL (compartibles, soportan "atrás"). PENDING es el default — no ensucia la URL si no cambió. */

@@ -121,16 +121,18 @@ export type InboxGroup = {
   groupHref: string | null;
   severity: BrainDecisionSeverity;
   count: number;
-  branches: Array<{ code: string; name: string }>;
+  branches: Array<{ id: string; code: string; name: string }>;
   impactAmount: number;
   oldestDetectedAt: Date;
   hasReappeared: boolean;
+  /** Parte A · Commit 2.2 — productId distintos del grupo, para "Crear carga de precios" (área PRICING). Vacío si ninguna decisión del grupo tiene producto puntual. */
+  productIds: string[];
 };
 
 export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Promise<{ groups: InboxGroup[]; areas: Array<{ area: DecisionArea; count: number; criticalCount: number }> }> {
   const where = buildWhere(filters);
 
-  const [bySeverity, branchRows, reappearedRows] = await Promise.all([
+  const [bySeverity, branchRows, productRows, reappearedRows] = await Promise.all([
     db.brainDecision.groupBy({
       by: ["proposedActionType", "category", "severity"],
       where,
@@ -142,6 +144,13 @@ export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Pro
       where,
       distinct: ["proposedActionType", "category", "branchId"],
       select: { proposedActionType: true, category: true, branch: { select: { id: true, code: true, name: true } } },
+    }),
+    // Parte A · Commit 2.2 — productId distintos por grupo, para "Crear
+    // carga de precios" (no hace falta expandir el grupo para tenerlos).
+    db.brainDecision.findMany({
+      where: { ...where, productId: { not: null } },
+      distinct: ["proposedActionType", "category", "productId"],
+      select: { proposedActionType: true, category: true, productId: true },
     }),
     db.brainDecisionActionLog.findMany({
       where: { action: "REDETECTED", decision: where },
@@ -158,6 +167,14 @@ export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Pro
     const map = branchesByKey.get(key) ?? new Map();
     map.set(row.branch.code, row.branch);
     branchesByKey.set(key, map);
+  }
+  const productIdsByKey = new Map<string, Set<string>>();
+  for (const row of productRows) {
+    if (!row.productId) continue;
+    const key = groupKeyFor(row.proposedActionType, row.category);
+    const set = productIdsByKey.get(key) ?? new Set<string>();
+    set.add(row.productId);
+    productIdsByKey.set(key, set);
   }
 
   // Parte A 1.1 — "red de seguridad": ya no se descarta nada. Una decisión
@@ -200,10 +217,11 @@ export async function getBrainInbox(filters: InboxFilters, db: Db = prisma): Pro
         groupHref: isUnknown ? null : catalogEntry.href({ branchId: filters.branchId ?? branches[0]?.id ?? null, productId: null, evidence: {}, action: {} }),
         severity: acc.bestSeverity,
         count: acc.count,
-        branches: branches.map((b) => ({ code: b.code, name: b.name })),
+        branches: branches.map((b) => ({ id: b.id, code: b.code, name: b.name })),
         impactAmount: acc.impactAmount,
         oldestDetectedAt: acc.oldestDetectedAt,
         hasReappeared: reappearedKeys.has(acc.key),
+        productIds: [...(productIdsByKey.get(acc.key) ?? [])],
       };
     })
     .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.impactAmount - a.impactAmount || b.count - a.count);

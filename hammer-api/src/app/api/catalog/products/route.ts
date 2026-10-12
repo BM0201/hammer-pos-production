@@ -78,6 +78,8 @@ async function handleGet(request: Request) {
     }
 
     const q = searchParams.get("q") ?? undefined;
+    const idsParam = searchParams.get("ids");
+    const ids = idsParam ? idsParam.split(",").map((id) => id.trim()).filter(Boolean) : undefined;
     const isActiveParam = searchParams.get("isActive");
     const isActive = isActiveParam === null ? undefined : isActiveParam === "true";
     const topSelling = searchParams.get("topSelling") === "true";
@@ -108,7 +110,7 @@ async function handleGet(request: Request) {
       return okCached(canSeeCosts ? products : redactCostFields(products), 30);
     }
 
-    const products = await listProducts({ q, isActive, branchId, limit, inStockOnly, group });
+    const products = await listProducts({ q, ids, isActive, branchId, limit, inStockOnly, group });
     // Search results: short TTL so new products appear within 30s
     return okCached(canSeeCosts ? products : redactCostFieldsDeep(products as unknown[]), 30);
   } catch (error) {
