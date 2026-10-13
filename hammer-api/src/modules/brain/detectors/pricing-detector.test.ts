@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isPriceStaleAgainstCost, isReviewStillValid, evaluateBranchCostAgainstReference, escalateForTopMover } from "@/modules/brain/detectors/pricing-detector";
+import { isPriceStaleAgainstCost, isReviewStillValid, evaluateBranchCostAgainstReference, escalateForTopMover, unitLossForMarginDecision } from "@/modules/brain/detectors/pricing-detector";
 
 /**
  * Fase 1.2 (prompt-motor-precios-lote-herencia-gobierno.md) — la señal
@@ -241,4 +241,35 @@ test("escalateForTopMover: clase A sube confidenceScore (+0.12), sin pasar de 0.
   assert.equal(low.confidenceScore, 0.77);
   const high = escalateForTopMover("MEDIUM", true, 0.95);
   assert.equal(high.confidenceScore, 0.98, "tope en 0.98, no 1.07");
+});
+
+/**
+ * D.1.4 (prompt-completo-pendientes-2026-10.md) — "impacto honesto".
+ * unitLossForMarginDecision reemplaza el "precio − costo" de antes, que daba
+ * CERO exactamente en el caso más obvio de ganancia perdida (precio = costo).
+ */
+
+test("LA QUE IMPORTA — precio = costo (margen 0%) ya NO da impacto cero: hay ganancia que se deja de ganar frente al mínimo de política", () => {
+  const unitLoss = unitLossForMarginDecision({ isBelowCost: false, price: 100, cost: 100, minMarginPercent: 20 });
+  // priceAtMinMargin = 100 / (1 - 0.20) = 125; impacto = 125 - 100 = 25.
+  assert.equal(unitLoss, 25);
+});
+
+test("bajo el costo: sigue siendo stock × (costo − precio), sin cambios", () => {
+  assert.equal(unitLossForMarginDecision({ isBelowCost: true, price: 80, cost: 100, minMarginPercent: 20 }), 20);
+});
+
+test("margen bajo el mínimo pero el precio ya cubre el costo: ganancia que se deja de ganar frente al precio al mínimo, no precio − costo", () => {
+  // costo 100, precio 110 (10% de margen, bajo el mínimo del 20%).
+  // Antes: unitLoss = precio - costo = 10 (subestima la brecha real).
+  // Ahora: priceAtMinMargin = 100 / 0.8 = 125; impacto = 125 - 110 = 15.
+  const unitLoss = unitLossForMarginDecision({ isBelowCost: false, price: 110, cost: 100, minMarginPercent: 20 });
+  assert.equal(unitLoss, 15);
+});
+
+test("precio ya en o sobre el mínimo de política no debería llamarse con este caso, pero el piso en 0 lo deja inofensivo", () => {
+  // precio 130 ya da 23.1% de margen, sobre el mínimo del 20% — si por algún
+  // motivo se llamara igual, Math.max(0, ...) no produce un impacto negativo.
+  const unitLoss = unitLossForMarginDecision({ isBelowCost: false, price: 130, cost: 100, minMarginPercent: 20 });
+  assert.equal(unitLoss, 0);
 });

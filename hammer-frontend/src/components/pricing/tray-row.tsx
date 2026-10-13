@@ -35,6 +35,7 @@ export type TrayRowData = {
   applicable: boolean;
   costLooksWrong: boolean;
   referenceCost: number | null;
+  costSuspicionMessage: string | null;
   realizedMarginPct: number | null;
   units90d: number | null;
   otherBranchPrices: { min: number; max: number; count: number } | null;
@@ -214,8 +215,8 @@ export function TrayRow(props: TrayRowProps) {
           <td />
           <td colSpan={7} className="px-3 py-2 text-xs text-[var(--color-warning-700)]">
             <AlertTriangle className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />
-            Costo de sucursal {money(row.effectiveCost ?? 0)} · promedio del producto {row.referenceCost !== null ? money(row.referenceCost) : "—"}.{" "}
-            <Link href={`/app/master/catalog-inventory/products/${row.productId}`} className="font-semibold underline underline-offset-2">Revisar el costo primero</Link>
+            {row.costSuspicionMessage ?? `Costo de sucursal ${money(row.effectiveCost ?? 0)} · promedio del producto ${row.referenceCost !== null ? money(row.referenceCost) : "—"}.`}{" "}
+            <Link href={`/app/master/catalog-inventory/products/${row.productId}`} className="font-semibold underline underline-offset-2">Costo dudoso: revisar antes</Link>
           </td>
         </tr>
       )}
@@ -242,6 +243,12 @@ export function TrayRow(props: TrayRowProps) {
               <span>Costo: <strong className="text-[var(--color-text)]">{row.effectiveCost !== null ? money(row.effectiveCost) : "—"}</strong></span>
               <span>Precio actual: <strong className="text-[var(--color-text)]">{row.currentPrice !== null ? money(row.currentPrice) : "—"}</strong></span>
               {row.units90d !== null && row.units90d > 0 && <span className="col-span-2">Vendido 90d: <strong className="text-[var(--color-text)]">{qty(row.units90d)} u.{row.realizedMarginPct !== null ? ` · ${row.realizedMarginPct.toFixed(1)}% real` : ""}</strong></span>}
+              {row.costLooksWrong && (
+                <span className="col-span-2 text-[var(--color-warning-700)]">
+                  <AlertTriangle className="mr-1 inline h-3 w-3" aria-hidden="true" />
+                  {row.costSuspicionMessage ?? `Costo de sucursal ${money(row.effectiveCost ?? 0)} vs. promedio ${row.referenceCost !== null ? money(row.referenceCost) : "—"}.`} Costo dudoso: revisar antes.
+                </span>
+              )}
             </div>
             <PriceDecisionBody {...props} />
             <button type="button" onClick={onToggleExpand} className="mt-2 w-full rounded-lg border border-[var(--color-border)] py-2 text-xs font-semibold text-[var(--color-text-secondary)]">

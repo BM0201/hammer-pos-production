@@ -89,6 +89,8 @@ export type PricingTrayRow = {
   /** Parte A (prompt-huecos-fase1-fase3-despliegue.md) — branchCost más de 2× el costo de referencia del producto: probablemente un error de tecleo, no un producto mal preciado. El precio sugerido se calculó sobre ese costo y hereda el error. */
   costLooksWrong: boolean;
   referenceCost: number | null;
+  /** D.1.4 — mensaje de la sospecha de costo (COST_EQUALS_PRICE, PACKAGE_AS_UNIT) cuando costLooksWrong viene de ahí en vez de REVIEW_BRANCH_COST_PRICE; null para mantener el texto viejo de "costo de sucursal vs. promedio". */
+  costSuspicionMessage: string | null;
   /** Parte C.2 — margen REALMENTE vendido (90 días, ponderado por cantidad), unidades vendidas y precio en otras sucursales. Calculados EN LOTE para toda la página, no uno por fila. null = sin datos suficientes. */
   realizedMarginPct: number | null;
   units90d: number | null;
@@ -234,6 +236,7 @@ export async function getPricingTray(
       applicable: proposed !== null && typeof proposed.suggestedPrice === "number" && !costLooksWrong,
       costLooksWrong,
       referenceCost: num(evidence.referenceCost),
+      costSuspicionMessage: typeof evidence.costSuspicionMessage === "string" ? evidence.costSuspicionMessage : null,
       realizedMarginPct: realizedMarginUsable(realized) ? realized.marginPct : null,
       units90d: units90dByKey.get(key) ?? null,
       otherBranchPrices: otherBranchPricesByKey.get(key) ?? null,

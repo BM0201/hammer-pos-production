@@ -9,6 +9,7 @@ import { checkStockGroupPricingHealth, type FusionPricingIssueKind } from "@/mod
 import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceBatch } from "@/modules/pricing/commercial-intelligence";
 import { calculatePricingSuggestion } from "@/modules/pricing/calculator";
+import { computeCostSuspicionsBatch } from "@/modules/pricing/cost-correction-service";
 
 function n(value: Prisma.Decimal | number | null | undefined) {
   return Number(value ?? 0);
@@ -59,6 +60,22 @@ export function isReviewStillValid(input: {
   if (input.effectiveCost === null || input.priceReviewedCost <= 0) return false;
   const costDeltaPercent = (Math.abs(input.effectiveCost - input.priceReviewedCost) / input.priceReviewedCost) * 100;
   return costDeltaPercent <= input.reviewCostTolerancePercent;
+}
+
+/**
+ * D.1.4 (prompt-completo-pendientes-2026-10.md) — "impacto honesto", pura y
+ * sin DB para poder probarla sin armar un balance/policy completo: bajo el
+ * costo, stock × (costo − precio) sigue siendo la pérdida real de vender
+ * hoy. Pero cuando el precio YA cubre el costo (incluso precio = costo,
+ * margen 0%) y solo está bajo el mínimo de política, "precio − costo" no es
+ * una pérdida — es margen positivo, solo insuficiente — y daba 0 en el caso
+ * precio=costo pese a que ahí SIEMPRE hay ganancia que se deja de ganar. El
+ * impacto correcto es esa ganancia, frente al precio al mínimo de política.
+ */
+export function unitLossForMarginDecision(input: { isBelowCost: boolean; price: number; cost: number; minMarginPercent: number }): number {
+  if (input.isBelowCost) return Math.max(0, input.cost - input.price);
+  const priceAtMinMargin = input.cost / (1 - input.minMarginPercent / 100);
+  return Math.max(0, priceAtMinMargin - input.price);
 }
 
 export type BranchCostReferenceCheck = {
@@ -186,6 +203,25 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
   const toleranceByBranch = new Map(toleranceConfigs.map((c) => [c.branchId, Number(c.reviewCostTolerancePercent)]));
   const DEFAULT_REVIEW_TOLERANCE = 3;
 
+  // D.1.4 (prompt-completo-pendientes-2026-10.md) — "impacto honesto": si el
+  // costo mismo es sospechoso (igual al precio, o el del paquete cargado
+  // como si fuera el de la unidad), el impacto se calculó sobre un costo
+  // malo y no debe sumar al total en riesgo — mismo tratamiento que ya
+  // existe para REVIEW_BRANCH_COST_PRICE (costLooksWrong), reusando las
+  // sospechas de cost-correction-service.ts (D.1) sin reimplementarlas.
+  const costPriceForSuspicion = (branchId: string, productId: string, fallbackCost: number) => {
+    const k = `${branchId}:${productId}`;
+    const effective = pricingByKey.get(k);
+    const cost = effective?.effectiveCost === null || effective?.effectiveCost === undefined ? fallbackCost : n(effective.effectiveCost);
+    const price = effective ? n(effective.effectivePrice) : 0;
+    return { cost: cost > 0 ? cost : null, price: price > 0 ? price : null };
+  };
+  const suspicionPairs = [
+    ...balances.map((b) => ({ branchId: b.branchId, productId: b.productId, ...costPriceForSuspicion(b.branchId, b.productId, n(b.weightedAverageCost)) })),
+    ...branchSettings.map((s) => ({ branchId: s.branchId, productId: s.productId, ...costPriceForSuspicion(s.branchId, s.productId, n(s.branchCost)) })),
+  ];
+  const suspicionsByKey = await computeCostSuspicionsBatch(prisma, suspicionPairs);
+
   for (const balance of balances) {
     const key = `${balance.branchId}:${balance.productId}`;
     const effective = pricingByKey.get(key);
@@ -277,22 +313,26 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
         suggestedPrice,
         recentUnits: n(balance.quantityOnHand),
       });
-      // G: when price < cost, impactAmount = stock × (cost – price) = real daily loss exposure.
-      // When margin is just below policy, impactAmount = stock × (price – cost) = at-risk margin value.
-      const unitLoss = isBelowCost ? Math.max(0, cost - price) : Math.max(0, price - cost);
+      const unitLoss = unitLossForMarginDecision({ isBelowCost, price, cost, minMarginPercent: minMargin });
       const stockQty = n(balance.quantityOnHand);
+      const suspicions = suspicionsByKey.get(key) ?? [];
+      const costLooksWrong = suspicions.length > 0;
       decisions.push({
         category: "PRICING",
         severity,
         title: `Margen bajo: ${balance.product.sku} - ${balance.product.name}`,
         description: `${balance.branch.code} opera con margen efectivo de ${margin.toFixed(1)}%, por debajo de la politica (${minMargin.toFixed(1)}%).${isTopMover ? " Es uno de los productos que más se mueve (clase A)." : ""}`,
-        recommendation: isBelowCost
+        recommendation: costLooksWrong
+          ? "Costo dudoso: revisar antes de confiar en este margen."
+          : isBelowCost
           ? "Precio efectivo debajo del costo efectivo: revisar costo/precio antes de vender."
           : "Validar costo reciente y recalcular precio con politica de categoria e inteligencia ABC-XYZ.",
         branchId: balance.branchId,
         productId: balance.productId,
         confidenceScore,
-        impactAmount: stockQty * unitLoss,
+        // D.1.4 — un impacto calculado sobre un costo sospechoso no debe
+        // sumar al total en riesgo (tray-service.ts ya excluye costLooksWrong).
+        impactAmount: costLooksWrong ? 0 : stockQty * unitLoss,
         riskScore: riskScoreFor(severity, confidenceScore),
         proposedActionType: isBelowCost ? "REVIEW_PRICE_BELOW_COST" : "REVIEW_PRICE_MARGIN_POLICY",
         proposedActionJson: {
@@ -311,12 +351,17 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
           cost,
           currentPrice: price,
           suggestedPrice,
-          unitLoss: cost - price,
+          unitLoss,
           stockAtRisk: stockQty,
           priceSource: effective.priceSource,
           costSource: effective.costSource,
           policyMinMarginPercent: minMargin,
           recommendedMarginPercent: commercial.recommendedMarginPercent,
+          // D.1.4 — mismo tratamiento que REVIEW_BRANCH_COST_PRICE: costo
+          // sospechoso (COST_EQUALS_PRICE, PACKAGE_AS_UNIT) excluye la fila
+          // del total en riesgo y la marca para revisar antes de aplicar.
+          costLooksWrong,
+          costSuspicionMessage: suspicions[0]?.message ?? null,
           // Parte C.2 (prompt-completo-pendientes-2026-10.md) — el ajuste
           // CRUDO de la matriz ABC-XYZ (sin floor/clamp), para explicar
           // "30% meta + 20% por baja rotación (CZ) = 50%" sin recalcular.
@@ -572,6 +617,10 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     // "stock x pérdida unitaria en córdobas" que el resto del detector.
     const marginGapPercent = Math.max(0, targetMargin - currentMargin);
     const unitImpact = price * (marginGapPercent / 100);
+    // D.1.4 — mismo criterio que el bloque de margen bajo: un costo
+    // sospechoso excluye esta fila del total en riesgo.
+    const staleSuspicions = suspicionsByKey.get(key) ?? [];
+    const staleCostLooksWrong = staleSuspicions.length > 0;
 
     decisions.push({
       category: "PRICING",
@@ -583,11 +632,11 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
       description: setting.priceReviewedAt && setting.priceReviewedCost !== null
         ? `${setting.branch.code}: lo mantuviste en C$ ${n(setting.priceReviewedPrice).toFixed(2)} el ${setting.priceReviewedAt.toISOString().slice(0, 10)}; el costo pasó de C$ ${n(setting.priceReviewedCost).toFixed(2)} a C$ ${cost.toFixed(2)}. Margen efectivo hoy: ${currentMargin.toFixed(1)}%.${commercial.abcClass === "A" ? " Es uno de los productos que más se mueve (clase A)." : ""}`
         : `${setting.branch.code}: el costo cambió el ${costUpdatedAt.toISOString().slice(0, 10)}${setting.lastPriceUpdateAt ? `, después de la última actualización de precio (${setting.lastPriceUpdateAt.toISOString().slice(0, 10)})` : " y este precio nunca registró cuándo se fijó"}. Margen efectivo hoy: ${currentMargin.toFixed(1)}%.${commercial.abcClass === "A" ? " Es uno de los productos que más se mueve (clase A)." : ""}`,
-      recommendation: "Recalcular el precio con el costo actual y aplicar la sugerencia.",
+      recommendation: staleCostLooksWrong ? "Costo dudoso: revisar antes de confiar en este margen." : "Recalcular el precio con el costo actual y aplicar la sugerencia.",
       branchId: setting.branchId,
       productId: setting.productId,
       confidenceScore,
-      impactAmount: stockQty * unitImpact,
+      impactAmount: staleCostLooksWrong ? 0 : stockQty * unitImpact,
       riskScore: riskScoreFor(severity, confidenceScore),
       proposedActionType: "COST_CHANGED_PRICE_STALE",
       proposedActionJson: {
@@ -618,6 +667,8 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
         commercialClass: commercial.combinedClass,
         abcClass: commercial.abcClass,
         stockAtRisk: stockQty,
+        costLooksWrong: staleCostLooksWrong,
+        costSuspicionMessage: staleSuspicions[0]?.message ?? null,
       },
       sourceJson: { detector: "pricing-detector" },
       fingerprintParts: ["pricing", "cost-stale", setting.branchId, setting.productId],
