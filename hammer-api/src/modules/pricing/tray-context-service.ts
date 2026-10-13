@@ -217,12 +217,31 @@ export function buildSuggestedBreakdownFromDecision(
 export type PricingTrayDecisionContext = {
   references: PriceReference[];
   sales90d: { units: number; amount: number };
+  /** "un gráfico simple de las ventas de 90 días por semana" (Fase 4.2) — ~13 semanas, la más vieja primero. */
+  weeklyUnits: Array<{ weekStart: string; units: number }>;
   daysInStock: number | null;
   realizedMarginPct: number | null;
   otherBranches: Array<{ branchId: string; branchName: string; price: number; marginHere: number | null }>;
   priceHistory: Array<{ changedAt: string; previousPrice: number | null; newPrice: number | null; actorName: string | null }>;
   lastReview: { reviewedAt: string; reviewedPrice: number | null; reviewedCost: number | null; byUserName: string | null; note: string | null } | null;
 };
+
+/** Pura — agrupa líneas (fecha, cantidad) en baldes semanales de domingo a sábado, la semana más vieja primero. */
+export function bucketUnitsByWeek(lines: Array<{ createdAt: Date; quantity: number }>, windowDays: number): Array<{ weekStart: string; units: number }> {
+  const since = new Date();
+  since.setDate(since.getDate() - windowDays);
+  since.setHours(0, 0, 0, 0);
+
+  const buckets = new Map<string, number>();
+  for (const line of lines) {
+    const weekStart = new Date(line.createdAt);
+    weekStart.setHours(0, 0, 0, 0);
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    const key = weekStart.toISOString().slice(0, 10);
+    buckets.set(key, (buckets.get(key) ?? 0) + line.quantity);
+  }
+  return [...buckets.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([weekStart, units]) => ({ weekStart, units }));
+}
 
 export async function getPricingTrayDecisionContext(decisionId: string, db: typeof prisma = prisma): Promise<PricingTrayDecisionContext> {
   const decision = await db.brainDecision.findUniqueOrThrow({ where: { id: decisionId } });
@@ -256,6 +275,12 @@ export async function getPricingTrayDecisionContext(decisionId: string, db: type
     }),
   ]);
 
+  const weeklyLines = await db.saleOrderLine.findMany({
+    where: { productId, saleOrder: { branchId, status: { in: [...SALE_STATUSES] }, createdAt: { gte: daysAgo(REALIZED_MARGIN_WINDOW_DAYS) } } },
+    select: { quantity: true, saleOrder: { select: { createdAt: true } } },
+  });
+  const weeklyUnits = bucketUnitsByWeek(weeklyLines.map((l) => ({ createdAt: l.saleOrder.createdAt, quantity: Number(l.quantity) })), REALIZED_MARGIN_WINDOW_DAYS);
+
   const reviewer = setting?.priceReviewedByUserId
     ? await db.user.findUnique({ where: { id: setting.priceReviewedByUserId }, select: { fullName: true, username: true } })
     : null;
@@ -283,6 +308,7 @@ export async function getPricingTrayDecisionContext(decisionId: string, db: type
   return {
     references,
     sales90d: { units: Number(salesAgg._sum.quantity ?? 0), amount: Number(salesAgg._sum.lineSubtotal ?? 0) },
+    weeklyUnits,
     daysInStock,
     realizedMarginPct: realizedMarginUsable(realized) ? realized.marginPct : null,
     otherBranches: otherSettings.map((s) => {

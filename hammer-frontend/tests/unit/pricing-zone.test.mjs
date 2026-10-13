@@ -164,9 +164,12 @@ test("Fase 4.1: el editor de precio por sucursal en Catálogo (product-360) enla
 });
 
 test("Fase 4.2: cada fila de la bandeja enlaza a la ficha del producto en Catálogo", () => {
-  const p = read("app/app/master/pricing/page.tsx");
+  // Parte C.4 (prompt-completo-pendientes-2026-10.md) — RowGroup se movió a
+  // components/pricing/tray-row.tsx (TrayRow); el enlace sigue existiendo,
+  // solo cambió de archivo.
+  const p = read("components/pricing/tray-row.tsx");
   const productLinkMatches = p.match(/href=\{`\/app\/master\/catalog-inventory\/products\/\$\{row\.productId\}`\}/g) ?? [];
-  // Debe haber al menos dos: el enlace de toda fila (RowGroup) y el de "Revisar el costo primero" (costLooksWrong).
+  // Debe haber al menos dos: el enlace de toda fila (escritorio + tarjeta) y el de "Revisar el costo primero" (costLooksWrong).
   assert.ok(productLinkMatches.length >= 2, "toda fila debe enlazar al producto, no solo las de costo dudoso");
 });
 

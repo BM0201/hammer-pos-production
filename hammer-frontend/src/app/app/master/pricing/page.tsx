@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, ChevronDown, ChevronRight, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2, ReceiptText, Search, HelpCircle, Flame, ClipboardList } from "lucide-react";
+import { AlertTriangle, RefreshCcw, TrendingDown, Clock3, SearchX, Inbox, Calculator, Settings, SlidersHorizontal, Building2, ReceiptText, Search, HelpCircle, ClipboardList, ChevronDown } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +10,18 @@ import { PricingCalculatorPanel } from "@/components/pricing/pricing-calculator-
 import { CategoryPoliciesPanel } from "@/components/pricing/category-policies-panel";
 import { PricingConfigPanel } from "@/components/pricing/pricing-config-panel";
 import { PriceLoadTab, type LoadSeed } from "@/components/pricing/price-load-tab";
+import { TrayRow, type TrayRowData, type ReferenceChip } from "@/components/pricing/tray-row";
+import { TrayDetailDrawer, type PricingTrayDecisionContext } from "@/components/pricing/tray-detail-drawer";
+import {
+  parsePriceInput,
+  shouldConfirmBigChange,
+  buildBatchSummary,
+  priceForMethod,
+  readGainOrderPreference,
+  writeGainOrderPreference,
+  type PriceApplyMethod,
+  type GainOrderPreference,
+} from "@/lib/pricing-tray-logic";
 import { useSubmitting } from "@/lib/client/use-submitting";
 import toast from "react-hot-toast";
 import { money, fmtDatePadded } from "@/lib/format";
@@ -178,8 +189,10 @@ export default function PricingZonePage() {
             <PricingTrayTab
               branchId={branchId}
               branchName={branches.find((b) => b.id === branchId)?.name}
+              branches={branches}
               onClearBranch={() => selectBranch("")}
               onGoToCalculator={() => selectTab("calculator")}
+              onSendToLoads={sendSelectionToLoads}
             />
           )}
           {activeTab === "current" && (
@@ -208,33 +221,16 @@ export default function PricingZonePage() {
 
 type Reason = "BELOW_COST" | "MARGIN_POLICY" | "COST_STALE" | "NO_COST";
 
-type TrayRow = {
-  decisionId: string;
-  severity: string;
+/** La fila que trae /api/master/pricing/tray — superconjunto de TrayRowData (components/pricing/tray-row.tsx), que es lo que el componente realmente necesita. */
+type TrayRowDto = TrayRowData & {
   reason: Reason;
-  branchId: string;
-  branchName: string;
-  productId: string;
-  productSku: string;
-  productName: string;
-  currentPrice: number | null;
-  suggestedPrice: number | null;
-  effectiveCost: number | null;
   marginActual: number | null;
-  marginObjetivo: number | null;
-  stockAtRisk: number | null;
-  impactAmount: number;
   lastPriceUpdateAt: string | null;
-  applicable: boolean;
-  /** Parte A (prompt-huecos-fase1-fase3-despliegue.md) — branchCost más de 2× el costo de referencia: probable error de tecleo, no un producto mal preciado. */
-  costLooksWrong: boolean;
-  referenceCost: number | null;
-  evidence: Record<string, unknown>;
 };
 
 type TrayTotals = { count: number; impactTotal: number; byReason: Record<Reason, number>; costDoubtfulCount: number };
 type TrayResult = {
-  rows: TrayRow[];
+  rows: TrayRowDto[];
   totals: TrayTotals;
   /** Parte A (prompt-zona-precios-consolidacion.md) — el mismo cálculo, sin los filtros del usuario. */
   unfilteredTotals: TrayTotals;
@@ -245,6 +241,18 @@ type ApplyResponse = {
   applied: Array<{ decisionId: string; branchId: string; productId: string; previousPrice: number | null; newPrice: number }>;
   failed: Array<{ decisionId: string; reason: string }>;
 };
+type KeepResponse = { kept: string[]; rejected: Array<{ decisionId: string; reason: string }> };
+
+const REFERENCE_LABELS: Record<PriceApplyMethod, string> = {
+  MANUAL: "Manual",
+  SUGGESTED: "Referencia de política",
+  REALIZED_MARGIN: "Como lo venís vendiendo",
+  KEEP_GAIN_AMOUNT: "Misma ganancia en C$",
+  KEEP_MARGIN_PCT: "Mismo % que tenía",
+  OTHER_BRANCH: "Igual que otra sucursal",
+  POLICY_MIN: "Mínimo de la política",
+};
+const KEEP_NOTE_CHIPS = ["Precio de competencia", "Producto gancho", "Ya lo revisé"];
 
 const REASON_GROUPS: Array<{ key: Reason; title: string; badge: string; icon: typeof TrendingDown }> = [
   { key: "BELOW_COST", title: "Vendiendo bajo el costo", badge: "CRITICAL", icon: AlertTriangle },
@@ -269,24 +277,22 @@ const fmt = (v: number | null) => (v === null ? "—" : money(v));
 const fmtPct = (v: number | null) => (v === null ? "—" : `${v.toFixed(1)}%`);
 const fmtDate = (iso: string | null) => (iso ? fmtDatePadded(iso) : "nunca");
 
-function severityDot(severity: string) {
-  if (severity === "CRITICAL") return "bg-[var(--color-danger-600)]";
-  if (severity === "HIGH") return "bg-[var(--color-warning-600)]";
-  return "bg-[var(--color-text-soft)]";
-}
-
 function PricingTrayTab({
   branchId,
   branchName,
+  branches,
   onClearBranch,
   onGoToCalculator,
+  onSendToLoads,
 }: {
   branchId: string;
   branchName?: string;
+  branches: Branch[];
   /** Limpia el filtro de sucursal — vive en el estado del padre (Zona Precios), compartido por las cuatro pestañas. */
   onClearBranch: () => void;
   /** Parte C.2 (prompt-zona-precios-consolidacion.md) — "Calcular un precio" cambia de pestaña en el padre. */
   onGoToCalculator: () => void;
+  onSendToLoads: (seed: LoadSeed) => void;
 }) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<TrayResult | null>(null);
@@ -294,11 +300,36 @@ function PricingTrayTab({
   const [categoryFilter, setCategoryFilter] = useState("");
   const [reasonFilter, setReasonFilter] = useState<Reason | "">("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [applying, setApplying] = useState(false);
   const [lastApplyResult, setLastApplyResult] = useState<ApplyResponse | null>(null);
   const [scanning, setScanning] = useState(false);
+
+  // Parte C.4 (prompt-completo-pendientes-2026-10.md) — "la Bandeja como mesa
+  // de decisión": precio editable por fila (precargado con el ACTUAL, no el
+  // sugerido), el método con el que se llenó ese precio, el contexto
+  // completo (Fase 2) cargado bajo demanda, y cuál fila tiene el drawer abierto.
+  const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
+  const [methodByRow, setMethodByRow] = useState<Record<string, PriceApplyMethod>>({});
+  const [contextCache, setContextCache] = useState<Record<string, PricingTrayDecisionContext>>({});
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [gainOrderPreference, setGainOrderPreferenceState] = useState<GainOrderPreference>("cost");
+  const [rowMenuFor, setRowMenuFor] = useState<string | null>(null);
+  const [keepTarget, setKeepTarget] = useState<string[] | null>(null); // decisionIds a "mantener" — 1 (fila) o N (lote)
+  const [keepNote, setKeepNote] = useState("");
+  const [keeping, setKeeping] = useState(false);
+  const [alsoBranchesFor, setAlsoBranchesFor] = useState<string | null>(null);
+  const [alsoBranchIds, setAlsoBranchIds] = useState<Set<string>>(new Set());
+  const [applyingSingle, setApplyingSingle] = useState<string | null>(null);
+  const [batchMethodMenuOpen, setBatchMethodMenuOpen] = useState(false);
+  const [pendingBigChange, setPendingBigChange] = useState<{ decisionId: string; price: number; method: PriceApplyMethod } | null>(null);
+  const rowInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  useEffect(() => { setGainOrderPreferenceState(readGainOrderPreference()); }, []);
+  function setGainOrderPreference(pref: GainOrderPreference) {
+    setGainOrderPreferenceState(pref);
+    writeGainOrderPreference(pref);
+  }
 
   // Parte A.2/B.3 (prompt-zona-precios-consolidacion.md) — la sucursal (estado
   // del padre) cuenta como filtro igual que categoría/motivo: es exactamente
@@ -320,14 +351,51 @@ function PricingTrayTab({
       const res = await apiFetch(`/api/master/pricing/tray?${params.toString()}`);
       const raw = await res.json();
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar la bandeja de precios.");
-      setData(unwrapApiData(raw) as TrayResult);
+      const result = unwrapApiData(raw) as TrayResult;
+      setData(result);
       setSelected(new Set());
+      // El input se precarga con el precio ACTUAL (no el sugerido) — el
+      // dueño decide. Solo para filas nuevas: si ya existe (de una carga
+      // previa en esta misma sesión) no se pisa lo que el usuario tecleó.
+      setPriceInputs((prev) => {
+        const next = { ...prev };
+        for (const row of result.rows) if (!(row.decisionId in next)) next[row.decisionId] = row.currentPrice !== null ? String(row.currentPrice) : "";
+        return next;
+      });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo cargar la bandeja de precios.");
     } finally {
       setLoading(false);
     }
   }, [branchId, categoryFilter, reasonFilter]);
+
+  async function ensureContext(decisionId: string): Promise<PricingTrayDecisionContext | null> {
+    const cached = contextCache[decisionId];
+    if (cached) return cached;
+    try {
+      const res = await apiFetch(`/api/master/pricing/tray/${decisionId}/context`);
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo cargar el contexto.");
+      const ctx = unwrapApiData(raw) as PricingTrayDecisionContext;
+      setContextCache((prev) => ({ ...prev, [decisionId]: ctx }));
+      return ctx;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo cargar el contexto.");
+      return null;
+    }
+  }
+
+  /** Antes de tener el contexto completo (Fase 2), la fila igual muestra "Referencia de política" — ya viene en evidenceJson, sin fetch extra. */
+  function referencesFor(row: TrayRowDto): ReferenceChip[] {
+    const ctx = contextCache[row.decisionId];
+    if (ctx) return ctx.references.map((r) => ({ method: r.method, label: REFERENCE_LABELS[r.method] ?? r.label, price: r.price, available: r.available, reason: r.reason }));
+    return [{ method: "SUGGESTED", label: REFERENCE_LABELS.SUGGESTED, price: row.suggestedPrice, available: row.suggestedPrice !== null, reason: row.suggestedPrice === null ? "sin costo" : undefined }];
+  }
+
+  function openDetail(decisionId: string) {
+    setExpandedRow(decisionId);
+    void ensureContext(decisionId);
+  }
 
   /**
    * PARTE A (prompt-precios-mejoras-bandeja-visibilidad.md) — "Recalcular
@@ -389,10 +457,13 @@ function PricingTrayTab({
   }, []);
 
   const rowsByReason = useMemo(() => {
-    const map: Record<Reason, TrayRow[]> = { BELOW_COST: [], NO_COST: [], MARGIN_POLICY: [], COST_STALE: [] };
+    const map: Record<Reason, TrayRowDto[]> = { BELOW_COST: [], NO_COST: [], MARGIN_POLICY: [], COST_STALE: [] };
     for (const row of data?.rows ?? []) map[row.reason].push(row);
     return map;
   }, [data]);
+
+  // ↑/↓ mueven entre filas — orden plano, el mismo en que se renderizan los grupos.
+  const flatRowOrder = useMemo(() => REASON_GROUPS.flatMap((g) => rowsByReason[g.key].map((r) => r.decisionId)), [rowsByReason]);
 
   const selectedRows = useMemo(() => (data?.rows ?? []).filter((r) => selected.has(r.decisionId)), [data, selected]);
 
@@ -417,21 +488,34 @@ function PricingTrayTab({
     });
   }
 
+  function focusRow(decisionId: string | undefined) {
+    if (!decisionId) return;
+    rowInputRefs.current[decisionId]?.focus();
+  }
+
+  function moveSelection(fromDecisionId: string, direction: -1 | 1) {
+    const idx = flatRowOrder.indexOf(fromDecisionId);
+    if (idx === -1) return;
+    focusRow(flatRowOrder[idx + direction]);
+  }
+
   const summary = useMemo(() => {
     if (selectedRows.length === 0) return null;
-    const branchSet = new Set(selectedRows.map((r) => r.branchId));
-    const diffs = selectedRows.filter((r) => r.suggestedPrice !== null && r.currentPrice !== null).map((r) => (r.suggestedPrice as number) - (r.currentPrice as number));
-    const avgDiff = diffs.length > 0 ? diffs.reduce((a, b) => a + b, 0) / diffs.length : 0;
-    return { productCount: selectedRows.length, branchCount: branchSet.size, avgDiff };
-  }, [selectedRows]);
+    return buildBatchSummary(selectedRows.map((r) => ({ previousPrice: r.currentPrice, newPrice: parsePriceInput(priceInputs[r.decisionId] ?? "") })));
+  }, [selectedRows, priceInputs]);
 
   async function applySelection() {
     setApplying(true);
     try {
+      const items = [...selected].map((decisionId) => {
+        const price = parsePriceInput(priceInputs[decisionId] ?? "");
+        const method = methodByRow[decisionId] ?? "SUGGESTED";
+        return price !== null ? { decisionId, price, method } : { decisionId };
+      });
       const res = await apiFetch("/api/master/pricing/tray/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decisionIds: [...selected], reason: "Aplicado desde la bandeja de precios" }),
+        body: JSON.stringify({ items, reason: "Aplicado desde la bandeja de precios" }),
       });
       const raw = await res.json().catch(() => null);
       if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar la selección.");
@@ -451,8 +535,133 @@ function PricingTrayTab({
     }
   }
 
+  async function applyOneDecision(decisionId: string, price: number, method: PriceApplyMethod) {
+    setApplyingSingle(decisionId);
+    try {
+      const res = await apiFetch("/api/master/pricing/tray/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: [{ decisionId, price, method }], reason: "Aplicado desde la bandeja de precios" }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar el precio.");
+      const result = unwrapApiData(raw) as ApplyResponse;
+      if (result.failed.length > 0) throw new Error(result.failed[0].reason);
+      toast.success("Precio aplicado.");
+      if (expandedRow === decisionId) setExpandedRow(null);
+      void load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo aplicar el precio.");
+    } finally {
+      setApplyingSingle(null);
+    }
+  }
+
+  /** Enter en el input, o botón "Aplicar": aplica, con confirmación si el cambio pasa de ±30%. */
+  function requestApply(row: TrayRowDto) {
+    const price = parsePriceInput(priceInputs[row.decisionId] ?? "");
+    if (price === null) return;
+    const method = methodByRow[row.decisionId] ?? "SUGGESTED";
+    if (shouldConfirmBigChange(row.currentPrice, price)) {
+      setPendingBigChange({ decisionId: row.decisionId, price, method });
+      return;
+    }
+    void applyOneDecision(row.decisionId, price, method);
+  }
+
+  async function keepDecisions(decisionIds: string[], note: string) {
+    setKeeping(true);
+    try {
+      const res = await apiFetch("/api/master/pricing/tray/keep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decisionIds, note }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo mantener el precio.");
+      const result = unwrapApiData(raw) as KeepResponse;
+      if (result.rejected.length === 0) {
+        toast.success(`${result.kept.length} precio(s) mantenido(s).`);
+      } else {
+        toast.error(`${result.kept.length} mantenido(s), ${result.rejected.length} rechazado(s): ${result.rejected[0].reason}`);
+      }
+      setKeepTarget(null);
+      setKeepNote("");
+      void load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo mantener el precio.");
+    } finally {
+      setKeeping(false);
+    }
+  }
+
+  async function applyAlsoInBranches(row: TrayRowDto) {
+    const price = parsePriceInput(priceInputs[row.decisionId] ?? "");
+    if (price === null || alsoBranchIds.size === 0) return;
+    setApplyingSingle(row.decisionId);
+    try {
+      const res = await apiFetch("/api/master/pricing/tray/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: [{ decisionId: row.decisionId, price, method: methodByRow[row.decisionId] ?? "MANUAL", alsoBranchIds: [...alsoBranchIds] }],
+          reason: "Aplicado desde la bandeja de precios",
+        }),
+      });
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar en las otras sucursales.");
+      const result = unwrapApiData(raw) as ApplyResponse & { applied: Array<{ alsoBranches?: Array<{ branchId: string; applied: boolean; error?: string }> }> };
+      const alsoResults = result.applied[0]?.alsoBranches ?? [];
+      const failedAlso = alsoResults.filter((b) => !b.applied);
+      toast.success(failedAlso.length === 0
+        ? `Aplicado acá y en ${alsoResults.length} sucursal(es) más.`
+        : `Aplicado acá; ${failedAlso.length} de ${alsoResults.length} sucursal(es) fallaron.`);
+      setAlsoBranchesFor(null);
+      setAlsoBranchIds(new Set());
+      void load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo aplicar en las otras sucursales.");
+    } finally {
+      setApplyingSingle(null);
+    }
+  }
+
+  /** "Usar método ▾ en seleccionadas": precio de ESE método en cada fila seleccionada, solo donde esté disponible. */
+  async function applyMethodToSelection(method: PriceApplyMethod) {
+    setBatchMethodMenuOpen(false);
+    const rows = selectedRows;
+    const contexts = await Promise.all(rows.map((row) => ensureContext(row.decisionId)));
+    const touchedIds = new Set<string>();
+    setPriceInputs((prev) => {
+      const next = { ...prev };
+      rows.forEach((row, i) => {
+        const ctx = contexts[i];
+        const refs: ReferenceChip[] = ctx ? ctx.references.map((r) => ({ method: r.method, label: r.label, price: r.price, available: r.available })) : referencesFor(row);
+        const price = priceForMethod(refs, method);
+        if (price !== null) { next[row.decisionId] = String(price); touchedIds.add(row.decisionId); }
+      });
+      return next;
+    });
+    setMethodByRow((prev) => {
+      const next = { ...prev };
+      for (const decisionId of touchedIds) next[decisionId] = method;
+      return next;
+    });
+  }
+
   return (
     <div className="space-y-6">
+      {/* Parte C.4.3 — "quitar el lenguaje que trata la política como verdad". */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-medium text-[var(--color-text-muted)]">Revisá y decidí. Las referencias son guía.</p>
+        <button
+          type="button"
+          onClick={() => setGainOrderPreference(gainOrderPreference === "cost" ? "price" : "cost")}
+          className="text-xs font-medium text-[var(--color-master-600)] hover:underline"
+        >
+          Mostrar primero: {gainOrderPreference === "cost" ? "% sobre costo" : "% sobre precio"}
+        </button>
+      </div>
       <div className="flex items-center justify-between gap-4">
         <div>
           {data && (
@@ -584,28 +793,38 @@ function PricingTrayTab({
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="border-b border-[var(--color-border)] text-left text-xs text-[var(--color-text-muted)]">
+                        <tr className="hidden border-b border-[var(--color-border)] text-left text-xs text-[var(--color-text-muted)] xl:table-row">
                           <th className="w-8 px-3 py-2" />
                           <th className="px-3 py-2">Producto</th>
                           <th className="px-3 py-2">Sucursal</th>
                           <th className="px-3 py-2 text-right">Costo</th>
                           <th className="px-3 py-2 text-right">Precio actual</th>
-                          <th className="px-3 py-2 text-right">Margen actual</th>
-                          <th className="px-3 py-2 text-right">Precio sugerido</th>
-                          <th className="px-3 py-2 text-right">Margen resultante</th>
-                          <th className="px-3 py-2 text-right">Impacto</th>
-                          <th className="w-8 px-3 py-2" />
+                          <th className="px-3 py-2">Precio nuevo</th>
+                          <th className="px-3 py-2 text-right">Vendido 90d</th>
+                          <th className="w-14 px-3 py-2" />
                         </tr>
                       </thead>
                       <tbody>
                         {rows.map((row) => (
-                          <RowGroup
+                          <TrayRow
                             key={row.decisionId}
                             row={row}
+                            priceInput={priceInputs[row.decisionId] ?? ""}
+                            onPriceInputChange={(value) => { setPriceInputs((prev) => ({ ...prev, [row.decisionId]: value })); setMethodByRow((prev) => ({ ...prev, [row.decisionId]: "MANUAL" })); }}
+                            method={methodByRow[row.decisionId] ?? "SUGGESTED"}
+                            onSelectReference={(method, price) => { setPriceInputs((prev) => ({ ...prev, [row.decisionId]: String(price) })); setMethodByRow((prev) => ({ ...prev, [row.decisionId]: method })); }}
+                            references={referencesFor(row)}
                             selected={selected.has(row.decisionId)}
-                            expanded={expanded === row.decisionId}
                             onToggleSelect={() => toggleRow(row.decisionId, row.applicable)}
-                            onToggleExpand={() => setExpanded((prev) => (prev === row.decisionId ? null : row.decisionId))}
+                            expanded={expandedRow === row.decisionId}
+                            onToggleExpand={() => (expandedRow === row.decisionId ? setExpandedRow(null) : openDetail(row.decisionId))}
+                            onApply={() => requestApply(row)}
+                            onKeep={() => setKeepTarget([row.decisionId])}
+                            onOpenMenu={() => setRowMenuFor((prev) => (prev === row.decisionId ? null : row.decisionId))}
+                            gainOrderPreference={gainOrderPreference}
+                            onEnterKey={() => requestApply(row)}
+                            onArrowKey={(direction) => moveSelection(row.decisionId, direction)}
+                            registerInputRef={(el) => { rowInputRefs.current[row.decisionId] = el; }}
                           />
                         ))}
                       </tbody>
@@ -666,11 +885,24 @@ function PricingTrayTab({
 
       {selected.size > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 shadow-2xl md:pl-[calc(var(--sidebar-width,0px)+1rem)]">
-          <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+          <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
             <span className="text-sm text-[var(--color-text-muted)]">{selected.size} producto{selected.size === 1 ? "" : "s"} seleccionado{selected.size === 1 ? "" : "s"}</span>
-            <Button type="button" variant="success" onClick={() => setConfirming(true)}>
-              Aplicar seleccionados ({selected.size})
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setBatchMethodMenuOpen((v) => !v)} icon={<ChevronDown className="h-3.5 w-3.5" />}>Usar método</Button>
+                {batchMethodMenuOpen && (
+                  <div className="absolute bottom-full right-0 mb-1 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-modal)]">
+                    {(Object.keys(REFERENCE_LABELS) as PriceApplyMethod[]).filter((m) => m !== "MANUAL").map((m) => (
+                      <button key={m} type="button" onClick={() => void applyMethodToSelection(m)} className="block w-full px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)]">{REFERENCE_LABELS[m]}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setKeepTarget([...selected])}>Mantener seleccionadas</Button>
+              <Button type="button" variant="success" onClick={() => setConfirming(true)}>
+                Aplicar seleccionados ({selected.size})
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -683,9 +915,8 @@ function PricingTrayTab({
               Aplicar precios en lote es irreversible en la práctica. Antes de confirmar:
             </p>
             <div className="space-y-1.5 rounded-lg bg-[var(--color-surface-alt)] p-3 text-sm">
-              <p><strong className="text-[var(--color-text)]">{summary.productCount}</strong> producto{summary.productCount === 1 ? "" : "s"}</p>
-              <p><strong className="text-[var(--color-text)]">{summary.branchCount}</strong> sucursal{summary.branchCount === 1 ? "" : "es"}</p>
-              <p>Cambio de precio promedio: <strong className={summary.avgDiff >= 0 ? "text-[var(--color-success-700)]" : "text-[var(--color-danger-600)]"}>{summary.avgDiff >= 0 ? "+" : ""}{fmt(summary.avgDiff)}</strong></p>
+              <p><strong className="text-[var(--color-text)]">{summary.count}</strong> producto{summary.count === 1 ? "" : "s"} · <strong className="text-[var(--color-success-700)]">{summary.upCount} suben</strong> · <strong className="text-[var(--color-danger-600)]">{summary.downCount} bajan</strong>{summary.sameCount > 0 ? ` · ${summary.sameCount} sin cambio` : ""}</p>
+              <p>Promedio: <strong className="text-[var(--color-text)]">{fmt(summary.avgBefore)} → {fmt(summary.avgAfter)}</strong></p>
             </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setConfirming(false)} disabled={applying}>Cancelar</Button>
@@ -694,6 +925,122 @@ function PricingTrayTab({
           </div>
         </div>
       )}
+
+      {/* "⋯" — Ver detalle / Enviar a carga de precios / Aplicar también en… */}
+      {rowMenuFor && (() => {
+        const row = (data?.rows ?? []).find((r) => r.decisionId === rowMenuFor);
+        if (!row) return null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setRowMenuFor(null)}>
+            <div className="w-full max-w-xs space-y-1 rounded-t-xl bg-[var(--color-surface)] p-2 shadow-2xl sm:rounded-xl" onClick={(e) => e.stopPropagation()}>
+              <button type="button" onClick={() => { openDetail(row.decisionId); setRowMenuFor(null); }} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-alt)]">Ver detalle</button>
+              <button type="button" onClick={() => { onSendToLoads({ branchId: row.branchId, products: [{ productId: row.productId, sku: row.productSku, name: row.productName }] }); setRowMenuFor(null); }} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-alt)]">Enviar a carga de precios</button>
+              {row.applicable && (
+                <button type="button" onClick={() => { setAlsoBranchesFor(row.decisionId); setAlsoBranchIds(new Set()); setRowMenuFor(null); }} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-alt)]">Aplicar también en…</button>
+              )}
+              <button type="button" onClick={() => setRowMenuFor(null)} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]">Cancelar</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Detalle (Fase 4.2) */}
+      {expandedRow && (() => {
+        const row = (data?.rows ?? []).find((r) => r.decisionId === expandedRow);
+        if (!row) return null;
+        return (
+          <TrayDetailDrawer
+            row={row}
+            onClose={() => setExpandedRow(null)}
+            rowProps={{
+              row,
+              priceInput: priceInputs[row.decisionId] ?? "",
+              onPriceInputChange: (value) => { setPriceInputs((prev) => ({ ...prev, [row.decisionId]: value })); setMethodByRow((prev) => ({ ...prev, [row.decisionId]: "MANUAL" })); },
+              method: methodByRow[row.decisionId] ?? "SUGGESTED",
+              onSelectReference: (method, price) => { setPriceInputs((prev) => ({ ...prev, [row.decisionId]: String(price) })); setMethodByRow((prev) => ({ ...prev, [row.decisionId]: method })); },
+              references: referencesFor(row),
+              selected: selected.has(row.decisionId),
+              onToggleSelect: () => toggleRow(row.decisionId, row.applicable),
+              expanded: true,
+              onToggleExpand: () => setExpandedRow(null),
+              onApply: () => requestApply(row),
+              onKeep: () => setKeepTarget([row.decisionId]),
+              onOpenMenu: () => {},
+              gainOrderPreference,
+              onEnterKey: () => requestApply(row),
+              registerInputRef: () => {},
+            }}
+          />
+        );
+      })()}
+
+      {/* "Mantener" — nota obligatoria, con chips rápidos */}
+      {keepTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
+            <h3 className="text-sm font-semibold text-[var(--color-text)]">Mantener {keepTarget.length === 1 ? "el precio actual" : `${keepTarget.length} precios`}</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {KEEP_NOTE_CHIPS.map((chip) => (
+                <button key={chip} type="button" onClick={() => setKeepNote(chip)} className="rounded-full border border-[var(--color-border)] px-2.5 py-1 text-xs font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">{chip}</button>
+              ))}
+            </div>
+            <textarea value={keepNote} onChange={(e) => setKeepNote(e.target.value)} rows={2} placeholder="Nota (mínimo 5 caracteres)" className="hm-input w-full rounded-lg text-sm" />
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => { setKeepTarget(null); setKeepNote(""); }} disabled={keeping}>Cancelar</Button>
+              <Button type="button" variant="success" onClick={() => void keepDecisions(keepTarget, keepNote)} loading={keeping} disabled={keepNote.trim().length < 5}>Confirmar</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* "Aplicar también en…" */}
+      {alsoBranchesFor && (() => {
+        const row = (data?.rows ?? []).find((r) => r.decisionId === alsoBranchesFor);
+        if (!row) return null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-md space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
+              <h3 className="text-sm font-semibold text-[var(--color-text)]">Aplicar también en otras sucursales</h3>
+              <p className="text-xs text-[var(--color-text-muted)]">{money(parsePriceInput(priceInputs[row.decisionId] ?? "") ?? 0)} para {row.productName} — cada sucursal valida su propio costo.</p>
+              <div className="flex flex-wrap gap-2">
+                {branches.filter((b) => b.id !== row.branchId).map((b) => {
+                  const active = alsoBranchIds.has(b.id);
+                  return (
+                    <label key={b.id} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${active ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] text-[var(--color-text-muted)]"}`}>
+                      <input type="checkbox" className="hidden" checked={active} onChange={() => setAlsoBranchIds((prev) => { const next = new Set(prev); if (next.has(b.id)) next.delete(b.id); else next.add(b.id); return next; })} />
+                      {b.code} · {b.name}
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => { setAlsoBranchesFor(null); setAlsoBranchIds(new Set()); }} disabled={applyingSingle === row.decisionId}>Cancelar</Button>
+                <Button type="button" variant="success" onClick={() => void applyAlsoInBranches(row)} loading={applyingSingle === row.decisionId} disabled={alsoBranchIds.size === 0}>Aplicar</Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Enter sube/baja más de ±30% — confirmar antes de aplicar (Fase 4.3). */}
+      {pendingBigChange && (() => {
+        const row = (data?.rows ?? []).find((r) => r.decisionId === pendingBigChange.decisionId);
+        if (!row) { setPendingBigChange(null); return null; }
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-sm space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
+              <h3 className="text-sm font-semibold text-[var(--color-text)]">¿Confirmar cambio grande?</h3>
+              <p className="text-sm text-[var(--color-text-muted)]">
+                {row.productName}: {fmt(row.currentPrice)} → <strong className="text-[var(--color-text)]">{fmt(pendingBigChange.price)}</strong> — más de 30% de cambio.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => setPendingBigChange(null)}>Cancelar</Button>
+                <Button type="button" variant="success" onClick={() => { const p = pendingBigChange; setPendingBigChange(null); void applyOneDecision(p.decisionId, p.price, p.method); }}>Confirmar</Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -758,116 +1105,6 @@ function EmptyTrayState({
         <Button type="button" variant="secondary" size="sm" onClick={onGoToCalculator}>Calcular un precio</Button>
       </div>
     </Card>
-  );
-}
-
-function RowGroup({ row, selected, expanded, onToggleSelect, onToggleExpand }: {
-  row: TrayRow;
-  selected: boolean;
-  expanded: boolean;
-  onToggleSelect: () => void;
-  onToggleExpand: () => void;
-}) {
-  const evidence = row.evidence;
-  const commercialClass = typeof evidence.commercialClass === "string" ? evidence.commercialClass : null;
-  const priceSource = typeof evidence.priceSource === "string" ? evidence.priceSource : null;
-  const costSource = typeof evidence.costSource === "string" ? evidence.costSource : null;
-  const stock = row.stockAtRisk;
-  // prompt-precios-vigilancia-movimiento.md — "sobre todo lo que más se
-  // mueve": el detector ya escala severidad/prioridad para clase A
-  // (escalateForTopMover, pricing-detector.ts) — este ícono hace ese
-  // criterio VISIBLE en la fila, no solo un efecto silencioso en el orden.
-  const isTopMover = evidence.abcClass === "A";
-
-  return (
-    <>
-      <tr className={["border-b border-[var(--color-border)] last:border-0", !row.applicable ? "opacity-60" : ""].join(" ")}>
-        <td className="px-3 py-2.5">
-          {row.costLooksWrong ? (
-            <AlertTriangle className="h-4 w-4 text-[var(--color-warning-600)]" aria-hidden="true" />
-          ) : (
-            <input
-              type="checkbox"
-              checked={selected}
-              onChange={onToggleSelect}
-              disabled={!row.applicable}
-              title={row.applicable ? undefined : "Esta decisión no tiene un precio sugerido listo para aplicar"}
-              className="h-4 w-4 rounded border-[var(--color-border-strong)]"
-            />
-          )}
-        </td>
-        <td className="px-3 py-2.5">
-          {/* Fase 4.2 (prompt-mudanza-zona-precios.md) — la bandeja enlaza a la ficha del producto en Catálogo (los dos sentidos, junto con 4.1). */}
-          <Link href={`/app/master/catalog-inventory/products/${row.productId}`} className="flex items-center gap-1.5 group">
-            <span className={["h-2 w-2 shrink-0 rounded-full", severityDot(row.severity)].join(" ")} aria-hidden="true" />
-            {isTopMover && (
-              <span title="Uno de los productos que más se mueve (clase A)" className="shrink-0">
-                <Flame className="h-3.5 w-3.5 text-[var(--color-danger-500)]" aria-hidden="true" />
-              </span>
-            )}
-            <span className="min-w-0">
-              <span className="block truncate font-medium text-[var(--color-text)] group-hover:underline">{row.productName}</span>
-              <span className="block text-xs text-[var(--color-text-soft)]">{row.productSku}</span>
-            </span>
-          </Link>
-        </td>
-        <td className="px-3 py-2.5 text-[var(--color-text-muted)]">{row.branchName}</td>
-        <td className="px-3 py-2.5 text-right tabular-nums">
-          {row.costLooksWrong ? <span className="font-semibold text-[var(--color-warning-700)]">{fmt(row.effectiveCost)}</span> : fmt(row.effectiveCost)}
-        </td>
-        <td className="px-3 py-2.5 text-right tabular-nums">{fmt(row.currentPrice)}</td>
-        <td className="px-3 py-2.5 text-right tabular-nums">{fmtPct(row.marginActual)}</td>
-        {/* A.2 — el precio sugerido sigue visible, en gris: si el costo resulta ser correcto, quien lo revise lo necesita. */}
-        <td className={["px-3 py-2.5 text-right font-medium tabular-nums", row.costLooksWrong ? "text-[var(--color-text-soft)]" : "text-[var(--color-success-700)]"].join(" ")}>
-          {fmt(row.suggestedPrice)}
-        </td>
-        <td className="px-3 py-2.5 text-right tabular-nums">{fmtPct(row.marginObjetivo)}</td>
-        <td className="px-3 py-2.5 text-right font-medium tabular-nums text-[var(--color-danger-600)]">
-          {row.costLooksWrong ? <span className="font-normal text-[var(--color-text-soft)]">sin cuantificar</span> : fmt(row.impactAmount)}
-        </td>
-        <td className="px-3 py-2.5">
-          <button type="button" onClick={onToggleExpand} className="text-[var(--color-text-soft)]" aria-label="Ver detalle">
-            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          </button>
-        </td>
-      </tr>
-
-      {/* A.2 — costo sospechoso: sin checkbox, con la comparación contra el costo de referencia y un enlace al editor en vez de aplicar a ciegas. */}
-      {row.costLooksWrong && (
-        <tr className="border-b border-[var(--color-border)] bg-[var(--color-warning-50)] last:border-0">
-          <td />
-          <td colSpan={9} className="px-3 py-2">
-            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--color-warning-700)]">
-              <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span>Costo de sucursal {fmt(row.effectiveCost)} · promedio del producto {fmt(row.referenceCost)}.</span>
-              <Link href={`/app/master/catalog-inventory/products/${row.productId}`} className="font-semibold underline underline-offset-2">
-                Revisar el costo primero
-              </Link>
-            </p>
-          </td>
-        </tr>
-      )}
-
-      {expanded && (
-        <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] last:border-0">
-          <td />
-          <td colSpan={9} className="px-3 py-3">
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-[var(--color-text-muted)] sm:grid-cols-4">
-              <span>Clase comercial: <strong className="text-[var(--color-text)]">{commercialClass ?? "—"}</strong></span>
-              <span>Stock en riesgo: <strong className="text-[var(--color-text)]">{stock ?? "—"}</strong></span>
-              <span>Origen del costo: <strong className="text-[var(--color-text)]">{costSource ?? "—"}</strong></span>
-              <span>Origen del precio: <strong className="text-[var(--color-text)]">{priceSource ?? "—"}</strong></span>
-              <span>Último precio fijado: <strong className="text-[var(--color-text)]">{fmtDate(row.lastPriceUpdateAt)}</strong></span>
-              {!row.applicable && !row.costLooksWrong && (
-                <span className="col-span-2 flex items-center gap-1 text-[var(--color-warning-700)] sm:col-span-4">
-                  <AlertTriangle className="h-3.5 w-3.5" /> Sin precio sugerido calculado — no se puede aplicar desde acá todavía.
-                </span>
-              )}
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
   );
 }
 

@@ -7,6 +7,7 @@ import {
   computeOtherBranchPricesBatch,
   resolvePriorCost,
   buildSuggestedBreakdownFromDecision,
+  bucketUnitsByWeek,
 } from "@/modules/pricing/tray-context-service";
 
 /**
@@ -183,4 +184,20 @@ test("el desglose detecta cuando el piso de la política cambió el número fina
 test("sin evidence o sin calculationSnapshot, el desglose es null (no inventa nada)", () => {
   assert.equal(buildSuggestedBreakdownFromDecision(null, { marginPercent: 50 }), null);
   assert.equal(buildSuggestedBreakdownFromDecision({ marginObjetivo: 30, commercialClass: "CZ" }, null), null);
+});
+
+test("LA QUE IMPORTA — bucketUnitsByWeek agrupa por semana (domingo a sábado), la más vieja primero", () => {
+  const buckets = bucketUnitsByWeek([
+    { createdAt: new Date("2026-09-06T10:00:00Z"), quantity: 5 }, // domingo
+    { createdAt: new Date("2026-09-09T10:00:00Z"), quantity: 3 }, // miércoles, misma semana
+    { createdAt: new Date("2026-09-15T10:00:00Z"), quantity: 7 }, // semana siguiente
+  ], 90);
+  assert.equal(buckets.length, 2);
+  assert.equal(buckets[0].units, 8, "domingo + miércoles de la misma semana se suman");
+  assert.equal(buckets[1].units, 7);
+  assert.ok(buckets[0].weekStart < buckets[1].weekStart, "la semana más vieja va primero");
+});
+
+test("bucketUnitsByWeek sin líneas da un array vacío, sin reventar", () => {
+  assert.deepEqual(bucketUnitsByWeek([], 90), []);
 });
