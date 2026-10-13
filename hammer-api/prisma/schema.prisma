@@ -2671,6 +2671,25 @@ model PricingConfig {
   prorationMethod       ProrationMethod @default(BY_QUANTITY)
   estimatedMonthlyUnits Decimal         @default(1000) /// Estimated units sold per month
   isActive              Boolean         @default(true)
+  /// Parte C.3 (prompt-completo-pendientes-2026-10.md) — "nada fijo en el
+  /// código": default de categoría cuando no hay BranchCategoryPricingPolicy
+  /// propia. La migración copia los 15/30 que antes vivían hardcodeados en
+  /// DEFAULT_POLICY, así que nada cambia hasta que el dueño los edite.
+  alertMinMarginPercent Decimal         @default(15)
+  targetMarginPercent   Decimal         @default(30)
+  /// Tolerancia (%) para que una revisión ("mantener precio") siga vigente
+  /// aunque el costo se haya movido un poco — por debajo de esto, la
+  /// alerta no vuelve; por encima, vuelve con el antes/después del costo.
+  reviewCostTolerancePercent Decimal    @default(3)
+  /// Interruptor "Ajustar el sugerido por rotación" — apagado, el sugerido
+  /// usa solo la meta de la política, sin la matriz ABC-XYZ.
+  abcXyzAdjustmentEnabled Boolean       @default(true)
+  /// null = usa la matriz default (CZ +20, CY +15, BZ/CX +10, AZ/BY +5,
+  /// AX -5). Con valor, un objeto completo {AX,AY,AZ,BX,BY,BZ,CX,CY,CZ}
+  /// con el ajuste de esta sucursal para cada clase — se guarda completo,
+  /// nunca parcial, para que un claseo faltante no caiga en un default
+  /// ambiguo (¿el de la matriz, o 0?).
+  abcXyzMarginDeltaJson Json?
   updatedByUserId       String?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt

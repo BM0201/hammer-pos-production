@@ -150,6 +150,11 @@ function createPoFakeStore(opts: {
     branchCategoryPricingPolicy: {
       findUnique: async () => null,
     },
+    // Parte C.3 (prompt-completo-pendientes-2026-10.md) — getCategoryPricingPolicy
+    // ahora también lee PricingConfig para el default de margen por sucursal.
+    pricingConfig: {
+      findUnique: async () => null,
+    },
     category: {
       findUnique: async () => ({ code: "GEN", name: "General" }),
     },

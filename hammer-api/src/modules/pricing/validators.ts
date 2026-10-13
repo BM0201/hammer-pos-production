@@ -54,11 +54,19 @@ export const updateExpenseSchema = z.object({
 
 /* ── Pricing Config Validators ───────────────────── */
 
+export const ABC_XYZ_CLASSES = ["AX", "AY", "AZ", "BX", "BY", "BZ", "CX", "CY", "CZ"] as const;
+
 export const upsertPricingConfigSchema = z.object({
   branchId: z.string().min(1, "Sucursal es requerida"),
   desiredMarginPercent: z.number().min(0.1).max(99.9, "El margen debe ser entre 0.1% y 99.9%"),
   prorationMethod: z.enum(PRORATION_METHODS).optional(),
   estimatedMonthlyUnits: z.number().positive("Las unidades estimadas deben ser > 0"),
+  // Parte C.3 (prompt-completo-pendientes-2026-10.md) — "nada fijo en el código".
+  alertMinMarginPercent: z.number().min(0).max(99.9).optional(),
+  targetMarginPercent: z.number().min(0).max(99.9).optional(),
+  reviewCostTolerancePercent: z.number().min(0).max(100).optional(),
+  abcXyzAdjustmentEnabled: z.boolean().optional(),
+  abcXyzMarginDeltaJson: z.record(z.enum(ABC_XYZ_CLASSES), z.number().min(-50).max(50)).optional().nullable(),
 });
 
 /* ── Suggested Price Validators ──────────────────── */

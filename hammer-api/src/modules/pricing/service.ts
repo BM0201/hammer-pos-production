@@ -350,6 +350,17 @@ export async function upsertPricingConfig(
   input: UpsertPricingConfigInput,
   actorUserId: string,
 ) {
+  // Parte C.3 — los 5 campos nuevos son opcionales en el schema (compat con
+  // callers viejos que no los mandan); solo se tocan cuando vienen, para no
+  // pisar un valor ya configurado con undefined en cada guardado del
+  // formulario viejo (margen/unidades/prorrateo).
+  const newFields = {
+    ...(input.alertMinMarginPercent !== undefined ? { alertMinMarginPercent: new Prisma.Decimal(input.alertMinMarginPercent) } : {}),
+    ...(input.targetMarginPercent !== undefined ? { targetMarginPercent: new Prisma.Decimal(input.targetMarginPercent) } : {}),
+    ...(input.reviewCostTolerancePercent !== undefined ? { reviewCostTolerancePercent: new Prisma.Decimal(input.reviewCostTolerancePercent) } : {}),
+    ...(input.abcXyzAdjustmentEnabled !== undefined ? { abcXyzAdjustmentEnabled: input.abcXyzAdjustmentEnabled } : {}),
+    ...(input.abcXyzMarginDeltaJson !== undefined ? { abcXyzMarginDeltaJson: input.abcXyzMarginDeltaJson === null ? Prisma.JsonNull : input.abcXyzMarginDeltaJson } : {}),
+  };
   const config = await prisma.pricingConfig.upsert({
     where: { branchId: input.branchId },
     create: {
@@ -358,12 +369,14 @@ export async function upsertPricingConfig(
       prorationMethod: (input.prorationMethod ?? "BY_QUANTITY") as any,
       estimatedMonthlyUnits: new Prisma.Decimal(input.estimatedMonthlyUnits),
       updatedByUserId: actorUserId,
+      ...newFields,
     },
     update: {
       desiredMarginPercent: new Prisma.Decimal(input.desiredMarginPercent),
       ...(input.prorationMethod ? { prorationMethod: input.prorationMethod as any } : {}),
       estimatedMonthlyUnits: new Prisma.Decimal(input.estimatedMonthlyUnits),
       updatedByUserId: actorUserId,
+      ...newFields,
     },
   });
 
@@ -378,6 +391,10 @@ export async function upsertPricingConfig(
       desiredMarginPercent: input.desiredMarginPercent,
       estimatedMonthlyUnits: input.estimatedMonthlyUnits,
       prorationMethod: input.prorationMethod,
+      alertMinMarginPercent: input.alertMinMarginPercent,
+      targetMarginPercent: input.targetMarginPercent,
+      reviewCostTolerancePercent: input.reviewCostTolerancePercent,
+      abcXyzAdjustmentEnabled: input.abcXyzAdjustmentEnabled,
     },
   });
 

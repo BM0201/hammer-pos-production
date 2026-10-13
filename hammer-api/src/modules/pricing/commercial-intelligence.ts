@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEffectiveProductPricing, getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
-import { resolvePolicyForProduct, resolvePolicyForProductBatch, type CategoryPricingPolicyDto } from "@/modules/pricing/category-policy-service";
+import { resolvePolicyForProduct, resolvePolicyForProductBatch, FALLBACK_POLICY_DEFAULTS, type CategoryPricingPolicyDto } from "@/modules/pricing/category-policy-service";
 import { resolveAbcXyzClassification, type AbcClass, type XyzClass, type CombinedAbcXyzClass } from "@/modules/analytics/abc-xyz-classification";
 import { excludeDerivedStockGroupMembers } from "@/modules/catalog/service";
 
@@ -34,6 +34,10 @@ export type CommercialIntelligenceInput = {
     "priceMode" |
     "roundingRule"
   > | null;
+  /** Parte C.3 — interruptor "Ajustar el sugerido por rotación" de la sucursal (PricingConfig.abcXyzAdjustmentEnabled). Apagado: el sugerido usa solo la meta de la política, sin la matriz ABC-XYZ. Default true (la migración lo deja como hoy). */
+  abcXyzAdjustmentEnabled?: boolean;
+  /** Parte C.3 — ajuste de margen (puntos %) por clase, de PricingConfig.abcXyzMarginDeltaJson. Reemplaza el marginDelta de esa clase en la matriz built-in; las clases sin override usan el default del código. */
+  abcXyzMarginDeltaOverrides?: Partial<Record<CombinedAbcXyzClass, number>> | null;
 };
 
 export type CommercialPricingRecommendation = {
@@ -69,16 +73,6 @@ export type CommercialAlert = {
   severity: "INFO" | "WARNING" | "DANGER";
 };
 
-const DEFAULT_POLICY = {
-  minMarginPercent: 15,
-  targetMarginPercent: 30,
-  minProfitAmount: 0,
-  maxDiscountPercent: 0,
-  stockPolicy: "NORMAL",
-  priceMode: "CATEGORY",
-  roundingRule: "NEAREST_1",
-};
-
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -91,15 +85,22 @@ function round1(value: number) {
   return Number(value.toFixed(1));
 }
 
+/**
+ * Parte C.3 — ÚLTIMO recurso: en la práctica, todo llamador real resuelve
+ * la política ANTES de llegar aquí (resolvePolicyForProduct/Batch, que ya
+ * lee PricingConfig de la sucursal) — este fallback a FALLBACK_POLICY_DEFAULTS
+ * solo protege contra un caller que no resolvió nada, no es "el default
+ * del sistema" (ese vive en PricingConfig, no en código).
+ */
 function normalizePolicy(input: CommercialIntelligenceInput["categoryPolicy"]) {
   return {
-    minMarginPercent: input?.minMarginPercent ?? DEFAULT_POLICY.minMarginPercent,
-    targetMarginPercent: input?.targetMarginPercent ?? DEFAULT_POLICY.targetMarginPercent,
-    minProfitAmount: input?.minProfitAmount ?? DEFAULT_POLICY.minProfitAmount,
-    maxDiscountPercent: input?.maxDiscountPercent ?? DEFAULT_POLICY.maxDiscountPercent,
-    stockPolicy: input?.stockPolicy ?? DEFAULT_POLICY.stockPolicy,
-    priceMode: input?.priceMode ?? DEFAULT_POLICY.priceMode,
-    roundingRule: input?.roundingRule ?? DEFAULT_POLICY.roundingRule,
+    minMarginPercent: input?.minMarginPercent ?? FALLBACK_POLICY_DEFAULTS.minMarginPercent,
+    targetMarginPercent: input?.targetMarginPercent ?? FALLBACK_POLICY_DEFAULTS.targetMarginPercent,
+    minProfitAmount: input?.minProfitAmount ?? FALLBACK_POLICY_DEFAULTS.minProfitAmount,
+    maxDiscountPercent: input?.maxDiscountPercent ?? FALLBACK_POLICY_DEFAULTS.maxDiscountPercent,
+    stockPolicy: input?.stockPolicy ?? FALLBACK_POLICY_DEFAULTS.stockPolicy,
+    priceMode: input?.priceMode ?? FALLBACK_POLICY_DEFAULTS.priceMode,
+    roundingRule: input?.roundingRule ?? FALLBACK_POLICY_DEFAULTS.roundingRule,
   };
 }
 
@@ -189,13 +190,14 @@ export function resolveCommercialPricingRecommendation(input: CommercialIntellig
   };
 
   const rule = matrix[classified.combinedClass];
-  const recommendedMarginPercent = round1(
-    clamp(
-      Math.max(policy.targetMarginPercent + rule.marginDelta, rule.minMargin ?? policy.minMarginPercent, policy.minMarginPercent),
-      0,
-      80,
-    ),
-  );
+  // Parte C.3 — "Ajustar el sugerido por rotación", apagado o encendido
+  // por sucursal. Apagado: el sugerido usa SOLO la meta de la política,
+  // la matriz ABC-XYZ no participa (ni su marginDelta ni su minMargin).
+  const adjustmentEnabled = input.abcXyzAdjustmentEnabled ?? true;
+  const marginDelta = adjustmentEnabled ? (input.abcXyzMarginDeltaOverrides?.[classified.combinedClass] ?? rule.marginDelta) : 0;
+  const recommendedMarginPercent = adjustmentEnabled
+    ? round1(clamp(Math.max(policy.targetMarginPercent + marginDelta, rule.minMargin ?? policy.minMarginPercent, policy.minMarginPercent), 0, 80))
+    : round1(clamp(policy.targetMarginPercent, 0, 80));
   const policyDiscount = policy.maxDiscountPercent > 0 ? policy.maxDiscountPercent : rule.discountDefault;
   const recommendedMaxDiscountPercent = round1(Math.max(0, Math.min(policyDiscount, rule.discountDefault)));
   const warnings = [
@@ -215,9 +217,16 @@ export function resolveCommercialPricingRecommendation(input: CommercialIntellig
     warnings,
     recommendedActions: rule.actions,
     targetMarginPercent: policy.targetMarginPercent,
-    marginDelta: rule.marginDelta,
+    marginDelta,
   };
 }
+
+/** Las 9 claves de la matriz ABC-XYZ, con su marginDelta default — lo que la pantalla de Políticas (Fase 4.4) edita por sucursal. */
+export const ABC_XYZ_DEFAULT_MARGIN_DELTAS: Record<CombinedAbcXyzClass, number> = {
+  AX: -5, AY: 0, AZ: 5,
+  BX: 0, BY: 5, BZ: 10,
+  CX: 10, CY: 15, CZ: 20,
+};
 
 function grossMarginPercent(price: number, cost: number | null) {
   if (cost === null || price <= 0) return null;
@@ -392,8 +401,9 @@ export async function buildCommercialIntelligenceBatch(
   if (items.length === 0) return result;
 
   const productIds = [...new Set(items.map((item) => item.productId))];
+  const branchIds = [...new Set(items.map((item) => item.branchId))];
 
-  const [products, balances, pricingByKey, policyByKey, signalsByKey] = await Promise.all([
+  const [products, balances, pricingByKey, policyByKey, signalsByKey, abcXyzConfigs] = await Promise.all([
     prisma.product.findMany({
       where: { id: { in: productIds } },
       select: { id: true, abcClassification: true, xyzClassification: true, averageDailySales: true, daysInStock: true },
@@ -405,10 +415,12 @@ export async function buildCommercialIntelligenceBatch(
     getEffectiveProductPricingBatch(prisma, items),
     resolvePolicyForProductBatch(items),
     getSalesSignalsBatch(items),
+    prisma.pricingConfig.findMany({ where: { branchId: { in: branchIds } }, select: { branchId: true, abcXyzAdjustmentEnabled: true, abcXyzMarginDeltaJson: true } }),
   ]);
 
   const productById = new Map(products.map((product) => [product.id, product]));
   const balanceByKey = new Map(balances.map((balance) => [`${balance.branchId}:${balance.productId}`, balance]));
+  const abcXyzConfigByBranch = new Map(abcXyzConfigs.map((c) => [c.branchId, c]));
 
   for (const { branchId, productId } of items) {
     const key = `${branchId}:${productId}`;
@@ -423,6 +435,7 @@ export async function buildCommercialIntelligenceBatch(
 
     const effectivePrice = pricing?.effectivePrice === null || pricing?.effectivePrice === undefined ? null : Number(pricing.effectivePrice);
     const effectiveCost = pricing?.effectiveCost === null || pricing?.effectiveCost === undefined ? null : Number(pricing.effectiveCost);
+    const abcXyzConfig = abcXyzConfigByBranch.get(branchId);
 
     result.set(key, resolveCommercialPricingRecommendation({
       productId: product.id,
@@ -440,6 +453,8 @@ export async function buildCommercialIntelligenceBatch(
       effectivePrice,
       grossMarginPercent: effectivePrice === null ? null : grossMarginPercent(effectivePrice, effectiveCost),
       categoryPolicy: policy?.categoryPolicy,
+      abcXyzAdjustmentEnabled: abcXyzConfig?.abcXyzAdjustmentEnabled,
+      abcXyzMarginDeltaOverrides: abcXyzConfig?.abcXyzMarginDeltaJson as Partial<Record<CombinedAbcXyzClass, number>> | null,
     }));
   }
 
@@ -447,7 +462,7 @@ export async function buildCommercialIntelligenceBatch(
 }
 
 export async function buildCommercialIntelligenceForProduct(input: { branchId: string; productId: string }) {
-  const [product, pricing, balance, policy, signals] = await Promise.all([
+  const [product, pricing, balance, policy, signals, abcXyzConfig] = await Promise.all([
     prisma.product.findUniqueOrThrow({
       where: { id: input.productId },
       select: {
@@ -465,6 +480,7 @@ export async function buildCommercialIntelligenceForProduct(input: { branchId: s
     }),
     resolvePolicyForProduct(input),
     getSalesSignals(input),
+    prisma.pricingConfig.findUnique({ where: { branchId: input.branchId }, select: { abcXyzAdjustmentEnabled: true, abcXyzMarginDeltaJson: true } }),
   ]);
 
   return resolveCommercialPricingRecommendation({
@@ -485,6 +501,8 @@ export async function buildCommercialIntelligenceForProduct(input: { branchId: s
       ? null
       : grossMarginPercent(Number(pricing.effectivePrice), pricing.effectiveCost === null ? null : Number(pricing.effectiveCost)),
     categoryPolicy: policy.categoryPolicy,
+    abcXyzAdjustmentEnabled: abcXyzConfig?.abcXyzAdjustmentEnabled,
+    abcXyzMarginDeltaOverrides: abcXyzConfig?.abcXyzMarginDeltaJson as Partial<Record<CombinedAbcXyzClass, number>> | null,
   });
 }
 

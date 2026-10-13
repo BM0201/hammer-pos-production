@@ -26,11 +26,39 @@ function marginPct(price: number, cost: number) {
  * classifyTenderForLedger en otros módulos. Solo aplica a settings con un
  * branchPrice fijado — sin eso no hay "última vez que alguien fijó el
  * precio de esta sucursal" que comparar.
+ *
+ * Parte C.3 (prompt-completo-pendientes-2026-10.md) — compara contra
+ * max(lastPriceUpdateAt, priceReviewedAt): "mantener el precio" (sin
+ * aplicar ningún número nuevo) también cuenta como "alguien ya lo revisó",
+ * no solo un precio recién aplicado.
  */
-export function isPriceStaleAgainstCost(input: { branchPrice: number | null; costUpdatedAt: Date | null; lastPriceUpdateAt: Date | null }): boolean {
+export function isPriceStaleAgainstCost(input: { branchPrice: number | null; costUpdatedAt: Date | null; lastPriceUpdateAt: Date | null; priceReviewedAt?: Date | null }): boolean {
   if (input.branchPrice === null) return false;
   if (!input.costUpdatedAt) return false;
-  return input.lastPriceUpdateAt === null || input.costUpdatedAt > input.lastPriceUpdateAt;
+  const lastKnownGood = [input.lastPriceUpdateAt, input.priceReviewedAt ?? null].filter((d): d is Date => d !== null).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+  return lastKnownGood === null || input.costUpdatedAt > lastKnownGood;
+}
+
+/**
+ * Parte C.3 — "la política sugiere y el dueño decide, y esa decisión se
+ * respeta": una revisión ("mantener precio") sigue vigente mientras el
+ * precio efectivo no haya cambiado desde entonces Y el costo no se haya
+ * movido más que la tolerancia de la sucursal. Fuera de esa ventana, la
+ * alerta vuelve — el dueño revisó un costo que ya no es el de hoy.
+ */
+export function isReviewStillValid(input: {
+  priceReviewedAt: Date | null;
+  priceReviewedPrice: number | null;
+  priceReviewedCost: number | null;
+  effectivePrice: number | null;
+  effectiveCost: number | null;
+  reviewCostTolerancePercent: number;
+}): boolean {
+  if (!input.priceReviewedAt || input.priceReviewedPrice === null || input.priceReviewedCost === null) return false;
+  if (input.effectivePrice === null || input.effectivePrice !== input.priceReviewedPrice) return false;
+  if (input.effectiveCost === null || input.priceReviewedCost <= 0) return false;
+  const costDeltaPercent = (Math.abs(input.effectiveCost - input.priceReviewedCost) / input.priceReviewedCost) * 100;
+  return costDeltaPercent <= input.reviewCostTolerancePercent;
 }
 
 export type BranchCostReferenceCheck = {
@@ -139,12 +167,24 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     ...balances.map((b) => ({ branchId: b.branchId, productId: b.productId })),
     ...branchSettings.map((s) => ({ branchId: s.branchId, productId: s.productId })),
   ];
-  const [pricingByKey, policyByKey, commercialByKey] = await Promise.all([
+  const branchIdsForTolerance = [...new Set(pairs.map((p) => p.branchId))];
+  const [pricingByKey, policyByKey, commercialByKey, toleranceConfigs] = await Promise.all([
     getEffectiveProductPricingBatch(prisma, pairs),
     resolvePolicyForProductBatch(pairs),
     buildCommercialIntelligenceBatch(pairs),
+    prisma.pricingConfig.findMany({ where: { branchId: { in: branchIdsForTolerance } }, select: { branchId: true, reviewCostTolerancePercent: true } }),
   ]);
   const balanceByKey = new Map(balances.map((b) => [`${b.branchId}:${b.productId}`, b]));
+  // Parte C.3 — "mantener el precio" guardado en BranchProductSetting; se
+  // lee de branchSettings (ya trae estos 3 campos sin seleccionarlos
+  // aparte) y se indexa UNA vez para que el loop de balances (que no es el
+  // mismo array) también lo pueda consultar.
+  const reviewByKey = new Map(branchSettings.map((s) => [
+    `${s.branchId}:${s.productId}`,
+    { priceReviewedAt: s.priceReviewedAt, priceReviewedPrice: s.priceReviewedPrice === null ? null : n(s.priceReviewedPrice), priceReviewedCost: s.priceReviewedCost === null ? null : n(s.priceReviewedCost) },
+  ]));
+  const toleranceByBranch = new Map(toleranceConfigs.map((c) => [c.branchId, Number(c.reviewCostTolerancePercent)]));
+  const DEFAULT_REVIEW_TOLERANCE = 3;
 
   for (const balance of balances) {
     const key = `${balance.branchId}:${balance.productId}`;
@@ -206,8 +246,17 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     const margin = marginPct(price, cost);
     const minMargin = policy.categoryPolicy.minMarginPercent;
     if (price <= cost || margin < minMargin) {
-      const marginSeverity = severityForMargin(margin);
       const isBelowCost = price <= cost;
+      // Parte C.3 — "bajo el costo siempre se emite, haya revisión o no";
+      // el margen-bajo-la-política SÍ respeta una revisión vigente ("ya lo
+      // revisé, está bien así") mientras el costo no se haya movido más
+      // que la tolerancia de la sucursal.
+      if (!isBelowCost) {
+        const review = reviewByKey.get(key);
+        const tolerance = toleranceByBranch.get(balance.branchId) ?? DEFAULT_REVIEW_TOLERANCE;
+        if (review && isReviewStillValid({ ...review, effectivePrice: price, effectiveCost: cost, reviewCostTolerancePercent: tolerance })) continue;
+      }
+      const marginSeverity = severityForMargin(margin, minMargin);
       const { severity, confidenceScore } = escalateForTopMover(isBelowCost ? "CRITICAL" : marginSeverity, isTopMover, 0.82);
       const suggestion = calculatePricingSuggestion({
         mode: "ADVANCED",
@@ -469,7 +518,7 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     const costUpdatedAt = setting.product.costUpdatedAt;
     if (!costUpdatedAt) continue;
     const branchPrice = setting.branchPrice === null ? null : n(setting.branchPrice);
-    if (!isPriceStaleAgainstCost({ branchPrice, costUpdatedAt, lastPriceUpdateAt: setting.lastPriceUpdateAt })) continue;
+    if (!isPriceStaleAgainstCost({ branchPrice, costUpdatedAt, lastPriceUpdateAt: setting.lastPriceUpdateAt, priceReviewedAt: setting.priceReviewedAt })) continue;
 
     const key = `${setting.branchId}:${setting.productId}`;
     const effective = pricingByKey.get(key);
@@ -479,6 +528,18 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
     const cost = effective.effectiveCost === null ? n(setting.branchCost) : n(effective.effectiveCost);
     const price = n(effective.effectivePrice);
     if (cost <= 0 || price <= 0) continue;
+
+    // Parte C.3 — misma revisión vigente que respeta REVIEW_PRICE_MARGIN_POLICY:
+    // "lo mantuviste" sigue valiendo mientras el costo no se mueva más que la tolerancia.
+    const tolerance = toleranceByBranch.get(setting.branchId) ?? DEFAULT_REVIEW_TOLERANCE;
+    if (isReviewStillValid({
+      priceReviewedAt: setting.priceReviewedAt,
+      priceReviewedPrice: setting.priceReviewedPrice === null ? null : n(setting.priceReviewedPrice),
+      priceReviewedCost: setting.priceReviewedCost === null ? null : n(setting.priceReviewedCost),
+      effectivePrice: price,
+      effectiveCost: cost,
+      reviewCostTolerancePercent: tolerance,
+    })) continue;
 
     const currentMargin = marginPct(price, cost);
     const minMargin = policy.categoryPolicy.minMarginPercent;
@@ -516,7 +577,12 @@ export async function detectPricingDecisions(ctx: BrainDetectorContext): Promise
       category: "PRICING",
       severity,
       title: `Costo actualizado, precio sin tocar: ${setting.product.sku} - ${setting.product.name}`,
-      description: `${setting.branch.code}: el costo cambió el ${costUpdatedAt.toISOString().slice(0, 10)}${setting.lastPriceUpdateAt ? `, después de la última actualización de precio (${setting.lastPriceUpdateAt.toISOString().slice(0, 10)})` : " y este precio nunca registró cuándo se fijó"}. Margen efectivo hoy: ${currentMargin.toFixed(1)}%.${commercial.abcClass === "A" ? " Es uno de los productos que más se mueve (clase A)." : ""}`,
+      // Parte C.3 — si había una revisión ("mantener precio") que ya no
+      // cubre el costo de hoy (por eso llegamos acá pese a isReviewStillValid),
+      // decirlo con el antes/después del costo en vez del genérico de siempre.
+      description: setting.priceReviewedAt && setting.priceReviewedCost !== null
+        ? `${setting.branch.code}: lo mantuviste en C$ ${n(setting.priceReviewedPrice).toFixed(2)} el ${setting.priceReviewedAt.toISOString().slice(0, 10)}; el costo pasó de C$ ${n(setting.priceReviewedCost).toFixed(2)} a C$ ${cost.toFixed(2)}. Margen efectivo hoy: ${currentMargin.toFixed(1)}%.${commercial.abcClass === "A" ? " Es uno de los productos que más se mueve (clase A)." : ""}`
+        : `${setting.branch.code}: el costo cambió el ${costUpdatedAt.toISOString().slice(0, 10)}${setting.lastPriceUpdateAt ? `, después de la última actualización de precio (${setting.lastPriceUpdateAt.toISOString().slice(0, 10)})` : " y este precio nunca registró cuándo se fijó"}. Margen efectivo hoy: ${currentMargin.toFixed(1)}%.${commercial.abcClass === "A" ? " Es uno de los productos que más se mueve (clase A)." : ""}`,
       recommendation: "Recalcular el precio con el costo actual y aplicar la sugerencia.",
       branchId: setting.branchId,
       productId: setting.productId,

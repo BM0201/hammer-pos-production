@@ -83,10 +83,16 @@ export function severityForInventoryGap(quantity: number, threshold = 0): BrainD
   return "LOW";
 }
 
-export function severityForMargin(marginPct: number): BrainDecisionSeverity {
+/**
+ * Parte C.3 (prompt-completo-pendientes-2026-10.md) — "nada fijo en el
+ * código": la escala es relativa al mínimo de LA SUCURSAL/categoría
+ * (`minMarginPercent`, de PricingConfig/BranchCategoryPricingPolicy), no
+ * contra 10/20 fijos. Bajo el costo sigue siendo CRITICAL siempre.
+ */
+export function severityForMargin(marginPct: number, minMarginPercent: number): BrainDecisionSeverity {
   if (marginPct < 0) return "CRITICAL";
-  if (marginPct < 10) return "HIGH";
-  if (marginPct < 20) return "MEDIUM";
+  if (marginPct < minMarginPercent / 2) return "HIGH";
+  if (marginPct < minMarginPercent) return "MEDIUM";
   return "LOW";
 }
 

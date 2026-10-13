@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isPriceStaleAgainstCost, evaluateBranchCostAgainstReference, escalateForTopMover } from "@/modules/brain/detectors/pricing-detector";
+import { isPriceStaleAgainstCost, isReviewStillValid, evaluateBranchCostAgainstReference, escalateForTopMover } from "@/modules/brain/detectors/pricing-detector";
 
 /**
  * Fase 1.2 (prompt-motor-precios-lote-herencia-gobierno.md) — la señal
@@ -53,6 +53,108 @@ test("sin branchPrice fijado, no hay 'última vez que se fijó el precio' que co
 
 test("sin costUpdatedAt (nunca se registró el costo), no hay nada que comparar — no dispara", () => {
   assert.equal(isPriceStaleAgainstCost({ branchPrice: 150, costUpdatedAt: null, lastPriceUpdateAt: null }), false);
+});
+
+/**
+ * Parte C.3 (prompt-completo-pendientes-2026-10.md) — "la política sugiere
+ * y el dueño decide, y esa decisión se respeta": priceReviewedAt cuenta
+ * como "alguien ya lo revisó", igual que lastPriceUpdateAt.
+ */
+test("LA QUE IMPORTA — priceReviewedAt POSTERIOR al cambio de costo también apaga la señal (mantener precio cuenta como revisión)", () => {
+  assert.equal(
+    isPriceStaleAgainstCost({
+      branchPrice: 150,
+      costUpdatedAt: new Date("2026-08-01T00:00:00Z"),
+      lastPriceUpdateAt: null,
+      priceReviewedAt: new Date("2026-08-10T00:00:00Z"),
+    }),
+    false,
+  );
+});
+
+test("priceReviewedAt ANTERIOR al cambio de costo no apaga nada — la revisión ya quedó vieja", () => {
+  assert.equal(
+    isPriceStaleAgainstCost({
+      branchPrice: 150,
+      costUpdatedAt: new Date("2026-08-20T00:00:00Z"),
+      lastPriceUpdateAt: null,
+      priceReviewedAt: new Date("2026-08-10T00:00:00Z"),
+    }),
+    true,
+  );
+});
+
+test("se usa el MÁS RECIENTE entre lastPriceUpdateAt y priceReviewedAt", () => {
+  assert.equal(
+    isPriceStaleAgainstCost({
+      branchPrice: 150,
+      costUpdatedAt: new Date("2026-08-15T00:00:00Z"),
+      lastPriceUpdateAt: new Date("2026-08-01T00:00:00Z"), // viejo
+      priceReviewedAt: new Date("2026-08-20T00:00:00Z"), // más reciente, posterior al costo
+    }),
+    false,
+    "priceReviewedAt (20) es posterior al cambio de costo (15), aunque lastPriceUpdateAt (01) no lo sea",
+  );
+});
+
+/**
+ * Parte C.3 — isReviewStillValid decide si "mantener precio" sigue
+ * respetándose: mismo precio, mismo costo dentro de tolerancia.
+ */
+test("LA QUE IMPORTA — isReviewStillValid: mismo precio y costo dentro de tolerancia → sigue vigente", () => {
+  assert.equal(
+    isReviewStillValid({
+      priceReviewedAt: new Date("2026-08-10T00:00:00Z"),
+      priceReviewedPrice: 100,
+      priceReviewedCost: 70,
+      effectivePrice: 100,
+      effectiveCost: 71, // 1.4% de cambio, dentro de 3%
+      reviewCostTolerancePercent: 3,
+    }),
+    true,
+  );
+});
+
+test("LA QUE IMPORTA — isReviewStillValid: el costo se movió MÁS que la tolerancia → ya no vale", () => {
+  assert.equal(
+    isReviewStillValid({
+      priceReviewedAt: new Date("2026-08-10T00:00:00Z"),
+      priceReviewedPrice: 100,
+      priceReviewedCost: 70,
+      effectivePrice: 100,
+      effectiveCost: 80, // 14% de cambio, más que 3%
+      reviewCostTolerancePercent: 3,
+    }),
+    false,
+  );
+});
+
+test("isReviewStillValid: el precio efectivo cambió desde la revisión → ya no vale (alguien lo tocó)", () => {
+  assert.equal(
+    isReviewStillValid({
+      priceReviewedAt: new Date("2026-08-10T00:00:00Z"),
+      priceReviewedPrice: 100,
+      priceReviewedCost: 70,
+      effectivePrice: 105,
+      effectiveCost: 70,
+      reviewCostTolerancePercent: 3,
+    }),
+    false,
+  );
+});
+
+test("isReviewStillValid: sin revisión previa (priceReviewedAt null) → nunca vale", () => {
+  assert.equal(
+    isReviewStillValid({
+      priceReviewedAt: null,
+      priceReviewedPrice: null,
+      priceReviewedCost: null,
+      effectivePrice: 100,
+      effectiveCost: 70,
+      reviewCostTolerancePercent: 3,
+    }),
+    false,
+  );
 });
 
 /**

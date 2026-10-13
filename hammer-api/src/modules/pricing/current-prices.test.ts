@@ -89,6 +89,14 @@ function makeFakeDb(fixtures: {
         return fixtures.policies.filter((p) => inArray(where, "branchId", p.branchId) && inArray(where, "categoryId", p.categoryId));
       },
     },
+    // Parte C.3 (prompt-completo-pendientes-2026-10.md) — resolvePolicyForProductBatch
+    // ahora también lee PricingConfig para el default de margen por sucursal
+    // (reemplaza el 15/30 fijo); null/[] = usa FALLBACK_POLICY_DEFAULTS, que
+    // coincide con los números que estos tests ya esperaban.
+    pricingConfig: {
+      findUnique: async () => null,
+      findMany: async () => [],
+    },
     // Parte B.2 (prompt-precios-mejoras-bandeja-visibilidad.md) — getCurrentPrices
     // ahora también consulta AuditLog para "quién fijó el costo manual" de un
     // BranchProductSetting con costSource BRANCH.

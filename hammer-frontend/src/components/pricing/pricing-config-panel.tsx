@@ -22,6 +22,11 @@ export function PricingConfigPanel({ branchId, onSaved }: { branchId: string; on
     desiredMarginPercent: "30",
     estimatedMonthlyUnits: "1000",
     prorationMethod: "BY_QUANTITY",
+    // Parte C.3 (prompt-completo-pendientes-2026-10.md) — "nada fijo en el código".
+    alertMinMarginPercent: "15",
+    targetMarginPercent: "30",
+    reviewCostTolerancePercent: "3",
+    abcXyzAdjustmentEnabled: true,
   });
 
   const load = useCallback(async () => {
@@ -36,11 +41,18 @@ export function PricingConfigPanel({ branchId, onSaved }: { branchId: string; on
       const cfgData = unwrapApiData(await cfgRes.json());
       setSummary(sumData as ExpenseSummary);
       if (cfgData && (cfgData as { id?: string }).id) {
-        const cfg = cfgData as { desiredMarginPercent: number; estimatedMonthlyUnits: number; prorationMethod: string };
+        const cfg = cfgData as {
+          desiredMarginPercent: number; estimatedMonthlyUnits: number; prorationMethod: string;
+          alertMinMarginPercent?: number; targetMarginPercent?: number; reviewCostTolerancePercent?: number; abcXyzAdjustmentEnabled?: boolean;
+        };
         setConfigForm({
           desiredMarginPercent: String(cfg.desiredMarginPercent),
           estimatedMonthlyUnits: String(cfg.estimatedMonthlyUnits),
           prorationMethod: cfg.prorationMethod || "BY_QUANTITY",
+          alertMinMarginPercent: String(cfg.alertMinMarginPercent ?? 15),
+          targetMarginPercent: String(cfg.targetMarginPercent ?? 30),
+          reviewCostTolerancePercent: String(cfg.reviewCostTolerancePercent ?? 3),
+          abcXyzAdjustmentEnabled: cfg.abcXyzAdjustmentEnabled ?? true,
         });
       }
     } catch (e) {
@@ -65,6 +77,10 @@ export function PricingConfigPanel({ branchId, onSaved }: { branchId: string; on
           desiredMarginPercent: parseFloat(configForm.desiredMarginPercent),
           estimatedMonthlyUnits: parseFloat(configForm.estimatedMonthlyUnits),
           prorationMethod: configForm.prorationMethod,
+          alertMinMarginPercent: parseFloat(configForm.alertMinMarginPercent),
+          targetMarginPercent: parseFloat(configForm.targetMarginPercent),
+          reviewCostTolerancePercent: parseFloat(configForm.reviewCostTolerancePercent),
+          abcXyzAdjustmentEnabled: configForm.abcXyzAdjustmentEnabled,
         }),
       });
       if (!res.ok) throw new Error("Failed");
@@ -163,6 +179,35 @@ export function PricingConfigPanel({ branchId, onSaved }: { branchId: string; on
                 ? "Gastos se reparten segun participacion economica del producto o lote."
                 : "Gastos se dividen equitativamente entre unidades vendidas."}
             </p>
+          </div>
+
+          {/* Parte C.3 (prompt-completo-pendientes-2026-10.md) — "nada fijo en el código": estos 4 campos reemplazan el 15/30 y la matriz ABC-XYZ que antes vivían en el código fuente. */}
+          <div className="rounded-xl border-2 border-slate-200 bg-slate-50 p-4 space-y-4">
+            <p className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">Cuándo aparece en la Bandeja de precios</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="text-xs font-semibold text-slate-600">
+                Margen mínimo para alertar (%)
+                <input type="number" min="0" max="99.9" step="0.1" value={configForm.alertMinMarginPercent} onChange={(e) => setConfigForm((p) => ({ ...p, alertMinMarginPercent: e.target.value }))} className="mt-1 w-full rounded-lg border-2 border-slate-300 px-3 py-2 text-sm font-semibold" />
+                <span className="mt-1 block font-normal text-slate-500">Por debajo de este margen, el producto aparece en la Bandeja.</span>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Margen meta (%)
+                <input type="number" min="0" max="99.9" step="0.1" value={configForm.targetMarginPercent} onChange={(e) => setConfigForm((p) => ({ ...p, targetMarginPercent: e.target.value }))} className="mt-1 w-full rounded-lg border-2 border-slate-300 px-3 py-2 text-sm font-semibold" />
+                <span className="mt-1 block font-normal text-slate-500">La base del precio sugerido, antes del ajuste por rotación.</span>
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Tolerancia de revisión (%)
+                <input type="number" min="0" max="100" step="0.5" value={configForm.reviewCostTolerancePercent} onChange={(e) => setConfigForm((p) => ({ ...p, reviewCostTolerancePercent: e.target.value }))} className="mt-1 w-full rounded-lg border-2 border-slate-300 px-3 py-2 text-sm font-semibold" />
+                <span className="mt-1 block font-normal text-slate-500">Cuánto puede moverse el costo antes de que &quot;mantener precio&quot; deje de valer.</span>
+              </label>
+              <label className="flex items-start gap-2 text-xs font-semibold text-slate-600">
+                <input type="checkbox" checked={configForm.abcXyzAdjustmentEnabled} onChange={(e) => setConfigForm((p) => ({ ...p, abcXyzAdjustmentEnabled: e.target.checked }))} className="mt-0.5 h-4 w-4" />
+                <span>
+                  Ajustar el sugerido por rotación
+                  <span className="mt-1 block font-normal text-slate-500">Apagado: el sugerido usa solo la meta, sin subir/bajar por clase ABC-XYZ.</span>
+                </span>
+              </label>
+            </div>
           </div>
 
           {/* Resumen rápido de gastos */}
