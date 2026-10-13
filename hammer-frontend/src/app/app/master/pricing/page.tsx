@@ -12,10 +12,10 @@ import { PricingConfigPanel } from "@/components/pricing/pricing-config-panel";
 import { PriceLoadTab, type LoadSeed } from "@/components/pricing/price-load-tab";
 import { TrayRow, type TrayRowData, type ReferenceChip } from "@/components/pricing/tray-row";
 import { TrayDetailDrawer, type PricingTrayDecisionContext } from "@/components/pricing/tray-detail-drawer";
+import { CostCorrectionSheet } from "@/components/pricing/cost-correction-sheet";
 import {
   parsePriceInput,
   shouldConfirmBigChange,
-  buildBatchSummary,
   priceForMethod,
   readGainOrderPreference,
   writeGainOrderPreference,
@@ -300,10 +300,11 @@ function PricingTrayTab({
   const [categoryFilter, setCategoryFilter] = useState("");
   const [reasonFilter, setReasonFilter] = useState<Reason | "">("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [confirming, setConfirming] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const [lastApplyResult, setLastApplyResult] = useState<ApplyResponse | null>(null);
   const [scanning, setScanning] = useState(false);
+  // D · Fase 2 (prompt-completo-pendientes-2026-10.md) — "Revisar y aplicar"
+  // reemplaza el modal "Confirmar aplicación en lote": se abre con los
+  // seleccionados, o con un solo producto desde "Corregir" en el menú de fila.
+  const [correctionRows, setCorrectionRows] = useState<TrayRowDto[] | null>(null);
 
   // Parte C.4 (prompt-completo-pendientes-2026-10.md) — "la Bandeja como mesa
   // de decisión": precio editable por fila (precargado con el ACTUAL, no el
@@ -497,42 +498,6 @@ function PricingTrayTab({
     const idx = flatRowOrder.indexOf(fromDecisionId);
     if (idx === -1) return;
     focusRow(flatRowOrder[idx + direction]);
-  }
-
-  const summary = useMemo(() => {
-    if (selectedRows.length === 0) return null;
-    return buildBatchSummary(selectedRows.map((r) => ({ previousPrice: r.currentPrice, newPrice: parsePriceInput(priceInputs[r.decisionId] ?? "") })));
-  }, [selectedRows, priceInputs]);
-
-  async function applySelection() {
-    setApplying(true);
-    try {
-      const items = [...selected].map((decisionId) => {
-        const price = parsePriceInput(priceInputs[decisionId] ?? "");
-        const method = methodByRow[decisionId] ?? "SUGGESTED";
-        return price !== null ? { decisionId, price, method } : { decisionId };
-      });
-      const res = await apiFetch("/api/master/pricing/tray/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items, reason: "Aplicado desde la bandeja de precios" }),
-      });
-      const raw = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo aplicar la selección.");
-      const result = unwrapApiData(raw) as ApplyResponse;
-      setLastApplyResult(result);
-      if (result.failed.length === 0) {
-        toast.success(`${result.applied.length} precio(s) aplicado(s).`);
-      } else {
-        toast.error(`${result.applied.length} aplicado(s), ${result.failed.length} con error.`);
-      }
-      setConfirming(false);
-      void load();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo aplicar la selección.");
-    } finally {
-      setApplying(false);
-    }
   }
 
   async function applyOneDecision(decisionId: string, price: number, method: PriceApplyMethod) {
@@ -874,15 +839,6 @@ function PricingTrayTab({
         </div>
       )}
 
-      {lastApplyResult && lastApplyResult.failed.length > 0 && (
-        <Card className="border-[var(--color-danger-200)] bg-[var(--color-danger-50)] p-4">
-          <h3 className="mb-2 text-sm font-semibold text-[var(--color-danger-700)]">{lastApplyResult.failed.length} no se pudieron aplicar</h3>
-          <ul className="space-y-1 text-xs text-[var(--color-danger-700)]">
-            {lastApplyResult.failed.map((f) => <li key={f.decisionId}>{f.decisionId}: {f.reason}</li>)}
-          </ul>
-        </Card>
-      )}
-
       {selected.size > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 shadow-2xl md:pl-[calc(var(--sidebar-width,0px)+1rem)]">
           <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
@@ -899,7 +855,7 @@ function PricingTrayTab({
                 )}
               </div>
               <Button type="button" variant="ghost" size="sm" onClick={() => setKeepTarget([...selected])}>Mantener seleccionadas</Button>
-              <Button type="button" variant="success" onClick={() => setConfirming(true)}>
+              <Button type="button" variant="success" onClick={() => setCorrectionRows(selectedRows)}>
                 Aplicar seleccionados ({selected.size})
               </Button>
             </div>
@@ -907,26 +863,7 @@ function PricingTrayTab({
         </div>
       )}
 
-      {confirming && summary && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md space-y-4 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
-            <h3 className="text-sm font-semibold text-[var(--color-text)]">Confirmar aplicación en lote</h3>
-            <p className="text-sm text-[var(--color-text-muted)]">
-              Aplicar precios en lote es irreversible en la práctica. Antes de confirmar:
-            </p>
-            <div className="space-y-1.5 rounded-lg bg-[var(--color-surface-alt)] p-3 text-sm">
-              <p><strong className="text-[var(--color-text)]">{summary.count}</strong> producto{summary.count === 1 ? "" : "s"} · <strong className="text-[var(--color-success-700)]">{summary.upCount} suben</strong> · <strong className="text-[var(--color-danger-600)]">{summary.downCount} bajan</strong>{summary.sameCount > 0 ? ` · ${summary.sameCount} sin cambio` : ""}</p>
-              <p>Promedio: <strong className="text-[var(--color-text)]">{fmt(summary.avgBefore)} → {fmt(summary.avgAfter)}</strong></p>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setConfirming(false)} disabled={applying}>Cancelar</Button>
-              <Button type="button" variant="success" onClick={() => void applySelection()} loading={applying}>Confirmar</Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* "⋯" — Ver detalle / Enviar a carga de precios / Aplicar también en… */}
+      {/* "⋯" — Ver detalle / Corregir / Enviar a carga de precios / Aplicar también en… */}
       {rowMenuFor && (() => {
         const row = (data?.rows ?? []).find((r) => r.decisionId === rowMenuFor);
         if (!row) return null;
@@ -934,6 +871,7 @@ function PricingTrayTab({
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setRowMenuFor(null)}>
             <div className="w-full max-w-xs space-y-1 rounded-t-xl bg-[var(--color-surface)] p-2 shadow-2xl sm:rounded-xl" onClick={(e) => e.stopPropagation()}>
               <button type="button" onClick={() => { openDetail(row.decisionId); setRowMenuFor(null); }} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-alt)]">Ver detalle</button>
+              <button type="button" onClick={() => { setCorrectionRows([row]); setRowMenuFor(null); }} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-alt)]">Corregir</button>
               <button type="button" onClick={() => { onSendToLoads({ branchId: row.branchId, products: [{ productId: row.productId, sku: row.productSku, name: row.productName }] }); setRowMenuFor(null); }} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-alt)]">Enviar a carga de precios</button>
               {row.applicable && (
                 <button type="button" onClick={() => { setAlsoBranchesFor(row.decisionId); setAlsoBranchIds(new Set()); setRowMenuFor(null); }} className="block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-alt)]">Aplicar también en…</button>
@@ -943,6 +881,16 @@ function PricingTrayTab({
           </div>
         );
       })()}
+
+      {correctionRows && (
+        <CostCorrectionSheet
+          rows={correctionRows}
+          branchName={branchName}
+          gainOrderPreference={gainOrderPreference}
+          onClose={() => setCorrectionRows(null)}
+          onDone={() => { setCorrectionRows(null); setSelected(new Set()); void load(); }}
+        />
+      )}
 
       {/* Detalle (Fase 4.2) */}
       {expandedRow && (() => {
