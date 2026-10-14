@@ -390,6 +390,8 @@ export type StartContinuousScanOptions = {
   onDecode: (rawText: string) => void;
   /** Solo errores REALES (permiso denegado, cámara ocupada) — "no hay código en este cuadro" es el caso normal entre lecturas y nunca llega acá. */
   onError?: (error: unknown) => void;
+  /** E · Fase 3 — detalle opcional de cada lectura ACEPTADA (formato, si el dígito verificador aplicaba y pasó, milisegundos desde que se abrió la cámara) para la página de diagnóstico. Nadie más lo necesita — CameraScanner no lo usa. */
+  onDecodeDetail?: (detail: { code: string; format: SupportedFormat | "unknown"; checksumValid: boolean | null; elapsedSinceOpenMs: number }) => void;
 };
 
 type ExtendedCapabilities = MediaTrackCapabilities & { torch?: boolean; zoom?: { min: number; max: number; step: number }; focusMode?: string[]; exposureMode?: string[] };
@@ -443,15 +445,24 @@ export function startContinuousScan(options: StartContinuousScanOptions): Scanne
 
   /** Única puerta de salida de una lectura candidata — checksum + consenso, sin importar qué bucle la trajo (frame-loop o zxing-js). */
   function acceptCandidate(rawValue: string, format: string, now: number) {
+    let checksumValid: boolean | null = null;
     if (format === "upc_e") {
       const expanded = expandUpcEToUpcA(rawValue);
-      if (!expanded || !isValidGtinChecksum(expanded)) return; // descartado en silencio (1.4).
-    } else if (GTIN_FORMATS.has(format as SupportedFormat) && !isValidGtinChecksum(rawValue)) {
-      return; // descartado en silencio (1.4).
+      checksumValid = Boolean(expanded) && isValidGtinChecksum(expanded!);
+      if (!checksumValid) return; // descartado en silencio (1.4).
+    } else if (GTIN_FORMATS.has(format as SupportedFormat)) {
+      checksumValid = isValidGtinChecksum(rawValue);
+      if (!checksumValid) return; // descartado en silencio (1.4).
     }
     const needsConsensus = format !== "qr_code" && engine !== "native";
     if (needsConsensus && !consensus.feed(rawValue, now)) return;
     options.onDecode(rawValue);
+    options.onDecodeDetail?.({
+      code: rawValue,
+      format: (SUPPORTED_FORMATS as readonly string[]).includes(format) ? (format as SupportedFormat) : "unknown",
+      checksumValid,
+      elapsedSinceOpenMs: Math.round(now - startedAt),
+    });
   }
 
   async function runFrameLoop() {

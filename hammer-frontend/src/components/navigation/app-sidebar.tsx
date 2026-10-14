@@ -44,6 +44,7 @@ import {
   Settings,
   Brain,
   Printer,
+  ScanBarcode,
   Factory,
   History,
   Merge,
@@ -131,6 +132,7 @@ const MASTER_NAV: NavSection[] = [
       { href: "/app/master/audit", label: "Auditoría", icon: ScrollText, capabilities: [CAPABILITIES.AUDIT_VIEW] },
       { href: "/app/master/settings/print", label: "Impresión", icon: Printer },
       { href: "/app/master/settings/payroll", label: "Nómina", icon: Receipt },
+      { href: "/app/master/settings/scanner-test", label: "Prueba de Escáner", icon: ScanBarcode, capabilities: [CAPABILITIES.MASTER_ACCESS] },
     ],
   },
   {
