@@ -11,6 +11,7 @@ import { getProductStockConversion } from "@/modules/inventory/unit-conversion";
 import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
 import { resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
+import { suspectCostEqualsPrice } from "@/modules/pricing/cost-correction-service";
 
 export const INVENTORY_IMPORT_BATCH_STATUS = {
   UPLOADED: "UPLOADED",
@@ -204,6 +205,18 @@ export function buildImportPreviewCsv(items: UnifiedImportItem[]) {
     ]);
   }
   return rows.map((row) => row.map(toCsvValue).join(",")).join("\n");
+}
+
+/**
+ * D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "prevención en el
+ * saldo inicial y la importación": si una fila trae costo = precio exacto,
+ * es casi siempre un error de carga (se tecleó el precio en la columna del
+ * costo, o al revés) — mismo criterio que suspectCostEqualsPrice
+ * (cost-correction-service.ts), reusado, no reimplementado. NO bloquea el
+ * import — solo avisa en la vista previa.
+ */
+export function countCostEqualsPriceRows(items: Array<{ unitCost: number | null; standardSalePrice: number | null }>): number {
+  return items.filter((item) => suspectCostEqualsPrice(item.unitCost, item.standardSalePrice) !== null).length;
 }
 
 /* ── Analyze: detect missing categories and new products before preview ── */
@@ -477,6 +490,9 @@ export async function previewUnifiedCatalogInventoryImport(input: PreviewInput) 
     errors: items.filter((item) => item.status === "ERROR").length,
     status: INVENTORY_IMPORT_BATCH_STATUS.PREVIEWED,
     priceChangeCount: priceChanges.length,
+    // D · Fase 3 — "Costo igual al precio en N filas: ¿lo cargaste en la
+    // columna correcta?", no bloqueante.
+    costEqualsPriceCount: countCostEqualsPriceRows(items.map((item) => ({ unitCost: item.unitCost, standardSalePrice: item.standardSalePrice }))),
   };
   const previewCsv = buildImportPreviewCsv(items);
 

@@ -33,6 +33,7 @@ import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { printProductLabels } from "@/lib/client/print-product-labels";
 import { money, qty, fmtDateTime } from "@/lib/format";
+import { CostOnlyCorrectionModal } from "@/components/pricing/cost-only-correction-modal";
 
 // Fase 5 (prompt-flujo-velocidad.md): las 3 pestañas más pesadas de esta
 // ficha de producto (Kardex, historial de costo, historial de precio) se
@@ -162,10 +163,13 @@ export function Product360({ productId }: { productId: string }) {
   });
   const [error, setError] = useState("");
   const [printingLabel, setPrintingLabel] = useState(false);
+  // D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "Corregir costo" en
+  // la pestaña de Precios y Costos: qué sucursal tiene el modal abierto.
+  const [correctingBranchId, setCorrectingBranchId] = useState<string | null>(null);
   const sessionState = useSession();
 
-  useEffect(() => {
-    fetch(`/api/master/catalog-inventory/products/${productId}`, { cache: "no-store" })
+  const reloadProduct = useCallback(() => {
+    return fetch(`/api/master/catalog-inventory/products/${productId}`, { cache: "no-store" })
       .then(async (response) => {
         const raw = await response.json();
         if (!response.ok) throw new Error(raw.message ?? "No se pudo cargar el producto.");
@@ -173,6 +177,8 @@ export function Product360({ productId }: { productId: string }) {
       })
       .catch((err) => setError(err instanceof Error ? err.message : "No se pudo cargar el producto."));
   }, [productId]);
+
+  useEffect(() => { void reloadProduct(); }, [reloadProduct]);
 
   /* ── Loading / Error states ── */
   if (error) {
@@ -417,6 +423,7 @@ export function Product360({ productId }: { productId: string }) {
                       <th>Sucursal</th>
                       <th className="text-center">Disponible</th>
                       <th className="text-right">Costo Sucursal</th>
+                      <th />
                     </tr>
                   </thead>
                   <tbody>
@@ -438,6 +445,9 @@ export function Product360({ productId }: { productId: string }) {
                           )}
                         </td>
                         <td className="text-right font-mono">{s.branchCost ? money(s.branchCost) : <span className="text-[var(--color-text-muted)]">Base</span>}</td>
+                        <td className="text-right">
+                          <button type="button" onClick={() => setCorrectingBranchId(s.branch.id)} className="text-xs font-semibold text-[var(--color-primary-600)] underline underline-offset-2">Corregir costo</button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -445,6 +455,16 @@ export function Product360({ productId }: { productId: string }) {
               </div>
             )}
           </div>
+
+          {correctingBranchId && (
+            <CostOnlyCorrectionModal
+              productId={product.id}
+              branchId={correctingBranchId}
+              productName={product.name}
+              onClose={() => setCorrectingBranchId(null)}
+              onDone={() => { setCorrectingBranchId(null); toast.success("Costo corregido."); void reloadProduct(); }}
+            />
+          )}
 
           <BranchPricingBlock productId={product.id} standardSalePriceFallback={product.standardSalePrice} />
         </div>

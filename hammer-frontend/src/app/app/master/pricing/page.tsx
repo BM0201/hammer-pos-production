@@ -13,6 +13,7 @@ import { PriceLoadTab, type LoadSeed } from "@/components/pricing/price-load-tab
 import { TrayRow, type TrayRowData, type ReferenceChip } from "@/components/pricing/tray-row";
 import { TrayDetailDrawer, type PricingTrayDecisionContext } from "@/components/pricing/tray-detail-drawer";
 import { CostCorrectionSheet } from "@/components/pricing/cost-correction-sheet";
+import { CostOnlyCorrectionModal } from "@/components/pricing/cost-only-correction-modal";
 import {
   parsePriceInput,
   shouldConfirmBigChange,
@@ -1088,6 +1089,9 @@ type CurrentPriceRow = {
   lastPriceUpdateAt: string | null;
   stockOnHand: number;
   canonicalProductLabel: string | null;
+  /** D · Fase 3 (prompt-completo-pendientes-2026-10.md) — mismas sospechas que la Bandeja, calculadas acá también para productos sin ninguna BrainDecision abierta todavía. */
+  costLooksWrong: boolean;
+  costSuspicionMessage: string | null;
 };
 
 type CurrentPricesTotals = {
@@ -1097,6 +1101,8 @@ type CurrentPricesTotals = {
   missingCostCount: number;
   /** Parte B.3 — contador del encabezado: "N productos con costo manual por sucursal". */
   branchCostCount: number;
+  /** D · Fase 3 — cuántas filas tienen costo dudoso. */
+  costDoubtfulCount: number;
 };
 
 type CurrentPricesResponse = {
@@ -1129,8 +1135,11 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [priceSourceFilter, setPriceSourceFilter] = useState<CurrentPriceSource | "">("");
+  const [costLooksWrongFilter, setCostLooksWrongFilter] = useState(false);
   const [sort, setSort] = useState<CurrentPricesSort>("name");
   const [page, setPage] = useState(1);
+  // D · Fase 3 — fila cuyo "Corregir costo" está abierto.
+  const [correctingRow, setCorrectingRow] = useState<CurrentPriceRow | null>(null);
   // Puente a "Carga de precios" — selección de esta página, no de todo el
   // filtro (ver prompt-carga-precios.md, reporte de cierre: "seleccionar
   // todos los N del filtro" quedó fuera de alcance para no arriesgar un
@@ -1146,9 +1155,9 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
 
   // Los filtros (menos la sucursal, que es contexto obligatorio, no un
   // filtro que se pueda "quitar") vuelven a la página 1 al cambiar.
-  useEffect(() => { setPage(1); }, [categoryFilter, debouncedQ, priceSourceFilter]);
+  useEffect(() => { setPage(1); }, [categoryFilter, debouncedQ, priceSourceFilter, costLooksWrongFilter]);
 
-  const hasFilters = !!categoryFilter || !!debouncedQ || !!priceSourceFilter;
+  const hasFilters = !!categoryFilter || !!debouncedQ || !!priceSourceFilter || costLooksWrongFilter;
 
   const load = useCallback(async () => {
     if (!branchId) return;
@@ -1159,6 +1168,7 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
       if (categoryFilter) params.set("categoryId", categoryFilter);
       if (debouncedQ) params.set("q", debouncedQ);
       if (priceSourceFilter) params.set("priceSource", priceSourceFilter);
+      if (costLooksWrongFilter) params.set("costLooksWrong", "true");
       if (sort !== "name") params.set("sort", sort);
       params.set("page", String(page));
       const res = await apiFetch(`/api/master/pricing/current?${params.toString()}`);
@@ -1171,7 +1181,7 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
     } finally {
       setLoading(false);
     }
-  }, [branchId, categoryFilter, debouncedQ, priceSourceFilter, sort, page]);
+  }, [branchId, categoryFilter, debouncedQ, priceSourceFilter, costLooksWrongFilter, sort, page]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -1184,6 +1194,7 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
     setQ("");
     setDebouncedQ("");
     setPriceSourceFilter("");
+    setCostLooksWrongFilter(false);
   }
 
   function toggleSourceChip(source: CurrentPriceSource) {
@@ -1255,6 +1266,21 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
             >
               {data.totals.branchCostCount} con costo manual por sucursal
             </span>
+          )}
+          {/* D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "costo dudoso" filtra, igual que los chips de origen. */}
+          {data.totals.costDoubtfulCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setCostLooksWrongFilter((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                costLooksWrongFilter
+                  ? "border-[var(--color-pay)] bg-[var(--color-pay)]/10 text-[var(--color-pay)]"
+                  : "border-[var(--color-warning-200)] bg-[var(--color-warning-50)] text-[var(--color-warning-700)]"
+              }`}
+              title="Costo igual al precio, o costo del paquete cargado como si fuera el de la unidad."
+            >
+              <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> {data.totals.costDoubtfulCount} costo dudoso
+            </button>
           )}
         </div>
       )}
@@ -1372,8 +1398,16 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
                               Manual
                             </span>
                           )}
+                          {row.costLooksWrong && (
+                            <span title={row.costSuspicionMessage ?? "Costo dudoso: revisar antes"}>
+                              <AlertTriangle className="h-3.5 w-3.5 text-[var(--color-warning-600)]" aria-hidden="true" />
+                            </span>
+                          )}
                           {row.effectiveCost > 0 ? fmt(row.effectiveCost) : <span className="text-[var(--color-text-soft)]">—</span>}
                         </div>
+                        {row.costLooksWrong && (
+                          <button type="button" onClick={(e) => { e.stopPropagation(); setCorrectingRow(row); }} className="mt-0.5 block text-xs font-semibold text-[var(--color-primary-600)] underline underline-offset-2">Corregir costo</button>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums">{row.effectivePrice !== null ? fmt(row.effectivePrice) : <span className="text-[var(--color-text-soft)]">—</span>}</td>
                       <td className="px-3 py-2.5">
@@ -1429,6 +1463,16 @@ function CurrentPricesTab({ branchId, onOpenCalculator, onSendToLoads }: { branc
             </Button>
           </div>
         </div>
+      )}
+
+      {correctingRow && (
+        <CostOnlyCorrectionModal
+          productId={correctingRow.productId}
+          branchId={branchId}
+          productName={correctingRow.name}
+          onClose={() => setCorrectingRow(null)}
+          onDone={() => { setCorrectingRow(null); toast.success("Costo corregido."); void load(); }}
+        />
       )}
     </div>
   );

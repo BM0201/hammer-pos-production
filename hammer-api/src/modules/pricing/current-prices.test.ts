@@ -63,7 +63,13 @@ function makeFakeDb(fixtures: {
     },
     productStockGroupMember: {
       findMany: async ({ where }: { where?: Record<string, unknown> }) => {
-        return fixtures.stockMembers.filter((m) => inArray(where, "productId", m.productId) && m.isActive);
+        return fixtures.stockMembers.filter((m) => {
+          if (!m.isActive) return false;
+          if (!inArray(where, "productId", m.productId)) return false;
+          if (where?.stockGroupId !== undefined && !inArray(where, "stockGroupId", m.stockGroupId)) return false;
+          if (where?.isCanonical !== undefined && m.isCanonical !== where.isCanonical) return false;
+          return true;
+        });
       },
     },
     inventoryBalance: {
@@ -73,6 +79,20 @@ function makeFakeDb(fixtures: {
           if (!inArray(where, "productId", b.productId)) return false;
           return true;
         });
+      },
+      // D · Fase 3 — computeCostSuspicionsBatch usa groupBy para el máximo WAC por producto (sospecha PACKAGE_AS_UNIT).
+      groupBy: async ({ where }: { where?: Record<string, unknown> }) => {
+        const matches = fixtures.balances.filter((b) => inArray(where, "productId", b.productId));
+        const costsByProduct = new Map<string, Prisma.Decimal[]>();
+        for (const b of matches) {
+          if (!b.weightedAverageCost) continue;
+          if (!costsByProduct.has(b.productId)) costsByProduct.set(b.productId, []);
+          costsByProduct.get(b.productId)!.push(b.weightedAverageCost);
+        }
+        return [...costsByProduct.entries()].map(([productId, costs]) => ({
+          productId,
+          _max: { weightedAverageCost: costs.reduce((max, c) => (c.gt(max) ? c : max)) },
+        }));
       },
     },
     branchProductSetting: {
@@ -371,4 +391,45 @@ test("Parte B.2: sin fullName, cae a username", async () => {
   const result = await getCurrentPrices({ branchId: BRANCH }, db);
   const p5 = result.rows.find((r) => r.productId === "p5")!;
   assert.equal(p5.branchCostSetBy, "beto");
+});
+
+/**
+ * D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "costo dudoso" en
+ * Precios vigentes, aunque el producto todavía no tenga ninguna
+ * BrainDecision abierta (computeCostSuspicionsBatch se corre acá también).
+ */
+function fixturesWithCostEqualsPrice() {
+  const fixtures = baseFixtures();
+  fixtures.products.push({ id: "p6", sku: "SKU-6", name: "Producto con costo = precio", standardSalePrice: d(0), categoryId: CAT_CEMENTO, isActive: true, averageCost: null, globalCost: null, lastPurchaseCost: null, category: { code: "CEM", name: "Cemento" } });
+  fixtures.settings.push({ id: "setting-p6", productId: "p6", branchId: BRANCH, branchPrice: d(50), branchCost: d(50), priceExceptionReason: "Carga inicial", priceExceptionAt: new Date("2026-08-01"), lastPriceUpdateAt: new Date("2026-08-01") });
+  return fixtures;
+}
+
+test("LA QUE IMPORTA — D.3: branchCost = branchPrice marca costLooksWrong con el mensaje de COST_EQUALS_PRICE", async () => {
+  const db = makeFakeDb(fixturesWithCostEqualsPrice());
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  const p6 = result.rows.find((r) => r.productId === "p6")!;
+  assert.equal(p6.costLooksWrong, true);
+  assert.match(p6.costSuspicionMessage ?? "", /igual al precio/);
+});
+
+test("D.3: costDoubtfulCount en totals cuenta exactamente las filas con costLooksWrong", async () => {
+  const db = makeFakeDb(fixturesWithCostEqualsPrice());
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  assert.equal(result.totals.costDoubtfulCount, 1);
+});
+
+test("D.3: filtro costLooksWrong=true deja solo las filas dudosas", async () => {
+  const db = makeFakeDb(fixturesWithCostEqualsPrice());
+  const result = await getCurrentPrices({ branchId: BRANCH, costLooksWrong: true }, db);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].productId, "p6");
+});
+
+test("D.3: un producto sin sospechas no trae costSuspicionMessage", async () => {
+  const db = makeFakeDb(baseFixtures());
+  const result = await getCurrentPrices({ branchId: BRANCH }, db);
+  const p1 = result.rows.find((r) => r.productId === "p1")!;
+  assert.equal(p1.costLooksWrong, false);
+  assert.equal(p1.costSuspicionMessage, null);
 });

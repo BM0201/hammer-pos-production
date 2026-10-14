@@ -3,6 +3,7 @@ import { getEffectiveProductPricingBatch, type EffectivePricing } from "@/module
 import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
 import { getProductStockConversionsBatch } from "@/modules/inventory/unit-conversion";
 import { buildProductSearchWhere, rankProductMatches } from "@/modules/catalog/product-search";
+import { computeCostSuspicionsBatch } from "@/modules/pricing/cost-correction-service";
 import type { Prisma } from "@prisma/client";
 
 /**
@@ -54,6 +55,9 @@ export type CurrentPriceRow = {
   stockOnHand: number;
   /** Solo con priceSource FUSION_DERIVED — "SKU · nombre" del canónico, para el tooltip de C.2. */
   canonicalProductLabel: string | null;
+  /** D · Fase 3 (prompt-completo-pendientes-2026-10.md) — mismas sospechas que la Bandeja (COST_EQUALS_PRICE, PACKAGE_AS_UNIT), calculadas acá también porque un costo dudoso puede no tener ninguna BrainDecision abierta todavía. */
+  costLooksWrong: boolean;
+  costSuspicionMessage: string | null;
 };
 
 export type CurrentPricesTotals = {
@@ -63,6 +67,8 @@ export type CurrentPricesTotals = {
   missingCostCount: number;
   /** Parte B.3 — cuántos de los productos de esta consulta tienen un costo manual propio de esta sucursal (costSource BRANCH), para el contador del encabezado. */
   branchCostCount: number;
+  /** D · Fase 3 — cuántas filas tienen costo dudoso (COST_EQUALS_PRICE, PACKAGE_AS_UNIT). */
+  costDoubtfulCount: number;
 };
 
 export type CurrentPricesResult = {
@@ -79,6 +85,7 @@ const EMPTY_TOTALS: CurrentPricesTotals = {
   belowPolicyCount: 0,
   missingCostCount: 0,
   branchCostCount: 0,
+  costDoubtfulCount: 0,
 };
 
 /** BRANCH_PRODUCT_SETTING_UPSERT se dispara para branchPrice O branchCost — solo cuenta como "quién fijó el costo manual" si esa escritura puntual tocó branchCost. */
@@ -99,6 +106,7 @@ export async function getCurrentPrices(
     categoryId?: string;
     q?: string;
     priceSource?: CurrentPriceSource;
+    costLooksWrong?: boolean;
     page?: number;
     limit?: number;
     sort?: CurrentPricesSort;
@@ -156,6 +164,17 @@ export async function getCurrentPrices(
 
   const settingByProductId = new Map(settings.map((s) => [s.productId, s]));
   const stockByProductId = new Map(balances.map((b) => [b.productId, Number(b.quantityOnHand)]));
+
+  // D · Fase 3 — mismo cálculo batched que pricing-detector.ts, acá para que
+  // "costo dudoso" se vea aunque todavía no exista una BrainDecision abierta.
+  const suspicionPairs = productIds.map((productId) => {
+    const key = `${filters.branchId}:${productId}`;
+    const pricing = pricingByKey.get(key);
+    const cost = pricing?.effectiveCost !== null && pricing?.effectiveCost !== undefined ? Number(pricing.effectiveCost) : null;
+    const price = pricing?.effectivePrice !== null && pricing?.effectivePrice !== undefined ? Number(pricing.effectivePrice) : null;
+    return { branchId: filters.branchId, productId, cost, price };
+  });
+  const suspicionsByKey = await computeCostSuspicionsBatch(db, suspicionPairs);
 
   // Parte B.2 — "quién fijó el costo manual" es best-effort: solo se busca
   // para los BranchProductSetting que hoy resuelven costSource BRANCH (el
@@ -221,6 +240,7 @@ export async function getCurrentPrices(
       : null;
     const costSource: EffectivePricing["costSource"] = pricing?.costSource ?? "NONE";
     const branchCostAudit = costSource === "BRANCH" && setting ? branchCostAuditBySettingId.get(setting.id) ?? null : null;
+    const suspicions = suspicionsByKey.get(key) ?? [];
 
     return {
       productId: product.id,
@@ -242,6 +262,8 @@ export async function getCurrentPrices(
       lastPriceUpdateAt: setting?.lastPriceUpdateAt ? setting.lastPriceUpdateAt.toISOString() : null,
       stockOnHand: stockByProductId.get(product.id) ?? 0,
       canonicalProductLabel,
+      costLooksWrong: suspicions.length > 0,
+      costSuspicionMessage: suspicions[0]?.message ?? null,
     };
   });
 
@@ -260,9 +282,12 @@ export async function getCurrentPrices(
     belowPolicyCount: rows.filter((r) => r.belowPolicy).length,
     missingCostCount: rows.filter((r) => r.effectiveCost <= 0).length,
     branchCostCount: rows.filter((r) => r.costSource === "BRANCH").length,
+    costDoubtfulCount: rows.filter((r) => r.costLooksWrong).length,
   };
 
-  const filteredRows = filters.priceSource ? rows.filter((r) => r.priceSource === filters.priceSource) : rows;
+  const filteredRows = rows
+    .filter((r) => !filters.priceSource || r.priceSource === filters.priceSource)
+    .filter((r) => !filters.costLooksWrong || r.costLooksWrong);
 
   let sortedRows: CurrentPriceRow[];
   if (filters.sort === "marginAsc") {

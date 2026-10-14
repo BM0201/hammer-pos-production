@@ -44,12 +44,14 @@ export async function GET(request: Request) {
     const limitParam = url.searchParams.get("limit");
     const page = pageParam ? Math.max(1, Number(pageParam) || 1) : undefined;
     const limit = limitParam ? parseListLimit(limitParam, { default: 50 }) : undefined;
+    const costLooksWrong = url.searchParams.get("costLooksWrong") === "true" ? true : undefined;
 
     const result = await getCurrentPrices({
       branchId,
       categoryId,
       q,
       priceSource: priceSourceParam as CurrentPriceSource | undefined,
+      costLooksWrong,
       sort: sortParam as CurrentPricesSort | undefined,
       page,
       limit,

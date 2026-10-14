@@ -53,6 +53,8 @@ type ImportSummary = {
   inventoryMovements?: number;
   priceUpdates?: number;
   costUpdates?: number;
+  /** D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "Costo igual al precio en N filas", no bloqueante. */
+  costEqualsPriceCount?: number;
 };
 
 const IMPORT_TEMPLATES: Record<string, { headers: string[]; example: string[] }> = {
@@ -478,6 +480,16 @@ export function UnifiedImportPanel({ branches, categories, onDone }: { branches:
                   <li key={p.sku}>{p.sku} — {p.name}: {money(p.previousPrice)} → {money(p.newPrice)}</li>
                 ))}
               </ul>
+            </div>
+          ) : null}
+
+          {/* ── D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "si la
+              fila trae costo = precio... mostrar un aviso... No bloquea." ── */}
+          {(summary?.costEqualsPriceCount ?? 0) > 0 ? (
+            <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+              <p className="text-xs font-bold text-amber-800">
+                Costo igual al precio en {summary!.costEqualsPriceCount} fila{summary!.costEqualsPriceCount !== 1 ? "s" : ""}: ¿lo cargaste en la columna correcta?
+              </p>
             </div>
           ) : null}
 

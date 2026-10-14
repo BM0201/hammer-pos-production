@@ -65,7 +65,7 @@ function describeAbcXyzClass(combinedClass: string | undefined): string | null {
   return `${XYZ_ROTATION_LABEL[xyz] ?? "rotación"} (${combinedClass})`;
 }
 
-function fallbackCostAfterClear(h: CostSourceDescription["history"]): number | null {
+export function fallbackCostAfterClear(h: CostSourceDescription["history"]): number | null {
   return h.averageCost ?? h.globalCost ?? h.lastPurchase?.cost ?? null;
 }
 
