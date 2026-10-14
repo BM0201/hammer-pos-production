@@ -46,9 +46,15 @@ const SCRIPT_ORIGINS = "https://challenges.cloudflare.com";
 function buildCsp(nonce: string): string {
   // challenges.cloudflare.com: widget de Turnstile en el login (script + iframe
   // + verificación). fonts.googleapis.com/gstatic: @import de DM Mono en /login.
+  // 'wasm-unsafe-eval': prompt-completo-pendientes-2026-10.md, Parte E,
+  // Fase 1 — el escáner de cámara usa el polyfill WASM de BarcodeDetector
+  // (barcode-detector/zxing-wasm) cuando el navegador no trae el nativo.
+  // Habilita SOLO la instanciación de WebAssembly, no unsafe-eval genérico
+  // — el .wasm se sirve siempre desde este mismo dominio (public/vendor/zxing/),
+  // nunca de un CDN.
   const scriptSrc = isDev
-    ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${SCRIPT_ORIGINS}`
-    : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' ${SCRIPT_ORIGINS}`;
+    ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' ${SCRIPT_ORIGINS}`
+    : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'wasm-unsafe-eval' ${SCRIPT_ORIGINS}`;
 
   return [
     "default-src 'self'",

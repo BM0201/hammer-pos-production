@@ -25,3 +25,9 @@ Thumbs.db
 # Misc
 *.tsbuildinfo
 .vercel
+
+# E · Fase 1 (prompt-completo-pendientes-2026-10.md) — zxing_reader.wasm se
+# copia en cada `npm install` (scripts/copy-zxing-wasm.mjs, postinstall)
+# desde node_modules/zxing-wasm — no se commitea un binario de ~1 MB que de
+# todos modos se regenera siempre, igual que node_modules/.
+public/vendor/zxing/
