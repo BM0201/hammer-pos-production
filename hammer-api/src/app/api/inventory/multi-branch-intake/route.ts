@@ -14,9 +14,15 @@ export const maxDuration = 60;
 
 const lineSchema = z.object({
   productId: z.string().min(1),
-  quantity: z.number().positive(),
+  // Fase 1 (prompt-entrada-inventario.md) — PHYSICAL_COUNT permite 0 (un
+  // conteo real que deja el producto en cero); la validación de "mayor a
+  // 0" para ADD_STOCK/OPENING_BALANCE vive en el servicio, que sí conoce el
+  // `kind` (acá, a nivel de línea suelta, no se puede distinguir).
+  quantity: z.number().min(0),
   overrides: z.record(z.string(), z.number().min(0)).optional(),
   unitCost: z.number().min(0).optional(),
+  salePrice: z.number().positive().optional(),
+  unit: z.string().optional(),
 });
 
 const createSchema = z.object({
@@ -24,7 +30,9 @@ const createSchema = z.object({
   kind: z.nativeEnum(MultiBranchIntakeKind),
   reason: z.string().trim().min(1),
   notes: z.string().optional().nullable(),
-  branchIds: z.array(z.string().min(1)).min(2),
+  // Fase 1 — "permitir 1 sucursal. Hoy exige 2: esa regla pasa a ser solo
+  // de la pantalla de compras" (PurchaseOrderGroup, un módulo aparte).
+  branchIds: z.array(z.string().min(1)).min(1),
   lines: z.array(lineSchema).min(1),
 });
 

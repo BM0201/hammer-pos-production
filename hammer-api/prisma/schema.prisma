@@ -1986,13 +1986,23 @@ model TransferGroup {
   transfers  Transfer[]
 }
 
+/// Fase 1 (prompt-entrada-inventario.md) — ADD_STOCK (sumar) y
+/// PHYSICAL_COUNT (conteo) son los tipos nuevos; ADJUSTMENT_IN queda SOLO
+/// por compatibilidad con filas ya guardadas (el código lo trata como alias
+/// de ADD_STOCK) — nada nuevo lo escribe.
 enum MultiBranchIntakeKind {
   OPENING_BALANCE
   ADJUSTMENT_IN
+  ADD_STOCK
+  PHYSICAL_COUNT
 }
 
+/// IN_PROGRESS — Fase 1: una sucursal con al menos una tanda procesada pero
+/// no todas; distingue "nunca empezó" (PENDING) de "se puede reanudar desde
+/// processedLines" (IN_PROGRESS).
 enum MultiBranchIntakeBranchStatus {
   PENDING
+  IN_PROGRESS
   DONE
   FAILED
 }
@@ -2004,6 +2014,9 @@ enum MultiBranchIntakeBranchStatus {
 /// createManualInventoryAdjustmentTx, que SÍ recalculan WAC/costo por línea
 /// (el mismo motivo por el que createOpeningBalanceBulk ya evita una sola
 /// transacción gigante: timeouts de función serverless en Vercel).
+/// Fase 1 (prompt-entrada-inventario.md) — además, cada sucursal se procesa
+/// en tandas de 25 líneas (processedLines/totalLines), reanudables: una
+/// tanda que falla a la mitad no reprocesa lo ya guardado.
 model MultiBranchIntake {
   id              String                 @id @default(cuid())
   code            String                 @unique /// "IM-000001"
@@ -2011,7 +2024,11 @@ model MultiBranchIntake {
   clientRequestId String                 @unique
   kind            MultiBranchIntakeKind
   reason          String
-  /// [{ productId, quantity, overrides?: Record<branchId, quantity>, unitCost? }]
+  /// Fase 1 — antes NO se guardaba: retry/continue siempre reprocesaban con
+  /// notes=null. Guardarla hace que una tanda reanudada lleve la MISMA nota
+  /// que el pedido original, no una vacía.
+  notes           String?
+  /// [{ productId, quantity, overrides?: Record<branchId, quantity>, unitCost?, salePrice?, unit? }]
   linesJson       Json
   createdByUserId String
   createdAt       DateTime               @default(now())
@@ -2027,6 +2044,13 @@ model MultiBranchIntakeBranch {
   status      MultiBranchIntakeBranchStatus @default(PENDING)
   error       String?
   processedAt DateTime?
+  /// Fase 1 — cuántas líneas de esta sucursal ya se procesaron (tandas de
+  /// 25). /continue reanuda desde acá, nunca reprocesa una ya hecha.
+  processedLines Int @default(0)
+  /// Cuántas líneas tiene esta sucursal en total — fijado al crear el
+  /// intake. Filas viejas (antes de esta columna) quedan en 0: son todas
+  /// terminales (DONE/FAILED), nunca se leen para reanudar.
+  totalLines     Int @default(0)
 
   intake MultiBranchIntake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
   branch Branch            @relation(fields: [branchId], references: [id])
