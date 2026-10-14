@@ -3,6 +3,21 @@ import { NextResponse, type NextRequest } from "next/server";
 /**
  * Frontend (hammer-frontend) middleware.
  *
+ * E · Fase 1 (prompt-completo-pendientes-2026-10.md) — este archivo vivía en
+ * la raíz del proyecto (hammer-frontend/middleware.ts). Con un directorio
+ * `src/`, Next.js exige que middleware.ts viva DENTRO de `src/`, al lado de
+ * `app/` — si no, lo ignora en silencio: ni error de build, ni warning, el
+ * matcher simplemente nunca corre. Confirmado empíricamente (curl a /health
+ * con next dev y next start): sin ningún header que esta función agrega —
+ * ni el nonce, ni la CSP, ni siquiera un header de depuración agregado a
+ * propósito para probarlo — hasta moverlo acá. Esto significa que la CSP,
+ * el nonce de scripts inline y el gate de cookie de /app/* NUNCA corrieron
+ * en este proyecto, desde el primer commit (`git log` del archivo viejo
+ * solo tiene el snapshot inicial). No es nada de esta Parte — se encontró
+ * verificando el requisito de Fase 1 ("confirmar que el motor WASM carga
+ * sin errores de CSP"), y se corrigió porque dejarlo roto habría hecho que
+ * agregar 'wasm-unsafe-eval' acá no sirviera de nada.
+ *
  * Scope: only protects the UI route surface. The backend (hammer-api) handles
  * its own auth/CSRF middleware.
  *
