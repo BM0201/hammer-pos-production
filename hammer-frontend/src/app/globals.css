@@ -1087,11 +1087,18 @@ aside[class*="bg-[var(--color-sidebar)]"] {
   50% { opacity: 0.65; }
 }
 
+/* E · Fase 2 (prompt-completo-pendientes-2026-10.md) — línea animada del recuadro guía 1D en CameraScanner. */
+@keyframes scan-line {
+  0%, 100% { top: 0; }
+  50% { top: calc(100% - 2px); }
+}
+
 .animate-fade-in-up  { animation: fadeInUp 0.28s var(--ease-smooth) both; }
 .animate-fade-in     { animation: fadeIn 0.3s ease both; }
 .animate-slide-in    { animation: slideInLeft 0.35s var(--ease-smooth) both; }
 .animate-scale-in    { animation: scaleIn 0.25s var(--ease-smooth) both; }
 .animate-pulse-soft  { animation: pulse-soft 2s ease-in-out infinite; }
+.animate-scan-line   { animation: scan-line 1.8s ease-in-out infinite; }
 
 /* Stagger grid children */
 .stagger-children > * { animation: fadeInUp 0.4s var(--ease-smooth) both; }

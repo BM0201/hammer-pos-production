@@ -377,6 +377,8 @@ export type ScannerHandle = {
   getZoomRange: () => { min: number; max: number; step: number } | null;
   switchCamera: (deviceId: string) => Promise<void>;
   listCameras: () => Promise<CameraDeviceLike[]>;
+  /** deviceId de la cámara ACTIVA ahora mismo (la elegida automáticamente por pickBackCamera, o la última pasada a switchCamera) — para que el botón "cambiar cámara" sepa cuál es la siguiente en la lista. null antes de que la cámara abra. */
+  getCurrentDeviceId: () => string | null;
   getStats: () => ScannerStats;
 };
 
@@ -642,6 +644,7 @@ export function startContinuousScan(options: StartContinuousScanOptions): Scanne
       const all = await navigator.mediaDevices.enumerateDevices();
       return all.filter((d) => d.kind === "videoinput").map((d) => ({ deviceId: d.deviceId, label: d.label, kind: d.kind }));
     },
+    getCurrentDeviceId: () => track?.getSettings().deviceId ?? null,
     getStats: (): ScannerStats => ({
       engine,
       resolutionWidth: track?.getSettings().width ?? null,
