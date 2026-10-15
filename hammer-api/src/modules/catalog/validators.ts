@@ -59,6 +59,25 @@ export const moveProductBarcodeSchema = z.object({
   toProductId: z.string().cuid(),
 });
 
+// prompt-codigos-editar-eliminar.md Fase 1.1 — editar código y/o tipo (al menos uno de los dos).
+export const updateProductBarcodeSchema = z.object({
+  code: z.string().min(1).max(64).optional(),
+  kind: z.enum(["FACTORY", "INTERNAL", "SUPPLIER"]).optional(),
+}).refine((data) => data.code !== undefined || data.kind !== undefined, { message: "Nada que actualizar." });
+
+// Fase 1.2 — "Deshacer" tras quitar un código.
+export const restoreProductBarcodeSchema = z.object({
+  code: z.string().min(1).max(64),
+  kind: z.enum(["FACTORY", "INTERNAL", "SUPPLIER"]),
+  makePrimary: z.boolean(),
+});
+
+// Fase 1.2 — quitar en lote, máximo 200 por llamada.
+export const bulkRemoveBarcodesSchema = z.object({
+  ids: z.array(z.string().cuid()).min(1).max(200),
+  reason: z.string().trim().min(1).max(300),
+});
+
 // prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
 export const previewMergeSchema = z.object({
   survivingProductId: z.string().cuid(),

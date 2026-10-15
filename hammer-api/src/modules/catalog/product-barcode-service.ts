@@ -1,6 +1,6 @@
 import { Prisma, type ProductBarcodeKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { normalizeScannedCode } from "@/modules/catalog/barcode";
+import { normalizeScannedCode, buildInternalBarcode, checksumWarningForCode } from "@/modules/catalog/barcode";
 import { BarcodeAlreadyExistsError } from "@/modules/catalog/barcode-errors";
 
 /**
@@ -99,6 +99,79 @@ export async function addBarcode(
   return created;
 }
 
+export type UpdateBarcodeResult = { id: string; code: string; kind: ProductBarcodeKind; isPrimary: boolean; warnings: "CHECKSUM_INVALID"[] };
+
+/**
+ * Edita el texto y/o el tipo de un código existente (Fase 1.1,
+ * prompt-codigos-editar-eliminar.md) — antes había que quitarlo y volver a
+ * agregarlo. Bloquea la fila (mismo patrón que moveBarcode) porque dos
+ * ediciones concurrentes al mismo código podrían pisarse. El dígito
+ * verificador inválido es un AVISO (`warnings`), nunca bloquea el guardado.
+ */
+export async function updateBarcode(
+  barcodeId: string,
+  patch: { code?: string; kind?: ProductBarcodeKind },
+  actorUserId: string,
+  db: Db = prisma,
+): Promise<UpdateBarcodeResult> {
+  await db.$queryRaw`SELECT id FROM "ProductBarcode" WHERE id = ${barcodeId} FOR UPDATE`;
+  const barcode = await db.productBarcode.findUnique({ where: { id: barcodeId } });
+  if (!barcode) throw new Error("NOT_FOUND");
+
+  const nextCode = patch.code !== undefined ? normalizeScannedCode(patch.code) : barcode.code;
+  if (patch.code !== undefined && !nextCode) throw new Error("VALIDATION_ERROR: el código no puede estar vacío.");
+  const nextKind = patch.kind ?? barcode.kind;
+  const codeChanged = nextCode !== barcode.code;
+
+  if (codeChanged) {
+    const existing = await db.productBarcode.findUnique({
+      where: { code: nextCode },
+      select: { productId: true, product: { select: { id: true, name: true, sku: true, isActive: true } } },
+    });
+    if (existing) {
+      if (existing.productId !== barcode.productId) {
+        throw new BarcodeAlreadyExistsError(
+          `Ya existe un producto con el código "${nextCode}" (${existing.product.name}).`,
+          { id: existing.product.id, name: existing.product.name, sku: existing.product.sku, barcode: nextCode, isActive: existing.product.isActive },
+        );
+      }
+      throw new Error("VALIDATION_ERROR: este producto ya tiene ese código.");
+    }
+  }
+
+  const updated = await db.productBarcode.update({ where: { id: barcodeId }, data: { code: nextCode, kind: nextKind } });
+
+  if (barcode.isPrimary && codeChanged) {
+    await db.product.update({ where: { id: barcode.productId }, data: { barcode: nextCode } });
+  }
+
+  await auditBarcodeEvent(db, {
+    actorUserId,
+    action: "PRODUCT_BARCODE_UPDATED",
+    productId: barcode.productId,
+    metadataJson: { barcodeId, before: { code: barcode.code, kind: barcode.kind }, after: { code: nextCode, kind: nextKind } },
+  });
+
+  const warnings: "CHECKSUM_INVALID"[] = checksumWarningForCode(nextCode) !== null ? ["CHECKSUM_INVALID"] : [];
+  return { id: updated.id, code: updated.code, kind: updated.kind, isPrimary: updated.isPrimary, warnings };
+}
+
+/**
+ * "Regenerar código interno" (Fase 1.1) — mejor que editar el texto a mano
+ * cuando lo que cambió fue el SKU: vuelve a armar el HMR- con
+ * buildInternalBarcode(sku actual). Solo para códigos INTERNAL — un
+ * FACTORY/SUPPLIER no tiene un "patrón esperado" que regenerar.
+ */
+export async function regenerateInternalBarcode(barcodeId: string, actorUserId: string, db: Db = prisma): Promise<UpdateBarcodeResult & { needsReprint: true }> {
+  const barcode = await db.productBarcode.findUnique({ where: { id: barcodeId } });
+  if (!barcode) throw new Error("NOT_FOUND");
+  if (barcode.kind !== "INTERNAL") throw new Error("VALIDATION_ERROR: solo se puede regenerar un código interno (INTERNAL).");
+
+  const product = await db.product.findUniqueOrThrow({ where: { id: barcode.productId }, select: { sku: true } });
+  const result = await updateBarcode(barcodeId, { code: buildInternalBarcode(product.sku) }, actorUserId, db);
+  return { ...result, needsReprint: true };
+}
+
 /** Marca un código existente como el principal (y refresca Product.barcode). No-op si ya lo era. */
 export async function setPrimaryBarcode(productId: string, barcodeId: string, actorUserId: string, db: Db = prisma) {
   const barcode = await db.productBarcode.findUnique({ where: { id: barcodeId } });
@@ -119,8 +192,15 @@ export async function setPrimaryBarcode(productId: string, barcodeId: string, ac
   return updated;
 }
 
-/** Quita un código. Si era el principal, el siguiente más viejo lo reemplaza, o Product.barcode queda en null si no queda ninguno. */
-export async function removeBarcode(barcodeId: string, actorUserId: string, db: Db = prisma): Promise<{ newPrimaryCode: string | null }> {
+/**
+ * Quita un código. Si era el principal, el siguiente más viejo lo
+ * reemplaza, o Product.barcode queda en null si no queda ninguno.
+ * `removed` (Fase 1.2, prompt-codigos-editar-eliminar.md) — lo necesita el
+ * "Deshacer": restoreBarcode es un addBarcode normal con estos mismos
+ * datos, nada que no se pudiera reconstruir, pero evita que el caller
+ * tenga que recordar el código/tipo/principal de memoria.
+ */
+export async function removeBarcode(barcodeId: string, actorUserId: string, db: Db = prisma): Promise<{ newPrimaryCode: string | null; removed: { code: string; kind: ProductBarcodeKind; wasPrimary: boolean } }> {
   const barcode = await db.productBarcode.findUnique({ where: { id: barcodeId } });
   if (!barcode) throw new Error("NOT_FOUND");
 
@@ -146,7 +226,70 @@ export async function removeBarcode(barcodeId: string, actorUserId: string, db: 
     metadataJson: { barcodeId, code: barcode.code, newPrimaryCode },
   });
 
-  return { newPrimaryCode };
+  return { newPrimaryCode, removed: { code: barcode.code, kind: barcode.kind, wasPrimary: barcode.isPrimary } };
+}
+
+/**
+ * "Deshacer" (Fase 1.2) — restaura un código recién quitado. Es un
+ * addBarcode normal (si mientras tanto alguien lo tomó, el mismo 409
+ * BarcodeAlreadyExistsError de siempre); `makePrimary` fuerza que vuelva a
+ * ser el principal cuando el que se quitó lo era — addBarcode por sí solo
+ * NO lo haría si el producto ya promovió otro código al quitar este.
+ */
+export async function restoreBarcode(
+  productId: string,
+  input: { code: string; kind: ProductBarcodeKind; makePrimary: boolean },
+  actorUserId: string,
+  db: Db = prisma,
+): Promise<{ id: string; code: string; kind: ProductBarcodeKind; isPrimary: boolean }> {
+  const created = await addBarcode({ productId, rawCode: input.code, kind: input.kind, actorUserId }, db);
+  if (input.makePrimary && !created.isPrimary) {
+    return setPrimaryBarcode(productId, created.id, actorUserId, db);
+  }
+  return created;
+}
+
+export type BulkRemoveBarcodesResult = {
+  removed: Array<{ id: string; code: string }>;
+  failed: Array<{ id: string; error: string }>;
+};
+
+/**
+ * "Quitar en lote" (Fase 1.2) — hasta 200 a la vez (la ruta valida el
+ * máximo), CADA UNO en su propia transacción: si uno falla, no arrastra a
+ * los demás ni los deja a medio hacer. `db` es el PrismaClient completo
+ * (necesita $transaction real, no un Prisma.TransactionClient — no se puede
+ * anidar una transacción dentro de otra).
+ */
+export async function bulkRemoveBarcodes(
+  input: { ids: string[]; reason: string; actorUserId: string },
+  db: typeof prisma = prisma,
+): Promise<BulkRemoveBarcodesResult> {
+  const removed: BulkRemoveBarcodesResult["removed"] = [];
+  const failed: BulkRemoveBarcodesResult["failed"] = [];
+
+  for (const id of input.ids) {
+    try {
+      const result = await db.$transaction(async (tx) => {
+        // productId se captura ANTES de borrar — después de removeBarcode la fila ya no existe en esta misma tx.
+        const before = await tx.productBarcode.findUnique({ where: { id }, select: { productId: true } });
+        if (!before) throw new Error("NOT_FOUND: código no encontrado.");
+        const removal = await removeBarcode(id, input.actorUserId, tx);
+        await auditBarcodeEvent(tx, {
+          actorUserId: input.actorUserId,
+          action: "PRODUCT_BARCODE_BULK_REMOVE_ITEM",
+          productId: before.productId,
+          metadataJson: { barcodeId: id, code: removal.removed.code, reason: input.reason },
+        });
+        return { id, code: removal.removed.code };
+      });
+      removed.push(result);
+    } catch (error) {
+      failed.push({ id, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return { removed, failed };
 }
 
 /**
