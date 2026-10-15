@@ -1,6 +1,7 @@
 import { getCurrentSession } from "@/modules/auth/service";
 import { assertAuthenticated, assertMaster } from "@/modules/auth/access";
 import { addBarcode, listProductBarcodes } from "@/modules/catalog/product-barcode-service";
+import { findPossibleDuplicatesAfterLink } from "@/modules/catalog/barcode-suggestions-service";
 import { addProductBarcodeSchema } from "@/modules/catalog/validators";
 import { toHttpErrorResponse } from "@/lib/http";
 import { requireCsrf } from "@/modules/security/csrf";
@@ -38,8 +39,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return fail("VALIDATION_ERROR", "Invalid payload", 400);
     }
 
-    const barcode = await addBarcode({ productId: id, rawCode: parsed.data.code, kind: parsed.data.kind, actorUserId: session.userId });
-    return ok(barcode);
+    const barcode = await addBarcode({ productId: id, rawCode: parsed.data.code, kind: parsed.data.kind, actorUserId: session.userId, suggestion: parsed.data.suggestion });
+    // Fase 2.5 — "después de vincular, avisar si parece un duplicado ya cargado con otro código." No bloquea: si esto falla, el código ya quedó vinculado igual.
+    const possibleDuplicates = await findPossibleDuplicatesAfterLink(id).catch(() => []);
+    return ok({ ...barcode, possibleDuplicates });
   } catch (error) {
     return toHttpErrorResponse(error);
   }

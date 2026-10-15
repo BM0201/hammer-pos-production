@@ -53,6 +53,11 @@ export const updateProductSchema = z.object({
 export const addProductBarcodeSchema = z.object({
   code: z.string().min(1).max(64),
   kind: z.enum(["FACTORY", "INTERNAL", "SUPPLIER"]),
+  // Fase 2.4 (prompt-codigos-editar-eliminar.md) — "aprender de lo elegido": presente solo cuando el código se vinculó desde una tarjeta de sugerencia.
+  suggestion: z.object({
+    rank: z.number().int().positive(),
+    reasons: z.array(z.object({ code: z.string(), text: z.string() })),
+  }).optional(),
 });
 
 export const moveProductBarcodeSchema = z.object({

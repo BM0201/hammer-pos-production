@@ -1103,6 +1103,11 @@ model ProductBarcode {
   createdBy User?   @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   @@index([productId])
+  // Fase 2.3 (prompt-codigos-editar-eliminar.md) — "¿podría ser este
+  // producto?" busca el prefijo GS1 común más largo con `code LIKE
+  // 'prefijo%'` (findManufacturerSiblingsTx) — el B-tree normal de arriba
+  // (collation no-"C") no sirve para eso, text_pattern_ops sí.
+  @@index([code(ops: raw("text_pattern_ops"))])
 }
 
 model ProductStockGroup {

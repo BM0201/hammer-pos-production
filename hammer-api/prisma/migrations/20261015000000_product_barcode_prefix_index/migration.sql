@@ -1,0 +1,14 @@
+-- Fase 2.3 (prompt-codigos-editar-eliminar.md) — "¿podría ser este
+-- producto?" busca el prefijo GS1 común más largo entre el código
+-- escaneado y los FACTORY ya registrados (findManufacturerSiblingsTx,
+-- barcode-suggestions-service.ts) con `code LIKE 'prefijo%'`. El índice
+-- B-tree por defecto de ProductBarcode_code_key (collation normal, no "C")
+-- no sirve para ese patrón — Postgres hace seq scan. text_pattern_ops lo
+-- habilita.
+--
+-- NO parcial (sin WHERE kind='FACTORY'): Prisma no modela índices
+-- parciales — un futuro `prisma migrate dev` lo vería "fuera del schema" e
+-- intentaría borrarlo (mismo problema ya resuelto para el GIN de
+-- pg_trgm, ver el comentario en schema.prisma). Se declara en
+-- schema.prisma (@@index con ops: raw) para que coincida.
+CREATE INDEX "ProductBarcode_code_prefix_idx" ON "ProductBarcode" (code text_pattern_ops);

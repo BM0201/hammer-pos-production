@@ -58,7 +58,14 @@ async function auditBarcodeEvent(
  * pantalla pueda ofrecer "¿son el mismo producto?" distinto de un dato viejo).
  */
 export async function addBarcode(
-  input: { productId: string; rawCode: string; kind: ProductBarcodeKind; actorUserId: string },
+  input: {
+    productId: string;
+    rawCode: string;
+    kind: ProductBarcodeKind;
+    actorUserId: string;
+    /** Fase 2.4 (prompt-codigos-editar-eliminar.md) — "aprender de lo elegido": si este código se vinculó desde una sugerencia, se audita qué puesto tenía y por qué, para medir acierto (GET /suggest/stats). */
+    suggestion?: { rank: number; reasons: Array<{ code: string; text: string }> };
+  },
   db: Db = prisma,
 ): Promise<{ id: string; code: string; kind: ProductBarcodeKind; isPrimary: boolean }> {
   const code = normalizeScannedCode(input.rawCode);
@@ -93,7 +100,7 @@ export async function addBarcode(
     actorUserId: input.actorUserId,
     action: "PRODUCT_BARCODE_ADDED",
     productId: input.productId,
-    metadataJson: { barcodeId: created.id, code, kind: input.kind, isPrimary },
+    metadataJson: { barcodeId: created.id, code, kind: input.kind, isPrimary, suggestion: input.suggestion ?? null },
   });
 
   return created;
