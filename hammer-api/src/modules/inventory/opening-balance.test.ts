@@ -134,3 +134,23 @@ test("11. Con SET_WAC explícito, el WAC sí cambia — comportamiento intencion
   assert.ok(Math.abs(getBalance().weightedAverageCost.toNumber() - expectedWac) < 0.001);
   assert.ok(Math.abs(Number(result.weightedAverageCost) - expectedWac) < 0.001);
 });
+
+test("LA QUE IMPORTA — BLEND (alias público de SET_WAC, prompt-entrada-inventario.md) promedia exactamente igual, no reemplaza", async () => {
+  const { tx, getBalance } = buildFakeDb({ initialWac: 18.55, initialQty: 100, standardSalePrice: 35 });
+  const result = await createOpeningBalanceTx(tx, {
+    actorUserId: "user-1",
+    branchId: "branch-1",
+    productId: "prod-1",
+    quantity: 20,
+    stockMode: "ADD_TO_STOCK",
+    unitCost: 20,
+    costMode: "BLEND",
+    salePrice: null,
+    priceMode: "NO_PRICE_CHANGE",
+    reason: "Sumar mercadería",
+  }, { createNoopMovement: true });
+
+  const expectedWac = (100 * 18.55 + 20 * 20) / 120;
+  assert.ok(Math.abs(getBalance().weightedAverageCost.toNumber() - expectedWac) < 0.001, "BLEND debe promediar, igual que SET_WAC");
+  assert.ok(Math.abs(Number(result.weightedAverageCost) - expectedWac) < 0.001);
+});

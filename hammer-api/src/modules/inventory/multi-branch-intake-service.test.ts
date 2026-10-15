@@ -162,7 +162,7 @@ test("LA QUE IMPORTA — mapeo de kind a stockMode/costMode", () => {
   assert.equal(costModeForKind("OPENING_BALANCE", true), "SET_BRANCH_COST");
   assert.equal(costModeForKind("OPENING_BALANCE", false), "SET_BRANCH_COST", "carga inicial siempre fija el costo de sucursal (el costo es obligatorio, se valida aparte)");
   assert.equal(costModeForKind("PHYSICAL_COUNT", true), "QUANTITY_ONLY", "un conteo NUNCA cambia el costo, aunque venga uno");
-  assert.equal(costModeForKind("ADD_STOCK", true), "SET_WAC", "con costo, sumar PROMEDIA");
+  assert.equal(costModeForKind("ADD_STOCK", true), "BLEND", "con costo, sumar PROMEDIA — BLEND es el alias claro de SET_WAC");
   assert.equal(costModeForKind("ADD_STOCK", false), "QUANTITY_ONLY", "sin costo, usa el promedio vigente");
 });
 

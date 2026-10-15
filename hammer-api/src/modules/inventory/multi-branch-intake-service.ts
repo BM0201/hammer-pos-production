@@ -38,10 +38,10 @@ export function stockModeForKind(kind: NormalizedIntakeKind): "SET_PHYSICAL_STOC
 }
 
 /** `hasCost` = la línea trae un costo > 0 para ESTA sucursal (quantityForBranch ya resuelto; unitCost es el mismo para todas las sucursales de una línea). */
-export function costModeForKind(kind: NormalizedIntakeKind, hasCost: boolean): "SET_WAC" | "SET_BRANCH_COST" | "QUANTITY_ONLY" {
+export function costModeForKind(kind: NormalizedIntakeKind, hasCost: boolean): "BLEND" | "SET_BRANCH_COST" | "QUANTITY_ONLY" {
   if (kind === "OPENING_BALANCE") return "SET_BRANCH_COST";
   if (kind === "PHYSICAL_COUNT") return "QUANTITY_ONLY"; // "un conteo no cambia el costo"
-  return hasCost ? "SET_WAC" : "QUANTITY_ONLY"; // ADD_STOCK: "BLEND" (alias público de SET_WAC) si trae costo
+  return hasCost ? "BLEND" : "QUANTITY_ONLY"; // ADD_STOCK con costo: BLEND (alias público, claro, de SET_WAC — createOpeningBalanceTx trata ambos idéntico)
 }
 
 export type IntakeLineInput = {

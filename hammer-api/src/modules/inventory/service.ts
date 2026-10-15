@@ -553,7 +553,11 @@ export type OpeningBalanceInput = {
   unit?: string;
   stockMode: "SET_PHYSICAL_STOCK" | "ADD_TO_STOCK" | "ADD_OPENING_STOCK";
   unitCost?: number | null;
-  costMode: "SET_WAC" | "SET_BRANCH_COST" | "QUANTITY_ONLY";
+  /** Fase 1 (prompt-entrada-inventario.md) — "BLEND" es un alias público,
+   * más claro, de "SET_WAC" ("promedia con recalculateWeightedAverage", no
+   * "fija/reemplaza" — SET_WAC se queda por compatibilidad con callers
+   * existentes). Tratados IDÉNTICOS en todo el cuerpo de la función. */
+  costMode: "SET_WAC" | "BLEND" | "SET_BRANCH_COST" | "QUANTITY_ONLY";
   salePrice?: number | null;
   priceMode: "SET_BRANCH_PRICE" | "SET_GLOBAL_PRICE" | "NO_PRICE_CHANGE";
   reason: string;
@@ -1883,7 +1887,7 @@ export async function createOpeningBalanceTx(
     const previousEffectivePrice = existingSetting?.branchPrice ?? product.standardSalePrice;
 
     let unitCost = previousSaleUnitWac;
-    if (input.costMode === "SET_WAC" || input.costMode === "SET_BRANCH_COST") {
+    if (input.costMode === "SET_WAC" || input.costMode === "BLEND" || input.costMode === "SET_BRANCH_COST") {
       unitCost = new Prisma.Decimal(input.unitCost ?? 0);
     }
     if (input.costMode === "QUANTITY_ONLY" && unitCost.lte(0)) {
@@ -1920,7 +1924,7 @@ export async function createOpeningBalanceTx(
             },
           });
       movementResult = { movement, balance };
-    } else if (input.costMode === "SET_WAC") {
+    } else if (input.costMode === "SET_WAC" || input.costMode === "BLEND") {
       movementResult = await createInventoryMovementTx(tx, {
         actorUserId: input.actorUserId,
         branchId: input.branchId,
