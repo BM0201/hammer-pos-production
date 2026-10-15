@@ -161,6 +161,11 @@ export function Product360({ productId }: { productId: string }) {
     const requested = searchParams.get("tab");
     return requested && TAB_IDS.has(requested as Tab) ? (requested as Tab) : "general";
   });
+  // prompt-codigos-editar-eliminar.md Fase 3.3 — el menú rápido del chip de
+  // código en catalog-inventory-admin.tsx enlaza a ?tab=barcodes&editPrimary=1
+  // para abrir el editor del código principal ya desplegado, sin duplicar el
+  // formulario de edición fuera de la pestaña Códigos.
+  const autoEditPrimaryBarcode = searchParams.get("editPrimary") === "1";
   const [error, setError] = useState("");
   const [printingLabel, setPrintingLabel] = useState(false);
   // D · Fase 3 (prompt-completo-pendientes-2026-10.md) — "Corregir costo" en
@@ -479,6 +484,7 @@ export function Product360({ productId }: { productId: string }) {
           productUnit={product.unit}
           productTotalStock={totalStock}
           standardSalePrice={Number(product.standardSalePrice)}
+          autoEditPrimary={autoEditPrimaryBarcode}
         />
       )}
 

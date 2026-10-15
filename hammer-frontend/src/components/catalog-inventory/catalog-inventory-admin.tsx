@@ -20,6 +20,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty, fmtDateTime } from "@/lib/format";
 import { tokenize } from "@/lib/product-search";
 import { formatSharedStock } from "@/lib/inventory/shared-stock-format";
+import { UNDO_WINDOW_MS, type BarcodeKind } from "@/lib/barcode-manager-logic";
 
 // Fase 5 (prompt-flujo-velocidad.md): FusionPricingPanel solo se monta con
 // la pestaña "fusion" activa (línea ~1568) — carga diferida para que su
@@ -575,6 +576,16 @@ export function CatalogInventoryAdmin() {
   const [focusedPricingProductId, setFocusedPricingProductId] = useState<string | null>(null);
   const [movementDialog, setMovementDialog] = useState<"adjustment" | "opening" | null>(null);
 
+  /* prompt-codigos-editar-eliminar.md Fase 3.3 — menú rápido del chip de
+     código en la fila (Editar / Quitar / Ir a Códigos). "Quitar" es la única
+     acción realmente en línea (consulta el código principal al vuelo y lo
+     borra con deshacer); "Editar" navega a la ficha con el editor ya abierto
+     — reutiliza el formulario completo en vez de duplicar la UI de edición
+     dentro de esta tabla densa. */
+  const [codeMenuProductId, setCodeMenuProductId] = useState<string | null>(null);
+  const [codeMenuConfirmId, setCodeMenuConfirmId] = useState<string | null>(null);
+  const [codeMenuBusyId, setCodeMenuBusyId] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams();
@@ -732,6 +743,56 @@ export function CatalogInventoryAdmin() {
     setEditSkuPreview("");
   }
 
+  async function removePrimaryBarcodeQuick(product: ProductRow) {
+    setCodeMenuBusyId(product.id);
+    try {
+      const listRes = await apiFetch(`/api/catalog/products/${product.id}/barcodes`);
+      const listRaw = await listRes.json().catch(() => null);
+      if (!listRes.ok) throw new Error(listRaw?.error?.message ?? "No se pudieron cargar los códigos.");
+      const rows = unwrapApiData(listRaw) as Array<{ id: string; isPrimary: boolean }>;
+      const primary = rows.find((r) => r.isPrimary) ?? rows[0];
+      if (!primary) { toast.error("Este producto ya no tiene códigos."); return; }
+
+      const delRes = await apiFetch(`/api/catalog/products/${product.id}/barcodes/${primary.id}`, { method: "DELETE" });
+      const delRaw = await delRes.json().catch(() => null);
+      if (!delRes.ok) throw new Error(delRaw?.error?.message ?? "No se pudo quitar el código.");
+      const { removed } = unwrapApiData(delRaw) as { removed: { code: string; kind: BarcodeKind; wasPrimary: boolean } };
+
+      toast((t) => (
+        <span className="flex items-center gap-3">
+          Código {removed.code} quitado.
+          <button
+            type="button"
+            className="font-semibold text-[var(--color-info-600)] hover:underline"
+            onClick={async () => {
+              toast.dismiss(t.id);
+              try {
+                const restoreRes = await apiFetch(`/api/catalog/products/${product.id}/barcodes/restore`, {
+                  method: "POST",
+                  body: JSON.stringify({ code: removed.code, kind: removed.kind, makePrimary: removed.wasPrimary }),
+                });
+                if (!restoreRes.ok) throw new Error();
+                toast.success("Código restaurado.");
+                await load();
+              } catch {
+                toast.error("No se pudo deshacer — es posible que otro usuario ya haya tomado ese código.");
+              }
+            }}
+          >
+            Deshacer
+          </button>
+        </span>
+      ), { duration: UNDO_WINDOW_MS });
+
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "No se pudo quitar el código.");
+    } finally {
+      setCodeMenuBusyId(null);
+      setCodeMenuConfirmId(null);
+      setCodeMenuProductId(null);
+    }
+  }
   async function regenerateSku(product: ProductRow) {
     const name = editDraft.name.trim() || product.name;
     const catId = editDraft.categoryId || product.category?.id || "";
@@ -1426,21 +1487,76 @@ export function CatalogInventoryAdmin() {
                           se gestiona desde la ficha, donde el historial y el
                           chequeo de duplicados tienen contexto completo. */}
                       {!isEditing && (
-                        <div className="mt-1 flex items-center gap-1.5 text-[0.68rem]">
-                          {product.barcode ? (
-                            <span className="rounded border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-[var(--color-text-muted)]">
-                              {product.barcode}
-                              {(product.barcodes?.length ?? 0) > 1 && ` +${(product.barcodes?.length ?? 1) - 1}`}
-                            </span>
-                          ) : (
-                            <span className="text-[var(--color-text-muted)]">Sin código</span>
-                          )}
+                        <div className="relative mt-1 flex items-center gap-1.5 text-[0.68rem]">
+                          <button
+                            type="button"
+                            onClick={() => { setCodeMenuProductId((id) => (id === product.id ? null : product.id)); setCodeMenuConfirmId(null); }}
+                            className="rounded border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-alt)]"
+                          >
+                            {product.barcode ? (
+                              <>
+                                {product.barcode}
+                                {(product.barcodes?.length ?? 0) > 1 && ` +${(product.barcodes?.length ?? 1) - 1}`}
+                              </>
+                            ) : (
+                              "Sin código"
+                            )}
+                          </button>
                           <Link
                             href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes` as Route}
                             className="font-medium text-[var(--color-info-600)] hover:underline"
                           >
                             Códigos…
                           </Link>
+
+                          {codeMenuProductId === product.id && (
+                            <div className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
+                              {product.barcode ? (
+                                <>
+                                  <Link
+                                    href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes&editPrimary=1` as Route}
+                                    onClick={() => setCodeMenuProductId(null)}
+                                    className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-alt)]"
+                                  >
+                                    <Pencil className="h-3 w-3" /> Editar
+                                  </Link>
+                                  {codeMenuConfirmId === product.id ? (
+                                    <div className="px-3 py-2">
+                                      <p className="mb-1.5 text-[var(--color-text-muted)]">¿Quitar {product.barcode}?</p>
+                                      <div className="flex gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={codeMenuBusyId === product.id}
+                                          onClick={() => void removePrimaryBarcodeQuick(product)}
+                                          className="font-semibold text-[var(--color-danger-600)] hover:underline disabled:opacity-50"
+                                        >
+                                          {codeMenuBusyId === product.id ? "Quitando…" : "Sí, quitar"}
+                                        </button>
+                                        <button type="button" onClick={() => setCodeMenuConfirmId(null)} className="text-[var(--color-text-muted)] hover:underline">
+                                          Cancelar
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setCodeMenuConfirmId(product.id)}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
+                                    >
+                                      <Trash2 className="h-3 w-3" /> Quitar
+                                    </button>
+                                  )}
+                                </>
+                              ) : null}
+                              <Link
+                                href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes` as Route}
+                                onClick={() => setCodeMenuProductId(null)}
+                                className="flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-surface-alt)]"
+                              >
+                                <ScanLine className="h-3 w-3" /> Ir a Códigos
+                              </Link>
+                            </div>
+                          )}
                         </div>
                       )}
                     </td>

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductBarcodeKind } from "@prisma/client";
-import { searchBarcodes, listAllBarcodesForExport } from "@/modules/catalog/barcode-search-service";
+import { searchBarcodes, listAllBarcodesForExport, getBarcodeCoverage, listProductsWithoutBarcodeForCategoryWalk, countBarcodeIssues } from "@/modules/catalog/barcode-search-service";
 
 /**
  * Fase 1.3 (prompt-codigos-editar-eliminar.md) — fake-db mínimo para los dos
@@ -219,4 +219,71 @@ test("LA QUE IMPORTA — listAllBarcodesForExport trae TODO el set filtrado, nun
   );
   const rows = await listAllBarcodesForExport({}, db);
   assert.equal(rows.length, 5);
+});
+
+// ── getBarcodeCoverage ─────────────────────────────────────────────────────
+
+test("LA QUE IMPORTA — getBarcodeCoverage: cuenta productos con código vs total, por categoría", async () => {
+  const productsFixture = [
+    { id: "p1", isActive: true, mergedIntoProductId: null, categoryId: "cat-a", hasBarcode: true },
+    { id: "p2", isActive: true, mergedIntoProductId: null, categoryId: "cat-a", hasBarcode: false },
+    { id: "p3", isActive: true, mergedIntoProductId: null, categoryId: "cat-b", hasBarcode: true },
+    { id: "p4", isActive: false, mergedIntoProductId: null, categoryId: "cat-a", hasBarcode: true }, // inactivo, no cuenta
+  ];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db: any = {
+    product: {
+      count: async ({ where }: { where: { isActive?: boolean; mergedIntoProductId?: null; categoryId?: string; barcodes?: { some: object } } }) =>
+        productsFixture.filter((p) =>
+          (where.isActive === undefined || p.isActive === where.isActive) &&
+          (where.mergedIntoProductId === undefined || p.mergedIntoProductId === where.mergedIntoProductId) &&
+          (where.categoryId === undefined || p.categoryId === where.categoryId) &&
+          (where.barcodes === undefined || p.hasBarcode),
+        ).length,
+    },
+  };
+  const result = await getBarcodeCoverage({ categoryId: "cat-a" }, db);
+  assert.deepEqual(result, { withBarcode: 1, total: 2 });
+});
+
+// ── listProductsWithoutBarcodeForCategoryWalk ─────────────────────────────
+
+test("LA QUE IMPORTA — listProductsWithoutBarcodeForCategoryWalk: solo productos sin código, de esa categoría, con su stock en la sucursal", async () => {
+  const productsFixture = [
+    { id: "p1", name: "Sin código, con stock", sku: "SKU-1", categoryId: "cat-a", isActive: true, mergedIntoProductId: null, hasBarcode: false },
+    { id: "p2", name: "Ya tiene código", sku: "SKU-2", categoryId: "cat-a", isActive: true, mergedIntoProductId: null, hasBarcode: true },
+    { id: "p3", name: "Otra categoría", sku: "SKU-3", categoryId: "cat-b", isActive: true, mergedIntoProductId: null, hasBarcode: false },
+  ];
+  const balancesFixture = [{ branchId: "b1", productId: "p1", quantityOnHand: 7 }];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db: any = {
+    product: {
+      findMany: async ({ where }: { where: { categoryId: string; barcodes: { none: object } } }) =>
+        productsFixture.filter((p) => p.categoryId === where.categoryId && !p.hasBarcode).map((p) => ({ id: p.id, name: p.name, sku: p.sku })),
+    },
+    inventoryBalance: {
+      findMany: async ({ where }: { where: { branchId: string; productId: { in: string[] } } }) =>
+        balancesFixture.filter((b) => b.branchId === where.branchId && where.productId.in.includes(b.productId)),
+    },
+  };
+  const result = await listProductsWithoutBarcodeForCategoryWalk({ categoryId: "cat-a", branchId: "b1" }, db);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].productId, "p1");
+  assert.equal(result[0].stockInBranch, 7);
+});
+
+// ── countBarcodeIssues ─────────────────────────────────────────────────────
+
+test("LA QUE IMPORTA — countBarcodeIssues: el total real por issue, no solo una página", async () => {
+  const db = buildFakeDb(
+    [product({ id: "p1", isActive: false }), product({ id: "p2" })],
+    [
+      barcode({ id: "bc1", productId: "p1", code: "111" }),
+      barcode({ id: "bc2", productId: "p2", code: "4006381333930" }), // checksum inválido
+    ],
+  );
+  const counts = await countBarcodeIssues(db);
+  assert.equal(counts.PRODUCT_INACTIVE, 1);
+  assert.equal(counts.CHECKSUM_INVALID, 1);
+  assert.equal(counts.MULTIPLE_CODES, 0);
 });

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import type { Route } from "next";
 import toast from "react-hot-toast";
-import { ArrowLeft, Camera, Check, Loader2, Package, Printer, QrCode, ScanLine, Search, Undo2, Link2, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Camera, Check, Loader2, Package, Printer, QrCode, ScanLine, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,18 +17,14 @@ import { useSession } from "@/lib/client/session";
 import { useCameraAvailable } from "@/lib/client/use-camera-available";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { printProductLabels } from "@/lib/client/print-product-labels";
-import { money } from "@/lib/format";
+import { money, qty } from "@/lib/format";
 import {
   decideScanStep,
   shouldIgnoreRepeatedCode,
   loadRememberedProductDefaults,
   saveRememberedProductDefaults,
-  loadRememberedScanMode,
-  saveRememberedScanMode,
   findSimilarProductByName,
-  needsSecondCodeConfirmation,
   type ScanStep,
-  type ScanMode,
   type RememberedProductDefaults,
   type NameSimilarityCandidate,
 } from "@/lib/quick-add-product";
@@ -40,12 +37,13 @@ import {
  * debounce de 1.5s (shouldIgnoreRepeatedCode) para ignorar una lectura
  * repetida entre cuadros continuos.
  *
- * prompt-codigos-y-duplicados.md Fase 2 — "Escanear productos" (antes
- * "Alta rápida con escáner"): dos modos, recordados entre sesiones.
- * Registrar nuevos es el comportamiento de siempre (código no encontrado →
- * formulario de alta). Etiquetar catálogo es nuevo: código no encontrado →
- * buscar el producto YA existente y vincularle este código — nunca crea un
- * producto nuevo desde ese modo.
+ * prompt-codigos-editar-eliminar.md Fase 3.2 — "No mantener dos flujos de
+ * etiquetado": el modo "Etiquetar catálogo" se reemplaza por un enlace a
+ * "Códigos de barra" (modo Escanear, con sugerencias "¿podría ser este
+ * producto?"). Esta pantalla vuelve a ser de un solo propósito: Registrar
+ * nuevos. Antes del formulario de alta, se consultan esas mismas
+ * sugerencias por el código escaneado — si el producto YA existe,
+ * vincularlo ahí evita un alta duplicada.
  */
 
 type Category = { id: string; code: string; name: string; isActive: boolean };
@@ -109,29 +107,10 @@ function readRememberedDefaults(): RememberedProductDefaults | null {
   }
 }
 
-function readRememberedMode(): ScanMode {
-  try {
-    return loadRememberedScanMode(window.localStorage);
-  } catch {
-    return "REGISTER";
-  }
-}
+type CodeSuggestion = { productId: string; name: string; sku: string; unit: string; stockInBranch: number; reasons: Array<{ code: string; text: string }> };
 
-type LabelSearchResult = {
-  id: string;
-  sku: string;
-  name: string;
-  barcode: string | null;
-  barcodes?: string[];
-  standardSalePrice: number | string;
-  isActive: boolean;
-  category?: { name: string } | null;
-};
-
-type LinkedEntry = { barcodeId: string; productId: string; productName: string; code: string };
-
-export default function QuickAddProductPage() {
-  const [mode, setMode] = useState<ScanMode>(() => readRememberedMode());
+function QuickAddProductContent() {
+  const searchParams = useSearchParams();
   const [categories, setCategories] = useState<Category[]>([]);
   const [code, setCode] = useState("");
   const [checking, setChecking] = useState(false);
@@ -145,25 +124,17 @@ export default function QuickAddProductPage() {
   const cameraAvailable = useCameraAvailable();
   const [showCamera, setShowCamera] = useState(false);
 
-  // ── Registrar nuevos: "¿este producto ya está en el catálogo?" ──
+  // ── "¿este producto ya está en el catálogo?" — por nombre (al tipear) y por código (apenas se abre el formulario) ──
   const [nameSuggestion, setNameSuggestion] = useState<NameSimilarityCandidate | null>(null);
   const [linkingExisting, setLinkingExisting] = useState(false);
-
-  // ── Etiquetar catálogo ──
-  const [labelQuery, setLabelQuery] = useState("");
-  const [labelResults, setLabelResults] = useState<LabelSearchResult[]>([]);
-  const [labelSearching, setLabelSearching] = useState(false);
-  const [labelSelected, setLabelSelected] = useState<LabelSearchResult | null>(null);
-  const [labelSubmitting, setLabelSubmitting] = useState(false);
-  const [linkedCount, setLinkedCount] = useState(0);
-  const [lastLinked, setLastLinked] = useState<LinkedEntry | null>(null);
+  const [codeSuggestions, setCodeSuggestions] = useState<CodeSuggestion[]>([]);
+  const [codeSuggestionsLoading, setCodeSuggestionsLoading] = useState(false);
 
   const codeInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const labelSearchRef = useRef<HTMLInputElement>(null);
   const lastCodeRef = useRef<{ code: string; at: number } | null>(null);
   const nameCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const labelSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prefillHandled = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -179,32 +150,16 @@ export default function QuickAddProductPage() {
 
   useEffect(() => () => {
     if (nameCheckTimer.current) clearTimeout(nameCheckTimer.current);
-    if (labelSearchTimer.current) clearTimeout(labelSearchTimer.current);
   }, []);
 
-  // Foco permanente en el campo Código salvo cuando el formulario de alta
-  // está abierto (ahí el foco va al Nombre) o el buscador de Etiquetar
-  // catálogo está abierto (foco al buscador).
+  // Foco permanente en el campo Código salvo cuando el formulario de alta está abierto (ahí el foco va al Nombre).
   useEffect(() => {
     if (step?.kind === "REGISTER_NOT_FOUND") {
       nameInputRef.current?.focus();
-    } else if (step?.kind === "LABEL_SEARCH") {
-      labelSearchRef.current?.focus();
     } else {
       codeInputRef.current?.focus();
     }
   }, [step]);
-
-  function switchMode(next: ScanMode) {
-    if (next === mode) return;
-    setMode(next);
-    try {
-      saveRememberedScanMode(window.localStorage, next);
-    } catch {
-      // No crítico.
-    }
-    resetToScan();
-  }
 
   const lookupCode = useCallback(async (rawCode: string) => {
     const trimmed = rawCode.trim();
@@ -217,29 +172,53 @@ export default function QuickAddProductPage() {
     setChecking(true);
     setNoCodeMode(false);
     setNameSuggestion(null);
-    setLabelSelected(null);
-    setLabelQuery("");
-    setLabelResults([]);
+    setCodeSuggestions([]);
     try {
       const res = await apiFetch(`/api/catalog/products/by-code?code=${encodeURIComponent(trimmed)}`);
       const body = await res.json().catch(() => null);
       if (!res.ok) {
         const message = (body?.error?.message as string | undefined) ?? "No se pudo consultar el código.";
-        setStep(decideScanStep({ mode, code: trimmed, response: null, errorMessage: message }));
+        setStep(decideScanStep({ code: trimmed, response: null, errorMessage: message }));
         return;
       }
       const data = unwrapApiData(body);
-      const decided = decideScanStep({ mode, code: trimmed, response: data });
+      const decided = decideScanStep({ code: trimmed, response: data });
       setStep(decided);
       if (decided.kind === "REGISTER_NOT_FOUND") {
         setForm(defaultForm(readRememberedDefaults()));
+        if (trimmed) void loadCodeSuggestions(trimmed);
       }
     } catch {
-      setStep(decideScanStep({ mode, code: trimmed, response: null, errorMessage: "Error de red." }));
+      setStep(decideScanStep({ code: trimmed, response: null, errorMessage: "Error de red." }));
     } finally {
       setChecking(false);
     }
-  }, [mode]);
+  }, []);
+
+  // Prefill desde la pantalla "Códigos de barra" → "Es nuevo → crearlo" (?code=...).
+  useEffect(() => {
+    if (prefillHandled.current) return;
+    const prefillCode = searchParams.get("code");
+    if (prefillCode) {
+      prefillHandled.current = true;
+      setCode(prefillCode);
+      void lookupCode(prefillCode);
+    }
+  }, [searchParams, lookupCode]);
+
+  async function loadCodeSuggestions(forCode: string) {
+    setCodeSuggestionsLoading(true);
+    try {
+      const res = await apiFetch(`/api/catalog/barcodes/suggest?code=${encodeURIComponent(forCode)}`);
+      const raw = await res.json().catch(() => null);
+      if (!res.ok) return;
+      setCodeSuggestions((unwrapApiData(raw) as { suggestions: CodeSuggestion[] }).suggestions);
+    } catch {
+      // Silencioso — es una sugerencia, no un chequeo obligatorio.
+    } finally {
+      setCodeSuggestionsLoading(false);
+    }
+  }
 
   function handleCodeKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== "Enter") return;
@@ -253,6 +232,7 @@ export default function QuickAddProductPage() {
     setNoCodeMode(true);
     setStep({ kind: "REGISTER_NOT_FOUND", code: "" });
     setForm(defaultForm(readRememberedDefaults()));
+    setCodeSuggestions([]);
   }
 
   function resetToScan() {
@@ -260,13 +240,11 @@ export default function QuickAddProductPage() {
     setNoCodeMode(false);
     setCode("");
     setNameSuggestion(null);
-    setLabelSelected(null);
-    setLabelQuery("");
-    setLabelResults([]);
+    setCodeSuggestions([]);
   }
 
-  // ── Registrar nuevos: "¿ya existe?" — se dispara al tipear el nombre, con
-  // el mismo debounce de 350ms que usa el buscador del catálogo. Pura
+  // ── "¿ya existe?" por nombre — se dispara al tipear el nombre, con el
+  // mismo debounce de 350ms que usa el buscador del catálogo. Pura
   // sugerencia: nunca bloquea seguir escribiendo ni guardar como nuevo.
   function handleNameChange(value: string) {
     setForm((prev) => ({ ...prev, name: value }));
@@ -303,65 +281,6 @@ export default function QuickAddProductPage() {
       toast.error(e instanceof Error ? e.message : "No se pudo vincular el código.");
     } finally {
       setLinkingExisting(false);
-    }
-  }
-
-  // ── Etiquetar catálogo: buscador ──
-  function handleLabelQueryChange(value: string) {
-    setLabelQuery(value);
-    setLabelSelected(null);
-    if (labelSearchTimer.current) clearTimeout(labelSearchTimer.current);
-    if (value.trim().length < 2) {
-      setLabelResults([]);
-      return;
-    }
-    labelSearchTimer.current = setTimeout(async () => {
-      setLabelSearching(true);
-      try {
-        const res = await apiFetch(`/api/catalog/products?q=${encodeURIComponent(value.trim())}&limit=20`);
-        const raw = await res.json();
-        setLabelResults(unwrapApiData(raw) as LabelSearchResult[]);
-      } catch {
-        toast.error("No se pudo buscar en el catálogo.");
-      } finally {
-        setLabelSearching(false);
-      }
-    }, 350);
-  }
-
-  async function handleLinkLabel() {
-    if (step?.kind !== "LABEL_SEARCH" || !labelSelected) return;
-    setLabelSubmitting(true);
-    try {
-      const res = await apiFetch(`/api/catalog/products/${labelSelected.id}/barcodes`, {
-        method: "POST",
-        body: JSON.stringify({ code: step.code, kind: "FACTORY" }),
-      });
-      const raw = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo vincular el código.");
-      const created = unwrapApiData(raw) as { id: string };
-      setLinkedCount((n) => n + 1);
-      setLastLinked({ barcodeId: created.id, productId: labelSelected.id, productName: labelSelected.name, code: step.code });
-      toast.success(`Vinculado a ${labelSelected.name}.`);
-      resetToScan();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "No se pudo vincular el código.");
-    } finally {
-      setLabelSubmitting(false);
-    }
-  }
-
-  async function handleUndoLastLink() {
-    if (!lastLinked) return;
-    try {
-      const res = await apiFetch(`/api/catalog/products/${lastLinked.productId}/barcodes/${lastLinked.barcodeId}`, { method: "DELETE" });
-      const raw = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(raw?.error?.message ?? "No se pudo deshacer.");
-      setLinkedCount((n) => Math.max(0, n - 1));
-      toast.success(`Deshecho: ${lastLinked.code} ya no está vinculado a ${lastLinked.productName}.`);
-      setLastLinked(null);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "No se pudo deshacer.");
     }
   }
 
@@ -480,8 +399,7 @@ export default function QuickAddProductPage() {
     }
   }
 
-  const formLocked = step?.kind === "REGISTER_NOT_FOUND" || step?.kind === "LABEL_SEARCH";
-  const labelConfirming = step?.kind === "LABEL_SEARCH" && labelSelected && needsSecondCodeConfirmation(labelSelected.barcodes?.length ?? 0);
+  const formLocked = step?.kind === "REGISTER_NOT_FOUND";
 
   return (
     <section className="space-y-5">
@@ -494,55 +412,20 @@ export default function QuickAddProductPage() {
           Catálogo
         </Link>
         <div>
-          <h1 className="text-xl font-medium" style={{ color: "var(--color-text)" }}>Escanear productos</h1>
+          <h1 className="text-xl font-medium" style={{ color: "var(--color-text)" }}>Registrar nuevos</h1>
           <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
             Escaneá o tecleá el código y presioná Enter — la cámara, el lector USB y el lector Bluetooth escriben igual.
           </p>
         </div>
+        <Link
+          href={"/app/master/catalog/barcodes" as Route}
+          className="ml-auto inline-flex h-11 items-center gap-1.5 rounded-lg border border-[var(--color-master-300)] bg-[var(--color-master-50)] px-3 text-sm font-semibold text-[var(--color-master-700)] hover:bg-[var(--color-master-100)]"
+        >
+          Etiquetar catálogo existente →
+        </Link>
       </div>
 
-      {/* ── Selector de modo — recordado entre sesiones ── */}
-      <div className="inline-flex rounded-lg border border-[var(--color-border)] p-1" style={{ background: "var(--color-surface-alt)" }}>
-        <button
-          type="button"
-          onClick={() => switchMode("REGISTER")}
-          disabled={formLocked}
-          className={`h-9 rounded-md px-4 text-sm font-semibold transition-colors disabled:opacity-50 ${
-            mode === "REGISTER" ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-secondary)]"
-          }`}
-        >
-          Registrar nuevos
-        </button>
-        <button
-          type="button"
-          onClick={() => switchMode("LABEL")}
-          disabled={formLocked}
-          className={`h-9 rounded-md px-4 text-sm font-semibold transition-colors disabled:opacity-50 ${
-            mode === "LABEL" ? "bg-[var(--color-master-600)] text-white" : "text-[var(--color-text-secondary)]"
-          }`}
-        >
-          Etiquetar catálogo
-        </button>
-        {mode === "LABEL" && linkedCount > 0 && (
-          <span className="ml-2 flex items-center gap-1 px-2 text-xs font-medium text-[var(--color-text-muted)]">
-            <Link2 className="h-3.5 w-3.5" />
-            Vinculados en esta sesión: {linkedCount}
-          </span>
-        )}
-      </div>
-
-      {mode === "LABEL" && lastLinked && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-success-300)] bg-[var(--color-success-50)] px-4 py-2.5 text-sm">
-          <span className="text-[var(--color-success-800)]">
-            {lastLinked.code} vinculado a <strong>{lastLinked.productName}</strong>.
-          </span>
-          <Button size="sm" variant="ghost" icon={<Undo2 className="h-3.5 w-3.5" />} onClick={() => void handleUndoLastLink()}>
-            Deshacer
-          </Button>
-        </div>
-      )}
-
-      {/* ── Campo de código: foco permanente mientras no hay formulario/buscador abierto ── */}
+      {/* ── Campo de código: foco permanente mientras no hay formulario abierto ── */}
       <Card>
         <div className="space-y-3">
           <label htmlFor="quick-add-code" className="block text-sm font-semibold" style={{ color: "var(--color-text)" }}>
@@ -569,17 +452,15 @@ export default function QuickAddProductPage() {
             >
               Buscar
             </Button>
-            {mode === "REGISTER" && (
-              <Button
-                variant="ghost"
-                className="h-11"
-                icon={<QrCode className="h-4 w-4" />}
-                onClick={handleStartNoCode}
-                disabled={formLocked}
-              >
-                Sin código — generar QR
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              className="h-11"
+              icon={<QrCode className="h-4 w-4" />}
+              onClick={handleStartNoCode}
+              disabled={formLocked}
+            >
+              Sin código — generar QR
+            </Button>
             {cameraAvailable && (
               <Button
                 variant={showCamera ? "primary" : "ghost"}
@@ -592,10 +473,6 @@ export default function QuickAddProductPage() {
               </Button>
             )}
           </div>
-          {/* Modo continuo: se oculta mientras el formulario/buscador está
-              abierto (el campo Código queda bloqueado) y reaparece solo al
-              volver a escanear (resetToScan) — mismo criterio que el
-              bloqueo del input de arriba. */}
           {cameraAvailable && showCamera && !formLocked && (
             <CameraScanner
               className="max-w-sm"
@@ -652,87 +529,7 @@ export default function QuickAddProductPage() {
         </Card>
       )}
 
-      {/* ── ETIQUETAR CATÁLOGO: buscador de producto existente ── */}
-      {step?.kind === "LABEL_SEARCH" && (
-        <Card>
-          <div className="mb-4 flex items-center gap-2">
-            <Search className="h-4 w-4" style={{ color: "var(--color-master-600)" }} />
-            <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>
-              Código <span className="font-mono">{step.code}</span> no está registrado — buscá el producto en el catálogo
-            </h2>
-          </div>
-
-          <Input
-            ref={labelSearchRef}
-            className="h-11"
-            value={labelQuery}
-            onChange={(e) => handleLabelQueryChange(e.target.value)}
-            placeholder="Buscar por nombre o SKU…"
-          />
-
-          {labelSearching && (
-            <p className="mt-2 flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando…
-            </p>
-          )}
-
-          {!labelSelected && labelResults.length > 0 && (
-            <div className="mt-3 max-h-72 divide-y divide-[var(--color-border)] overflow-y-auto rounded-lg border border-[var(--color-border)]">
-              {labelResults.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setLabelSelected(p)}
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm hover:bg-[var(--color-surface-alt)]"
-                >
-                  <div>
-                    <span className="font-medium text-[var(--color-text)]">{p.name}</span>
-                    <span className="ml-2 font-mono text-xs text-[var(--color-text-muted)]">{p.sku}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {(p.barcodes?.length ?? 0) > 0 && <Badge variant="neutral">{p.barcodes!.length} código{p.barcodes!.length === 1 ? "" : "s"}</Badge>}
-                    {!p.isActive && <Badge variant="warning">Inactivo</Badge>}
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {labelSelected && (
-            <div className="mt-3 rounded-lg border-2 border-[var(--color-master-300)] bg-[var(--color-master-50)] p-3">
-              <p className="text-sm font-semibold text-[var(--color-text)]">{labelSelected.name}</p>
-              <p className="text-xs text-[var(--color-text-muted)]">SKU {labelSelected.sku}</p>
-
-              {labelConfirming && (
-                <div className="mt-2 flex items-start gap-2 rounded-lg bg-amber-100 p-2.5 text-xs text-amber-800">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
-                  <span>
-                    Este producto ya tiene {labelSelected.barcodes?.length} código{labelSelected.barcodes?.length === 1 ? "" : "s"} registrado(s) —
-                    {" "}<span className="font-mono">{step.code}</span> se agregaría como código adicional, no como principal.
-                  </span>
-                </div>
-              )}
-
-              <div className="mt-3 flex gap-2">
-                <Button variant="success" className="h-10" loading={labelSubmitting} disabled={labelSubmitting} onClick={() => void handleLinkLabel()} icon={<Link2 className="h-4 w-4" />}>
-                  {labelConfirming ? "Sí, agregar como código adicional" : "Vincular código"}
-                </Button>
-                <Button variant="ghost" className="h-10" onClick={() => setLabelSelected(null)} disabled={labelSubmitting}>
-                  Elegir otro
-                </Button>
-              </div>
-            </div>
-          )}
-
-          <div className="mt-4 border-t border-[var(--color-border)] pt-3">
-            <Button variant="ghost" className="h-10" onClick={resetToScan}>
-              Cancelar
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      {/* ── Formulario de alta rápida (Registrar nuevos) ── */}
+      {/* ── Formulario de alta rápida ── */}
       {step?.kind === "REGISTER_NOT_FOUND" && (
         <Card>
           <div className="mb-4 flex items-center gap-2">
@@ -741,6 +538,29 @@ export default function QuickAddProductPage() {
               {noCodeMode ? "Producto sin código de fábrica" : "Producto nuevo"}
             </h2>
           </div>
+
+          {/* "¿Ya está en el catálogo?" — por el CÓDIGO escaneado (prompt-codigos-editar-eliminar.md Fase 3.3), antes que nada. */}
+          {!noCodeMode && (codeSuggestionsLoading || codeSuggestions.length > 0) && (
+            <div className="mb-4 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+              <p className="text-sm font-semibold text-amber-800">¿Ya está en el catálogo?</p>
+              {codeSuggestionsLoading ? (
+                <p className="mt-1 flex items-center gap-2 text-xs text-amber-700"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando…</p>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {codeSuggestions.map((s) => (
+                    <div key={s.productId} className="flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-white p-2">
+                      <div>
+                        <p className="text-sm font-medium text-[var(--color-text)]">{s.name}</p>
+                        <p className="font-mono text-xs text-[var(--color-text-muted)]">{s.sku} · {s.unit} · stock {qty(s.stockInBranch)}</p>
+                        <div className="mt-0.5 flex flex-wrap gap-1">{s.reasons.map((r, i) => <Badge key={i} variant="neutral">{r.text}</Badge>)}</div>
+                      </div>
+                      <Button size="sm" variant="success" loading={linkingExisting} disabled={linkingExisting} onClick={() => void handleLinkToExisting(s.productId, s.name)}>Vincular</Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {nameSuggestion && (
             <div className="mb-4 flex items-start gap-2 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
@@ -850,8 +670,8 @@ export default function QuickAddProductPage() {
         </p>
       )}
 
-      {/* ── Registrados en esta sesión (solo modo Registrar nuevos) ── */}
-      {mode === "REGISTER" && sessionRows.length > 0 && (
+      {/* ── Registrados en esta sesión ── */}
+      {sessionRows.length > 0 && (
         <Card noPadding>
           <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "0.5px solid var(--color-border)" }}>
             <h2 className="text-sm font-semibold" style={{ color: "var(--color-text)" }}>
@@ -906,5 +726,13 @@ export default function QuickAddProductPage() {
         </Card>
       )}
     </section>
+  );
+}
+
+export default function QuickAddProductPage() {
+  return (
+    <Suspense fallback={null}>
+      <QuickAddProductContent />
+    </Suspense>
   );
 }

@@ -25,29 +25,25 @@ export type QuickAddByCodeResponse = {
 };
 
 /**
- * prompt-codigos-y-duplicados.md Fase 2 — "Escanear productos" tiene dos
- * modos: Registrar nuevos (el de siempre: código no encontrado → alta) y
- * Etiquetar catálogo (código no encontrado → buscar en el catálogo YA
- * existente y vincularlo, nunca crear un producto nuevo desde acá).
+ * prompt-codigos-editar-eliminar.md Fase 3.2 — "No mantener dos flujos de
+ * etiquetado": el modo "Etiquetar catálogo" (código no encontrado → buscar
+ * en el catálogo existente y vincularlo) se reemplaza por un enlace a la
+ * pantalla nueva "Códigos de barra" (modo Escanear, con sugerencias
+ * "¿podría ser este producto?"). Esta pantalla vuelve a tener un solo
+ * propósito: Registrar nuevos.
  */
-export type ScanMode = "REGISTER" | "LABEL";
-
 export type ScanStep =
   | { kind: "FOUND"; product: QuickAddProductMatch; matchedBy: "barcode" | "sku" }
   | { kind: "ERROR"; code: string; message: string }
-  | { kind: "REGISTER_NOT_FOUND"; code: string }
-  | { kind: "LABEL_SEARCH"; code: string };
+  | { kind: "REGISTER_NOT_FOUND"; code: string };
 
 /**
  * Decide la pantalla siguiente tras consultar GET /api/catalog/products/by-code.
  * Un código encontrado SIEMPRE muestra la tarjeta "Ya registrado" — nunca
- * abre el formulario de alta ni el buscador (evitaría duplicados), sin
- * importar el modo. Sin coincidencia, el modo decide: Registrar nuevos abre
- * el formulario de alta; Etiquetar catálogo muestra el buscador de productos
- * existentes.
+ * abre el formulario de alta (evitaría duplicados). Sin coincidencia, abre
+ * el formulario de alta.
  */
 export function decideScanStep(input: {
-  mode: ScanMode;
   code: string;
   response: QuickAddByCodeResponse | null;
   errorMessage?: string | null;
@@ -58,9 +54,7 @@ export function decideScanStep(input: {
   if (input.response?.product && input.response.matchedBy) {
     return { kind: "FOUND", product: input.response.product, matchedBy: input.response.matchedBy };
   }
-  return input.mode === "LABEL"
-    ? { kind: "LABEL_SEARCH", code: input.code }
-    : { kind: "REGISTER_NOT_FOUND", code: input.code };
+  return { kind: "REGISTER_NOT_FOUND", code: input.code };
 }
 
 /**
@@ -101,35 +95,6 @@ export function findSimilarProductByName(
     return candidateName.includes(typed) || typed.includes(candidateName);
   });
   return partial ?? null;
-}
-
-/**
- * Modo Etiquetar catálogo — si el producto elegido YA tiene al menos un
- * código, agregar este sería un código SECUNDARIO (no el principal) y se
- * confirma antes de vincular, para que no sea una sorpresa silenciosa.
- */
-export function needsSecondCodeConfirmation(existingBarcodeCount: number): boolean {
-  return existingBarcodeCount > 0;
-}
-
-export const SCAN_MODE_STORAGE_KEY = "hammer:scan-and-label-mode";
-
-/** Modo recordado entre sesiones de escaneo — REGISTER es el default si no hay nada guardado o el valor guardado no es válido. */
-export function loadRememberedScanMode(storage: KeyValueStorage): ScanMode {
-  try {
-    const raw = storage.getItem(SCAN_MODE_STORAGE_KEY);
-    return raw === "LABEL" ? "LABEL" : "REGISTER";
-  } catch {
-    return "REGISTER";
-  }
-}
-
-export function saveRememberedScanMode(storage: KeyValueStorage, mode: ScanMode): void {
-  try {
-    storage.setItem(SCAN_MODE_STORAGE_KEY, mode);
-  } catch {
-    // Ver nota de loadRememberedProductDefaults — nunca debe romper la pantalla.
-  }
 }
 
 export type RememberedProductDefaults = {

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   isValidGtinChecksum,
   expandUpcEToUpcA,
+  checksumWarningForCode,
   createReadConsensus,
   computeRoi,
   roiModeForAttempt,
@@ -68,6 +69,21 @@ test("UPC-E de 8 dígitos con número de sistema inválido (2): null", () => {
 });
 test("longitud que no es 6 ni 8: null", () => {
   assert.equal(expandUpcEToUpcA("12345"), null);
+});
+
+// ── checksumWarningForCode (prompt-codigos-editar-eliminar.md Fase 1.1/3.1) ──
+
+test("LA QUE IMPORTA — checksumWarningForCode: EAN-13 válido no avisa, inválido sí", () => {
+  assert.equal(checksumWarningForCode("4006381333931"), false);
+  assert.equal(checksumWarningForCode("4006381333930"), true);
+});
+
+test("checksumWarningForCode: código con letras (SUPPLIER/interno) nunca avisa", () => {
+  assert.equal(checksumWarningForCode("HMR-FER-0001"), false);
+});
+
+test("checksumWarningForCode: UPC-E de 6 dígitos válido no avisa", () => {
+  assert.equal(checksumWarningForCode("123000"), false);
 });
 
 // ── createReadConsensus (1.4 — "la misma lectura 2 veces dentro de 700ms") ──

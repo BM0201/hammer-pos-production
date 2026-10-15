@@ -153,3 +153,63 @@ export async function searchBarcodes(input: BarcodeSearchInput, db: PrismaClient
 export async function listAllBarcodesForExport(filters: { q?: string; kind?: ProductBarcodeKind; issue?: BarcodeIssue }, db: PrismaClient = prisma): Promise<BarcodeSearchRow[]> {
   return fetchAllWithIssues(db, filters);
 }
+
+export type BarcodeCoverage = { withBarcode: number; total: number };
+
+/**
+ * Fase 3.2 — "Productos con código: 1,412 de 3,705 · 38%", filtrable por
+ * sucursal y categoría. Mismo filtro de visibilidad por sucursal que el
+ * resto del catálogo (branchProductScopeFilter) — "con código" cuenta
+ * `barcodes: { some: {} }` en vez de leer Product.barcode directo porque
+ * ese campo es solo un espejo del principal, mantenido por
+ * product-barcode-service.ts; la tabla ProductBarcode es la fuente real.
+ */
+export async function getBarcodeCoverage(filters: { branchId?: string; categoryId?: string }, db: PrismaClient = prisma): Promise<BarcodeCoverage> {
+  const { branchProductScopeFilter } = await import("@/modules/catalog/branch-product-scope");
+  const where: Prisma.ProductWhereInput = {
+    isActive: true,
+    mergedIntoProductId: null,
+    ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
+    ...(filters.branchId ? branchProductScopeFilter(filters.branchId) : {}),
+  };
+  const [withBarcode, total] = await Promise.all([
+    db.product.count({ where: { ...where, barcodes: { some: {} } } }),
+    db.product.count({ where }),
+  ]);
+  return { withBarcode, total };
+}
+
+export type CategoryWalkCandidate = { productId: string; name: string; sku: string; stockInBranch: number };
+
+/**
+ * Fase 3.2 — "Recorrer por categoría": productos SIN código de esa
+ * categoría, con stock primero (lo que más rota conviene etiquetarlo
+ * antes — el orden final por stock lo decide la pantalla, acá solo se
+ * manda el número).
+ */
+export async function listProductsWithoutBarcodeForCategoryWalk(
+  input: { categoryId: string; branchId: string },
+  db: PrismaClient = prisma,
+): Promise<CategoryWalkCandidate[]> {
+  const products = await db.product.findMany({
+    where: { categoryId: input.categoryId, isActive: true, mergedIntoProductId: null, barcodes: { none: {} } },
+    select: { id: true, name: true, sku: true },
+  });
+  if (products.length === 0) return [];
+
+  const balances = await db.inventoryBalance.findMany({
+    where: { branchId: input.branchId, productId: { in: products.map((p) => p.id) } },
+    select: { productId: true, quantityOnHand: true },
+  });
+  const stockByProduct = new Map(balances.map((b) => [b.productId, Number(b.quantityOnHand)]));
+
+  return products.map((p) => ({ productId: p.id, name: p.name, sku: p.sku, stockInBranch: stockByProduct.get(p.id) ?? 0 }));
+}
+
+/** Fase 3.1 — "Con problemas (N)... con chips por problema y su conteo": el total real por issue, para la pestaña y sus chips (no solo lo que entra en una página). */
+export async function countBarcodeIssues(db: PrismaClient = prisma): Promise<Record<BarcodeIssue, number>> {
+  const rows = await fetchAllWithIssues(db, {});
+  const counts: Record<BarcodeIssue, number> = { CHECKSUM_INVALID: 0, PRODUCT_INACTIVE: 0, PRODUCT_MERGED: 0, MULTIPLE_CODES: 0, INTERNAL_SKU_MISMATCH: 0, NO_PRIMARY: 0 };
+  for (const row of rows) for (const issue of row.issues) counts[issue] += 1;
+  return counts;
+}

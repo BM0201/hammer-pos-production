@@ -129,6 +129,29 @@ export function expandUpcEToUpcA(upcE: string): string | null {
   return `${payload}${checkDigit}`;
 }
 
+/**
+ * prompt-codigos-editar-eliminar.md Fase 1.1/3.1 — "aviso de dígito
+ * verificador inválido" en vivo, mientras se teclea/edita un código (antes
+ * de guardar). Espejo documentado de catalog/barcode.ts (hammer-api) —
+ * mismo criterio ahí para el `warnings` que devuelve updateBarcode, nunca
+ * bloquea el guardado, solo avisa. Ver ese archivo para por qué 8 dígitos
+ * es ambiguo (EAN-8 autocontenido vs. UPC-E con sistema+verificador).
+ */
+export function checksumWarningForCode(code: string): boolean {
+  if (!/^\d+$/.test(code)) return false;
+  if (code.length === 12 || code.length === 13) return !isValidGtinChecksum(code);
+  if (code.length === 8) {
+    if (isValidGtinChecksum(code)) return false;
+    const expanded = expandUpcEToUpcA(code);
+    return !(expanded && isValidGtinChecksum(expanded));
+  }
+  if (code.length === 6) {
+    const expanded = expandUpcEToUpcA(code);
+    return !(expanded && isValidGtinChecksum(expanded));
+  }
+  return false;
+}
+
 export type ReadConsensus = {
   /** Registra una lectura; true cuando se alcanzó el consenso (y lo reinicia). */
   feed: (code: string, now: number) => boolean;
