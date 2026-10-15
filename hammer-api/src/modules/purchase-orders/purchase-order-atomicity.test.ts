@@ -139,6 +139,13 @@ function createPoFakeStore(opts: {
           && (!where.referenceId || m.referenceId === where.referenceId)
           && (!where.movementType || m.movementType === where.movementType),
         ).length,
+      // Fase 3 (prompt-entrada-inventario.md) — findRecentManualAddStockCodesTx
+      // consulta esto en toda recepción; estos tests no siembran ningún
+      // ADD_STOCK manual previo, así que no hay nada que encontrar.
+      findMany: async () => [],
+    },
+    multiBranchIntake: {
+      findMany: async () => [],
     },
     product: {
       findUnique: async () => product,

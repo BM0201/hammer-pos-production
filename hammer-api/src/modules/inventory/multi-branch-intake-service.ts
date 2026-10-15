@@ -329,21 +329,38 @@ function toResult(intake: { id: string; code: string; branches: Array<{ branchId
   return { intake: { id: intake.id, code: intake.code }, overallStatus, branches };
 }
 
+/** Detalle de solo lectura (Fase 3) — linesJson solo trae productId; acá se enriquece con sku/name para no obligar a la pantalla a resolverlo aparte. */
 export async function getMultiBranchIntake(id: string, db: DbClient = prisma) {
   const intake = await db.multiBranchIntake.findUnique({
     where: { id },
-    include: { branches: { include: { branch: { select: { id: true, code: true, name: true } } } } },
+    include: {
+      branches: { include: { branch: { select: { id: true, code: true, name: true } } } },
+      createdBy: { select: { id: true, fullName: true } },
+    },
   });
   if (!intake) throw new Error("NOT_FOUND: Ingreso de inventario no encontrado.");
-  return intake;
+
+  const lines = intake.linesJson as unknown as IntakeLineInput[];
+  const productIds = [...new Set(lines.map((l) => l.productId))];
+  const products = productIds.length > 0
+    ? await db.product.findMany({ where: { id: { in: productIds } }, select: { id: true, sku: true, name: true } })
+    : [];
+  const productById = new Map(products.map((p) => [p.id, p]));
+  const linesDetail = lines.map((line) => ({ ...line, product: productById.get(line.productId) ?? null }));
+
+  return { ...intake, linesDetail };
 }
 
+/** Fase 3 (prompt-entrada-inventario.md) — "historial de entradas... tipo, sucursales, líneas, estado, quién y cuándo". */
 export async function listMultiBranchIntakes(input: { limit: number; cursor?: string }, db: DbClient = prisma) {
   const intakes = await db.multiBranchIntake.findMany({
     orderBy: { createdAt: "desc" },
     take: input.limit + 1,
     ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
-    include: { branches: { include: { branch: { select: { code: true } } } } },
+    include: {
+      branches: { include: { branch: { select: { code: true } } } },
+      createdBy: { select: { fullName: true } },
+    },
   });
   const hasMore = intakes.length > input.limit;
   const page = hasMore ? intakes.slice(0, input.limit) : intakes;

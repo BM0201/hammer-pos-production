@@ -83,9 +83,7 @@ export const openingBalanceSchema = z.object({
   // default de esta pantalla ERA SET_WAC: cargar existencias, la operación
   // más común del sistema, reescribía el costo promedio sin que nadie lo
   // pidiera. QUANTITY_ONLY como default: cargar stock ya no toca ningún
-  // costo salvo que se elija explícitamente. Único caller real
-  // (opening-balance/bulk desde catalog-inventory-admin.tsx) ya manda
-  // costMode explícito en cada línea — este cambio no le afecta.
+  // costo salvo que se elija explícitamente.
   costMode: z.enum(["SET_WAC", "SET_BRANCH_COST", "QUANTITY_ONLY"]).default("QUANTITY_ONLY"),
   salePrice: z.coerce.number().nonnegative("El precio inicial no puede ser negativo.").optional().nullable(),
   priceMode: z.enum(["SET_BRANCH_PRICE", "SET_GLOBAL_PRICE", "NO_PRICE_CHANGE"]).default("SET_BRANCH_PRICE"),
@@ -109,53 +107,3 @@ export const openingBalanceSchema = z.object({
   }
 });
 
-const openingBalanceBulkLineSchema = z.object({
-  productId: z.string().cuid(),
-  quantity: z.coerce.number().positive("La cantidad debe ser mayor que cero."),
-  unit: z.string().min(1).max(32).optional(),
-  unitCost: z.coerce.number().nonnegative("El costo inicial no puede ser negativo.").optional().nullable(),
-  // Mismo cambio de default que openingBalanceSchema arriba — ver ese
-  // comentario. La carga masiva es donde el riesgo es peor: una planilla
-  // de 300 filas con el default equivocado reescribía 300 costos de una
-  // vez.
-  costMode: z.enum(["SET_WAC", "SET_BRANCH_COST", "QUANTITY_ONLY"]).default("QUANTITY_ONLY"),
-  allowLargeWacJump: z.boolean().optional(),
-  salePrice: z.coerce.number().nonnegative("El precio inicial no puede ser negativo.").optional().nullable(),
-  priceMode: z.enum(["SET_BRANCH_PRICE", "SET_GLOBAL_PRICE", "NO_PRICE_CHANGE"]).default("SET_BRANCH_PRICE"),
-  notes: z.string().max(500).optional().nullable(),
-}).superRefine((data, ctx) => {
-  if ((data.costMode === "SET_WAC" || data.costMode === "SET_BRANCH_COST") && (!data.unitCost || data.unitCost <= 0)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["unitCost"],
-      message: "Este modo de costo requiere un costo inicial mayor que cero.",
-    });
-  }
-  if ((data.priceMode === "SET_BRANCH_PRICE" || data.priceMode === "SET_GLOBAL_PRICE") && (!data.salePrice || data.salePrice <= 0)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["salePrice"],
-      message: "Este modo de precio requiere un precio de venta mayor que cero.",
-    });
-  }
-});
-
-export const openingBalanceBulkSchema = z.object({
-  branchId: z.string().cuid(),
-  mode: z.enum(["SET_PHYSICAL_STOCK", "ADD_OPENING_STOCK"]).default("SET_PHYSICAL_STOCK"),
-  reason: z.string().min(5, "El motivo es obligatorio.").max(300),
-  notes: z.string().max(500).optional().nullable(),
-  lines: z.array(openingBalanceBulkLineSchema).min(1, "Agrega al menos un producto.").max(500, "La carga maxima es de 500 productos."),
-}).superRefine((data, ctx) => {
-  const seen = new Set<string>();
-  data.lines.forEach((line, index) => {
-    if (seen.has(line.productId)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["lines", index, "productId"],
-        message: "Producto duplicado dentro de la carga.",
-      });
-    }
-    seen.add(line.productId);
-  });
-});

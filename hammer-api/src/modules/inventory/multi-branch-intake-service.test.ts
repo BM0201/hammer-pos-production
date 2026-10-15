@@ -371,6 +371,25 @@ test("getMultiBranchIntake — inexistente da NOT_FOUND", async () => {
   await assert.rejects(() => getMultiBranchIntake("no-existe", db), /NOT_FOUND/);
 });
 
+test("LA QUE IMPORTA — getMultiBranchIntake enriquece linesJson con sku/name para el detalle de solo lectura (Fase 3)", async () => {
+  const { db } = buildFakeDb();
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-detail",
+    actorUserId: "user-1",
+    kind: "OPENING_BALANCE",
+    reason: "Apertura",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p1", quantity: 10, unitCost: 50 }],
+  }, db);
+
+  db.product.findMany = async ({ where }: { where: { id: { in: string[] } } }) =>
+    where.id.in.filter((id) => id === "p1").map((id) => ({ id, sku: "SKU-P1", name: "Producto 1" }));
+
+  const detail = await getMultiBranchIntake(created.intake.id, db);
+  assert.equal(detail.linesDetail.length, 1);
+  assert.deepEqual(detail.linesDetail[0].product, { id: "p1", sku: "SKU-P1", name: "Producto 1" });
+});
+
 test("ADJUSTMENT_IN (kind legado) se comporta igual que ADD_STOCK", async () => {
   const { db, getBalance } = buildFakeDb({ initialBalances: [{ branchId: BRANCH_1, productId: "p1", quantityOnHand: 40, weightedAverageCost: 100 }] });
   const result = await createMultiBranchIntake({

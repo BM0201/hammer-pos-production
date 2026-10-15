@@ -144,6 +144,8 @@ export type Movement = {
   userName?: string | null;
   product: { id: string; sku: string; name: string };
   branch: Branch;
+  /** Fase 3 (prompt-entrada-inventario.md) — solo cuando referenceType es MULTI_BRANCH_INTAKE. */
+  intakeDocument?: { code: string; kind: string } | null;
 };
 export type Transfer = {
   id: string;

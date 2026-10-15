@@ -134,13 +134,3 @@ test("11. Con SET_WAC explícito, el WAC sí cambia — comportamiento intencion
   assert.ok(Math.abs(getBalance().weightedAverageCost.toNumber() - expectedWac) < 0.001);
   assert.ok(Math.abs(Number(result.weightedAverageCost) - expectedWac) < 0.001);
 });
-
-test("bulk: openingBalanceBulkLineSchema también tiene QUANTITY_ONLY como default (mismo riesgo, peor a escala)", async () => {
-  const { openingBalanceBulkSchema } = await import("@/modules/inventory/validators");
-  const parsed = openingBalanceBulkSchema.parse({
-    branchId: "clx0000000000000000000001",
-    reason: "Conteo físico de rutina",
-    lines: [{ productId: "clx0000000000000000000000", quantity: 5, priceMode: "NO_PRICE_CHANGE" }],
-  });
-  assert.equal(parsed.lines[0].costMode, "QUANTITY_ONLY");
-});

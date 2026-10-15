@@ -14,6 +14,7 @@ import { money, qty, fmtDateTime } from "@/lib/format";
 import { tokenize } from "@/lib/product-search";
 import { numberOrNull } from "@/components/catalog-inventory/catalog-inventory-admin";
 import { IntakeSheet } from "@/components/inventory-intake/intake-sheet";
+import { IntakeHistoryPanel } from "@/components/inventory-intake/intake-history-panel";
 import type { Branch, Movement, Pagination, ProductRow } from "@/components/catalog-inventory/catalog-inventory-admin";
 
 /**
@@ -76,6 +77,13 @@ function fmtRef(type: string, id: string) {
     : id.length > 16 ? `${id.slice(0, 14)}…` : id;
   return { label, shortId };
 }
+// Fase 3 (prompt-entrada-inventario.md) — "Entrada IM-000123 (Sumar/Conteo/Carga inicial)".
+const INTAKE_KIND_LABELS: Record<string, string> = {
+  ADD_STOCK: "Sumar",
+  ADJUSTMENT_IN: "Sumar",
+  PHYSICAL_COUNT: "Conteo",
+  OPENING_BALANCE: "Carga inicial",
+};
 function isKardexIn(type: string) {
   return type.endsWith("_IN") || type === "PURCHASE_IN" || type === "PRODUCTION_OUTPUT";
 }
@@ -114,6 +122,8 @@ export function MovementsPanel({
   const [loadingMovements, setLoadingMovements] = useState(false);
   const [showAdjustment, setShowAdjustment] = useState(false);
   const [showOpening, setShowOpening] = useState(false);
+  // Fase 3 (prompt-entrada-inventario.md) — "una pestaña o sección 'Entradas' en Movimientos".
+  const [activeTab, setActiveTab] = useState<"kardex" | "intakes">("kardex");
   const [submitting, setSubmitting] = useState(false);
   const activeBranchId = selectedBranchId || branches[0]?.id || "";
   const firstProduct = products[0];
@@ -257,6 +267,15 @@ export function MovementsPanel({
           <Button variant="success" size="sm" onClick={() => setShowOpening(true)} icon={<Package className="h-4 w-4" />}>Entrada de inventario</Button>
         </div>
       </div>
+      <div className="flex gap-1 border-b border-[var(--color-border)] px-4 pt-2">
+        <button type="button" onClick={() => setActiveTab("kardex")} className={`rounded-t-lg px-3 py-2 text-xs font-semibold ${activeTab === "kardex" ? "border-b-2 border-[var(--color-master-600)] text-[var(--color-master-700)]" : "text-[var(--color-text-muted)]"}`}>Kardex</button>
+        <button type="button" onClick={() => setActiveTab("intakes")} className={`rounded-t-lg px-3 py-2 text-xs font-semibold ${activeTab === "intakes" ? "border-b-2 border-[var(--color-master-600)] text-[var(--color-master-700)]" : "text-[var(--color-text-muted)]"}`}>Entradas</button>
+      </div>
+      {activeTab === "intakes" ? (
+        <div className="p-4">
+          <IntakeHistoryPanel />
+        </div>
+      ) : (
       <div className="p-4 space-y-4">
         {/* 7 controles de filtro de ancho similar y cantidad fija — auto-fit
             se acomoda solo a cualquier ancho en vez de necesitar más
@@ -336,8 +355,22 @@ export function MovementsPanel({
                     </td>
                     <td className="text-xs text-[var(--color-text-muted)] font-mono">{unit}</td>
                     <td>
-                      <div className="text-[11px] font-medium text-[var(--color-text-secondary)]">{ref.label}</div>
-                      <div className="font-mono text-[10px] text-[var(--color-text-muted)]">{ref.shortId}</div>
+                      {item.intakeDocument ? (
+                        <button
+                          type="button"
+                          onClick={() => { setMovementSearch(item.referenceId); resetMovementPage(); }}
+                          className="text-left hover:underline"
+                          title="Filtrar el kardex por este documento de entrada"
+                        >
+                          <div className="text-[11px] font-medium text-[var(--color-master-700)]">Entrada {item.intakeDocument.code}</div>
+                          <div className="text-[10px] text-[var(--color-text-muted)]">{INTAKE_KIND_LABELS[item.intakeDocument.kind] ?? item.intakeDocument.kind}</div>
+                        </button>
+                      ) : (
+                        <>
+                          <div className="text-[11px] font-medium text-[var(--color-text-secondary)]">{ref.label}</div>
+                          <div className="font-mono text-[10px] text-[var(--color-text-muted)]">{ref.shortId}</div>
+                        </>
+                      )}
                     </td>
                     <td className="max-w-[180px]">
                       {nota ? (
@@ -363,6 +396,7 @@ export function MovementsPanel({
           </table>
         </div>
       </div>
+      )}
       </Card>
       {/* Modales fuera del Card para evitar cualquier contexto de apilamiento del shadow/border */}
       {showAdjustment ? (

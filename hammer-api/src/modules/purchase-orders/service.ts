@@ -20,6 +20,47 @@ function generateOrderNumber(): string {
   return `PO-${ts}-${rand}`;
 }
 
+const RECENT_MANUAL_ADD_STOCK_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Fase 3 (prompt-entrada-inventario.md) — "si se recibe una orden de un
+ * producto que tuvo un ADD_STOCK manual en las últimas 48h en esa sucursal,
+ * avisar". Solo cuenta ADD_STOCK (o su alias legado ADJUSTMENT_IN) — un
+ * conteo o una carga inicial reciente no es "la misma mercadería que llegó
+ * dos veces", así que no entra. `inventoryProductIds` ya viene resuelto al
+ * producto canónico (igual que el resto de receivePurchaseOrderTx).
+ */
+async function findRecentManualAddStockCodesTx(tx: Prisma.TransactionClient, branchId: string, inventoryProductIds: string[]): Promise<Map<string, string>> {
+  if (inventoryProductIds.length === 0) return new Map();
+  const recentMovements = await tx.inventoryMovement.findMany({
+    where: {
+      branchId,
+      productId: { in: inventoryProductIds },
+      referenceType: "MULTI_BRANCH_INTAKE",
+      movementType: "ADJUSTMENT_IN",
+      createdAt: { gte: new Date(Date.now() - RECENT_MANUAL_ADD_STOCK_WINDOW_MS) },
+    },
+    select: { productId: true, referenceId: true },
+    orderBy: { createdAt: "desc" },
+  });
+  if (recentMovements.length === 0) return new Map();
+
+  const intakeIds = [...new Set(recentMovements.map((m) => m.referenceId))];
+  const addStockIntakes = await tx.multiBranchIntake.findMany({
+    where: { id: { in: intakeIds }, kind: { in: ["ADD_STOCK", "ADJUSTMENT_IN"] } },
+    select: { id: true, code: true },
+  });
+  const codeByIntakeId = new Map(addStockIntakes.map((i) => [i.id, i.code]));
+
+  const codeByProductId = new Map<string, string>();
+  for (const movement of recentMovements) {
+    if (codeByProductId.has(movement.productId)) continue; // ya ordenado desc — la primera que aparece es la más reciente.
+    const code = codeByIntakeId.get(movement.referenceId);
+    if (code) codeByProductId.set(movement.productId, code);
+  }
+  return codeByProductId;
+}
+
 type PurchaseTaxTreatment = "INCLUDE_IN_COST" | "SEPARATE_CREDIT";
 
 type ReceivePurchaseOrderInput = {
@@ -658,6 +699,12 @@ export async function receivePurchaseOrderTx(
   const freightPerUnit = totalReceiveQty > 0 ? nonNegative(input.freightAmount) / totalReceiveQty : 0;
   const otherPerUnit = totalReceiveQty > 0 ? nonNegative(input.otherChargesAmount) / totalReceiveQty : 0;
   const warnings: string[] = [];
+  // Fase 3 (prompt-entrada-inventario.md) — "si se recibe una orden de un
+  // producto que tuvo un ADD_STOCK manual en las últimas 48h en esa
+  // sucursal, avisar antes de confirmar la recepción... No bloquea." Un
+  // aviso más de línea (lineWarnings), mismo mecanismo que los de
+  // precio/margen de abajo — nunca detiene la recepción.
+  const recentAddStockCodeByProductId = await findRecentManualAddStockCodesTx(tx, po.branchId, inventoryProductIds);
 
   {
     const receivedLines = [];
@@ -731,6 +778,10 @@ export async function receivePurchaseOrderTx(
       if (costIncreasePercent > 10) {
         priceReviewRequired = true;
         lineWarnings.push(`El costo recibido subio ${costIncreasePercent.toFixed(1)}%. Revisar precio de venta antes de vender.`);
+      }
+      const recentAddStockCode = recentAddStockCodeByProductId.get(stockResolutionByProductId.get(line.productId)?.inventoryProductId ?? line.productId);
+      if (recentAddStockCode) {
+        lineWarnings.push(`Este producto se sumó a mano hace poco (${recentAddStockCode}): ¿no es la misma mercadería?`);
       }
       warnings.push(...lineWarnings);
 

@@ -1,4 +1,4 @@
-import { InventoryMovementType, Prisma } from "@prisma/client";
+import { InventoryMovementType, Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAuditEvent } from "@/modules/audit/service";
 import { approvalService } from "@/modules/approvals/service";
@@ -114,9 +114,9 @@ function endOfDay(date: Date) {
   return end;
 }
 
-export async function listInventoryMovementsPaginated(params: InventoryMovementPaginationParams) {
+export async function listInventoryMovementsPaginated(params: InventoryMovementPaginationParams, db: PrismaClient = prisma) {
   const resolved = params.productId
-    ? await resolveInventoryProductForMovement(prisma, params.productId)
+    ? await resolveInventoryProductForMovement(db, params.productId)
     : null;
   const { page, limit, skip } = clampInventoryMovementPagination(params);
   const dateFrom = params.dateFrom ? new Date(params.dateFrom) : null;
@@ -146,7 +146,7 @@ export async function listInventoryMovementsPaginated(params: InventoryMovementP
   };
 
   const [rows, total] = await Promise.all([
-    prisma.inventoryMovement.findMany({
+    db.inventoryMovement.findMany({
       where,
       select: {
         id: true,
@@ -169,21 +169,36 @@ export async function listInventoryMovementsPaginated(params: InventoryMovementP
       skip,
       take: limit,
     }),
-    prisma.inventoryMovement.count({ where }),
+    db.inventoryMovement.count({ where }),
   ]);
 
   const userIds = [...new Set(rows.map((r) => r.userId).filter(Boolean))] as string[];
   const userMap = userIds.length > 0
     ? new Map(
-        (await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, fullName: true } }))
+        (await db.user.findMany({ where: { id: { in: userIds } }, select: { id: true, fullName: true } }))
           .map((u) => [u.id, u.fullName])
       )
     : new Map<string, string>();
+
+  // Fase 3 (prompt-entrada-inventario.md) — "los movimientos de una entrada
+  // muestran 'Entrada IM-000123 (Sumar/Conteo/Carga inicial)' con enlace al
+  // documento". El literal "MULTI_BRANCH_INTAKE" es INTAKE_REFERENCE_TYPE
+  // (multi-branch-intake-service.ts) repetido a propósito — importarlo de
+  // ahí crearía un ciclo (ese módulo ya importa createOpeningBalanceTx de
+  // este archivo).
+  const intakeIds = [...new Set(rows.filter((r) => r.referenceType === "MULTI_BRANCH_INTAKE").map((r) => r.referenceId))];
+  const intakeMap = intakeIds.length > 0
+    ? new Map(
+        (await db.multiBranchIntake.findMany({ where: { id: { in: intakeIds } }, select: { id: true, code: true, kind: true } }))
+          .map((i) => [i.id, { code: i.code, kind: i.kind }])
+      )
+    : new Map<string, { code: string; kind: string }>();
 
   return {
     rows: rows.map((r) => ({
       ...r,
       userName: r.userId ? (userMap.get(r.userId) ?? null) : null,
+      intakeDocument: r.referenceType === "MULTI_BRANCH_INTAKE" ? (intakeMap.get(r.referenceId) ?? null) : null,
     })),
     pagination: {
       page,
@@ -2227,113 +2242,6 @@ export async function createOpeningBalanceTx(
 
 export async function createOpeningBalance(input: OpeningBalanceInput) {
   return prisma.$transaction((tx) => createOpeningBalanceTx(tx, input, { createNoopMovement: true }));
-}
-
-export async function createOpeningBalanceBulk(input: {
-  actorUserId: string;
-  branchId: string;
-  mode: "SET_PHYSICAL_STOCK" | "ADD_OPENING_STOCK";
-  reason: string;
-  notes?: string | null;
-  lines: Array<{
-    productId: string;
-    quantity: number;
-    unit?: string;
-    unitCost?: number | null;
-    costMode: "SET_WAC" | "SET_BRANCH_COST" | "QUANTITY_ONLY";
-    salePrice?: number | null;
-    priceMode: "SET_BRANCH_PRICE" | "SET_GLOBAL_PRICE" | "NO_PRICE_CHANGE";
-    notes?: string | null;
-    allowLargeWacJump?: boolean;
-  }>;
-}) {
-  const batchReference = `OPENING-BULK-${Date.now()}`;
-  const lines = [];
-  // Each product runs in its own mini-transaction to avoid a single long-lived
-  // transaction that causes 504 timeouts on Vercel serverless functions.
-  for (let index = 0; index < input.lines.length; index += 1) {
-    const line = input.lines[index];
-    const result = await prisma.$transaction((tx) =>
-      createOpeningBalanceTx(tx, {
-        actorUserId: input.actorUserId,
-        branchId: input.branchId,
-        productId: line.productId,
-        quantity: line.quantity,
-        unit: line.unit,
-        stockMode: input.mode,
-        unitCost: line.unitCost,
-        costMode: line.costMode,
-        salePrice: line.salePrice,
-        priceMode: line.priceMode,
-        reason: input.reason,
-        notes: [line.notes, input.notes].filter(Boolean).join(" - ") || null,
-        allowLargeWacJump: line.allowLargeWacJump,
-      }, {
-        referenceType: "OPENING_BALANCE_BULK",
-        referenceId: `${batchReference}-${index + 1}`,
-        createNoopMovement: false,
-        skipLineAudit: true,
-        bulkReference: batchReference,
-      })
-    );
-    lines.push(result);
-  }
-
-  const processed = lines.filter((line) => line.movementId !== null).length;
-  const skipped = lines.length - processed;
-  const summary = {
-    totalProducts: lines.length,
-    totalInventoryValue: lines.reduce((sum, line) => sum + (Number(line.newBaseStock) * Number(line.weightedAverageCost)), 0),
-    productsWithoutCost: lines.filter((line) => line.newCost === null || line.newCost <= 0).length,
-    productsWithoutPrice: lines.filter((line) => line.newPrice === null || line.newPrice <= 0).length,
-    productsBelowCost: lines.filter((line) => line.newCost !== null && line.newPrice < line.newCost).length,
-    lowMarginProducts: lines.filter((line) => {
-      if (line.newCost === null || line.newPrice <= 0 || line.newPrice < line.newCost) return false;
-      const margin = ((line.newPrice - line.newCost) / line.newPrice) * 100;
-      return margin < 20;
-    }).length,
-  };
-
-  await prisma.auditLog.create({
-    data: {
-      actorUserId: input.actorUserId,
-      branchId: input.branchId,
-      module: "inventory",
-      action: "OPENING_BALANCE_BULK_CREATE",
-      entityType: "InventoryMovement",
-      entityId: batchReference,
-      metadataJson: {
-        batchReference,
-        mode: input.mode,
-        reason: input.reason,
-        notes: input.notes ?? null,
-        lineCount: input.lines.length,
-        processed,
-        skipped,
-        productIds: input.lines.map((line) => line.productId),
-        summary,
-        changes: lines.map((line) => ({
-          productId: line.productId,
-          inventoryProductId: line.inventoryProductId,
-          movementId: line.movementId,
-          previousBaseStock: line.previousBaseStock,
-          newBaseStock: line.newBaseStock,
-          adjustmentBaseDelta: line.adjustmentBaseDelta,
-          movementType: line.movementType,
-          stockConversion: line.stockConversion,
-        })),
-      },
-    },
-  });
-
-  return {
-    ok: true,
-    batchReference,
-    processed,
-    skipped,
-    summary,
-    lines,
-  };
 }
 
 // Decide qué movimiento ejecutar para llevar el stock de currentQuantity a
