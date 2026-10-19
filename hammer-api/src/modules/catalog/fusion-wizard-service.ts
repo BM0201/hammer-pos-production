@@ -11,6 +11,7 @@ import {
   derivedBaseWac,
   type MigrationResolution,
 } from "@/modules/catalog/equivalent-stock-migration";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 /**
  * Fusión de Inventario v2, Fase 2.1 — el asistente de creación de 3 pasos.
@@ -381,6 +382,15 @@ export async function createFusionGroupTx(
       zeroedProductIds: derivedIds,
       warning: rec.hasConflict ? rec.warning : null,
     });
+  }
+
+  // prompt-inventario-v3.md Fase 1 — escribe InventoryBalance directo (no
+  // pasa por createInventoryMovementTx): refresca canónico + derivados en
+  // todas las sucursales tocadas, recién creada la fusión.
+  try {
+    await refreshProductStateTx(tx, allProductIds, branches.map((b) => b.id));
+  } catch {
+    // Nunca debe tumbar la creación de fusión real.
   }
 
   return { groupId: createdGroup.id, groupCode: createdGroup.code, branches: results };

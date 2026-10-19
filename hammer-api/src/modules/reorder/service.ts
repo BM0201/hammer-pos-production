@@ -11,6 +11,7 @@ import { logAuditEvent } from "@/modules/audit/service";
 import { createPurchaseOrder } from "@/modules/purchase-orders/service";
 import { createTransfer } from "@/modules/transfers/service";
 import type { UpsertPolicyInput } from "@/modules/reorder/validators";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 /* ════════════════════════════════════════════════════════════════
  *  POLICIES — CRUD for StockReorderPolicy
@@ -93,6 +94,14 @@ export async function upsertReorderPolicy(input: UpsertPolicyInput, userId: stri
     },
   });
 
+  // prompt-inventario-v3.md Fase 1 — StockReorderPolicy es la fuente de
+  // minQuantity/reorderPoint/stockStatus en ProductBranchState.
+  try {
+    await refreshProductStateTx(prisma, [input.productId], [input.branchId]);
+  } catch {
+    // Nunca debe tumbar la política de reposición real.
+  }
+
   return policy;
 }
 
@@ -131,6 +140,11 @@ export async function bulkUpsertReorderPolicies(inputs: UpsertPolicyInput[], use
         },
       });
       count++;
+      try {
+        await refreshProductStateTx(tx, [input.productId], [input.branchId]);
+      } catch {
+        // Nunca debe tumbar la carga masiva de políticas real.
+      }
     }
   });
 

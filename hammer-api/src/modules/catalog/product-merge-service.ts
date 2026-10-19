@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createInventoryMovementTx } from "@/modules/inventory/service";
 import { normalizeManualSku } from "@/modules/catalog/sku-generator";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 /**
  * prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
@@ -98,6 +99,12 @@ export const MERGE_POLICY_EXCLUDED_RELATIONS = [
   // posibles duplicados: bookkeeping de ESA pantalla, no datos de negocio
   // que una fusión real tenga que decidir qué hacer con ellos.
   "duplicateDismissalsAsA", "duplicateDismissalsAsB",
+  // prompt-inventario-v3.md Fase 1 — ProductBranchState/ProductCatalogState
+  // son CACHÉ derivada (refreshProductStateTx la recalcula sola desde
+  // InventoryBalance/StockReorderPolicy/etc.), no un dato de negocio que
+  // una fusión tenga que mover o decidir — se refresca sola para A y B al
+  // final de mergeProductsTx, igual que cualquier otro escritor.
+  "branchStates", "catalogState",
 ];
 
 /** relación → {delegate de Prisma, campo FK} — para el MOVE/CHOOSE/CLOSE genérico y sus conteos en el preview. */
@@ -440,6 +447,17 @@ export async function mergeProductsTx(
       } as Prisma.InputJsonValue,
     },
   });
+
+  // prompt-inventario-v3.md Fase 1 — A (sobreviviente) heredó stock/líneas de
+  // B; su costo/precio efectivo y ProductCatalogState pueden haber cambiado.
+  // B queda con su caché tal cual (ya refrescada por el traslado de stock
+  // de arriba, vía createInventoryMovementTx) — mismo criterio best-effort
+  // que esa misma función: un fallo acá nunca debe tumbar la fusión real.
+  try {
+    await refreshProductStateTx(tx, [survivingProductId, mergedProductId]);
+  } catch {
+    // Ver nota de arriba.
+  }
 
   return merge;
 }

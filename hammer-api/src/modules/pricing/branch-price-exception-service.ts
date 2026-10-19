@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getEffectiveProductPricing } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 /**
  * Fase 3 (prompt-motor-precios-lote-herencia-gobierno.md) — "cada sucursal
@@ -111,6 +112,14 @@ export async function setBranchPriceTx(
     });
   }
 
+  // prompt-inventario-v3.md Fase 1 — único escritor de branchPrice (5
+  // caminos documentados arriba): un solo hook acá los cubre a todos.
+  try {
+    await refreshProductStateTx(tx, [input.productId], [input.branchId]);
+  } catch {
+    // Nunca debe tumbar la escritura de precio real.
+  }
+
   return { previousPrice, setting };
 }
 
@@ -214,6 +223,12 @@ export async function clearBranchPriceExceptionTx(tx: Prisma.TransactionClient, 
       } as Prisma.InputJsonValue,
     },
   });
+
+  try {
+    await refreshProductStateTx(tx, [input.productId], [input.branchId]);
+  } catch {
+    // Nunca debe tumbar la limpieza de excepción real.
+  }
 
   return previous === null ? null : Number(previous);
 }

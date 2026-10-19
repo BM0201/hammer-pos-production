@@ -103,6 +103,12 @@ const RAW_CATALOG: Record<string, DecisionCatalogEntry> = {
 
   // ── Inventario ──
   REVIEW_INVENTORY_MOVEMENTS: { label: "Movimientos de inventario a revisar", area: "INVENTORY", resolution: "IN_MODULE", cta: "Abrir en Inventario", href: productHref },
+  // prompt-inventario-v3.md Fase 1 — comparación nocturna de
+  // ProductBranchState (cron cleanup): ya se autocorrige al detectarse (el
+  // muestreo vuelve a escribir la fila), así que es informativa, no
+  // ejecutable. href apunta a la pantalla vieja hasta que exista la nueva
+  // sección de Inventario (Fase 2+ de este mismo doc).
+  REVIEW_PRODUCT_STATE_DRIFT: { label: "Estado de inventario precalculado desactualizado", area: "INVENTORY", resolution: "ACKNOWLEDGE", cta: "Ya lo revisé", href: () => "/app/master/catalog-inventory" },
   REVIEW_REORDER_OR_TRANSFER: { label: "Reponer o trasladar", area: "INVENTORY", resolution: "IN_MODULE", cta: "Abrir Reposición", href: () => "/app/master/replenishment" },
   REVIEW_PRODUCT_COST: { label: "Costo de producto a revisar", area: "INVENTORY", resolution: "IN_MODULE", cta: "Abrir producto", href: productHref },
   INITIAL_STOCK_WITHOUT_COST: { label: "Existencia inicial sin costo", area: "INVENTORY", resolution: "IN_MODULE", cta: "Abrir producto", href: productHref },

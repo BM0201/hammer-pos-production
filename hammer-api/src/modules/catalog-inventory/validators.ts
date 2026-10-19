@@ -38,3 +38,36 @@ export const massDeleteProductsSchema = z.object({
 export type CatalogInventoryQuery = z.infer<typeof catalogInventoryQuerySchema>;
 export type UpdateBranchProductSettingInput = z.infer<typeof updateBranchProductSettingSchema>;
 export type MassDeleteProductsInput = z.infer<typeof massDeleteProductsSchema>;
+
+/** prompt-inventario-v3.md Fase 1.2 — endpoints nuevos por sección, leyendo de ProductBranchState/ProductCatalogState. */
+export const inventoryProductsQuerySchema = z.object({
+  branchId: z.string().cuid(),
+  categoryId: z.string().cuid().optional(),
+  q: z.string().trim().optional(),
+  view: z.enum(["ALL", "NEGATIVE", "LOW", "ZERO", "NO_COST", "NO_PRICE", "NO_CODE", "NO_MOVEMENT_90D", "COST_EQ_PRICE", "INACTIVE"]).optional(),
+  sort: z.enum(["name", "stock", "margin", "value", "sales90d", "lastMovement"]).optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+export type InventoryProductsQuery = z.infer<typeof inventoryProductsQuerySchema>;
+
+export const inventoryOverviewQuerySchema = z.object({
+  branchId: z.string().cuid(),
+});
+
+export const inventoryStockQuerySchema = z.object({
+  branchIds: z.string().min(1).transform((v) => v.split(",").filter(Boolean)),
+  categoryId: z.string().cuid().optional(),
+  q: z.string().trim().optional(),
+});
+
+export const inventoryMovementsQuerySchema = z.object({
+  branchId: z.string().cuid().optional(),
+  productId: z.string().cuid().optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+export const inventoryCategoriesQuerySchema = z.object({
+  branchId: z.string().cuid(),
+});

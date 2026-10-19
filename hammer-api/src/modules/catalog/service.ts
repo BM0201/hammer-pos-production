@@ -14,6 +14,7 @@ import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
 import { aggregateWeightedAverageCost } from "@/modules/catalog/stock-group-crud";
 import { getVisibleProductIdsForBranch } from "@/modules/catalog/branch-visible-products-cache";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 /**
  * "el precio de venta no se mueva solo" — umbral de desvío contra el precio
@@ -792,6 +793,11 @@ export async function createProduct(input: {
           tx,
         );
       }
+      try {
+        await refreshProductStateTx(tx, [created.id]);
+      } catch {
+        // Nunca debe tumbar el alta real.
+      }
       return created;
     });
   } catch (error) {
@@ -1176,6 +1182,13 @@ export async function updateProduct(productId: string, input: {
         sku: canonicalProduct.sku,
         newCost: costRedirect.costForTarget,
       };
+    }
+
+    try {
+      const stateProductIds = canonicalUpdate ? [productId, canonicalUpdate.productId] : [productId];
+      await refreshProductStateTx(tx, stateProductIds);
+    } catch {
+      // Nunca debe tumbar la edición real.
     }
 
     return { product: { ...updated, barcode: finalBarcode }, canonicalUpdate };

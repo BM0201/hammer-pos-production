@@ -430,6 +430,7 @@ model Branch {
   retainedCashAdjustments     RetainedCashAdjustment[]
   priceUpdateLines            PriceUpdateLine[]
   brainScanRuns               BrainScanRun[]
+  productBranchStates         ProductBranchState[]
 }
 
 model User {
@@ -1005,6 +1006,8 @@ model Product {
   replenishmentDraftItems    ReplenishmentDraftItem[]    @relation("ReplenishmentDraftItemProduct")
   priceUpdateLines           PriceUpdateLine[]
   barcodes                   ProductBarcode[]
+  branchStates               ProductBranchState[]
+  catalogState               ProductCatalogState?
 
   /// prompt-codigos-y-duplicados.md Fase 3 — unificar productos duplicados.
   /// Un producto fusionado NUNCA se borra (su historial de ventas,
@@ -1033,6 +1036,75 @@ model Product {
   // pg_trgm cada tecleo en el buscador es un seq scan de toda la tabla.
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
   @@index([sku(ops: raw("gin_trgm_ops"))], type: Gin)
+}
+
+enum ProductStockStatus {
+  NEGATIVE
+  ZERO
+  LOW
+  OK
+}
+
+/// prompt-inventario-v3.md Fase 1 — estado PRECALCULADO por producto y
+/// sucursal, para que la lista/overview de inventario filtren y ordenen en
+/// la base en vez de traer TODO el catálogo y calcular en memoria (el
+/// cuello de botella de getCatalogInventoryCenter). Un solo escritor:
+/// refreshProductStateTx (catalog-inventory/product-state-service.ts), que
+/// NUNCA reimplementa la cadena de costo/precio — llama a las mismas
+/// funciones que ya usa getCatalogInventoryCenter hoy
+/// (getEffectiveProductPricingBatch, fusión incluida) y a StockReorderPolicy
+/// (la fuente real de "stock bajo" hoy — ver nota en isCriticalStock,
+/// catalog-inventory/service.ts). units90d/revenue90d NO se recalculan en
+/// cada escritura (sería caro): se incrementan en la venta
+/// (incrementProductSales90dTx) y se reconcilian de verdad una vez por
+/// noche (cron cleanup), igual que el resto de los agregados de 90 días
+/// ya existentes (analytics/abc-classifier.ts).
+model ProductBranchState {
+  productId String
+  branchId  String
+
+  quantityOnHand Decimal @default(0)
+  effectiveCost  Decimal?
+  costSource     String?
+  effectivePrice Decimal?
+  priceSource    String?
+  marginPercent  Decimal?
+
+  /// Espejo de StockReorderPolicy.minQuantity/reorderPoint — null sin
+  /// política activa para este producto+sucursal (mismo caso que hoy cae al
+  /// fallback CRITICAL_STOCK_FALLBACK=1 para decidir LOW, no a 0).
+  minQuantity  Decimal?
+  reorderPoint Decimal?
+  stockStatus  ProductStockStatus @default(OK)
+
+  lastMovementAt DateTime?
+  units90d       Decimal @default(0)
+  revenue90d     Decimal @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id])
+  branch  Branch  @relation(fields: [branchId], references: [id])
+
+  @@id([productId, branchId])
+  @@index([branchId, stockStatus])
+  @@index([branchId, marginPercent])
+  @@index([branchId, lastMovementAt])
+}
+
+/// Un registro por producto (no por sucursal) — "calidad del catálogo" de
+/// un vistazo: ¿tiene código?, ¿tiene costo en ALGUNA sucursal?, ¿tiene
+/// precio?, ¿costo = precio?, cantidad total en TODA la red.
+model ProductCatalogState {
+  productId       String  @id
+  hasCode         Boolean @default(false)
+  hasCost         Boolean @default(false)
+  hasPrice        Boolean @default(false)
+  costEqualsPrice Boolean @default(false)
+  totalQuantity   Decimal @default(0)
+  updatedAt       DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id])
 }
 
 /// prompt-codigos-y-duplicados.md Fase 3 — registro de auditoría completo de

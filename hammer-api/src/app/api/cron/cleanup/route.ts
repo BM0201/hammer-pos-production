@@ -4,6 +4,7 @@ import { timingSafeEqualStrings } from "@/lib/timing-safe-compare";
 import { runRetentionSweep } from "@/modules/retention/service";
 import { LOGIN_ATTEMPT_RETENTION_DAYS, retentionCutoff } from "@/modules/retention/policy";
 import { expireStaleBrainDecisions } from "@/modules/brain/service";
+import { reconcileSales90dTx, compareProductStateSample } from "@/modules/catalog-inventory/product-state-reconciliation-service";
 
 /**
  * Cron diario de limpieza (ver vercel.json — 0 9 UTC = 3am Managua).
@@ -59,6 +60,14 @@ export async function GET(request: Request) {
   // (condición desaparecida) para que la bandeja no acumule bulto muerto.
   const brainExpired = await expireStaleBrainDecisions(now);
 
+  // prompt-inventario-v3.md Fase 1 — las dos tareas nocturnas de
+  // ProductBranchState: recompone units90d/revenue90d de verdad (el
+  // incremento por venta es solo una suma barata entre noche y noche) y
+  // vuelve a refrescar una muestra al azar para detectar (y corregir) un
+  // escritor que no haya dejado el estado al día.
+  const salesReconcile = await reconcileSales90dTx();
+  const stateDrift = await compareProductStateSample();
+
   return ok({
     timestamp: now.toISOString(),
     cleaned: {
@@ -67,6 +76,11 @@ export async function GET(request: Request) {
       revokedSessions: revokedDeleted.count,
       mfaPendingTokens: mfaDeleted.count,
       brainDecisionsExpired: brainExpired,
+    },
+    productState: {
+      sales90dRowsUpdated: salesReconcile.rowsUpdated,
+      driftSampleSize: stateDrift.sampled,
+      driftFound: stateDrift.drifted.length,
     },
     retention: {
       cutoff: retention.cutoffIso,

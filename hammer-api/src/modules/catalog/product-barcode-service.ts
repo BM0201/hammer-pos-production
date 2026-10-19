@@ -2,6 +2,7 @@ import { Prisma, type ProductBarcodeKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { normalizeScannedCode, buildInternalBarcode, checksumWarningForCode } from "@/modules/catalog/barcode";
 import { BarcodeAlreadyExistsError } from "@/modules/catalog/barcode-errors";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 /**
  * prompt-codigos-y-duplicados.md Fase 1 — varios códigos por producto.
@@ -15,6 +16,19 @@ import { BarcodeAlreadyExistsError } from "@/modules/catalog/barcode-errors";
  */
 
 type Db = Prisma.TransactionClient | typeof prisma;
+
+/**
+ * prompt-inventario-v3.md Fase 1 — hasCode (ProductCatalogState) depende de
+ * Product.barcode. Nunca debe tumbar la operación real de códigos — mismo
+ * criterio best-effort que el resto de esta fase.
+ */
+async function refreshCatalogStateSafe(db: Db, productIds: string[]) {
+  try {
+    await refreshProductStateTx(db, productIds);
+  } catch {
+    // Ver comentario de arriba.
+  }
+}
 
 /**
  * MISMA regla que el backfill de la migración (20261009000000_product_barcodes
@@ -103,6 +117,8 @@ export async function addBarcode(
     metadataJson: { barcodeId: created.id, code, kind: input.kind, isPrimary, suggestion: input.suggestion ?? null },
   });
 
+  await refreshCatalogStateSafe(db, [input.productId]);
+
   return created;
 }
 
@@ -159,6 +175,8 @@ export async function updateBarcode(
     metadataJson: { barcodeId, before: { code: barcode.code, kind: barcode.kind }, after: { code: nextCode, kind: nextKind } },
   });
 
+  await refreshCatalogStateSafe(db, [barcode.productId]);
+
   const warnings: "CHECKSUM_INVALID"[] = checksumWarningForCode(nextCode) !== null ? ["CHECKSUM_INVALID"] : [];
   return { id: updated.id, code: updated.code, kind: updated.kind, isPrimary: updated.isPrimary, warnings };
 }
@@ -196,6 +214,8 @@ export async function setPrimaryBarcode(productId: string, barcodeId: string, ac
     metadataJson: { barcodeId, code: barcode.code },
   });
 
+  await refreshCatalogStateSafe(db, [productId]);
+
   return updated;
 }
 
@@ -232,6 +252,8 @@ export async function removeBarcode(barcodeId: string, actorUserId: string, db: 
     productId: barcode.productId,
     metadataJson: { barcodeId, code: barcode.code, newPrimaryCode },
   });
+
+  await refreshCatalogStateSafe(db, [barcode.productId]);
 
   return { newPrimaryCode, removed: { code: barcode.code, kind: barcode.kind, wasPrimary: barcode.isPrimary } };
 }
@@ -402,6 +424,8 @@ export async function moveBarcode(barcodeId: string, toProductId: string, actorU
     productId: toProductId,
     metadataJson: { barcodeId, code: barcode.code, fromProductId, toProductId },
   });
+
+  await refreshCatalogStateSafe(db, [fromProductId, toProductId]);
 
   return { code: barcode.code };
 }

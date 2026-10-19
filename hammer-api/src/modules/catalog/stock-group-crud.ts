@@ -6,6 +6,7 @@ import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
 import { canonicalizePresentationUnit, findUnitCollisions } from "@/modules/catalog/presentation-units";
 import { resolveCostChain, resolveFusionMemberCost } from "@/modules/catalog/effective-pricing";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 export type StockGroupMemberInput = {
   productId: string;
@@ -420,6 +421,15 @@ export async function rebuildStockGroupBalancesTx(
       zeroedProductIds: nonCanonicalIds,
       warnings: branchWarnings,
     });
+  }
+
+  // prompt-inventario-v3.md Fase 1 — rebuildStockGroupBalancesTx escribe
+  // InventoryBalance directo (no pasa por createInventoryMovementTx):
+  // refresca TODOS los miembros del grupo en TODAS las sucursales tocadas.
+  try {
+    await refreshProductStateTx(tx, allProductIds, branches.map((b) => b.id));
+  } catch {
+    // Nunca debe tumbar la reconstrucción de balances real.
   }
 
   return results;
@@ -1432,6 +1442,12 @@ export async function unmergeStockGroupTx(
 
   await tx.productStockGroupMember.updateMany({ where: { stockGroupId: group.id }, data: { isActive: false } });
   const updatedGroup = await tx.productStockGroup.update({ where: { id: group.id }, data: { isActive: false } });
+
+  try {
+    await refreshProductStateTx(tx, allProductIds, branches.map((b) => b.id));
+  } catch {
+    // Nunca debe tumbar la desfusión real.
+  }
 
   return { group: updatedGroup, branches: results };
 }

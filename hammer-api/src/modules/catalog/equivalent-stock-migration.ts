@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 /**
  * Equivalence-stock migration ("reinterpretación" de inventario).
@@ -495,6 +496,15 @@ export async function applyEquivalentStockGroupMigrationTx(
       zeroedProductIds: derivedIds,
       warning: rec.hasConflict ? rec.warning : null,
     });
+  }
+
+  // prompt-inventario-v3.md Fase 1 — escribe InventoryBalance directo (no
+  // pasa por createInventoryMovementTx): refresca canónico + derivados en
+  // todas las sucursales tocadas.
+  try {
+    await refreshProductStateTx(tx, allProductIds, branches.map((b) => b.id));
+  } catch {
+    // Nunca debe tumbar la migración de equivalencia real.
   }
 
   return results;

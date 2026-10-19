@@ -10,6 +10,7 @@ import { applyAlsoBranchPriceTx } from "@/modules/pricing/tray-service";
 import { resolvePolicyForProduct } from "@/modules/pricing/category-policy-service";
 import { buildCommercialIntelligenceForProduct } from "@/modules/pricing/commercial-intelligence";
 import { calculatePricingSuggestion } from "@/modules/pricing/calculator";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 /**
  * Parte D (prompt-completo-pendientes-2026-10.md) — "corregir costo y
@@ -325,6 +326,17 @@ export async function correctProductCostTx(tx: Prisma.TransactionClient, input: 
       } as unknown as Prisma.InputJsonValue,
     },
   });
+
+  // prompt-inventario-v3.md Fase 1 — SET_GLOBAL_COST ya pasa por
+  // updateProduct (que tiene su propio hook); las otras 3 acciones escriben
+  // BranchProductSetting/InventoryBalance/Product directo acá, sin pasar
+  // por ningún escritor central — llamarlo de nuevo acá es inofensivo
+  // (idempotente) y cubre esos 3 caminos. Mismo best-effort de siempre.
+  try {
+    await refreshProductStateTx(tx, [input.productId], [input.branchId]);
+  } catch {
+    // Nunca debe tumbar la corrección de costo real.
+  }
 
   return { effectiveCost, costSource: effective.costSource as CostSourceField, previousValue: before.effectiveCost, newValue };
 }

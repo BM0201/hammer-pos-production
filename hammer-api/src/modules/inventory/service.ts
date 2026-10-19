@@ -26,6 +26,7 @@ import {
 import { branchProductScopeFilter, excludeDerivedStockGroupMembers, resolveGlobalCostWriteTarget } from "@/modules/catalog/service";
 import { isWacDrivesCostChainEnabled } from "@/modules/catalog/cost-chain-config";
 import { checkStockGroupHealth } from "@/modules/catalog/stock-group-health";
+import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 
 export const INVENTORY_ADJUSTMENT_APPROVAL_THRESHOLD = 25;
 
@@ -1059,6 +1060,22 @@ export async function createInventoryMovementTx(
     } catch {
       // El verificador de salud nunca debe tumbar la operación real.
     }
+  }
+
+  // prompt-inventario-v3.md Fase 1 — único hook que cubre venta, venta
+  // anulada/devuelta, recepción de OC, traslados, producción, fusión y
+  // timber a la vez: TODOS pasan por createInventoryMovementTx. Se
+  // refrescan tanto el producto solicitado (su costo/precio efectivo puede
+  // diferir si es un derivado de fusión) como el producto de inventario
+  // real (inventoryProductId, donde vive el balance) cuando son distintos.
+  // Mismo criterio que checkStockGroupHealth arriba: un fallo acá nunca
+  // debe tumbar la venta/traslado/etc. real — la comparación nocturna
+  // (cron cleanup) es el respaldo que detecta cualquier desvío.
+  try {
+    const stateProductIds = inventoryProductId === input.productId ? [input.productId] : [input.productId, inventoryProductId];
+    await refreshProductStateTx(tx, stateProductIds, [input.branchId]);
+  } catch {
+    // Ver nota de arriba — el estado precalculado nunca debe tumbar la operación real.
   }
 
   return { movement, balance: updatedBalance, autoOpenMovements };
