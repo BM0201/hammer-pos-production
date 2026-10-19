@@ -1,6 +1,5 @@
-import { redirect } from "next/navigation";
-import type { Route } from "next";
+import { InventoryHome } from "@/components/inventory/inventory-home";
 
 export default function MasterInventoryPage() {
-  redirect("/app/master/catalog-inventory?tab=stock" as Route);
+  return <InventoryHome />;
 }

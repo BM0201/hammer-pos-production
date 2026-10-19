@@ -91,7 +91,11 @@ const MASTER_NAV: NavSection[] = [
   {
     title: "INVENTARIO & ABASTECIMIENTO",
     items: [
-      { href: "/app/master/catalog-inventory", label: "Catálogo e Inventario", icon: Boxes, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE, CAPABILITIES.INVENTORY_VIEW] },
+      // prompt-inventario-v3.md Fase 2.1 — apunta a la navegación lateral
+      // nueva (Inicio/Catálogo/Existencias/Calidad de datos); la pantalla
+      // vieja de 12 pestañas (catalog-inventory-admin.tsx) sigue viva y
+      // alcanzable desde ahí hasta que la Fase 7 decida qué hacer con ella.
+      { href: "/app/master/inventory", label: "Catálogo e Inventario", icon: Boxes, capabilities: [CAPABILITIES.MASTER_CATALOG_MANAGE, CAPABILITIES.INVENTORY_VIEW] },
       // Fase 2.3 (prompt-mudanza-zona-precios.md) — junto a Catálogo e Inventario,
       // no junto a Finanzas: precios es una decisión comercial sobre el producto,
       // no contabilidad. Dos capabilities por diseño (decisión previa del mismo

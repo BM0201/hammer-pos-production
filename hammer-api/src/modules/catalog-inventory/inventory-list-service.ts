@@ -365,6 +365,40 @@ export async function getInventoryCategoriesTree(branchId: string): Promise<Inve
   return roots;
 }
 
+const DAILY_FLOW_IN_TYPES = ["PURCHASE_IN", "RETURN_IN", "RETURN_IN_DAMAGED", "ADJUSTMENT_IN", "TRANSFER_IN", "PACKAGE_IN", "LOOSE_UNIT_RETURN_IN", "TIMBER_INTAKE_IN"] as const;
+const DAILY_FLOW_OUT_TYPES = ["SALE_OUT", "RETURN_OUT", "ADJUSTMENT_OUT", "TRANSFER_OUT", "PACKAGE_SALE_OUT", "LOOSE_UNIT_SALE_OUT"] as const;
+
+export type InventoryDailyFlowPoint = { date: string; unitsIn: number; unitsOut: number };
+
+/**
+ * Fase 2.2 — "entradas y salidas de los últimos 30 días" (barras por día).
+ * Deliberadamente deja afuera lo que es reempaque interno, no flujo real
+ * (PACKAGE_OPENED/_AUTO_OPENED/_CLOSED, LOOSE_ADJUSTMENT,
+ * PACKAGE_ADJUSTMENT) y el consumo de producción (ni "entra" ni "sale" de
+ * la red, se transforma) — contarlos infla el gráfico con movimientos que
+ * no representan mercadería entrando o saliendo de verdad.
+ */
+export async function getInventoryDailyFlow(branchId: string, days = 30): Promise<InventoryDailyFlowPoint[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const rows = await prisma.$queryRaw<Array<{ day: Date; movementType: string; total: Prisma.Decimal }>>`
+    SELECT date_trunc('day', "createdAt") AS day, "movementType", SUM(quantity) AS total
+    FROM "InventoryMovement"
+    WHERE "branchId" = ${branchId} AND "createdAt" >= ${since}
+      AND "movementType"::text IN (${Prisma.join([...DAILY_FLOW_IN_TYPES, ...DAILY_FLOW_OUT_TYPES])})
+    GROUP BY day, "movementType"
+  `;
+
+  const byDay = new Map<string, InventoryDailyFlowPoint>();
+  for (const row of rows) {
+    const key = row.day.toISOString().slice(0, 10);
+    const point = byDay.get(key) ?? { date: key, unitsIn: 0, unitsOut: 0 };
+    if ((DAILY_FLOW_IN_TYPES as readonly string[]).includes(row.movementType)) point.unitsIn += decimalToNumber(row.total);
+    else point.unitsOut += decimalToNumber(row.total);
+    byDay.set(key, point);
+  }
+  return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
 export type InventoryQualityCounts = {
   noCost: number;
   noPrice: number;
