@@ -5,7 +5,13 @@
  */
 
 export type IntakeKind = "ADD_STOCK" | "PHYSICAL_COUNT" | "OPENING_BALANCE";
-export type IntakeLineStatus = "OK" | "REVIEW" | "ERROR";
+/**
+ * prompt-entrada-multisucursal-fix.md — SKIPPED (celda: "0 en esta
+ * sucursal, no lleva") y PENDING (fila: la vista previa todavía no llegó,
+ * o falló — nunca se muestra como ERROR mientras tanto) se suman al viejo
+ * OK/REVIEW/ERROR.
+ */
+export type IntakeLineStatus = "OK" | "REVIEW" | "ERROR" | "SKIPPED" | "PENDING";
 
 export type IntakeLine = {
   productId: string;
@@ -118,30 +124,87 @@ export function reasonChipsForKind(kind: IntakeKind): string[] {
 
 export type RowStatus = { productId: string; status: IntakeLineStatus };
 
-/** Estado de una fila = el peor de sus celdas (una por sucursal elegida). Sin vista previa todavía → ERROR (nunca "✓ Listo" antes de que el servidor confirme). */
+/**
+ * Estado de una fila = el peor de sus celdas (una por sucursal elegida).
+ * Sin ninguna celda todavía (vista previa no llegó o no corrió) → PENDING,
+ * nunca ERROR — "calculando", no "falta algo" (prompt-entrada-multisucursal-fix.md
+ * Commit 2 #4). SKIPPED ("no lleva") no cuenta para el peor estado: una
+ * fila con una sucursal en 0 y otra OK sigue siendo OK. Si TODAS las
+ * celdas de la fila fueran SKIPPED (no debería pasar — el backend ya
+ * convierte ese caso a ERROR con ALL_BRANCHES_SKIPPED), se trata como
+ * PENDING por seguridad, nunca como "listo".
+ */
 export function worstRowStatus(cellStatuses: IntakeLineStatus[]): IntakeLineStatus {
-  if (cellStatuses.length === 0) return "ERROR";
-  if (cellStatuses.includes("ERROR")) return "ERROR";
-  if (cellStatuses.includes("REVIEW")) return "REVIEW";
+  if (cellStatuses.length === 0) return "PENDING";
+  const meaningful = cellStatuses.filter((s) => s !== "SKIPPED");
+  if (meaningful.length === 0) return "PENDING";
+  if (meaningful.includes("ERROR")) return "ERROR";
+  if (meaningful.includes("REVIEW")) return "REVIEW";
   return "OK";
 }
 
-export type BarCounts = { ok: number; review: number; error: number };
+export type BarCounts = { ok: number; review: number; error: number; pending: number };
 
-/** "✓ N listos · ⚠ N para revisar · ✕ N con error" (2.4). */
+/** "✓ N listos · ⚠ N para revisar · ✕ N con error" (2.4). PENDING no es error — es "todavía calculando". */
 export function computeBarCounts(rows: RowStatus[]): BarCounts {
-  const counts: BarCounts = { ok: 0, review: 0, error: 0 };
+  const counts: BarCounts = { ok: 0, review: 0, error: 0, pending: 0 };
   for (const row of rows) {
     if (row.status === "OK") counts.ok += 1;
     else if (row.status === "REVIEW") counts.review += 1;
+    else if (row.status === "PENDING") counts.pending += 1;
     else counts.error += 1;
   }
   return counts;
 }
 
-/** "Revisar y confirmar" deshabilitado con errores (o sin ninguna fila todavía). */
-export function canConfirmIntake(counts: BarCounts, totalRows: number): boolean {
-  return totalRows > 0 && counts.error === 0;
+/**
+ * "Revisar y confirmar" deshabilitado con errores, sin ninguna fila
+ * todavía, con alguna fila aún calculando, o si la vista previa falló del
+ * todo (prompt-entrada-multisucursal-fix.md Commit 2 #4 — "el botón
+ * confirmar queda deshabilitado con ese texto, no con 'corregí N errores'").
+ */
+export function canConfirmIntake(counts: BarCounts, totalRows: number, previewFailed = false): boolean {
+  return totalRows > 0 && counts.error === 0 && counts.pending === 0 && !previewFailed;
+}
+
+/** Texto corto del badge según el tipo de mensaje de error — nunca todo "Falta dato" (causa 1). */
+export function shortTextForErrorCode(code: string): string {
+  switch (code) {
+    case "MISSING_QUANTITY":
+    case "NO_COST_NO_AVERAGE":
+    case "ALL_BRANCHES_SKIPPED":
+      return "Falta dato";
+    case "OPENING_BALANCE_NO_COST":
+      return "Falta costo";
+    case "PRODUCT_BLOCKED":
+      return "Bloqueado";
+    case "OPENING_BALANCE_HAS_STOCK":
+    case "PRICE_BELOW_COST":
+      return "No se puede";
+    default:
+      return "Revisar";
+  }
+}
+
+/** Para "Corregí N errores → enfocá la primera fila con error" (Commit 2 #7). */
+export function firstErrorProductId(rows: RowStatus[]): string | null {
+  return rows.find((r) => r.status === "ERROR")?.productId ?? null;
+}
+
+/**
+ * Celdas por sucursal (Commit 2 #1): vacío QUITA el override (vuelve a
+ * "para todas" — nunca lo deja en null, que es el bug de fondo de la
+ * causa 3); cualquier número (incluido 0 = "no lleva") lo fija.
+ */
+export function applyBranchCellInput(line: IntakeLine, branchId: string, rawValue: string): IntakeLine {
+  if (rawValue.trim() === "") {
+    const overrides = { ...line.overrides };
+    delete overrides[branchId];
+    return { ...line, overrides };
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return line;
+  return { ...line, overrides: { ...line.overrides, [branchId]: parsed } };
 }
 
 export type IntakeLinePayload = { productId: string; quantity: number; unit?: string; unitCost?: number; salePrice?: number; overrides?: Record<string, number> };

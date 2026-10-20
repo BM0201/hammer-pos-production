@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addOrFocusScannedProduct,
+  applyBranchCellInput,
   buildCreateIntakeRequest,
   buildIntakePayloadLines,
   buildPreviewRequestLines,
@@ -10,9 +11,11 @@ import {
   computeBarCounts,
   draftAgeLabel,
   enforceBranchSelectionForKind,
+  firstErrorProductId,
   loadIntakeDraft,
   quantityForIntakeBranch,
   saveIntakeDraft,
+  shortTextForErrorCode,
   switchingKindNeedsConfirmation,
   toggleBranchSelection,
   worstRowStatus,
@@ -52,17 +55,35 @@ test("LA QUE IMPORTA — estado de la barra: cuenta OK/REVIEW/ERROR y deshabilit
     { productId: "p3", status: "ERROR" as const },
   ];
   const counts = computeBarCounts(rows);
-  assert.deepEqual(counts, { ok: 1, review: 1, error: 1 });
+  assert.deepEqual(counts, { ok: 1, review: 1, error: 1, pending: 0 });
   assert.equal(canConfirmIntake(counts, rows.length), false, "con 1 error, no se puede confirmar");
-  assert.equal(canConfirmIntake({ ok: 2, review: 1, error: 0 }, 3), true, "sin errores, sí se puede");
-  assert.equal(canConfirmIntake({ ok: 0, review: 0, error: 0 }, 0), false, "sin ninguna fila, tampoco");
+  assert.equal(canConfirmIntake({ ok: 2, review: 1, error: 0, pending: 0 }, 3), true, "sin errores, sí se puede");
+  assert.equal(canConfirmIntake({ ok: 0, review: 0, error: 0, pending: 0 }, 0), false, "sin ninguna fila, tampoco");
 });
 
-test("una fila sin vista previa todavía (ninguna celda resuelta) nunca aparece lista", () => {
-  assert.equal(worstRowStatus([]), "ERROR");
+test("LA QUE IMPORTA — una fila con alguna celda todavía calculando no cuenta como error, pero tampoco deja confirmar", () => {
+  const counts = computeBarCounts([{ productId: "p1", status: "OK" }, { productId: "p2", status: "PENDING" }]);
+  assert.deepEqual(counts, { ok: 1, review: 0, error: 0, pending: 1 });
+  assert.equal(canConfirmIntake(counts, 2), false, "con una fila pendiente, no se puede confirmar todavía");
+});
+
+test("LA QUE IMPORTA — vista previa que falló del todo deshabilita confirmar aunque no haya errores", () => {
+  const counts = computeBarCounts([{ productId: "p1", status: "OK" }]);
+  assert.equal(canConfirmIntake(counts, 1, true), false);
+  assert.equal(canConfirmIntake(counts, 1, false), true);
+});
+
+test("una fila sin vista previa todavía (ninguna celda resuelta) nunca aparece lista — PENDING, no ERROR", () => {
+  assert.equal(worstRowStatus([]), "PENDING");
   assert.equal(worstRowStatus(["OK", "OK"]), "OK");
   assert.equal(worstRowStatus(["OK", "REVIEW"]), "REVIEW");
   assert.equal(worstRowStatus(["OK", "REVIEW", "ERROR"]), "ERROR");
+});
+
+test("LA QUE IMPORTA — SKIPPED (0 = no lleva) nunca empeora el estado de la fila: OK+SKIPPED sigue OK", () => {
+  assert.equal(worstRowStatus(["OK", "SKIPPED"]), "OK");
+  assert.equal(worstRowStatus(["REVIEW", "SKIPPED"]), "REVIEW");
+  assert.equal(worstRowStatus(["ERROR", "SKIPPED"]), "ERROR");
 });
 
 // ── escanear un repetido en Sumar suma y en Conteo enfoca ──────────────────
@@ -217,4 +238,51 @@ test("draftAgeLabel: 'hace 2 h' para un borrador de hace 2 horas", () => {
   const savedAt = new Date("2026-01-01T10:00:00.000Z").toISOString();
   const now = new Date("2026-01-01T12:00:00.000Z");
   assert.equal(draftAgeLabel(savedAt, now), "hace 2 h");
+});
+
+// ── prompt-entrada-multisucursal-fix.md Commit 2 ───────────────────────────
+
+test("LA QUE IMPORTA — applyBranchCellInput: vacío QUITA el override (vuelve a 'para todas'), nunca lo deja en null", () => {
+  const withOverride = line({ quantity: 10, overrides: { "branch-1": 5 } });
+  const result = applyBranchCellInput(withOverride, "branch-1", "");
+  assert.ok(!("branch-1" in result.overrides), "la clave desaparece del todo, no queda en null");
+  assert.equal(quantityForIntakeBranch(result, "branch-1"), 10, "sin override, cae a 'para todas'");
+});
+
+test("applyBranchCellInput: 0 fija la celda en 0 ('no lleva'), no la quita", () => {
+  const result = applyBranchCellInput(line({ quantity: 10 }), "branch-1", "0");
+  assert.equal(result.overrides["branch-1"], 0);
+});
+
+test("applyBranchCellInput: un número normal fija el override de esa sucursal", () => {
+  const result = applyBranchCellInput(line({ quantity: 10 }), "branch-2", "25");
+  assert.equal(result.overrides["branch-2"], 25);
+});
+
+test("applyBranchCellInput: un valor no numérico no rompe nada — devuelve la línea sin tocar", () => {
+  const original = line({ quantity: 10 });
+  const result = applyBranchCellInput(original, "branch-1", "abc");
+  assert.deepEqual(result, original);
+});
+
+test("LA QUE IMPORTA — shortTextForErrorCode: cada código cae en su texto corto correcto, nunca todo 'Falta dato'", () => {
+  assert.equal(shortTextForErrorCode("MISSING_QUANTITY"), "Falta dato");
+  assert.equal(shortTextForErrorCode("NO_COST_NO_AVERAGE"), "Falta dato");
+  assert.equal(shortTextForErrorCode("OPENING_BALANCE_NO_COST"), "Falta costo");
+  assert.equal(shortTextForErrorCode("PRODUCT_BLOCKED"), "Bloqueado");
+  assert.equal(shortTextForErrorCode("OPENING_BALANCE_HAS_STOCK"), "No se puede");
+  assert.equal(shortTextForErrorCode("PRICE_BELOW_COST"), "No se puede");
+});
+
+test("firstErrorProductId: el primero en el orden de las filas, no el primero alfabético", () => {
+  const rows = [
+    { productId: "p1", status: "OK" as const },
+    { productId: "p2", status: "ERROR" as const },
+    { productId: "p3", status: "ERROR" as const },
+  ];
+  assert.equal(firstErrorProductId(rows), "p2");
+});
+
+test("firstErrorProductId: sin ningún error, null", () => {
+  assert.equal(firstErrorProductId([{ productId: "p1", status: "OK" as const }]), null);
 });

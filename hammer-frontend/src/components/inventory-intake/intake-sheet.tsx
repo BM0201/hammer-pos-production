@@ -19,6 +19,7 @@ import { findExactProductMatch, looksLikeScannedCode } from "@/lib/pos-enter-res
 import { parseMatrixTsvPaste, type TsvPasteProduct } from "@/lib/multi-branch-matrix";
 import {
   addOrFocusScannedProduct,
+  applyBranchCellInput,
   buildCreateIntakeRequest,
   buildPreviewRequestLines,
   canConfirmIntake,
@@ -26,10 +27,12 @@ import {
   computeBarCounts,
   draftAgeLabel,
   enforceBranchSelectionForKind,
+  firstErrorProductId,
   loadIntakeDraft,
   quantityForIntakeBranch,
   reasonChipsForKind,
   saveIntakeDraft,
+  shortTextForErrorCode,
   switchingKindNeedsConfirmation,
   toggleBranchSelection,
   worstRowStatus,
@@ -49,7 +52,8 @@ import type { Branch, ProductRow, CenterData } from "@/components/catalog-invent
  * reanudables (createMultiBranchIntake / continueMultiBranchIntake).
  */
 
-type PreviewMessage = { code: string; text: string; poId?: string };
+type MessageKind = "DATA" | "BLOCKED" | "RULE";
+type PreviewMessage = { code: string; kind: MessageKind; text: string; poId?: string };
 type PreviewCell = {
   productId: string;
   branchId: string;
@@ -64,7 +68,9 @@ type PreviewCell = {
   messages: PreviewMessage[];
 };
 type PreviewTotals = { units: number; value: number | null; wacChanges: number };
-type PreviewResponse = { cells: PreviewCell[]; totals: Record<string, PreviewTotals> };
+/** prompt-entrada-multisucursal-fix.md — un mensaje por código con sus sucursales, nunca un mensaje por celda con el id interno. */
+type PreviewLineMessage = { code: string; kind: MessageKind; text: string; branchCodes: string[]; poId?: string };
+type PreviewResponse = { cells: PreviewCell[]; totals: Record<string, PreviewTotals>; lineMessages: Record<string, PreviewLineMessage[]> };
 
 type IntakeBranchResult = { branchId: string; status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED"; error: string | null; processedLines: number; totalLines: number };
 type CreateIntakeResult = { intake: { id: string; code: string }; overallStatus: "DONE" | "IN_PROGRESS"; branches: IntakeBranchResult[] };
@@ -154,8 +160,11 @@ export function IntakeSheet({
 
   const [previewCells, setPreviewCells] = useState<Map<string, PreviewCell>>(new Map());
   const [previewTotals, setPreviewTotals] = useState<Record<string, PreviewTotals>>({});
+  const [previewLineMessages, setPreviewLineMessages] = useState<Record<string, PreviewLineMessage[]>>({});
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
   const [statusFilter, setStatusFilter] = useState<IntakeLineStatus | null>(null);
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
 
   const [showConfirm, setShowConfirm] = useState(false);
   const [reviewedWarnings, setReviewedWarnings] = useState(false);
@@ -323,23 +332,27 @@ export function IntakeSheet({
   function removeLine(productId: string) {
     setLines((prev) => prev.filter((l) => l.productId !== productId));
   }
-  function setOverride(productId: string, branchId: string, value: number | null) {
-    setLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, overrides: { ...l.overrides, [branchId]: value } } : l)));
+  // prompt-entrada-multisucursal-fix.md — vacío QUITA el override (vuelve
+  // a "para todas"); 0 lo fija en "no lleva". Antes, vaciar el campo dejaba
+  // el override en null, que la validación leía como "falta la cantidad"
+  // en vez de volver a "para todas" (causa 3 del bug reportado).
+  function setBranchCell(productId: string, branchId: string, rawValue: string) {
+    setLines((prev) => prev.map((l) => (l.productId === productId ? applyBranchCellInput(l, branchId, rawValue) : l)));
   }
   function resetOverride(productId: string, branchId: string) {
-    setLines((prev) => prev.map((l) => {
-      if (l.productId !== productId) return l;
-      const overrides = { ...l.overrides };
-      delete overrides[branchId];
-      return { ...l, overrides };
-    }));
+    setBranchCell(productId, branchId, "");
   }
 
   // ── Vista previa real (debounce 400 ms) ─────────────────────────────────
+  // prompt-entrada-multisucursal-fix.md Commit 2 #4 — si falla, las filas
+  // quedan "Sin verificar" (previewFailed), nunca se muestran como si
+  // tuvieran un error real; un banner arriba ofrece reintentar.
   useEffect(() => {
     if (branchIds.length === 0 || lines.length === 0) {
       setPreviewCells(new Map());
       setPreviewTotals({});
+      setPreviewLineMessages({});
+      setPreviewFailed(false);
       return;
     }
     const controller = new AbortController();
@@ -355,9 +368,11 @@ export function IntakeSheet({
         for (const cell of data.cells) map.set(cellKey(cell.productId, cell.branchId), cell);
         setPreviewCells(map);
         setPreviewTotals(data.totals);
+        setPreviewLineMessages(data.lineMessages ?? {});
+        setPreviewFailed(false);
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          toast.error(error instanceof Error ? error.message : "No se pudo calcular la vista previa.");
+          setPreviewFailed(true);
         }
       } finally {
         setPreviewLoading(false);
@@ -365,6 +380,12 @@ export function IntakeSheet({
     }, 400);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [kind, branchIds, lines]);
+
+  function retryPreview() {
+    // Fuerza al efecto de arriba a volver a correr aunque `lines` no haya cambiado.
+    setPreviewFailed(false);
+    setLines((prev) => [...prev]);
+  }
 
   const rowStatuses = useMemo(() => lines.map((line) => {
     const statuses = branchIds.map((id) => previewCells.get(cellKey(line.productId, id))?.status).filter((s): s is IntakeLineStatus => !!s);
@@ -374,8 +395,9 @@ export function IntakeSheet({
 
   const barCounts = useMemo(() => computeBarCounts(rowStatuses.map((r) => ({ productId: r.productId, status: r.status }))), [rowStatuses]);
   const anyRowLoading = rowStatuses.some((r) => r.loading);
-  const canConfirm = canConfirmIntake(barCounts, lines.length) && !anyRowLoading;
+  const canConfirm = canConfirmIntake(barCounts, lines.length, previewFailed) && !anyRowLoading;
   const hasReviewWarnings = barCounts.review > 0;
+  const firstErrorId = useMemo(() => firstErrorProductId(rowStatuses), [rowStatuses]);
 
   const visibleLines = useMemo(
     () => (statusFilter ? lines.filter((l) => rowStatuses.find((r) => r.productId === l.productId)?.status === statusFilter) : lines),
@@ -551,6 +573,17 @@ export function IntakeSheet({
               {/* Paso 4 — Productos */}
               <section>
                 <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">4. Productos</h4>
+                {previewFailed ? (
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-danger-300)] bg-[var(--color-danger-50)] px-3 py-2 text-xs text-[var(--color-danger-800)]">
+                    <span>No se pudo calcular la vista previa — las filas quedan sin verificar.</span>
+                    <button type="button" onClick={retryPreview} className="shrink-0 font-semibold hover:underline">Reintentar</button>
+                  </div>
+                ) : null}
+                {branchIds.length > 1 ? (
+                  <p className="mb-2 text-xs text-[var(--color-text-muted)]">
+                    Escribí la cantidad en &quot;para todas&quot;. Cambiá solo la sucursal que lleve distinto. 0 = no lleva. Vacío = igual que &quot;para todas&quot;.
+                  </p>
+                ) : null}
                 {pendingPoWarnings.length > 0 ? (
                   <div className="mb-2 space-y-1.5">
                     {pendingPoWarnings.map((w) => (
@@ -618,15 +651,15 @@ export function IntakeSheet({
               {/* Tabla (≥1024) */}
               <div className="hidden overflow-x-auto rounded-xl border border-[var(--color-border-strong)] lg:block">
                 <table className="hm-sheet-table min-w-full">
-                  <thead>
+                  <thead className="sticky top-0 z-10 bg-[var(--color-surface)]">
                     <tr>
-                      <th>Producto</th>
-                      <th className="hm-num">Cantidad{branchIds.length > 1 ? " (· todas)" : ""}</th>
-                      {branchIds.length > 1 ? branchIds.map((id) => <th key={id} className="hm-num">{branches.find((b) => b.id === id)?.code ?? id}</th>) : null}
-                      {kind !== "PHYSICAL_COUNT" ? <th className="hm-num">Costo de esta entrada</th> : null}
-                      <th>Resultado</th>
-                      <th>Estado</th>
-                      <th></th>
+                      <th className="sticky top-0 z-10 bg-[var(--color-surface)]">Producto</th>
+                      <th className="hm-num sticky top-0 z-10 bg-[var(--color-surface)]">Cantidad{branchIds.length > 1 ? " · todas" : ""}</th>
+                      {branchIds.length > 1 ? branchIds.map((id) => <th key={id} className="hm-num sticky top-0 z-10 bg-[var(--color-surface)]">{branches.find((b) => b.id === id)?.code ?? id}</th>) : null}
+                      {kind !== "PHYSICAL_COUNT" ? <th className="hm-num sticky top-0 z-10 bg-[var(--color-surface)]">Costo de esta entrada</th> : null}
+                      <th className="sticky top-0 z-10 bg-[var(--color-surface)]">Resultado</th>
+                      <th className="sticky top-0 z-10 bg-[var(--color-surface)]">Estado</th>
+                      <th className="sticky top-0 z-10 bg-[var(--color-surface)]"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -638,13 +671,17 @@ export function IntakeSheet({
                         branches={branches}
                         branchIds={branchIds}
                         cells={previewCells}
+                        lineMessages={previewLineMessages[line.productId] ?? []}
+                        previewFailed={previewFailed}
+                        expanded={expandedMessages.has(line.productId)}
+                        onToggleExpanded={() => setExpandedMessages((prev) => { const next = new Set(prev); if (next.has(line.productId)) next.delete(line.productId); else next.add(line.productId); return next; })}
                         rowLoading={rowStatuses.find((r) => r.productId === line.productId)?.loading ?? true}
-                        rowStatus={rowStatuses.find((r) => r.productId === line.productId)?.status ?? "ERROR"}
+                        rowStatus={rowStatuses.find((r) => r.productId === line.productId)?.status ?? "PENDING"}
                         priceEditorOpen={priceEditorFor === line.productId}
                         onTogglePriceEditor={() => setPriceEditorFor((v) => (v === line.productId ? null : line.productId))}
                         quantityRef={(el) => { quantityRefs.current[line.productId] = el; }}
                         onUpdate={(patch) => updateLine(line.productId, patch)}
-                        onSetOverride={(branchId, value) => setOverride(line.productId, branchId, value)}
+                        onSetOverride={(branchId, rawValue) => setBranchCell(line.productId, branchId, rawValue)}
                         onResetOverride={(branchId) => resetOverride(line.productId, branchId)}
                         onRemove={() => removeLine(line.productId)}
                       />
@@ -666,12 +703,16 @@ export function IntakeSheet({
                     branches={branches}
                     branchIds={branchIds}
                     cells={previewCells}
+                    lineMessages={previewLineMessages[line.productId] ?? []}
+                    previewFailed={previewFailed}
+                    expanded={expandedMessages.has(line.productId)}
+                    onToggleExpanded={() => setExpandedMessages((prev) => { const next = new Set(prev); if (next.has(line.productId)) next.delete(line.productId); else next.add(line.productId); return next; })}
                     rowLoading={rowStatuses.find((r) => r.productId === line.productId)?.loading ?? true}
-                    rowStatus={rowStatuses.find((r) => r.productId === line.productId)?.status ?? "ERROR"}
+                    rowStatus={rowStatuses.find((r) => r.productId === line.productId)?.status ?? "PENDING"}
                     priceEditorOpen={priceEditorFor === line.productId}
                     onTogglePriceEditor={() => setPriceEditorFor((v) => (v === line.productId ? null : line.productId))}
                     onUpdate={(patch) => updateLine(line.productId, patch)}
-                    onSetOverride={(branchId, value) => setOverride(line.productId, branchId, value)}
+                    onSetOverride={(branchId, rawValue) => setBranchCell(line.productId, branchId, rawValue)}
                     onResetOverride={(branchId) => resetOverride(line.productId, branchId)}
                     onRemove={() => removeLine(line.productId)}
                   />
@@ -701,8 +742,32 @@ export function IntakeSheet({
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="ghost" size="sm" onClick={saveDraftNow} icon={<Save className="h-3.5 w-3.5" />}>Guardar borrador</Button>
-                <Button type="button" variant="success" size="sm" disabled={!canConfirm} onClick={() => setShowConfirm(true)} icon={<Check className="h-3.5 w-3.5" />}>
-                  {barCounts.error > 0 ? `Corregí ${barCounts.error} error${barCounts.error === 1 ? "" : "es"} para continuar` : "Revisar y confirmar"}
+                <Button
+                  type="button"
+                  variant={previewFailed ? "danger" : barCounts.error > 0 ? "secondary" : "success"}
+                  size="sm"
+                  disabled={lines.length === 0 || (!previewFailed && barCounts.error === 0 && !canConfirm)}
+                  onClick={() => {
+                    // prompt-entrada-multisucursal-fix.md Commit 2 #4/#7 — con
+                    // errores, el botón LLEVA a la primera fila con error en
+                    // vez de quedar muerto; si la vista previa falló, reintenta.
+                    if (previewFailed) { retryPreview(); return; }
+                    if (barCounts.error > 0) {
+                      setStatusFilter(null);
+                      if (firstErrorId) requestAnimationFrame(() => { const el = quantityRefs.current[firstErrorId]; el?.scrollIntoView({ block: "center", behavior: "smooth" }); el?.focus(); });
+                      return;
+                    }
+                    if (canConfirm) setShowConfirm(true);
+                  }}
+                  icon={<Check className="h-3.5 w-3.5" />}
+                >
+                  {previewFailed
+                    ? "No se pudo calcular la vista previa"
+                    : barCounts.error > 0
+                      ? `Corregí ${barCounts.error} error${barCounts.error === 1 ? "" : "es"} →`
+                      : anyRowLoading
+                        ? "Calculando…"
+                        : "Revisar y confirmar"}
                 </Button>
               </div>
             </div>
@@ -737,11 +802,18 @@ function StatusFilterChip({ label, count, variant, active, onClick }: { label: s
   );
 }
 
-function StatusBadge({ status, loading }: { status: IntakeLineStatus; loading: boolean }) {
+/**
+ * prompt-entrada-multisucursal-fix.md Commit 2 #2 — el texto corto sigue
+ * el TIPO real del primer mensaje (shortTextForErrorCode), nunca
+ * "Falta dato" para todo. PENDING ("sin vista previa todavía o falló") es
+ * neutro, nunca rojo — distinto de un error real.
+ */
+function StatusBadge({ status, loading, firstMessageCode }: { status: IntakeLineStatus; loading: boolean; firstMessageCode?: string }) {
   if (loading) return <Badge variant="neutral">… revisando</Badge>;
+  if (status === "PENDING") return <Badge variant="neutral">Sin verificar</Badge>;
   if (status === "OK") return <Badge variant="success">✓ Listo</Badge>;
   if (status === "REVIEW") return <Badge variant="warning">⚠ Revisar</Badge>;
-  return <Badge variant="danger">✕ Falta dato</Badge>;
+  return <Badge variant="danger">✕ {firstMessageCode ? shortTextForErrorCode(firstMessageCode) : "Falta dato"}</Badge>;
 }
 
 function ResultLine({ cell, branchCode }: { cell: PreviewCell | undefined; branchCode?: string }) {
@@ -760,16 +832,28 @@ function ResultLine({ cell, branchCode }: { cell: PreviewCell | undefined; branc
   );
 }
 
-function RowMessages({ cells, branchIds }: { cells: PreviewCell[]; branchIds: string[] }) {
-  const messages = cells.flatMap((c) => c.messages.map((m) => ({ ...m, branchId: c.branchId })));
+/**
+ * prompt-entrada-multisucursal-fix.md Commit 2 #2/#3 — el primer mensaje
+ * siempre visible en una línea; el resto en "y N más ▾". Usa los
+ * lineMessages YA AGRUPADOS por código con su código de sucursal
+ * (MSY, RIV — nunca el id interno) que manda el preview.
+ */
+function RowMessages({ messages, expanded, onToggleExpanded }: { messages: PreviewLineMessage[]; expanded: boolean; onToggleExpanded: () => void }) {
   if (messages.length === 0) return null;
+  const [first, ...rest] = messages;
   return (
     <div className="mt-1 space-y-0.5">
-      {messages.map((m, i) => (
-        <div key={`${m.code}-${m.branchId}-${i}`} className="text-[10.5px] leading-tight text-[var(--color-text-muted)]">
-          {branchIds.length > 1 ? `[${m.branchId.slice(0, 4)}] ` : ""}{m.text}
-        </div>
-      ))}
+      <div className="text-[10.5px] leading-tight text-[var(--color-text-muted)]">{first.text}</div>
+      {rest.length > 0 ? (
+        <>
+          {expanded ? rest.map((m, i) => (
+            <div key={`${m.code}-${i}`} className="text-[10.5px] leading-tight text-[var(--color-text-muted)]">{m.text}</div>
+          )) : null}
+          <button type="button" onClick={onToggleExpanded} className="text-[10.5px] font-semibold text-[var(--color-master-600)]">
+            {expanded ? "ocultar ▴" : `y ${rest.length} más ▾`}
+          </button>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -780,12 +864,16 @@ type RowProps = {
   branches: Branch[];
   branchIds: string[];
   cells: Map<string, PreviewCell>;
+  lineMessages: PreviewLineMessage[];
+  previewFailed: boolean;
+  expanded: boolean;
+  onToggleExpanded: () => void;
   rowLoading: boolean;
   rowStatus: IntakeLineStatus;
   priceEditorOpen: boolean;
   onTogglePriceEditor: () => void;
   onUpdate: (patch: Partial<IntakeLine>) => void;
-  onSetOverride: (branchId: string, value: number | null) => void;
+  onSetOverride: (branchId: string, rawValue: string) => void;
   onResetOverride: (branchId: string) => void;
   onRemove: () => void;
   quantityRef?: (el: HTMLInputElement | null) => void;
@@ -804,37 +892,105 @@ function shouldShowCostInput(kind: IntakeKind, cells: PreviewCell[]): boolean {
   return cells.length > 0 && cells.some((c) => c.currentWac === null && c.lastPurchaseCost === null);
 }
 
-function IntakeTableRow({ line, kind, branches, branchIds, cells, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove, quantityRef }: RowProps) {
+/**
+ * prompt-entrada-multisucursal-fix.md Commit 2 #5 — "actual C$ X" si todas
+ * las sucursales elegidas tienen el mismo costo; "actual: MGA C$ X · MSY
+ * C$ Y" si difieren; y "MSY sin costo" en ámbar si falta en alguna.
+ */
+function CostHint({ cells, branchIds, branches, productId }: { cells: Map<string, PreviewCell>; branchIds: string[]; branches: Branch[]; productId: string }) {
+  const entries = branchIds.map((id) => {
+    const cell = cells.get(cellKey(productId, id));
+    const cost = cell?.currentWac ?? cell?.lastPurchaseCost ?? null;
+    return { code: branches.find((b) => b.id === id)?.code ?? id, cost };
+  });
+  const withCost = entries.filter((e): e is { code: string; cost: number } => e.cost !== null);
+  const withoutCost = entries.filter((e) => e.cost === null);
+  if (withCost.length === 0 && withoutCost.length === 0) return null;
+  const allSame = withCost.length > 0 && withCost.every((e) => e.cost === withCost[0].cost);
+
+  return (
+    <div className="mt-0.5 text-[10.5px] leading-tight">
+      {withCost.length > 0 ? (
+        <span className="text-[var(--color-text-muted)]">
+          actual {allSame || withCost.length === 1 ? money(withCost[0].cost) : withCost.map((e) => `${e.code} ${money(e.cost)}`).join(" · ")}
+        </span>
+      ) : null}
+      {withoutCost.length > 0 ? (
+        <span className={withCost.length > 0 ? "ml-1 text-[var(--color-warning-700)]" : "text-[var(--color-warning-700)]"}>
+          {withoutCost.map((e) => e.code).join(", ")} sin costo
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+const QUANTITY_ERROR_CODES = new Set(["MISSING_QUANTITY", "ALL_BRANCHES_SKIPPED"]);
+const COST_ERROR_CODES = new Set(["NO_COST_NO_AVERAGE", "OPENING_BALANCE_NO_COST", "PRICE_BELOW_COST"]);
+
+/** prompt-entrada-multisucursal-fix.md Commit 2 #2 — "el input con el problema queda con borde rojo": cantidad, costo o la celda de la sucursal. */
+function hasLineError(lineMessages: PreviewLineMessage[], codes: Set<string>): boolean {
+  return lineMessages.some((m) => codes.has(m.code));
+}
+
+function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove, quantityRef }: RowProps) {
   const lineCells = rowCells(line, branchIds, cells);
   const showCost = shouldShowCostInput(kind, lineCells);
   const singleBranchId = branchIds.length === 1 ? branchIds[0] : null;
-  const hintCost = singleBranchId ? cells.get(cellKey(line.productId, singleBranchId))?.currentWac ?? cells.get(cellKey(line.productId, singleBranchId))?.lastPurchaseCost ?? null : null;
+  const quantityHasError = !previewFailed && hasLineError(lineMessages, QUANTITY_ERROR_CODES);
+  const costHasError = !previewFailed && hasLineError(lineMessages, COST_ERROR_CODES);
+  // "Las otras sucursales quedan sin cantidad. ¿Usar X para todas?" (Commit 2 #1) — solo tiene sentido con "para todas" vacío y AL MENOS una, pero no todas, las sucursales con un valor propio.
+  const overrideCount = Object.keys(line.overrides).length;
+  const showUseForAllHint = branchIds.length > 1 && line.quantity === null && overrideCount > 0 && overrideCount < branchIds.length;
+  const firstOverrideValue = showUseForAllHint ? Object.values(line.overrides).find((v) => v !== null && v !== undefined) ?? null : null;
 
   return (
     <>
-      <tr className={rowStatus === "ERROR" && !rowLoading ? "bg-[var(--color-danger-50)]" : rowStatus === "REVIEW" && !rowLoading ? "bg-[var(--color-warning-50)]" : undefined}>
+      <tr className={!previewFailed && rowStatus === "ERROR" && !rowLoading ? "bg-[var(--color-danger-50)]" : !previewFailed && rowStatus === "REVIEW" && !rowLoading ? "bg-[var(--color-warning-50)]" : undefined}>
         <td>
           <div className="font-medium text-[var(--color-text)]">{line.name}</div>
           <div className="font-mono text-[11px] text-[var(--color-text-muted)]">{line.sku}</div>
         </td>
         <td className="hm-num">
-          <Input ref={quantityRef} type="number" min="0" step="0.0001" className="w-24 text-right" value={line.quantity ?? ""} onChange={(e) => onUpdate({ quantity: e.target.value === "" ? null : Number(e.target.value) })} placeholder="—" />
+          <Input ref={quantityRef} type="number" min="0" step="0.0001" className={`w-24 text-right ${quantityHasError ? "border-[var(--color-danger-400)]" : ""}`} value={line.quantity ?? ""} onChange={(e) => onUpdate({ quantity: e.target.value === "" ? null : Number(e.target.value) })} placeholder="—" />
           {line.hasConversion ? (
             <select className="hm-input mt-1 w-24 text-xs" value={line.unit} onChange={(e) => onUpdate({ unit: e.target.value })}>
               <option value={line.saleUnit}>{line.saleUnit}</option>
               <option value={line.baseUnit}>{line.baseUnit}</option>
             </select>
           ) : null}
+          {showUseForAllHint && firstOverrideValue !== null ? (
+            <div className="mt-1 text-[10.5px] leading-tight text-[var(--color-text-muted)]">
+              Las otras sucursales quedan sin cantidad.{" "}
+              <button type="button" onClick={() => onUpdate({ quantity: firstOverrideValue })} className="font-semibold text-[var(--color-master-600)] hover:underline">
+                ¿Usar {qty(firstOverrideValue)} para todas?
+              </button>
+            </div>
+          ) : null}
         </td>
         {branchIds.length > 1 ? branchIds.map((id) => {
           const value = quantityForIntakeBranch(line, id);
           const overridden = id in line.overrides;
+          const cell = cells.get(cellKey(line.productId, id));
+          const skipped = cell?.status === "SKIPPED";
+          const cellHasError = !previewFailed && cell?.status === "ERROR";
+          const hasStockOnOpening = kind === "OPENING_BALANCE" && cell?.messages.some((m) => m.code === "OPENING_BALANCE_HAS_STOCK");
           return (
             <td key={id} className="hm-num">
               <div className="flex items-center justify-end gap-1">
-                <Input type="number" min="0" step="0.0001" className={`w-20 text-right ${overridden ? "border-[var(--color-warning-400)] bg-[var(--color-warning-50)]" : ""}`} value={value ?? ""} onChange={(e) => onSetOverride(id, e.target.value === "" ? null : Number(e.target.value))} placeholder="—" />
+                <Input
+                  type="number" min="0" step="0.0001"
+                  className={`w-20 text-right ${cellHasError ? "border-[var(--color-danger-400)]" : overridden ? "border-[var(--color-warning-400)] bg-[var(--color-warning-50)]" : ""} ${skipped ? "text-[var(--color-text-soft)] line-through" : ""}`}
+                  value={value ?? ""}
+                  onChange={(e) => onSetOverride(id, e.target.value)}
+                  placeholder={skipped ? "no lleva" : "—"}
+                />
                 {overridden ? <button type="button" onClick={() => onResetOverride(id)} className="hm-icon-btn h-6 w-6" title="Igualar a 'para todas'"><RotateCcw className="h-3 w-3" /></button> : null}
               </div>
+              {hasStockOnOpening ? (
+                <button type="button" onClick={() => onSetOverride(id, "0")} className="mt-0.5 block w-full text-right text-[10.5px] font-semibold text-[var(--color-danger-600)] hover:underline">
+                  Quitar esta sucursal
+                </button>
+              ) : null}
             </td>
           );
         }) : null}
@@ -842,8 +998,8 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, rowLoading, ro
           <td className="hm-num">
             {showCost ? (
               <>
-                <Input type="number" min="0" step="0.01" className="w-24 text-right" value={line.unitCost ?? ""} onChange={(e) => onUpdate({ unitCost: e.target.value === "" ? null : Number(e.target.value) })} placeholder={kind === "OPENING_BALANCE" ? "obligatorio" : "sin cambio"} />
-                {hintCost !== null && !line.unitCost ? <div className="mt-0.5 text-[10.5px] text-[var(--color-text-muted)]">actual {money(hintCost)}</div> : null}
+                <Input type="number" min="0" step="0.01" className={`w-24 text-right ${costHasError ? "border-[var(--color-danger-400)]" : ""}`} value={line.unitCost || ""} onChange={(e) => onUpdate({ unitCost: e.target.value === "" ? null : Number(e.target.value) })} placeholder={kind === "OPENING_BALANCE" ? "obligatorio" : "sin cambio"} />
+                {!line.unitCost ? <CostHint cells={cells} branchIds={branchIds} branches={branches} productId={line.productId} /> : null}
               </>
             ) : <span className="text-[var(--color-text-soft)]">—</span>}
           </td>
@@ -852,9 +1008,9 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, rowLoading, ro
           {branchIds.length > 1
             ? branchIds.map((id) => <ResultLine key={id} cell={cells.get(cellKey(line.productId, id))} branchCode={branches.find((b) => b.id === id)?.code} />)
             : <ResultLine cell={singleBranchId ? cells.get(cellKey(line.productId, singleBranchId)) : undefined} />}
-          <RowMessages cells={lineCells} branchIds={branchIds} />
+          {previewFailed ? null : <RowMessages messages={lineMessages} expanded={expanded} onToggleExpanded={onToggleExpanded} />}
         </td>
-        <td><StatusBadge status={rowStatus} loading={rowLoading} /></td>
+        <td><StatusBadge status={previewFailed ? "PENDING" : rowStatus} loading={rowLoading && !previewFailed} firstMessageCode={lineMessages[0]?.code} /></td>
         <td>
           <div className="flex items-center gap-1">
             <button type="button" onClick={onTogglePriceEditor} className="hm-icon-btn h-7 w-7" title="Cambiar precio de venta"><MoreHorizontal className="h-3.5 w-3.5" /></button>
@@ -876,32 +1032,46 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, rowLoading, ro
   );
 }
 
-function IntakeCardRow({ line, kind, branches, branchIds, cells, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove }: RowProps) {
+function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove }: RowProps) {
   const lineCells = rowCells(line, branchIds, cells);
   const showCost = shouldShowCostInput(kind, lineCells);
   const singleBranchId = branchIds.length === 1 ? branchIds[0] : null;
+  const quantityHasError = !previewFailed && hasLineError(lineMessages, QUANTITY_ERROR_CODES);
+  const costHasError = !previewFailed && hasLineError(lineMessages, COST_ERROR_CODES);
+  const overrideCount = Object.keys(line.overrides).length;
+  const showUseForAllHint = branchIds.length > 1 && line.quantity === null && overrideCount > 0 && overrideCount < branchIds.length;
+  const firstOverrideValue = showUseForAllHint ? Object.values(line.overrides).find((v) => v !== null && v !== undefined) ?? null : null;
 
   return (
-    <div className={`rounded-xl border p-3 ${rowStatus === "ERROR" && !rowLoading ? "border-[var(--color-danger-300)] bg-[var(--color-danger-50)]" : rowStatus === "REVIEW" && !rowLoading ? "border-[var(--color-warning-300)] bg-[var(--color-warning-50)]" : "border-[var(--color-border-strong)] bg-[var(--color-surface)]"}`}>
+    <div className={`rounded-xl border p-3 ${!previewFailed && rowStatus === "ERROR" && !rowLoading ? "border-[var(--color-danger-300)] bg-[var(--color-danger-50)]" : !previewFailed && rowStatus === "REVIEW" && !rowLoading ? "border-[var(--color-warning-300)] bg-[var(--color-warning-50)]" : "border-[var(--color-border-strong)] bg-[var(--color-surface)]"}`}>
       <div className="mb-2 flex items-start justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-[var(--color-text)]">{line.name}</p>
           <p className="font-mono text-[11px] text-[var(--color-text-muted)]">{line.sku}</p>
         </div>
         <div className="flex items-center gap-1">
-          <StatusBadge status={rowStatus} loading={rowLoading} />
+          <StatusBadge status={previewFailed ? "PENDING" : rowStatus} loading={rowLoading && !previewFailed} firstMessageCode={lineMessages[0]?.code} />
           <button type="button" onClick={onRemove} className="hm-icon-btn hm-icon-btn-danger min-h-[44px] min-w-[44px]"><Trash2 className="h-4 w-4" /></button>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2">
         <label className="text-xs">
           <span className="mb-1 block text-[var(--color-text-muted)]">Cantidad</span>
-          <Input type="number" min="0" step="0.0001" className="h-11" value={line.quantity ?? ""} onChange={(e) => onUpdate({ quantity: e.target.value === "" ? null : Number(e.target.value) })} placeholder="—" />
+          <Input type="number" min="0" step="0.0001" className={`h-11 ${quantityHasError ? "border-[var(--color-danger-400)]" : ""}`} value={line.quantity ?? ""} onChange={(e) => onUpdate({ quantity: e.target.value === "" ? null : Number(e.target.value) })} placeholder="—" />
+          {showUseForAllHint && firstOverrideValue !== null ? (
+            <span className="mt-1 block text-[10.5px] leading-tight text-[var(--color-text-muted)]">
+              Las otras sucursales quedan sin cantidad.{" "}
+              <button type="button" onClick={() => onUpdate({ quantity: firstOverrideValue })} className="font-semibold text-[var(--color-master-600)] hover:underline">
+                ¿Usar {qty(firstOverrideValue)} para todas?
+              </button>
+            </span>
+          ) : null}
         </label>
         {kind !== "PHYSICAL_COUNT" && showCost ? (
           <label className="text-xs">
             <span className="mb-1 block text-[var(--color-text-muted)]">Costo de esta entrada</span>
-            <Input type="number" min="0" step="0.01" className="h-11" value={line.unitCost ?? ""} onChange={(e) => onUpdate({ unitCost: e.target.value === "" ? null : Number(e.target.value) })} placeholder={kind === "OPENING_BALANCE" ? "obligatorio" : "sin cambio"} />
+            <Input type="number" min="0" step="0.01" className={`h-11 ${costHasError ? "border-[var(--color-danger-400)]" : ""}`} value={line.unitCost || ""} onChange={(e) => onUpdate({ unitCost: e.target.value === "" ? null : Number(e.target.value) })} placeholder={kind === "OPENING_BALANCE" ? "obligatorio" : "sin cambio"} />
+            {!line.unitCost ? <CostHint cells={cells} branchIds={branchIds} branches={branches} productId={line.productId} /> : null}
           </label>
         ) : null}
       </div>
@@ -909,7 +1079,7 @@ function IntakeCardRow({ line, kind, branches, branchIds, cells, rowLoading, row
         {branchIds.length > 1
           ? branchIds.map((id) => <ResultLine key={id} cell={cells.get(cellKey(line.productId, id))} branchCode={branches.find((b) => b.id === id)?.code} />)
           : <ResultLine cell={singleBranchId ? cells.get(cellKey(line.productId, singleBranchId)) : undefined} />}
-        <RowMessages cells={lineCells} branchIds={branchIds} />
+        {previewFailed ? null : <RowMessages messages={lineMessages} expanded={expanded} onToggleExpanded={onToggleExpanded} />}
       </div>
       {branchIds.length > 1 ? (
         <details className="mt-2">
@@ -919,12 +1089,27 @@ function IntakeCardRow({ line, kind, branches, branchIds, cells, rowLoading, row
               const value = quantityForIntakeBranch(line, id);
               const overridden = id in line.overrides;
               const branch = branches.find((b) => b.id === id);
+              const cell = cells.get(cellKey(line.productId, id));
+              const skipped = cell?.status === "SKIPPED";
+              const cellHasError = !previewFailed && cell?.status === "ERROR";
+              const hasStockOnOpening = kind === "OPENING_BALANCE" && cell?.messages.some((m) => m.code === "OPENING_BALANCE_HAS_STOCK");
               return (
                 <div key={id} className="flex items-center justify-between gap-2">
                   <span className="text-xs text-[var(--color-text-secondary)]">{branch?.code ?? id}</span>
-                  <div className="flex items-center gap-1">
-                    <Input type="number" min="0" step="0.0001" className={`h-11 w-20 text-right ${overridden ? "border-[var(--color-warning-400)] bg-[var(--color-warning-50)]" : ""}`} value={value ?? ""} onChange={(e) => onSetOverride(id, e.target.value === "" ? null : Number(e.target.value))} placeholder="—" />
-                    {overridden ? <button type="button" onClick={() => onResetOverride(id)} className="hm-icon-btn min-h-[44px] min-w-[44px]"><RotateCcw className="h-4 w-4" /></button> : null}
+                  <div className="flex flex-col items-end gap-0.5">
+                    <div className="flex items-center gap-1">
+                      <Input
+                        type="number" min="0" step="0.0001"
+                        className={`h-11 w-20 text-right ${cellHasError ? "border-[var(--color-danger-400)]" : overridden ? "border-[var(--color-warning-400)] bg-[var(--color-warning-50)]" : ""} ${skipped ? "text-[var(--color-text-soft)] line-through" : ""}`}
+                        value={value ?? ""}
+                        onChange={(e) => onSetOverride(id, e.target.value)}
+                        placeholder={skipped ? "no lleva" : "—"}
+                      />
+                      {overridden ? <button type="button" onClick={() => onResetOverride(id)} className="hm-icon-btn min-h-[44px] min-w-[44px]"><RotateCcw className="h-4 w-4" /></button> : null}
+                    </div>
+                    {hasStockOnOpening ? (
+                      <button type="button" onClick={() => onSetOverride(id, "0")} className="text-[10.5px] font-semibold text-[var(--color-danger-600)] hover:underline">Quitar esta sucursal</button>
+                    ) : null}
                   </div>
                 </div>
               );
