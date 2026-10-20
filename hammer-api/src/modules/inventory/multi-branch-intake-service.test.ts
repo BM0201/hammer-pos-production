@@ -25,7 +25,7 @@ function decimal(value: number) {
 const BRANCH_1 = "branch-1";
 const BRANCH_2 = "branch-2";
 
-function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number; initialBalances?: Array<{ branchId: string; productId: string; quantityOnHand: number; weightedAverageCost: number }> } = {}) {
+function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number; initialBalances?: Array<{ branchId: string; productId: string; quantityOnHand: number; weightedAverageCost: number }>; blockedProducts?: Map<string, { isActive?: boolean; mergedIntoProductId?: string | null; mergedInto?: { sku: string; name: string } | null }> } = {}) {
   const products = opts.products ?? new Set(["p1", "p2"]);
   const balances = new Map<string, { id: string; branchId: string; productId: string; quantityOnHand: Prisma.Decimal; closedPackageQuantity: Prisma.Decimal; looseUnitQuantity: Prisma.Decimal; weightedAverageCost: Prisma.Decimal }>();
   const movements: Array<Record<string, unknown>> = [];
@@ -70,6 +70,14 @@ function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number;
         return { id: where.id, standardSalePrice: decimal(opts.standardSalePrice ?? 100) };
       },
       findUnique: async ({ where }: { where: { id: string } }) => (products.has(where.id) ? { id: where.id, standardSalePrice: decimal(opts.standardSalePrice ?? 100) } : null),
+      // assertProductsIntakeable (prompt-entrada-multisucursal-fix.md) — por
+      // defecto todos activos y sin unificar; los tests de bloqueo pasan su
+      // propio Set/Map via opts.blockedProducts.
+      findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.filter((id) => products.has(id)).map((id) => {
+          const blocked = opts.blockedProducts?.get(id);
+          return { id, isActive: blocked?.isActive ?? true, mergedIntoProductId: blocked?.mergedIntoProductId ?? null, mergedInto: blocked?.mergedInto ?? null };
+        }),
     },
     branchProductSetting: {
       findUnique: async () => null,
@@ -276,6 +284,36 @@ test("una sucursal con producto inexistente FAILED, las demás DONE (una no tumb
   assert.equal(branch1.status, "DONE");
   assert.equal(branch2.status, "FAILED");
   assert.equal(Number(getBalance(BRANCH_1, "p1").quantityOnHand), 10);
+});
+
+test("producto inactivo rechaza toda la carga, con el mismo motivo que el preview", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1"]), blockedProducts: new Map([["p1", { isActive: false }]]) });
+  await assert.rejects(
+    () => createMultiBranchIntake({
+      clientRequestId: "req-inactive",
+      actorUserId: "user-1",
+      kind: "ADD_STOCK",
+      reason: "Llegó pedido",
+      branchIds: [BRANCH_1],
+      lines: [{ productId: "p1", quantity: 10 }],
+    }, db),
+    /inactivo/,
+  );
+});
+
+test("producto unificado en otro rechaza toda la carga con el nombre del principal", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p2"]), blockedProducts: new Map([["p2", { mergedIntoProductId: "p1", mergedInto: { sku: "SKU-1", name: "Producto Principal" } }]]) });
+  await assert.rejects(
+    () => createMultiBranchIntake({
+      clientRequestId: "req-merged",
+      actorUserId: "user-1",
+      kind: "ADD_STOCK",
+      reason: "Llegó pedido",
+      branchIds: [BRANCH_1],
+      lines: [{ productId: "p2", quantity: 10 }],
+    }, db),
+    /Producto Principal/,
+  );
 });
 
 test("LA QUE IMPORTA — doble envío con el mismo clientRequestId → un solo documento, no reprocesa", async () => {

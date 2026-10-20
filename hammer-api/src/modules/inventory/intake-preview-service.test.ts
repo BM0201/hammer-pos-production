@@ -18,11 +18,13 @@ function decimal(value: number) {
 const BRANCH_1 = "branch-1";
 const BRANCH_2 = "branch-2";
 
-type ProductFixture = { id: string; isActive?: boolean; standardSalePrice?: number; averageCost?: number | null; globalCost?: number | null; lastPurchaseCost?: number | null; costUpdatedAt?: Date | null };
+type ProductFixture = { id: string; isActive?: boolean; standardSalePrice?: number; averageCost?: number | null; globalCost?: number | null; lastPurchaseCost?: number | null; costUpdatedAt?: Date | null; mergedIntoProductId?: string | null; mergedInto?: { sku: string; name: string } | null };
 type BalanceFixture = { branchId: string; productId: string; quantityOnHand: number; weightedAverageCost: number };
 type BranchSettingFixture = { branchId: string; productId: string; branchCost?: number | null; branchPrice?: number | null };
 type ApprovedPoFixture = { id: string; orderNumber: string; branchId: string; productIds: string[] };
 type PoLineFixture = { branchId: string; productId: string; quantity: number };
+
+type FusionMemberFixture = { productId: string; stockGroupId: string; isCanonical: boolean; conversionFactor: number; saleUnit?: string; isPackagePresentation?: boolean };
 
 function buildFakeDb(opts: {
   products?: ProductFixture[];
@@ -30,17 +32,49 @@ function buildFakeDb(opts: {
   branchSettings?: BranchSettingFixture[];
   approvedPOs?: ApprovedPoFixture[];
   poLines?: PoLineFixture[];
+  fusionMembers?: FusionMemberFixture[];
 } = {}) {
   const products = opts.products ?? [];
   const balances = opts.balances ?? [];
   const branchSettings = opts.branchSettings ?? [];
   const approvedPOs = opts.approvedPOs ?? [];
   const poLines = opts.poLines ?? [];
+  const fusionMembers = opts.fusionMembers ?? [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fake db, shape dictado por los selects reales de cada llamador.
   const db: any = {
     systemSetting: { findUnique: async () => null },
-    productStockGroupMember: { findMany: async () => [] },
+    // prompt-entrada-multisucursal-fix.md — réplica mínima de
+    // getProductStockConversionsBatch (unit-conversion.ts): agrupa los
+    // miembros por stockGroupId y arma, para cada fila, el mismo "products"
+    // que ve el canónico (necesario para encontrar isCanonical).
+    productStockGroupMember: {
+      findMany: async ({ where }: { where: { productId: { in: string[] } } }) => {
+        const relevant = fusionMembers.filter((m) => where.productId.in.includes(m.productId));
+        return relevant.map((m) => {
+          const groupPeers = fusionMembers.filter((g) => g.stockGroupId === m.stockGroupId);
+          return {
+            productId: m.productId,
+            stockGroupId: m.stockGroupId,
+            conversionFactor: decimal(m.conversionFactor),
+            saleUnit: m.saleUnit ?? "UN",
+            isPackagePresentation: m.isPackagePresentation ?? false,
+            stockGroup: {
+              code: m.stockGroupId,
+              name: m.stockGroupId,
+              baseUnit: "UN",
+              packageUnit: null,
+              conversionFactorToBase: null,
+              tracksPackages: false,
+              approximateFactor: false,
+              minimumClosedPackageReserve: decimal(0),
+              autoOpenForUnitSale: false,
+              products: groupPeers.map((g) => ({ productId: g.productId, isCanonical: g.isCanonical, conversionFactor: decimal(g.conversionFactor) })),
+            },
+          };
+        });
+      },
+    },
     product: {
       findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
         products
@@ -53,7 +87,15 @@ function buildFakeDb(opts: {
             averageCost: p.averageCost != null ? decimal(p.averageCost) : null,
             lastPurchaseCost: p.lastPurchaseCost != null ? decimal(p.lastPurchaseCost) : null,
             costUpdatedAt: p.costUpdatedAt ?? null,
+            mergedIntoProductId: p.mergedIntoProductId ?? null,
+            mergedInto: p.mergedInto ?? null,
           })),
+    },
+    // prompt-entrada-multisucursal-fix.md — códigos de sucursal para
+    // lineMessages agrupados; ningún test de este archivo verifica el
+    // texto exacto de branchCodes, así que basta con un eco del id.
+    branch: {
+      findMany: async ({ where }: { where: { id: { in: string[] } } }) => where.id.in.map((id) => ({ id, code: id })),
     },
     branchProductSetting: {
       findMany: async ({ where }: { where: { productId: { in: string[] }; branchId: { in: string[] } } }) =>
@@ -210,4 +252,93 @@ test("lastPurchaseCost/fecha salen de Product (global, no por sucursal) — igua
   const cell = result.cells[0];
   assert.equal(cell.lastPurchaseCost, 123.45);
   assert.equal(cell.lastPurchaseDate, costUpdatedAt.toISOString());
+});
+
+// ── prompt-entrada-multisucursal-fix.md ─────────────────────────────────
+
+test("LA QUE IMPORTA — un miembro DERIVADO de una fusión se acepta (no es un producto unificado) y mueve el canónico con el factor", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "canonico" }, { id: "derivado" }],
+    balances: [{ branchId: BRANCH_1, productId: "canonico", quantityOnHand: 100, weightedAverageCost: 20 }],
+    fusionMembers: [
+      { productId: "canonico", stockGroupId: "g1", isCanonical: true, conversionFactor: 1, saleUnit: "UN" },
+      { productId: "derivado", stockGroupId: "g1", isCanonical: false, conversionFactor: 14, saleUnit: "QQ" },
+    ],
+  });
+  const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "derivado", quantity: 2, unitCost: 300 }] }, db);
+  const cell = result.cells[0];
+  assert.notEqual(cell.status, "ERROR", "una presentación de fusión NUNCA es 'producto unificado'");
+  assert.ok(!cell.messages.some((m) => m.code === "PRODUCT_BLOCKED"));
+  // 2 unidades del derivado (factor 14) = 28 de base, sobre 100 ya existentes del canónico.
+  assert.equal(cell.currentQty, 100);
+  assert.equal(cell.finalQty, 128);
+});
+
+test("producto con mergedIntoProductId → PRODUCT_BLOCKED con el nombre del principal, no 'inactivo' ni 'unificado' genérico", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "p-merged", mergedIntoProductId: "p-survivor", mergedInto: { sku: "SKU-1", name: "Producto Principal" } }],
+  });
+  const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "p-merged", quantity: 5, unitCost: 10 }] }, db);
+  const cell = result.cells[0];
+  assert.equal(cell.status, "ERROR");
+  const msg = cell.messages.find((m) => m.code === "PRODUCT_BLOCKED")!;
+  assert.ok(msg.text.includes("Producto Principal"));
+  assert.equal(cell.messages.length, 1, "bloqueado no evalúa cantidad/costo además — un solo mensaje");
+});
+
+test("LA QUE IMPORTA — 0 en una sucursal: SKIPPED, sin mensajes, no entra en los totales; la otra sucursal (con cantidad real) sigue OK", async () => {
+  const db = buildFakeDb({ products: [{ id: "p1" }] });
+  const result = await previewIntake({
+    kind: "ADD_STOCK",
+    branchIds: [BRANCH_1, BRANCH_2],
+    lines: [{ productId: "p1", quantity: 100, unitCost: 50, overrides: { [BRANCH_2]: 0 } }],
+  }, db);
+  const cellB1 = result.cells.find((c) => c.branchId === BRANCH_1)!;
+  const cellB2 = result.cells.find((c) => c.branchId === BRANCH_2)!;
+  assert.equal(cellB1.status, "OK");
+  assert.equal(cellB2.status, "SKIPPED");
+  assert.deepEqual(cellB2.messages, []);
+  assert.equal(result.totals[BRANCH_2].units, 0, "la sucursal que no lleva no suma nada a sus totales");
+  assert.equal(result.totals[BRANCH_1].units, 100);
+});
+
+test("LA QUE IMPORTA — todas las sucursales elegidas en 0 para una línea: error de línea 'Elegí al menos una sucursal con cantidad', no SKIPPED silencioso", async () => {
+  const db = buildFakeDb({ products: [{ id: "p1" }] });
+  const result = await previewIntake({
+    kind: "ADD_STOCK",
+    branchIds: [BRANCH_1, BRANCH_2],
+    lines: [{ productId: "p1", quantity: 0, unitCost: 50 }],
+  }, db);
+  assert.ok(result.cells.every((c) => c.status === "ERROR"));
+  assert.ok(result.cells.every((c) => c.messages.some((m) => m.code === "ALL_BRANCHES_SKIPPED")));
+  assert.equal(result.lineMessages["p1"]?.length, 1);
+  assert.equal(result.lineMessages["p1"]![0].code, "ALL_BRANCHES_SKIPPED");
+});
+
+test("PHYSICAL_COUNT con 0: sigue siendo un conteo válido (no SKIPPED, no ALL_BRANCHES_SKIPPED) — 0 en conteo es un valor real, no 'no lleva'", async () => {
+  // Sin balance previo (currentQty=0): contar 0 no es ninguna baja — nada que avisar.
+  const db = buildFakeDb({ products: [{ id: "p1" }] });
+  const result = await previewIntake({ kind: "PHYSICAL_COUNT", branchIds: [BRANCH_1], lines: [{ productId: "p1", quantity: 0 }] }, db);
+  assert.notEqual(result.cells[0].status, "SKIPPED");
+  assert.equal(result.lineMessages["p1"], undefined);
+});
+
+test("LA QUE IMPORTA — sin costo en una sola sucursal de dos: lineMessages agrupa NO_COST_NO_AVERAGE con el código de ESA sucursal nada más, texto legible (no ids)", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "p1" }],
+    branchSettings: [{ branchId: BRANCH_1, productId: "p1", branchCost: 40 }], // BRANCH_1 sí tiene costo; BRANCH_2 no tiene ninguno.
+  });
+  const result = await previewIntake({
+    kind: "ADD_STOCK",
+    branchIds: [BRANCH_1, BRANCH_2],
+    lines: [{ productId: "p1", quantity: 10 }], // sin unitCost — depende del costo efectivo de cada sucursal.
+  }, db);
+  const cellB1 = result.cells.find((c) => c.branchId === BRANCH_1)!;
+  const cellB2 = result.cells.find((c) => c.branchId === BRANCH_2)!;
+  assert.equal(cellB1.status, "OK", "BRANCH_1 tiene costo propio");
+  assert.equal(cellB2.status, "ERROR");
+  const grouped = result.lineMessages["p1"]!;
+  const noCostGroup = grouped.find((m) => m.code === "NO_COST_NO_AVERAGE")!;
+  assert.deepEqual(noCostGroup.branchCodes, [BRANCH_2], "solo la sucursal que de verdad no tiene costo, no las dos");
+  assert.ok(!noCostGroup.text.includes(BRANCH_1), "el texto agrupado nunca mezcla ids/códigos de sucursales no afectadas");
 });

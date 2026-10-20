@@ -49,9 +49,20 @@ test("LA QUE IMPORTA — cantidad vacía (nunca escrita): ERROR, nunca se manda 
   assert.ok(result.messages.some((m) => m.code === "MISSING_QUANTITY"));
 });
 
-test("ADD_STOCK con cantidad 0: ERROR (0 no es una cantidad real para sumar)", () => {
+// prompt-entrada-multisucursal-fix.md — causa 3: antes esto daba ERROR
+// "La cantidad debe ser mayor a 0", que es exactamente el bug que reportó
+// el dueño (una sucursal que no lleva ese producto quedaba marcada como
+// si le faltara un dato). 0 escrito a propósito en ADD_STOCK/OPENING_BALANCE
+// es "esta sucursal no lleva" — SKIPPED, sin mensajes, nunca un error.
+test("ADD_STOCK con cantidad 0: SKIPPED (0 = esta sucursal no lleva, no un error)", () => {
   const result = validateIntakeLine(base({ quantity: 0 }));
-  assert.equal(result.status, "ERROR");
+  assert.equal(result.status, "SKIPPED");
+  assert.deepEqual(result.messages, []);
+});
+
+test("OPENING_BALANCE con cantidad 0: SKIPPED, ni siquiera exige costo (una sucursal que no lleva no necesita costo)", () => {
+  const result = validateIntakeLine(base({ kind: "OPENING_BALANCE", quantity: 0, enteredCost: null, currentQty: 0 }));
+  assert.equal(result.status, "SKIPPED");
 });
 
 test("PHYSICAL_COUNT con cantidad 0, pero ESCRITA explícitamente: no es error de cantidad (se permite 0 en conteo)", () => {

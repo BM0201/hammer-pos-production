@@ -95,13 +95,23 @@ function validateInput(input: CreateIntakeInput) {
     if (seen.has(line.productId)) throw new Error(`VALIDATION_ERROR: El producto ${line.productId} está repetido.`);
     seen.add(line.productId);
 
-    // "cantidad para todas" — el nivel de línea. Los overrides por sucursal
-    // se validan en resolveLinesForBranch (ahí sí importa, por sucursal,
-    // qué cuenta como "sin escribir" vs "0 real" para PHYSICAL_COUNT).
-    if (kind === "PHYSICAL_COUNT") {
-      if (!(line.quantity >= 0)) throw new Error(`VALIDATION_ERROR: La cantidad para ${line.productId} no puede ser negativa.`);
-    } else if (!(line.quantity > 0)) {
-      throw new Error(`VALIDATION_ERROR: La cantidad para ${line.productId} debe ser mayor a 0.`);
+    // prompt-entrada-multisucursal-fix.md — "para todas" vacío (mandado
+    // como 0, ver buildIntakePayloadLines) con TODO el valor real puesto en
+    // overrides por sucursal (el caso exacto que reportó el dueño: MSY 100,
+    // RIV 0) es válido — antes este chequeo solo miraba line.quantity y
+    // rechazaba la carga ENTERA. Ahora alcanza con que ALGUNA sucursal
+    // elegida resuelva a una cantidad real (0 en ADD_STOCK/OPENING_BALANCE
+    // es "no lleva", no cuenta como real).
+    const resolvedPerBranch = input.branchIds.map((branchId) => quantityForBranch(line, branchId));
+    const hasAnyRealQuantity = kind === "PHYSICAL_COUNT"
+      ? resolvedPerBranch.some((q) => q >= 0)
+      : resolvedPerBranch.some((q) => q > 0);
+    if (!hasAnyRealQuantity) {
+      throw new Error(
+        kind === "PHYSICAL_COUNT"
+          ? `VALIDATION_ERROR: La cantidad para ${line.productId} no puede ser negativa.`
+          : `VALIDATION_ERROR: Elegí al menos una sucursal con cantidad para ${line.productId}.`,
+      );
     }
 
     if (kind === "OPENING_BALANCE" && !(line.unitCost !== undefined && line.unitCost > 0)) {
@@ -228,8 +238,39 @@ async function processBranchUntilDeadline(
   }
 }
 
+/**
+ * prompt-entrada-multisucursal-fix.md — misma validación que el preview
+ * (intake-preview-service.ts), con los mismos motivos: producto inactivo o
+ * unificado en otro nunca debería llegar a createOpeningBalanceTx (que no
+ * lo chequea — confía en el llamador). Un miembro DERIVADO de una fusión
+ * se acepta igual que en el preview: createOpeningBalanceTx ya lo redirige
+ * al canónico con el factor.
+ *
+ * Un producto que NO EXISTE EN ABSOLUTO (id inválido, o uno que se va a
+ * crear más tarde) NO se rechaza acá a propósito — eso lo sigue manejando
+ * el motor de tandas reanudables como siempre: esa sucursal/tanda queda
+ * FAILED (createOpeningBalanceTx ya tira NOT_FOUND) sin tumbar las demás,
+ * y un /retry posterior la completa una vez que el producto exista. Mezclar
+ * ambos conceptos rompería esa resiliencia (ya probada, Fase 1 de
+ * prompt-entrada-inventario.md) sin necesidad — el pedido acá es solo
+ * "inactivo o unificado", no "existe".
+ */
+async function assertProductsIntakeable(db: PrismaClient, productIds: string[]): Promise<void> {
+  const products = await db.product.findMany({
+    where: { id: { in: productIds } },
+    select: { id: true, isActive: true, mergedIntoProductId: true, mergedInto: { select: { sku: true, name: true } } },
+  });
+  for (const product of products) {
+    if (!product.isActive) throw new Error(`VALIDATION_ERROR: ${product.id} es un producto inactivo.`);
+    if (product.mergedIntoProductId) {
+      throw new Error(`VALIDATION_ERROR: Este producto se unificó en ${product.mergedInto?.name ?? product.mergedIntoProductId} (${product.mergedInto?.sku ?? ""}): cargá en ese producto.`);
+    }
+  }
+}
+
 export async function createMultiBranchIntake(input: CreateIntakeInput, db: PrismaClient = prisma): Promise<CreateIntakeResult> {
   validateInput(input);
+  await assertProductsIntakeable(db, input.lines.map((l) => l.productId));
 
   const existing = await db.multiBranchIntake.findUnique({
     where: { clientRequestId: input.clientRequestId },

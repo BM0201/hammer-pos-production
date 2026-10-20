@@ -4,7 +4,7 @@ import { getProductStockConversionsBatch, calculateSharedStockChange } from "@/m
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
 import { normalizeIntakeKind, stockModeForKind, type NormalizedIntakeKind } from "@/modules/inventory/multi-branch-intake-service";
-import { validateIntakeLine, type IntakeValidationMessage, type IntakeLineStatus } from "@/modules/inventory/intake-validation";
+import { validateIntakeLine, formatGroupedMessageText, type IntakeValidationMessage, type IntakeLineStatus } from "@/modules/inventory/intake-validation";
 
 /**
  * Fase 1 (prompt-entrada-inventario.md) — "vista previa real": el mismo
@@ -46,9 +46,13 @@ export type PreviewCell = {
 
 export type PreviewBranchTotals = { units: number; value: number | null; wacChanges: number };
 
+/** prompt-entrada-multisucursal-fix.md — un mensaje por código, con la lista de sucursales donde aplica ("Sin costo en MSY y RIV: ..."), en vez de un mensaje repetido por celda con el id interno. */
+export type PreviewLineMessage = { code: IntakeValidationMessage["code"]; kind: IntakeValidationMessage["kind"]; text: string; branchCodes: string[]; poId?: string };
+
 export type PreviewResult = {
   cells: PreviewCell[];
   totals: Record<string, PreviewBranchTotals>;
+  lineMessages: Record<string, PreviewLineMessage[]>;
 };
 
 function median(sorted: number[]): number | null {
@@ -75,6 +79,7 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
     products,
     pendingPOs,
     purchaseQuantityHistory,
+    branchRows,
   ] = await Promise.all([
     getProductStockConversionsBatch(db, productIds),
     getEffectiveProductPricingBatch(db, pairs),
@@ -82,7 +87,11 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
     // sucursal) en todo el resto del sistema — purchase-orders/service.ts los
     // actualiza así en cada recepción; no hay "última compra por sucursal"
     // en ningún otro lado, así que inventar uno acá sería divergir sin razón.
-    db.product.findMany({ where: { id: { in: productIds } }, select: { id: true, isActive: true, lastPurchaseCost: true, costUpdatedAt: true } }),
+    // mergedIntoProductId/mergedInto — prompt-entrada-multisucursal-fix.md:
+    // el bloqueo real es "este producto SE UNIFICÓ en otro", no "es un
+    // miembro derivado de una fusión de presentaciones" (eso es válido acá,
+    // createOpeningBalanceTx ya lo redirige al canónico con el factor).
+    db.product.findMany({ where: { id: { in: productIds } }, select: { id: true, isActive: true, lastPurchaseCost: true, costUpdatedAt: true, mergedIntoProductId: true, mergedInto: { select: { id: true, sku: true, name: true } } } }),
     db.purchaseOrder.findMany({
       where: { branchId: { in: branchIds }, status: "APPROVED", lines: { some: { productId: { in: productIds } } } },
       select: { id: true, orderNumber: true, branchId: true, lines: { where: { productId: { in: productIds } }, select: { productId: true } } },
@@ -94,7 +103,10 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
       where: { productId: { in: productIds }, purchaseOrder: { branchId: { in: branchIds } } },
       select: { productId: true, quantity: true, purchaseOrder: { select: { branchId: true } } },
     }),
+    // Códigos de sucursal (MSY, RIV...) — para lineMessages agrupados, nunca el id interno.
+    db.branch.findMany({ where: { id: { in: branchIds } }, select: { id: true, code: true } }),
   ]);
+  const branchCodeById = new Map(branchRows.map((b) => [b.id, b.code]));
 
   const canonicalProductIds = [...new Set(productIds.map((id) => conversionByProductId.get(id)?.canonicalProductId ?? id))];
   const balances = await db.inventoryBalance.findMany({
@@ -170,7 +182,16 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
       const lastPurchaseDate = lastPurchaseCost !== null ? (product?.costUpdatedAt?.toISOString() ?? null) : null;
       const pendingPO = pendingPoByKey.get(key) ?? null;
       const isActive = product?.isActive ?? false;
-      const isDerivedMember = !!conversion && !conversion.isCanonical;
+      // Un miembro DERIVADO de una fusión de presentaciones (ej. el quintal
+      // de un cemento que se lleva en bolsas) es una presentación VÁLIDA —
+      // NO un producto unificado. createOpeningBalanceTx ya lo redirige al
+      // canónico con el factor (ver canonicalProductId arriba). El bloqueo
+      // real es mergedIntoProductId (unificación de duplicados de verdad).
+      const productBlocked = !isActive
+        ? { reason: "Producto inactivo." }
+        : product?.mergedIntoProductId
+          ? { reason: `Este producto se unificó en ${product.mergedInto?.name ?? product.mergedIntoProductId} (${product.mergedInto?.sku ?? ""}): cargá en ese producto.` }
+          : null;
 
       const validation = validateIntakeLine({
         kind,
@@ -180,7 +201,7 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
         currentEffectiveCost,
         lastPurchaseCost,
         newPrice: line.salePrice ?? null,
-        productBlocked: !isActive ? { reason: "Producto inactivo." } : isDerivedMember ? { reason: "Producto unificado — entrá la carga por el producto principal." } : null,
+        productBlocked,
         pendingPurchaseOrder: pendingPO,
         typicalPurchaseQuantity: typicalQuantityByKey.get(key) ?? null,
       });
@@ -216,5 +237,47 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
     if (anyCostMissingByBranch[branchId]) totals[branchId].value = null;
   }
 
-  return { cells, totals };
+  // ── lineMessages: un mensaje por código, con sus sucursales — nunca un
+  // mensaje repetido por celda con el id interno (causa 4). También acá:
+  // "todas las sucursales elegidas quedaron en 0" para esta línea → la
+  // línea entera pasa a ERROR con un solo mensaje claro (Commit 1 #2).
+  const lineMessages: Record<string, PreviewLineMessage[]> = {};
+  for (const productId of productIds) {
+    const lineCells = cells.filter((c) => c.productId === productId);
+    if (lineCells.length === 0) continue;
+
+    const allSkipped = lineCells.every((c) => c.status === "SKIPPED");
+    if (allSkipped) {
+      const text = "Elegí al menos una sucursal con cantidad.";
+      for (const cell of lineCells) {
+        cell.status = "ERROR";
+        cell.messages = [{ code: "ALL_BRANCHES_SKIPPED", kind: "DATA", text }];
+      }
+      lineMessages[productId] = [{ code: "ALL_BRANCHES_SKIPPED", kind: "DATA", text, branchCodes: [] }];
+      continue;
+    }
+
+    const byCode = new Map<string, { kind: IntakeValidationMessage["kind"]; sampleText: string; branchIds: string[]; poId?: string }>();
+    for (const cell of lineCells) {
+      for (const message of cell.messages) {
+        const existing = byCode.get(message.code);
+        if (existing) existing.branchIds.push(cell.branchId);
+        else byCode.set(message.code, { kind: message.kind, sampleText: message.text, branchIds: [cell.branchId], poId: message.poId });
+      }
+    }
+    if (byCode.size > 0) {
+      lineMessages[productId] = [...byCode.entries()].map(([code, group]) => {
+        const branchCodes = group.branchIds.map((id) => branchCodeById.get(id) ?? id.slice(0, 4));
+        return {
+          code: code as IntakeValidationMessage["code"],
+          kind: group.kind,
+          text: formatGroupedMessageText(code as IntakeValidationMessage["code"], branchCodes, group.sampleText),
+          branchCodes,
+          poId: group.poId,
+        };
+      });
+    }
+  }
+
+  return { cells, totals, lineMessages };
 }
