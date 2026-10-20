@@ -88,14 +88,28 @@ const SORT_EXPR: Record<InventoryProductSort, Prisma.Sql> = {
   lastMovement: Prisma.sql`pbs."lastMovementAt" DESC NULLS LAST, p.id ASC`,
 };
 
-/** `view IS NULL` cuenta como "ALL" — true cuando el producto queda bajo esa vista. Usado tanto en el WHERE de la página como (sin el view activo) en el FILTER de cada conteo. */
+/**
+ * `view IS NULL` cuenta como "ALL" — true cuando el producto queda bajo esa
+ * vista. Usado tanto en el WHERE de la página como (sin el view activo) en
+ * el FILTER de cada conteo.
+ *
+ * prompt-inventario-inicio-fix.md Commit 3 §3 — NO_COST/NO_PRICE/NO_CODE
+ * antes contaban `pcs IS NULL` (el estado de ese producto TODAVÍA no se
+ * calculó) igual que `pcs."hasCost" = false` (se calculó Y de verdad no
+ * tiene costo) — "no sé" no es lo mismo que "no tiene", así que un producto
+ * recién creado (antes de su primer refreshProductStateTx) salía contado
+ * como "sin costo" sin que nadie lo haya revisado todavía. Ahora exige que
+ * la fila EXISTA (`pcs."productId" IS NOT NULL`) antes de mirar el campo —
+ * sin fila, no cuenta ni para un lado ni para el otro (la cobertura, no
+ * este conteo, es quien dice "todavía falta calcular esto").
+ */
 const VIEW_COND: Record<Exclude<InventoryProductView, "ALL">, Prisma.Sql> = {
   NEGATIVE: Prisma.sql`pbs."stockStatus" = 'NEGATIVE'`,
   LOW: Prisma.sql`pbs."stockStatus" = 'LOW'`,
   ZERO: Prisma.sql`(pbs."stockStatus" = 'ZERO' OR pbs."productId" IS NULL)`,
-  NO_COST: Prisma.sql`(pcs."hasCost" IS NULL OR pcs."hasCost" = false)`,
-  NO_PRICE: Prisma.sql`(pcs."hasPrice" IS NULL OR pcs."hasPrice" = false)`,
-  NO_CODE: Prisma.sql`(pcs."hasCode" IS NULL OR pcs."hasCode" = false)`,
+  NO_COST: Prisma.sql`(pcs."productId" IS NOT NULL AND pcs."hasCost" = false)`,
+  NO_PRICE: Prisma.sql`(pcs."productId" IS NOT NULL AND pcs."hasPrice" = false)`,
+  NO_CODE: Prisma.sql`(pcs."productId" IS NOT NULL AND pcs."hasCode" = false)`,
   NO_MOVEMENT_90D: Prisma.sql`(pbs."lastMovementAt" IS NULL OR pbs."lastMovementAt" < now() - interval '90 days')`,
   COST_EQ_PRICE: Prisma.sql`pcs."costEqualsPrice" = true`,
   INACTIVE: Prisma.sql`p."isActive" = false`,
@@ -245,6 +259,8 @@ export type InventoryOverview = {
   noCostOrPrice: number;
   /** Commit 2 §1 — sub-línea de "Sin movimiento 90 días" ("C$18,420 en 31 con costo · 147 sin costo"): cuántos del total tienen costo (contribuyen al value) vs no. */
   noMovement90d: { count: number; value: number; withCost: number };
+  /** Commit 3 §3 — ProductBranchState: pares (producto activo, sucursal activa) con estado YA calculado, de los que deberían tenerlo. branchId concreto → expected=activeProducts; red → expected=activeProducts×sucursales activas. */
+  coverage: StateCoverage;
 };
 
 /**
@@ -261,21 +277,24 @@ export type InventoryOverview = {
 export async function getInventoryOverview(branchId: string | null): Promise<InventoryOverview> {
   if (branchId === null) return getInventoryOverviewNetwork();
 
-  const [row] = await prisma.$queryRaw<Array<Record<string, unknown>>>`
-    SELECT
-      COALESCE(SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)), 0) AS "totalValueAtCost",
-      COUNT(*) FILTER (WHERE p."isActive" = true) AS "activeProducts",
-      COUNT(*) FILTER (WHERE p."isActive" = true AND p."createdAt" >= date_trunc('month', now())) AS "createdThisMonth",
-      COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NEGATIVE}) AS "negativeStock",
-      COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.LOW}) AS "lowStock",
-      COUNT(*) FILTER (WHERE p."isActive" = true AND (${VIEW_COND.NO_COST} OR ${VIEW_COND.NO_PRICE})) AS "noCostOrPrice",
-      COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D}) AS "noMovement90dCount",
-      COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D} AND COALESCE(pcs."hasCost", false) = true) AS "noMovement90dWithCost",
-      COALESCE(SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D}), 0) AS "noMovement90dValue"
-    FROM "Product" p
-    LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = p.id AND pbs."branchId" = ${branchId}
-    LEFT JOIN "ProductCatalogState" pcs ON pcs."productId" = p.id
-  `;
+  const [row, coverage] = await Promise.all([
+    prisma.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT
+        COALESCE(SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)), 0) AS "totalValueAtCost",
+        COUNT(*) FILTER (WHERE p."isActive" = true) AS "activeProducts",
+        COUNT(*) FILTER (WHERE p."isActive" = true AND p."createdAt" >= date_trunc('month', now())) AS "createdThisMonth",
+        COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NEGATIVE}) AS "negativeStock",
+        COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.LOW}) AS "lowStock",
+        COUNT(*) FILTER (WHERE p."isActive" = true AND (${VIEW_COND.NO_COST} OR ${VIEW_COND.NO_PRICE})) AS "noCostOrPrice",
+        COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D}) AS "noMovement90dCount",
+        COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D} AND COALESCE(pcs."hasCost", false) = true) AS "noMovement90dWithCost",
+        COALESCE(SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D}), 0) AS "noMovement90dValue"
+      FROM "Product" p
+      LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = p.id AND pbs."branchId" = ${branchId}
+      LEFT JOIN "ProductCatalogState" pcs ON pcs."productId" = p.id
+    `.then((rows) => rows[0]),
+    getProductBranchStateCoverage(branchId),
+  ]);
 
   return {
     branchId,
@@ -290,16 +309,73 @@ export async function getInventoryOverview(branchId: string | null): Promise<Inv
       value: decimalToNumber(row.noMovement90dValue as Prisma.Decimal),
       withCost: Number(row.noMovement90dWithCost),
     },
+    coverage,
   };
 }
 
+/**
+ * prompt-inventario-inicio-fix.md Commit 3 §3 — "expected" NUNCA es
+ * "todo producto activo × toda sucursal activa": no todos los productos
+ * existen en todas las sucursales (visibilidad por sucursal,
+ * BranchProductSetting.isAvailable) y contarlo así marca permanentemente
+ * cobertura incompleta en productos que simplemente nunca estuvieron en
+ * esa sucursal — ni es un hueco, ni algo que un backfill vaya a llenar
+ * jamás. "Expected" real = pares con ALGUNA señal de que el producto
+ * existe ahí (InventoryBalance, BranchProductSetting o StockReorderPolicy)
+ * — el mismo criterio que ya usa discoverRelevantPairs (product-state-
+ * service.ts) para decidir qué refrescar.
+ */
+async function getProductBranchStateCoverage(branchId: string): Promise<StateCoverage> {
+  const [row] = await prisma.$queryRaw<Array<{ expected: bigint; present: bigint }>>`
+    WITH signals AS (
+      SELECT DISTINCT "productId" FROM "InventoryBalance" WHERE "branchId" = ${branchId}
+      UNION
+      SELECT DISTINCT "productId" FROM "BranchProductSetting" WHERE "branchId" = ${branchId}
+      UNION
+      SELECT DISTINCT "productId" FROM "StockReorderPolicy" WHERE "branchId" = ${branchId}
+    )
+    SELECT
+      COUNT(*) AS expected,
+      COUNT(*) FILTER (WHERE pbs."productId" IS NOT NULL) AS present
+    FROM signals s
+    JOIN "Product" p ON p.id = s."productId" AND p."isActive" = true
+    LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = s."productId" AND pbs."branchId" = ${branchId}
+  `;
+  return { expected: Number(row.expected), present: Number(row.present) };
+}
+
+async function getProductBranchStateCoverageNetwork(): Promise<StateCoverage> {
+  const [row] = await prisma.$queryRaw<Array<{ expected: bigint; present: bigint }>>`
+    WITH signals AS (
+      SELECT DISTINCT "productId", "branchId" FROM "InventoryBalance"
+      UNION
+      SELECT DISTINCT "productId", "branchId" FROM "BranchProductSetting"
+      UNION
+      SELECT DISTINCT "productId", "branchId" FROM "StockReorderPolicy"
+    )
+    SELECT
+      COUNT(*) AS expected,
+      COUNT(*) FILTER (WHERE pbs."productId" IS NOT NULL) AS present
+    FROM signals s
+    JOIN "Product" p ON p.id = s."productId" AND p."isActive" = true
+    JOIN "Branch" b ON b.id = s."branchId" AND b."isActive" = true
+    LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = s."productId" AND pbs."branchId" = s."branchId"
+  `;
+  return { expected: Number(row.expected), present: Number(row.present) };
+}
+
 async function getInventoryOverviewNetwork(): Promise<InventoryOverview> {
-  const [row] = await prisma.$queryRaw<Array<Record<string, unknown>>>`
+  const [[row], coverage] = await Promise.all([
+    prisma.$queryRaw<Array<Record<string, unknown>>>`
     WITH agg AS (
       SELECT
         p.id AS "productId",
         p."isActive",
         p."createdAt",
+        -- Commit 3 §3 — igual cuidado que VIEW_COND/getInventoryQualityCounts:
+        -- "hasCatalogState" distingue "no tiene costo" de "todavía no se
+        -- calculó su estado" (pcs ausente).
+        (pcs."productId" IS NOT NULL) AS "hasCatalogState",
         COALESCE(pcs."hasCost", false) AS "hasCost",
         COALESCE(pcs."hasPrice", false) AS "hasPrice",
         SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)) AS value,
@@ -309,7 +385,7 @@ async function getInventoryOverviewNetwork(): Promise<InventoryOverview> {
       FROM "Product" p
       LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = p.id
       LEFT JOIN "ProductCatalogState" pcs ON pcs."productId" = p.id
-      GROUP BY p.id, p."isActive", p."createdAt", pcs."hasCost", pcs."hasPrice"
+      GROUP BY p.id, p."isActive", p."createdAt", pcs."productId", pcs."hasCost", pcs."hasPrice"
     )
     SELECT
       COALESCE(SUM(value), 0) AS "totalValueAtCost",
@@ -317,12 +393,14 @@ async function getInventoryOverviewNetwork(): Promise<InventoryOverview> {
       COUNT(*) FILTER (WHERE "isActive" AND "createdAt" >= date_trunc('month', now())) AS "createdThisMonth",
       COUNT(*) FILTER (WHERE "isActive" AND "isNegative") AS "negativeStock",
       COUNT(*) FILTER (WHERE "isActive" AND "isLow") AS "lowStock",
-      COUNT(*) FILTER (WHERE "isActive" AND (NOT "hasCost" OR NOT "hasPrice")) AS "noCostOrPrice",
+      COUNT(*) FILTER (WHERE "isActive" AND "hasCatalogState" AND (NOT "hasCost" OR NOT "hasPrice")) AS "noCostOrPrice",
       COUNT(*) FILTER (WHERE "isActive" AND "isNoMovement") AS "noMovement90dCount",
       COUNT(*) FILTER (WHERE "isActive" AND "isNoMovement" AND "hasCost") AS "noMovement90dWithCost",
       COALESCE(SUM(value) FILTER (WHERE "isActive" AND "isNoMovement"), 0) AS "noMovement90dValue"
     FROM agg
-  `;
+  `,
+    getProductBranchStateCoverageNetwork(),
+  ]);
 
   return {
     branchId: null,
@@ -337,6 +415,7 @@ async function getInventoryOverviewNetwork(): Promise<InventoryOverview> {
       value: decimalToNumber(row.noMovement90dValue as Prisma.Decimal),
       withCost: Number(row.noMovement90dWithCost),
     },
+    coverage,
   };
 }
 
@@ -448,20 +527,32 @@ export type InventoryDailyFlowPoint = { date: string; unitsIn: number; unitsOut:
  * PACKAGE_ADJUSTMENT) y el consumo de producción (ni "entra" ni "sale" de
  * la red, se transforma) — contarlos infla el gráfico con movimientos que
  * no representan mercadería entrando o saliendo de verdad.
+ *
+ * prompt-inventario-inicio-fix.md Commit 3 §4 — agrupaba por día en UTC
+ * (`date_trunc('day', "createdAt")`), corriendo el día real en Managua
+ * (UTC-6): un movimiento de las 6pm en Managua ya cae del lado de "mañana"
+ * en UTC. Mismo idiom ya usado en reports/sales-analytics.ts para
+ * "paidAt" por día de Managua — `AT TIME ZONE 'UTC' AT TIME ZONE
+ * 'America/Managua'` reinterpreta el instante en hora local antes de
+ * truncar. `quantity` siempre es la MAGNITUD positiva (la dirección la da
+ * `movementType`, nunca el signo — verificado contra producción: ventas de
+ * 30 días con SUM(quantity) > 0 en los dos únicos branches con actividad),
+ * así que sumar directo a unitsIn/unitsOut ya era correcto — no había bug
+ * de signo, solo el de huso horario.
  */
 export async function getInventoryDailyFlow(branchId: string, days = 30): Promise<InventoryDailyFlowPoint[]> {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  const rows = await prisma.$queryRaw<Array<{ day: Date; movementType: string; total: Prisma.Decimal }>>`
-    SELECT date_trunc('day', "createdAt") AS day, "movementType", SUM(quantity) AS total
+  const rows = await prisma.$queryRaw<Array<{ day: string; movementType: string; total: Prisma.Decimal }>>`
+    SELECT ("createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'America/Managua')::date::text AS day, "movementType", SUM(quantity) AS total
     FROM "InventoryMovement"
     WHERE "branchId" = ${branchId} AND "createdAt" >= ${since}
       AND "movementType"::text IN (${Prisma.join([...DAILY_FLOW_IN_TYPES, ...DAILY_FLOW_OUT_TYPES])})
-    GROUP BY day, "movementType"
+    GROUP BY 1, "movementType"
   `;
 
   const byDay = new Map<string, InventoryDailyFlowPoint>();
   for (const row of rows) {
-    const key = row.day.toISOString().slice(0, 10);
+    const key = row.day;
     const point = byDay.get(key) ?? { date: key, unitsIn: 0, unitsOut: 0 };
     if ((DAILY_FLOW_IN_TYPES as readonly string[]).includes(row.movementType)) point.unitsIn += decimalToNumber(row.total);
     else point.unitsOut += decimalToNumber(row.total);
@@ -490,6 +581,8 @@ export async function getInventoryNavCounts(branchId: string | null): Promise<In
   return { activeProducts: overview.activeProducts, negativeStock: overview.negativeStock, lowStock: overview.lowStock, staleTransfers, pendingQuality };
 }
 
+export type StateCoverage = { expected: number; present: number };
+
 export type InventoryQualityCounts = {
   noCost: number;
   noPrice: number;
@@ -498,15 +591,26 @@ export type InventoryQualityCounts = {
   noCategory: number;
   /** Commit 2 §5 — "2,336 pendientes en 1,190 productos": productos DISTINTOS con al menos uno de los 5 problemas (un producto puede tener varios a la vez, por eso nunca es la suma). */
   affectedProducts: number;
+  /** Commit 3 §3 — ProductCatalogState: cuántos productos activos YA tienen su estado calculado, de los que deberían tenerlo. */
+  coverage: StateCoverage;
 };
 
-/** Fase 1.2 — conteos de calidad del catálogo (la versión completa, con detectores de duplicados/unidades/nombres, es Fase 5). */
+/**
+ * Fase 1.2 — conteos de calidad del catálogo (la versión completa, con
+ * detectores de duplicados/unidades/nombres, es Fase 5).
+ *
+ * Commit 3 §3 — noCost/noPrice/noCode exigen que la fila de
+ * ProductCatalogState EXISTA (`pcs."productId" IS NOT NULL`) antes de
+ * mirar el campo, igual que VIEW_COND arriba — un producto sin estado
+ * calculado todavía no es "sin costo", es "no sé". `affectedProducts`
+ * hereda el mismo cuidado.
+ */
 export async function getInventoryQualityCounts(): Promise<InventoryQualityCounts> {
   const [row] = await prisma.$queryRaw<Array<Record<string, bigint>>>`
     SELECT
-      COUNT(*) FILTER (WHERE p."isActive" = true AND (pcs."hasCost" IS NULL OR pcs."hasCost" = false)) AS "noCost",
-      COUNT(*) FILTER (WHERE p."isActive" = true AND (pcs."hasPrice" IS NULL OR pcs."hasPrice" = false)) AS "noPrice",
-      COUNT(*) FILTER (WHERE p."isActive" = true AND (pcs."hasCode" IS NULL OR pcs."hasCode" = false)) AS "noCode",
+      COUNT(*) FILTER (WHERE p."isActive" = true AND pcs."productId" IS NOT NULL AND pcs."hasCost" = false) AS "noCost",
+      COUNT(*) FILTER (WHERE p."isActive" = true AND pcs."productId" IS NOT NULL AND pcs."hasPrice" = false) AS "noPrice",
+      COUNT(*) FILTER (WHERE p."isActive" = true AND pcs."productId" IS NOT NULL AND pcs."hasCode" = false) AS "noCode",
       COUNT(*) FILTER (WHERE p."isActive" = true AND pcs."costEqualsPrice" = true) AS "costEqualsPrice",
       -- "Sin categoría" no existe de verdad (categoryId es obligatorio en el
       -- schema) — lo único detectable es "en una categoría genérica tipo
@@ -514,12 +618,14 @@ export async function getInventoryQualityCounts(): Promise<InventoryQualityCount
       -- eso en el sistema). Heurística honesta, no una regla de negocio.
       COUNT(*) FILTER (WHERE p."isActive" = true AND c.name ILIKE '%general%') AS "noCategory",
       COUNT(*) FILTER (WHERE p."isActive" = true AND (
-        (pcs."hasCost" IS NULL OR pcs."hasCost" = false) OR
-        (pcs."hasPrice" IS NULL OR pcs."hasPrice" = false) OR
-        (pcs."hasCode" IS NULL OR pcs."hasCode" = false) OR
+        (pcs."productId" IS NOT NULL AND pcs."hasCost" = false) OR
+        (pcs."productId" IS NOT NULL AND pcs."hasPrice" = false) OR
+        (pcs."productId" IS NOT NULL AND pcs."hasCode" = false) OR
         pcs."costEqualsPrice" = true OR
         c.name ILIKE '%general%'
-      )) AS "affectedProducts"
+      )) AS "affectedProducts",
+      COUNT(*) FILTER (WHERE p."isActive" = true) AS "coverageExpected",
+      COUNT(*) FILTER (WHERE p."isActive" = true AND pcs."productId" IS NOT NULL) AS "coveragePresent"
     FROM "Product" p
     JOIN "Category" c ON c.id = p."categoryId"
     LEFT JOIN "ProductCatalogState" pcs ON pcs."productId" = p.id
@@ -531,6 +637,7 @@ export async function getInventoryQualityCounts(): Promise<InventoryQualityCount
     costEqualsPrice: Number(row.costEqualsPrice),
     noCategory: Number(row.noCategory),
     affectedProducts: Number(row.affectedProducts),
+    coverage: { expected: Number(row.coverageExpected), present: Number(row.coveragePresent) },
   };
 }
 

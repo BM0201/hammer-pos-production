@@ -4,7 +4,7 @@ import { timingSafeEqualStrings } from "@/lib/timing-safe-compare";
 import { runRetentionSweep } from "@/modules/retention/service";
 import { LOGIN_ATTEMPT_RETENTION_DAYS, retentionCutoff } from "@/modules/retention/policy";
 import { expireStaleBrainDecisions } from "@/modules/brain/service";
-import { reconcileSales90dTx, compareProductStateSample } from "@/modules/catalog-inventory/product-state-reconciliation-service";
+import { reconcileSales90dTx, compareProductStateSample, backfillMissingProductStatesTx } from "@/modules/catalog-inventory/product-state-reconciliation-service";
 
 /**
  * Cron diario de limpieza (ver vercel.json — 0 9 UTC = 3am Managua).
@@ -67,6 +67,11 @@ export async function GET(request: Request) {
   // escritor que no haya dejado el estado al día.
   const salesReconcile = await reconcileSales90dTx();
   const stateDrift = await compareProductStateSample();
+  // prompt-inventario-inicio-fix.md Commit 3 §2 — tercera tarea: reconstruye
+  // SOLO los pares (producto, sucursal) con alguna señal real que todavía
+  // no tienen su estado calculado (nunca "todo × todo" — ver su propio
+  // comentario). Preventivo: en producción hoy no hay ninguno faltante.
+  const stateBackfill = await backfillMissingProductStatesTx();
 
   return ok({
     timestamp: now.toISOString(),
@@ -81,6 +86,9 @@ export async function GET(request: Request) {
       sales90dRowsUpdated: salesReconcile.rowsUpdated,
       driftSampleSize: stateDrift.sampled,
       driftFound: stateDrift.drifted.length,
+      productsChecked: stateBackfill.productsChecked,
+      branchPairsBackfilled: stateBackfill.branchPairsBackfilled,
+      catalogStatesBackfilled: stateBackfill.catalogStatesBackfilled,
     },
     retention: {
       cutoff: retention.cutoffIso,

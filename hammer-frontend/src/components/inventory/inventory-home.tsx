@@ -10,7 +10,7 @@ import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { money, money0, moneyCompact, qty, fmtDate } from "@/lib/format";
-import { kpiTone, bucketCategoryValues, buildAttentionItems, type AttentionItem, type CategoryBar, type KpiTone } from "@/lib/inventory-home-logic";
+import { kpiTone, bucketCategoryValues, buildAttentionItems, combinedCoveragePercent, type AttentionItem, type CategoryBar, type KpiTone, type StateCoverage } from "@/lib/inventory-home-logic";
 import { LoadingState } from "@/components/ui/loading-state";
 
 /**
@@ -26,9 +26,11 @@ import { LoadingState } from "@/components/ui/loading-state";
  * comentario de getInventoryDailyFlow) y caen a la sucursal activa del
  * usuario como referencia, con un aviso explícito en su encabezado.
  *
- * El aviso "Datos actualizándose (N% listo)" de la maqueta es Commit 3
- * (necesita `coverage` en los endpoints, que todavía no existe) — no se
- * construye acá para no fingir una cobertura que no se calculó.
+ * Commit 3 §3 — "Datos actualizándose (N% listo)": combina la cobertura de
+ * overview (ProductBranchState) y quality (ProductCatalogState) en un solo
+ * aviso con barra; solo se muestra cuando de verdad falta algo (en
+ * producción, a 2026-10-20, las dos están al 100% — el aviso simplemente
+ * no aparece, no es un placeholder fijo).
  */
 
 type Overview = {
@@ -40,9 +42,10 @@ type Overview = {
   lowStock: number;
   noCostOrPrice: number;
   noMovement90d: { count: number; value: number; withCost: number };
+  coverage: StateCoverage;
 };
 
-type QualityCounts = { noCost: number; noPrice: number; noCode: number; costEqualsPrice: number; noCategory: number; affectedProducts: number };
+type QualityCounts = { noCost: number; noPrice: number; noCode: number; costEqualsPrice: number; noCategory: number; affectedProducts: number; coverage: StateCoverage };
 
 type AttentionCounts = {
   noCost: number;
@@ -117,6 +120,18 @@ export function InventoryHome() {
   const attentionItems = buildAttentionItems({ ...attentionCounts, topMoversNoCost: isNetwork ? null : attentionCounts.topMoversNoCost });
   const withCost = overview.activeProducts - quality.noCost;
   const pendingQualityTotal = quality.noCost + quality.noPrice + quality.noCode + quality.costEqualsPrice + quality.noCategory;
+  const coveragePercent = combinedCoveragePercent(overview.coverage, quality.coverage);
+
+  const coverageBanner = coveragePercent < 100 && (
+    <div className="rounded-xl border border-[var(--color-info-200)] bg-[var(--color-info-50)] p-3">
+      <p className="text-xs text-[var(--color-info-700)]">
+        Datos actualizándose: {coveragePercent}% de los productos ya tienen su estado calculado. Los números pueden cambiar.
+      </p>
+      <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--color-info-100)]">
+        <div className="h-1.5 rounded-full bg-[var(--color-info-500)]" style={{ width: `${coveragePercent}%` }} />
+      </div>
+    </div>
+  );
 
   const kpis = (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
@@ -260,6 +275,7 @@ export function InventoryHome() {
     <div className="space-y-5">
       {tab === null && (
         <>
+          {coverageBanner}
           {kpis}
           <div className="grid gap-4 lg:grid-cols-2">
             {attentionPanel}

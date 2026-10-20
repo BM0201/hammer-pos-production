@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
+import { refreshProductStateTx, discoverRelevantPairs } from "@/modules/catalog-inventory/product-state-service";
 import { makeDecisionFingerprint, riskScoreFor, priorityScoreFor } from "@/modules/brain/scoring";
 
 /**
@@ -174,4 +174,67 @@ async function raiseProductStateDriftDecision(drifted: ProductStateDriftFinding[
       evidenceJson: { sampleSize, driftCount: drifted.length, findings: drifted.slice(0, 50) } as Prisma.InputJsonValue,
     },
   });
+}
+
+/**
+ * prompt-inventario-inicio-fix.md Commit 3 §2 — "el cron diario
+ * reconstruye SOLO los pares faltantes, por tandas". Diagnóstico de
+ * producción (2026-10-20) confirmó 0 faltantes reales (ver reporte en el
+ * cierre del doc) — esta función queda corriendo igual, de forma
+ * preventiva, para el día que un producto/sucursal nuevo quede sin su
+ * estado por lo que sea (caída a mitad de una escritura, etc.), sin
+ * esperar a que alguien lo note en Inicio.
+ *
+ * "Faltante" = exactamente lo que discoverRelevantPairs ya considera
+ * relevante (señal real en InventoryBalance/BranchProductSetting/
+ * StockReorderPolicy) y que todavía no tiene fila en ProductBranchState —
+ * nunca "todo producto × toda sucursal" (ver nota de coverage en
+ * inventory-list-service.ts: no todos los productos están en todas las
+ * sucursales, y eso no es un hueco). ProductCatalogState se arregla gratis
+ * cuando refreshProductStateTx corre para esos productos; los que no
+ * tienen NINGUNA señal en ninguna sucursal (nunca tocados) igual reciben
+ * su ProductCatalogState vacío al final de cada tanda.
+ */
+export async function backfillMissingProductStatesTx(db: PrismaClient = prisma, batchSize = 200): Promise<{ productsChecked: number; branchPairsBackfilled: number; catalogStatesBackfilled: number }> {
+  const activeProducts = await db.product.findMany({ where: { isActive: true }, select: { id: true } });
+  const activeProductIds = activeProducts.map((p) => p.id);
+
+  let branchPairsBackfilled = 0;
+  let catalogStatesBackfilled = 0;
+
+  for (let i = 0; i < activeProductIds.length; i += batchSize) {
+    const batchIds = activeProductIds.slice(i, i + batchSize);
+
+    // Secuencial a propósito (ver nota en discoverRelevantPairs, product-state-service.ts).
+    const existingCatalogStates = await db.productCatalogState.findMany({ where: { productId: { in: batchIds } }, select: { productId: true } });
+    const existingCatalogSet = new Set(existingCatalogStates.map((s) => s.productId));
+    const missingCatalogIds = batchIds.filter((id) => !existingCatalogSet.has(id));
+
+    const signalPairs = await discoverRelevantPairs(db, batchIds);
+    const existingBranchStates = await db.productBranchState.findMany({ where: { productId: { in: batchIds } }, select: { productId: true, branchId: true } });
+    const existingBranchSet = new Set(existingBranchStates.map((s) => `${s.productId}:${s.branchId}`));
+    const missingPairs = signalPairs.filter((pair) => !existingBranchSet.has(`${pair.productId}:${pair.branchId}`));
+
+    const missingByBranch = new Map<string, string[]>();
+    for (const pair of missingPairs) {
+      const list = missingByBranch.get(pair.branchId) ?? [];
+      list.push(pair.productId);
+      missingByBranch.set(pair.branchId, list);
+    }
+    for (const [branchId, productIds] of missingByBranch) {
+      await refreshProductStateTx(db, productIds, [branchId]);
+      branchPairsBackfilled += productIds.length;
+    }
+
+    // Productos sin ProductCatalogState que YA se arreglaron arriba (su
+    // branchId faltante era de este mismo batch) no necesitan otra pasada.
+    const idsHandledByBranchPass = new Set(missingPairs.map((p) => p.productId));
+    const stillMissingCatalogIds = missingCatalogIds.filter((id) => !idsHandledByBranchPass.has(id));
+    if (stillMissingCatalogIds.length > 0) {
+      await refreshProductStateTx(db, stillMissingCatalogIds);
+    }
+    catalogStatesBackfilled += missingCatalogIds.length;
+  }
+
+  return { productsChecked: activeProductIds.length, branchPairsBackfilled, catalogStatesBackfilled };
 }

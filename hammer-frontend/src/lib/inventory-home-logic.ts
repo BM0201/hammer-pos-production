@@ -5,6 +5,21 @@
  * separado del componente para poder testearlo sin montar nada.
  */
 
+export type StateCoverage = { expected: number; present: number };
+
+/**
+ * Commit 3 §3 — "Datos actualizándose (N% listo)": un solo porcentaje que
+ * combina la cobertura de ProductBranchState (overview) y ProductCatalogState
+ * (quality) — ambas las llena el mismo backfill, así que separarlas en dos
+ * avisos sería ruido sin una razón real para el usuario. 100% cuando no hay
+ * nada esperado (evita dividir por cero, nunca pasa en la práctica).
+ */
+export function combinedCoveragePercent(overviewCoverage: StateCoverage, qualityCoverage: StateCoverage): number {
+  const expected = overviewCoverage.expected + qualityCoverage.expected;
+  const present = overviewCoverage.present + qualityCoverage.present;
+  return expected > 0 ? Math.round((present / expected) * 100) : 100;
+}
+
 export type KpiTone = "neutral" | "danger" | "warning";
 
 /**

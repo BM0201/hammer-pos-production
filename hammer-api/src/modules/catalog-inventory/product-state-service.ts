@@ -29,7 +29,7 @@ export function computeStockStatus(quantityOnHand: number, reorderPoint: number 
   return "OK";
 }
 
-type ProductBranchPair = { productId: string; branchId: string };
+export type ProductBranchPair = { productId: string; branchId: string };
 
 /**
  * Qué pares (producto, sucursal) importan para estos productos cuando el
@@ -39,8 +39,13 @@ type ProductBranchPair = { productId: string; branchId: string };
  * creado, sin ninguna de las tres, no genera ninguna fila todavía — se
  * crea sola en cuanto algo la toque (mismo patrón perezoso que
  * InventoryBalance, que tampoco se pre-crea al dar de alta un producto).
+ *
+ * Exportada (prompt-inventario-inicio-fix.md Commit 3 §2) — el cron de
+ * backfill de pares faltantes (product-state-reconciliation-service.ts)
+ * la reusa para saber qué pares DEBERÍAN existir, sin reimplementar el
+ * mismo criterio dos veces.
  */
-async function discoverRelevantPairs(db: Db, productIds: string[]): Promise<ProductBranchPair[]> {
+export async function discoverRelevantPairs(db: Db, productIds: string[]): Promise<ProductBranchPair[]> {
   // Secuencial a propósito, no Promise.all: si una de las tres llamadas
   // revienta sincrónicamente (p.ej. un mock de test incompleto), un
   // Promise.all con elementos que se evalúan antes del que falla deja esas

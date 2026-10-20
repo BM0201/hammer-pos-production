@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { kpiTone, bucketCategoryValues, buildAttentionItems, type InventoryAttentionCountsInput } from "@/lib/inventory-home-logic";
+import { kpiTone, bucketCategoryValues, buildAttentionItems, combinedCoveragePercent, type InventoryAttentionCountsInput } from "@/lib/inventory-home-logic";
+
+test("LA QUE IMPORTA — combinedCoveragePercent: combina overview+quality en un solo % redondeado", () => {
+  assert.equal(combinedCoveragePercent({ expected: 1267, present: 1267 }, { expected: 1267, present: 1267 }), 100);
+  assert.equal(combinedCoveragePercent({ expected: 3801, present: 3401 }, { expected: 1267, present: 1267 }), 92);
+});
+
+test("combinedCoveragePercent: sin nada esperado da 100% (nunca divide por cero)", () => {
+  assert.equal(combinedCoveragePercent({ expected: 0, present: 0 }, { expected: 0, present: 0 }), 100);
+});
 
 test("LA QUE IMPORTA — kpiTone: rojo solo para stock negativo, ámbar para el resto de problemas, neutro en 0", () => {
   assert.equal(kpiTone("negativeStock", 3), "danger");
