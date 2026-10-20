@@ -157,6 +157,22 @@ export function money0(value: number): string {
 }
 
 /**
+ * prompt-inventario-inicio-fix.md Commit 2 §1 — "el número con clamp() y
+ * nunca cortado: si no entra, formato compacto ('C$ 135.0 mil') con el
+ * exacto en el tooltip". El KPI muestra SIEMPRE esta versión (el valor
+ * completo va en el title/tooltip del elemento, no acá) — así el número
+ * nunca obliga a la tarjeta a crecer o a recortarse.
+ */
+export function moneyCompact(value: number): string {
+  const num = Number.isFinite(value) ? value : 0;
+  const abs = Math.abs(num);
+  const sign = num < 0 ? "-" : "";
+  if (abs < 1000) return money0(num);
+  if (abs < 1_000_000) return `${sign}C$ ${(abs / 1000).toFixed(1)} mil`;
+  return `${sign}C$ ${(abs / 1_000_000).toFixed(1)} M`;
+}
+
+/**
  * Cantidad con N decimales EXACTOS (rellena con ceros) — a diferencia de
  * qty(), que recorta ceros de sobra (maximumFractionDigits sin minimum).
  * decimals=2 por default. Usada donde varios campos comparten un mismo

@@ -3,43 +3,60 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
+import { useSearchParams } from "next/navigation";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { AlertTriangle, TrendingDown, DollarSign, Package, Boxes, ScanLine, Plus, ClipboardCheck } from "lucide-react";
+import { DollarSign, Box, CircleMinus, Hourglass, Tag, Pause, Package, ScanLine, Plus, Boxes, ClipboardCheck } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
-import { money, money0, qty, fmtDate } from "@/lib/format";
-import { KpiCard } from "@/components/dashboard/kpi-card";
+import { money, money0, moneyCompact, qty, fmtDate } from "@/lib/format";
+import { kpiTone, bucketCategoryValues, buildAttentionItems, type AttentionItem, type CategoryBar, type KpiTone } from "@/lib/inventory-home-logic";
 import { LoadingState } from "@/components/ui/loading-state";
 
 /**
- * prompt-inventario-v3.md Fase 2.2 — Inicio de la sección Inventario:
- * KPIs, "para atender" y gráficos, todos leyendo de los endpoints nuevos
- * de Fase 1 (ProductBranchState/ProductCatalogState) — nunca recalculando
- * nada en el cliente.
+ * prompt-inventario-inicio-fix.md Commit 2 — Inicio rediseñado: KPIs 3×2
+ * sin cortes, "Para atender" por tipo e impacto, categorías y flujo diario
+ * con valores. Reemplaza el Inicio de prompt-inventario-v3.md Fase 2.2.
  *
- * "Para atender" acá es la versión ACOTADA de lo que pide el doc: stock
- * negativo, por agotarse, sin costo/precio — las 4 señales que Fase 1 ya
- * agrega. Las otras (OC pendiente, conteos por aprobar, traslados en
- * tránsito +2 días, productos creados sin precio) necesitan cruzar con
- * Compras/Traslados/Conteos — fuera de alcance de Fase 2, se suman cuando
- * esos módulos tengan su propio enganche con el estado precalculado.
+ * Alcance: lee `?branchId=`/`?scope=network` de la URL (mismo mecanismo que
+ * InventoryTopbar, Commit 1) — nunca el selector global de sucursal
+ * directamente. "Toda la red" agrega de verdad en overview/attention (el
+ * backend ya soporta branchId=null ahí); categorías y flujo diario NO
+ * tienen variante de red todavía (fuera de lo que este commit pide — ver
+ * comentario de getInventoryDailyFlow) y caen a la sucursal activa del
+ * usuario como referencia, con un aviso explícito en su encabezado.
+ *
+ * El aviso "Datos actualizándose (N% listo)" de la maqueta es Commit 3
+ * (necesita `coverage` en los endpoints, que todavía no existe) — no se
+ * construye acá para no fingir una cobertura que no se calculó.
  */
 
 type Overview = {
-  branchId: string;
+  branchId: string | null;
   totalValueAtCost: number;
   activeProducts: number;
+  createdThisMonth: number;
   negativeStock: number;
   lowStock: number;
   noCostOrPrice: number;
-  noMovement90d: { count: number; value: number };
+  noMovement90d: { count: number; value: number; withCost: number };
+};
+
+type QualityCounts = { noCost: number; noPrice: number; noCode: number; costEqualsPrice: number; noCategory: number; affectedProducts: number };
+
+type AttentionCounts = {
+  noCost: number;
+  noPrice: number;
+  costEqualsPrice: number;
+  negativeStock: number;
+  lowStock: number;
+  staleTransfers: number;
+  staleTransferSample: { transferNumber: string; fromBranchCode: string; toBranchCode: string } | null;
+  failedIntakeLines: number;
+  topMoversNoCost: number | null;
 };
 
 type DailyFlowPoint = { date: string; unitsIn: number; unitsOut: number };
-
-type TopNoMovementRow = { id: string; sku: string; name: string; quantityOnHand: number; effectiveCost: number | null };
-
 type CategoryNode = { id: string; name: string; valueAtCost: number; productCount: number; children: CategoryNode[] };
 
 function flattenCategoryValues(nodes: CategoryNode[]): Array<{ name: string; value: number }> {
@@ -48,137 +65,294 @@ function flattenCategoryValues(nodes: CategoryNode[]): Array<{ name: string; val
     if (node.valueAtCost > 0) flat.push({ name: node.name, value: node.valueAtCost });
     flat.push(...flattenCategoryValues(node.children));
   }
-  return flat.sort((a, b) => b.value - a.value).slice(0, 8);
+  return flat;
 }
 
 export function InventoryHome() {
+  const searchParams = useSearchParams();
   const sessionState = useSession();
-  const branchId = sessionState.status === "authenticated"
-    ? getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId)
-    : "";
+  const branches = sessionState.status === "authenticated" ? (sessionState.session.branches ?? []) : [];
+  const defaultBranchId = sessionState.status === "authenticated" ? getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId) : "";
+
+  const isNetwork = searchParams.get("scope") === "network";
+  const branchIdParam = searchParams.get("branchId");
+  const branchId = isNetwork ? null : (branchIdParam || defaultBranchId || null);
+  // Referencia para lo que NO tiene variante de red (categorías, flujo diario) — siempre una sucursal concreta.
+  const referenceBranchId = branchId ?? defaultBranchId;
+  const referenceBranchCode = branches.find((b) => b.id === referenceBranchId)?.code ?? "";
+  const tab = searchParams.get("tab");
 
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [quality, setQuality] = useState<QualityCounts | null>(null);
+  const [attentionCounts, setAttentionCounts] = useState<AttentionCounts | null>(null);
   const [dailyFlow, setDailyFlow] = useState<DailyFlowPoint[]>([]);
-  const [categoryValues, setCategoryValues] = useState<Array<{ name: string; value: number }>>([]);
-  const [topNoMovement, setTopNoMovement] = useState<TopNoMovementRow[]>([]);
+  const [categoryBars, setCategoryBars] = useState<CategoryBar[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!branchId) return;
+    if (!isNetwork && !branchId) return;
+    if (!referenceBranchId) return;
     setLoading(true);
+    const scopeQs = isNetwork ? "" : `?branchId=${branchId}`;
     Promise.all([
-      apiFetch(`/api/master/inventory/overview?branchId=${branchId}`).then((r) => r.json()).then(unwrapApiData),
-      apiFetch(`/api/master/inventory/daily-flow?branchId=${branchId}`).then((r) => r.json()).then(unwrapApiData),
-      apiFetch(`/api/master/inventory/categories?branchId=${branchId}`).then((r) => r.json()).then(unwrapApiData),
-      apiFetch(`/api/master/inventory/products?branchId=${branchId}&view=NO_MOVEMENT_90D&sort=value&limit=10`).then((r) => r.json()).then(unwrapApiData),
+      apiFetch(`/api/master/inventory/overview${scopeQs}`).then((r) => r.json()).then(unwrapApiData),
+      apiFetch(`/api/master/inventory/quality`).then((r) => r.json()).then(unwrapApiData),
+      apiFetch(`/api/master/inventory/attention${scopeQs}`).then((r) => r.json()).then(unwrapApiData),
+      apiFetch(`/api/master/inventory/daily-flow?branchId=${referenceBranchId}`).then((r) => r.json()).then(unwrapApiData),
+      apiFetch(`/api/master/inventory/categories?branchId=${referenceBranchId}`).then((r) => r.json()).then(unwrapApiData),
     ])
-      .then(([overviewData, flowData, categoriesData, productsData]) => {
+      .then(([overviewData, qualityData, attentionData, flowData, categoriesData]) => {
         setOverview(overviewData as Overview);
+        setQuality(qualityData as QualityCounts);
+        setAttentionCounts(attentionData as AttentionCounts);
         setDailyFlow(flowData as DailyFlowPoint[]);
-        setCategoryValues(flattenCategoryValues(categoriesData as CategoryNode[]));
-        setTopNoMovement(((productsData as { rows: TopNoMovementRow[] }).rows ?? []));
+        setCategoryBars(bucketCategoryValues(flattenCategoryValues(categoriesData as CategoryNode[])));
       })
       .finally(() => setLoading(false));
-  }, [branchId]);
+  }, [branchId, isNetwork, referenceBranchId]);
 
-  if (!branchId) return <LoadingState message="Cargando sucursal…" />;
-  if (loading || !overview) return <LoadingState message="Cargando inventario…" />;
+  if (!isNetwork && !branchId) return <LoadingState message="Cargando sucursal…" />;
+  if (loading || !overview || !quality || !attentionCounts) return <LoadingState message="Cargando inventario…" />;
+
+  const attentionItems = buildAttentionItems({ ...attentionCounts, topMoversNoCost: isNetwork ? null : attentionCounts.topMoversNoCost });
+  const withCost = overview.activeProducts - quality.noCost;
+  const pendingQualityTotal = quality.noCost + quality.noPrice + quality.noCode + quality.costEqualsPrice + quality.noCategory;
+
+  const kpis = (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+      <HomeKpiCard
+        icon={DollarSign}
+        label="Valor a costo"
+        value={moneyCompact(overview.totalValueAtCost)}
+        exactTooltip={money(overview.totalValueAtCost)}
+        tone="neutral"
+        subline={`Con costo: ${withCost.toLocaleString("es-NI")} de ${overview.activeProducts.toLocaleString("es-NI")} productos`}
+      />
+      <HomeKpiCard
+        icon={Box}
+        label="Productos activos"
+        value={qty(overview.activeProducts)}
+        tone="neutral"
+        subline={`${overview.createdThisMonth.toLocaleString("es-NI")} creados este mes`}
+      />
+      <HomeKpiCard
+        icon={CircleMinus}
+        label="Stock negativo"
+        value={qty(overview.negativeStock)}
+        tone={kpiTone("negativeStock", overview.negativeStock)}
+        subline={overview.negativeStock > 0 ? "Revisar antes de vender" : "Sin problemas"}
+        sublineOk={overview.negativeStock === 0}
+      />
+      <HomeKpiCard
+        icon={Hourglass}
+        label="Por agotarse"
+        value={qty(overview.lowStock)}
+        tone={kpiTone("lowStock", overview.lowStock)}
+        subline={overview.lowStock > 0 ? "Podrían quedarse sin stock pronto" : "Sin problemas"}
+        sublineOk={overview.lowStock === 0}
+      />
+      <HomeKpiCard
+        icon={Tag}
+        label="Sin costo o sin precio"
+        value={qty(overview.noCostOrPrice)}
+        tone={kpiTone("noCostOrPrice", overview.noCostOrPrice)}
+        subline={
+          overview.noCostOrPrice === 0
+            ? "Sin problemas"
+            : attentionCounts.topMoversNoCost
+              ? `${attentionCounts.topMoversNoCost} de ellos están entre los más vendidos`
+              : `${overview.noCostOrPrice.toLocaleString("es-NI")} productos`
+        }
+        sublineOk={overview.noCostOrPrice === 0}
+      />
+      <HomeKpiCard
+        icon={Pause}
+        label="Sin movimiento 90 días"
+        value={qty(overview.noMovement90d.count)}
+        tone="neutral"
+        subline={
+          overview.noMovement90d.count === 0
+            ? "Nada sin movimiento"
+            : `${money0(overview.noMovement90d.value)} en ${overview.noMovement90d.withCost} con costo · ${(overview.noMovement90d.count - overview.noMovement90d.withCost).toLocaleString("es-NI")} sin costo`
+        }
+      />
+    </div>
+  );
+
+  const attentionPanel = (
+    <div className="rounded-xl border border-[var(--color-border-strong)] p-4">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Para atender</h2>
+        <span className="text-[11px] text-[var(--color-text-muted)]">ordenado por impacto</span>
+      </div>
+      {pendingQualityTotal > 0 && (
+        <p className="mb-3 text-[11px] text-[var(--color-text-muted)]">
+          Calidad de datos: {pendingQualityTotal.toLocaleString("es-NI")} pendientes en {quality.affectedProducts.toLocaleString("es-NI")} productos
+        </p>
+      )}
+      {attentionItems.length === 0 ? (
+        <p className="text-sm text-[var(--color-text-muted)]">Nada pendiente por ahora.</p>
+      ) : (
+        <div className="divide-y divide-[var(--color-border)]">
+          {attentionItems.map((item) => (
+            <AttentionItemRow key={item.type} item={item} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const categoriesPanel = (
+    <div className="rounded-xl border border-[var(--color-border-strong)] p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Valor por categoría</h2>
+        <span className="text-[11px] text-[var(--color-text-muted)]">a costo · top 8{isNetwork ? ` · sucursal ${referenceBranchCode}` : ""}</span>
+      </div>
+      {categoryBars.length === 0 ? (
+        <p className="text-sm text-[var(--color-text-muted)]">Sin datos todavía.</p>
+      ) : (
+        <div className="space-y-2">
+          {(() => {
+            const max = Math.max(...categoryBars.map((c) => c.value));
+            return categoryBars.map((bar) => (
+              <div key={bar.name} className="flex items-center gap-2">
+                <span className="w-24 shrink-0 truncate text-xs text-[var(--color-text-secondary)]">{bar.name}</span>
+                <div className="h-4 flex-1 rounded-full bg-[var(--color-surface-alt)]">
+                  <div
+                    className={`h-4 rounded-full ${bar.isOther ? "bg-[var(--color-text-muted)]" : "bg-[var(--color-master-500)]"}`}
+                    style={{ width: `${max > 0 ? Math.max((bar.value / max) * 100, 3) : 0}%` }}
+                  />
+                </div>
+                <span className="w-20 shrink-0 text-right text-xs font-medium text-[var(--color-text)]">{money0(bar.value)}</span>
+              </div>
+            ));
+          })()}
+        </div>
+      )}
+    </div>
+  );
+
+  const dailyFlowPanel = (
+    <div className="rounded-xl border border-[var(--color-border-strong)] p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Entradas y salidas · últimos 30 días</h2>
+        <span className="text-[11px] text-[var(--color-text-muted)]">unidades por día{isNetwork ? ` · sucursal ${referenceBranchCode}` : ""}</span>
+      </div>
+      {dailyFlow.length === 0 ? (
+        <p className="text-sm text-[var(--color-text-muted)]">Sin movimientos en los últimos 30 días.</p>
+      ) : (
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={dailyFlow.map((d) => ({ ...d, label: fmtDate(d.date) }))} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(v: unknown) => [qty(Number(v)), ""]} />
+            <Legend wrapperStyle={{ fontSize: "0.7rem" }} />
+            <Bar dataKey="unitsIn" name="Entradas" fill="var(--color-success-500)" radius={[3, 3, 0, 0]} />
+            <Bar dataKey="unitsOut" name="Salidas (ventas, traslados, ajustes)" fill="var(--color-info-500)" radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-lg font-semibold text-[var(--color-text)]">Inventario — Inicio</h1>
-        <p className="text-xs text-[var(--color-text-muted)]">Vista general de la sucursal activa.</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <KpiCard label="Valor a costo" value={money0(overview.totalValueAtCost)} accent="master" />
-        <KpiCard label="Productos activos" value={qty(overview.activeProducts)} accent="master" />
-        <KpiCard label="Stock negativo" value={qty(overview.negativeStock)} tone={overview.negativeStock > 0 ? "alert" : "ok"} accent="master" />
-        <KpiCard label="Por agotarse" value={qty(overview.lowStock)} tone={overview.lowStock > 0 ? "alert" : "ok"} accent="master" />
-        <KpiCard label="Sin costo o precio" value={qty(overview.noCostOrPrice)} tone={overview.noCostOrPrice > 0 ? "alert" : "ok"} accent="master" />
-        <KpiCard label="Sin movimiento 90d" value={qty(overview.noMovement90d.count)} helper={money0(overview.noMovement90d.value)} accent="master" />
-      </div>
-
-      <div className="rounded-xl border border-[var(--color-border-strong)] p-4">
-        <h2 className="mb-3 text-sm font-semibold text-[var(--color-text)]">Para atender</h2>
-        <div className="space-y-2">
-          {overview.negativeStock > 0 && (
-            <AttentionRow icon={AlertTriangle} tone="critical" label={`${overview.negativeStock} producto(s) con stock negativo`} href="/app/master/catalog-inventory?tab=stock&filter=NEGATIVE_STOCK" />
-          )}
-          {overview.lowStock > 0 && (
-            <AttentionRow icon={TrendingDown} tone="warning" label={`${overview.lowStock} producto(s) por agotarse`} href="/app/master/catalog-inventory?tab=stock&filter=LOW_STOCK" />
-          )}
-          {overview.noCostOrPrice > 0 && (
-            <AttentionRow icon={DollarSign} tone="warning" label={`${overview.noCostOrPrice} producto(s) sin costo o sin precio`} href="/app/master/catalog-inventory?tab=products&filter=NO_COST" />
-          )}
-          {overview.negativeStock === 0 && overview.lowStock === 0 && overview.noCostOrPrice === 0 && (
-            <p className="text-sm text-[var(--color-text-muted)]">Nada pendiente por ahora.</p>
-          )}
-        </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-[var(--color-border-strong)] p-4">
-          <h2 className="mb-3 text-sm font-semibold text-[var(--color-text)]">Valor por categoría (a costo)</h2>
-          {categoryValues.length === 0 ? (
-            <p className="text-sm text-[var(--color-text-muted)]">Sin datos todavía.</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={categoryValues} layout="vertical" margin={{ top: 4, right: 16, left: 4, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
-                <XAxis type="number" tickFormatter={(v) => money0(v)} tick={{ fontSize: 11 }} />
-                <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: unknown) => [money(Number(v)), "Valor"]} />
-                <Bar dataKey="value" fill="var(--color-master-500)" radius={[0, 3, 3, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-[var(--color-border-strong)] p-4">
-          <h2 className="mb-3 text-sm font-semibold text-[var(--color-text)]">Entradas y salidas — últimos 30 días</h2>
-          {dailyFlow.length === 0 ? (
-            <p className="text-sm text-[var(--color-text-muted)]">Sin movimientos en los últimos 30 días.</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={dailyFlow.map((d) => ({ ...d, label: fmtDate(d.date) }))} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: unknown) => [qty(Number(v)), ""]} />
-                <Legend wrapperStyle={{ fontSize: "0.7rem" }} />
-                <Bar dataKey="unitsIn" name="Entradas" fill="var(--color-success-500)" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="unitsOut" name="Salidas" fill="var(--color-warning-500)" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-[var(--color-border-strong)] p-4">
-        <h2 className="mb-3 text-sm font-semibold text-[var(--color-text)]">Top 10 sin movimiento (90 días) por valor inmovilizado</h2>
-        {topNoMovement.length === 0 ? (
-          <p className="text-sm text-[var(--color-text-muted)]">Nada sin movimiento — o todavía no hay datos suficientes.</p>
-        ) : (
-          <div className="space-y-1">
-            {topNoMovement.map((row) => (
-              <div key={row.id} className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] py-1.5 text-sm last:border-0">
-                <span className="truncate">{row.name} <span className="text-[var(--color-text-muted)]">({row.sku})</span></span>
-                <span className="shrink-0 font-medium">{money0(row.quantityOnHand * (row.effectiveCost ?? 0))}</span>
-              </div>
-            ))}
+      {tab === null && (
+        <>
+          {kpis}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {attentionPanel}
+            {categoriesPanel}
           </div>
-        )}
-      </div>
+          {dailyFlowPanel}
+          <div className="flex flex-wrap gap-2">
+            <QuickLink href="/app/master/catalog-inventory?tab=movements" icon={Package} label="Entrada de inventario" primary />
+            <QuickLink href="/app/master/catalog/products/quick-add" icon={ScanLine} label="Escanear productos" />
+            <QuickLink href="/app/master/catalog-inventory?tab=products" icon={Plus} label="Nuevo producto" />
+            <QuickLink href="/app/master/catalog-inventory?tab=movements" icon={ClipboardCheck} label="Conteo" />
+            <QuickLink href="/app/master/catalog-inventory?tab=stock" icon={Boxes} label="Ver stock por sucursal" />
+          </div>
+        </>
+      )}
+      {tab === "attention" && attentionPanel}
+      {tab === "analysis" && (
+        <>
+          {categoriesPanel}
+          {dailyFlowPanel}
+        </>
+      )}
+    </div>
+  );
+}
 
-      <div className="flex flex-wrap gap-2">
-        <QuickLink href="/app/master/catalog-inventory?tab=movements" icon={Package} label="Entrada de inventario" primary />
-        <QuickLink href="/app/master/catalog/products/quick-add" icon={ScanLine} label="Escanear productos" />
-        <QuickLink href="/app/master/catalog-inventory?tab=products" icon={Plus} label="Nuevo producto" />
-        <QuickLink href="/app/master/catalog-inventory?tab=movements" icon={ClipboardCheck} label="Conteo" />
-        <QuickLink href="/app/master/catalog-inventory?tab=stock" icon={Boxes} label="Ver stock por sucursal" />
+const DOT_TONE_CLASSES: Record<AttentionItem["dotTone"], string> = {
+  danger: "bg-[var(--color-danger-500)]",
+  warning: "bg-[var(--color-warning-500)]",
+  info: "bg-[var(--color-info-500)]",
+};
+
+function AttentionItemRow({ item }: { item: AttentionItem }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2.5">
+      <div className="flex min-w-0 items-start gap-2.5">
+        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${DOT_TONE_CLASSES[item.dotTone]}`} />
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-[var(--color-text)]">{item.label}</p>
+          <p className="truncate text-xs text-[var(--color-text-muted)]">{item.context}</p>
+        </div>
       </div>
+      <div className="flex shrink-0 items-center gap-3">
+        <span className="text-sm font-bold text-[var(--color-text)]">{item.count.toLocaleString("es-NI")}</span>
+        <Link href={item.actionHref as Route} className="text-xs font-semibold text-[var(--color-info-600)] hover:underline">
+          {item.actionLabel}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+const KPI_TONE_BORDER: Record<KpiTone, string> = {
+  neutral: "border-[var(--color-border-strong)]",
+  danger: "border-[var(--color-danger-300)]",
+  warning: "border-[var(--color-warning-300)]",
+};
+const KPI_TONE_TEXT: Record<KpiTone, string> = {
+  neutral: "text-[var(--color-text)]",
+  danger: "text-[var(--color-danger-600)]",
+  warning: "text-[var(--color-warning-500)]",
+};
+const KPI_TONE_ICON: Record<KpiTone, string> = {
+  neutral: "bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]",
+  danger: "bg-[var(--color-danger-100)] text-[var(--color-danger-600)]",
+  warning: "bg-[var(--color-warning-100)] text-[var(--color-warning-600)]",
+};
+
+function HomeKpiCard({ icon: Icon, label, value, exactTooltip, subline, sublineOk, tone }: {
+  icon: typeof DollarSign;
+  label: string;
+  value: string;
+  exactTooltip?: string;
+  subline: string;
+  sublineOk?: boolean;
+  tone: KpiTone;
+}) {
+  return (
+    <div className={`rounded-xl border p-4 ${KPI_TONE_BORDER[tone]}`}>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs font-medium text-[var(--color-text-secondary)]">{label}</p>
+        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${KPI_TONE_ICON[tone]}`}>
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+      </div>
+      <p
+        className={`mt-1 font-bold leading-tight ${KPI_TONE_TEXT[tone]}`}
+        style={{ fontSize: "clamp(1.1rem, 2.4vw, 1.5rem)" }}
+        title={exactTooltip}
+      >
+        {value}
+      </p>
+      <p className={`mt-1 text-xs ${sublineOk ? "text-[var(--color-success-600)]" : "text-[var(--color-text-muted)]"}`}>{subline}</p>
     </div>
   );
 }
@@ -195,25 +369,6 @@ function QuickLink({ href, icon: Icon, label, primary }: { href: string; icon: t
     >
       <Icon className="h-4 w-4" />
       {label}
-    </Link>
-  );
-}
-
-function AttentionRow({ icon: Icon, tone, label, href }: { icon: typeof AlertTriangle; tone: "critical" | "warning"; label: string; href: string }) {
-  return (
-    <Link
-      href={href as Route}
-      className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition-colors hover:bg-[var(--color-surface-alt)]"
-      style={{
-        borderColor: tone === "critical" ? "var(--color-danger-200)" : "var(--color-warning-200)",
-        background: tone === "critical" ? "var(--color-danger-50)" : "var(--color-warning-50)",
-      }}
-    >
-      <span className="flex items-center gap-2">
-        <Icon className={`h-4 w-4 ${tone === "critical" ? "text-[var(--color-danger-600)]" : "text-[var(--color-warning-600)]"}`} />
-        {label}
-      </span>
-      <span className="text-xs font-medium text-[var(--color-info-600)]">Ver →</span>
     </Link>
   );
 }

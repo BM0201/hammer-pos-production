@@ -238,10 +238,13 @@ export type InventoryOverview = {
   branchId: string | null;
   totalValueAtCost: number;
   activeProducts: number;
+  /** prompt-inventario-inicio-fix.md Commit 2 §1 — sub-línea de "Productos activos" ("12 creados este mes"). */
+  createdThisMonth: number;
   negativeStock: number;
   lowStock: number;
   noCostOrPrice: number;
-  noMovement90d: { count: number; value: number };
+  /** Commit 2 §1 — sub-línea de "Sin movimiento 90 días" ("C$18,420 en 31 con costo · 147 sin costo"): cuántos del total tienen costo (contribuyen al value) vs no. */
+  noMovement90d: { count: number; value: number; withCost: number };
 };
 
 /**
@@ -262,10 +265,12 @@ export async function getInventoryOverview(branchId: string | null): Promise<Inv
     SELECT
       COALESCE(SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)), 0) AS "totalValueAtCost",
       COUNT(*) FILTER (WHERE p."isActive" = true) AS "activeProducts",
+      COUNT(*) FILTER (WHERE p."isActive" = true AND p."createdAt" >= date_trunc('month', now())) AS "createdThisMonth",
       COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NEGATIVE}) AS "negativeStock",
       COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.LOW}) AS "lowStock",
       COUNT(*) FILTER (WHERE p."isActive" = true AND (${VIEW_COND.NO_COST} OR ${VIEW_COND.NO_PRICE})) AS "noCostOrPrice",
       COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D}) AS "noMovement90dCount",
+      COUNT(*) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D} AND COALESCE(pcs."hasCost", false) = true) AS "noMovement90dWithCost",
       COALESCE(SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)) FILTER (WHERE p."isActive" = true AND ${VIEW_COND.NO_MOVEMENT_90D}), 0) AS "noMovement90dValue"
     FROM "Product" p
     LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = p.id AND pbs."branchId" = ${branchId}
@@ -276,10 +281,15 @@ export async function getInventoryOverview(branchId: string | null): Promise<Inv
     branchId,
     totalValueAtCost: decimalToNumber(row.totalValueAtCost as Prisma.Decimal),
     activeProducts: Number(row.activeProducts),
+    createdThisMonth: Number(row.createdThisMonth),
     negativeStock: Number(row.negativeStock),
     lowStock: Number(row.lowStock),
     noCostOrPrice: Number(row.noCostOrPrice),
-    noMovement90d: { count: Number(row.noMovement90dCount), value: decimalToNumber(row.noMovement90dValue as Prisma.Decimal) },
+    noMovement90d: {
+      count: Number(row.noMovement90dCount),
+      value: decimalToNumber(row.noMovement90dValue as Prisma.Decimal),
+      withCost: Number(row.noMovement90dWithCost),
+    },
   };
 }
 
@@ -289,6 +299,7 @@ async function getInventoryOverviewNetwork(): Promise<InventoryOverview> {
       SELECT
         p.id AS "productId",
         p."isActive",
+        p."createdAt",
         COALESCE(pcs."hasCost", false) AS "hasCost",
         COALESCE(pcs."hasPrice", false) AS "hasPrice",
         SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)) AS value,
@@ -298,15 +309,17 @@ async function getInventoryOverviewNetwork(): Promise<InventoryOverview> {
       FROM "Product" p
       LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = p.id
       LEFT JOIN "ProductCatalogState" pcs ON pcs."productId" = p.id
-      GROUP BY p.id, p."isActive", pcs."hasCost", pcs."hasPrice"
+      GROUP BY p.id, p."isActive", p."createdAt", pcs."hasCost", pcs."hasPrice"
     )
     SELECT
       COALESCE(SUM(value), 0) AS "totalValueAtCost",
       COUNT(*) FILTER (WHERE "isActive") AS "activeProducts",
+      COUNT(*) FILTER (WHERE "isActive" AND "createdAt" >= date_trunc('month', now())) AS "createdThisMonth",
       COUNT(*) FILTER (WHERE "isActive" AND "isNegative") AS "negativeStock",
       COUNT(*) FILTER (WHERE "isActive" AND "isLow") AS "lowStock",
       COUNT(*) FILTER (WHERE "isActive" AND (NOT "hasCost" OR NOT "hasPrice")) AS "noCostOrPrice",
       COUNT(*) FILTER (WHERE "isActive" AND "isNoMovement") AS "noMovement90dCount",
+      COUNT(*) FILTER (WHERE "isActive" AND "isNoMovement" AND "hasCost") AS "noMovement90dWithCost",
       COALESCE(SUM(value) FILTER (WHERE "isActive" AND "isNoMovement"), 0) AS "noMovement90dValue"
     FROM agg
   `;
@@ -315,10 +328,15 @@ async function getInventoryOverviewNetwork(): Promise<InventoryOverview> {
     branchId: null,
     totalValueAtCost: decimalToNumber(row.totalValueAtCost as Prisma.Decimal),
     activeProducts: Number(row.activeProducts),
+    createdThisMonth: Number(row.createdThisMonth),
     negativeStock: Number(row.negativeStock),
     lowStock: Number(row.lowStock),
     noCostOrPrice: Number(row.noCostOrPrice),
-    noMovement90d: { count: Number(row.noMovement90dCount), value: decimalToNumber(row.noMovement90dValue as Prisma.Decimal) },
+    noMovement90d: {
+      count: Number(row.noMovement90dCount),
+      value: decimalToNumber(row.noMovement90dValue as Prisma.Decimal),
+      withCost: Number(row.noMovement90dWithCost),
+    },
   };
 }
 
@@ -459,7 +477,7 @@ export async function getInventoryDailyFlow(branchId: string, days = 30): Promis
  * "Traslados atrasados" = IN_TRANSIT/PARTIALLY_RECEIVED despachados hace
  * más de 2 días — no existía ningún conteo de esto en el sistema todavía.
  */
-export type InventoryNavCounts = { activeProducts: number; negativeStock: number; staleTransfers: number; pendingQuality: number };
+export type InventoryNavCounts = { activeProducts: number; negativeStock: number; lowStock: number; staleTransfers: number; pendingQuality: number };
 
 export async function getInventoryNavCounts(branchId: string | null): Promise<InventoryNavCounts> {
   const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
@@ -469,7 +487,7 @@ export async function getInventoryNavCounts(branchId: string | null): Promise<In
     prisma.transfer.count({ where: { status: { in: ["IN_TRANSIT", "PARTIALLY_RECEIVED"] }, dispatchedAt: { lt: twoDaysAgo } } }),
   ]);
   const pendingQuality = quality.noCost + quality.noPrice + quality.noCode + quality.costEqualsPrice + quality.noCategory;
-  return { activeProducts: overview.activeProducts, negativeStock: overview.negativeStock, staleTransfers, pendingQuality };
+  return { activeProducts: overview.activeProducts, negativeStock: overview.negativeStock, lowStock: overview.lowStock, staleTransfers, pendingQuality };
 }
 
 export type InventoryQualityCounts = {
@@ -478,6 +496,8 @@ export type InventoryQualityCounts = {
   noCode: number;
   costEqualsPrice: number;
   noCategory: number;
+  /** Commit 2 §5 — "2,336 pendientes en 1,190 productos": productos DISTINTOS con al menos uno de los 5 problemas (un producto puede tener varios a la vez, por eso nunca es la suma). */
+  affectedProducts: number;
 };
 
 /** Fase 1.2 — conteos de calidad del catálogo (la versión completa, con detectores de duplicados/unidades/nombres, es Fase 5). */
@@ -492,7 +512,14 @@ export async function getInventoryQualityCounts(): Promise<InventoryQualityCount
       -- schema) — lo único detectable es "en una categoría genérica tipo
       -- cajón de sastre", por NOMBRE (no hay ningún código reservado para
       -- eso en el sistema). Heurística honesta, no una regla de negocio.
-      COUNT(*) FILTER (WHERE p."isActive" = true AND c.name ILIKE '%general%') AS "noCategory"
+      COUNT(*) FILTER (WHERE p."isActive" = true AND c.name ILIKE '%general%') AS "noCategory",
+      COUNT(*) FILTER (WHERE p."isActive" = true AND (
+        (pcs."hasCost" IS NULL OR pcs."hasCost" = false) OR
+        (pcs."hasPrice" IS NULL OR pcs."hasPrice" = false) OR
+        (pcs."hasCode" IS NULL OR pcs."hasCode" = false) OR
+        pcs."costEqualsPrice" = true OR
+        c.name ILIKE '%general%'
+      )) AS "affectedProducts"
     FROM "Product" p
     JOIN "Category" c ON c.id = p."categoryId"
     LEFT JOIN "ProductCatalogState" pcs ON pcs."productId" = p.id
@@ -503,5 +530,79 @@ export async function getInventoryQualityCounts(): Promise<InventoryQualityCount
     noCode: Number(row.noCode),
     costEqualsPrice: Number(row.costEqualsPrice),
     noCategory: Number(row.noCategory),
+    affectedProducts: Number(row.affectedProducts),
   };
+}
+
+export type InventoryAttentionCounts = {
+  noCost: number;
+  noPrice: number;
+  costEqualsPrice: number;
+  negativeStock: number;
+  lowStock: number;
+  staleTransfers: number;
+  staleTransferSample: { transferNumber: string; fromBranchCode: string; toBranchCode: string } | null;
+  failedIntakeLines: number;
+  /**
+   * De los 20 productos que más venden (units90d, SOLO tiene sentido por
+   * sucursal), cuántos no tienen costo — "Los 20 que más venden primero"
+   * (Commit 2 §4). null en "Toda la red": units90d vive por sucursal en
+   * ProductBranchState y agregarlo en red es un cálculo distinto, fuera de
+   * lo que este commit pide — la fila cae a su texto genérico.
+   */
+  topMoversNoCost: number | null;
+};
+
+const STALE_TRANSFER_STATUSES = ["IN_TRANSIT", "PARTIALLY_RECEIVED"] as const;
+
+/**
+ * prompt-inventario-inicio-fix.md Commit 2 §4 — conteos crudos para las
+ * filas de "Para atender" (7 de los 8 tipos del doc; "conteos por aprobar"
+ * no tiene ninguna entidad real detrás todavía — ni modelo, ni workflow de
+ * aprobación — así que no se inventa acá: la fila simplemente no sale
+ * nunca mientras no exista esa pieza). Etiquetas/orden/enlaces se arman en
+ * el frontend (inventory-home-logic.ts) a partir de estos números — acá
+ * solo los datos.
+ */
+export async function getInventoryAttentionCounts(branchId: string | null): Promise<InventoryAttentionCounts> {
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const [overview, quality, staleTransfers, staleTransferSampleRows, failedIntakeLines, topMoversNoCost] = await Promise.all([
+    getInventoryOverview(branchId),
+    getInventoryQualityCounts(),
+    prisma.transfer.count({ where: { status: { in: [...STALE_TRANSFER_STATUSES] }, dispatchedAt: { lt: twoDaysAgo } } }),
+    prisma.transfer.findMany({
+      where: { status: { in: [...STALE_TRANSFER_STATUSES] }, dispatchedAt: { lt: twoDaysAgo } },
+      select: { transferNumber: true, fromBranch: { select: { code: true } }, toBranch: { select: { code: true } } },
+      orderBy: { dispatchedAt: "asc" },
+      take: 1,
+    }),
+    prisma.multiBranchIntakeBranch.count({ where: { status: "FAILED" } }),
+    branchId ? getTopMoversNoCostCount(branchId) : Promise.resolve(null),
+  ]);
+
+  const sample = staleTransferSampleRows[0];
+  return {
+    noCost: quality.noCost,
+    noPrice: quality.noPrice,
+    costEqualsPrice: quality.costEqualsPrice,
+    negativeStock: overview.negativeStock,
+    lowStock: overview.lowStock,
+    staleTransfers,
+    staleTransferSample: sample ? { transferNumber: sample.transferNumber, fromBranchCode: sample.fromBranch.code, toBranchCode: sample.toBranch.code } : null,
+    failedIntakeLines,
+    topMoversNoCost,
+  };
+}
+
+async function getTopMoversNoCostCount(branchId: string, topN = 20): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ hasCost: boolean }>>`
+    SELECT COALESCE(pcs."hasCost", false) AS "hasCost"
+    FROM "Product" p
+    LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = p.id AND pbs."branchId" = ${branchId}
+    LEFT JOIN "ProductCatalogState" pcs ON pcs."productId" = p.id
+    WHERE p."isActive" = true
+    ORDER BY COALESCE(pbs."units90d", 0) DESC
+    LIMIT ${topN}
+  `;
+  return rows.filter((r) => !r.hasCost).length;
 }

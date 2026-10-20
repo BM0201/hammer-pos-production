@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search, ScanLine, Plus, ChevronDown, MoreHorizontal } from "lucide-react";
+import { Search, ScanLine, Plus, ChevronDown } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSession } from "@/lib/client/session";
 import { getActiveBranchId } from "@/lib/client/active-branch";
@@ -76,7 +76,17 @@ export function InventoryTopbar() {
 
   const active = useMemo(() => resolveActiveNav(pathname, searchParams.get("tab")), [pathname, searchParams]);
 
-  const [counts, setCounts] = useState({ activeProducts: 0, negativeStock: 0, staleTransfers: 0, pendingQuality: 0 });
+  // §1.5 — "la barra sticky no tapa contenido: el scroll-margin-top de los
+  // anclajes lo contempla". No hay anclajes hoy en Inventario, pero esto es
+  // justo lo barato de dejar resuelto de una vez para cuando los haya —
+  // aplica SOLO mientras esta barra está montada (se deshace al desmontar).
+  useEffect(() => {
+    const prev = document.documentElement.style.scrollPaddingTop;
+    document.documentElement.style.scrollPaddingTop = "12rem";
+    return () => { document.documentElement.style.scrollPaddingTop = prev; };
+  }, []);
+
+  const [counts, setCounts] = useState({ activeProducts: 0, negativeStock: 0, lowStock: 0, staleTransfers: 0, pendingQuality: 0 });
   useEffect(() => {
     // "Toda la red" manda SIN branchId — el backend agrega las 4 sucursales
     // en vez de filtrar a una (getInventoryOverview/getInventoryNavCounts
@@ -90,7 +100,6 @@ export function InventoryTopbar() {
   }, [activeBranchId, isNetwork]);
 
   // ── Buscador ───────────────────────────────────────────────────────────
-  const [overflowOpen, setOverflowOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<NavSearchResultGroup[]>([]);
@@ -186,11 +195,19 @@ export function InventoryTopbar() {
 
   return (
     <div className="sticky top-[3.5rem] z-20 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-      {/* Fila 1 — título, buscador, alcance, acciones */}
+      {/* Fila 1 — título, alcance, buscador, acciones. En móvil se reacomoda
+          con `order-*` en vez de duplicar nada: título+alcance comparten la
+          primera línea, "+ Entrada" y el buscador bajan cada uno a su
+          propia línea a lo ancho (así lo muestra inventario-inicio-movil.png
+          — el alcance SIGUE visible en móvil, no se esconde en un menú). */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-2 lg:px-6">
-        <h2 className="hidden shrink-0 text-sm font-bold text-[var(--color-text)] md:block">Inventario</h2>
+        <h2 className="order-1 shrink-0 text-sm font-bold text-[var(--color-text)]">Inventario</h2>
 
-        <div className="relative min-w-[180px] flex-1 md:max-w-xl">
+        <div className="order-2 ml-auto md:order-3 md:ml-0">
+          <ScopeSelector branches={branches} activeBranchId={activeBranchId} isNetwork={isNetwork} onChange={setScope} />
+        </div>
+
+        <div className="relative order-4 w-full md:order-2 md:w-auto md:min-w-[180px] md:max-w-xl md:flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-muted)]" />
           <input
             ref={searchInputRef}
@@ -200,7 +217,7 @@ export function InventoryTopbar() {
             onBlur={() => window.setTimeout(() => setSearchOpen(false), 160)}
             onKeyDown={handleSearchKeyDown}
             placeholder="Buscar producto, SKU, código o sección…"
-            className="hm-input h-10 w-full pl-9 pr-14"
+            className="hm-input h-11 w-full pl-9 pr-14 md:h-10"
           />
           <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-text-muted)] sm:block">Ctrl K</kbd>
 
@@ -232,65 +249,22 @@ export function InventoryTopbar() {
           ) : null}
         </div>
 
-        <div className="hidden items-center gap-2 lg:flex">
-          <ScopeSelector branches={branches} activeBranchId={activeBranchId} isNetwork={scopeParam === "network"} onChange={setScope} />
-          <Link href={"/app/master/catalog/barcodes" as Route} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">
-            <ScanLine className="h-4 w-4" /> Escanear
-          </Link>
-          <Link href={"/app/master/catalog-inventory?tab=movements" as Route} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-[var(--color-master-600)] px-3 text-xs font-semibold text-white hover:bg-[var(--color-master-700)]">
-            <Plus className="h-4 w-4" /> Entrada
-          </Link>
-        </div>
-        {/* Mobile (<lg): "solo queda '+ Entrada' (lo demás en ⋯)" — alcance y Escanear se mueven al menú ⋯ en vez de desaparecer sin reemplazo. Botones a 44px (h-11) para el dedo. */}
-        <div className="flex items-center gap-1.5 lg:hidden">
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setOverflowOpen((v) => !v)}
-              onBlur={() => window.setTimeout(() => setOverflowOpen(false), 160)}
-              title="Más opciones"
-              aria-label="Más opciones"
-              className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]"
-            >
-              <MoreHorizontal className="h-5 w-5" />
-            </button>
-            {overflowOpen ? (
-              <div className="absolute right-0 top-full z-40 mt-1 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
-                <p className="px-3 pt-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Alcance</p>
-                {branches.map((b) => (
-                  <button
-                    key={b.id}
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => { setScope({ branchId: b.id }); setOverflowOpen(false); }}
-                    className="flex w-full items-center justify-between px-3 py-2.5 text-left text-xs hover:bg-[var(--color-surface-alt)]"
-                  >
-                    {b.name} {b.id === activeBranchId && !isNetwork ? "✓" : ""}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => { setScope({ network: true }); setOverflowOpen(false); }}
-                  className="flex w-full items-center justify-between px-3 py-2.5 text-left text-xs hover:bg-[var(--color-surface-alt)]"
-                >
-                  Toda la red {isNetwork ? "✓" : ""}
-                </button>
-                <div className="my-1 border-t border-[var(--color-border)]" />
-                <Link
-                  href={"/app/master/catalog/barcodes" as Route}
-                  onClick={() => setOverflowOpen(false)}
-                  className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]"
-                >
-                  <ScanLine className="h-4 w-4" /> Escanear
-                </Link>
-              </div>
-            ) : null}
-          </div>
-          <Link href={"/app/master/catalog-inventory?tab=movements" as Route} className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-[var(--color-master-600)] px-3 text-xs font-semibold text-white">
-            <Plus className="h-4 w-4" /> Entrada
-          </Link>
-        </div>
+        {/* Escanear — el mock móvil no lo muestra en la barra (sigue
+            disponible desde Catálogo → Códigos de barra); desde md se suma
+            junto al resto. */}
+        <Link
+          href={"/app/master/catalog/barcodes" as Route}
+          className="order-5 hidden items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] md:order-4 md:inline-flex md:h-10"
+        >
+          <ScanLine className="h-4 w-4" /> Escanear
+        </Link>
+
+        <Link
+          href={"/app/master/catalog-inventory?tab=movements" as Route}
+          className="order-3 flex h-11 w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--color-master-600)] px-3 text-xs font-semibold text-white hover:bg-[var(--color-master-700)] md:order-5 md:h-10 md:w-auto"
+        >
+          <Plus className="h-4 w-4" /> Entrada
+        </Link>
       </div>
 
       {/* Fila 2 — grupos */}
@@ -298,7 +272,12 @@ export function InventoryTopbar() {
         {INVENTORY_GROUPS.map((group) => {
           const isActive = group.key === active.groupKey;
           const tone = groupTone(group.key, counts);
-          const count = group.key === "catalog" ? counts.activeProducts : group.key === "quality" ? counts.pendingQuality : null;
+          // "Existencias N" (inventario-inicio-desktop.png) — negativo + por agotarse + traslados atrasados: todo lo que ese grupo cubre, no solo lo que pinta de rojo (groupTone sigue sin contar "por agotarse" para el color, a propósito).
+          const count =
+            group.key === "catalog" ? counts.activeProducts
+            : group.key === "stock" ? counts.negativeStock + counts.lowStock + counts.staleTransfers
+            : group.key === "quality" ? counts.pendingQuality
+            : null;
           return (
             <button
               key={group.key}
@@ -352,7 +331,7 @@ function ScopeSelector({ branches, activeBranchId, isNetwork, onChange }: {
 
   return (
     <div className="relative">
-      <button type="button" onClick={() => setOpen((v) => !v)} onBlur={() => window.setTimeout(() => setOpen(false), 160)} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">
+      <button type="button" onClick={() => setOpen((v) => !v)} onBlur={() => window.setTimeout(() => setOpen(false), 160)} className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] md:h-10">
         {label} <ChevronDown className="h-3.5 w-3.5" />
       </button>
       {open ? (

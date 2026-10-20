@@ -1,5 +1,10 @@
+import { Suspense } from "react";
 import { InventoryHome } from "@/components/inventory/inventory-home";
 
 export default function MasterInventoryPage() {
-  return <InventoryHome />;
+  return (
+    <Suspense fallback={null}>
+      <InventoryHome />
+    </Suspense>
+  );
 }
