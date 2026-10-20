@@ -234,7 +234,8 @@ async function countInventoryProductsByView(input: Pick<ListInventoryProductsInp
  * acá solo los números agregados.
  */
 export type InventoryOverview = {
-  branchId: string;
+  /** null = "Toda la red" (agregado de todas las sucursales, no una en particular). */
+  branchId: string | null;
   totalValueAtCost: number;
   activeProducts: number;
   negativeStock: number;
@@ -243,7 +244,20 @@ export type InventoryOverview = {
   noMovement90d: { count: number; value: number };
 };
 
-export async function getInventoryOverview(branchId: string): Promise<InventoryOverview> {
+/**
+ * branchId null — "Toda la red" (prompt-inventario-inicio-fix.md §1.1/1.3):
+ * activeProducts/noCostOrPrice ya eran de red (ProductCatalogState no tiene
+ * sucursal), pero negativeStock/lowStock/noMovement90d SÍ dependían de una
+ * sola fila de ProductBranchState por producto — agregarlos de verdad
+ * requiere explotar el producto en una fila por sucursal (CTE) en vez de
+ * filtrar a una. "Negativo"/"Por agotarse" de red = con que UNA sucursal lo
+ * tenga ya cuenta (OR); "sin movimiento 90d" de red = que NINGUNA sucursal
+ * lo haya movido (AND) — lo contrario (OR) marcaría como "muerto" un
+ * producto que sí se vende, solo que en otra sucursal.
+ */
+export async function getInventoryOverview(branchId: string | null): Promise<InventoryOverview> {
+  if (branchId === null) return getInventoryOverviewNetwork();
+
   const [row] = await prisma.$queryRaw<Array<Record<string, unknown>>>`
     SELECT
       COALESCE(SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)), 0) AS "totalValueAtCost",
@@ -260,6 +274,45 @@ export async function getInventoryOverview(branchId: string): Promise<InventoryO
 
   return {
     branchId,
+    totalValueAtCost: decimalToNumber(row.totalValueAtCost as Prisma.Decimal),
+    activeProducts: Number(row.activeProducts),
+    negativeStock: Number(row.negativeStock),
+    lowStock: Number(row.lowStock),
+    noCostOrPrice: Number(row.noCostOrPrice),
+    noMovement90d: { count: Number(row.noMovement90dCount), value: decimalToNumber(row.noMovement90dValue as Prisma.Decimal) },
+  };
+}
+
+async function getInventoryOverviewNetwork(): Promise<InventoryOverview> {
+  const [row] = await prisma.$queryRaw<Array<Record<string, unknown>>>`
+    WITH agg AS (
+      SELECT
+        p.id AS "productId",
+        p."isActive",
+        COALESCE(pcs."hasCost", false) AS "hasCost",
+        COALESCE(pcs."hasPrice", false) AS "hasPrice",
+        SUM(COALESCE(pbs."quantityOnHand", 0) * COALESCE(pbs."effectiveCost", 0)) AS value,
+        BOOL_OR(pbs."stockStatus" = 'NEGATIVE') AS "isNegative",
+        BOOL_OR(pbs."stockStatus" = 'LOW') AS "isLow",
+        BOOL_AND(pbs."lastMovementAt" IS NULL OR pbs."lastMovementAt" < now() - interval '90 days') AS "isNoMovement"
+      FROM "Product" p
+      LEFT JOIN "ProductBranchState" pbs ON pbs."productId" = p.id
+      LEFT JOIN "ProductCatalogState" pcs ON pcs."productId" = p.id
+      GROUP BY p.id, p."isActive", pcs."hasCost", pcs."hasPrice"
+    )
+    SELECT
+      COALESCE(SUM(value), 0) AS "totalValueAtCost",
+      COUNT(*) FILTER (WHERE "isActive") AS "activeProducts",
+      COUNT(*) FILTER (WHERE "isActive" AND "isNegative") AS "negativeStock",
+      COUNT(*) FILTER (WHERE "isActive" AND "isLow") AS "lowStock",
+      COUNT(*) FILTER (WHERE "isActive" AND (NOT "hasCost" OR NOT "hasPrice")) AS "noCostOrPrice",
+      COUNT(*) FILTER (WHERE "isActive" AND "isNoMovement") AS "noMovement90dCount",
+      COALESCE(SUM(value) FILTER (WHERE "isActive" AND "isNoMovement"), 0) AS "noMovement90dValue"
+    FROM agg
+  `;
+
+  return {
+    branchId: null,
     totalValueAtCost: decimalToNumber(row.totalValueAtCost as Prisma.Decimal),
     activeProducts: Number(row.activeProducts),
     negativeStock: Number(row.negativeStock),
@@ -397,6 +450,26 @@ export async function getInventoryDailyFlow(branchId: string, days = 30): Promis
     byDay.set(key, point);
   }
   return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * prompt-inventario-inicio-fix.md Commit 1 — conteos para los 4 grupos de
+ * la barra superior (Catálogo/Existencias/Calidad de datos), en una sola
+ * consulta por concepto en vez de que el topbar dispare 3-4 pedidos.
+ * "Traslados atrasados" = IN_TRANSIT/PARTIALLY_RECEIVED despachados hace
+ * más de 2 días — no existía ningún conteo de esto en el sistema todavía.
+ */
+export type InventoryNavCounts = { activeProducts: number; negativeStock: number; staleTransfers: number; pendingQuality: number };
+
+export async function getInventoryNavCounts(branchId: string | null): Promise<InventoryNavCounts> {
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const [overview, quality, staleTransfers] = await Promise.all([
+    getInventoryOverview(branchId),
+    getInventoryQualityCounts(),
+    prisma.transfer.count({ where: { status: { in: ["IN_TRANSIT", "PARTIALLY_RECEIVED"] }, dispatchedAt: { lt: twoDaysAgo } } }),
+  ]);
+  const pendingQuality = quality.noCost + quality.noPrice + quality.noCode + quality.costEqualsPrice + quality.noCategory;
+  return { activeProducts: overview.activeProducts, negativeStock: overview.negativeStock, staleTransfers, pendingQuality };
 }
 
 export type InventoryQualityCounts = {

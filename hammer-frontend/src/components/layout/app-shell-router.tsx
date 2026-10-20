@@ -43,13 +43,17 @@ const MODULE_META: Record<string, { title: string; subtitle: string }> = {
 const SECTION_META: Record<string, { title: string; subtitle: string }> = {
   branches: { title: "Sucursales", subtitle: "Estructura, estado y configuracion operativa." },
   users: { title: "Usuarios", subtitle: "Roles, accesos y membresias por sucursal." },
-  "catalog-inventory": { title: "Catalogo e Inventario", subtitle: "Productos, precios, costos, existencias e importaciones." },
+  // prompt-inventario-inicio-fix.md §1.3 — misma razón que "inventory" abajo: InventoryTopbar ya dice "Inventario".
+  "catalog-inventory": { title: "", subtitle: "" },
   brain: { title: "Centro de Decisiones", subtitle: "Qué necesita tu atención hoy, en qué sucursal y dónde se resuelve." },
   reports: { title: "Reportes", subtitle: "Indicadores y consultas para seguimiento gerencial." },
   approvals: { title: "Aprobaciones", subtitle: "Solicitudes pendientes, evidencia y resoluciones." },
   audit: { title: "Auditoria", subtitle: "Bitacora de cambios y actividad sensible." },
   "cash-boxes": { title: "Cajas", subtitle: "Sesiones, diferencias y control de efectivo." },
-  inventory: { title: "Inventario", subtitle: "Existencias, movimientos y alertas de stock." },
+  // prompt-inventario-inicio-fix.md §1.3 — InventoryTopbar (fila 1) ya
+  // muestra "Inventario"; el encabezado global queda solo con lo global
+  // (rol, sucursal, usuario, salir) para no repetir el título dos veces.
+  inventory: { title: "", subtitle: "" },
   dispatch: { title: "Despacho", subtitle: "Preparacion, carga, ruta y entrega de ordenes." },
   payments: { title: "Pagos", subtitle: "Ordenes pendientes y confirmacion de cobro." },
   orders: { title: "Ventas", subtitle: "Ordenes, tickets y seguimiento comercial." },
@@ -174,17 +178,24 @@ export function AppShellRouter({
                 />
               </div>
 
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="truncate text-sm font-bold text-[var(--color-text)] sm:text-[0.9375rem]">
-                    {headerMeta.title}
-                  </h1>
-                  <RoleBadge roleCode={session.roleCode} size="sm" />
+              {headerMeta.title ? (
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h1 className="truncate text-sm font-bold text-[var(--color-text)] sm:text-[0.9375rem]">
+                      {headerMeta.title}
+                    </h1>
+                    <RoleBadge roleCode={session.roleCode} size="sm" />
+                  </div>
+                  <p className="hidden truncate text-xs text-[var(--color-text-muted)] md:block leading-tight">
+                    {headerMeta.subtitle}
+                  </p>
                 </div>
-                <p className="hidden truncate text-xs text-[var(--color-text-muted)] md:block leading-tight">
-                  {headerMeta.subtitle}
-                </p>
-              </div>
+              ) : (
+                // prompt-inventario-inicio-fix.md §1.3 — "o queda solo lo
+                // global (usuario, salir)": sin título/subtítulo acá
+                // (InventoryTopbar ya lo muestra), solo el rol.
+                <RoleBadge roleCode={session.roleCode} size="sm" />
+              )}
             </div>
 
             {/* Right — branch selector + theme toggle + user + logout */}

@@ -561,6 +561,17 @@ export function CatalogInventoryAdmin() {
     activeTabRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
   }, [tab]);
 
+  // prompt-inventario-inicio-fix.md Commit 1 §1.2 — las píldoras de la
+  // barra superior nueva son <Link>, no llaman a setTab: navegan a
+  // ?tab=X. El useState de `tab` solo leía la URL una vez, al montar — sin
+  // este efecto, tocar una píldora cambiaba la URL pero el panel visible
+  // se quedaba igual.
+  useEffect(() => {
+    const requested = searchParams.get("tab") as Tab | null;
+    if (requested && requested !== tab && TABS.some((t) => t.id === requested)) setTab(requested);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   /* Debounce the text search so each keystroke doesn't fire an API request */
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQ(q), 350);
@@ -1138,8 +1149,13 @@ export function CatalogInventoryAdmin() {
         </p>
       ) : null}
 
-      {/* ── Tabs — subrayado ── */}
-      <div className="overflow-x-auto" style={{ borderBottom: "0.5px solid var(--color-border)" }}>
+      {/* ── Tabs — subrayado ──
+          prompt-inventario-inicio-fix.md Commit 1 §1.2 — oculta: la barra
+          superior nueva (InventoryTopbar, montada en page.tsx) es ahora la
+          única navegación entre estas secciones. El estado `tab`/`setTab`
+          de abajo se queda intacto — cada pestaña sigue siendo el mismo
+          panel de siempre, solo cambia quién decide cuál mostrar. */}
+      <div className="hidden overflow-x-auto" style={{ borderBottom: "0.5px solid var(--color-border)" }}>
         <div className="flex min-w-max">
           {TABS.map((item) => {
             const Icon = item.icon;

@@ -13,9 +13,9 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const parsed = inventoryOverviewQuerySchema.safeParse({ branchId: searchParams.get("branchId") ?? undefined });
-    if (!parsed.success) return fail("VALIDATION_ERROR", "Falta branchId.", 400);
+    if (!parsed.success) return fail("VALIDATION_ERROR", "branchId invalido.", 400);
 
-    return ok(await getInventoryOverview(parsed.data.branchId));
+    return ok(await getInventoryOverview(parsed.data.branchId ?? null));
   } catch (error) {
     return toHttpErrorResponse(error);
   }

@@ -1,13 +1,13 @@
 import { Suspense } from "react";
-import { InventoryLocalNav } from "@/components/inventory/inventory-local-nav";
+import { InventoryTopbar } from "@/components/inventory/inventory-topbar";
 
 export default function InventoryLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-4 p-4 md:flex-row">
+    <div className="flex min-h-full flex-col">
       <Suspense fallback={null}>
-        <InventoryLocalNav />
+        <InventoryTopbar />
       </Suspense>
-      <div className="min-w-0 flex-1">{children}</div>
+      <div className="min-w-0 flex-1 p-4">{children}</div>
     </div>
   );
 }

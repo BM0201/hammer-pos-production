@@ -13,7 +13,10 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const parsed = inventoryOverviewQuerySchema.safeParse({ branchId: searchParams.get("branchId") ?? undefined });
-    if (!parsed.success) return fail("VALIDATION_ERROR", "Falta branchId.", 400);
+    // getInventoryDailyFlow todavía no tiene variante "toda la red" (el
+    // doc no la pide para Commit 1) — branchId sigue siendo obligatorio
+    // acá aunque el schema compartido ahora lo permita omitir.
+    if (!parsed.success || !parsed.data.branchId) return fail("VALIDATION_ERROR", "Falta branchId.", 400);
 
     return ok(await getInventoryDailyFlow(parsed.data.branchId));
   } catch (error) {

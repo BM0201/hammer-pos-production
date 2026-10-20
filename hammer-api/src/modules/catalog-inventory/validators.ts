@@ -51,8 +51,9 @@ export const inventoryProductsQuerySchema = z.object({
 });
 export type InventoryProductsQuery = z.infer<typeof inventoryProductsQuerySchema>;
 
+/** prompt-inventario-inicio-fix.md Commit 1 — branchId ausente = "Toda la red" (el topbar lo manda así con ?scope=network, nunca con un branchId vacío). */
 export const inventoryOverviewQuerySchema = z.object({
-  branchId: z.string().cuid(),
+  branchId: z.string().cuid().optional(),
 });
 
 export const inventoryStockQuerySchema = z.object({

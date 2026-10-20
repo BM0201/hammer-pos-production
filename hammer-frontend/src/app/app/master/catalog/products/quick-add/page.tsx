@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { CameraScanner } from "@/components/scanner/camera-scanner";
+import { InventoryTopbar } from "@/components/inventory/inventory-topbar";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { useSubmitting } from "@/lib/client/use-submitting";
 import { useSession } from "@/lib/client/session";
@@ -732,6 +733,7 @@ function QuickAddProductContent() {
 export default function QuickAddProductPage() {
   return (
     <Suspense fallback={null}>
+      <InventoryTopbar />
       <QuickAddProductContent />
     </Suspense>
   );

@@ -1,5 +1,7 @@
 "use client";
 
+import { Suspense } from "react";
+import { InventoryTopbar } from "@/components/inventory/inventory-topbar";
 import { InventoryFusionManager } from "@/components/inventory/inventory-fusion-manager";
 
 /**
@@ -12,8 +14,13 @@ import { InventoryFusionManager } from "@/components/inventory/inventory-fusion-
  */
 export default function InventoryFusionPage() {
   return (
-    <section className="space-y-6 animate-fade-in-up">
-      <InventoryFusionManager />
-    </section>
+    <>
+      <Suspense fallback={null}>
+        <InventoryTopbar />
+      </Suspense>
+      <section className="space-y-6 animate-fade-in-up p-4">
+        <InventoryFusionManager />
+      </section>
+    </>
   );
 }
