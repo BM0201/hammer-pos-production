@@ -16,6 +16,8 @@ function base(overrides: Partial<ValidateIntakeLineInput> = {}): ValidateIntakeL
     currentEffectiveCost: 95,
     lastPurchaseCost: 98,
     newPrice: null,
+    currentSalePrice: null,
+    minMarginPercent: null,
     productBlocked: null,
     pendingPurchaseOrder: null,
     typicalPurchaseQuantity: null,
@@ -191,4 +193,59 @@ test("con un error Y un aviso de revisión a la vez, el estado es ERROR (no REVI
   assert.equal(result.status, "ERROR");
   assert.ok(result.messages.some((m) => m.code === "MISSING_QUANTITY"));
   assert.ok(result.messages.some((m) => m.code === "PENDING_PURCHASE_ORDER"));
+});
+
+// ── prompt-entrada-reintento-precio.md Commit 3 — precio de venta y margen ─
+
+test("LA QUE IMPORTA — sin precio de venta en la sucursal (ni nuevo ni vigente): REVIEW, nunca bloquea", () => {
+  const result = validateIntakeLine(base({ currentSalePrice: 0, newPrice: null }));
+  assert.equal(result.status, "REVIEW");
+  assert.ok(result.messages.some((m) => m.code === "NO_SALE_PRICE"));
+});
+
+test("sin precio: PHYSICAL_COUNT nunca dispara el aviso (no cambia precios)", () => {
+  const result = validateIntakeLine(base({ kind: "PHYSICAL_COUNT", quantity: 38, enteredCost: null, currentSalePrice: 0, newPrice: null }));
+  assert.ok(!result.messages.some((m) => m.code === "NO_SALE_PRICE"));
+});
+
+test("currentSalePrice null (el llamador no mandó el dato — tests/llamadores viejos) nunca dispara nada nuevo", () => {
+  const result = validateIntakeLine(base({ currentSalePrice: null, newPrice: null }));
+  assert.equal(result.status, "OK");
+});
+
+test("hay precio vigente (currentSalePrice > 0) y no se cambia: no avisa 'sin precio'", () => {
+  const result = validateIntakeLine(base({ currentSalePrice: 200, newPrice: null, minMarginPercent: null }));
+  assert.ok(!result.messages.some((m) => m.code === "NO_SALE_PRICE"));
+});
+
+test("LA QUE IMPORTA — margen bajo la política de la categoría: REVIEW con el % calculado sobre el costo RESULTANTE (entrado), no el viejo", () => {
+  // precio 130, costo entrado 120 (el costo viejo era 95, irrelevante acá) -> margen (130-120)/130 = 7.7%, bajo el mínimo de 20%.
+  const result = validateIntakeLine(base({ currentSalePrice: 130, newPrice: null, enteredCost: 120, currentEffectiveCost: 95, minMarginPercent: 20 }));
+  assert.equal(result.status, "REVIEW");
+  const msg = result.messages.find((m) => m.code === "MARGIN_BELOW_POLICY");
+  assert.ok(msg, "debe avisar margen bajo política");
+  assert.match(msg!.text, /7\.7%/);
+});
+
+test("margen por encima de la política: no avisa", () => {
+  const result = validateIntakeLine(base({ currentSalePrice: 200, newPrice: null, enteredCost: 100, minMarginPercent: 20 }));
+  assert.ok(!result.messages.some((m) => m.code === "MARGIN_BELOW_POLICY"));
+});
+
+test("sin minMarginPercent (sin política configurada): nunca avisa margen, aunque el margen sea bajo", () => {
+  const result = validateIntakeLine(base({ currentSalePrice: 101, newPrice: null, enteredCost: 100, minMarginPercent: null }));
+  assert.ok(!result.messages.some((m) => m.code === "MARGIN_BELOW_POLICY"));
+});
+
+test("un precio nuevo (newPrice) gana sobre el vigente para calcular el margen", () => {
+  // vigente 500 (margen alto), nuevo 110 contra costo 100 -> margen (110-100)/110 = 9.1%, bajo 20%.
+  const result = validateIntakeLine(base({ currentSalePrice: 500, newPrice: 110, enteredCost: 100, minMarginPercent: 20 }));
+  const msg = result.messages.find((m) => m.code === "MARGIN_BELOW_POLICY");
+  assert.ok(msg, "debe usar el precio NUEVO, no el vigente, para el cálculo");
+});
+
+test("precio bajo costo sigue bloqueando (PRICE_BELOW_COST, sin cambios de Commit 3)", () => {
+  const result = validateIntakeLine(base({ currentSalePrice: 150, newPrice: 90, enteredCost: 100, minMarginPercent: 20 }));
+  assert.equal(result.status, "ERROR");
+  assert.ok(result.messages.some((m) => m.code === "PRICE_BELOW_COST"));
 });

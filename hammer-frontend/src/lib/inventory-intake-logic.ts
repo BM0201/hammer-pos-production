@@ -29,12 +29,19 @@ export type IntakeLine = {
   overrides: Record<string, number | null>;
   /** null = sin cambio de costo (usa el promedio/costo vigente). */
   unitCost: number | null;
-  /** null = sin cambio de precio de venta ("⋯ → Cambiar precio de venta", 2.3). */
+  /** null = sin cambio de precio de venta ("para todas" — gana salePriceOverrides de esa sucursal, si existe). */
   salePrice: number | null;
+  /** Commit 3 (prompt-entrada-reintento-precio.md) — columna "Precio de venta {sucursal}", mismo patrón que `overrides` de cantidad. */
+  salePriceOverrides: Record<string, number | null>;
 };
 
 export function quantityForIntakeBranch(line: IntakeLine, branchId: string): number | null {
   return branchId in line.overrides ? line.overrides[branchId] : line.quantity;
+}
+
+/** Commit 3 — mismo patrón que quantityForIntakeBranch: el precio de ESA sucursal gana sobre "para todas". */
+export function salePriceForIntakeBranch(line: IntakeLine, branchId: string): number | null {
+  return branchId in line.salePriceOverrides ? line.salePriceOverrides[branchId] : line.salePrice;
 }
 
 export type ScannedProductRef = {
@@ -61,6 +68,7 @@ function newIntakeLine(product: ScannedProductRef): IntakeLine {
     overrides: {},
     unitCost: null,
     salePrice: null,
+    salePriceOverrides: {},
   };
 }
 
@@ -207,28 +215,45 @@ export function applyBranchCellInput(line: IntakeLine, branchId: string, rawValu
   return { ...line, overrides: { ...line.overrides, [branchId]: parsed } };
 }
 
-export type IntakeLinePayload = { productId: string; quantity: number; unit?: string; unitCost?: number; salePrice?: number; overrides?: Record<string, number> };
+/** Commit 3 — mismo criterio que applyBranchCellInput, para la columna "Precio de venta {sucursal}". Un precio <= 0 no tiene sentido (igual que el campo "para todas"): se ignora, no se guarda como override. */
+export function applySalePriceCellInput(line: IntakeLine, branchId: string, rawValue: string): IntakeLine {
+  if (rawValue.trim() === "") {
+    const salePriceOverrides = { ...line.salePriceOverrides };
+    delete salePriceOverrides[branchId];
+    return { ...line, salePriceOverrides };
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) return line;
+  return { ...line, salePriceOverrides: { ...line.salePriceOverrides, [branchId]: parsed } };
+}
+
+export type IntakeLinePayload = { productId: string; quantity: number; unit?: string; unitCost?: number; salePrice?: number; overrides?: Record<string, number>; salePriceOverrides?: Record<string, number> };
 
 /**
  * "la cantidad vacía no se manda como 1" (tests 2.8) — una línea sin NINGÚN
  * valor escrito (ni "para todas" ni ningún override, para ninguna sucursal
  * elegida) se omite entera; nunca se completa con 1. Los `overrides` solo
  * viajan donde el valor real DIFIERE de "para todas" (mismo criterio que
- * multi-branch-matrix.ts).
+ * multi-branch-matrix.ts). Commit 3 (prompt-entrada-reintento-precio.md) —
+ * `salePriceOverrides` viaja con el MISMO criterio, en paralelo.
  */
 export function buildIntakePayloadLines(lines: IntakeLine[], branchIds: string[]): IntakeLinePayload[] {
   return lines
     .filter((line) => branchIds.some((id) => quantityForIntakeBranch(line, id) !== null))
     .map((line) => {
       const overrides: Record<string, number> = {};
+      const salePriceOverrides: Record<string, number> = {};
       for (const branchId of branchIds) {
-        const resolved = quantityForIntakeBranch(line, branchId);
-        if (resolved !== null && resolved !== line.quantity) overrides[branchId] = resolved;
+        const resolvedQty = quantityForIntakeBranch(line, branchId);
+        if (resolvedQty !== null && resolvedQty !== line.quantity) overrides[branchId] = resolvedQty;
+        const resolvedPrice = salePriceForIntakeBranch(line, branchId);
+        if (resolvedPrice !== null && resolvedPrice !== line.salePrice) salePriceOverrides[branchId] = resolvedPrice;
       }
       const payload: IntakeLinePayload = { productId: line.productId, quantity: line.quantity ?? 0, unit: line.unit };
       if (line.unitCost !== null) payload.unitCost = line.unitCost;
       if (line.salePrice !== null) payload.salePrice = line.salePrice;
       if (Object.keys(overrides).length > 0) payload.overrides = overrides;
+      if (Object.keys(salePriceOverrides).length > 0) payload.salePriceOverrides = salePriceOverrides;
       return payload;
     });
 }
@@ -261,7 +286,7 @@ export function buildCreateIntakeRequest(input: {
   };
 }
 
-export type PreviewRequestLine = { productId: string; quantity: number | null; overrides?: Record<string, number | null>; unitCost?: number | null; salePrice?: number | null; unit?: string };
+export type PreviewRequestLine = { productId: string; quantity: number | null; overrides?: Record<string, number | null>; unitCost?: number | null; salePrice?: number | null; salePriceOverrides?: Record<string, number | null>; unit?: string };
 
 /** Vista previa: a diferencia del guardado, SÍ viaja con `null` (campo vacío) — el servidor decide el estado de esa celda (intake-preview-service.ts). */
 export function buildPreviewRequestLines(lines: IntakeLine[]): PreviewRequestLine[] {
@@ -271,6 +296,7 @@ export function buildPreviewRequestLines(lines: IntakeLine[]): PreviewRequestLin
     overrides: Object.keys(line.overrides).length > 0 ? line.overrides : undefined,
     unitCost: line.unitCost,
     salePrice: line.salePrice,
+    salePriceOverrides: Object.keys(line.salePriceOverrides).length > 0 ? line.salePriceOverrides : undefined,
     unit: line.unit,
   }));
 }
@@ -324,6 +350,55 @@ export function clearIntakeDraft(storage: DraftStorage, userId: string, kind: In
   } catch {
     /* localStorage no disponible */
   }
+}
+
+// ── Commit 3 (prompt-entrada-reintento-precio.md) — precio de venta y margen ──
+
+/** Mismo criterio que branch-band-service.ts (decidePriceBandPath): margen como % del PRECIO, no del costo. null si el precio no es positivo (no hay margen que calcular). */
+export function computeMarginPercent(price: number, cost: number): number | null {
+  if (price <= 0) return null;
+  return ((price - cost) / price) * 100;
+}
+
+/** Inversa de computeMarginPercent — "despejar el precio que da tal margen sobre tal costo", para los atajos +5/+10/+15 %. */
+export function priceForMarginPercent(cost: number, marginPercent: number): number | null {
+  if (cost <= 0 || marginPercent >= 100) return null;
+  return cost / (1 - marginPercent / 100);
+}
+
+/**
+ * "El estado de la fila dice lo que falta" (Commit 3 §4) — nunca "Falta
+ * dato" genérico. Un ERROR manda sobre un REVIEW; dentro de cada uno, el
+ * código más específico gana sobre el texto plano "Revisar".
+ */
+export function rowStateLabel(status: IntakeLineStatus, messageCodes: string[]): string {
+  if (status === "PENDING") return "Sin verificar";
+  if (status === "SKIPPED") return "No lleva";
+  if (status === "ERROR") {
+    if (messageCodes.includes("MISSING_QUANTITY") || messageCodes.includes("ALL_BRANCHES_SKIPPED")) return "Falta cantidad";
+    if (messageCodes.includes("NO_COST_NO_AVERAGE") || messageCodes.includes("OPENING_BALANCE_NO_COST")) return "Falta costo";
+    if (messageCodes.includes("PRICE_BELOW_COST")) return "Precio bajo costo";
+    if (messageCodes.includes("PRODUCT_BLOCKED")) return "Bloqueado";
+    return "Revisar";
+  }
+  if (status === "REVIEW") {
+    if (messageCodes.includes("MARGIN_BELOW_POLICY") || messageCodes.includes("NO_SALE_PRICE")) return "Revisar margen";
+    return "Revisar";
+  }
+  return "Listo";
+}
+
+/**
+ * "el resumen final dice '3 productos quedan sin precio en RIV'" — cuenta,
+ * por sucursal, cuántas líneas (no celdas repetidas) tienen NO_SALE_PRICE
+ * en esa sucursal.
+ */
+export function countMissingPriceByBranch(cells: Array<{ branchId: string; messages: Array<{ code: string }> }>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const cell of cells) {
+    if (cell.messages.some((m) => m.code === "NO_SALE_PRICE")) counts[cell.branchId] = (counts[cell.branchId] ?? 0) + 1;
+  }
+  return counts;
 }
 
 /** "Tenés un borrador de hace 2 h: ¿continuar?" (2.4). */

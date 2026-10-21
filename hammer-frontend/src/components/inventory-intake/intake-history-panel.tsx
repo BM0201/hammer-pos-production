@@ -201,6 +201,7 @@ export function IntakeHistoryPanel({ kindFilter, branches, fallbackProducts }: {
           overrides: {},
           unitCost: line.unitCost ?? null,
           salePrice: line.salePrice ?? null,
+          salePriceOverrides: {},
         };
       }));
       setEditModeInput({

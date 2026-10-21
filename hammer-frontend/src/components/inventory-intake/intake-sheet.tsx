@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
-  Camera, Check, ChevronDown, Loader2, MoreHorizontal, RotateCcw,
+  Camera, Check, ChevronDown, Loader2, RotateCcw,
   Save, Search, Trash2, Upload, X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -20,18 +20,24 @@ import { parseMatrixTsvPaste, type TsvPasteProduct } from "@/lib/multi-branch-ma
 import {
   addOrFocusScannedProduct,
   applyBranchCellInput,
+  applySalePriceCellInput,
   buildCreateIntakeRequest,
   buildIntakePayloadLines,
   buildPreviewRequestLines,
   canConfirmIntake,
   clearIntakeDraft,
   computeBarCounts,
+  computeMarginPercent,
+  countMissingPriceByBranch,
   draftAgeLabel,
   enforceBranchSelectionForKind,
   firstErrorProductId,
   loadIntakeDraft,
+  priceForMarginPercent,
   quantityForIntakeBranch,
   reasonChipsForKind,
+  rowStateLabel,
+  salePriceForIntakeBranch,
   saveIntakeDraft,
   shortTextForErrorCode,
   switchingKindNeedsConfirmation,
@@ -65,6 +71,12 @@ type PreviewCell = {
   newWac: number | null;
   lastPurchaseCost: number | null;
   lastPurchaseDate: string | null;
+  /** Commit 3 (prompt-entrada-reintento-precio.md) — precio de venta vigente en ESTA sucursal (<=0 = sin precio configurado). */
+  currentSalePrice: number | null;
+  /** Costo efectivo vigente (distinto de currentWac: es el de la cadena completa, el mismo que usa la validación). */
+  currentEffectiveCost: number | null;
+  /** Mínimo de margen de la política de categoría — null = sin política configurada. */
+  minMarginPercent: number | null;
   status: IntakeLineStatus;
   messages: PreviewMessage[];
 };
@@ -139,7 +151,7 @@ function blankLineFromRef(ref: ScannedProductRef): IntakeLine {
   return {
     productId: ref.id, sku: ref.sku, name: ref.name, saleUnit: ref.saleUnit, baseUnit: ref.baseUnit,
     hasConversion: ref.hasConversion, conversionFactor: ref.conversionFactor, unit: ref.saleUnit,
-    quantity: null, overrides: {}, unitCost: null, salePrice: null,
+    quantity: null, overrides: {}, unitCost: null, salePrice: null, salePriceOverrides: {},
   };
 }
 
@@ -181,7 +193,11 @@ export function IntakeSheet({
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [pasting, setPasting] = useState(false);
+  // Commit 3 (prompt-entrada-reintento-precio.md) — ya no abre el editor
+  // único de "⋯ → Cambiar precio de venta" (reemplazado por la columna);
+  // ahora es el toggle "por sucursal ▾" cuando hay más de 3 sucursales.
   const [priceEditorFor, setPriceEditorFor] = useState<string | null>(null);
+  const [primaryBranch, setPrimaryBranch] = useState<{ id: string; code: string } | null>(null);
 
   const [previewCells, setPreviewCells] = useState<Map<string, PreviewCell>>(new Map());
   const [previewTotals, setPreviewTotals] = useState<Record<string, PreviewTotals>>({});
@@ -212,6 +228,28 @@ export function IntakeSheet({
     if (draft && draft.lines.length > 0) setDraftBanner({ savedAt: draft.savedAt });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, userId]);
+
+  // Commit 3 — "igual que MGA": la sucursal principal de Inventario
+  // (prompt-inventario-unificado.md Commit 1 §3), nunca una sucursal fija
+  // a mano. Si no está entre las elegidas, el atajo simplemente no aparece.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch("/api/master/inventory/config/primary-branch", { cache: "no-store" });
+        const raw = await response.json().catch(() => null);
+        if (!response.ok || cancelled) return;
+        const data = unwrapApiData(raw) as { branchId: string | null };
+        if (!data.branchId) return;
+        const branch = branches.find((b) => b.id === data.branchId);
+        if (branch) setPrimaryBranch({ id: branch.id, code: branch.code });
+      } catch {
+        /* sin sucursal principal configurada o sin red -- el atajo "igual que" no aparece */
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function restoreDraft() {
     if (!userId) return;
@@ -368,6 +406,13 @@ export function IntakeSheet({
   function resetOverride(productId: string, branchId: string) {
     setBranchCell(productId, branchId, "");
   }
+  // Commit 3 — "Precio de venta {sucursal}", mismo criterio que setBranchCell/resetOverride para cantidad.
+  function setSalePriceCell(productId: string, branchId: string, rawValue: string) {
+    setLines((prev) => prev.map((l) => (l.productId === productId ? applySalePriceCellInput(l, branchId, rawValue) : l)));
+  }
+  function resetSalePriceOverride(productId: string, branchId: string) {
+    setSalePriceCell(productId, branchId, "");
+  }
 
   // ── Vista previa real (debounce 400 ms) ─────────────────────────────────
   // prompt-entrada-multisucursal-fix.md Commit 2 #4 — si falla, las filas
@@ -439,6 +484,14 @@ export function IntakeSheet({
     }
     return [...seen.values()];
   }, [previewCells]);
+
+  // Commit 3 — "visible siempre en Sumar y en Carga inicial. En Conteo se
+  // oculta". Una sucursal: una columna. Hasta 3: una por sucursal. Más de
+  // 3: un solo campo con "por sucursal ▾" (reusa priceEditorFor/onTogglePriceEditor).
+  const showSalePrice = kind !== "PHYSICAL_COUNT";
+  const priceColumnBranchIds = showSalePrice && branchIds.length <= 3 ? branchIds : [];
+  const showPriceExpandToggle = showSalePrice && branchIds.length > 3;
+  const missingPriceByBranch = useMemo(() => countMissingPriceByBranch([...previewCells.values()]), [previewCells]);
 
   /** Presupuesto de tiempo agotado antes de terminar (IN_PROGRESS) → /continue hasta asentarse, igual para crear que para editar+reintentar. */
   async function settleUntilDone(initial: CreateIntakeResult): Promise<CreateIntakeResult> {
@@ -733,6 +786,9 @@ export function IntakeSheet({
                       <th className="hm-num sticky top-0 z-10 bg-[var(--color-surface)]">Cantidad{branchIds.length > 1 ? " · todas" : ""}</th>
                       {branchIds.length > 1 ? branchIds.map((id) => <th key={id} className="hm-num sticky top-0 z-10 bg-[var(--color-surface)]">{branches.find((b) => b.id === id)?.code ?? id}</th>) : null}
                       {kind !== "PHYSICAL_COUNT" ? <th className="hm-num sticky top-0 z-10 bg-[var(--color-surface)]">Costo de esta entrada</th> : null}
+                      {priceColumnBranchIds.length > 0
+                        ? priceColumnBranchIds.map((id) => <th key={id} className="hm-num sticky top-0 z-10 bg-[var(--color-surface)]">Precio de venta {branches.find((b) => b.id === id)?.code ?? id}</th>)
+                        : showPriceExpandToggle ? <th className="hm-num sticky top-0 z-10 bg-[var(--color-surface)]">Precio de venta</th> : null}
                       <th className="sticky top-0 z-10 bg-[var(--color-surface)]">Resultado</th>
                       <th className="sticky top-0 z-10 bg-[var(--color-surface)]">Estado</th>
                       <th className="sticky top-0 z-10 bg-[var(--color-surface)]"></th>
@@ -760,10 +816,16 @@ export function IntakeSheet({
                         onSetOverride={(branchId, rawValue) => setBranchCell(line.productId, branchId, rawValue)}
                         onResetOverride={(branchId) => resetOverride(line.productId, branchId)}
                         onRemove={() => removeLine(line.productId)}
+                        showSalePrice={showSalePrice}
+                        priceColumnBranchIds={priceColumnBranchIds}
+                        showPriceExpandToggle={showPriceExpandToggle}
+                        primaryBranch={primaryBranch}
+                        onSetSalePrice={(branchId, rawValue) => setSalePriceCell(line.productId, branchId, rawValue)}
+                        onResetSalePrice={(branchId) => resetSalePriceOverride(line.productId, branchId)}
                       />
                     ))}
                     {visibleLines.length === 0 ? (
-                      <tr><td colSpan={8} className="py-8 text-center text-sm text-[var(--color-text-muted)]">{lines.length === 0 ? "Buscá un producto arriba, escaneá o pegá desde Excel." : "Ninguna fila coincide con el filtro elegido."}</td></tr>
+                      <tr><td colSpan={11} className="py-8 text-center text-sm text-[var(--color-text-muted)]">{lines.length === 0 ? "Buscá un producto arriba, escaneá o pegá desde Excel." : "Ninguna fila coincide con el filtro elegido."}</td></tr>
                     ) : null}
                   </tbody>
                 </table>
@@ -791,6 +853,12 @@ export function IntakeSheet({
                     onSetOverride={(branchId, rawValue) => setBranchCell(line.productId, branchId, rawValue)}
                     onResetOverride={(branchId) => resetOverride(line.productId, branchId)}
                     onRemove={() => removeLine(line.productId)}
+                    showSalePrice={showSalePrice}
+                    priceColumnBranchIds={priceColumnBranchIds}
+                    showPriceExpandToggle={showPriceExpandToggle}
+                    primaryBranch={primaryBranch}
+                    onSetSalePrice={(branchId, rawValue) => setSalePriceCell(line.productId, branchId, rawValue)}
+                    onResetSalePrice={(branchId) => resetSalePriceOverride(line.productId, branchId)}
                   />
                 ))}
                 {visibleLines.length === 0 ? (
@@ -798,6 +866,14 @@ export function IntakeSheet({
                 ) : null}
               </div>
             </div>
+
+            {Object.keys(missingPriceByBranch).length > 0 ? (
+              <div className="px-5 pb-2 text-xs text-[var(--color-warning-700)]">
+                {Object.entries(missingPriceByBranch).map(([branchId, count]) => (
+                  <span key={branchId} className="mr-3">{count} producto{count === 1 ? "" : "s"} sin precio en {branches.find((b) => b.id === branchId)?.code ?? branchId}</span>
+                ))}
+              </div>
+            ) : null}
 
             {/* Barra fija abajo */}
             <div className="space-y-2 border-t border-[var(--color-border)] px-5 py-3">
@@ -859,6 +935,7 @@ export function IntakeSheet({
           branches={branches}
           branchIds={branchIds}
           totals={previewTotals}
+          missingPriceByBranch={missingPriceByBranch}
           hasReviewWarnings={hasReviewWarnings}
           reviewedWarnings={reviewedWarnings}
           onToggleReviewed={() => setReviewedWarnings((v) => !v)}
@@ -956,6 +1033,14 @@ type RowProps = {
   onResetOverride: (branchId: string) => void;
   onRemove: () => void;
   quantityRef?: (el: HTMLInputElement | null) => void;
+  /** Commit 3 — false en Conteo (no cambia precios). */
+  showSalePrice: boolean;
+  /** Columnas de precio a mostrar (vacío = usar el campo único + priceEditorOpen "por sucursal ▾"). */
+  priceColumnBranchIds: string[];
+  showPriceExpandToggle: boolean;
+  primaryBranch: { id: string; code: string } | null;
+  onSetSalePrice: (branchId: string, rawValue: string) => void;
+  onResetSalePrice: (branchId: string) => void;
 };
 
 function rowCells(line: IntakeLine, branchIds: string[], cells: Map<string, PreviewCell>): PreviewCell[] {
@@ -1003,6 +1088,94 @@ function CostHint({ cells, branchIds, branches, productId }: { cells: Map<string
   );
 }
 
+/**
+ * Commit 3 §3 — "si la sucursal no tiene costo: chips con 'Última compra
+ * C$85' y 'MGA C$82'. Tocar un chip lo copia al campo, pero no se llena
+ * solo." Solo tiene sentido ofrecerlos cuando el campo está vacío — una
+ * vez que el dueño escribió algo, los chips no sirven (ya hay un valor).
+ */
+function CostChips({ cell, principalCell, principalCode, onPick }: { cell: PreviewCell | undefined; principalCell: PreviewCell | undefined; principalCode: string | undefined; onPick: (value: number) => void }) {
+  const chips: Array<{ label: string; value: number }> = [];
+  if (cell?.lastPurchaseCost) chips.push({ label: `Última compra ${money(cell.lastPurchaseCost)}`, value: cell.lastPurchaseCost });
+  if (principalCode && principalCell?.currentEffectiveCost) chips.push({ label: `${principalCode} ${money(principalCell.currentEffectiveCost)}`, value: principalCell.currentEffectiveCost });
+  if (chips.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {chips.map((c) => (
+        <button key={c.label} type="button" onClick={() => onPick(c.value)} className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">{c.label}</button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Commit 3 — el campo "Precio de venta {sucursal}", con toda su ayuda:
+ * precio/margen vigente, margen con el costo NUEVO (ámbar bajo la
+ * política), atajos +5/10/15 % sobre el costo resultante e "igual que
+ * {principal}", y el aviso de "sin precio" (nunca bloquea, solo avisa).
+ */
+function SalePriceCell({ line, branchId, branchCode, cell, resultingCost, primaryBranch, principalCell, onSet, onReset, className }: {
+  line: IntakeLine;
+  branchId: string;
+  branchCode: string;
+  cell: PreviewCell | undefined;
+  resultingCost: number | null;
+  primaryBranch: { id: string; code: string } | null;
+  principalCell: PreviewCell | undefined;
+  onSet: (branchId: string, rawValue: string) => void;
+  onReset: (branchId: string) => void;
+  className?: string;
+}) {
+  const resolvedPrice = salePriceForIntakeBranch(line, branchId);
+  const overridden = branchId in line.salePriceOverrides;
+  const currentPrice = cell?.currentSalePrice ?? null;
+  const hasCurrentPrice = currentPrice !== null && currentPrice > 0;
+  const currentMargin = hasCurrentPrice && resultingCost !== null ? computeMarginPercent(currentPrice, resultingCost) : null;
+  const resultingPrice = resolvedPrice ?? (hasCurrentPrice ? currentPrice : null);
+  const newMargin = resultingPrice !== null && resultingCost !== null ? computeMarginPercent(resultingPrice, resultingCost) : null;
+  const belowPolicy = newMargin !== null && cell?.minMarginPercent != null && newMargin < cell.minMarginPercent;
+  const noPrice = !hasCurrentPrice && resolvedPrice === null;
+  const priceBelowCost = resultingPrice !== null && resultingCost !== null && resultingCost > 0 && resultingPrice < resultingCost;
+  const principalPrice = primaryBranch && primaryBranch.id !== branchId ? principalCell?.currentSalePrice ?? null : null;
+
+  return (
+    <div className={className}>
+      <div className="flex items-center gap-1">
+        <Input
+          type="number" min="0" step="0.01"
+          className={`w-24 text-right ${priceBelowCost ? "border-[var(--color-danger-400)]" : belowPolicy ? "border-[var(--color-warning-400)]" : ""}`}
+          value={resolvedPrice ?? ""}
+          onChange={(e) => onSet(branchId, e.target.value)}
+          placeholder="sin cambio"
+        />
+        {overridden ? <button type="button" onClick={() => onReset(branchId)} className="hm-icon-btn h-6 w-6" title="Igualar a 'para todas'"><RotateCcw className="h-3 w-3" /></button> : null}
+      </div>
+      <div className="mt-0.5 space-y-0.5 text-[10.5px] leading-tight">
+        {hasCurrentPrice ? (
+          <div className="text-[var(--color-text-muted)]">actual {money(currentPrice)}{currentMargin !== null ? ` · margen ${currentMargin.toFixed(1)}%` : ""}</div>
+        ) : null}
+        {noPrice ? (
+          <div className="text-[var(--color-warning-700)]">{branchCode} no tiene precio de venta</div>
+        ) : newMargin !== null && resultingPrice !== currentPrice ? (
+          <div className={belowPolicy ? "text-[var(--color-warning-700)]" : "text-[var(--color-text-muted)]"}>margen {belowPolicy ? "baja a" : "queda en"} {newMargin.toFixed(1)}% con el costo nuevo</div>
+        ) : null}
+        {resultingCost !== null && resultingCost > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {[5, 10, 15].map((m) => {
+              const shortcutPrice = priceForMarginPercent(resultingCost, m);
+              if (shortcutPrice === null) return null;
+              return <button key={m} type="button" onClick={() => onSet(branchId, String(Math.round(shortcutPrice * 100) / 100))} className="rounded-full border border-[var(--color-border)] px-1.5 py-0.5 font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">+{m}%</button>;
+            })}
+            {principalPrice !== null ? (
+              <button type="button" onClick={() => onSet(branchId, String(principalPrice))} className="rounded-full border border-[var(--color-border)] px-1.5 py-0.5 font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)]">igual que {primaryBranch!.code}</button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 const QUANTITY_ERROR_CODES = new Set(["MISSING_QUANTITY", "ALL_BRANCHES_SKIPPED"]);
 const COST_ERROR_CODES = new Set(["NO_COST_NO_AVERAGE", "OPENING_BALANCE_NO_COST", "PRICE_BELOW_COST"]);
 
@@ -1011,12 +1184,13 @@ function hasLineError(lineMessages: PreviewLineMessage[], codes: Set<string>): b
   return lineMessages.some((m) => codes.has(m.code));
 }
 
-function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove, quantityRef }: RowProps) {
+function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove, quantityRef, showSalePrice, priceColumnBranchIds, showPriceExpandToggle, primaryBranch, onSetSalePrice, onResetSalePrice }: RowProps) {
   const lineCells = rowCells(line, branchIds, cells);
   const showCost = shouldShowCostInput(kind, lineCells);
   const singleBranchId = branchIds.length === 1 ? branchIds[0] : null;
   const quantityHasError = !previewFailed && hasLineError(lineMessages, QUANTITY_ERROR_CODES);
   const costHasError = !previewFailed && hasLineError(lineMessages, COST_ERROR_CODES);
+  const principalCell = primaryBranch ? cells.get(cellKey(line.productId, primaryBranch.id)) : undefined;
   // "Las otras sucursales quedan sin cantidad. ¿Usar X para todas?" (Commit 2 #1) — solo tiene sentido con "para todas" vacío y AL MENOS una, pero no todas, las sucursales con un valor propio.
   const overrideCount = Object.keys(line.overrides).length;
   const showUseForAllHint = branchIds.length > 1 && line.quantity === null && overrideCount > 0 && overrideCount < branchIds.length;
@@ -1079,9 +1253,24 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, 
               <>
                 <Input type="number" min="0" step="0.01" className={`w-24 text-right ${costHasError ? "border-[var(--color-danger-400)]" : ""}`} value={line.unitCost || ""} onChange={(e) => onUpdate({ unitCost: e.target.value === "" ? null : Number(e.target.value) })} placeholder={kind === "OPENING_BALANCE" ? "obligatorio" : "sin cambio"} />
                 {!line.unitCost ? <CostHint cells={cells} branchIds={branchIds} branches={branches} productId={line.productId} /> : null}
+                {!line.unitCost ? <CostChips cell={singleBranchId ? cells.get(cellKey(line.productId, singleBranchId)) : lineCells[0]} principalCell={principalCell} principalCode={primaryBranch?.code} onPick={(value) => onUpdate({ unitCost: value })} /> : null}
               </>
             ) : <span className="text-[var(--color-text-soft)]">—</span>}
           </td>
+        ) : null}
+        {showSalePrice ? (
+          priceColumnBranchIds.length > 0
+            ? priceColumnBranchIds.map((id) => {
+                const resultingCost = line.unitCost ?? cells.get(cellKey(line.productId, id))?.currentEffectiveCost ?? null;
+                return <td key={id} className="hm-num"><SalePriceCell line={line} branchId={id} branchCode={branches.find((b) => b.id === id)?.code ?? id} cell={cells.get(cellKey(line.productId, id))} resultingCost={resultingCost} primaryBranch={primaryBranch} principalCell={principalCell} onSet={onSetSalePrice} onReset={onResetSalePrice} /></td>;
+              })
+            : showPriceExpandToggle ? (
+                <td className="hm-num">
+                  <button type="button" onClick={onTogglePriceEditor} className="text-xs font-semibold text-[var(--color-master-600)]">
+                    Precio de venta · {branchIds.length} suc. {priceEditorOpen ? "▴" : "▾"}
+                  </button>
+                </td>
+              ) : null
         ) : null}
         <td className="min-w-[140px]">
           {branchIds.length > 1
@@ -1089,21 +1278,28 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, 
             : <ResultLine cell={singleBranchId ? cells.get(cellKey(line.productId, singleBranchId)) : undefined} />}
           {previewFailed ? null : <RowMessages messages={lineMessages} expanded={expanded} onToggleExpanded={onToggleExpanded} />}
         </td>
-        <td><StatusBadge status={previewFailed ? "PENDING" : rowStatus} loading={rowLoading && !previewFailed} firstMessageCode={lineMessages[0]?.code} /></td>
         <td>
-          <div className="flex items-center gap-1">
-            <button type="button" onClick={onTogglePriceEditor} className="hm-icon-btn h-7 w-7" title="Cambiar precio de venta"><MoreHorizontal className="h-3.5 w-3.5" /></button>
-            <button type="button" onClick={onRemove} className="hm-icon-btn hm-icon-btn-danger h-7 w-7"><Trash2 className="h-3.5 w-3.5" /></button>
-          </div>
+          <StatusBadge status={previewFailed ? "PENDING" : rowStatus} loading={rowLoading && !previewFailed} firstMessageCode={lineMessages[0]?.code} />
+          {!rowLoading && !previewFailed ? <div className="mt-0.5 text-[10.5px] text-[var(--color-text-muted)]">{rowStateLabel(rowStatus, lineMessages.map((m) => m.code))}</div> : null}
+        </td>
+        <td>
+          <button type="button" onClick={onRemove} className="hm-icon-btn hm-icon-btn-danger h-7 w-7"><Trash2 className="h-3.5 w-3.5" /></button>
         </td>
       </tr>
-      {priceEditorOpen ? (
+      {showPriceExpandToggle && priceEditorOpen ? (
         <tr>
-          <td colSpan={8} className="bg-[var(--color-surface-alt)] px-3 py-2">
-            <label className="flex items-center gap-2 text-xs">
-              <span className="font-semibold text-[var(--color-text-muted)]">Cambiar precio de venta</span>
-              <Input type="number" min="0" step="0.01" className="w-28" value={line.salePrice ?? ""} onChange={(e) => onUpdate({ salePrice: e.target.value === "" ? null : Number(e.target.value) })} placeholder="sin cambio" />
-            </label>
+          <td colSpan={11} className="bg-[var(--color-surface-alt)] px-3 py-2">
+            <div className="flex flex-wrap gap-3">
+              {branchIds.map((id) => {
+                const resultingCost = line.unitCost ?? cells.get(cellKey(line.productId, id))?.currentEffectiveCost ?? null;
+                return (
+                  <div key={id}>
+                    <div className="mb-1 text-[10.5px] font-semibold text-[var(--color-text-muted)]">{branches.find((b) => b.id === id)?.code ?? id}</div>
+                    <SalePriceCell line={line} branchId={id} branchCode={branches.find((b) => b.id === id)?.code ?? id} cell={cells.get(cellKey(line.productId, id))} resultingCost={resultingCost} primaryBranch={primaryBranch} principalCell={principalCell} onSet={onSetSalePrice} onReset={onResetSalePrice} />
+                  </div>
+                );
+              })}
+            </div>
           </td>
         </tr>
       ) : null}
@@ -1111,12 +1307,13 @@ function IntakeTableRow({ line, kind, branches, branchIds, cells, lineMessages, 
   );
 }
 
-function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, priceEditorOpen, onTogglePriceEditor, onUpdate, onSetOverride, onResetOverride, onRemove }: RowProps) {
+function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, previewFailed, expanded, onToggleExpanded, rowLoading, rowStatus, onUpdate, onSetOverride, onResetOverride, onRemove, showSalePrice, primaryBranch, onSetSalePrice, onResetSalePrice }: RowProps) {
   const lineCells = rowCells(line, branchIds, cells);
   const showCost = shouldShowCostInput(kind, lineCells);
   const singleBranchId = branchIds.length === 1 ? branchIds[0] : null;
   const quantityHasError = !previewFailed && hasLineError(lineMessages, QUANTITY_ERROR_CODES);
   const costHasError = !previewFailed && hasLineError(lineMessages, COST_ERROR_CODES);
+  const principalCell = primaryBranch ? cells.get(cellKey(line.productId, primaryBranch.id)) : undefined;
   const overrideCount = Object.keys(line.overrides).length;
   const showUseForAllHint = branchIds.length > 1 && line.quantity === null && overrideCount > 0 && overrideCount < branchIds.length;
   const firstOverrideValue = showUseForAllHint ? Object.values(line.overrides).find((v) => v !== null && v !== undefined) ?? null : null;
@@ -1151,6 +1348,7 @@ function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, p
             <span className="mb-1 block text-[var(--color-text-muted)]">Costo de esta entrada</span>
             <Input type="number" min="0" step="0.01" className={`h-11 ${costHasError ? "border-[var(--color-danger-400)]" : ""}`} value={line.unitCost || ""} onChange={(e) => onUpdate({ unitCost: e.target.value === "" ? null : Number(e.target.value) })} placeholder={kind === "OPENING_BALANCE" ? "obligatorio" : "sin cambio"} />
             {!line.unitCost ? <CostHint cells={cells} branchIds={branchIds} branches={branches} productId={line.productId} /> : null}
+            {!line.unitCost ? <CostChips cell={singleBranchId ? cells.get(cellKey(line.productId, singleBranchId)) : lineCells[0]} principalCell={principalCell} principalCode={primaryBranch?.code} onPick={(value) => onUpdate({ unitCost: value })} /> : null}
           </label>
         ) : null}
       </div>
@@ -1196,19 +1394,30 @@ function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, p
           </div>
         </details>
       ) : null}
-      <button type="button" onClick={onTogglePriceEditor} className="mt-2 text-xs font-semibold text-[var(--color-master-600)]">⋯ Cambiar precio de venta</button>
-      {priceEditorOpen ? (
-        <Input type="number" min="0" step="0.01" className="mt-1 h-11" value={line.salePrice ?? ""} onChange={(e) => onUpdate({ salePrice: e.target.value === "" ? null : Number(e.target.value) })} placeholder="sin cambio" />
+      {!previewFailed ? <div className="mt-1 text-[10.5px] font-medium text-[var(--color-text-muted)]">{rowStateLabel(rowStatus, lineMessages.map((m) => m.code))}</div> : null}
+      {showSalePrice ? (
+        <div className="mt-2 space-y-2 border-t border-[var(--color-border)] pt-2">
+          {branchIds.map((id) => {
+            const resultingCost = line.unitCost ?? cells.get(cellKey(line.productId, id))?.currentEffectiveCost ?? null;
+            return (
+              <div key={id}>
+                <span className="mb-1 block text-xs text-[var(--color-text-muted)]">Precio de venta{branchIds.length > 1 ? ` ${branches.find((b) => b.id === id)?.code ?? id}` : ""}</span>
+                <SalePriceCell line={line} branchId={id} branchCode={branches.find((b) => b.id === id)?.code ?? id} cell={cells.get(cellKey(line.productId, id))} resultingCost={resultingCost} primaryBranch={primaryBranch} principalCell={principalCell} onSet={onSetSalePrice} onReset={onResetSalePrice} />
+              </div>
+            );
+          })}
+        </div>
       ) : null}
     </div>
   );
 }
 
-function ConfirmSummaryModal({ kind, branches, branchIds, totals, hasReviewWarnings, reviewedWarnings, onToggleReviewed, submitting, onCancel, onConfirm, editBranchCode }: {
+function ConfirmSummaryModal({ kind, branches, branchIds, totals, missingPriceByBranch, hasReviewWarnings, reviewedWarnings, onToggleReviewed, submitting, onCancel, onConfirm, editBranchCode }: {
   kind: IntakeKind;
   branches: Branch[];
   branchIds: string[];
   totals: Record<string, PreviewTotals>;
+  missingPriceByBranch: Record<string, number>;
   hasReviewWarnings: boolean;
   reviewedWarnings: boolean;
   onToggleReviewed: () => void;
@@ -1234,6 +1443,11 @@ function ConfirmSummaryModal({ kind, branches, branchIds, totals, hasReviewWarni
             );
           })}
         </div>
+        {Object.keys(missingPriceByBranch).length > 0 ? (
+          <p className="mt-2 text-xs text-[var(--color-warning-700)]">
+            {Object.entries(missingPriceByBranch).map(([id, count]) => `${count} producto${count === 1 ? "" : "s"} sin precio en ${branches.find((b) => b.id === id)?.code ?? id}`).join(" · ")}
+          </p>
+        ) : null}
         {hasReviewWarnings ? (
           <label className="mt-3 flex items-center gap-2 text-xs text-[var(--color-warning-800)]">
             <input type="checkbox" checked={reviewedWarnings} onChange={onToggleReviewed} /> Revisé los avisos marcados con ⚠

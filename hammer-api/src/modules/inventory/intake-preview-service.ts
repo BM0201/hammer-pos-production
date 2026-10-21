@@ -2,6 +2,7 @@ import { Prisma, PrismaClient, MultiBranchIntakeKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getProductStockConversionsBatch, calculateSharedStockChange } from "@/modules/inventory/unit-conversion";
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
+import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
 import { recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
 import { normalizeIntakeKind, stockModeForKind, type NormalizedIntakeKind } from "@/modules/inventory/multi-branch-intake-service";
 import { validateIntakeLine, formatGroupedMessageText, type IntakeValidationMessage, type IntakeLineStatus } from "@/modules/inventory/intake-validation";
@@ -21,6 +22,8 @@ export type PreviewRequestLine = {
   overrides?: Record<string, number | null>;
   unitCost?: number | null;
   salePrice?: number | null;
+  /** Commit 3 (prompt-entrada-reintento-precio.md) — precio de venta por sucursal, mismo patrón que `overrides` de cantidad: gana sobre `salePrice`. */
+  salePriceOverrides?: Record<string, number | null>;
   unit?: string;
 };
 
@@ -40,6 +43,12 @@ export type PreviewCell = {
   newWac: number | null;
   lastPurchaseCost: number | null;
   lastPurchaseDate: string | null;
+  /** Commit 3 — precio de venta vigente en ESTA sucursal (effectivePrice; <=0 = sin precio configurado). */
+  currentSalePrice: number | null;
+  /** Costo efectivo vigente ANTES de esta línea — el mismo que usa la validación para "margen actual" (distinto de currentWac, que es el WAC crudo). */
+  currentEffectiveCost: number | null;
+  /** Mínimo de margen de la política de categoría de esta sucursal — null = sin política configurada. */
+  minMarginPercent: number | null;
   status: IntakeLineStatus;
   messages: IntakeValidationMessage[];
 };
@@ -66,6 +75,12 @@ function quantityForBranch(line: PreviewRequestLine, branchId: string): number |
   return line.quantity;
 }
 
+/** Commit 3 — mismo patrón que quantityForBranch: el override de ESA sucursal gana sobre el precio "para todas". */
+function salePriceForBranch(line: PreviewRequestLine, branchId: string): number | null {
+  if (line.salePriceOverrides && branchId in line.salePriceOverrides) return line.salePriceOverrides[branchId];
+  return line.salePrice ?? null;
+}
+
 export async function previewIntake(input: PreviewRequest, db: PrismaClient = prisma): Promise<PreviewResult> {
   const kind = normalizeIntakeKind(input.kind);
   const stockMode = stockModeForKind(kind);
@@ -76,6 +91,7 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
   const [
     conversionByProductId,
     pricingByKey,
+    policyByKey,
     products,
     pendingPOs,
     purchaseQuantityHistory,
@@ -83,6 +99,9 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
   ] = await Promise.all([
     getProductStockConversionsBatch(db, productIds),
     getEffectiveProductPricingBatch(db, pairs),
+    // Commit 3 — "política de la categoría" (minMarginPercent), misma
+    // fuente que ya usa la pantalla de precios de sucursal (branch-band-service.ts).
+    resolvePolicyForProductBatch(pairs, db),
     // lastPurchaseCost/costUpdatedAt ya son GLOBALES (por producto, no por
     // sucursal) en todo el resto del sistema — purchase-orders/service.ts los
     // actualiza así en cada recepción; no hay "última compra por sucursal"
@@ -193,6 +212,9 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
           ? { reason: `Este producto se unificó en ${product.mergedInto?.name ?? product.mergedIntoProductId} (${product.mergedInto?.sku ?? ""}): cargá en ese producto.` }
           : null;
 
+      const currentSalePrice = effective?.effectivePrice !== null && effective?.effectivePrice !== undefined ? Number(effective.effectivePrice) : null;
+      const minMarginPercent = policyByKey.get(key)?.categoryPolicy.minMarginPercent ?? null;
+
       const validation = validateIntakeLine({
         kind,
         quantity: resolvedQty,
@@ -200,7 +222,9 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
         enteredCost: line.unitCost ?? null,
         currentEffectiveCost,
         lastPurchaseCost,
-        newPrice: line.salePrice ?? null,
+        newPrice: salePriceForBranch(line, branchId),
+        currentSalePrice,
+        minMarginPercent,
         productBlocked,
         pendingPurchaseOrder: pendingPO,
         typicalPurchaseQuantity: typicalQuantityByKey.get(key) ?? null,
@@ -216,6 +240,9 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
         newWac: newWacBase !== null ? Number(newWacBase) : null,
         lastPurchaseCost,
         lastPurchaseDate,
+        currentSalePrice,
+        currentEffectiveCost,
+        minMarginPercent,
         status: validation.status,
         messages: validation.messages,
       });

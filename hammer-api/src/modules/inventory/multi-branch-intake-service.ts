@@ -52,8 +52,10 @@ export type IntakeLineInput = {
   quantity: number;
   overrides?: Record<string, number>;
   unitCost?: number;
-  /** Fase 2 — "⋯ → Cambiar precio de venta", opcional, por línea (mismo valor para todas las sucursales de esa línea). */
+  /** Precio de venta "para todas" — gana `salePriceOverrides` de esa sucursal, si existe. */
   salePrice?: number;
+  /** Commit 3 (prompt-entrada-reintento-precio.md) — columna "Precio de venta {sucursal}", mismo patrón que `overrides` de cantidad. */
+  salePriceOverrides?: Record<string, number>;
   /** Selector de unidad, si el producto tiene conversión — igual que hoy. */
   unit?: string;
 };
@@ -95,6 +97,11 @@ export type CreateIntakeResult = {
 
 function quantityForBranch(line: IntakeLineInput, branchId: string): number {
   return line.overrides && branchId in line.overrides ? line.overrides[branchId] : line.quantity;
+}
+
+/** Commit 3 — mismo patrón que quantityForBranch: el override de ESA sucursal gana sobre el precio "para todas". */
+function salePriceForBranch(line: IntakeLineInput, branchId: string): number | undefined {
+  return line.salePriceOverrides && branchId in line.salePriceOverrides ? line.salePriceOverrides[branchId] : line.salePrice;
 }
 
 function validateInput(input: CreateIntakeInput) {
@@ -150,7 +157,7 @@ export type ResolvedLine = { productId: string; quantity: number; unitCost?: num
  */
 function resolveLinesForBranch(lines: IntakeLineInput[], branchId: string, kind: NormalizedIntakeKind): ResolvedLine[] {
   return lines
-    .map((line) => ({ productId: line.productId, quantity: quantityForBranch(line, branchId), unitCost: line.unitCost, salePrice: line.salePrice, unit: line.unit }))
+    .map((line) => ({ productId: line.productId, quantity: quantityForBranch(line, branchId), unitCost: line.unitCost, salePrice: salePriceForBranch(line, branchId), unit: line.unit }))
     .filter((line) => (kind === "PHYSICAL_COUNT" ? line.quantity >= 0 : line.quantity > 0));
 }
 

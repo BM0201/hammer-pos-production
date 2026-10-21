@@ -15,6 +15,8 @@ const lineSchema = z.object({
   overrides: z.record(z.string(), z.number().min(0).nullable()).optional(),
   unitCost: z.number().min(0).nullable().optional(),
   salePrice: z.number().positive().nullable().optional(),
+  // Commit 3 (prompt-entrada-reintento-precio.md) — mismo patrón que `overrides` de cantidad.
+  salePriceOverrides: z.record(z.string(), z.number().positive().nullable()).optional(),
   unit: z.string().optional(),
 });
 

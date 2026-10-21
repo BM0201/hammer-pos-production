@@ -3,17 +3,23 @@ import test from "node:test";
 import {
   addOrFocusScannedProduct,
   applyBranchCellInput,
+  applySalePriceCellInput,
   buildCreateIntakeRequest,
   buildIntakePayloadLines,
   buildPreviewRequestLines,
   canConfirmIntake,
   clearIntakeDraft,
   computeBarCounts,
+  computeMarginPercent,
+  countMissingPriceByBranch,
   draftAgeLabel,
   enforceBranchSelectionForKind,
   firstErrorProductId,
   loadIntakeDraft,
+  priceForMarginPercent,
   quantityForIntakeBranch,
+  rowStateLabel,
+  salePriceForIntakeBranch,
   saveIntakeDraft,
   shortTextForErrorCode,
   switchingKindNeedsConfirmation,
@@ -41,7 +47,7 @@ function line(overrides: Partial<IntakeLine> = {}): IntakeLine {
   return {
     productId: "p1", sku: "SKU-1", name: "Cemento", saleUnit: "BOLSA", baseUnit: "BOLSA",
     hasConversion: false, conversionFactor: 1, unit: "BOLSA",
-    quantity: null, overrides: {}, unitCost: null, salePrice: null,
+    quantity: null, overrides: {}, unitCost: null, salePrice: null, salePriceOverrides: {},
     ...overrides,
   };
 }
@@ -285,4 +291,78 @@ test("firstErrorProductId: el primero en el orden de las filas, no el primero al
 
 test("firstErrorProductId: sin ningún error, null", () => {
   assert.equal(firstErrorProductId([{ productId: "p1", status: "OK" as const }]), null);
+});
+
+// ── prompt-entrada-reintento-precio.md Commit 3 — precio de venta y margen ─
+
+test("LA QUE IMPORTA — salePriceForIntakeBranch: el override de esa sucursal gana sobre 'para todas'", () => {
+  const l = line({ salePrice: 100, salePriceOverrides: { "branch-1": 150 } });
+  assert.equal(salePriceForIntakeBranch(l, "branch-1"), 150);
+  assert.equal(salePriceForIntakeBranch(l, "branch-2"), 100, "sin override, usa el general");
+});
+
+test("applySalePriceCellInput: vacío quita el override (vuelve a 'para todas'), un número lo fija", () => {
+  let l = line({ salePrice: 100 });
+  l = applySalePriceCellInput(l, "branch-1", "180");
+  assert.equal(l.salePriceOverrides["branch-1"], 180);
+  l = applySalePriceCellInput(l, "branch-1", "");
+  assert.ok(!("branch-1" in l.salePriceOverrides), "vacío QUITA el override, no lo deja en null");
+});
+
+test("applySalePriceCellInput: un precio <= 0 no tiene sentido, se ignora (no se guarda como override)", () => {
+  const l = line({ salePrice: 100 });
+  const result = applySalePriceCellInput(l, "branch-1", "0");
+  assert.deepEqual(result, l, "sin cambios");
+});
+
+test("LA QUE IMPORTA — buildIntakePayloadLines manda salePriceOverrides igual que overrides de cantidad (solo donde difiere del general)", () => {
+  const l = line({ quantity: 10, salePrice: 100, salePriceOverrides: { "b1": 150, "b2": 100 } });
+  const [payload] = buildIntakePayloadLines([l], ["b1", "b2"]);
+  assert.equal(payload.salePrice, 100);
+  assert.deepEqual(payload.salePriceOverrides, { b1: 150 }, "b2 coincide con el general -- no viaja como override");
+});
+
+test("buildPreviewRequestLines incluye salePriceOverrides (o undefined si no hay ninguno)", () => {
+  const withOverride = buildPreviewRequestLines([line({ salePriceOverrides: { b1: 200 } })]);
+  assert.deepEqual(withOverride[0].salePriceOverrides, { b1: 200 });
+  const without = buildPreviewRequestLines([line()]);
+  assert.equal(without[0].salePriceOverrides, undefined);
+});
+
+test("LA QUE IMPORTA — computeMarginPercent: margen como % del precio (branch-band-service.ts), no del costo", () => {
+  assert.equal(computeMarginPercent(100, 80), 20);
+  assert.equal(computeMarginPercent(200, 150), 25);
+  assert.equal(computeMarginPercent(0, 80), null, "sin precio positivo, no hay margen que calcular");
+});
+
+test("LA QUE IMPORTA — priceForMarginPercent (atajo +N%): calcula sobre el costo RESULTANTE recibido, es responsabilidad de quien llama pasar el costo nuevo", () => {
+  // margen 20% sobre costo 80 -> precio 100 (verificación cruzada con computeMarginPercent).
+  const price = priceForMarginPercent(80, 20)!;
+  assert.equal(Math.round(price), 100);
+  assert.equal(Math.round(computeMarginPercent(price, 80)!), 20);
+});
+
+test("rowStateLabel: ERROR por cantidad -> 'Falta cantidad'; por costo -> 'Falta costo'; nunca 'Falta dato' genérico", () => {
+  assert.equal(rowStateLabel("ERROR", ["MISSING_QUANTITY"]), "Falta cantidad");
+  assert.equal(rowStateLabel("ERROR", ["NO_COST_NO_AVERAGE"]), "Falta costo");
+  assert.equal(rowStateLabel("ERROR", ["OPENING_BALANCE_NO_COST"]), "Falta costo");
+});
+
+test("rowStateLabel: REVIEW por margen o sin precio -> 'Revisar margen'", () => {
+  assert.equal(rowStateLabel("REVIEW", ["MARGIN_BELOW_POLICY"]), "Revisar margen");
+  assert.equal(rowStateLabel("REVIEW", ["NO_SALE_PRICE"]), "Revisar margen");
+});
+
+test("rowStateLabel: OK sin mensajes -> 'Listo'", () => {
+  assert.equal(rowStateLabel("OK", []), "Listo");
+});
+
+test("LA QUE IMPORTA — countMissingPriceByBranch: cuenta por sucursal, no mezcla las demás", () => {
+  const cells = [
+    { branchId: "b1", messages: [{ code: "NO_SALE_PRICE" }] },
+    { branchId: "b1", messages: [{ code: "NO_SALE_PRICE" }] },
+    { branchId: "b2", messages: [{ code: "NO_SALE_PRICE" }] },
+    { branchId: "b2", messages: [{ code: "MARGIN_BELOW_POLICY" }] }, // no cuenta -- no es NO_SALE_PRICE
+  ];
+  assert.deepEqual(countMissingPriceByBranch(cells), { b1: 2, b2: 1 });
 });

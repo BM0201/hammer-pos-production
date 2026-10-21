@@ -18,7 +18,9 @@ function decimal(value: number) {
 const BRANCH_1 = "branch-1";
 const BRANCH_2 = "branch-2";
 
-type ProductFixture = { id: string; isActive?: boolean; standardSalePrice?: number; averageCost?: number | null; globalCost?: number | null; lastPurchaseCost?: number | null; costUpdatedAt?: Date | null; mergedIntoProductId?: string | null; mergedInto?: { sku: string; name: string } | null };
+type ProductFixture = { id: string; isActive?: boolean; standardSalePrice?: number; averageCost?: number | null; globalCost?: number | null; lastPurchaseCost?: number | null; costUpdatedAt?: Date | null; mergedIntoProductId?: string | null; mergedInto?: { sku: string; name: string } | null; categoryId?: string };
+/** Commit 3 (prompt-entrada-reintento-precio.md) — "política de la categoría" (resolvePolicyForProductBatch). Ausente = usa el default real de FALLBACK_POLICY_DEFAULTS (15%), igual que producción sin PricingConfig ni BranchCategoryPricingPolicy. */
+type CategoryPolicyFixture = { branchId: string; categoryId: string; minMarginPercent: number; targetMarginPercent?: number };
 type BalanceFixture = { branchId: string; productId: string; quantityOnHand: number; weightedAverageCost: number };
 type BranchSettingFixture = { branchId: string; productId: string; branchCost?: number | null; branchPrice?: number | null };
 type ApprovedPoFixture = { id: string; orderNumber: string; branchId: string; productIds: string[] };
@@ -33,6 +35,7 @@ function buildFakeDb(opts: {
   approvedPOs?: ApprovedPoFixture[];
   poLines?: PoLineFixture[];
   fusionMembers?: FusionMemberFixture[];
+  categoryPolicies?: CategoryPolicyFixture[];
 } = {}) {
   const products = opts.products ?? [];
   const balances = opts.balances ?? [];
@@ -40,6 +43,7 @@ function buildFakeDb(opts: {
   const approvedPOs = opts.approvedPOs ?? [];
   const poLines = opts.poLines ?? [];
   const fusionMembers = opts.fusionMembers ?? [];
+  const categoryPolicies = opts.categoryPolicies ?? [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fake db, shape dictado por los selects reales de cada llamador.
   const db: any = {
@@ -89,7 +93,23 @@ function buildFakeDb(opts: {
             costUpdatedAt: p.costUpdatedAt ?? null,
             mergedIntoProductId: p.mergedIntoProductId ?? null,
             mergedInto: p.mergedInto ?? null,
+            // resolvePolicyForProductBatch (Commit 3) — mismo mock, otro select.
+            categoryId: p.categoryId ?? "cat-default",
+            category: { code: "GEN", name: "General" },
           })),
+    },
+    // Commit 3 — "política de la categoría" (resolvePolicyForProductBatch).
+    // Sin fixtures (default): ningún test de antes de este commit configura
+    // esto, así que cae al default real de PricingConfig/FALLBACK_POLICY_DEFAULTS
+    // (15%) — nunca dispara MARGIN_BELOW_POLICY por accidente.
+    branchCategoryPricingPolicy: {
+      findMany: async ({ where }: { where: { branchId: { in: string[] }; categoryId: { in: string[] } } }) =>
+        categoryPolicies
+          .filter((p) => where.branchId.in.includes(p.branchId) && where.categoryId.in.includes(p.categoryId))
+          .map((p) => ({ id: `policy-${p.branchId}-${p.categoryId}`, branchId: p.branchId, categoryId: p.categoryId, minMarginPercent: decimal(p.minMarginPercent), targetMarginPercent: decimal(p.targetMarginPercent ?? 30), minProfitAmount: decimal(0), maxDiscountPercent: decimal(0), estimatedMonthlyUnits: decimal(1), estimatedMonthlySalesValue: null, monthlyExpenseAllocation: decimal(0), stockPolicy: "NORMAL", priceMode: "CATEGORY", roundingRule: "NEAREST_1", isActive: true, notes: null, category: { code: "GEN", name: "General" } })),
+    },
+    pricingConfig: {
+      findMany: async () => [],
     },
     // prompt-entrada-multisucursal-fix.md — códigos de sucursal para
     // lineMessages agrupados; ningún test de este archivo verifica el
@@ -127,7 +147,11 @@ function buildFakeDb(opts: {
 
 test("LA QUE IMPORTA — ADD_STOCK con costo PROMEDIA de verdad en la vista previa (120 a 402.30 + 50 a 415 → 406.04), igual que el servicio real", async () => {
   const db = buildFakeDb({
-    products: [{ id: "p1" }],
+    // standardSalePrice realista frente al costo (415) — nada que ver con
+    // lo que este test verifica (el promedio de WAC), pero con el default
+    // de 100 el margen quedaría negativo y dispararía MARGIN_BELOW_POLICY
+    // (Commit 3), que es correcto mas no lo que este test puntual mide.
+    products: [{ id: "p1", standardSalePrice: 600 }],
     balances: [{ branchId: BRANCH_1, productId: "p1", quantityOnHand: 120, weightedAverageCost: 402.3 }],
   });
   const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "p1", quantity: 50, unitCost: 415 }] }, db);
@@ -341,4 +365,53 @@ test("LA QUE IMPORTA — sin costo en una sola sucursal de dos: lineMessages agr
   const noCostGroup = grouped.find((m) => m.code === "NO_COST_NO_AVERAGE")!;
   assert.deepEqual(noCostGroup.branchCodes, [BRANCH_2], "solo la sucursal que de verdad no tiene costo, no las dos");
   assert.ok(!noCostGroup.text.includes(BRANCH_1), "el texto agrupado nunca mezcla ids/códigos de sucursales no afectadas");
+});
+
+// ── prompt-entrada-reintento-precio.md Commit 3 — precio de venta por sucursal ──
+
+test("LA QUE IMPORTA — salePriceOverrides por sucursal gana sobre salePrice general", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "p1", standardSalePrice: 100 }],
+    categoryPolicies: [{ branchId: BRANCH_1, categoryId: "cat-default", minMarginPercent: 10 }, { branchId: BRANCH_2, categoryId: "cat-default", minMarginPercent: 10 }],
+  });
+  const result = await previewIntake({
+    kind: "ADD_STOCK",
+    branchIds: [BRANCH_1, BRANCH_2],
+    lines: [{ productId: "p1", quantity: 10, unitCost: 50, salePrice: 200, salePriceOverrides: { [BRANCH_1]: 60 } }],
+  }, db);
+  const cellB1 = result.cells.find((c) => c.branchId === BRANCH_1)!;
+  const cellB2 = result.cells.find((c) => c.branchId === BRANCH_2)!;
+  // BRANCH_1 usa el override (60) contra costo 50 -> margen (60-50)/60=16.7%, por encima del 10% mínimo: OK.
+  assert.ok(!cellB1.messages.some((m) => m.code === "MARGIN_BELOW_POLICY"));
+  assert.ok(!cellB1.messages.some((m) => m.code === "PRICE_BELOW_COST"));
+  // BRANCH_2 usa el general (200) contra el mismo costo -> margen alto, también OK, pero con otro precio.
+  assert.equal(cellB2.status, "OK");
+});
+
+test("sin precio en absoluto (ni override, ni general, ni vigente): avisa 'sin precio', nunca bloquea ni fuerza un valor", async () => {
+  const db = buildFakeDb({ products: [{ id: "p1", standardSalePrice: 0 }] }); // "0" = nunca se configuró un precio
+  const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "p1", quantity: 10, unitCost: 50 }] }, db);
+  const cell = result.cells[0];
+  assert.equal(cell.status, "REVIEW", "avisa, no bloquea");
+  assert.ok(cell.messages.some((m) => m.code === "NO_SALE_PRICE"));
+  assert.equal(cell.currentSalePrice, 0);
+});
+
+test("LA QUE IMPORTA — el margen se calcula sobre el costo RESULTANTE (entrado en esta línea), no sobre el costo efectivo viejo", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "p1", standardSalePrice: 100, averageCost: 20 }], // costo viejo 20 -> margen viejo altísimo si se usara ese
+    categoryPolicies: [{ branchId: BRANCH_1, categoryId: "cat-default", minMarginPercent: 30 }],
+  });
+  const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "p1", quantity: 10, unitCost: 85 }] }, db); // costo NUEVO 85 -> margen (100-85)/100=15%, bajo el 30%
+  const cell = result.cells[0];
+  const msg = cell.messages.find((m) => m.code === "MARGIN_BELOW_POLICY");
+  assert.ok(msg, "debe avisar con el costo entrado, no el costo viejo (que hubiera dado margen de 80%)");
+  assert.match(msg!.text, /15\.0%/);
+});
+
+test("precio bajo el costo resultante bloquea de punta a punta (vista previa real, no solo la validación pura)", async () => {
+  const db = buildFakeDb({ products: [{ id: "p1", standardSalePrice: 100 }] });
+  const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "p1", quantity: 10, unitCost: 80, salePrice: 70 }] }, db);
+  assert.equal(result.cells[0].status, "ERROR");
+  assert.ok(result.cells[0].messages.some((m) => m.code === "PRICE_BELOW_COST"));
 });

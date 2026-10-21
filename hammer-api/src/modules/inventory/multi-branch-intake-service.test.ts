@@ -926,3 +926,29 @@ test("posible duplicado: una FAILED de hace más de 14 días no cuenta", async (
   }, db);
   assert.ok(second.intake.id, "se creó sin aviso -- la FAILED anterior ya pasó los 14 días");
 });
+
+// ── prompt-entrada-reintento-precio.md Commit 3 — precio de venta por sucursal ──
+
+test("LA QUE IMPORTA — salePriceOverrides aplica un precio DISTINTO por sucursal, salePrice general es el resto", async () => {
+  const { db } = buildFakeDb();
+  const upserts: Array<{ branchId: string; branchPrice: number }> = [];
+  const originalUpsert = db.branchProductSetting.upsert;
+  db.branchProductSetting.upsert = async (args: { where: { branchId_productId: { branchId: string; productId: string } }; create: Record<string, unknown> }) => {
+    if ("branchPrice" in args.create) upserts.push({ branchId: args.where.branchId_productId.branchId, branchPrice: Number(args.create.branchPrice) });
+    return originalUpsert(args);
+  };
+
+  const result = await createMultiBranchIntake({
+    clientRequestId: "req-saleprice",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1, BRANCH_2],
+    lines: [{ productId: "p1", quantity: 10, unitCost: 50, salePrice: 150, salePriceOverrides: { [BRANCH_1]: 180 } }],
+  }, db);
+
+  assert.equal(result.branches.find((b) => b.branchId === BRANCH_1)!.status, "DONE");
+  assert.equal(result.branches.find((b) => b.branchId === BRANCH_2)!.status, "DONE");
+  assert.equal(upserts.find((u) => u.branchId === BRANCH_1)?.branchPrice, 180, "BRANCH_1 usa el override");
+  assert.equal(upserts.find((u) => u.branchId === BRANCH_2)?.branchPrice, 150, "BRANCH_2 usa el precio general (sin override)");
+});

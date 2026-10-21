@@ -30,7 +30,9 @@ export type IntakeValidationMessage = {
     | "COUNT_DROPS_SHARPLY"
     | "PENDING_PURCHASE_ORDER"
     | "QUANTITY_FAR_ABOVE_TYPICAL"
-    | "ALL_BRANCHES_SKIPPED";
+    | "ALL_BRANCHES_SKIPPED"
+    | "NO_SALE_PRICE"
+    | "MARGIN_BELOW_POLICY";
   text: string;
   /** DATA = falta un dato; BLOCKED = el producto no se puede cargar acá; RULE = una regla de negocio lo impide o lo marca para revisar. La pantalla elige el texto corto del badge con esto. */
   kind: IntakeMessageKind;
@@ -47,8 +49,18 @@ export type ValidateIntakeLineInput = {
   /** Costo efectivo ANTES de esta línea (branchCost > WAC > averageCost > globalCost > lastPurchaseCost) — null = sin costo previo. */
   currentEffectiveCost: number | null;
   lastPurchaseCost: number | null;
-  /** Precio de venta nuevo, solo si la fila lo cambia (Fase 2, "⋯ → Cambiar precio de venta"). null = no se toca. */
+  /** Precio de venta nuevo, solo si la fila lo cambia (ya resuelto para ESTA sucursal — override ?? general). null = no se toca. */
   newPrice: number | null;
+  /**
+   * prompt-entrada-reintento-precio.md Commit 3 — precio de venta vigente
+   * en ESTA sucursal (nunca null en el llamador real: effectivePrice cae a
+   * standardSalePrice). null acá = "el llamador no mandó este dato" (test
+   * viejo, antes de este commit) — no dispara ningún chequeo nuevo, igual
+   * que typicalPurchaseQuantity.
+   */
+  currentSalePrice: number | null;
+  /** Mínimo de margen de la política de categoría de esta sucursal — null = sin dato (no se compara). */
+  minMarginPercent: number | null;
   productBlocked: { reason: string } | null;
   pendingPurchaseOrder: { poId: string; orderNumber: string } | null;
   /** Compra típica (p.ej. mediana de cantidad por línea de compra) — null = sin historial suficiente. */
@@ -127,6 +139,29 @@ export function validateIntakeLine(input: ValidateIntakeLineInput): IntakeLineVa
   }
 
   // ── Para revisar (se puede guardar marcando "Revisé los avisos") ───────
+
+  // Commit 3 (prompt-entrada-reintento-precio.md) — "visible siempre en
+  // Sumar y en Carga inicial. En Conteo se oculta: no cambia precios."
+  // `currentSalePrice === null` = el llamador no mandó este dato (tests
+  // viejos) — no dispara nada nuevo, igual que typicalPurchaseQuantity.
+  if (input.kind !== "PHYSICAL_COUNT" && input.currentSalePrice !== null) {
+    const resultingPrice = input.newPrice ?? input.currentSalePrice;
+    if (resultingPrice <= 0) {
+      reviews.push({ code: "NO_SALE_PRICE", kind: "DATA", text: "No tiene precio de venta en esta sucursal." });
+    } else if (input.minMarginPercent !== null) {
+      // "margen con el costo nuevo" — el mismo precio resultante (nuevo o
+      // vigente) contra el costo que esta línea deja (entrado o el
+      // efectivo de siempre), nunca contra el costo viejo.
+      const resultingCost = input.enteredCost ?? input.currentEffectiveCost;
+      if (resultingCost !== null && resultingCost > 0) {
+        const marginPercent = ((resultingPrice - resultingCost) / resultingPrice) * 100;
+        if (marginPercent < input.minMarginPercent) {
+          reviews.push({ code: "MARGIN_BELOW_POLICY", kind: "RULE", text: `El margen queda en ${marginPercent.toFixed(1)}%, bajo el ${input.minMarginPercent}% de la categoría.` });
+        }
+      }
+    }
+  }
+
   if (input.enteredCost !== null && input.enteredCost > 0) {
     const vsAverage = input.currentEffectiveCost !== null && deviates(input.enteredCost, input.currentEffectiveCost);
     const vsLastPurchase = input.lastPurchaseCost !== null && deviates(input.enteredCost, input.lastPurchaseCost);
@@ -181,6 +216,10 @@ export function formatGroupedMessageText(code: IntakeValidationMessage["code"], 
       return `¿Precio por paquete en vez de por unidad? (${joined})`;
     case "PENDING_PURCHASE_ORDER":
       return `Tiene una orden de compra pendiente en ${joined}: si es esa mercadería, recibila desde la orden.`;
+    case "NO_SALE_PRICE":
+      return `No tiene precio de venta en ${joined}.`;
+    case "MARGIN_BELOW_POLICY":
+      return `El margen queda bajo la política de la categoría en ${joined}.`;
     default:
       return branchCodes.length > 0 ? `${fallbackText} (${joined})` : fallbackText;
   }
