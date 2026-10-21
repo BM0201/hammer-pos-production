@@ -2082,6 +2082,11 @@ enum MultiBranchIntakeBranchStatus {
   IN_PROGRESS
   DONE
   FAILED
+  /// prompt-entrada-reintento-precio.md Commit 2 §3 — FAILED con
+  /// processedLines=0 (nada se aplicó) que el dueño decide NO corregir:
+  /// se descarta en vez de quedar como "falla eterna". Nunca se llega acá
+  /// si ya se aplicó algo (ver discardMultiBranchIntakeBranch).
+  DISCARDED
 }
 
 /// Parte B.2 — "mismas líneas, cantidad por sucursal ajustable, reintento
@@ -2133,6 +2138,16 @@ model MultiBranchIntakeBranch {
   /// intake. Filas viejas (antes de esta columna) quedan en 0: son todas
   /// terminales (DONE/FAILED), nunca se leen para reanudar.
   totalLines     Int @default(0)
+  /// prompt-entrada-reintento-precio.md Commit 2 §2 — null = "usa las
+  /// líneas del pedido general" (linesJson de MultiBranchIntake), como
+  /// siempre. Con valor: SOLO las líneas PENDIENTES de esta sucursal
+  /// (índice >= processedLines al momento de editar) — las ya aplicadas
+  /// no se repiten acá, siguen contadas por processedLines. Mismo formato
+  /// que MultiBranchIntake.linesJson.
+  linesOverrideJson Json?
+  /// Concurrencia optimista para PUT .../lines — expectedRevision en el
+  /// body debe coincidir con este valor o 409 ("la entrada cambió").
+  revision          Int    @default(0)
 
   intake MultiBranchIntake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
   branch Branch            @relation(fields: [branchId], references: [id])

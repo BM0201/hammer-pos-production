@@ -8,7 +8,7 @@ import { requireCsrf } from "@/modules/security/csrf";
 import { ok, created, fail } from "@/lib/api/response";
 import { parseListLimit } from "@/lib/api/list-limit";
 import { prisma } from "@/lib/prisma";
-import { createMultiBranchIntake, listMultiBranchIntakes } from "@/modules/inventory/multi-branch-intake-service";
+import { createMultiBranchIntake, listMultiBranchIntakes, PossibleDuplicateIntakeError } from "@/modules/inventory/multi-branch-intake-service";
 
 export const maxDuration = 60;
 
@@ -34,6 +34,8 @@ const createSchema = z.object({
   // de la pantalla de compras" (PurchaseOrderGroup, un módulo aparte).
   branchIds: z.array(z.string().min(1)).min(1),
   lines: z.array(lineSchema).min(1),
+  // Commit 2 §4 — "Crear nueva igual" en el diálogo de posible duplicado.
+  confirmDuplicate: z.boolean().optional(),
 });
 
 /** GET /api/inventory/multi-branch-intake — lista paginada. */
@@ -80,6 +82,9 @@ export async function POST(request: Request) {
     const result = await createMultiBranchIntake({ ...parsed.data, actorUserId: session!.userId });
     return created(result);
   } catch (error) {
+    // Commit 2 §4 — no es un error real: el dueño elige "Corregir {code}"
+    // o reenviar con confirmDuplicate:true ("Crear nueva igual"). 200, no 4xx.
+    if (error instanceof PossibleDuplicateIntakeError) return ok({ possibleDuplicate: error.warning });
     return toHttpErrorResponse(error);
   }
 }

@@ -9,6 +9,9 @@ import {
   normalizeIntakeKind,
   stockModeForKind,
   costModeForKind,
+  updateMultiBranchIntakeBranchLines,
+  discardMultiBranchIntakeBranch,
+  PossibleDuplicateIntakeError,
 } from "@/modules/inventory/multi-branch-intake-service";
 
 /**
@@ -172,14 +175,14 @@ function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number;
       },
       findFirst: async () => (intakes.length === 0 ? null : intakes.reduce((max, i) => ((i.sequence as number) > (max.sequence as number) ? i : max))),
       create: async ({ data }: { data: Record<string, unknown> }) => {
-        const row = { id: `intake-${intakes.length + 1}`, ...data };
+        const row = { id: `intake-${intakes.length + 1}`, createdAt: new Date(), ...data };
         intakes.push(row);
         return row;
       },
     },
     multiBranchIntakeBranch: {
       createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
-        for (const d of data) intakeBranches.push({ id: `ib-${intakeBranches.length + 1}`, processedLines: 0, totalLines: 0, error: null, ...d });
+        for (const d of data) intakeBranches.push({ id: `ib-${intakeBranches.length + 1}`, processedLines: 0, totalLines: 0, error: null, linesOverrideJson: null, revision: 0, ...d });
         return { count: data.length };
       },
       updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
@@ -188,10 +191,33 @@ function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number;
         matches.forEach((b) => Object.assign(b, data));
         return { count: matches.length };
       },
+      findUnique: async ({ where }: { where: { intakeId_branchId: { intakeId: string; branchId: string } } }) => findIntakeBranch(where.intakeId_branchId.intakeId, where.intakeId_branchId.branchId) ?? null,
       findUniqueOrThrow: async ({ where }: { where: { intakeId_branchId: { intakeId: string; branchId: string } } }) => {
         const found = findIntakeBranch(where.intakeId_branchId.intakeId, where.intakeId_branchId.branchId);
         if (!found) throw new Error("NOT_FOUND: MultiBranchIntakeBranch");
         return found;
+      },
+      // Commit 2 §2 (overrideRows en runBranches) y §4 (findPossibleDuplicateIntake)
+      // — los dos únicos usos reales de este findMany: por intakeId+branchId+
+      // linesOverrideJson no-null, y por branchId+status FAILED+intake.createdAt
+      // reciente. El join a `intake`/`branch` se arma a mano (el fake no tiene
+      // relaciones de verdad).
+      findMany: async ({ where, orderBy }: { where: { intakeId?: string; branchId?: { in: string[] }; status?: string; linesOverrideJson?: { not: unknown }; intake?: { createdAt?: { gte: Date } } }; orderBy?: { intake?: { createdAt?: "asc" | "desc" } } }) => {
+        const rows = intakeBranches.filter((b) => {
+          if (where.intakeId !== undefined && b.intakeId !== where.intakeId) return false;
+          if (where.branchId && !where.branchId.in.includes(b.branchId as string)) return false;
+          if (where.status !== undefined && b.status !== where.status) return false;
+          if (where.linesOverrideJson?.not !== undefined && (b.linesOverrideJson === null || b.linesOverrideJson === undefined)) return false;
+          return true;
+        });
+        let withIntake = rows.map((b) => ({ row: b, intake: intakes.find((i) => i.id === b.intakeId)! }));
+        if (where.intake?.createdAt?.gte) withIntake = withIntake.filter(({ intake }) => (intake.createdAt as Date).getTime() >= where.intake!.createdAt!.gte.getTime());
+        if (orderBy?.intake?.createdAt === "desc") withIntake.sort((a, c) => (c.intake.createdAt as Date).getTime() - (a.intake.createdAt as Date).getTime());
+        return withIntake.map(({ row, intake }) => ({
+          ...row,
+          intake: { id: intake.id, code: intake.code, linesJson: intake.linesJson },
+          branch: { name: row.branchId },
+        }));
       },
     },
   };
@@ -552,4 +578,320 @@ test("ADJUSTMENT_IN (kind legado) se comporta igual que ADD_STOCK", async () => 
   }, db);
   assert.equal(result.branches[0].status, "DONE");
   assert.equal(Number(getBalance(BRANCH_1, "p1").quantityOnHand), 50, "sumó, igual que ADD_STOCK");
+});
+
+// ── prompt-entrada-reintento-precio.md Commit 2 — editar y reintentar ────
+
+test("LA QUE IMPORTA — editar una sucursal FAILED no toca las que ya quedaron DONE", async () => {
+  const { db, intakeBranches } = buildFakeDb({ products: new Set(["p1"]) }); // p2 "no existe" -> BRANCH_2 falla
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-edit-1",
+    actorUserId: "user-1",
+    kind: "OPENING_BALANCE",
+    reason: "Carga inicial",
+    branchIds: [BRANCH_1, BRANCH_2],
+    lines: [
+      { productId: "p1", quantity: 10, unitCost: 50, overrides: { [BRANCH_2]: 0 } },
+      { productId: "p2", quantity: 5, unitCost: 20, overrides: { [BRANCH_1]: 0 } },
+    ],
+  }, db);
+  assert.equal(created.branches.find((b) => b.branchId === BRANCH_1)!.status, "DONE");
+  assert.equal(created.branches.find((b) => b.branchId === BRANCH_2)!.status, "FAILED");
+  const branch1Before = { ...intakeBranches.find((b) => b.branchId === BRANCH_1)! };
+
+  await updateMultiBranchIntakeBranchLines({
+    intakeId: created.intake.id,
+    branchId: BRANCH_2,
+    lines: [{ productId: "p2", quantity: 5, unitCost: 20 }],
+    expectedRevision: 0,
+    actorUserId: "user-1",
+  }, db);
+
+  const branch1After = intakeBranches.find((b) => b.branchId === BRANCH_1)!;
+  assert.deepEqual(branch1After, branch1Before, "la sucursal DONE no se tocó en absoluto");
+  const branch2After = intakeBranches.find((b) => b.branchId === BRANCH_2)!;
+  assert.equal(branch2After.revision, 1);
+  assert.ok(branch2After.linesOverrideJson, "la FAILED sí quedó con el override");
+});
+
+test("editar con expectedRevision viejo (desactualizado) -> CONFLICT (409)", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1"]) }); // p2 "no existe" -> falla
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-edit-2",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p2", quantity: 5 }],
+  }, db);
+  assert.equal(created.branches[0].status, "FAILED");
+
+  await updateMultiBranchIntakeBranchLines({ intakeId: created.intake.id, branchId: BRANCH_1, lines: [{ productId: "p1", quantity: 5 }], expectedRevision: 0, actorUserId: "user-1" }, db);
+  await assert.rejects(
+    () => updateMultiBranchIntakeBranchLines({ intakeId: created.intake.id, branchId: BRANCH_1, lines: [{ productId: "p1", quantity: 7 }], expectedRevision: 0, actorUserId: "user-1" }, db),
+    /CONFLICT/,
+    "expectedRevision:0 ya no es el vigente (ya quedó en 1 tras la primera edición)",
+  );
+});
+
+test("editar una sucursal DONE -> CONFLICT (409), solo se edita una que falló", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1"]) });
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-edit-3",
+    actorUserId: "user-1",
+    kind: "OPENING_BALANCE",
+    reason: "Carga inicial",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p1", quantity: 10, unitCost: 50 }],
+  }, db);
+  assert.equal(created.branches[0].status, "DONE");
+
+  await assert.rejects(
+    () => updateMultiBranchIntakeBranchLines({ intakeId: created.intake.id, branchId: BRANCH_1, lines: [{ productId: "p1", quantity: 20, unitCost: 50 }], expectedRevision: 0, actorUserId: "user-1" }, db),
+    /CONFLICT/,
+  );
+});
+
+test("LA QUE IMPORTA — editar + reintentar aplica el override corregido una sola vez (no duplica)", async () => {
+  const { db, getBalance } = buildFakeDb({ products: new Set(["p1"]) });
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-edit-retry",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p1", quantity: 6 }], // sin costo entrado, sin WAC, sin averageCost -> FAILED
+  }, db);
+  assert.equal(created.branches[0].status, "FAILED");
+  assert.equal(Number(getBalance(BRANCH_1, "p1").quantityOnHand), 0);
+
+  await updateMultiBranchIntakeBranchLines({
+    intakeId: created.intake.id,
+    branchId: BRANCH_1,
+    lines: [{ productId: "p1", quantity: 6, unitCost: 80 }],
+    expectedRevision: 0,
+    actorUserId: "user-1",
+  }, db);
+
+  const retried = await retryMultiBranchIntake(created.intake.id, "user-1", db);
+  assert.equal(retried.branches[0].status, "DONE");
+  assert.equal(Number(getBalance(BRANCH_1, "p1").quantityOnHand), 6, "se aplicó una sola vez");
+  assert.equal(Number(getBalance(BRANCH_1, "p1").weightedAverageCost), 80, "con el costo corregido del override, no el de la entrada original (sin costo)");
+
+  await retryMultiBranchIntake(created.intake.id, "user-1", db);
+  assert.equal(Number(getBalance(BRANCH_1, "p1").quantityOnHand), 6, "un segundo retry (ya DONE) no reprocesa ni duplica");
+});
+
+test("LA QUE IMPORTA — falla a mitad (25 de 40 líneas): las 25 quedan bloqueadas y el reintento corregido aplica solo las 15 pendientes", async () => {
+  const productIds = Array.from({ length: 40 }, (_, i) => `o${i + 1}`);
+  const { db, getBalance } = buildFakeDb({
+    products: new Set([...productIds, "o41"]),
+    // o26 ya tiene existencias -- dispara la guarda de OPENING_BALANCE a
+    // mitad de la SEGUNDA tanda (líneas 26-40), revirtiendo esa tanda ENTERA
+    // (una tanda es una sola transacción) sin tocar la primera (ya confirmada).
+    initialBalances: [{ branchId: BRANCH_1, productId: "o26", quantityOnHand: 1, weightedAverageCost: 999 }],
+  });
+  const lines = productIds.map((productId) => ({ productId, quantity: 10, unitCost: 50 }));
+
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-mid-fail",
+    actorUserId: "user-1",
+    kind: "OPENING_BALANCE",
+    reason: "Carga inicial",
+    branchIds: [BRANCH_1],
+    lines,
+  }, db);
+
+  assert.equal(created.branches[0].status, "FAILED");
+  assert.equal(created.branches[0].processedLines, 25, "la tanda 1 (25 líneas) quedó confirmada");
+  assert.equal(Number(getBalance(BRANCH_1, "o1").quantityOnHand), 10, "o1 (tanda 1) sí se aplicó");
+  assert.equal(Number(getBalance(BRANCH_1, "o27").quantityOnHand), 0, "o27 (tanda 2, junto a la que falló) NO se aplicó -- la tanda entera se revirtió");
+
+  // Corrección: o26 (la que ya tenía existencias) se reemplaza por o41 --
+  // los otros 14 pendientes (o27..o40) se mandan sin cambios. Sigue siendo
+  // un override de 15 líneas, "las pendientes de esa sucursal".
+  const overrideLines = [
+    { productId: "o41", quantity: 10, unitCost: 50 },
+    ...Array.from({ length: 14 }, (_, i) => ({ productId: `o${i + 27}`, quantity: 10, unitCost: 50 })),
+  ];
+  assert.equal(overrideLines.length, 15);
+
+  await updateMultiBranchIntakeBranchLines({ intakeId: created.intake.id, branchId: BRANCH_1, lines: overrideLines, expectedRevision: 0, actorUserId: "user-1" }, db);
+  const retried = await retryMultiBranchIntake(created.intake.id, "user-1", db);
+
+  assert.equal(retried.branches[0].status, "DONE");
+  assert.equal(Number(getBalance(BRANCH_1, "o1").quantityOnHand), 10, "o1 (tanda 1) no se duplicó");
+  assert.equal(Number(getBalance(BRANCH_1, "o27").quantityOnHand), 10, "o27 (pendiente, sin cambios en la corrección) ahora sí se aplicó");
+  assert.equal(Number(getBalance(BRANCH_1, "o41").quantityOnHand), 10, "o41 (el reemplazo de o26) se aplicó");
+  assert.equal(Number(getBalance(BRANCH_1, "o26").quantityOnHand), 1, "o26 (descartada de la corrección) nunca se tocó -- sigue con su stock original");
+});
+
+test("descartar una sucursal que YA aplicó líneas (processedLines > 0) se rechaza -- se corrige con otra entrada, no se descarta", async () => {
+  const productIds = Array.from({ length: 30 }, (_, i) => `d${i + 1}`);
+  const { db } = buildFakeDb({ products: new Set(productIds.slice(0, 25)) }); // d26..d30 "no existen" todavía
+  const lines = productIds.map((productId) => ({ productId, quantity: 10, unitCost: 50 }));
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-discard-blocked",
+    actorUserId: "user-1",
+    kind: "OPENING_BALANCE",
+    reason: "Carga inicial",
+    branchIds: [BRANCH_1],
+    lines,
+  }, db);
+  assert.equal(created.branches[0].status, "FAILED");
+  assert.equal(created.branches[0].processedLines, 25, "la tanda 1 sí aplicó");
+
+  await assert.rejects(
+    () => discardMultiBranchIntakeBranch({ intakeId: created.intake.id, branchId: BRANCH_1, reason: "ya no hace falta", actorUserId: "user-1" }, db),
+    /CONFLICT/,
+  );
+});
+
+test("descartar una sucursal FAILED sin nada aplicado (processedLines === 0) sí funciona -- pasa a DISCARDED", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1"]) });
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-discard-ok",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p2", quantity: 5 }], // p2 no existe -> FAILED, nada aplicado
+  }, db);
+  assert.equal(created.branches[0].status, "FAILED");
+  assert.equal(created.branches[0].processedLines, 0);
+
+  await discardMultiBranchIntakeBranch({ intakeId: created.intake.id, branchId: BRANCH_1, reason: "se compró en otra sucursal", actorUserId: "user-1" }, db);
+
+  await assert.rejects(
+    () => discardMultiBranchIntakeBranch({ intakeId: created.intake.id, branchId: BRANCH_1, reason: "de nuevo", actorUserId: "user-1" }, db),
+    /CONFLICT/,
+    "ya no está FAILED (está DISCARDED) -- no se puede descartar dos veces",
+  );
+});
+
+test("overallStatus es DONE_WITH_FAILURES ('Con fallas') si alguna sucursal quedó FAILED y las demás ya terminaron", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1"]) }); // p2 no existe
+  const result = await createMultiBranchIntake({
+    clientRequestId: "req-status-fails",
+    actorUserId: "user-1",
+    kind: "OPENING_BALANCE",
+    reason: "Carga inicial",
+    branchIds: [BRANCH_1, BRANCH_2],
+    lines: [
+      { productId: "p1", quantity: 10, unitCost: 50, overrides: { [BRANCH_2]: 0 } },
+      { productId: "p2", quantity: 5, unitCost: 20, overrides: { [BRANCH_1]: 0 } },
+    ],
+  }, db);
+  assert.equal(result.branches.find((b) => b.branchId === BRANCH_1)!.status, "DONE");
+  assert.equal(result.branches.find((b) => b.branchId === BRANCH_2)!.status, "FAILED");
+  assert.equal(result.overallStatus, "DONE_WITH_FAILURES");
+});
+
+test("overallStatus vuelve a DONE una vez que la única FAILED se descarta (DONE = todas DONE o DISCARDED)", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1"]) });
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-status-done",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p2", quantity: 5 }], // p2 no existe -> FAILED
+  }, db);
+  assert.equal(created.overallStatus, "DONE_WITH_FAILURES");
+
+  await discardMultiBranchIntakeBranch({ intakeId: created.intake.id, branchId: BRANCH_1, reason: "no hace falta", actorUserId: "user-1" }, db);
+  const after = await retryMultiBranchIntake(created.intake.id, "user-1", db); // sin FAILED que reintentar -> solo recalcula el estado
+  assert.equal(after.overallStatus, "DONE");
+  assert.equal(after.branches[0].status, "DISCARDED");
+});
+
+// ── Commit 2 §4 — aviso de posible duplicado ──────────────────────────────
+
+test("LA QUE IMPORTA — crear con los mismos productos que una FAILED reciente avisa posible duplicado; confirmDuplicate la crea igual", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1"]) }); // p2 no existe -> falla
+  const first = await createMultiBranchIntake({
+    clientRequestId: "req-dup-1",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p2", quantity: 5 }],
+  }, db);
+  assert.equal(first.branches[0].status, "FAILED");
+
+  await assert.rejects(
+    () => createMultiBranchIntake({
+      clientRequestId: "req-dup-2",
+      actorUserId: "user-1",
+      kind: "ADD_STOCK",
+      reason: "Llegó pedido otra vez",
+      branchIds: [BRANCH_1],
+      lines: [{ productId: "p2", quantity: 5 }],
+    }, db),
+    (error: unknown) => {
+      assert.ok(error instanceof PossibleDuplicateIntakeError);
+      assert.equal(error.warning.intakeId, first.intake.id);
+      assert.equal(error.warning.branchId, BRANCH_1);
+      assert.equal(error.warning.matchPercent, 100);
+      return true;
+    },
+  );
+
+  const confirmed = await createMultiBranchIntake({
+    clientRequestId: "req-dup-3",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido otra vez",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p2", quantity: 5 }],
+    confirmDuplicate: true,
+  }, db);
+  assert.notEqual(confirmed.intake.id, first.intake.id, "confirmDuplicate SÍ crea una entrada nueva, en vez de avisar");
+});
+
+test("posible duplicado: menos del 80% de productos en común NO avisa", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1", "p2"]) }); // p3, p4, p5 no existen -> FAILED, pero igual cuentan para el % de productos
+  await createMultiBranchIntake({
+    clientRequestId: "req-dup-low-1",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p3", quantity: 5 }, { productId: "p4", quantity: 5 }],
+  }, db);
+
+  // Segunda entrada: solo p3 en común de 4 productos distintos (p3,p4,p5,p1) -> 1/4 = 25%, bajo el umbral de 80%.
+  const second = await createMultiBranchIntake({
+    clientRequestId: "req-dup-low-2",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Otro pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p3", quantity: 5 }, { productId: "p5", quantity: 5 }, { productId: "p1", quantity: 1 }],
+  }, db);
+  assert.ok(second.intake.id, "se creó sin aviso de duplicado");
+});
+
+test("posible duplicado: una FAILED de hace más de 14 días no cuenta", async () => {
+  const { db, intakes } = buildFakeDb({ products: new Set([]) }); // p9 no existe -> FAILED
+  await createMultiBranchIntake({
+    clientRequestId: "req-dup-old-1",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p9", quantity: 5 }],
+  }, db);
+  const old = intakes.find((i) => i.clientRequestId === "req-dup-old-1")!;
+  old.createdAt = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000); // hace 15 días -- fuera de la ventana de 14
+
+  const second = await createMultiBranchIntake({
+    clientRequestId: "req-dup-old-2",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Otro pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p9", quantity: 5 }],
+  }, db);
+  assert.ok(second.intake.id, "se creó sin aviso -- la FAILED anterior ya pasó los 14 días");
 });

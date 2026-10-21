@@ -4,6 +4,7 @@ import { createOpeningBalanceTx } from "@/modules/inventory/service";
 import { getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
 import { resolveInboundUnitCostBatch } from "@/modules/inventory/resolve-inbound-unit-cost";
 import { mapIntakeErrorToSpanish, buildIntakeErrorJson, type IntakeErrorJson, type IntakeErrorLine } from "@/modules/inventory/intake-error-messages";
+import { logAuditEvent } from "@/modules/audit/service";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -65,11 +66,13 @@ export type CreateIntakeInput = {
   notes?: string | null;
   branchIds: string[];
   lines: IntakeLineInput[];
+  /** Commit 2 §4 — "Crear nueva igual": salta el aviso de posible duplicado y crea de todos modos. */
+  confirmDuplicate?: boolean;
 };
 
 export type IntakeBranchResult = {
   branchId: string;
-  status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
+  status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED" | "DISCARDED";
   error: string | null;
   /** prompt-entrada-reintento-precio.md Commit 1 §3 — lista completa de problemas, en español, con el producto. null en branches no-FAILED o de antes de este commit. */
   errorJson: IntakeErrorJson | null;
@@ -78,8 +81,15 @@ export type IntakeBranchResult = {
 };
 export type CreateIntakeResult = {
   intake: { id: string; code: string };
-  /** DONE = todas las sucursales terminaron (con o sin error); IN_PROGRESS = el presupuesto de tiempo se agotó antes — llamar a /continue. */
-  overallStatus: "DONE" | "IN_PROGRESS";
+  /**
+   * prompt-entrada-reintento-precio.md Commit 2 §5 — antes "DONE" se usaba
+   * para "todas las sucursales terminaron", aunque alguna haya terminado
+   * en FAILED (parecía completa sin estarlo). Ahora: DONE = todas DONE o
+   * DISCARDED (de verdad completa); DONE_WITH_FAILURES = todas terminaron
+   * pero al menos una sigue FAILED ("Con fallas"); IN_PROGRESS = el
+   * presupuesto de tiempo se agotó antes — llamar a /continue.
+   */
+  overallStatus: "DONE" | "DONE_WITH_FAILURES" | "IN_PROGRESS";
   branches: IntakeBranchResult[];
 };
 
@@ -130,7 +140,7 @@ async function nextIntakeCodeTx(tx: Prisma.TransactionClient): Promise<{ code: s
   return { code: `IM-${String(sequence).padStart(6, "0")}`, sequence };
 }
 
-type ResolvedLine = { productId: string; quantity: number; unitCost?: number; salePrice?: number; unit?: string };
+export type ResolvedLine = { productId: string; quantity: number; unitCost?: number; salePrice?: number; unit?: string };
 
 /**
  * Líneas de ESTA sucursal, con el override ya resuelto. Para ADD_STOCK/
@@ -292,9 +302,27 @@ async function processBranchUntilDeadline(
   actorUserId: string,
   notes: string | null,
   deadlineAt: number,
+  /**
+   * prompt-entrada-reintento-precio.md Commit 2 §2 — si esta sucursal
+   * tiene `linesOverrideJson` (se editó después de fallar), esas líneas
+   * YA resueltas para ESTA sucursal reemplazan por completo a `lines` +
+   * resolveLinesForBranch — "el override contiene solo las pendientes,
+   * que se procesan desde 0 de ese override" (§3).
+   */
+  overrideLines?: ResolvedLine[],
 ): Promise<IntakeBranchResult> {
-  const resolved = resolveLinesForBranch(lines, branchId, kind);
-  const totalLines = resolved.length;
+  const resolved = overrideLines ?? resolveLinesForBranch(lines, branchId, kind);
+
+  let processedLines = (await db.multiBranchIntakeBranch.findUniqueOrThrow({ where: { intakeId_branchId: { intakeId: intake.id, branchId } }, select: { processedLines: true } })).processedLines;
+  // Commit 2 §3 — "no reinicia processedLines: las líneas ya aplicadas
+  // siguen contadas, y el override contiene SOLO las pendientes". `resolved`
+  // (el override) es relativo a sí mismo (índice 0 = la primera pendiente);
+  // `baseline` traduce ese índice relativo al `processedLines` absoluto que
+  // ya traía la sucursal, para seguir avanzando el mismo contador de
+  // siempre en vez de inventar uno paralelo. Sin override, baseline=0 y
+  // esto se reduce exactamente al comportamiento de antes.
+  const baseline = overrideLines ? processedLines : 0;
+  const totalLines = baseline + resolved.length;
 
   if (totalLines === 0) {
     const errorText = "Sin productos para esta sucursal (todas las cantidades quedaron sin aplicar).";
@@ -304,18 +332,16 @@ async function processBranchUntilDeadline(
 
   await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId, totalLines: 0 }, data: { totalLines } });
 
-  let processedLines = (await db.multiBranchIntakeBranch.findUniqueOrThrow({ where: { intakeId_branchId: { intakeId: intake.id, branchId } }, select: { processedLines: true } })).processedLines;
-
-  // Commit 1 §2 — solo antes de la primera tanda: si ya avanzó algo
-  // (reintento de una corrida anterior), esas líneas ya pasaron esta
-  // misma prueba la vez que se aplicaron; revalidar de nuevo no agrega
-  // nada y gastaría una consulta de más en cada /continue.
-  if (processedLines === 0) {
+  // Commit 1 §2 — solo antes de la primera tanda DE ESTE conjunto de
+  // líneas (processedLines === baseline: nada del override todavía
+  // aplicado). Las líneas de ANTES del baseline ya pasaron esta misma
+  // prueba cuando se aplicaron; revalidar de nuevo no agrega nada.
+  if (processedLines === baseline) {
     const problems = await prevalidateBranchLines(db, kind, branchId, branchCode, resolved);
     if (problems.length > 0) {
       const errorJson = buildIntakeErrorJson(problems);
       await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "FAILED", error: errorJson.summary, errorJson: errorJson as unknown as Prisma.InputJsonValue, processedAt: new Date() } });
-      return { branchId, status: "FAILED", error: errorJson.summary, errorJson, processedLines: 0, totalLines };
+      return { branchId, status: "FAILED", error: errorJson.summary, errorJson, processedLines, totalLines };
     }
   }
 
@@ -325,7 +351,8 @@ async function processBranchUntilDeadline(
         await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId, status: { in: ["PENDING", "IN_PROGRESS"] } }, data: { status: "IN_PROGRESS" } });
         return { branchId, status: "IN_PROGRESS", error: null, errorJson: null, processedLines, totalLines };
       }
-      const batch = resolved.slice(processedLines, processedLines + BATCH_SIZE);
+      const sliceStart = processedLines - baseline;
+      const batch = resolved.slice(sliceStart, sliceStart + BATCH_SIZE);
       const outcome = await processBatchTx(db, kind, intake, branchId, batch, actorUserId, notes, processedLines);
       if (outcome === "alreadyClaimed") {
         // Otra corrida (otro /continue, u otro /retry) ya reclamó y aplicó
@@ -375,6 +402,67 @@ async function assertProductsIntakeable(db: PrismaClient, productIds: string[]):
   }
 }
 
+const DUPLICATE_LOOKBACK_DAYS = 14;
+const DUPLICATE_MATCH_THRESHOLD = 0.8;
+
+export type DuplicateIntakeWarning = {
+  intakeId: string;
+  code: string;
+  branchId: string;
+  branchName: string;
+  /** 0-100 — productos en común entre ambos pedidos (intersección / unión). */
+  matchPercent: number;
+};
+
+/**
+ * Commit 2 §4 — "aviso de posible duplicado": se detectó, no se bloqueó.
+ * El dueño elige "Corregir {code}" (editar la sucursal FAILED, Commit 2 §3)
+ * o "Crear nueva igual" (reenvía con confirmDuplicate:true).
+ */
+export class PossibleDuplicateIntakeError extends Error {
+  constructor(public readonly warning: DuplicateIntakeWarning) {
+    super("POSSIBLE_DUPLICATE_INTAKE");
+    this.name = "PossibleDuplicateIntakeError";
+  }
+}
+
+/**
+ * Commit 2 §4 — "una sucursal FAILED de los últimos 14 días, en alguna de
+ * las sucursales elegidas, con ≥80% de los mismos productos". El % se mide
+ * como Jaccard (intersección/unión de productIds) para que agregar un
+ * producto nuevo a un pedido grande no dispare el aviso, y uno chico
+ * calcado de otro grande tampoco lo dispare por "casualidad" de tamaño.
+ * Candidatos ya vienen ordenados por más reciente primero — el primero que
+ * cruza el umbral es el que se reporta (no hace falta elegir "el mejor").
+ */
+async function findPossibleDuplicateIntake(db: PrismaClient, branchIds: string[], lines: IntakeLineInput[]): Promise<DuplicateIntakeWarning | null> {
+  const since = new Date(Date.now() - DUPLICATE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+  const candidates = await db.multiBranchIntakeBranch.findMany({
+    where: { branchId: { in: branchIds }, status: "FAILED", intake: { createdAt: { gte: since } } },
+    include: { intake: { select: { id: true, code: true, linesJson: true } }, branch: { select: { name: true } } },
+    orderBy: { intake: { createdAt: "desc" } },
+  });
+  if (candidates.length === 0) return null;
+
+  const newProductIds = new Set(lines.map((l) => l.productId));
+  for (const candidate of candidates) {
+    const candidateProductIds = new Set((candidate.intake.linesJson as unknown as IntakeLineInput[]).map((l) => l.productId));
+    const intersectionSize = [...newProductIds].filter((id) => candidateProductIds.has(id)).length;
+    const unionSize = new Set([...newProductIds, ...candidateProductIds]).size;
+    const matchPercent = unionSize === 0 ? 0 : intersectionSize / unionSize;
+    if (matchPercent >= DUPLICATE_MATCH_THRESHOLD) {
+      return {
+        intakeId: candidate.intake.id,
+        code: candidate.intake.code,
+        branchId: candidate.branchId,
+        branchName: candidate.branch.name,
+        matchPercent: Math.round(matchPercent * 100),
+      };
+    }
+  }
+  return null;
+}
+
 export async function createMultiBranchIntake(input: CreateIntakeInput, db: PrismaClient = prisma): Promise<CreateIntakeResult> {
   validateInput(input);
   await assertProductsIntakeable(db, input.lines.map((l) => l.productId));
@@ -385,6 +473,11 @@ export async function createMultiBranchIntake(input: CreateIntakeInput, db: Pris
   });
   if (existing) {
     return toResult(existing);
+  }
+
+  if (!input.confirmDuplicate) {
+    const duplicate = await findPossibleDuplicateIntake(db, input.branchIds, input.lines);
+    if (duplicate) throw new PossibleDuplicateIntakeError(duplicate);
   }
 
   let intake: { id: string; code: string; kind: MultiBranchIntakeKind; reason: string; notes: string | null };
@@ -424,12 +517,16 @@ async function runBranches(
   const deadlineAt = Date.now() + PROCESSING_TIME_BUDGET_MS;
   const branchRows = await db.branch.findMany({ where: { id: { in: branchIds } }, select: { id: true, code: true } });
   const codeByBranchId = new Map(branchRows.map((b) => [b.id, b.code]));
+  // Commit 2 §2/§3 — si alguna de estas sucursales se editó después de
+  // fallar, sus líneas pendientes vienen de ACÁ, no del pedido general.
+  const overrideRows = await db.multiBranchIntakeBranch.findMany({ where: { intakeId: intake.id, branchId: { in: branchIds }, linesOverrideJson: { not: Prisma.JsonNull } }, select: { branchId: true, linesOverrideJson: true } });
+  const overrideByBranchId = new Map(overrideRows.map((r) => [r.branchId, r.linesOverrideJson as unknown as ResolvedLine[]]));
   const results: IntakeBranchResult[] = [];
   for (const branchId of branchIds) {
-    const result = await processBranchUntilDeadline(db, kind, intake, branchId, codeByBranchId.get(branchId) ?? branchId, lines, actorUserId, notes, deadlineAt);
+    const result = await processBranchUntilDeadline(db, kind, intake, branchId, codeByBranchId.get(branchId) ?? branchId, lines, actorUserId, notes, deadlineAt, overrideByBranchId.get(branchId));
     results.push(result);
   }
-  const overallStatus: CreateIntakeResult["overallStatus"] = results.every((r) => r.status === "DONE" || r.status === "FAILED") ? "DONE" : "IN_PROGRESS";
+  const overallStatus = computeOverallStatus(results);
   return { intake: { id: intake.id, code: intake.code }, overallStatus, branches: results };
 }
 
@@ -441,10 +538,10 @@ export async function continueMultiBranchIntake(intakeId: string, actorUserId: s
   const pendingBranchIds = intake.branches.filter((b) => b.status === "PENDING" || b.status === "IN_PROGRESS").map((b) => b.branchId);
   if (pendingBranchIds.length === 0) return toResult(intake);
   const result = await runBranches(db, intake, pendingBranchIds, lines, actorUserId, intake.notes ?? null);
-  // Completa con las que ya estaban DONE/FAILED de antes, para devolver el estado de TODAS.
-  const alreadyDone = intake.branches.filter((b) => b.status === "DONE" || b.status === "FAILED").map(branchRowToResult);
+  // Completa con las que ya estaban DONE/FAILED/DISCARDED de antes, para devolver el estado de TODAS.
+  const alreadyDone = intake.branches.filter((b) => b.status === "DONE" || b.status === "FAILED" || b.status === "DISCARDED").map(branchRowToResult);
   const merged = [...alreadyDone, ...result.branches];
-  const overallStatus: CreateIntakeResult["overallStatus"] = merged.every((r) => r.status === "DONE" || r.status === "FAILED") ? "DONE" : "IN_PROGRESS";
+  const overallStatus = computeOverallStatus(merged);
   return { intake: result.intake, overallStatus, branches: merged };
 }
 
@@ -465,8 +562,103 @@ export async function retryMultiBranchIntake(intakeId: string, actorUserId: stri
   const result = await runBranches(db, intake, failedBranchIds, lines, actorUserId, intake.notes ?? null);
   const untouched = intake.branches.filter((b) => !failedBranchIds.includes(b.branchId)).map(branchRowToResult);
   const merged = [...untouched, ...result.branches];
-  const overallStatus: CreateIntakeResult["overallStatus"] = merged.every((r) => r.status === "DONE" || r.status === "FAILED") ? "DONE" : "IN_PROGRESS";
+  const overallStatus = computeOverallStatus(merged);
   return { intake: result.intake, overallStatus, branches: merged };
+}
+
+export type UpdateBranchLinesInput = {
+  intakeId: string;
+  branchId: string;
+  /** Mismo formato que ResolvedLine — SOLO las líneas pendientes corregidas, nunca las que index < processedLines ya aplicó. */
+  lines: ResolvedLine[];
+  expectedRevision: number;
+  actorUserId: string;
+};
+
+/**
+ * prompt-entrada-reintento-precio.md Commit 2 §3 — `PUT .../branches/:branchId/lines`:
+ * "solo si la sucursal está FAILED, con FOR UPDATE y updateMany
+ * condicionado a status:FAILED y revision:expectedRevision (si no, 409
+ * 'La entrada cambió; recargá')... no reinicia processedLines: las líneas
+ * ya aplicadas siguen contadas, y el override contiene solo las
+ * pendientes, que se procesan desde 0 de ese override."
+ */
+export async function updateMultiBranchIntakeBranchLines(input: UpdateBranchLinesInput, db: PrismaClient = prisma): Promise<{ revision: number; processedLines: number; totalLines: number }> {
+  if (input.lines.length === 0) throw new Error("VALIDATION_ERROR: Agregá al menos un producto.");
+
+  const before = await db.multiBranchIntakeBranch.findUnique({ where: { intakeId_branchId: { intakeId: input.intakeId, branchId: input.branchId } } });
+  if (!before) throw new Error("NOT_FOUND: Sucursal del ingreso no encontrada.");
+
+  const updated = await db.$transaction(async (tx) => {
+    // FOR UPDATE — misma fila que el claim de processBatchTx podría estar
+    // tocando en ese instante (un /retry corriendo a la vez que se edita).
+    await tx.$queryRaw`
+      SELECT id FROM "MultiBranchIntakeBranch"
+      WHERE "intakeId" = ${input.intakeId} AND "branchId" = ${input.branchId}
+      FOR UPDATE
+    `;
+    const row = await tx.multiBranchIntakeBranch.findUniqueOrThrow({ where: { intakeId_branchId: { intakeId: input.intakeId, branchId: input.branchId } } });
+    if (row.status !== "FAILED") throw new Error("CONFLICT: Solo se puede editar una sucursal que falló.");
+
+    const claim = await tx.multiBranchIntakeBranch.updateMany({
+      where: { intakeId: input.intakeId, branchId: input.branchId, status: "FAILED", revision: input.expectedRevision },
+      data: { linesOverrideJson: input.lines as unknown as Prisma.InputJsonValue, revision: input.expectedRevision + 1 },
+    });
+    if (claim.count === 0) throw new Error("CONFLICT: La entrada cambió; recargá.");
+
+    return tx.multiBranchIntakeBranch.findUniqueOrThrow({ where: { intakeId_branchId: { intakeId: input.intakeId, branchId: input.branchId } } });
+  });
+
+  // logAuditEvent usa el singleton `prisma`, no `tx` — mismo patrón que el
+  // resto del módulo (auditoría best-effort, nunca bloquea la operación real).
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    module: "inventory",
+    action: "MULTI_BRANCH_INTAKE_BRANCH_LINES_EDITED",
+    entityType: "MultiBranchIntakeBranch",
+    entityId: updated.id,
+    metadataJson: { before: before.linesOverrideJson ?? null, after: input.lines, revision: updated.revision },
+  });
+
+  return { revision: updated.revision, processedLines: updated.processedLines, totalLines: updated.totalLines };
+}
+
+export type DiscardBranchInput = { intakeId: string; branchId: string; reason: string; actorUserId: string };
+
+/**
+ * Commit 2 §3 — "POST .../branches/:branchId/discard { reason }: FAILED →
+ * DISCARDED... solo si processedLines === 0. Si se aplicó algo, no se
+ * descarta: se corrige con otra entrada. El motivo es obligatorio."
+ */
+export async function discardMultiBranchIntakeBranch(input: DiscardBranchInput, db: PrismaClient = prisma): Promise<void> {
+  if (!input.reason.trim()) throw new Error("VALIDATION_ERROR: El motivo es obligatorio.");
+
+  const row = await db.multiBranchIntakeBranch.findUnique({ where: { intakeId_branchId: { intakeId: input.intakeId, branchId: input.branchId } } });
+  if (!row) throw new Error("NOT_FOUND: Sucursal del ingreso no encontrada.");
+  if (row.status !== "FAILED") throw new Error("CONFLICT: Solo se puede descartar una sucursal que falló.");
+  if (row.processedLines > 0) throw new Error("CONFLICT: Ya se aplicaron líneas en esta sucursal — no se puede descartar, corregila con otra entrada.");
+
+  const claim = await db.multiBranchIntakeBranch.updateMany({
+    where: { intakeId: input.intakeId, branchId: input.branchId, status: "FAILED", processedLines: 0 },
+    data: { status: "DISCARDED", error: `Descartada: ${input.reason.trim()}`, processedAt: new Date() },
+  });
+  if (claim.count === 0) throw new Error("CONFLICT: La entrada cambió; recargá.");
+
+  await logAuditEvent({
+    actorUserId: input.actorUserId,
+    module: "inventory",
+    action: "MULTI_BRANCH_INTAKE_BRANCH_DISCARDED",
+    entityType: "MultiBranchIntakeBranch",
+    entityId: row.id,
+    metadataJson: { reason: input.reason.trim() },
+  });
+}
+
+/** Commit 2 §5 — "Completa" (DONE) solo si TODAS terminaron DONE o DISCARDED; "Con fallas" si alguna sigue FAILED; si queda alguna PENDING/IN_PROGRESS, todavía está corriendo. */
+function computeOverallStatus(branches: Array<{ status: string }>): CreateIntakeResult["overallStatus"] {
+  if (branches.some((b) => b.status === "PENDING" || b.status === "IN_PROGRESS")) return "IN_PROGRESS";
+  if (branches.some((b) => b.status === "FAILED")) return "DONE_WITH_FAILURES";
+  return "DONE";
 }
 
 function branchRowToResult(b: { branchId: string; status: string; error: string | null; errorJson?: Prisma.JsonValue | null; processedLines: number; totalLines: number }): IntakeBranchResult {
@@ -475,7 +667,7 @@ function branchRowToResult(b: { branchId: string; status: string; error: string 
 
 function toResult(intake: { id: string; code: string; branches: Array<{ branchId: string; status: string; error: string | null; errorJson?: Prisma.JsonValue | null; processedLines: number; totalLines: number }> }): CreateIntakeResult {
   const branches = intake.branches.map(branchRowToResult);
-  const overallStatus: CreateIntakeResult["overallStatus"] = branches.every((r) => r.status === "DONE" || r.status === "FAILED") ? "DONE" : "IN_PROGRESS";
+  const overallStatus = computeOverallStatus(branches);
   return { intake: { id: intake.id, code: intake.code }, overallStatus, branches };
 }
 
