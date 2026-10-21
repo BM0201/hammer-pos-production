@@ -6,34 +6,37 @@ import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Search, ScanLine, Plus, ChevronDown } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { useSession } from "@/lib/client/session";
-import { getActiveBranchId } from "@/lib/client/active-branch";
+import { useInventoryScope } from "@/hooks/use-inventory-scope";
 import {
   INVENTORY_GROUPS,
   resolveActiveNav,
+  buildInventoryHref,
   groupTone,
   buildNavSearchResults,
   shouldTriggerSearchShortcut,
   type InventoryTone,
   type NavSearchResultGroup,
 } from "@/lib/inventory-nav-logic";
+import type { ScopeBranch } from "@/lib/inventory-scope-logic";
 
 /**
- * prompt-inventario-inicio-fix.md Commit 1 — barra superior ÚNICA para
- * toda la sección de Inventario. Reemplaza InventoryLocalNav (al costado,
- * borrado) — "siempre la barra tiene que estar arriba, por cuestiones de
- * búsqueda y estética".
+ * prompt-inventario-inicio-fix.md Commit 1 (base) + prompt-inventario-
+ * unificado.md Commit 1 (reescritura) — barra superior ÚNICA para toda la
+ * sección de Inventario.
  *
- * Se monta en CADA pantalla del grupo (opción (b) del doc, ver reporte):
- * mover catalog-inventory/catalog/barcodes/inventory-fusion bajo
- * /inventory/* es un cambio de rutas grande, con riesgo real de romper
- * enlaces externos (Brain, notas, favoritos) que ya apuntan a esas rutas
- * — mucho más grande que lo que este doc puntual pide. Montar la barra en
- * cada página existente logra exactamente "toda pantalla del grupo
- * muestra la barra" sin mover un solo archivo.
+ * Reescritura: el botón de grupo ahora usa `buildInventoryHref` (antes
+ * perdía el `?tab=` y el alcance de sucursal — bug #1 del doc, "Existencias
+ * y Calidad no navegan"); el alcance viene de `useInventoryScope()`
+ * (sucursales reales desde `/api/master/branches`, nunca de la sesión del
+ * usuario — Master ve TODAS las sucursales, no solo sus membresías); fila 3
+ * solo se dibuja si el grupo tiene más de una subsección (Inicio no tiene
+ * ninguna fila 3 — "una sola página"); el buscador es flex-1 sin ancho
+ * máximo y el padding horizontal iguala al del <main> global (px-5 lg:px-8)
+ * para que el borde de la barra y el del contenido coincidan (bug #8).
+ *
+ * Se monta en CADA pantalla del grupo (Traslados y Reposición incluidos
+ * ahora — ya no son "external"/↗, se muestran DENTRO del layout).
  */
-
-type Branch = { id: string; code: string; name: string };
 
 const TONE_CLASSES: Record<InventoryTone, string> = {
   neutral: "text-[var(--color-text-secondary)]",
@@ -50,31 +53,12 @@ export function InventoryTopbar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const sessionState = useSession();
+  const scope = useInventoryScope();
 
-  const branches: Branch[] = sessionState.status === "authenticated" ? (sessionState.session.branches ?? []).map((b) => ({ id: b.id, code: b.code ?? "", name: b.name })) : [];
-  const defaultBranchId = sessionState.status === "authenticated" ? getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId) : "";
-
-  // "El alcance va en la URL — ?branchId= o ?scope=network — y lo respetan
-  // todas las subsecciones." Default: el mismo valor que el selector
-  // GLOBAL de sucursal (encabezado de la app) — nunca dos selectores que
-  // digan cosas distintas; cambiar el alcance ACÁ no toca ese selector
-  // global (que afecta POS y otros módulos ajenos a Inventario).
-  const scopeParam = searchParams.get("scope");
-  const isNetwork = scopeParam === "network";
-  const branchIdParam = searchParams.get("branchId");
-  const activeBranchId = isNetwork ? "" : (branchIdParam || defaultBranchId);
-
-  function setScope(next: { branchId: string } | { network: true }) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("branchId");
-    params.delete("scope");
-    if ("network" in next) params.set("scope", "network");
-    else params.set("branchId", next.branchId);
-    router.push(`${pathname}?${params.toString()}` as Route);
-  }
-
-  const active = useMemo(() => resolveActiveNav(pathname, searchParams.get("tab")), [pathname, searchParams]);
+  const active = useMemo(
+    () => resolveActiveNav(pathname, searchParams.get("tab"), Object.fromEntries(searchParams.entries())),
+    [pathname, searchParams],
+  );
 
   // §1.5 — "la barra sticky no tapa contenido: el scroll-margin-top de los
   // anclajes lo contempla". No hay anclajes hoy en Inventario, pero esto es
@@ -88,16 +72,15 @@ export function InventoryTopbar() {
 
   const [counts, setCounts] = useState({ activeProducts: 0, negativeStock: 0, lowStock: 0, staleTransfers: 0, pendingQuality: 0 });
   useEffect(() => {
-    // "Toda la red" manda SIN branchId — el backend agrega las 4 sucursales
-    // en vez de filtrar a una (getInventoryOverview/getInventoryNavCounts
-    // con branchId=null); nunca se salta el fetch ni muestra 0 por omisión.
-    if (!isNetwork && !activeBranchId) return;
-    const params = isNetwork ? "" : `?branchId=${activeBranchId}`;
+    if (scope.loading) return;
+    // "Toda la red" manda SIN branchId — el backend agrega las sucursales
+    // en vez de filtrar a una; nunca se salta el fetch ni muestra 0 por omisión.
+    const params = scope.mode === "branch" && scope.branchId ? `?branchId=${scope.branchId}` : "";
     apiFetch(`/api/master/inventory/nav-counts${params}`)
       .then((res) => res.json())
       .then((raw) => setCounts(unwrapApiData(raw) as typeof counts))
       .catch(() => {});
-  }, [activeBranchId, isNetwork]);
+  }, [scope.mode, scope.branchId, scope.loading]);
 
   // ── Buscador ───────────────────────────────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false);
@@ -111,19 +94,22 @@ export function InventoryTopbar() {
   // anterior, o ninguno si recién se abrió el buscador).
   const lastSearchedTerm = useRef<string>("");
 
+  const searchBranchId = scope.mode === "branch" ? scope.branchId : scope.branches[0]?.id;
+
   const runSearch = useCallback(async (term: string, signal?: AbortSignal) => {
     // listInventoryProducts siempre pide branchId (ver su propio comentario
     // de diseño) — el buscador solo empareja por nombre/SKU/código, nunca
-    // muestra costo/precio/stock, así que en "Toda la red" usa la sucursal
-    // activa del usuario como referencia sin que eso afecte qué encuentra.
-    const params = new URLSearchParams({ q: term, limit: "8", branchId: activeBranchId || defaultBranchId });
+    // muestra costo/precio/stock, así que en "Toda la red" usa la primera
+    // sucursal como referencia sin que eso afecte qué encuentra.
+    if (!searchBranchId) return [];
+    const params = new URLSearchParams({ q: term, limit: "8", branchId: searchBranchId });
     const res = await apiFetch(`/api/master/inventory/products?${params}`, { signal });
     const raw = await res.json().catch(() => null);
     const data = raw ? (unwrapApiData(raw) as { rows: Array<{ id: string; sku: string; name: string; barcode: string | null }> }) : { rows: [] };
     const groups = buildNavSearchResults(term, data.rows ?? []);
     lastSearchedTerm.current = term;
     return groups;
-  }, [activeBranchId, defaultBranchId]);
+  }, [searchBranchId]);
 
   useEffect(() => {
     const term = query.trim();
@@ -192,22 +178,23 @@ export function InventoryTopbar() {
   if (!active) return null; // No montada en una pantalla de Inventario — no debería pasar si cada page.tsx la incluye donde corresponde.
 
   const activeGroup = INVENTORY_GROUPS.find((g) => g.key === active.groupKey) ?? INVENTORY_GROUPS[0];
+  const currentBranchParam = scope.mode === "all" ? "all" : scope.branchId;
 
   return (
     <div className="sticky top-[3.5rem] z-20 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-      {/* Fila 1 — título, alcance, buscador, acciones. En móvil se reacomoda
-          con `order-*` en vez de duplicar nada: título+alcance comparten la
-          primera línea, "+ Entrada" y el buscador bajan cada uno a su
-          propia línea a lo ancho (así lo muestra inventario-inicio-movil.png
-          — el alcance SIGUE visible en móvil, no se esconde en un menú). */}
-      <div className="flex flex-wrap items-center gap-2 px-4 py-2 lg:px-6">
+      {/* Fila 1 — título, alcance, buscador, acciones. Mismo padding
+          horizontal que el <main> global (p-5 lg:p-8) para que el borde de
+          la barra coincida con el del contenido (bug #8). En móvil se
+          reacomoda con `order-*`: título+alcance comparten la primera
+          línea, "+ Nueva" y el buscador bajan cada uno a su propia línea. */}
+      <div className="flex flex-wrap items-center gap-2 px-5 py-2 lg:px-8">
         <h2 className="order-1 shrink-0 text-sm font-bold text-[var(--color-text)]">Inventario</h2>
 
         <div className="order-2 ml-auto md:order-3 md:ml-0">
-          <ScopeSelector branches={branches} activeBranchId={activeBranchId} isNetwork={isNetwork} onChange={setScope} />
+          <ScopeSelector scope={scope} />
         </div>
 
-        <div className="relative order-4 w-full md:order-2 md:w-auto md:min-w-[180px] md:max-w-xl md:flex-1">
+        <div className="relative order-4 w-full flex-1 md:order-2 md:w-auto md:min-w-[180px]">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-muted)]" />
           <input
             ref={searchInputRef}
@@ -250,7 +237,7 @@ export function InventoryTopbar() {
         </div>
 
         {/* Escanear — el mock móvil no lo muestra en la barra (sigue
-            disponible desde Catálogo → Códigos de barra); desde md se suma
+            disponible desde Productos → Códigos de barra); desde md se suma
             junto al resto. */}
         <Link
           href={"/app/master/catalog/barcodes" as Route}
@@ -259,8 +246,11 @@ export function InventoryTopbar() {
           <ScanLine className="h-4 w-4" /> Escanear
         </Link>
 
+        {/* "+ Nueva ▾" con las 6 opciones es Commit 2 de prompt-inventario-
+            unificado.md — acá solo se actualiza el destino a la nueva
+            subsección "Entradas" (antes tab=movements). */}
         <Link
-          href={"/app/master/catalog-inventory?tab=movements" as Route}
+          href={"/app/master/catalog-inventory?tab=intakes" as Route}
           className="order-3 flex h-11 w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--color-master-600)] px-3 text-xs font-semibold text-white hover:bg-[var(--color-master-700)] md:order-5 md:h-10 md:w-auto"
         >
           <Plus className="h-4 w-4" /> Entrada
@@ -268,13 +258,13 @@ export function InventoryTopbar() {
       </div>
 
       {/* Fila 2 — grupos */}
-      <div ref={groupScrollRef} className="flex gap-1 overflow-x-auto px-4 pb-1 lg:px-6" style={{ scrollbarWidth: "thin" }}>
+      <div ref={groupScrollRef} className="flex gap-1 overflow-x-auto px-5 pb-1 lg:px-8" style={{ scrollbarWidth: "thin" }}>
         {INVENTORY_GROUPS.map((group) => {
           const isActive = group.key === active.groupKey;
           const tone = groupTone(group.key, counts);
-          // "Existencias N" (inventario-inicio-desktop.png) — negativo + por agotarse + traslados atrasados: todo lo que ese grupo cubre, no solo lo que pinta de rojo (groupTone sigue sin contar "por agotarse" para el color, a propósito).
+          // "Existencias N" — negativo + por agotarse + traslados atrasados: todo lo que ese grupo cubre, no solo lo que pinta de rojo (groupTone sigue sin contar "por agotarse" para el color, a propósito).
           const count =
-            group.key === "catalog" ? counts.activeProducts
+            group.key === "products" ? counts.activeProducts
             : group.key === "stock" ? counts.negativeStock + counts.lowStock + counts.staleTransfers
             : group.key === "quality" ? counts.pendingQuality
             : null;
@@ -283,7 +273,7 @@ export function InventoryTopbar() {
               key={group.key}
               ref={isActive ? activeGroupRef : null}
               type="button"
-              onClick={() => router.push(group.subsections[0].path as Route)}
+              onClick={() => router.push(buildInventoryHref(group.subsections[0], { branch: currentBranchParam }) as Route)}
               className={`shrink-0 rounded-t-lg px-3 py-2.5 text-xs font-semibold whitespace-nowrap transition-colors ${
                 isActive ? "border-b-2 border-[var(--color-master-600)] text-[var(--color-master-700)]" : `border-b-2 border-transparent ${TONE_CLASSES[tone]} hover:bg-[var(--color-surface-alt)]`
               }`}
@@ -297,54 +287,89 @@ export function InventoryTopbar() {
         })}
       </div>
 
-      {/* Fila 3 — subsecciones del grupo activo */}
-      <div className="flex gap-1.5 overflow-x-auto border-t border-[var(--color-border)] px-4 py-1.5 lg:px-6" style={{ scrollbarWidth: "thin" }}>
-        {activeGroup.subsections.map((sub) => {
-          const isActive = !sub.external && sub.key === active.subsectionKey;
-          const href = sub.tab ? `${sub.path}?tab=${sub.tab}` : sub.path;
-          return (
-            <Link
-              key={sub.key}
-              href={href as Route}
-              className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                isActive ? "bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]"
-              }`}
-            >
-              {sub.label}{sub.external ? " ↗" : ""}
-            </Link>
-          );
-        })}
-      </div>
+      {/* Fila 3 — subsecciones del grupo activo, "solo si tiene más de una" */}
+      {activeGroup.subsections.length > 1 ? (
+        <div className="flex gap-1.5 overflow-x-auto border-t border-[var(--color-border)] px-5 py-1.5 lg:px-8" style={{ scrollbarWidth: "thin" }}>
+          {activeGroup.subsections.map((sub) => {
+            const isActive = sub.key === active.subsectionKey;
+            const href = buildInventoryHref(sub, { branch: currentBranchParam });
+            return (
+              <Link
+                key={sub.key}
+                href={href as Route}
+                className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  isActive ? "bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]"
+                }`}
+              >
+                {sub.label}
+              </Link>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function ScopeSelector({ branches, activeBranchId, isNetwork, onChange }: {
-  branches: Branch[];
-  activeBranchId: string;
-  isNetwork: boolean;
-  onChange: (next: { branchId: string } | { network: true }) => void;
-}) {
+function ScopeSelector({ scope }: { scope: ReturnType<typeof useInventoryScope> }) {
   const [open, setOpen] = useState(false);
-  const activeBranch = branches.find((b) => b.id === activeBranchId);
-  const label = isNetwork ? "Toda la red" : activeBranch ? `${activeBranch.name}` : "Elegir sucursal";
+  const [filterText, setFilterText] = useState("");
+
+  const activeBranch = scope.mode === "branch" ? scope.branches.find((b) => b.id === scope.branchId) : undefined;
+  const label = scope.mode === "all" ? "Toda la red" : activeBranch ? `${activeBranch.code} · ${activeBranch.name}` : "Elegir sucursal";
+
+  const visibleBranches = filterText.trim()
+    ? scope.branches.filter((b) => `${b.code} ${b.name}`.toLowerCase().includes(filterText.trim().toLowerCase()))
+    : scope.branches;
 
   return (
     <div className="relative">
-      <button type="button" onClick={() => setOpen((v) => !v)} onBlur={() => window.setTimeout(() => setOpen(false), 160)} className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] md:h-10">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 160)}
+        className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] md:h-10"
+      >
         {label} <ChevronDown className="h-3.5 w-3.5" />
       </button>
       {open ? (
-        <div className="absolute right-0 top-full z-40 mt-1 w-52 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
-          {branches.map((b) => (
-            <button key={b.id} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { onChange({ branchId: b.id }); setOpen(false); }} className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)]">
-              {b.name} {b.id === activeBranchId && !isNetwork ? "✓" : ""}
+        <div className="absolute right-0 top-full z-40 mt-1 w-60 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
+          {scope.canShowNetwork ? (
+            <>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { scope.setScope({ mode: "all", branchId: null }); setOpen(false); }}
+                className="flex w-full items-center justify-between px-3 py-2.5 text-left text-xs font-semibold hover:bg-[var(--color-surface-alt)]"
+              >
+                Toda la red · {scope.branches.length} sucursales {scope.mode === "all" ? "✓" : ""}
+              </button>
+              <div className="my-1 border-t border-[var(--color-border)]" />
+            </>
+          ) : null}
+          {scope.branches.length > 6 ? (
+            <div className="px-3 pb-1.5">
+              <input
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                placeholder="Filtrar sucursal…"
+                className="hm-input h-8 w-full text-xs"
+                onMouseDown={(e) => e.stopPropagation()}
+              />
+            </div>
+          ) : null}
+          {visibleBranches.map((b: ScopeBranch, i: number) => (
+            <button
+              key={b.id}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { scope.setScope({ mode: "branch", branchId: b.id }); setOpen(false); }}
+              className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)]"
+            >
+              <span>{b.code} · {b.name}</span>
+              <span>{i === 0 && !filterText.trim() ? "★" : ""}{b.id === scope.branchId && scope.mode === "branch" ? " ✓" : ""}</span>
             </button>
           ))}
-          <div className="my-1 border-t border-[var(--color-border)]" />
-          <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { onChange({ network: true }); setOpen(false); }} className="flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-[var(--color-surface-alt)]">
-            Toda la red {isNetwork ? "✓" : ""}
-          </button>
         </div>
       ) : null}
     </div>

@@ -63,7 +63,13 @@ type IntakeDetail = Omit<IntakeListItem, "branches"> & {
   linesDetail: IntakeLineDetail[];
 };
 
-export function IntakeHistoryPanel() {
+/**
+ * prompt-inventario-unificado.md Commit 1 — `kindFilter` opcional (ej.
+ * "PHYSICAL_COUNT") para reusar este mismo panel como la nueva subsección
+ * "Conteos" (Existencias) sin duplicar la lista/detalle: filtra en el
+ * cliente sobre lo ya traído, no agrega un parámetro nuevo al backend.
+ */
+export function IntakeHistoryPanel({ kindFilter }: { kindFilter?: string } = {}) {
   const [items, setItems] = useState<IntakeListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -110,6 +116,8 @@ export function IntakeHistoryPanel() {
     }
   }
 
+  const visibleItems = kindFilter ? items.filter((item) => item.kind === kindFilter) : items;
+
   return (
     <div className="space-y-3">
       <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
@@ -125,7 +133,7 @@ export function IntakeHistoryPanel() {
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {visibleItems.map((item) => (
               <tr key={item.id} className="cursor-pointer hover:bg-[var(--color-surface-alt)]" onClick={() => void openDetail(item.id)}>
                 <td className="font-mono text-xs font-semibold text-[var(--color-master-700)]">{item.code}</td>
                 <td className="text-xs">{INTAKE_KIND_LABELS[item.kind] ?? item.kind}</td>
@@ -141,8 +149,8 @@ export function IntakeHistoryPanel() {
                 <td className="whitespace-nowrap text-xs text-[var(--color-text-secondary)]">{fmtDateTime(item.createdAt)}</td>
               </tr>
             ))}
-            {items.length === 0 ? (
-              <tr><td colSpan={6} className="py-8 text-center text-sm text-[var(--color-text-muted)]">{loading ? "Cargando…" : "Todavía no hay entradas registradas."}</td></tr>
+            {visibleItems.length === 0 ? (
+              <tr><td colSpan={6} className="py-8 text-center text-sm text-[var(--color-text-muted)]">{loading ? "Cargando…" : kindFilter ? "Todavía no hay conteos registrados." : "Todavía no hay entradas registradas."}</td></tr>
             ) : null}
           </tbody>
         </table>

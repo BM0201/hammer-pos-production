@@ -92,6 +92,7 @@ function isKardexIn(type: string) {
    MOVEMENTS PANEL
    ═══════════════════════════════════════════════════════════ */
 export function MovementsPanel({
+  view,
   branches,
   products,
   movements,
@@ -101,6 +102,8 @@ export function MovementsPanel({
   onSelectBranch,
   onDone,
 }: {
+  /** prompt-inventario-unificado.md Commit 1 — Kardex/Entradas/Conteos ahora son 3 URLs reales (antes compartían tab=movements con un selector interno duplicado de la barra superior); la barra decide la vista, este panel ya no tiene su propio selector de pestaña. */
+  view: "kardex" | "intakes" | "counts";
   branches: Branch[];
   products: ProductRow[];
   movements: Movement[];
@@ -122,8 +125,6 @@ export function MovementsPanel({
   const [loadingMovements, setLoadingMovements] = useState(false);
   const [showAdjustment, setShowAdjustment] = useState(false);
   const [showOpening, setShowOpening] = useState(false);
-  // Fase 3 (prompt-entrada-inventario.md) — "una pestaña o sección 'Entradas' en Movimientos".
-  const [activeTab, setActiveTab] = useState<"kardex" | "intakes">("kardex");
   const [submitting, setSubmitting] = useState(false);
   const activeBranchId = selectedBranchId || branches[0]?.id || "";
   const firstProduct = products[0];
@@ -267,21 +268,23 @@ export function MovementsPanel({
           <Button variant="success" size="sm" onClick={() => setShowOpening(true)} icon={<Package className="h-4 w-4" />}>Entrada de inventario</Button>
         </div>
       </div>
-      <div className="flex gap-1 border-b border-[var(--color-border)] px-4 pt-2">
-        <button type="button" onClick={() => setActiveTab("kardex")} className={`rounded-t-lg px-3 py-2 text-xs font-semibold ${activeTab === "kardex" ? "border-b-2 border-[var(--color-master-600)] text-[var(--color-master-700)]" : "text-[var(--color-text-muted)]"}`}>Kardex</button>
-        <button type="button" onClick={() => setActiveTab("intakes")} className={`rounded-t-lg px-3 py-2 text-xs font-semibold ${activeTab === "intakes" ? "border-b-2 border-[var(--color-master-600)] text-[var(--color-master-700)]" : "text-[var(--color-text-muted)]"}`}>Entradas</button>
-      </div>
-      {activeTab === "intakes" ? (
+      {view === "intakes" ? (
         <div className="p-4">
           <IntakeHistoryPanel />
         </div>
+      ) : view === "counts" ? (
+        <div className="p-4">
+          <IntakeHistoryPanel kindFilter="PHYSICAL_COUNT" />
+        </div>
       ) : (
       <div className="p-4 space-y-4">
-        {/* 7 controles de filtro de ancho similar y cantidad fija — auto-fit
-            se acomoda solo a cualquier ancho en vez de necesitar más
-            breakpoints (mismo patrón que pos-catalog-panel.tsx). */}
+        {/* Antes había acá un <select> de sucursal propio, duplicado del
+            de la barra superior (prompt-inventario-unificado.md bug #4) —
+            selectedBranchId ya viene de useInventoryScope() en el padre. 6
+            controles de filtro de ancho similar — auto-fit se acomoda solo
+            a cualquier ancho en vez de necesitar más breakpoints (mismo
+            patrón que pos-catalog-panel.tsx). */}
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-          <select className="hm-input" value={activeBranchId} onChange={(e) => { onSelectBranch(e.target.value); resetMovementPage(); }}>{branches.map((b) => <option key={b.id} value={b.id}>{b.code} - {b.name}</option>)}</select>
           <select className="hm-input" value={productId} onChange={(e) => { setProductId(e.target.value); resetMovementPage(); }}><option value="">Todos los productos</option>{products.map((p) => <option key={p.id} value={p.id}>{p.sku} - {p.name}</option>)}</select>
           <select className="hm-input" value={movementType} onChange={(e) => { setMovementType(e.target.value); resetMovementPage(); }}><option value="">Todos los tipos</option><option value="PURCHASE_IN">Compra / entrada</option><option value="SALE_OUT">Venta / salida</option><option value="ADJUSTMENT_IN">Ajuste entrada / carga inicial</option><option value="ADJUSTMENT_OUT">Ajuste salida</option><option value="RETURN_IN">Devolucion entrada</option><option value="RETURN_OUT">Devolucion salida</option><option value="TRANSFER_IN">Traslado entrada</option><option value="TRANSFER_OUT">Traslado salida</option></select>
           <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetMovementPage(); }} />

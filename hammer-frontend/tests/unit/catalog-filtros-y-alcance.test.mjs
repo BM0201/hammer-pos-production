@@ -33,21 +33,30 @@ const ADMIN = "components/catalog-inventory/catalog-inventory-admin.tsx";
 // C.4 vive ahí ahora, no en catalog-inventory-admin.tsx.
 const PRICING = "components/catalog-inventory/pricing-panel.tsx";
 
-test("Parte A: la barra de filtros no usa .hm-input directo sin envolver — cada control en su propio div con ancho fijo", () => {
+test("Parte A: la barra de filtros no usa .hm-input directo sin envolver — el control que queda (categoría) sigue en su propio div con ancho fijo", () => {
   const c = read(ADMIN);
   // El bug: .hm-input declara width:100% (globals.css), así que un select
-  // sin envolver ocupa la fila entera. La barra de filtros ahora envuelve
-  // buscar/sucursal/categoría cada uno en su propio div w-[NNNpx].
-  assert.match(c, /<div className="w-\[190px\]">\s*<label htmlFor="cat-branch"/, "sucursal envuelta en div de ancho fijo, con label");
+  // sin envolver ocupa la fila entera. La barra de filtros envuelve
+  // buscar/categoría cada uno en su propio div w-[NNNpx].
   assert.match(c, /<div className="w-\[170px\]">\s*<label htmlFor="cat-category"/, "categoría envuelta en div de ancho fijo, con label");
 });
 
-test("Parte A.2: los 2 selects de la barra de filtros tienen label real (htmlFor/id)", () => {
+test("Parte A.2: el select que queda (categoría) tiene label real (htmlFor/id)", () => {
   const c = read(ADMIN);
-  assert.ok(c.includes('id="cat-branch"'), "select de sucursal debe tener id");
-  assert.ok(c.includes('htmlFor="cat-branch"'), "debe existir un label asociado a cat-branch");
   assert.ok(c.includes('id="cat-category"'), "select de categoría debe tener id");
   assert.ok(c.includes('htmlFor="cat-category"'), "debe existir un label asociado a cat-category");
+});
+
+// prompt-inventario-unificado.md Commit 1 §4 — "un solo selector de
+// sucursal: el desplegable que ya está en la barra... se borran el
+// <select> 'Sucursal' del encabezado viejo". El de acá (id="cat-branch")
+// contradecía al de la barra (bug #4 del doc: "Managua Central" en la
+// barra, "Todas las sucursales" en esta pantalla, al mismo tiempo).
+test("Parte A.4 — LA QUE IMPORTA: el <select> de sucursal propio de este encabezado se borró, branchId viene de useInventoryScope (la barra)", () => {
+  const c = read(ADMIN);
+  assert.ok(!c.includes('id="cat-branch"'), "el select de sucursal propio del encabezado viejo no debe existir más — contradecía al de la barra");
+  assert.ok(c.includes("useInventoryScope()"), "branchId debe salir del hook de alcance compartido, no de un useState propio");
+  assert.ok(!c.includes('const [branchId, setBranchId] = useState("")'), "ya no debe haber un useState local de branchId");
 });
 
 test("Parte A.3: sin botón Aplicar en la barra de filtros — branchId/categoryId ya disparan recarga sola", () => {

@@ -21,6 +21,7 @@ import { money, qty, fmtDateTime } from "@/lib/format";
 import { tokenize } from "@/lib/product-search";
 import { formatSharedStock } from "@/lib/inventory/shared-stock-format";
 import { UNDO_WINDOW_MS, type BarcodeKind } from "@/lib/barcode-manager-logic";
+import { useInventoryScope } from "@/hooks/use-inventory-scope";
 
 // Fase 5 (prompt-flujo-velocidad.md): FusionPricingPanel solo se monta con
 // la pestaña "fusion" activa (línea ~1568) — carga diferida para que su
@@ -299,7 +300,7 @@ function costSourceLabel(source: BranchPricingCostRow["costSource"], branchCode:
   }
 }
 
-type Tab = "summary" | "products" | "categories" | "import" | "stock" | "movements" | "pricing" | "fusion" | "transfers" | "reorder" | "duplicates" | "audit";
+type Tab = "summary" | "products" | "categories" | "import" | "stock" | "kardex" | "intakes" | "counts" | "pricing" | "fusion" | "transfers" | "reorder" | "duplicates" | "audit";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "summary", label: "Resumen", icon: BarChart3 },
@@ -307,7 +308,13 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "categories", label: "Categorías", icon: Tags },
   { id: "import", label: "Importar", icon: FileUp },
   { id: "stock", label: "Existencias", icon: Boxes },
-  { id: "movements", label: "Movimientos / Kardex", icon: History },
+  // prompt-inventario-unificado.md Commit 1 — antes una sola pestaña
+  // "movements" con Kardex/Entradas como sub-pestañas internas (y
+  // "Conteos" sin ningún lugar propio); ahora 3 URLs reales, una por
+  // subsección de la barra superior.
+  { id: "kardex", label: "Kardex", icon: History },
+  { id: "intakes", label: "Entradas", icon: History },
+  { id: "counts", label: "Conteos", icon: History },
   { id: "pricing", label: "Precios y costos", icon: TrendingUp },
   // "Ese apartado de Fusiones, es para poner el precio, no es otra
   // pestaña para crear" — a diferencia de Fusión de Inventario (crear
@@ -544,13 +551,22 @@ function PaginationBar({ pagination, onPageChange }: { pagination: Pagination; o
    ═══════════════════════════════════════════════════════════ */
 export function CatalogInventoryAdmin() {
   const searchParams = useSearchParams();
+  const scope = useInventoryScope();
   const [data, setData] = useState<CenterData | null>(null);
   const [tab, setTab] = useState<Tab>((searchParams.get("tab") as Tab) || "summary");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
-  const [branchId, setBranchId] = useState("");
+  // prompt-inventario-unificado.md Commit 1 §4 — ya no hay <select> de
+  // sucursal propio acá: lo da la barra (useInventoryScope). "Toda la red"
+  // cae a la primera sucursal visible para lo que esta pantalla todavía no
+  // sabe agregar en red (eso es Commit 2 — "Productos → Lista con la
+  // sucursal de la barra: Toda la red...").
+  const branchId = (scope.mode === "branch" ? scope.branchId : scope.branches[0]?.id) ?? "";
   const [categoryId, setCategoryId] = useState("");
-  const [filter, setFilter] = useState("");
+  // Pendientes (Calidad) llega con ?filter=NO_COST ya en la URL — antes
+  // este estado SIEMPRE arrancaba vacío e ignoraba ese parámetro (el link
+  // no hacía nada real, bug #1/regla 5 del doc).
+  const [filter, setFilter] = useState(() => searchParams.get("filter") ?? "");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [stockSearch, setStockSearch] = useState("");
@@ -1124,13 +1140,11 @@ export function CatalogInventoryAdmin() {
             />
           </div>
         </div>
-        <div className="w-[190px]">
-          <label htmlFor="cat-branch" className="mb-1 block text-xs" style={{ color: "var(--color-text-muted)" }}>Sucursal</label>
-          <select id="cat-branch" className="hm-input h-10" value={branchId} onChange={(event) => { setBranchId(event.target.value); setPage(1); }}>
-            <option value="">Todas las sucursales</option>
-            {data?.branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {branch.name}</option>)}
-          </select>
-        </div>
+        {/* prompt-inventario-unificado.md Commit 1 §4 — el <select> de
+            sucursal propio de este encabezado se borra: la sucursal única
+            la da la barra (useInventoryScope). El resto de este
+            encabezado viejo (título, buscador, categoría) se borra
+            completo en el Commit 2 de ese doc. */}
         <div className="w-[170px]">
           <label htmlFor="cat-category" className="mb-1 block text-xs" style={{ color: "var(--color-text-muted)" }}>Categoría</label>
           <select id="cat-category" className="hm-input h-10" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }}>
@@ -1700,8 +1714,8 @@ export function CatalogInventoryAdmin() {
               <select className="hm-input h-9" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }}>
                 {FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
-              <Button variant="primary" onClick={() => { setMovementDialog("adjustment"); setTab("movements"); }} icon={<Plus className="h-4 w-4" />}>Ajuste manual</Button>
-              <Button variant="success" onClick={() => { setMovementDialog("opening"); setTab("movements"); }} icon={<Package className="h-4 w-4" />}>Carga inicial</Button>
+              <Button variant="primary" onClick={() => { setMovementDialog("adjustment"); setTab("kardex"); }} icon={<Plus className="h-4 w-4" />}>Ajuste manual</Button>
+              <Button variant="success" onClick={() => { setMovementDialog("opening"); setTab("intakes"); }} icon={<Package className="h-4 w-4" />}>Carga inicial</Button>
               <Button variant="ghost" onClick={() => load().catch((e) => toast.error(e.message))} icon={<RefreshCcw className="h-4 w-4" />}>Refrescar</Button>
             </div>
             <div className="overflow-x-auto">
@@ -1720,7 +1734,9 @@ export function CatalogInventoryAdmin() {
         </Card>
       ) : null}
 
-      {data && tab === "movements" ? <MovementsPanel branches={data.branches} products={data.products} movements={data.movements} selectedBranchId={branchId} initialDialog={movementDialog} onInitialDialogHandled={() => setMovementDialog(null)} onSelectBranch={setBranchId} onDone={load} /> : null}
+      {data && (tab === "kardex" || tab === "intakes" || tab === "counts") ? (
+        <MovementsPanel view={tab} branches={data.branches} products={data.products} movements={data.movements} selectedBranchId={branchId} initialDialog={movementDialog} onInitialDialogHandled={() => setMovementDialog(null)} onSelectBranch={(nextBranchId) => scope.setScope({ mode: "branch", branchId: nextBranchId })} onDone={load} />
+      ) : null}
       {data && tab === "pricing" ? (
         <>
           <PricingPanel
@@ -1731,7 +1747,7 @@ export function CatalogInventoryAdmin() {
             missingPriceCount={data.kpis.missingPriceCount}
             onlyMissing={filter === "NO_BRANCH_PRICE"}
             onToggleOnlyMissing={() => { setFilter((prev) => (prev === "NO_BRANCH_PRICE" ? "" : "NO_BRANCH_PRICE")); setPage(1); }}
-            onSelectBranch={(nextBranchId) => { setBranchId(nextBranchId); setPage(1); }}
+            onSelectBranch={(nextBranchId) => { scope.setScope({ mode: "branch", branchId: nextBranchId }); setPage(1); }}
             onSave={updateBranchPrice}
             onSaveGlobalCost={updateGlobalCost}
             onToggleBranchAssignment={toggleBranchAssignment}

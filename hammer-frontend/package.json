@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit",
     "test:e2e": "cd ../hammer-api && npm exec -- tsx prisma/e2e-seed.ts && cd ../hammer-frontend && playwright test",
     "test:e2e:ui": "cd ../hammer-api && npm exec -- tsx prisma/e2e-seed.ts && cd ../hammer-frontend && playwright test --ui",
+    "test:e2e:nav": "cd ../hammer-api && npm exec -- tsx prisma/e2e-seed.ts && cd ../hammer-frontend && playwright test --project=ui",
     "lint": "eslint .",
     "knip": "knip",
     "security:audit": "npm audit --omit=dev"

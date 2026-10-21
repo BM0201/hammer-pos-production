@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import type { Route } from "next";
 import toast from "react-hot-toast";
 import {
   Plus, CheckCircle, Loader2, X, Search, Send, Ban, Package,
@@ -12,6 +14,8 @@ import { money, qty, fmtDate, fmtDateTime } from "@/lib/format";
 import { useSubmitting } from "@/lib/client/use-submitting";
 import { BranchMatrix } from "@/components/multi-branch/branch-matrix";
 import { type MatrixLine, buildMatrixPayloadLines, buildBranchPreviews } from "@/lib/multi-branch-matrix";
+import { InventoryTopbar } from "@/components/inventory/inventory-topbar";
+import { useInventoryScope } from "@/hooks/use-inventory-scope";
 
 /* ══════════════════════════════════════════════════════════════
  * Tipos
@@ -1586,12 +1590,24 @@ const MAIN_TABS: Array<{ key: MainTab; label: string }> = [
 ];
 
 export default function ReplenishmentPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const scope = useInventoryScope();
   const [activeTab, setActiveTab] = useState<MainTab>("signals");
   const [branches, setBranches] = useState<Branch[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [branchId, setBranchId] = useState("");
   const [planRefreshKey, setPlanRefreshKey] = useState(0);
+
+  // prompt-inventario-unificado.md Commit 1 §4 — ya no hay selector de
+  // sucursal propio acá: lo da useInventoryScope() (la barra). Esta
+  // pantalla es inherentemente de UNA sucursal (señales/plan/traslados se
+  // calculan por sucursal, no hay "toda la red" posible) — en "Toda la
+  // red" cae a la primera que no sea la central, igual que el default de
+  // siempre, para no dejar la pantalla sin nada que mostrar.
+  const branchId = scope.mode === "branch" && scope.branchId
+    ? scope.branchId
+    : (branches.find((b) => !b.isDefaultSupplier)?.id ?? branches[0]?.id ?? "");
 
   const fetchMeta = useCallback(async () => {
     try {
@@ -1603,53 +1619,67 @@ export default function ReplenishmentPage() {
       const bData = unwrapApiData(await bRes.json());
       const pData = unwrapApiData(await pRes.json());
       const sData = unwrapApiData(await sRes.json());
-      const branchList = Array.isArray(bData) ? bData : [];
-      setBranches(branchList);
+      setBranches(Array.isArray(bData) ? bData : []);
       // La madera se compra por pedido especial (viaje/trip con dimensiones
       // especificas, ver pestana Madera) — no debe aparecer en los
       // buscadores manuales de Plan/Traslados como si fuera un producto de
       // compra rutinaria.
       setProducts(Array.isArray(pData) ? (pData as Product[]).filter((p) => !p.isTimber) : []);
       setSuppliers(Array.isArray(sData) ? sData : []);
-      const firstNonCentral = branchList.find((b: Branch) => !b.isDefaultSupplier) ?? branchList[0];
-      if (firstNonCentral) setBranchId(firstNonCentral.id);
     } catch { /* non-critical */ }
   }, []);
 
   useEffect(() => { fetchMeta(); }, [fetchMeta]);
 
+  // prompt-inventario-unificado.md Commit 1 §1 — "Traslados" (Movimientos)
+  // y "Reposición" (Existencias) son la MISMA pantalla, distinguida por
+  // ?tab=transit vs sin tab — la URL manda sobre el estado interno.
+  useEffect(() => {
+    const requested = searchParams.get("tab") as MainTab | null;
+    if (requested && MAIN_TABS.some((t) => t.key === requested)) setActiveTab(requested);
+    else setActiveTab("signals");
+  }, [searchParams]);
+
+  function selectTab(tab: MainTab) {
+    setActiveTab(tab);
+    const params = new URLSearchParams(searchParams.toString());
+    if (tab === "signals") params.delete("tab"); else params.set("tab", tab);
+    const query = params.toString();
+    router.push((`/app/master/replenishment${query ? `?${query}` : ""}`) as Route);
+  }
+
   return (
-    <section className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex min-h-full flex-col">
+      <Suspense fallback={null}>
+        <InventoryTopbar />
+      </Suspense>
+      <section className="space-y-6 p-5 lg:p-8">
         <div>
           <h1 className="text-[1.1875rem] font-bold tracking-[-0.02em] text-[var(--color-text)]">Reposición Inteligente</h1>
           <p className="text-[0.78rem] text-[var(--color-text-muted)]">Un solo motor por demanda real — señales, plan, traslados y parámetros en un mismo lugar.</p>
         </div>
-        <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="hm-input rounded-lg text-sm" aria-label="Sucursal">
-          {branches.map((b) => <option key={b.id} value={b.id}>{b.isDefaultSupplier ? "★ " : ""}{b.code} — {b.name}</option>)}
-        </select>
-      </div>
 
-      <div className="erp-tabs-pill w-fit">
-        {MAIN_TABS.map((tab) => (
-          <button key={tab.key} type="button" data-active={activeTab === tab.key} onClick={() => setActiveTab(tab.key)}>
-            {tab.label}
-          </button>
-        ))}
-      </div>
+        <div className="erp-tabs-pill w-fit">
+          {MAIN_TABS.map((tab) => (
+            <button key={tab.key} type="button" data-active={activeTab === tab.key} onClick={() => selectTab(tab.key)}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-      {!branchId ? (
-        <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-[var(--color-master-500)]" /></div>
-      ) : (
-        <>
-          {activeTab === "signals" && <SignalsTab branchId={branchId} onAdded={() => setPlanRefreshKey((k) => k + 1)} />}
-          {activeTab === "plan" && <PlanTab branchId={branchId} products={products} refreshKey={planRefreshKey} />}
-          {activeTab === "transit" && <TransitTab branchId={branchId} branches={branches} products={products} />}
-          {activeTab === "inbound" && <InboundTab branchId={branchId} />}
-          {activeTab === "params" && <ParamsTab branchId={branchId} suppliers={suppliers} />}
-          {activeTab === "timber" && <TimberTab branchId={branchId} />}
-        </>
-      )}
-    </section>
+        {!branchId ? (
+          <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-[var(--color-master-500)]" /></div>
+        ) : (
+          <>
+            {activeTab === "signals" && <SignalsTab branchId={branchId} onAdded={() => setPlanRefreshKey((k) => k + 1)} />}
+            {activeTab === "plan" && <PlanTab branchId={branchId} products={products} refreshKey={planRefreshKey} />}
+            {activeTab === "transit" && <TransitTab branchId={branchId} branches={branches} products={products} />}
+            {activeTab === "inbound" && <InboundTab branchId={branchId} />}
+            {activeTab === "params" && <ParamsTab branchId={branchId} suppliers={suppliers} />}
+            {activeTab === "timber" && <TimberTab branchId={branchId} />}
+          </>
+        )}
+      </section>
+    </div>
   );
 }
