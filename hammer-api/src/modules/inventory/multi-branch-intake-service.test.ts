@@ -25,7 +25,7 @@ function decimal(value: number) {
 const BRANCH_1 = "branch-1";
 const BRANCH_2 = "branch-2";
 
-function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number; initialBalances?: Array<{ branchId: string; productId: string; quantityOnHand: number; weightedAverageCost: number }>; blockedProducts?: Map<string, { isActive?: boolean; mergedIntoProductId?: string | null; mergedInto?: { sku: string; name: string } | null }> } = {}) {
+function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number; initialBalances?: Array<{ branchId: string; productId: string; quantityOnHand: number; weightedAverageCost: number }>; blockedProducts?: Map<string, { isActive?: boolean; mergedIntoProductId?: string | null; mergedInto?: { sku: string; name: string } | null }>; productCost?: Map<string, { globalCost?: number; averageCost?: number; lastPurchaseCost?: number }> } = {}) {
   const products = opts.products ?? new Set(["p1", "p2"]);
   const balances = new Map<string, { id: string; branchId: string; productId: string; quantityOnHand: Prisma.Decimal; closedPackageQuantity: Prisma.Decimal; looseUnitQuantity: Prisma.Decimal; weightedAverageCost: Prisma.Decimal }>();
   const movements: Array<Record<string, unknown>> = [];
@@ -61,31 +61,68 @@ function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number;
     });
   }
 
+  // Costo a nivel producto (globalCost/averageCost/lastPurchaseCost) para
+  // resolveInboundUnitCost (prompt-entrada-reintento-precio.md Commit 1) —
+  // por defecto ninguno (los tests existentes siempre mandan un costo
+  // entrado o no lo necesitan); opts.productCost lo setea por test.
+  const productCostById = opts.productCost ?? new Map<string, { globalCost?: number; averageCost?: number; lastPurchaseCost?: number }>();
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- fake-db recursivo (db.$transaction se pasa a sí mismo).
   const db: any = {
-    productStockGroupMember: { findFirst: async () => null },
+    productStockGroupMember: { findFirst: async () => null, findMany: async () => [] },
+    branch: {
+      // runBranches (Commit 1) — códigos de sucursal para los mensajes en
+      // español ("No tiene costo en RIV..."); en los tests, el código ES el id.
+      findMany: async ({ where }: { where: { id: { in: string[] } } }) => where.id.in.map((id) => ({ id, code: id })),
+    },
     product: {
       findUniqueOrThrow: async ({ where }: { where: { id: string } }) => {
         if (!products.has(where.id)) throw new Error(`NOT_FOUND: producto ${where.id} no existe`);
         return { id: where.id, standardSalePrice: decimal(opts.standardSalePrice ?? 100) };
       },
       findUnique: async ({ where }: { where: { id: string } }) => (products.has(where.id) ? { id: where.id, standardSalePrice: decimal(opts.standardSalePrice ?? 100) } : null),
-      // assertProductsIntakeable (prompt-entrada-multisucursal-fix.md) — por
-      // defecto todos activos y sin unificar; los tests de bloqueo pasan su
-      // propio Set/Map via opts.blockedProducts.
+      // assertProductsIntakeable (prompt-entrada-multisucursal-fix.md) Y
+      // getEffectiveProductPricingBatch (Commit 1 de prompt-entrada-reintento-
+      // precio.md, vía resolveInboundUnitCostBatch) comparten este mismo
+      // mock — por eso trae AMBOS juegos de campos.
       findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.filter((id) => products.has(id)).map((id) => {
           const blocked = opts.blockedProducts?.get(id);
-          return { id, isActive: blocked?.isActive ?? true, mergedIntoProductId: blocked?.mergedIntoProductId ?? null, mergedInto: blocked?.mergedInto ?? null };
+          const cost = productCostById.get(id);
+          return {
+            id,
+            sku: id.toUpperCase(),
+            name: `Producto ${id}`,
+            isActive: blocked?.isActive ?? true,
+            mergedIntoProductId: blocked?.mergedIntoProductId ?? null,
+            mergedInto: blocked?.mergedInto ?? null,
+            standardSalePrice: decimal(opts.standardSalePrice ?? 100),
+            globalCost: cost?.globalCost !== undefined ? decimal(cost.globalCost) : null,
+            averageCost: cost?.averageCost !== undefined ? decimal(cost.averageCost) : null,
+            lastPurchaseCost: cost?.lastPurchaseCost !== undefined ? decimal(cost.lastPurchaseCost) : null,
+          };
         }),
     },
     branchProductSetting: {
       findUnique: async () => null,
+      findMany: async () => [],
       upsert: async ({ create }: { create: Record<string, unknown> }) => create,
     },
     inventoryBalance: {
       upsert: async ({ where }: { where: { branchId_productId: { branchId: string; productId: string } } }) => getBalance(where.branchId_productId.branchId, where.branchId_productId.productId),
       findUnique: async ({ where }: { where: { branchId_productId: { branchId: string; productId: string } } }) => getBalance(where.branchId_productId.branchId, where.branchId_productId.productId),
+      // resolveInboundUnitCostBatch/prevalidateBranchLines (Commit 1) — WAC
+      // por sucursal para la cadena de costo; también usado para el chequeo
+      // de PHYSICAL_COUNT en la prevalidación. Nunca devuelve una fila para
+      // un par sin balance todavía (mismo criterio que el real: "sin fila
+      // todavía" no es WAC=0, es "no sé").
+      findMany: async ({ where }: { where: { productId: { in: string[] }; branchId: { in: string[] } | string } }) => {
+        const productIds = where.productId.in;
+        const branchIds = typeof where.branchId === "string" ? [where.branchId] : where.branchId.in;
+        return [...balances.values()]
+          .filter((b) => productIds.includes(b.productId) && branchIds.includes(b.branchId))
+          .map((b) => ({ branchId: b.branchId, productId: b.productId, quantityOnHand: b.quantityOnHand, weightedAverageCost: b.weightedAverageCost }));
+      },
       update: async ({ where, data }: { where: { id?: string; branchId_productId?: { branchId: string; productId: string } }; data: Record<string, unknown> }) => {
         const bal = where.id ? getBalanceById(where.id) : getBalance(where.branchId_productId!.branchId, where.branchId_productId!.productId);
         Object.assign(bal, data);
@@ -105,16 +142,22 @@ function buildFakeDb(opts: { products?: Set<string>; standardSalePrice?: number;
     $queryRaw: async () => [],
     // Una tanda es UNA transacción — si una línea falla a mitad de camino,
     // Postgres real revierte las anteriores de ESA TANDA (no de tandas ya
-    // confirmadas antes). El fake simula eso con snapshot/restore.
+    // confirmadas antes) Y el reclamo de processedLines que abrió la misma
+    // transacción (Commit 1 §4: reclamo + aplicación se confirman juntos o
+    // no se confirma nada) — el fake simula las TRES cosas con
+    // snapshot/restore, intakeBranches incluido.
     $transaction: async (fn: (tx: typeof db) => Promise<unknown>) => {
       const balancesSnapshot = new Map([...balances].map(([k, v]) => [k, { ...v }]));
       const movementsLenSnapshot = movements.length;
+      const intakeBranchesSnapshot = intakeBranches.map((b) => ({ ...b }));
       try {
         return await fn(db);
       } catch (error) {
         balances.clear();
         for (const [k, v] of balancesSnapshot) balances.set(k, v);
         movements.length = movementsLenSnapshot;
+        intakeBranches.length = 0;
+        intakeBranches.push(...intakeBranchesSnapshot);
         throw error;
       }
     },
@@ -215,6 +258,46 @@ test("LA QUE IMPORTA — ADD_STOCK con costo PROMEDIA (120 a 402.30 + 50 a 415 �
   const balance = getBalance(BRANCH_1, "p1");
   assert.equal(Number(balance.quantityOnHand), 170);
   assert.equal(Number(balance.weightedAverageCost.toFixed(2)), 406.04);
+});
+
+// ── prompt-entrada-reintento-precio.md Commit 1 — regresión directa de IM-000008 ──
+
+test("LA QUE IMPORTA — caso real IM-000008: ADD_STOCK sin costo entrado, sin WAC en la sucursal, PERO con averageCost a nivel producto — ya NO revienta con ZERO_COST_INBOUND", async () => {
+  const { db, getBalance } = buildFakeDb({ products: new Set(["bisagras"]), productCost: new Map([["bisagras", { averageCost: 75 }]]) });
+  // RIV (BRANCH_1 acá) nunca tuvo una fila de balance para este producto —
+  // mismo estado exacto que RIV tenía para BISAGRAS CRONO en producción.
+  const result = await createMultiBranchIntake({
+    clientRequestId: "req-im8",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "bisagras", quantity: 6 }], // sin unitCost — igual que la línea real
+  }, db);
+  assert.equal(result.branches[0].status, "DONE", "antes del fix, esto fallaba con 'Inbound movements require a positive unit cost' aunque la vista previa decía OK");
+  const balance = getBalance(BRANCH_1, "bisagras");
+  assert.equal(Number(balance.quantityOnHand), 6);
+  assert.equal(Number(balance.weightedAverageCost), 75, "el movimiento usa el costo resuelto (cadena), no 0");
+});
+
+test("LA QUE IMPORTA — prevalidación por sucursal: sin costo en NINGUNA parte, la sucursal queda FAILED SIN aplicar nada, con errorJson con el producto", async () => {
+  const { db, getBalance } = buildFakeDb();
+  const result = await createMultiBranchIntake({
+    clientRequestId: "req-noavg",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p1", quantity: 6 }],
+  }, db);
+  assert.equal(result.branches[0].status, "FAILED");
+  assert.equal(result.branches[0].processedLines, 0, "nada se aplicó — la prevalidación corrió ANTES de la primera tanda");
+  assert.equal(Number(getBalance(BRANCH_1, "p1").quantityOnHand), 0);
+  assert.ok(result.branches[0].errorJson, "debe traer errorJson, no solo el texto plano");
+  assert.equal(result.branches[0].errorJson?.lines.length, 1);
+  assert.equal(result.branches[0].errorJson?.lines[0].productId, "p1");
+  assert.equal(result.branches[0].errorJson?.lines[0].code, "NO_COST_NO_AVERAGE");
+  assert.match(result.branches[0].errorJson?.lines[0].text ?? "", /branch-1/i, "el mensaje dice en QUÉ sucursal (branch-1 es el código en este fake)");
 });
 
 test("PHYSICAL_COUNT no toca el costo, aunque el conteo suba el stock", async () => {
@@ -402,6 +485,35 @@ test("LA QUE IMPORTA — /continue retoma una sucursal IN_PROGRESS (presupuesto 
   assert.equal(Number(getBalance(BRANCH_1, "p1").quantityOnHand), 5, "p1 no se reprocesó (seguía en 5, no subió a 10)");
   assert.equal(Number(getBalance(BRANCH_1, "p2").quantityOnHand), 5, "p2 y p3 sí se procesaron ahora");
   assert.equal(Number(getBalance(BRANCH_1, "p3").quantityOnHand), 5);
+});
+
+test("LA QUE IMPORTA — dos /continue simultáneos sobre la misma sucursal no duplican existencias (Commit 1 §4: el reclamo de processedLines está DENTRO de la transacción de la tanda)", async () => {
+  const { db, getBalance, intakeBranches, intakes } = buildFakeDb({ products: new Set(["p1", "p2", "p3"]) });
+  intakes.push({ id: "intake-race", code: "IM-000098", sequence: 98, clientRequestId: "req-race", kind: "ADD_STOCK", reason: "Llegó pedido", notes: null, linesJson: [
+    { productId: "p1", quantity: 5, unitCost: 10 },
+    { productId: "p2", quantity: 5, unitCost: 10 },
+    { productId: "p3", quantity: 5, unitCost: 10 },
+  ] });
+  intakeBranches.push({ id: "ib-race", intakeId: "intake-race", branchId: BRANCH_1, status: "IN_PROGRESS", error: null, processedLines: 0, totalLines: 3 });
+
+  // Dos corridas "al mismo tiempo" — Promise.all interlaza las dos cadenas
+  // de promesas en los mismos puntos `await` que usaría Node con dos
+  // requests HTTP concurrentes reales.
+  const [resultA, resultB] = await Promise.all([
+    continueMultiBranchIntake("intake-race", "user-1", db),
+    continueMultiBranchIntake("intake-race", "user-1", db),
+  ]);
+
+  const finalBranch = intakeBranches.find((b) => b.intakeId === "intake-race" && b.branchId === BRANCH_1)!;
+  assert.equal(finalBranch.status, "DONE");
+  assert.equal(finalBranch.processedLines, 3, "nunca más de totalLines — si se hubiera aplicado dos veces, el reclamo habría quedado en 6");
+  assert.equal(Number(getBalance(BRANCH_1, "p1").quantityOnHand), 5, "una sola aplicación, no dos");
+  assert.equal(Number(getBalance(BRANCH_1, "p2").quantityOnHand), 5);
+  assert.equal(Number(getBalance(BRANCH_1, "p3").quantityOnHand), 5);
+  // Una de las dos corridas hizo el trabajo real; la otra encontró todo ya
+  // reclamado/hecho y no tiene nada más que aplicar — ambas devuelven DONE.
+  assert.equal(resultA.branches.find((b) => b.branchId === BRANCH_1)!.status, "DONE");
+  assert.equal(resultB.branches.find((b) => b.branchId === BRANCH_1)!.status, "DONE");
 });
 
 test("getMultiBranchIntake — inexistente da NOT_FOUND", async () => {

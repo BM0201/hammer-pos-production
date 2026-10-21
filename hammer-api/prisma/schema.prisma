@@ -2119,7 +2119,12 @@ model MultiBranchIntakeBranch {
   intakeId    String
   branchId    String
   status      MultiBranchIntakeBranchStatus @default(PENDING)
+  /// Texto plano, para filas viejas — sigue existiendo, pero nuevas fallas
+  /// escriben errorJson (prompt-entrada-reintento-precio.md Commit 1 §3):
+  /// la lista COMPLETA de problemas en español, con el producto, no solo
+  /// el primer mensaje en inglés.
   error       String?
+  errorJson   Json?
   processedAt DateTime?
   /// Fase 1 — cuántas líneas de esta sucursal ya se procesaron (tandas de
   /// 25). /continue reanuda desde acá, nunca reprocesa una ya hecha.

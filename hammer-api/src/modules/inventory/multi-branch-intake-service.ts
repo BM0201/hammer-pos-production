@@ -2,6 +2,8 @@ import { Prisma, PrismaClient, MultiBranchIntakeKind } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createOpeningBalanceTx } from "@/modules/inventory/service";
 import { getSharedInventoryBalance } from "@/modules/inventory/unit-conversion";
+import { resolveInboundUnitCostBatch } from "@/modules/inventory/resolve-inbound-unit-cost";
+import { mapIntakeErrorToSpanish, buildIntakeErrorJson, type IntakeErrorJson, type IntakeErrorLine } from "@/modules/inventory/intake-error-messages";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -69,6 +71,8 @@ export type IntakeBranchResult = {
   branchId: string;
   status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED";
   error: string | null;
+  /** prompt-entrada-reintento-precio.md Commit 1 §3 — lista completa de problemas, en español, con el producto. null en branches no-FAILED o de antes de este commit. */
+  errorJson: IntakeErrorJson | null;
   processedLines: number;
   totalLines: number;
 };
@@ -140,7 +144,41 @@ function resolveLinesForBranch(lines: IntakeLineInput[], branchId: string, kind:
     .filter((line) => (kind === "PHYSICAL_COUNT" ? line.quantity >= 0 : line.quantity > 0));
 }
 
-/** Procesa UNA tanda (<=25 líneas) en SU PROPIA transacción. */
+/**
+ * Costo resuelto de cada línea de la tanda, con la MISMA regla que la
+ * vista previa (prompt-entrada-reintento-precio.md Commit 1 §1):
+ * `resolveInboundUnitCostBatch` — entrado > costo efectivo de ESA
+ * sucursal (branchCost > WAC > averageCost > globalCost > lastPurchaseCost,
+ * nunca de otra sucursal). Antes, `costModeForKind`+QUANTITY_ONLY dejaba
+ * que `createOpeningBalanceTx` cayera al WAC crudo de la sucursal (0 si
+ * nunca tuvo compras ahí) sin mirar esta cadena — la causa real de
+ * IM-000008: la vista previa veía costo (globalCost=75) y lo dejaba
+ * pasar; el guardado solo miraba el WAC de RIV (0) y reventaba.
+ */
+async function resolveBatchCosts(tx: Prisma.TransactionClient, branchId: string, batch: ResolvedLine[]): Promise<Map<string, Prisma.Decimal | null>> {
+  const resolved = await resolveInboundUnitCostBatch(tx, batch.map((line) => ({ productId: line.productId, branchId, enteredCost: line.unitCost ?? null })));
+  const costByProductId = new Map<string, Prisma.Decimal | null>();
+  for (const line of batch) {
+    costByProductId.set(line.productId, resolved.get(`${branchId}:${line.productId}`)?.cost ?? null);
+  }
+  return costByProductId;
+}
+
+type BatchOutcome = "applied" | "alreadyClaimed";
+
+/**
+ * Procesa UNA tanda (<=25 líneas) en SU PROPIA transacción — Commit 1 §4
+ * (anti-duplicado): el reclamo de `processedLines` (compare-and-swap sobre
+ * el valor esperado) pasa a ser el PRIMER paso DENTRO de esta misma
+ * transacción, antes de aplicar ninguna línea. Antes, el reclamo era una
+ * sentencia SEPARADA después de confirmar la tanda — un corte entre las
+ * dos (timeout de Vercel, despliegue) o dos /continue a la vez podían
+ * aplicar la misma tanda dos veces (el `updateMany` condicional solo
+ * evitaba contar dos veces, no aplicar dos veces). Ahora tanda + avance se
+ * confirman juntos o no se confirma nada — si el reclamo no es el
+ * esperado (`count===0`), otra corrida ya la tomó: no se toca ni una
+ * línea, la transacción (vacía) commitea sin efecto y el llamador relee.
+ */
 async function processBatchTx(
   db: PrismaClient,
   kind: NormalizedIntakeKind,
@@ -149,8 +187,17 @@ async function processBatchTx(
   batch: ResolvedLine[],
   actorUserId: string,
   notes: string | null,
-) {
-  await db.$transaction(async (tx) => {
+  expectedProcessedLines: number,
+): Promise<BatchOutcome> {
+  return db.$transaction(async (tx) => {
+    const claim = await tx.multiBranchIntakeBranch.updateMany({
+      where: { intakeId: intake.id, branchId, processedLines: expectedProcessedLines },
+      data: { processedLines: expectedProcessedLines + batch.length, status: "IN_PROGRESS" },
+    });
+    if (claim.count === 0) return "alreadyClaimed";
+
+    const costByProductId = kind === "PHYSICAL_COUNT" ? null : await resolveBatchCosts(tx, branchId, batch);
+
     for (const line of batch) {
       if (kind === "OPENING_BALANCE") {
         // Guarda de servidor — el preview (intake-preview-service.ts) ya
@@ -162,7 +209,9 @@ async function processBatchTx(
           throw new Error(`VALIDATION_ERROR: ${line.productId} ya tiene existencias en esta sucursal — usá Sumar o Conteo.`);
         }
       }
-      const hasCost = line.unitCost !== undefined && line.unitCost > 0;
+      const resolvedCost = costByProductId?.get(line.productId) ?? null;
+      const costValue = resolvedCost !== null ? Number(resolvedCost) : null;
+      const hasCost = costValue !== null && costValue > 0;
       await createOpeningBalanceTx(tx, {
         actorUserId,
         branchId,
@@ -170,7 +219,7 @@ async function processBatchTx(
         quantity: line.quantity,
         unit: line.unit,
         stockMode: stockModeForKind(kind),
-        unitCost: hasCost ? line.unitCost : null,
+        unitCost: hasCost ? costValue : null,
         costMode: costModeForKind(kind, hasCost),
         salePrice: line.salePrice ?? null,
         priceMode: line.salePrice !== undefined && line.salePrice > 0 ? "SET_BRANCH_PRICE" : "NO_PRICE_CHANGE",
@@ -178,6 +227,51 @@ async function processBatchTx(
         notes,
       }, { referenceType: INTAKE_REFERENCE_TYPE, referenceId: intake.id, bulkReference: intake.id });
     }
+    return "applied";
+  });
+}
+
+/**
+ * Commit 1 §2 — "prevalidación por sucursal antes de la primera tanda":
+ * todas las líneas, con la MISMA regla de costo que la vista previa y que
+ * el guardado (resolveInboundUnitCostBatch). Si alguna no resuelve costo
+ * (y el movimiento es de entrada — ADD_STOCK siempre, PHYSICAL_COUNT solo
+ * si la cantidad sube), la sucursal queda FAILED SIN aplicar nada, con la
+ * lista completa. OPENING_BALANCE no entra: validateInput() ya exige
+ * costo > 0 ahí mismo, antes de llegar acá.
+ */
+async function prevalidateBranchLines(
+  db: PrismaClient,
+  kind: NormalizedIntakeKind,
+  branchId: string,
+  branchCode: string,
+  lines: ResolvedLine[],
+): Promise<IntakeErrorLine[]> {
+  if (kind === "OPENING_BALANCE") return [];
+
+  const balances = kind === "PHYSICAL_COUNT"
+    ? await db.inventoryBalance.findMany({ where: { branchId, productId: { in: lines.map((l) => l.productId) } }, select: { productId: true, quantityOnHand: true } })
+    : [];
+  const currentQtyByProductId = new Map(balances.map((b) => [b.productId, Number(b.quantityOnHand)]));
+
+  const needsCost = lines.filter((line) => kind === "ADD_STOCK" || (kind === "PHYSICAL_COUNT" && line.quantity > (currentQtyByProductId.get(line.productId) ?? 0)));
+  if (needsCost.length === 0) return [];
+
+  const resolved = await resolveInboundUnitCostBatch(db, needsCost.map((line) => ({ productId: line.productId, branchId, enteredCost: line.unitCost ?? null })));
+  const missing = needsCost.filter((line) => !(resolved.get(`${branchId}:${line.productId}`)?.cost?.gt(0)));
+  if (missing.length === 0) return [];
+
+  const products = await db.product.findMany({ where: { id: { in: missing.map((l) => l.productId) } }, select: { id: true, sku: true, name: true } });
+  const productById = new Map(products.map((p) => [p.id, p]));
+  return missing.map((line) => {
+    const product = productById.get(line.productId);
+    return {
+      productId: line.productId,
+      sku: product?.sku ?? line.productId,
+      name: product?.name ?? "(producto)",
+      code: "NO_COST_NO_AVERAGE",
+      text: `No tiene costo en ${branchCode} y la entrada no traía costo. Escribí el costo de la factura.`,
+    };
   });
 }
 
@@ -193,6 +287,7 @@ async function processBranchUntilDeadline(
   kind: NormalizedIntakeKind,
   intake: { id: string; reason: string },
   branchId: string,
+  branchCode: string,
   lines: IntakeLineInput[],
   actorUserId: string,
   notes: string | null,
@@ -202,39 +297,51 @@ async function processBranchUntilDeadline(
   const totalLines = resolved.length;
 
   if (totalLines === 0) {
-    await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "FAILED", error: "Sin productos para esta sucursal (todas las cantidades quedaron sin aplicar).", totalLines: 0, processedAt: new Date() } });
-    return { branchId, status: "FAILED", error: "Sin productos para esta sucursal (todas las cantidades quedaron sin aplicar).", processedLines: 0, totalLines: 0 };
+    const errorText = "Sin productos para esta sucursal (todas las cantidades quedaron sin aplicar).";
+    await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "FAILED", error: errorText, errorJson: { summary: errorText, lines: [] } as unknown as Prisma.InputJsonValue, totalLines: 0, processedAt: new Date() } });
+    return { branchId, status: "FAILED", error: errorText, errorJson: { summary: errorText, lines: [] }, processedLines: 0, totalLines: 0 };
   }
 
   await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId, totalLines: 0 }, data: { totalLines } });
 
   let processedLines = (await db.multiBranchIntakeBranch.findUniqueOrThrow({ where: { intakeId_branchId: { intakeId: intake.id, branchId } }, select: { processedLines: true } })).processedLines;
 
+  // Commit 1 §2 — solo antes de la primera tanda: si ya avanzó algo
+  // (reintento de una corrida anterior), esas líneas ya pasaron esta
+  // misma prueba la vez que se aplicaron; revalidar de nuevo no agrega
+  // nada y gastaría una consulta de más en cada /continue.
+  if (processedLines === 0) {
+    const problems = await prevalidateBranchLines(db, kind, branchId, branchCode, resolved);
+    if (problems.length > 0) {
+      const errorJson = buildIntakeErrorJson(problems);
+      await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "FAILED", error: errorJson.summary, errorJson: errorJson as unknown as Prisma.InputJsonValue, processedAt: new Date() } });
+      return { branchId, status: "FAILED", error: errorJson.summary, errorJson, processedLines: 0, totalLines };
+    }
+  }
+
   try {
     while (processedLines < totalLines) {
       if (Date.now() > deadlineAt) {
         await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId, status: { in: ["PENDING", "IN_PROGRESS"] } }, data: { status: "IN_PROGRESS" } });
-        return { branchId, status: "IN_PROGRESS", error: null, processedLines, totalLines };
+        return { branchId, status: "IN_PROGRESS", error: null, errorJson: null, processedLines, totalLines };
       }
       const batch = resolved.slice(processedLines, processedLines + BATCH_SIZE);
-      await processBatchTx(db, kind, intake, branchId, batch, actorUserId, notes);
-      // Condicionado al valor que leímos — si otra corrida ya avanzó esto, no duplica: relee y sigue desde el valor real.
-      const advanced = await db.multiBranchIntakeBranch.updateMany({
-        where: { intakeId: intake.id, branchId, processedLines },
-        data: { processedLines: processedLines + batch.length, status: "IN_PROGRESS" },
-      });
-      if (advanced.count === 0) {
+      const outcome = await processBatchTx(db, kind, intake, branchId, batch, actorUserId, notes, processedLines);
+      if (outcome === "alreadyClaimed") {
+        // Otra corrida (otro /continue, u otro /retry) ya reclamó y aplicó
+        // esta tanda — relee el valor real y sigue desde ahí, sin tocar nada acá.
         processedLines = (await db.multiBranchIntakeBranch.findUniqueOrThrow({ where: { intakeId_branchId: { intakeId: intake.id, branchId } }, select: { processedLines: true } })).processedLines;
         continue;
       }
       processedLines += batch.length;
     }
-    await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "DONE", processedAt: new Date(), error: null } });
-    return { branchId, status: "DONE", error: null, processedLines, totalLines };
+    await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "DONE", processedAt: new Date(), error: null, errorJson: Prisma.JsonNull } });
+    return { branchId, status: "DONE", error: null, errorJson: null, processedLines, totalLines };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "FAILED", error: message, processedAt: new Date() } });
-    return { branchId, status: "FAILED", error: message, processedLines, totalLines };
+    const { code, text } = mapIntakeErrorToSpanish(error, branchCode);
+    const errorJson = buildIntakeErrorJson([{ productId: "", sku: "", name: "", code, text }]);
+    await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "FAILED", error: errorJson.summary, errorJson: errorJson as unknown as Prisma.InputJsonValue, processedAt: new Date() } });
+    return { branchId, status: "FAILED", error: errorJson.summary, errorJson, processedLines, totalLines };
   }
 }
 
@@ -315,9 +422,11 @@ async function runBranches(
 ): Promise<CreateIntakeResult> {
   const kind = normalizeIntakeKind(intake.kind);
   const deadlineAt = Date.now() + PROCESSING_TIME_BUDGET_MS;
+  const branchRows = await db.branch.findMany({ where: { id: { in: branchIds } }, select: { id: true, code: true } });
+  const codeByBranchId = new Map(branchRows.map((b) => [b.id, b.code]));
   const results: IntakeBranchResult[] = [];
   for (const branchId of branchIds) {
-    const result = await processBranchUntilDeadline(db, kind, intake, branchId, lines, actorUserId, notes, deadlineAt);
+    const result = await processBranchUntilDeadline(db, kind, intake, branchId, codeByBranchId.get(branchId) ?? branchId, lines, actorUserId, notes, deadlineAt);
     results.push(result);
   }
   const overallStatus: CreateIntakeResult["overallStatus"] = results.every((r) => r.status === "DONE" || r.status === "FAILED") ? "DONE" : "IN_PROGRESS";
@@ -360,11 +469,11 @@ export async function retryMultiBranchIntake(intakeId: string, actorUserId: stri
   return { intake: result.intake, overallStatus, branches: merged };
 }
 
-function branchRowToResult(b: { branchId: string; status: string; error: string | null; processedLines: number; totalLines: number }): IntakeBranchResult {
-  return { branchId: b.branchId, status: b.status as IntakeBranchResult["status"], error: b.error, processedLines: b.processedLines, totalLines: b.totalLines };
+function branchRowToResult(b: { branchId: string; status: string; error: string | null; errorJson?: Prisma.JsonValue | null; processedLines: number; totalLines: number }): IntakeBranchResult {
+  return { branchId: b.branchId, status: b.status as IntakeBranchResult["status"], error: b.error, errorJson: (b.errorJson as unknown as IntakeErrorJson | null) ?? null, processedLines: b.processedLines, totalLines: b.totalLines };
 }
 
-function toResult(intake: { id: string; code: string; branches: Array<{ branchId: string; status: string; error: string | null; processedLines: number; totalLines: number }> }): CreateIntakeResult {
+function toResult(intake: { id: string; code: string; branches: Array<{ branchId: string; status: string; error: string | null; errorJson?: Prisma.JsonValue | null; processedLines: number; totalLines: number }> }): CreateIntakeResult {
   const branches = intake.branches.map(branchRowToResult);
   const overallStatus: CreateIntakeResult["overallStatus"] = branches.every((r) => r.status === "DONE" || r.status === "FAILED") ? "DONE" : "IN_PROGRESS";
   return { intake: { id: intake.id, code: intake.code }, overallStatus, branches };
