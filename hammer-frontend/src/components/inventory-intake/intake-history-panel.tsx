@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { money, qty, fmtDateTime } from "@/lib/format";
-import { IntakeBranchFixSheet, type FixSheetAppliedLine } from "@/components/inventory-intake/intake-branch-fix-sheet";
+import { IntakeSheet, type IntakeEditModeInput } from "@/components/inventory-intake/intake-sheet";
+import type { Branch, ProductRow } from "@/components/catalog-inventory/catalog-inventory-admin";
 
 /**
  * Fase 3 (prompt-entrada-inventario.md) — "Historial de entradas: GET
@@ -72,6 +73,8 @@ type IntakeDetailBranch = {
   processedLines: number;
   totalLines: number;
   linesOverrideJson: Array<{ productId: string; quantity: number; unitCost?: number; salePrice?: number; unit?: string }> | null;
+  /** Mismos campos que linesOverrideJson, enriquecidos con sku/name (incluso para un producto que reemplaza a uno descartado, y nunca estuvo en `lines`). */
+  overrideLinesDetail: IntakeLineDetail[] | null;
   revision: number;
   branch: { id: string; code: string; name: string };
 };
@@ -87,7 +90,8 @@ type IntakeDetail = Omit<IntakeListItem, "branches"> & {
  * "Conteos" (Existencias) sin duplicar la lista/detalle: filtra en el
  * cliente sobre lo ya traído, no agrega un parámetro nuevo al backend.
  */
-export function IntakeHistoryPanel({ kindFilter }: { kindFilter?: string } = {}) {
+/** prompt-entrada-reintento-precio.md Commit 2 §2 — "Editar y reintentar" abre la MISMA hoja de Entrada; por eso necesita las mismas sucursales/productos que la pantalla que crea una entrada nueva. */
+export function IntakeHistoryPanel({ kindFilter, branches, fallbackProducts }: { kindFilter?: string; branches: Branch[]; fallbackProducts: ProductRow[] }) {
   const [items, setItems] = useState<IntakeListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -101,7 +105,8 @@ export function IntakeHistoryPanel({ kindFilter }: { kindFilter?: string } = {})
   const [discardingBranchId, setDiscardingBranchId] = useState<string | null>(null);
   const [discardReason, setDiscardReason] = useState("");
   const [discarding, setDiscarding] = useState(false);
-  const [fixingBranch, setFixingBranch] = useState<IntakeDetailBranch | null>(null);
+  const [editModeInput, setEditModeInput] = useState<IntakeEditModeInput | null>(null);
+  const [resolvingFixSheet, setResolvingFixSheet] = useState(false);
 
   async function loadPage(nextCursor: string | null, append: boolean) {
     (append ? setLoadingMore : setLoading)(true);
@@ -147,18 +152,76 @@ export function IntakeHistoryPanel({ kindFilter }: { kindFilter?: string } = {})
     await loadPage(null, false);
   }
 
-  function pendingLinesFor(branch: IntakeDetailBranch): FixSheetAppliedLine[] {
+  function pendingLineDetailsFor(branch: IntakeDetailBranch): IntakeLineDetail[] {
     if (!detail) return [];
-    const productById = new Map(detail.linesDetail.map((l) => [l.productId, l.product]));
-    if (branch.linesOverrideJson) {
-      return branch.linesOverrideJson.map((l) => ({ ...l, product: productById.get(l.productId) ?? null }));
-    }
-    return detail.linesDetail.slice(branch.processedLines).map((l) => ({ productId: l.productId, quantity: l.quantity, unitCost: l.unitCost, salePrice: l.salePrice, unit: l.unit, product: l.product }));
+    if (branch.overrideLinesDetail) return branch.overrideLinesDetail;
+    return detail.linesDetail.slice(branch.processedLines);
   }
 
-  function appliedLinesFor(branch: IntakeDetailBranch): FixSheetAppliedLine[] {
+  function appliedLinesFor(branch: IntakeDetailBranch): IntakeEditModeInput["appliedLines"] {
     if (!detail) return [];
-    return detail.linesDetail.slice(0, branch.processedLines).map((l) => ({ productId: l.productId, quantity: l.quantity, unitCost: l.unitCost, salePrice: l.salePrice, unit: l.unit, product: l.product }));
+    return detail.linesDetail.slice(0, branch.processedLines).map((l) => ({ productId: l.productId, sku: l.product?.sku ?? l.productId, name: l.product?.name ?? "(producto)", quantity: l.quantity, unitCost: l.unitCost, unit: l.unit }));
+  }
+
+  /** Resuelve el ProductRow completo (con stockConversion) de una línea pendiente — primero en `fallbackProducts` (sin red), si no está, una búsqueda puntual por SKU. */
+  async function resolveProductRow(productId: string, sku: string | undefined): Promise<ProductRow | null> {
+    const cached = fallbackProducts.find((p) => p.id === productId);
+    if (cached) return cached;
+    if (!sku) return null;
+    try {
+      const params = new URLSearchParams({ q: sku, page: "1", limit: "5" });
+      const response = await fetch(`/api/master/catalog-inventory?${params}`, { cache: "no-store" });
+      const raw = await response.json().catch(() => null);
+      if (!response.ok) return null;
+      const data = unwrapApiData(raw) as { products: ProductRow[] };
+      return data.products?.find((p) => p.id === productId) ?? data.products?.[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function openFixSheet(branch: IntakeDetailBranch) {
+    if (!detail) return;
+    setResolvingFixSheet(true);
+    try {
+      const pendingDetails = pendingLineDetailsFor(branch);
+      const pendingLines = await Promise.all(pendingDetails.map(async (line) => {
+        const productRow = await resolveProductRow(line.productId, line.product?.sku);
+        const saleUnit = productRow?.stockConversion?.saleUnit ?? productRow?.unit ?? line.unit ?? "UN";
+        const baseUnit = productRow?.stockConversion?.baseUnit ?? productRow?.unit ?? line.unit ?? "UN";
+        return {
+          productId: line.productId,
+          sku: productRow?.sku ?? line.product?.sku ?? line.productId,
+          name: productRow?.name ?? line.product?.name ?? "(producto)",
+          saleUnit, baseUnit,
+          hasConversion: !!productRow?.stockConversion,
+          conversionFactor: Number(productRow?.stockConversion?.conversionFactor ?? 1) || 1,
+          unit: line.unit ?? saleUnit,
+          quantity: line.quantity,
+          overrides: {},
+          unitCost: line.unitCost ?? null,
+          salePrice: line.salePrice ?? null,
+        };
+      }));
+      setEditModeInput({
+        intakeId: detail.id,
+        intakeCode: detail.code,
+        branchId: branch.branchId,
+        branchCode: branch.branch.code,
+        branchName: branch.branch.name,
+        // ADJUSTMENT_IN (kind legado) se edita como ADD_STOCK — mismo criterio que normalizeIntakeKind en el backend.
+        kind: detail.kind === "ADJUSTMENT_IN" ? "ADD_STOCK" : (detail.kind as IntakeEditModeInput["kind"]),
+        reason: detail.reason,
+        notes: detail.notes ?? "",
+        expectedRevision: branch.revision,
+        appliedLines: appliedLinesFor(branch),
+        pendingLines,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir el editor.");
+    } finally {
+      setResolvingFixSheet(false);
+    }
   }
 
   async function confirmDiscard(branch: IntakeDetailBranch) {
@@ -289,7 +352,7 @@ export function IntakeHistoryPanel({ kindFilter }: { kindFilter?: string } = {})
                           ) : null}
                           {isFailed ? (
                             <div className="flex flex-wrap gap-2 pt-1">
-                              <Button type="button" variant="primary" size="sm" onClick={() => setFixingBranch(b)}>Editar y reintentar {b.branch.code}</Button>
+                              <Button type="button" variant="primary" size="sm" loading={resolvingFixSheet} onClick={() => void openFixSheet(b)}>Editar y reintentar {b.branch.code}</Button>
                               {b.processedLines === 0 ? (
                                 <Button type="button" variant="ghost" size="sm" onClick={() => { setDiscardingBranchId(b.branchId); setDiscardReason(""); }}>Descartar {b.branch.code}</Button>
                               ) : null}
@@ -333,18 +396,16 @@ export function IntakeHistoryPanel({ kindFilter }: { kindFilter?: string } = {})
         </div>
       ) : null}
 
-      {fixingBranch && detail ? (
-        <IntakeBranchFixSheet
-          intakeId={detail.id}
-          intakeCode={detail.code}
-          branchId={fixingBranch.branchId}
-          branchCode={fixingBranch.branch.code}
-          branchName={fixingBranch.branch.name}
-          appliedLines={appliedLinesFor(fixingBranch)}
-          pendingLines={pendingLinesFor(fixingBranch)}
-          revision={fixingBranch.revision}
-          onClose={() => setFixingBranch(null)}
+      {editModeInput ? (
+        <IntakeSheet
+          branches={branches}
+          fallbackProducts={fallbackProducts}
+          activeBranchId={editModeInput.branchId}
+          onSelectBranch={() => {}}
+          onClose={() => setEditModeInput(null)}
           onDone={refreshAfterAction}
+          onViewKardex={() => setEditModeInput(null)}
+          editMode={editModeInput}
         />
       ) : null}
     </div>

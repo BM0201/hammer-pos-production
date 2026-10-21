@@ -683,14 +683,25 @@ export async function getMultiBranchIntake(id: string, db: DbClient = prisma) {
   if (!intake) throw new Error("NOT_FOUND: Ingreso de inventario no encontrado.");
 
   const lines = intake.linesJson as unknown as IntakeLineInput[];
-  const productIds = [...new Set(lines.map((l) => l.productId))];
+  // Commit 2 §2 — "Editar y reintentar" (intake-sheet.tsx en modo edición)
+  // necesita sku/name también de los productos que SOLO existen en un
+  // override (ej. un reemplazo de un producto descartado) — no están en
+  // `lines` (el pedido original), así que se suman a la misma consulta.
+  const overrideProductIds = intake.branches.flatMap((b) => ((b.linesOverrideJson as unknown as IntakeLineInput[] | null) ?? []).map((l) => l.productId));
+  const productIds = [...new Set([...lines.map((l) => l.productId), ...overrideProductIds])];
   const products = productIds.length > 0
     ? await db.product.findMany({ where: { id: { in: productIds } }, select: { id: true, sku: true, name: true } })
     : [];
   const productById = new Map(products.map((p) => [p.id, p]));
   const linesDetail = lines.map((line) => ({ ...line, product: productById.get(line.productId) ?? null }));
+  const branchesWithOverrideDetail = intake.branches.map((b) => ({
+    ...b,
+    overrideLinesDetail: b.linesOverrideJson
+      ? (b.linesOverrideJson as unknown as IntakeLineInput[]).map((line) => ({ ...line, product: productById.get(line.productId) ?? null }))
+      : null,
+  }));
 
-  return { ...intake, linesDetail };
+  return { ...intake, branches: branchesWithOverrideDetail, linesDetail };
 }
 
 /** Fase 3 (prompt-entrada-inventario.md) — "historial de entradas... tipo, sucursales, líneas, estado, quién y cuándo". */

@@ -21,6 +21,7 @@ import {
   addOrFocusScannedProduct,
   applyBranchCellInput,
   buildCreateIntakeRequest,
+  buildIntakePayloadLines,
   buildPreviewRequestLines,
   canConfirmIntake,
   clearIntakeDraft,
@@ -75,6 +76,28 @@ type PreviewResponse = { cells: PreviewCell[]; totals: Record<string, PreviewTot
 type IntakeBranchResult = { branchId: string; status: "PENDING" | "IN_PROGRESS" | "DONE" | "FAILED"; error: string | null; processedLines: number; totalLines: number };
 type CreateIntakeResult = { intake: { id: string; code: string }; overallStatus: "DONE" | "IN_PROGRESS"; branches: IntakeBranchResult[] };
 
+/**
+ * prompt-entrada-reintento-precio.md Commit 2 §2 — "abre la MISMA hoja de
+ * Entrada en modo 'Editar IM-000008 · RIV'": sucursal/tipo/motivo fijos,
+ * precargada con las líneas PENDIENTES de esa sucursal (las ya aplicadas
+ * se muestran bloqueadas aparte, vía `appliedLines`), misma vista previa,
+ * pero el botón final hace PUT .../lines + POST .../retry en vez de crear
+ * una entrada nueva.
+ */
+export type IntakeEditModeInput = {
+  intakeId: string;
+  intakeCode: string;
+  branchId: string;
+  branchCode: string;
+  branchName: string;
+  kind: IntakeKind;
+  reason: string;
+  notes: string;
+  expectedRevision: number;
+  appliedLines: Array<{ productId: string; sku: string; name: string; quantity: number; unit?: string; unitCost?: number }>;
+  pendingLines: IntakeLine[];
+};
+
 const KIND_META: Record<IntakeKind, { label: string; description: string; example: string }> = {
   ADD_STOCK: {
     label: "Sumar mercadería",
@@ -128,6 +151,7 @@ export function IntakeSheet({
   onClose,
   onDone,
   onViewKardex,
+  editMode,
 }: {
   branches: Branch[];
   fallbackProducts: ProductRow[];
@@ -136,17 +160,18 @@ export function IntakeSheet({
   onClose: () => void;
   onDone: () => Promise<void>;
   onViewKardex: (intakeId: string) => void;
+  editMode?: IntakeEditModeInput;
 }) {
   const sessionState = useSession();
   const userId = sessionState.status === "authenticated" ? sessionState.session.userId : null;
   const cameraAvailable = useCameraAvailable();
 
-  const [kind, setKind] = useState<IntakeKind>("ADD_STOCK");
-  const [branchIds, setBranchIds] = useState<string[]>(activeBranchId ? [activeBranchId] : []);
-  const [reason, setReason] = useState("");
-  const [notes, setNotes] = useState("");
+  const [kind, setKind] = useState<IntakeKind>(editMode?.kind ?? "ADD_STOCK");
+  const [branchIds, setBranchIds] = useState<string[]>(editMode ? [editMode.branchId] : (activeBranchId ? [activeBranchId] : []));
+  const [reason, setReason] = useState(editMode?.reason ?? "");
+  const [notes, setNotes] = useState(editMode?.notes ?? "");
   const [notesOpen, setNotesOpen] = useState(false);
-  const [lines, setLines] = useState<IntakeLine[]>([]);
+  const [lines, setLines] = useState<IntakeLine[]>(editMode?.pendingLines ?? []);
 
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<ProductRow[]>(fallbackProducts.slice(0, 12));
@@ -177,8 +202,9 @@ export function IntakeSheet({
   const quantityRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   // ── Borrador: avisar si hay uno guardado para el kind actual ────────────
+  // En modo edición no hay borrador — las líneas ya vienen precargadas de la entrada que falló.
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || editMode) return;
     if (draftCheckedKinds.current.has(kind)) return;
     draftCheckedKinds.current.add(kind);
     if (lines.length > 0) return;
@@ -414,34 +440,61 @@ export function IntakeSheet({
     return [...seen.values()];
   }, [previewCells]);
 
-  // ── Confirmar y guardar ─────────────────────────────────────────────────
+  /** Presupuesto de tiempo agotado antes de terminar (IN_PROGRESS) → /continue hasta asentarse, igual para crear que para editar+reintentar. */
+  async function settleUntilDone(initial: CreateIntakeResult): Promise<CreateIntakeResult> {
+    let data = initial;
+    let guard = 0;
+    while (data.overallStatus === "IN_PROGRESS" && guard < 20) {
+      guard += 1;
+      const response = await apiFetch(`/api/inventory/multi-branch-intake/${data.intake.id}/continue`, { method: "POST" });
+      const raw = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo continuar la entrada.");
+      data = unwrapApiData(raw) as CreateIntakeResult;
+    }
+    return data;
+  }
+
+  // ── Confirmar y guardar (o, en modo edición, corregir + reintentar) ─────
   async function confirmAndSubmit() {
     await runSubmit(async () => {
       try {
-        const body = buildCreateIntakeRequest({ clientRequestId, kind, reason, notes, branchIds, lines });
-        let response = await apiFetch("/api/inventory/multi-branch-intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        let raw = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar la entrada.");
-        let data = unwrapApiData(raw) as CreateIntakeResult;
+        let data: CreateIntakeResult;
+        if (editMode) {
+          const putResponse = await apiFetch(`/api/inventory/multi-branch-intake/${editMode.intakeId}/branches/${editMode.branchId}/lines`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lines: buildIntakePayloadLines(lines, branchIds), expectedRevision: editMode.expectedRevision }),
+          });
+          const putRaw = await putResponse.json().catch(() => null);
+          if (!putResponse.ok) throw new Error(putRaw?.error?.message ?? "No se pudo guardar la corrección.");
 
-        let guard = 0;
-        while (data.overallStatus === "IN_PROGRESS" && guard < 20) {
-          guard += 1;
-          response = await apiFetch(`/api/inventory/multi-branch-intake/${data.intake.id}/continue`, { method: "POST" });
-          raw = await response.json().catch(() => null);
-          if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo continuar la entrada.");
-          data = unwrapApiData(raw) as CreateIntakeResult;
+          const retryResponse = await apiFetch(`/api/inventory/multi-branch-intake/${editMode.intakeId}/retry`, { method: "POST" });
+          const retryRaw = await retryResponse.json().catch(() => null);
+          if (!retryResponse.ok) throw new Error(retryRaw?.error?.message ?? "Se guardó la corrección, pero no se pudo reintentar.");
+          data = await settleUntilDone(unwrapApiData(retryRaw) as CreateIntakeResult);
+        } else {
+          const body = buildCreateIntakeRequest({ clientRequestId, kind, reason, notes, branchIds, lines });
+          const response = await apiFetch("/api/inventory/multi-branch-intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          const raw = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar la entrada.");
+          data = await settleUntilDone(unwrapApiData(raw) as CreateIntakeResult);
         }
 
         setResult(data);
         setShowConfirm(false);
-        if (userId) clearIntakeDraft(window.localStorage, userId, kind);
+        if (!editMode && userId) clearIntakeDraft(window.localStorage, userId, kind);
         const failedCount = data.branches.filter((b) => b.status === "FAILED").length;
-        if (failedCount === 0) toast.success("Entrada registrada.");
-        else toast.error(`${failedCount} sucursal(es) fallaron — podés reintentar.`);
+        if (editMode) {
+          const thisBranch = data.branches.find((b) => b.branchId === editMode.branchId);
+          if (thisBranch?.status === "DONE") toast.success(`${editMode.branchCode} quedó al día.`);
+          else toast.error(`${editMode.branchCode} sigue fallando — revisá el detalle y corregí de nuevo.`);
+        } else if (failedCount === 0) {
+          toast.success("Entrada registrada.");
+        } else {
+          toast.error(`${failedCount} sucursal(es) fallaron — podés reintentar.`);
+        }
         await onDone();
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "No se pudo registrar la entrada.");
+        toast.error(error instanceof Error ? error.message : (editMode ? "No se pudo corregir la entrada." : "No se pudo registrar la entrada."));
       }
     });
   }
@@ -476,8 +529,8 @@ export function IntakeSheet({
       <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-surface)] shadow-2xl lg:h-auto lg:max-h-[94vh] lg:max-w-6xl lg:rounded-xl">
         <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-4">
           <div>
-            <h3 className="text-sm font-semibold">Entrada de inventario</h3>
-            <p className="text-xs text-[var(--color-text-muted)]">Sumá mercadería, hacé un conteo físico o cargá existencias iniciales — todo con vista previa real antes de guardar.</p>
+            <h3 className="text-sm font-semibold">{editMode ? `Editar ${editMode.intakeCode} · ${editMode.branchCode}` : "Entrada de inventario"}</h3>
+            <p className="text-xs text-[var(--color-text-muted)]">{editMode ? `${editMode.branchName} — corrige solo lo pendiente; lo ya aplicado no se toca.` : "Sumá mercadería, hacé un conteo físico o cargá existencias iniciales — todo con vista previa real antes de guardar."}</p>
           </div>
           <Button type="button" variant="ghost" size="sm" onClick={onClose} icon={<X className="h-4 w-4" />}>Cerrar</Button>
         </div>
@@ -504,75 +557,98 @@ export function IntakeSheet({
                 </div>
               ) : null}
 
-              {/* Paso 1 — ¿Qué estás haciendo? */}
-              <section>
-                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">1. ¿Qué estás haciendo?</h4>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  {KIND_ORDER.map((k) => {
-                    const meta = KIND_META[k];
-                    const active = kind === k;
-                    return (
-                      <button
-                        key={k}
-                        type="button"
-                        onClick={() => selectKind(k)}
-                        className={`rounded-xl border p-3 text-left transition ${active ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] ring-1 ring-[var(--color-master-600)]" : "border-[var(--color-border)] hover:bg-[var(--color-surface-alt)]"}`}
-                      >
-                        <div className="text-sm font-semibold text-[var(--color-text)]">{meta.label}</div>
-                        <p className="mt-1 text-xs text-[var(--color-text-muted)]">{meta.description}</p>
-                        {meta.example ? <p className="mt-1 font-mono text-[11px] text-[var(--color-text-soft)]">{meta.example}</p> : null}
-                      </button>
-                    );
-                  })}
+              {editMode ? (
+                <div className="rounded-lg border border-[var(--color-master-200)] bg-[var(--color-master-50)] px-3 py-2 text-xs text-[var(--color-master-800)]">
+                  <p>Estás corrigiendo la entrada original. Al guardar se reintenta la misma <strong>{editMode.intakeCode}</strong> en <strong>{editMode.branchCode}</strong>; no se crea otra.</p>
+                  <p className="mt-1 text-[var(--color-text-secondary)]">{KIND_META[editMode.kind].label} · {editMode.branchCode} — {editMode.branchName} · {editMode.reason}</p>
                 </div>
-              </section>
+              ) : (
+                <>
+                  {/* Paso 1 — ¿Qué estás haciendo? */}
+                  <section>
+                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">1. ¿Qué estás haciendo?</h4>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {KIND_ORDER.map((k) => {
+                        const meta = KIND_META[k];
+                        const active = kind === k;
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            onClick={() => selectKind(k)}
+                            className={`rounded-xl border p-3 text-left transition ${active ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] ring-1 ring-[var(--color-master-600)]" : "border-[var(--color-border)] hover:bg-[var(--color-surface-alt)]"}`}
+                          >
+                            <div className="text-sm font-semibold text-[var(--color-text)]">{meta.label}</div>
+                            <p className="mt-1 text-xs text-[var(--color-text-muted)]">{meta.description}</p>
+                            {meta.example ? <p className="mt-1 font-mono text-[11px] text-[var(--color-text-soft)]">{meta.example}</p> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
 
-              {/* Paso 2 — ¿A qué sucursales? */}
-              <section>
-                <div className="mb-2 flex items-center justify-between">
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">2. ¿A qué sucursales?</h4>
-                  {kind !== "PHYSICAL_COUNT" ? (
-                    <button type="button" onClick={() => setBranchIds(branches.map((b) => b.id))} className="text-xs font-semibold text-[var(--color-master-600)] hover:underline">Todas</button>
-                  ) : null}
-                </div>
-                {kind === "PHYSICAL_COUNT" ? <p className="mb-1.5 text-xs text-[var(--color-text-muted)]">Conteo físico admite una sola sucursal — cada estante es distinto.</p> : null}
-                <div className="flex flex-wrap gap-2">
-                  {branches.map((b) => {
-                    const active = branchIds.includes(b.id);
-                    return (
-                      <button
-                        key={b.id}
-                        type="button"
-                        onClick={() => { toggleBranch(b.id); onSelectBranch(b.id); }}
-                        className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${active ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] text-[var(--color-text-muted)]"}`}
-                      >
-                        {b.code} · {b.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
+                  {/* Paso 2 — ¿A qué sucursales? */}
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">2. ¿A qué sucursales?</h4>
+                      {kind !== "PHYSICAL_COUNT" ? (
+                        <button type="button" onClick={() => setBranchIds(branches.map((b) => b.id))} className="text-xs font-semibold text-[var(--color-master-600)] hover:underline">Todas</button>
+                      ) : null}
+                    </div>
+                    {kind === "PHYSICAL_COUNT" ? <p className="mb-1.5 text-xs text-[var(--color-text-muted)]">Conteo físico admite una sola sucursal — cada estante es distinto.</p> : null}
+                    <div className="flex flex-wrap gap-2">
+                      {branches.map((b) => {
+                        const active = branchIds.includes(b.id);
+                        return (
+                          <button
+                            key={b.id}
+                            type="button"
+                            onClick={() => { toggleBranch(b.id); onSelectBranch(b.id); }}
+                            className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${active ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] text-[var(--color-text-muted)]"}`}
+                          >
+                            {b.code} · {b.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
 
-              {/* Paso 3 — Motivo */}
-              <section>
-                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">3. Motivo</h4>
-                <div className="flex flex-wrap gap-2">
-                  {reasonChipsForKind(kind).map((chip) => (
-                    <button key={chip} type="button" onClick={() => setReason(chip)} className={`rounded-full border px-3 py-1.5 text-xs font-medium ${reason === chip ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] text-[var(--color-text-secondary)]"}`}>
-                      {chip}
+                  {/* Paso 3 — Motivo */}
+                  <section>
+                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">3. Motivo</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {reasonChipsForKind(kind).map((chip) => (
+                        <button key={chip} type="button" onClick={() => setReason(chip)} className={`rounded-full border px-3 py-1.5 text-xs font-medium ${reason === chip ? "border-[var(--color-master-600)] bg-[var(--color-master-50)] text-[var(--color-master-700)]" : "border-[var(--color-border)] text-[var(--color-text-secondary)]"}`}>
+                          {chip}
+                        </button>
+                      ))}
+                    </div>
+                    <Input className="mt-2" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo (podés escribir el tuyo)" />
+                    <button type="button" onClick={() => setNotesOpen((v) => !v)} className="mt-2 flex items-center gap-1 text-xs font-semibold text-[var(--color-master-600)]">
+                      <ChevronDown className={`h-3 w-3 transition-transform ${notesOpen ? "rotate-180" : ""}`} /> Nota opcional
                     </button>
-                  ))}
-                </div>
-                <Input className="mt-2" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo (podés escribir el tuyo)" />
-                <button type="button" onClick={() => setNotesOpen((v) => !v)} className="mt-2 flex items-center gap-1 text-xs font-semibold text-[var(--color-master-600)]">
-                  <ChevronDown className={`h-3 w-3 transition-transform ${notesOpen ? "rotate-180" : ""}`} /> Nota opcional
-                </button>
-                {notesOpen ? <Input className="mt-1" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Observación opcional" /> : null}
-              </section>
+                    {notesOpen ? <Input className="mt-1" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Observación opcional" /> : null}
+                  </section>
+                </>
+              )}
+
+              {editMode && editMode.appliedLines.length > 0 ? (
+                <section>
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Ya aplicadas ({editMode.appliedLines.length}) — no se pueden editar</h4>
+                  <div className="space-y-1">
+                    {editMode.appliedLines.map((line) => (
+                      <div key={line.productId} className="flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-1.5 text-xs text-[var(--color-text-muted)]">
+                        <span>{line.name} <span className="font-mono text-[10px]">{line.sku}</span></span>
+                        <span>{qty(line.quantity)}{line.unit ? ` ${line.unit}` : ""}{line.unitCost !== undefined ? ` · ${money(line.unitCost)}` : ""} · ya aplicada</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
 
               {/* Paso 4 — Productos */}
               <section>
-                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">4. Productos</h4>
+                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">{editMode ? `Pendientes (${lines.length})` : "4. Productos"}</h4>
                 {previewFailed ? (
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-danger-300)] bg-[var(--color-danger-50)] px-3 py-2 text-xs text-[var(--color-danger-800)]">
                     <span>No se pudo calcular la vista previa — las filas quedan sin verificar.</span>
@@ -741,7 +817,7 @@ export function IntakeSheet({
                 </div>
               </div>
               <div className="flex justify-end gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={saveDraftNow} icon={<Save className="h-3.5 w-3.5" />}>Guardar borrador</Button>
+                {!editMode ? <Button type="button" variant="ghost" size="sm" onClick={saveDraftNow} icon={<Save className="h-3.5 w-3.5" />}>Guardar borrador</Button> : null}
                 <Button
                   type="button"
                   variant={previewFailed ? "danger" : barCounts.error > 0 ? "secondary" : "success"}
@@ -767,7 +843,9 @@ export function IntakeSheet({
                       ? `Corregí ${barCounts.error} error${barCounts.error === 1 ? "" : "es"} →`
                       : anyRowLoading
                         ? "Calculando…"
-                        : "Revisar y confirmar"}
+                        : editMode
+                          ? `Ver vista previa y reintentar ${editMode.branchCode}`
+                          : "Revisar y confirmar"}
                 </Button>
               </div>
             </div>
@@ -787,6 +865,7 @@ export function IntakeSheet({
           submitting={submitting}
           onCancel={() => setShowConfirm(false)}
           onConfirm={() => void confirmAndSubmit()}
+          editBranchCode={editMode?.branchCode}
         />
       ) : null}
     </div>
@@ -1125,7 +1204,7 @@ function IntakeCardRow({ line, kind, branches, branchIds, cells, lineMessages, p
   );
 }
 
-function ConfirmSummaryModal({ kind, branches, branchIds, totals, hasReviewWarnings, reviewedWarnings, onToggleReviewed, submitting, onCancel, onConfirm }: {
+function ConfirmSummaryModal({ kind, branches, branchIds, totals, hasReviewWarnings, reviewedWarnings, onToggleReviewed, submitting, onCancel, onConfirm, editBranchCode }: {
   kind: IntakeKind;
   branches: Branch[];
   branchIds: string[];
@@ -1136,12 +1215,13 @@ function ConfirmSummaryModal({ kind, branches, branchIds, totals, hasReviewWarni
   submitting: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  editBranchCode?: string;
 }) {
   const canSubmit = !hasReviewWarnings || reviewedWarnings;
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-lg rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
-        <h3 className="text-sm font-semibold text-[var(--color-text)]">Confirmar {KIND_META[kind].label.toLowerCase()}</h3>
+        <h3 className="text-sm font-semibold text-[var(--color-text)]">{editBranchCode ? `Reintentar ${editBranchCode}` : `Confirmar ${KIND_META[kind].label.toLowerCase()}`}</h3>
         <div className="mt-3 space-y-2 text-sm">
           {branchIds.map((id) => {
             const t = totals[id];
@@ -1161,7 +1241,7 @@ function ConfirmSummaryModal({ kind, branches, branchIds, totals, hasReviewWarni
         ) : null}
         <div className="mt-4 flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onCancel}>Cancelar</Button>
-          <Button type="button" variant="success" loading={submitting} disabled={!canSubmit} onClick={onConfirm} icon={<Check className="h-4 w-4" />}>Registrar entrada</Button>
+          <Button type="button" variant="success" loading={submitting} disabled={!canSubmit} onClick={onConfirm} icon={<Check className="h-4 w-4" />}>{editBranchCode ? `Reintentar ${editBranchCode}` : "Registrar entrada"}</Button>
         </div>
       </div>
     </div>

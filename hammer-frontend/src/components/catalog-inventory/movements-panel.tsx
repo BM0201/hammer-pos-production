@@ -270,11 +270,11 @@ export function MovementsPanel({
       </div>
       {view === "intakes" ? (
         <div className="p-4">
-          <IntakeHistoryPanel />
+          <IntakeHistoryPanel branches={branches} fallbackProducts={products} />
         </div>
       ) : view === "counts" ? (
         <div className="p-4">
-          <IntakeHistoryPanel kindFilter="PHYSICAL_COUNT" />
+          <IntakeHistoryPanel kindFilter="PHYSICAL_COUNT" branches={branches} fallbackProducts={products} />
         </div>
       ) : (
       <div className="p-4 space-y-4">

@@ -566,6 +566,37 @@ test("LA QUE IMPORTA — getMultiBranchIntake enriquece linesJson con sku/name p
   assert.deepEqual(detail.linesDetail[0].product, { id: "p1", sku: "SKU-P1", name: "Producto 1" });
 });
 
+test("LA QUE IMPORTA — getMultiBranchIntake enriquece overrideLinesDetail, incluso con un producto que NO está en el pedido original (reemplazo de una línea descartada)", async () => {
+  const { db } = buildFakeDb({ products: new Set(["p1"]) }); // p2 "no existe" -> FAILED
+  const created = await createMultiBranchIntake({
+    clientRequestId: "req-override-detail",
+    actorUserId: "user-1",
+    kind: "ADD_STOCK",
+    reason: "Llegó pedido",
+    branchIds: [BRANCH_1],
+    lines: [{ productId: "p2", quantity: 5 }],
+  }, db);
+  assert.equal(created.branches[0].status, "FAILED");
+
+  await updateMultiBranchIntakeBranchLines({
+    intakeId: created.intake.id,
+    branchId: BRANCH_1,
+    lines: [{ productId: "p1", quantity: 3, unitCost: 10 }], // p1 reemplaza a p2 -- nunca estuvo en `lines`
+    expectedRevision: 0,
+    actorUserId: "user-1",
+  }, db);
+
+  db.product.findMany = async ({ where }: { where: { id: { in: string[] } } }) =>
+    where.id.in.filter((id) => id === "p1").map((id) => ({ id, sku: "SKU-P1", name: "Producto 1" }));
+
+  const detail = await getMultiBranchIntake(created.intake.id, db);
+  const branch = detail.branches.find((b) => b.branchId === BRANCH_1)!;
+  assert.ok(branch.overrideLinesDetail, "la sucursal con override trae su propio detalle enriquecido");
+  assert.equal(branch.overrideLinesDetail?.length, 1);
+  assert.equal(branch.overrideLinesDetail?.[0].productId, "p1");
+  assert.deepEqual(branch.overrideLinesDetail?.[0].product, { id: "p1", sku: "SKU-P1", name: "Producto 1" }, "p1 nunca estuvo en linesJson, pero igual se resuelve sku/name");
+});
+
 test("ADJUSTMENT_IN (kind legado) se comporta igual que ADD_STOCK", async () => {
   const { db, getBalance } = buildFakeDb({ initialBalances: [{ branchId: BRANCH_1, productId: "p1", quantityOnHand: 40, weightedAverageCost: 100 }] });
   const result = await createMultiBranchIntake({
