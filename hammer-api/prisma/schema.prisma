@@ -385,6 +385,7 @@ model Branch {
   incomingTransfers           Transfer[]                    @relation("TransferToBranch")
   transferGroups               TransferGroup[]
   multiBranchIntakeBranches    MultiBranchIntakeBranch[]
+  stockCounts                  StockCount[]
   internalFreightOrigins      InternalFreightRoute[]        @relation("InternalFreightRouteOrigin")
   internalFreightDestinations InternalFreightRoute[]        @relation("InternalFreightRouteDestination")
   purchaseOrders              PurchaseOrder[]
@@ -528,6 +529,12 @@ model User {
   intendedCashHandovers          TreasuryEntry[]              @relation("TreasuryEntryIntendedRecipient")
   createdPriceUpdateBatches      PriceUpdateBatch[]           @relation("PriceUpdateBatchCreatedBy")
   appliedPriceUpdateBatches      PriceUpdateBatch[]           @relation("PriceUpdateBatchAppliedBy")
+  // prompt-conteo-delegado.md Commit 1 — conteo por escaneo delegado.
+  createdStockCounts             StockCount[]                 @relation("StockCountCreatedBy")
+  submittedStockCounts           StockCount[]                 @relation("StockCountSubmittedBy")
+  reviewedStockCounts            StockCount[]                 @relation("StockCountReviewedBy")
+  stockCountLineScans            StockCountLine[]             @relation("StockCountLineLastScanBy")
+  stockCountEvents               StockCountEvent[]
 
   @@index([globalRole, isActive])
 }
@@ -1031,6 +1038,10 @@ model Product {
   mergeAsMerged          ProductMerge?               @relation("ProductMergeMerged")
   duplicateDismissalsAsA ProductDuplicateDismissal[] @relation("ProductDuplicateDismissalA")
   duplicateDismissalsAsB ProductDuplicateDismissal[] @relation("ProductDuplicateDismissalB")
+  // prompt-conteo-delegado.md Commit 1
+  stockCountLines        StockCountLine[]
+  stockCountEvents       StockCountEvent[]
+  stockCountUnknownCodeResolutions StockCountUnknownCode[]
 
   @@index([abcClassification])
   @@index([rotationIndex])
@@ -2147,6 +2158,8 @@ model MultiBranchIntake {
 
   createdBy User                      @relation(fields: [createdByUserId], references: [id])
   branches  MultiBranchIntakeBranch[]
+  // prompt-conteo-delegado.md Commit 1 — la Entrada PHYSICAL_COUNT que una aprobación de StockCount generó.
+  appliedToStockCount StockCount?
 }
 
 model MultiBranchIntakeBranch {
@@ -2184,6 +2197,112 @@ model MultiBranchIntakeBranch {
 
   @@unique([intakeId, branchId])
   @@index([status])
+}
+
+/// prompt-conteo-delegado.md — conteo por escaneo delegado: el contador
+/// (STOCK_COUNTER) nunca cambia el stock, solo escanea y envía; el stock
+/// cambia recién cuando Master/Owner aprueba (genera UNA Entrada
+/// PHYSICAL_COUNT con las líneas con diferencia, vía multi-branch-intake-service.ts).
+enum StockCountStatus {
+  OPEN
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model StockCount {
+  id              String           @id @default(cuid())
+  branchId        String
+  status          StockCountStatus @default(OPEN)
+  /// "Conteo MGA · Ferretería · 21 oct"
+  title           String
+  /// vacío = todo el catálogo de la sucursal
+  categoryIds     String[]
+  /// Conteo a ciegas por defecto — el contador no ve la cantidad del sistema.
+  blind           Boolean          @default(true)
+  /// Quién puede escanear en esta sesión (siempre STOCK_COUNTER u otro usuario de la sucursal, nunca un rol con INVENTORY_ADJUST).
+  assignedUserIds String[]
+  createdById     String
+  submittedById   String?
+  submittedAt     DateTime?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewNote      String?
+  /// La Entrada PHYSICAL_COUNT que la aprobación generó — null hasta que se aprueba.
+  appliedIntakeId String?          @unique
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  branch       Branch                  @relation(fields: [branchId], references: [id])
+  createdBy    User                    @relation("StockCountCreatedBy", fields: [createdById], references: [id])
+  submittedBy  User?                   @relation("StockCountSubmittedBy", fields: [submittedById], references: [id])
+  reviewedBy   User?                   @relation("StockCountReviewedBy", fields: [reviewedById], references: [id])
+  appliedIntake MultiBranchIntake?     @relation(fields: [appliedIntakeId], references: [id])
+  lines        StockCountLine[]
+  events       StockCountEvent[]
+  unknownCodes StockCountUnknownCode[]
+
+  @@index([branchId, status])
+}
+
+model StockCountLine {
+  id       String @id @default(cuid())
+  stockCountId String
+  /// Siempre el producto CANÓNICO si es miembro de una fusión; la cantidad se guarda en unidad base (igual que InventoryBalance).
+  productId String
+  countedBase Decimal @db.Decimal(18, 4)
+  /// "bolsa", "caja x12"… la última unidad escaneada, solo para mostrar — la cantidad real siempre vive en countedBase.
+  scannedUnitLabel String?
+  /// Snapshot del sistema al momento del ÚLTIMO escaneo de esta línea — la revisión del dueño compara contra ESTO, más los movimientos posteriores (Commit 3), no contra el sistema actual.
+  systemBaseAtLastScan Decimal? @db.Decimal(18, 4)
+  lastScanAt   DateTime
+  lastScanById String
+
+  stockCount StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  product    Product    @relation(fields: [productId], references: [id])
+  lastScanBy User       @relation("StockCountLineLastScanBy", fields: [lastScanById], references: [id])
+
+  @@unique([stockCountId, productId])
+}
+
+/// Bitácora de cada +N, −1 o edición — auditoría completa de quién escaneó qué, cuándo y desde qué dispositivo.
+model StockCountEvent {
+  id            String    @id @default(cuid())
+  stockCountId  String
+  productId     String?
+  code          String?
+  delta         Decimal?  @db.Decimal(18, 4)
+  setTo         Decimal?  @db.Decimal(18, 4)
+  /// SCAN | MINUS | EDIT | UNKNOWN_CODE | SUBMIT | APPROVE | REJECT | REOPEN
+  kind          String
+  userId        String
+  /// Idempotencia: un reintento de red (mismo escaneo mandado dos veces) nunca duplica — mismo criterio que MultiBranchIntake.clientRequestId.
+  clientEventId String    @unique
+  deviceLabel   String?
+  createdAt     DateTime  @default(now())
+
+  stockCount StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  product    Product?   @relation(fields: [productId], references: [id])
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@index([stockCountId, createdAt])
+}
+
+/// Códigos escaneados que no existen en el catálogo — el Commit 4 los resuelve (vincular a un producto existente o proponer uno nuevo) sin perder la cantidad ya contada.
+model StockCountUnknownCode {
+  id                 String   @id @default(cuid())
+  stockCountId       String
+  code               String
+  quantity           Decimal  @db.Decimal(18, 4)
+  /// "Bolsa azul de pegamento 1 kg" — lo que el contador escribió para que el dueño lo identifique después.
+  note               String?
+  resolvedProductId  String?
+
+  stockCount      StockCount @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  resolvedProduct Product?   @relation(fields: [resolvedProductId], references: [id])
+
+  @@unique([stockCountId, code])
 }
 
 model TransferLine {

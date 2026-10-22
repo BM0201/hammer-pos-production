@@ -83,11 +83,18 @@ function makeTable(rows: Array<Record<string, unknown>>) {
 // inventoryMovement y purchaseOrderLine quedan AFUERA de esta lista: tienen
 // su propio delegate especial más abajo (create real para
 // createInventoryMovementTx / count+findMany+updateMany ya cableados).
+// stockCountLine queda adentro de esta lista genérica a propósito: aunque
+// su política es BLOCK_IF_OPEN (como purchaseOrderLine), el count/updateMany
+// genérico de makeTable ya soporta el where anidado {stockCount:{status:{in:...}}}
+// que usa el bloqueo bespoke en product-merge-service.ts sin necesitar una
+// tabla especial — no hay ningún test acá que ejercite ese bloqueo (eso vive
+// en stock-count-service.test.ts), solo hace falta que no truene con undefined.
 const GENERIC_RELATION_DELEGATES = [
   "saleOrderLine", "saleReturnItem", "transferLine", "internalFreightTripLine",
   "productPricing", "branchProductSetting", "productAnalytics", "stockReorderPolicy", "reorderAlert",
   "reorderSuggestionLine", "productionRecipe", "productionRecipeInput", "productionBatchInput",
   "brainDecision", "replenishmentDraftItem", "priceUpdateLine",
+  "stockCountLine", "stockCountEvent", "stockCountUnknownCode",
 ];
 
 function buildFakeDb(opts: {

@@ -88,6 +88,13 @@ export const CAPABILITIES = {
   BRANCH_CATALOG_VIEW: "branch.catalog.view",
   BRANCH_INVENTORY_VIEW: "branch.inventory.view",
   INVENTORY_MOVEMENT_POST: "inventory.movement.post",
+  // prompt-conteo-delegado.md Commit 1 — conteo por escaneo delegado.
+  // PERFORM es "puede escanear en un conteo donde está asignado" (el
+  // contador temporal, Commit 2, y también Master/Owner para probar o
+  // ayudar); APPROVE es "puede aprobar/rechazar/devolver un conteo
+  // enviado" — nunca el mismo rol que PERFORM sin ser Master/Owner/SystemAdmin.
+  INVENTORY_COUNT_PERFORM: "inventory.count.perform",
+  INVENTORY_COUNT_APPROVE: "inventory.count.approve",
   SALES_VIEW: "sales.view",
   SALE_RETURN_REQUEST: "sale.return.request",
   SALE_RETURN_APPROVE: "sale.return.approve",

@@ -84,6 +84,17 @@ export const MERGE_RELATION_POLICY: Record<string, MergeRelationPolicyEntry> = {
   replenishmentDraftItems: { kind: "MOVE", label: "Borradores de reposición" },
   priceUpdateLines: { kind: "CLOSE", label: "Líneas de carga de precios" },
   barcodes: { kind: "BARCODE_TRANSFER", label: "Códigos de barra" },
+  // prompt-conteo-delegado.md Commit 1 — stockCountLines es BLOCK_IF_OPEN
+  // (bloqueo bespoke, igual que purchaseOrderLines): fusionar un producto
+  // que está siendo contado AHORA MISMO (StockCount OPEN/SUBMITTED)
+  // corrompería la comparación ciega sistema-vs-contado de esa línea. Una
+  // vez que el conteo ya cerró (APPROVED/REJECTED/CANCELLED) la línea es
+  // historia y se mueve igual que cualquier MOVE. stockCountEvents y la
+  // resolución de códigos desconocidos son bitácora pura — quedan
+  // apuntando a B, igual que inventoryMovements.
+  stockCountLines: { kind: "BLOCK_IF_OPEN", label: "Líneas de conteo de inventario" },
+  stockCountEvents: { kind: "CLOSE", label: "Bitácora de conteo de inventario" },
+  stockCountUnknownCodeResolutions: { kind: "CLOSE", label: "Códigos desconocidos resueltos en un conteo" },
 };
 
 /**
@@ -128,6 +139,9 @@ const RELATION_FK: Record<string, { delegate: string; fk: string }> = {
   brainDecisions: { delegate: "brainDecision", fk: "productId" },
   replenishmentDraftItems: { delegate: "replenishmentDraftItem", fk: "productId" },
   priceUpdateLines: { delegate: "priceUpdateLine", fk: "productId" },
+  stockCountLines: { delegate: "stockCountLine", fk: "productId" },
+  stockCountEvents: { delegate: "stockCountEvent", fk: "productId" },
+  stockCountUnknownCodeResolutions: { delegate: "stockCountUnknownCode", fk: "resolvedProductId" },
 };
 /** Relaciones CHOOSE y su clave de conflicto compartida con A (además de productId). */
 const CHOOSE_CONFLICT_KEY: Record<string, string> = {
@@ -226,6 +240,19 @@ export async function previewMerge(
   }
   plan.push({ relation: "purchaseOrderLines", label: MERGE_RELATION_POLICY.purchaseOrderLines.label, kind: "BLOCK_IF_OPEN", count: totalPoCount });
 
+  // stockCountLines — bloqueo si B tiene una línea en un conteo todavía
+  // OPEN/SUBMITTED (en curso); una vez que el conteo cerró (APPROVED/
+  // REJECTED/CANCELLED) la línea es historia y se mueve igual que el
+  // resto de las líneas MOVE (ver loop genérico más abajo).
+  const [openStockCountCount, totalStockCountLineCount] = await Promise.all([
+    db.stockCountLine.count({ where: { productId: merged.id, stockCount: { status: { in: ["OPEN", "SUBMITTED"] } } } }),
+    db.stockCountLine.count({ where: { productId: merged.id } }),
+  ]);
+  if (openStockCountCount > 0) {
+    blockers.push({ code: "OPEN_STOCK_COUNT", message: `${merged.name} tiene ${openStockCountCount} línea(s) en un conteo de inventario todavía en curso.` });
+  }
+  plan.push({ relation: "stockCountLines", label: MERGE_RELATION_POLICY.stockCountLines.label, kind: "BLOCK_IF_OPEN", count: totalStockCountLineCount });
+
   // timberProduct — to-one inverso de un @unique: si AMBOS tienen uno, no
   // hay forma limpia de elegir cuál config de madera sobrevive sin perder
   // la otra en silencio — se bloquea y se explica por qué.
@@ -251,7 +278,7 @@ export async function previewMerge(
 
   // Genéricas MOVE/CHOOSE/CLOSE
   for (const [relation, entry] of Object.entries(MERGE_RELATION_POLICY)) {
-    if (relation === "purchaseOrderLines") continue; // ya contada arriba (BLOCK_IF_OPEN tiene su propio conteo open/total)
+    if (relation === "purchaseOrderLines" || relation === "stockCountLines") continue; // ya contadas arriba (BLOCK_IF_OPEN tiene su propio conteo open/total)
     const fkEntry = RELATION_FK[relation];
     if (!fkEntry) continue; // ya cubiertas arriba (bespoke)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
