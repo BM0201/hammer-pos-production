@@ -510,6 +510,7 @@ model User {
   userPermissions                UserPermission[]
   grantedPermissions             UserPermission[]             @relation("PermissionGrantedBy")
   registeredManualInvoices       SaleOrder[]                  @relation("ManualInvoiceRegisteredBy")
+  voidedSaleOrders               SaleOrder[]                  @relation("SaleOrderVoidedBy")
   documentPrintLogs              DocumentPrintLog[]           @relation("DocumentPrintedBy")
   createdDocumentTemplates       DocumentTemplate[]           @relation("DocumentTemplateCreatedBy")
   resolvedBrainDecisions         BrainDecision[]              @relation("BrainDecisionResolvedBy")
@@ -724,7 +725,11 @@ model OperationalDay {
   summaryJson                  Json?
   reviewSummaryJson            Json?
   createdAt                    DateTime @default(now())
-  updatedAt                    DateTime @updatedAt
+  /// prompt-migraciones-rebaseline.md Fase 0 — @default(now()) explícito:
+  /// producción ya tiene este DEFAULT a nivel de columna (de antes de que
+  /// @updatedAt existiera); se declara acá en vez de borrarlo de la base,
+  /// para que el esquema generado desde cero coincida sin tocar nada real.
+  updatedAt                    DateTime @default(now()) @updatedAt
 
   branch     Branch @relation(fields: [branchId], references: [id])
   openedBy   User   @relation("OperationalDayOpenedBy", fields: [openedByUserId], references: [id])
@@ -963,9 +968,12 @@ model Product {
   allowsFraction      Boolean   @default(false)
   isTimber            Boolean   @default(false)
   standardSalePrice   Decimal
-  globalCost          Decimal?
-  averageCost         Decimal?
-  lastPurchaseCost    Decimal?
+  /// prompt-migraciones-rebaseline.md Fase 0 — precisión explícita (igual al
+  /// default real de Prisma) para que un esquema generado desde cero
+  /// coincida con el tipo que las migraciones ya crearon en producción.
+  globalCost          Decimal?  @db.Decimal
+  averageCost         Decimal?  @db.Decimal
+  lastPurchaseCost    Decimal?  @db.Decimal
   costUpdatedAt       DateTime?
   costSource          String?
   costUpdatedByUserId String?
@@ -1191,7 +1199,7 @@ model ProductStockGroup {
   conversionFactorToBase      Decimal?
   tracksPackages              Boolean  @default(false)
   approximateFactor           Boolean  @default(false)
-  minimumClosedPackageReserve Decimal  @default(1)
+  minimumClosedPackageReserve Decimal  @default(1) @db.Decimal
   autoOpenForUnitSale         Boolean  @default(true)
   categoryId                  String?
   isActive                    Boolean  @default(true)
@@ -1489,6 +1497,12 @@ model InventoryMovement {
   @@index([branchId, productId, createdAt])
   @@index([referenceType, referenceId])
   @@index([movementType, createdAt])
+  // prompt-migraciones-rebaseline.md Fase 0 — (branchId, productId, createdAt)
+  // NO cubre consultas por sucursal sin filtrar por producto, ordenadas por
+  // fecha (Kardex por sucursal, flujo diario) — branchId_createdAt sigue
+  // haciendo falta. productId_createdAt, mismo criterio para kardex por producto.
+  @@index([branchId, createdAt])
+  @@index([productId, createdAt])
 }
 
 model InventoryImportBatch {
@@ -1567,8 +1581,8 @@ model BranchProductSetting {
   replenishmentExcluded Boolean   @default(false)
   branchCost            Decimal?
   branchPrice           Decimal?
-  minPrice              Decimal?
-  wholesalePrice        Decimal?
+  minPrice              Decimal?  @db.Decimal
+  wholesalePrice        Decimal?  @db.Decimal
   /// String libre, sin enum de Prisma — valores en uso hoy por el código:
   /// "CALCULATED" (pricing/service.ts applySuggestedPrice — viene del motor
   /// con snapshot completo), "MANUAL" (catalog-inventory/service.ts —
@@ -1578,7 +1592,7 @@ model BranchProductSetting {
   /// valor CALCULADO en memoria (BRANCH/STANDARD/MISSING/FUSION_DERIVED),
   /// no esta columna.
   priceSource           String?
-  marginPercent         Decimal?
+  marginPercent         Decimal?  @db.Decimal
   lastPriceUpdateAt     DateTime?
   priceUpdatedByUserId  String?
   /// Por qué esta sucursal no sigue el precio general. Se llena al fijar
@@ -1628,6 +1642,17 @@ model SaleOrder {
   /// día filtra por esta columna; updatedAt solo queda como fallback legacy
   /// (una edición posterior re-contaba la anulación en el día de la edición).
   cancelledAt       DateTime?
+  /// prompt-migraciones-rebaseline.md Fase 0 — mecanismo de anulación VIEJO,
+  /// de antes de que existiera SaleCancellation (flujo de aprobación). Sin
+  /// referencias en el código hoy — status (CANCELLED) ya excluye estas
+  /// filas de cualquier reporte, independiente de estos campos. Se declaran
+  /// tal cual están en producción (5 filas reales, de 2026-06-09) para que
+  /// el esquema coincida; no se borran hasta que el dueño decida.
+  isTest                Boolean   @default(false)
+  manualDiscountAmount  Decimal   @default(0) @db.Decimal(65, 30)
+  voidReason            String?
+  voidedAt              DateTime?
+  voidedByUserId        String?
 
   // ── Fecha operativa / offline (ERP source-of-truth) ──
   // saleOccurredAt: cuándo ocurrió realmente la venta (en POS, incluso offline).
@@ -1662,6 +1687,7 @@ model SaleOrder {
   customer                    Customer?          @relation(fields: [customerId], references: [id])
   createdBy                   User               @relation("SaleOrderCreatedBy", fields: [createdByUserId], references: [id])
   manualInvoiceRegisteredBy   User?              @relation("ManualInvoiceRegisteredBy", fields: [manualInvoiceRegisteredById], references: [id])
+  voidedByUser                User?              @relation("SaleOrderVoidedBy", fields: [voidedByUserId], references: [id])
   lines                       SaleOrderLine[]
   payments                    Payment[]
   cancellations               SaleCancellation[] @relation("SaleCancellationOriginalOrder")
@@ -1682,6 +1708,10 @@ model SaleOrder {
   @@index([branchId, operationalDayId, status])
   // Dashboard de ventas y ventanas de dia operativo filtran por sucursal + rango de fechas
   @@index([branchId, createdAt])
+  // prompt-migraciones-rebaseline.md Fase 0 — índices del mecanismo de anulación viejo (ver isTest/voidedAt/voidedByUserId arriba).
+  @@index([isTest])
+  @@index([voidedAt])
+  @@index([voidedByUserId])
 }
 
 model SaleOrderLine {
@@ -1699,9 +1729,9 @@ model SaleOrderLine {
   branchId              String?
   quantity              Decimal
   unitPrice             Decimal
-  costSnapshot          Decimal?
-  marginSnapshot        Decimal?
-  marginPercentSnapshot Decimal?
+  costSnapshot          Decimal?  @db.Decimal
+  marginSnapshot        Decimal?  @db.Decimal
+  marginPercentSnapshot Decimal?  @db.Decimal
   costSourceSnapshot    String?
   discountAmount        Decimal  @default(0)
   lineSubtotal          Decimal
@@ -2921,11 +2951,11 @@ model PurchaseOrderLine {
   allocatedDiscountPerUnit     Decimal  @default(0)
   finalUnitCost                Decimal  @default(0)
   subtotal                     Decimal
-  previousGlobalCost           Decimal?
-  newGlobalCost                Decimal?
-  previousAverageCost          Decimal?
-  newAverageCost               Decimal?
-  receivedQtySnapshot          Decimal?
+  previousGlobalCost           Decimal?  @db.Decimal
+  newGlobalCost                Decimal?  @db.Decimal
+  previousAverageCost          Decimal?  @db.Decimal
+  newAverageCost               Decimal?  @db.Decimal
+  receivedQtySnapshot          Decimal?  @db.Decimal
   supplierIdSnapshot           String?
   supplierNameSnapshot         String?
 
@@ -3006,7 +3036,7 @@ model Supplier {
   /// texto libre para lo que ya haya cargado cada proveedor; no se parsea.
   /// null = contado.
   paymentTermDays        Int?
-  creditLimit            Decimal?
+  creditLimit            Decimal?  @db.Decimal
   notes                  String?
   category               String?
   defaultCurrency        String?
@@ -3161,7 +3191,8 @@ model BrainDecision {
   firstDetectedAt    DateTime               @default(now())
   lastDetectedAt     DateTime               @default(now())
   createdAt          DateTime               @default(now())
-  updatedAt          DateTime               @updatedAt
+  /// prompt-migraciones-rebaseline.md Fase 0 — ver mismo comentario en OperationalDay.updatedAt.
+  updatedAt          DateTime               @default(now()) @updatedAt
   expiresAt          DateTime?
   resolvedAt         DateTime?
   resolvedByUserId   String?
@@ -3238,8 +3269,12 @@ model BrainDecisionActionLog {
   metadataJson Json?
   createdAt    DateTime @default(now())
 
-  decision BrainDecision @relation(fields: [decisionId], references: [id])
-  actor    User?         @relation("BrainDecisionActionActor", fields: [actorUserId], references: [id])
+  /// prompt-migraciones-rebaseline.md Fase 0 — onDelete explícito (antes
+  /// implícito, y por lo tanto distinto al de producción): borrar una
+  /// decisión SÍ borra sus logs (Cascade); borrar un usuario con logs de
+  /// acciones NO se permite (Restrict, protege el rastro de auditoría).
+  decision BrainDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  actor    User?         @relation("BrainDecisionActionActor", fields: [actorUserId], references: [id], onDelete: Restrict)
 
   @@index([decisionId])
   @@index([actorUserId])
@@ -3614,6 +3649,9 @@ model ProductionRecipe {
   @@index([finishedProductId])
   @@index([code])
   @@index([isActive])
+  // prompt-migraciones-rebaseline.md Fase 0 — ya existían en producción, sin declarar acá; se agregan para que el esquema coincida (decisión de borrarlos o no, aparte).
+  @@index([recipeFamily])
+  @@index([recipeType])
 }
 
 /// Insumos de la receta (cemento, arena, etc.)
@@ -4035,7 +4073,10 @@ model ReplenishmentSignalSnapshot {
   coveredCount  Int      @default(0)
   generatedAt   DateTime @default(now())
 
-  branch Branch @relation(fields: [branchId], references: [id])
+  /// prompt-migraciones-rebaseline.md Fase 0 — onDelete explícito: esta
+  /// fila es un resumen cacheado por sucursal, sin valor propio — al
+  /// borrar la sucursal, se borra sola (igual que ya hace producción).
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
 }
 
 /**
