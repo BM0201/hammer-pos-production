@@ -19,6 +19,10 @@ export const FINANCE_CATEGORY_COLORS: Record<string, FinanceCategoryColor> = {
   TRANSPORT: { light: "#3b82f6", dark: "#60a5fa" },
   MARKETING: { light: "#ec4899", dark: "#f472b6" },
   TAXES: { light: "#db2777", dark: "#f0599f" },
+  // prompt-caja-gastos-pos-cobro.md Commit 1 — categorías nuevas.
+  SUPPLIES: { light: "#14b8a6", dark: "#2dd4bf" },
+  CASUAL_LABOR: { light: "#a16207", dark: "#ca8a04" },
+  BANK_FEES: { light: "#64748b", dark: "#94a3b8" },
   OTHER: { light: "#6b7280", dark: "#9ca3af" },
   UNCLASSIFIED: { light: "#d97706", dark: "#f59e0b" },
 };

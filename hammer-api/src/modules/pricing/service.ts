@@ -36,6 +36,14 @@ export async function createOperatingExpense(
   actorUserId: string,
   options: CreateOperatingExpenseOptions = {},
 ): Promise<CreateOperatingExpenseResult> {
+  // prompt-caja-gastos-pos-cobro.md Commit 1 — "Otro gasto" ya no cae directo
+  // en OTHER sin más: si de verdad no encaja en ninguna categoría real, la
+  // descripción tiene que explicar qué fue (mínimo 10 caracteres), no un
+  // "Otro" vacío que nadie puede auditar después.
+  if (input.category === "OTHER" && input.description.trim().length < 10) {
+    throw new Error("VALIDATION_ERROR: describe qué fue el gasto (mínimo 10 caracteres) cuando no encaja en ninguna categoría.");
+  }
+
   if (input.conceptId) {
     const concept = await prisma.expenseConcept.findUnique({ where: { id: input.conceptId }, select: { category: true } });
     if (!concept || !conceptMatchesCategory(concept.category, input.category)) {

@@ -2543,6 +2543,10 @@ const EXPENSE_CATEGORY_COUNTERPARTY: Record<ExpenseCategory, TreasuryCounterpart
   TRANSPORT: "SUPPLIER",
   MARKETING: "SUPPLIER",
   TAXES: "ADJUSTMENT",
+  // prompt-caja-gastos-pos-cobro.md Commit 1 — categorías nuevas.
+  SUPPLIES: "SUPPLIER",
+  CASUAL_LABOR: "EMPLOYEE",
+  BANK_FEES: "ADJUSTMENT",
   OTHER: "SUPPLIER",
 };
 

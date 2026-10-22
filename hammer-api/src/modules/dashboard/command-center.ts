@@ -30,7 +30,10 @@ function isCashOutflow(type: CashMovementType) {
     type === CashMovementType.CASH_OUT ||
     type === CashMovementType.BANK_DEPOSIT_OUT ||
     type === CashMovementType.EXPENSE_OUT ||
-    type === CashMovementType.REFUND_OUT
+    type === CashMovementType.REFUND_OUT ||
+    // prompt-caja-gastos-pos-cobro.md Commit 1 — compra de caja: resta igual
+    // que un gasto, pero adrede NO entra en cashExpensesTotal (ver abajo).
+    type === CashMovementType.PURCHASE_OUT
   );
 }
 

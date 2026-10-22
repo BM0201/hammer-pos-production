@@ -28,6 +28,10 @@ export const CASH_OUTFLOW_TYPES: readonly CashMovementType[] = [
   // CORRECTION quedó como ENTRADA (compatibilidad con datos existentes);
   // las correcciones que restan usan CORRECTION_OUT.
   CashMovementType.CORRECTION_OUT,
+  // prompt-caja-gastos-pos-cobro.md Commit 1 — compra de mercadería/flete
+  // pagada con caja: resta de la gaveta igual que un gasto, pero nunca liga
+  // un OperatingExpense (ver modelo CashPurchase).
+  CashMovementType.PURCHASE_OUT,
 ];
 
 export function isCashOutflowType(type: CashMovementType): boolean {

@@ -261,16 +261,27 @@ export type ExpenseManagerTab = "expenses" | "freight";
 
 /* ── Constants ── */
 
+/**
+ * prompt-caja-gastos-pos-cobro.md Commit 1 — fuente canónica de etiquetas en
+ * español del lado frontend ("Prohibido mostrar el código... en cualquier
+ * pantalla"). Antes había copias sueltas en cash-movements-panel.tsx,
+ * retained-cash-expense-sheet.tsx y retained-cash-expense-list.tsx —
+ * consolidadas para importar de acá. expense-manager.types.test.ts prueba
+ * que LABELS/ICONS/COLORS tengan exactamente las mismas categorías.
+ */
 export const CATEGORY_LABELS: Record<string, string> = {
   PAYROLL: "Personal / Nómina",
-  UTILITIES: "Servicios (Agua, Luz, Internet)",
+  UTILITIES: "Servicios (agua, luz, internet)",
   RENT: "Renta / Alquiler",
   FOOD: "Alimentación",
   MAINTENANCE: "Mantenimiento",
   TRANSPORT: "Transporte",
   MARKETING: "Publicidad / Marketing",
-  TAXES: "Impuestos (Alcaldía / DGI)",
-  OTHER: "Otros",
+  TAXES: "Impuestos y tasas",
+  SUPPLIES: "Suministros",
+  CASUAL_LABOR: "Carga y descarga",
+  BANK_FEES: "Comisiones bancarias",
+  OTHER: "Otro",
 };
 
 export const CATEGORY_ICONS: Record<string, string> = {
@@ -282,6 +293,9 @@ export const CATEGORY_ICONS: Record<string, string> = {
   TRANSPORT: "TRP",
   MARKETING: "MKT",
   TAXES: "IMP",
+  SUPPLIES: "SUM",
+  CASUAL_LABOR: "C&D",
+  BANK_FEES: "BCO",
   OTHER: "OTR",
 };
 
@@ -294,6 +308,9 @@ export const CATEGORY_COLORS: Record<string, string> = {
   TRANSPORT: "#3b82f6",
   MARKETING: "#ec4899",
   TAXES: "#db2777",
+  SUPPLIES: "#14b8a6",
+  CASUAL_LABOR: "#a16207",
+  BANK_FEES: "#64748b",
   OTHER: "#6b7280",
 };
 

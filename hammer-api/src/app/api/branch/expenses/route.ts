@@ -12,6 +12,7 @@ import { z } from "zod";
 import { EXPENSE_CATEGORIES } from "@/modules/pricing/validators";
 import { logAuditEvent } from "@/modules/audit/service";
 import { checkOutlier, computeCategoryStats } from "@/modules/finance/expense-intelligence";
+import { findPossibleDuplicate } from "@/modules/finance/expense-duplicate-detection";
 
 /** Returns year, month (1-based) and day in America/Managua timezone. */
 function getNicaraguaDateParts() {
@@ -50,6 +51,10 @@ const createSchema = z.object({
   conceptId: z.string().min(1).optional(),
   payee: z.string().max(160).optional(),
   receiptNumber: z.string().max(80).optional(),
+  // prompt-caja-gastos-pos-cobro.md Commit 1 — "Aviso de posible duplicado":
+  // el cliente lo manda en true solo después de que el usuario confirmó
+  // explícitamente "es otro gasto distinto" sobre el aviso ya mostrado.
+  confirmedNotDuplicate: z.boolean().optional(),
 });
 
 /**
@@ -157,6 +162,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Aviso de posible duplicado (prompt-caja-gastos-pos-cobro.md Commit 1):
+    // a diferencia del outlier de abajo, ESTE sí detiene el guardado — "no
+    // bloquea, pero hay que confirmarlo" — hasta que el cliente reenvíe con
+    // confirmedNotDuplicate:true (auditado) o cambie el monto/descripción.
+    if (!parsed.data.confirmedNotDuplicate) {
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const recent = await prisma.operatingExpense.findMany({
+        where: { branchId: parsed.data.branchId, cashMovementId: { not: null }, effectiveFrom: { gte: since24h } },
+        select: { id: true, category: true, description: true, amount: true, effectiveFrom: true },
+        orderBy: { effectiveFrom: "desc" },
+      });
+      const duplicate = findPossibleDuplicate(
+        { category: parsed.data.category, description: parsed.data.description, amount: parsed.data.amount, now: new Date() },
+        recent.map((r) => ({ id: r.id, category: r.category, description: r.description, amount: Number(r.amount), createdAt: r.effectiveFrom })),
+      );
+      if (duplicate) {
+        return fail("POSSIBLE_DUPLICATE", `Parecido a uno de hoy: ${duplicate.description} (C$${duplicate.amount.toFixed(2)}). ¿Es otro distinto?`, 409, { duplicate });
+      }
+    }
+
     // Presupuesto inteligente: antes de registrar, se compara el monto contra
     // el historial REAL de la categoría en esta sucursal. Si se sale de los
     // valores normales, se AVISA (warning en la respuesta + auditoría) pero se
@@ -185,6 +210,18 @@ export async function POST(req: NextRequest) {
     const expense = await createOperatingExpense(parsed.data, session.userId, {
       registerCashMovement: true,
     });
+
+    if (parsed.data.confirmedNotDuplicate) {
+      await logAuditEvent({
+        actorUserId: session.userId,
+        branchId: parsed.data.branchId,
+        module: "finance",
+        action: "expense.confirmed_not_duplicate",
+        entityType: "OperatingExpense",
+        entityId: (expense as { id?: string }).id ?? "unknown",
+        metadataJson: { category: parsed.data.category, description: parsed.data.description, amount: parsed.data.amount },
+      });
+    }
 
     if (outlier.isOutlier) {
       await logAuditEvent({

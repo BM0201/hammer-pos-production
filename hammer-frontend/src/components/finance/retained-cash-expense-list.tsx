@@ -8,18 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import toast from "react-hot-toast";
 import { money, fmtDatePadded } from "@/lib/format";
-
-const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
-  PAYROLL: "Personal / Nómina",
-  UTILITIES: "Servicios",
-  RENT: "Renta",
-  FOOD: "Alimentación",
-  MAINTENANCE: "Mantenimiento",
-  TRANSPORT: "Transporte",
-  MARKETING: "Mercadeo",
-  TAXES: "Impuestos",
-  OTHER: "Otro",
-};
+// prompt-caja-gastos-pos-cobro.md Commit 1 — etiquetas en español en un solo
+// lugar (antes una copia propia acá, desincronizada de las demás).
+import { CATEGORY_LABELS as EXPENSE_CATEGORY_LABELS } from "@/components/expenses/expense-manager.types";
 
 type RetainedCashExpenseRow = {
   treasuryEntryId: string;

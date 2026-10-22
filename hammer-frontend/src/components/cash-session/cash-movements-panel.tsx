@@ -35,6 +35,8 @@ const TYPE_LABELS: Record<string, string> = {
   CHANGE_IN: "Cambio",
   REFUND_OUT: "Devolución",
   CORRECTION: "Corrección",
+  // prompt-caja-gastos-pos-cobro.md Commit 1 — compra de mercadería/flete, no es gasto.
+  PURCHASE_OUT: "Compra",
 };
 
 const TYPE_COLOR: Record<string, string> = {
@@ -45,6 +47,7 @@ const TYPE_COLOR: Record<string, string> = {
   BANK_DEPOSIT_OUT: "text-[var(--color-warning-700)] bg-[var(--color-warning-50)] border-[var(--color-warning-200)]",
   REFUND_OUT: "text-[var(--color-warning-700)] bg-[var(--color-warning-50)] border-[var(--color-warning-200)]",
   CORRECTION: "text-[var(--color-text-muted)] bg-[var(--color-surface-alt)] border-[var(--color-border)]",
+  PURCHASE_OUT: "text-[var(--color-info-700)] bg-[var(--color-info-50)] border-[var(--color-info-200)]",
 };
 
 /** Evento para que "Gastos del Local" (panel hermano) se refresque al registrar un gasto aquí. */

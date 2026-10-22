@@ -108,6 +108,12 @@ enum CashMovementType {
   REFUND_OUT
   CORRECTION /// legado: corrección que SUMA a la gaveta (entrada)
   CORRECTION_OUT /// corrección que RESTA de la gaveta (salida)
+  /// prompt-caja-gastos-pos-cobro.md Commit 1 — compra de mercadería o flete
+  /// pagada con caja (CashPurchase). Resta de la caja igual que EXPENSE_OUT
+  /// (ver CASH_OUTFLOW_TYPES en expected-cash.ts) pero NUNCA liga un
+  /// OperatingExpense — así "no suma al gasto operativo" sin necesitar un
+  /// filtro aparte en cada pantalla que ya suma por EXPENSE_OUT.
+  PURCHASE_OUT
 }
 
 enum DispatchStatus {
@@ -391,6 +397,7 @@ model Branch {
   purchaseOrders              PurchaseOrder[]
   timberTrips                 TimberTrip[]
   operatingExpenses           OperatingExpense[]
+  cashPurchases               CashPurchase[]
   pricingConfig               PricingConfig?
   productPricings             ProductPricing[]
   categoryPricingPolicies     BranchCategoryPricingPolicy[]
@@ -685,6 +692,7 @@ model CashMovement {
   payrollDisbursements PayrollDisbursement[]
   operatingExpense     OperatingExpense?
   treasuryEntry        TreasuryEntry?
+  cashPurchase         CashPurchase?
 
   @@index([cashSessionId, createdAt])
   // Fase 2 (prompt-flujo-velocidad.md): reemplaza el índice de solo `type`
@@ -2160,6 +2168,8 @@ model MultiBranchIntake {
   branches  MultiBranchIntakeBranch[]
   // prompt-conteo-delegado.md Commit 1 — la Entrada PHYSICAL_COUNT que una aprobación de StockCount generó.
   appliedToStockCount StockCount?
+  // prompt-caja-gastos-pos-cobro.md Commit 1 — compras de caja que ya llegaron y se vincularon a esta Entrada.
+  linkedCashPurchases CashPurchase[]
 }
 
 model MultiBranchIntakeBranch {
@@ -2856,6 +2866,13 @@ enum ExpenseCategory {
   TRANSPORT
   MARKETING
   TAXES /// Impuestos del negocio: Alcaldía (municipal) y DGI
+  /// prompt-caja-gastos-pos-cobro.md Commit 1 — Suministros y empaque (antes
+  /// cargaban todos a OTHER: el botón "Suministros" de caja mapeaba a OTHER).
+  SUPPLIES
+  /// Mano de obra eventual: carga y descarga (antes caía en OTHER sin botón propio).
+  CASUAL_LABOR
+  /// Comisiones bancarias (antes sin categoría propia).
+  BANK_FEES
   OTHER
 }
 
@@ -2894,6 +2911,41 @@ model ExpenseConcept {
   expenses OperatingExpense[]
 
   @@index([category, isActive])
+  /// prompt-caja-gastos-pos-cobro.md Commit 1 — habilita el seed idempotente
+  /// (ON CONFLICT DO NOTHING por categoría+nombre). El mismo nombre puede
+  /// existir en DOS categorías distintas (p.ej. "Papelería" en Mantenimiento
+  /// y en Suministros): eso no choca, son tuplas distintas.
+  @@unique([category, name])
+}
+
+/// prompt-caja-gastos-pos-cobro.md Commit 1 — "Compra de mercadería o flete"
+/// pagada con caja: NO es un gasto operativo (arena, bloques, cemento, el
+/// flete de traerlos). Antes cualquiera de estas inflaba OTHER. El dinero
+/// SÍ sale de la caja (cashMovementId, type PURCHASE_OUT — resta igual que
+/// un EXPENSE_OUT, ver CASH_OUTFLOW_TYPES), pero nunca liga un
+/// OperatingExpense: así "Gastos del Local" y el libro de gastos no la
+/// cuentan sin necesitar un filtro aparte. linkedIntakeId es opcional y se
+/// llena después, cuando el material llega y alguien hace la Entrada real
+/// (esta tabla solo registra que el dinero ya salió, no mueve inventario).
+model CashPurchase {
+  id             String   @id @default(cuid())
+  branchId       String
+  amount         Decimal
+  description    String
+  supplierName   String?
+  kind           String /// GOODS | FREIGHT
+  linkedIntakeId String?
+  cashMovementId String   @unique
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch       Branch             @relation(fields: [branchId], references: [id])
+  cashMovement CashMovement       @relation(fields: [cashMovementId], references: [id])
+  linkedIntake MultiBranchIntake? @relation(fields: [linkedIntakeId], references: [id])
+
+  @@index([branchId, createdAt])
+  @@index([linkedIntakeId])
 }
 
 model OperatingExpense {

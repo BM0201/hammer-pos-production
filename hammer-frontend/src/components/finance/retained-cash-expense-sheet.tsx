@@ -8,17 +8,15 @@ import { Input } from "@/components/ui/input";
 import toast from "react-hot-toast";
 import type { CashPosition } from "@/components/navigation/cash-indicator-panel";
 import { money, formatBankAccountOption } from "@/lib/format";
+import { CATEGORY_LABELS } from "@/components/expenses/expense-manager.types";
 
-const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
-  UTILITIES: "Servicios (Agua, Luz, Internet)",
-  RENT: "Renta / Alquiler",
-  FOOD: "Alimentación",
-  MAINTENANCE: "Mantenimiento",
-  TRANSPORT: "Transporte",
-  MARKETING: "Mercadeo",
-  TAXES: "Impuestos",
-  OTHER: "Otro",
-};
+// prompt-caja-gastos-pos-cobro.md Commit 1 — etiquetas en español en un solo
+// lugar (antes una copia propia acá, desincronizada de las demás). PAYROLL
+// se excluye a propósito: la planilla nunca se registra a mano, la postea
+// Master y aparece sola el día de pago (mismo criterio que /api/branch/expenses).
+const EXPENSE_CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(CATEGORY_LABELS).filter(([code]) => code !== "PAYROLL"),
+);
 
 type BankAccountOption = {
   id: string;
