@@ -24,6 +24,7 @@
     "security:audit": "npm audit --omit=dev"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.2",
     "@zxing/browser": "^0.1.5",
     "@zxing/library": "^0.21.3",
     "barcode-detector": "^3.2.2",

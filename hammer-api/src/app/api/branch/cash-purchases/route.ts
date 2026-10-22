@@ -15,6 +15,7 @@ const createSchema = z.object({
   description: z.string().min(1).max(200),
   supplierName: z.string().max(160).optional(),
   kind: z.enum(["GOODS", "FREIGHT"]),
+  receiptPhotoUrl: z.string().url().optional(),
 });
 
 /**

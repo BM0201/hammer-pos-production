@@ -73,6 +73,7 @@ export async function createOperatingExpense(
     conceptId: input.conceptId ?? null,
     payee: input.payee ?? null,
     receiptNumber: input.receiptNumber ?? null,
+    receiptPhotoUrl: input.receiptPhotoUrl ?? null,
     ...kindFields,
   };
 

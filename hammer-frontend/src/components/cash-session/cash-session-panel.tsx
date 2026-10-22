@@ -524,7 +524,12 @@ export function CashSessionPanel({ branchId, onStatusChange }: { branchId: strin
 
       {/* Gastos y retiros — visible mientras la sesión está abierta */}
       {activeSession && (
-        <CashMovementsPanel cashSessionId={activeSession.id} branchId={branchId} />
+        <CashMovementsPanel
+          cashSessionId={activeSession.id}
+          branchId={branchId}
+          physicalCashBoxId={selectedCashBoxId}
+          cashBoxCode={selectedCashBox?.code}
+        />
       )}
 
       {/* Separador: fin de turno */}

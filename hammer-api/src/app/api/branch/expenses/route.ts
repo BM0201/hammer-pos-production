@@ -51,6 +51,8 @@ const createSchema = z.object({
   conceptId: z.string().min(1).optional(),
   payee: z.string().max(160).optional(),
   receiptNumber: z.string().max(80).optional(),
+  // prompt-caja-gastos-pos-cobro.md Commit 2 — URL del recibo (Vercel Blob).
+  receiptPhotoUrl: z.string().url().optional(),
   // prompt-caja-gastos-pos-cobro.md Commit 1 — "Aviso de posible duplicado":
   // el cliente lo manda en true solo después de que el usuario confirmó
   // explícitamente "es otro gasto distinto" sobre el aviso ya mostrado.

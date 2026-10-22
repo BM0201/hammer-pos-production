@@ -21,6 +21,7 @@ export type CreateCashPurchaseInput = {
   description: string;
   supplierName?: string | null;
   kind: "GOODS" | "FREIGHT";
+  receiptPhotoUrl?: string | null;
 };
 
 export async function createCashPurchase(input: CreateCashPurchaseInput, actorUserId: string) {
@@ -53,6 +54,7 @@ export async function createCashPurchase(input: CreateCashPurchaseInput, actorUs
         kind: input.kind,
         cashMovementId: movement.id,
         createdById: actorUserId,
+        receiptPhotoUrl: input.receiptPhotoUrl ?? null,
       },
     });
 

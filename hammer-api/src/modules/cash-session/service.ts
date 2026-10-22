@@ -344,6 +344,13 @@ export async function listCashMovements(cashSessionId: string) {
     orderBy: { createdAt: "desc" },
     include: {
       createdBy: { select: { id: true, fullName: true, username: true } },
+      // prompt-caja-gastos-pos-cobro.md Commit 2 — "Movimientos de esta
+      // sesión" necesita categoría › concepto y si tiene recibo, no solo
+      // `reason` suelto.
+      operatingExpense: {
+        select: { category: true, conceptId: true, concept: { select: { name: true } }, receiptNumber: true, receiptPhotoUrl: true },
+      },
+      cashPurchase: { select: { kind: true, supplierName: true, receiptPhotoUrl: true, linkedIntakeId: true } },
     },
     take: 50,
   });

@@ -44,6 +44,8 @@ export const createExpenseSchema = z.object({
   conceptId: z.string().min(1).optional(),
   payee: z.string().max(160).optional(),
   receiptNumber: z.string().max(80).optional(),
+  // prompt-caja-gastos-pos-cobro.md Commit 2 — URL del recibo (Vercel Blob).
+  receiptPhotoUrl: z.string().url().optional(),
 });
 
 export const updateExpenseSchema = z.object({

@@ -1,5 +1,6 @@
 import { checkOutlier, type CategoryStats } from "@/modules/finance/expense-intelligence";
 import type { ExpenseLedgerRow } from "@/modules/finance/expense-ledger";
+import { expenseCategoryLabel } from "@/modules/pricing/expense-category-labels";
 
 /**
  * prompt-gastos-semana-quincena.md Fase 2.4 — "alertas de qué cambió",
@@ -19,21 +20,13 @@ function money(n: number): string {
   return `C$${n.toLocaleString("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  PAYROLL: "Planilla",
-  UTILITIES: "Servicios",
-  RENT: "Alquiler",
-  FOOD: "Alimentación",
-  MAINTENANCE: "Mantenimiento",
-  TRANSPORT: "Transporte",
-  MARKETING: "Marketing",
-  TAXES: "Impuestos",
-  OTHER: "Otros",
-  UNCLASSIFIED: "Sin clasificar",
-};
-
+// prompt-caja-gastos-pos-cobro.md Commit 1 — etiquetas en español en un solo
+// lugar (antes una copia propia acá). UNCLASSIFIED no es una ExpenseCategory
+// real (es el marcador sintético de expense-ledger.ts para movimientos de
+// tesorería sin OperatingExpense vinculado) — se mantiene aparte.
 function categoryLabel(category: string): string {
-  return CATEGORY_LABELS[category] ?? category;
+  if (category === "UNCLASSIFIED") return "Sin clasificar";
+  return expenseCategoryLabel(category);
 }
 
 /**
@@ -103,9 +96,13 @@ export function buildOutlierAlerts(
   return alerts;
 }
 
-/** Gastos PAID sin número de recibo, por encima del umbral (default C$1,000). */
+/**
+ * Gastos PAID sin recibo, por encima del umbral (default C$1,000).
+ * "Sin recibo" = ni número de recibo ni foto (prompt-caja-gastos-pos-
+ * cobro.md Commit 2 — la foto satisface lo mismo que el número).
+ */
 export function buildNoReceiptAlert(rows: ExpenseLedgerRow[], threshold = NO_RECEIPT_DEFAULT_THRESHOLD): ExpensePeriodAlert | null {
-  const flagged = rows.filter((r) => r.source !== "DEVENGADO" && !r.receiptNumber && r.amount > threshold);
+  const flagged = rows.filter((r) => r.source !== "DEVENGADO" && !r.receiptNumber && !r.receiptPhotoUrl && r.amount > threshold);
   if (flagged.length === 0) return null;
   const total = flagged.reduce((s, r) => s + r.amount, 0);
   return {

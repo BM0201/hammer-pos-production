@@ -28,6 +28,8 @@ export type ExpenseLedgerRow = {
   description: string;
   payee: string | null;
   receiptNumber: string | null;
+  /** prompt-caja-gastos-pos-cobro.md Commit 2 — URL del recibo (foto). "Tiene recibo" = receiptNumber || receiptPhotoUrl. */
+  receiptPhotoUrl: string | null;
   amount: number;
   source: ExpenseLedgerSource;
   registeredBy: string | null;
@@ -79,6 +81,7 @@ async function loadCashRows(db: DbClient, branchId: string | null, start: Date, 
           description: true,
           payee: true,
           receiptNumber: true,
+          receiptPhotoUrl: true,
           conceptId: true,
           concept: { select: { name: true } },
         },
@@ -105,6 +108,7 @@ async function loadCashRows(db: DbClient, branchId: string | null, start: Date, 
       description: linked?.description ?? m.reason,
       payee: linked?.payee ?? null,
       receiptNumber: linked?.receiptNumber ?? null,
+      receiptPhotoUrl: linked?.receiptPhotoUrl ?? null,
       amount: num(m.amount),
       source: "CAJA" as const,
       registeredBy: userMap.get(m.createdByUserId) ?? null,
@@ -141,7 +145,7 @@ async function loadTreasuryRows(db: DbClient, branchId: string | null, start: Da
   const linkedExpenses = expensePaymentIds.length > 0
     ? await db.operatingExpense.findMany({
         where: { id: { in: expensePaymentIds } },
-        select: { id: true, category: true, isActive: true, description: true, payee: true, receiptNumber: true, conceptId: true, concept: { select: { name: true } } },
+        select: { id: true, category: true, isActive: true, description: true, payee: true, receiptNumber: true, receiptPhotoUrl: true, conceptId: true, concept: { select: { name: true } } },
       })
     : [];
   const linkedById = new Map(linkedExpenses.map((e) => [e.id, e]));
@@ -167,6 +171,7 @@ async function loadTreasuryRows(db: DbClient, branchId: string | null, start: Da
       description: linked?.description ?? e.counterpartyName ?? e.reference ?? "Sin descripción",
       payee: linked?.payee ?? e.counterpartyName ?? null,
       receiptNumber: linked?.receiptNumber ?? null,
+      receiptPhotoUrl: linked?.receiptPhotoUrl ?? null,
       amount: num(e.amount),
       source,
       registeredBy: userMap.get(e.createdByUserId) ?? null,
@@ -208,6 +213,7 @@ async function loadPayrollPaidRows(db: DbClient, branchId: string | null, start:
       description: `Costo laboral: ${d.employee.fullName}`,
       payee: d.employee.fullName,
       receiptNumber: null,
+      receiptPhotoUrl: null,
       amount: payrollEmployerCostPaid(d),
       source: "PLANILLA" as const,
       registeredBy: d.paidByUserId ? (userMap.get(d.paidByUserId) ?? null) : null,
@@ -275,6 +281,7 @@ async function accruePayroll(db: DbClient, input: { start: Date; end: Date; bran
         description: `Costo laboral devengado — planilla ${seg.month}/${seg.year}`,
         payee: null,
         receiptNumber: null,
+      receiptPhotoUrl: null,
         amount,
         source: "DEVENGADO",
         registeredBy: null,
@@ -343,6 +350,7 @@ export async function accrueRecurring(
         description: exp.description,
         payee: null,
         receiptNumber: null,
+      receiptPhotoUrl: null,
         amount,
         source: "DEVENGADO",
         registeredBy: null,

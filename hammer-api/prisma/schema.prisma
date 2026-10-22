@@ -2937,6 +2937,8 @@ model CashPurchase {
   linkedIntakeId String?
   cashMovementId String   @unique
   createdById    String
+  /// prompt-caja-gastos-pos-cobro.md Commit 2 — URL del recibo en Vercel Blob (null = "No hay recibo", nunca obligatorio acá para no romper compras ya migradas).
+  receiptPhotoUrl String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -2971,6 +2973,12 @@ model OperatingExpense {
   conceptId        String?
   payee            String? /// A quién se le pagó
   receiptNumber    String? /// Número de factura o recibo
+  /// prompt-caja-gastos-pos-cobro.md Commit 2 — URL del recibo en Vercel Blob
+  /// ("¿Hay recibo o factura? 📷 Sí, tomar foto"). Satisface "tiene recibo"
+  /// igual que receiptNumber (ver hasReceipt en expense-ledger.ts) — ninguno
+  /// de los dos es obligatorio a nivel de columna: "No hay recibo" es una
+  /// respuesta válida, el gasto se registra igual.
+  receiptPhotoUrl  String?
   paidAt           DateTime? /// Fecha real del pago (PAID/PAYROLL_SYNC); null en RECURRING
 
   branch       Branch          @relation(fields: [branchId], references: [id])
