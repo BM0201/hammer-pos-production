@@ -28,7 +28,7 @@ function baseReport(overrides: Partial<ExpensePeriodReport> = {}): ExpensePeriod
         {
           id: "cm-1", date: "2026-10-05T12:00:00.000Z", branchId: "branch-1", branchCode: "MSY", branchName: "Masaya",
           category: "RENT", conceptId: null, conceptName: "Alquiler local", description: "Pago, de alquiler", payee: "Doña \"Rosa\"",
-          receiptNumber: "R-001", amount: 1000, source: "CAJA", registeredBy: "Ana Pérez", approvedBy: null, reference: null,
+          receiptNumber: "R-001", receiptPhotoUrl: null, amount: 1000, source: "CAJA", registeredBy: "Ana Pérez", approvedBy: null, reference: null,
         },
       ],
       total: 1,

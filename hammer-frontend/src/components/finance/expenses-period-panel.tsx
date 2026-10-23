@@ -7,7 +7,7 @@ import {
 } from "recharts";
 import {
   ChevronLeft, ChevronRight, Building2, RefreshCw, AlertTriangle, Download, Printer,
-  ChevronDown, ChevronUp, Settings, Users, Truck, Info,
+  ChevronDown, ChevronUp, Settings, Users, Truck, Info, ArrowUp, ArrowDown, Camera, FileWarning, Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
@@ -25,6 +25,7 @@ import {
 } from "@/components/finance/expenses-period.types";
 import { ExpenseConceptsModal } from "@/components/finance/expense-concepts-modal";
 import { ClassifyCashOutModal } from "@/components/finance/classify-cash-out-modal";
+import { ReclassifyExpenseModal } from "@/components/finance/reclassify-expense-modal";
 
 type Branch = { id: string; code: string; name: string };
 
@@ -62,6 +63,63 @@ function deltaTone(delta: number): "ok" | "warn" | "default" {
   return "default";
 }
 
+/**
+ * prompt-caja-gastos-pos-cobro.md Commit 3 — tooltip de "Gasto por día" en
+ * español, oscuro/claro según el tema, fecha legible, categorías
+ * ordenadas por monto + el total del día (antes era el tooltip default de
+ * Recharts: inglés, fondo blanco fijo, sin orden ni total).
+ */
+function ExpenseDayTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ dataKey: string; value: number; color: string }>; label?: string }) {
+  if (!active || !payload || payload.length === 0) return null;
+  const date = new Date(`2026-${label}`); // label viene como "MM-DD"; el año es irrelevante, solo se usa para nombre de día/mes.
+  const dateLabel = Number.isNaN(date.getTime()) ? label : date.toLocaleDateString("es-NI", { weekday: "short", day: "numeric", month: "short" });
+  const entries = [...payload].filter((p) => p.value > 0).sort((a, b) => b.value - a.value);
+  const total = entries.reduce((s, e) => s + e.value, 0);
+  return (
+    <div className="rounded-lg p-2.5 shadow-lg text-xs" style={{ background: "var(--color-surface)", border: "0.5px solid var(--color-border)", color: "var(--color-text)" }}>
+      <p className="font-semibold mb-1 capitalize">{dateLabel}</p>
+      {entries.map((e) => (
+        <div key={e.dataKey} className="flex items-center justify-between gap-3">
+          <span className="flex items-center gap-1.5" style={{ color: "var(--color-text-muted)" }}>
+            <span className="h-2 w-2 rounded-full" style={{ background: e.color }} />
+            {ledgerCategoryLabel(e.dataKey)}
+          </span>
+          <span className="font-semibold tabular-nums">{money(e.value)}</span>
+        </div>
+      ))}
+      <div className="mt-1 flex items-center justify-between gap-3 pt-1" style={{ borderTop: "0.5px solid var(--color-border)" }}>
+        <span style={{ color: "var(--color-text-muted)" }}>Total</span>
+        <span className="font-bold tabular-nums">{money(total)}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "Posibles duplicados" (Commit 3) — mismo criterio del aviso al registrar
+ * (Commit 1): monto ±1%, misma sucursal, categoría igual o descripción
+ * parecida. A diferencia del aviso al registrar, acá se escanea la página
+ * YA CARGADA del libro de gastos (no todo el período — paginado, igual que
+ * el resto de esta tabla), buscando TODOS los pares, no "contra lo nuevo".
+ */
+export function findDuplicatePairs(rows: ExpensePeriodReport["rows"]["items"]): Array<{ a: ExpensePeriodReport["rows"]["items"][number]; b: ExpensePeriodReport["rows"]["items"][number] }> {
+  const pairs: Array<{ a: ExpensePeriodReport["rows"]["items"][number]; b: ExpensePeriodReport["rows"]["items"][number] }> = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    for (let j = i + 1; j < rows.length; j += 1) {
+      const a = rows[i];
+      const b = rows[j];
+      if (a.source === "DEVENGADO" || b.source === "DEVENGADO") continue;
+      if (a.branchId !== b.branchId) continue;
+      const amountDiffPct = Math.abs(a.amount - b.amount) / Math.max(a.amount, b.amount, 1);
+      if (amountDiffPct > 0.01) continue;
+      const hoursApart = Math.abs(new Date(a.date).getTime() - new Date(b.date).getTime()) / 36e5;
+      if (hoursApart > 24) continue;
+      pairs.push({ a, b });
+    }
+  }
+  return pairs;
+}
+
 export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string | null } = {}) {
   const router = useRouter();
   const pathname = usePathname();
@@ -80,6 +138,8 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
   const [rowsOffset, setRowsOffset] = useState(0);
   const [conceptsModalOpen, setConceptsModalOpen] = useState(false);
   const [classifyCashOutOpen, setClassifyCashOutOpen] = useState(false);
+  const [reclassifyTarget, setReclassifyTarget] = useState<"bulk" | { id: string; amount: number; description: string; effectiveFrom: string } | null>(null);
+  const [dismissedDuplicates, setDismissedDuplicates] = useState<Set<string>>(new Set());
 
   const effectiveBranchId = fixedBranchId ?? urlState.branchId;
 
@@ -156,6 +216,17 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
     const set = new Set<string>();
     for (const day of report.byDay) for (const cat of Object.keys(day.byCategory)) set.add(cat);
     return withUnclassifiedLast([...set].map((category) => ({ category }))).map((c) => c.category);
+  }, [report]);
+
+  const duplicatePairs = useMemo(() => {
+    if (!report) return [];
+    return findDuplicatePairs(report.rows.items).filter((p) => !dismissedDuplicates.has(`${p.a.id}:${p.b.id}`));
+  }, [report, dismissedDuplicates]);
+
+  const noReceiptCount = useMemo(() => {
+    if (!report) return { count: 0, total: 0 };
+    const flagged = report.rows.items.filter((r) => r.source !== "DEVENGADO" && !r.receiptNumber && !r.receiptPhotoUrl);
+    return { count: flagged.length, total: flagged.reduce((s, r) => s + r.amount, 0) };
   }, [report]);
 
   return (
@@ -310,8 +381,8 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(value) => money(typeof value === "number" ? value : Number(value ?? 0))} />
-                  <Legend formatter={(value: string) => ledgerCategoryLabel(value)} wrapperStyle={{ fontSize: 11 }} />
+                  <Tooltip content={<ExpenseDayTooltip />} />
+                  <Legend formatter={(value: string) => ledgerCategoryLabel(value)} wrapperStyle={{ fontSize: 11, color: "var(--color-text-muted)" }} />
                   {chartCategories.map((category) => (
                     <Bar key={category} dataKey={category} stackId="total" fill={getCategoryColor(category, theme)} name={category} />
                   ))}
@@ -329,7 +400,7 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
                   <th className="px-3 py-2 text-right text-xs font-semibold" style={{ color: "var(--color-text-muted)" }}>Gasto</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold" style={{ color: "var(--color-text-muted)" }}>Presupuesto</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold" style={{ color: "var(--color-text-muted)" }}>% ejecutado</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold" style={{ color: "var(--color-text-muted)" }}>vs promedio</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold" style={{ color: "var(--color-text-muted)" }} title="Comparado contra el promedio de los 4 períodos anteriores de este mismo tipo (día/semana/quincena/mes, según lo que esté seleccionado arriba)">vs promedio (4 anteriores)</th>
                 </tr>
               </thead>
               <tbody>
@@ -346,10 +417,32 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
                           {ledgerCategoryLabel(cat.category)}
                         </td>
                         <td className="px-3 py-2.5 text-right tabular-nums" data-label="Gasto">{money(cat.total)}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums" data-label="Presupuesto" style={{ color: "var(--color-text-muted)" }}>{money(cat.budgetProrated)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums" data-label="Presupuesto">
+                          {cat.budgetExecutedPercent == null ? (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); router.push("/app/master/finance?tab=expenses" as Parameters<typeof router.push>[0]); }}
+                              className="text-xs hover:underline"
+                              style={{ color: "var(--color-info-700)" }}
+                            >
+                              Sin presupuesto · Definir
+                            </button>
+                          ) : (
+                            <span style={{ color: "var(--color-text-muted)" }}>{money(cat.budgetProrated)}</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 text-right tabular-nums" data-label="% ejecutado">{cat.budgetExecutedPercent != null ? `${cat.budgetExecutedPercent.toFixed(0)}%` : "—"}</td>
-                        <td className="px-3 py-2.5 text-right tabular-nums" data-label="vs promedio" style={{ color: "var(--color-text-muted)" }}>
-                          {cat.deltaPercent != null ? `${cat.deltaPercent > 0 ? "+" : ""}${cat.deltaPercent.toFixed(0)}%` : "—"}
+                        <td className="px-3 py-2.5 text-right tabular-nums" data-label="vs promedio">
+                          {cat.deltaPercent != null ? (
+                            <span
+                              className="inline-flex items-center gap-0.5"
+                              title={`Promedio de los 4 períodos anteriores: ${money(cat.average4)}`}
+                              style={{ color: cat.deltaPercent > 0 ? "var(--color-danger-600)" : cat.deltaPercent < 0 ? "var(--color-success-600)" : "var(--color-text-muted)" }}
+                            >
+                              {cat.deltaPercent > 0 ? <ArrowUp className="h-3 w-3" /> : cat.deltaPercent < 0 ? <ArrowDown className="h-3 w-3" /> : null}
+                              {Math.abs(cat.deltaPercent).toFixed(0)}%
+                            </span>
+                          ) : "—"}
                         </td>
                       </tr>
                       {isExpanded && cat.byConcept.map((concept) => (
@@ -402,18 +495,56 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
             )}
           </div>
 
+          {/* ── Posibles duplicados ── */}
+          {duplicatePairs.length > 0 && (
+            <div className="rounded-lg p-3 space-y-2" style={{ background: "var(--color-warning-50)", border: "0.5px solid var(--color-warning-200)" }}>
+              <p className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5" style={{ color: "var(--color-warning-700)" }}>
+                <Copy className="h-3.5 w-3.5" /> Posibles duplicados ({duplicatePairs.length})
+              </p>
+              <ul className="space-y-1.5">
+                {duplicatePairs.map(({ a, b }) => (
+                  <li key={`${a.id}:${b.id}`} className="flex items-center justify-between gap-2 text-xs" style={{ color: "var(--color-text)" }}>
+                    <span>
+                      {a.description} {money(a.amount)} × 2 el {fmtDateTime(a.date)} en {a.branchCode ?? "—"}
+                    </span>
+                    <button
+                      type="button"
+                      className="shrink-0 hover:underline"
+                      style={{ color: "var(--color-warning-700)" }}
+                      onClick={() => setDismissedDuplicates((s) => new Set(s).add(`${a.id}:${b.id}`))}
+                    >
+                      Es otro gasto, no es duplicado
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* ── Libro de gastos (filas) ── */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <p className="text-xs font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
                 Libro de gastos {categoryFilter && `— ${ledgerCategoryLabel(categoryFilter)}`}
               </p>
-              {categoryFilter && (
-                <button onClick={() => setCategoryFilter(null)} className="text-xs hover:underline" style={{ color: "var(--color-info-700)" }}>
-                  Quitar filtro
-                </button>
-              )}
+              <div className="flex items-center gap-3">
+                {isMaster && categoryFilter === "OTHER" && (
+                  <button onClick={() => setReclassifyTarget("bulk")} className="text-xs font-semibold hover:underline" style={{ color: "var(--color-master-700)" }}>
+                    Revisar gastos en Otros
+                  </button>
+                )}
+                {categoryFilter && (
+                  <button onClick={() => setCategoryFilter(null)} className="text-xs hover:underline" style={{ color: "var(--color-info-700)" }}>
+                    Quitar filtro
+                  </button>
+                )}
+              </div>
             </div>
+            {noReceiptCount.count > 0 && (
+              <p className="text-xs flex items-center gap-1.5" style={{ color: "var(--color-warning-700)" }}>
+                <FileWarning className="h-3.5 w-3.5" /> {noReceiptCount.count} de {report.rows.items.length} sin recibo ({money(noReceiptCount.total)})
+              </p>
+            )}
             <div className="rounded-lg overflow-hidden" style={{ border: "0.5px solid var(--color-border)" }}>
               <table className="hm-table w-full text-sm">
                 <thead style={{ background: "var(--color-surface-alt)" }}>
@@ -424,29 +555,50 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
                     <th className="px-3 py-2 text-left text-xs font-semibold" style={{ color: "var(--color-text-muted)" }}>Descripción</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold" style={{ color: "var(--color-text-muted)" }}>Monto</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold" style={{ color: "var(--color-text-muted)" }}>Fuente</th>
+                    <th className="px-3 py-2 text-center text-xs font-semibold" style={{ color: "var(--color-text-muted)" }} title="Recibo (número o foto)">Recibo</th>
+                    {isMaster && <th className="px-3 py-2" />}
                   </tr>
                 </thead>
                 <tbody>
-                  {report.rows.items.map((row) => (
-                    <tr key={row.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-alt)]">
-                      <td className="px-3 py-2 text-xs" data-label="Fecha" style={{ color: "var(--color-text-muted)" }}>{fmtDateTime(row.date)}</td>
-                      <td className="px-3 py-2 text-xs" data-label="Sucursal">{row.branchCode ?? "—"}</td>
-                      <td className="px-3 py-2 text-xs" data-label="Categoría">
-                        {ledgerCategoryLabel(row.category)}
-                        {row.conceptName && <span className="block text-[11px]" style={{ color: "var(--color-text-muted)" }}>{row.conceptName}</span>}
-                      </td>
-                      <td className="px-3 py-2 text-xs max-w-xs truncate" data-label="Descripción" title={row.description}>
-                        {row.description}
-                        {!row.receiptNumber && row.source !== "DEVENGADO" && (
-                          <span className="ml-1 text-[10px] font-semibold" style={{ color: "var(--color-warning-700)" }}>sin recibo</span>
+                  {report.rows.items.map((row) => {
+                    const hasReceipt = Boolean(row.receiptNumber || row.receiptPhotoUrl);
+                    return (
+                      <tr key={row.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-alt)]">
+                        <td className="px-3 py-2 text-xs" data-label="Fecha" style={{ color: "var(--color-text-muted)" }}>{fmtDateTime(row.date)}</td>
+                        <td className="px-3 py-2 text-xs" data-label="Sucursal">{row.branchCode ?? "—"}</td>
+                        <td className="px-3 py-2 text-xs" data-label="Categoría">
+                          {ledgerCategoryLabel(row.category)}
+                          {row.conceptName && <span className="block text-[11px]" style={{ color: "var(--color-text-muted)" }}>{row.conceptName}</span>}
+                        </td>
+                        <td className="px-3 py-2 text-xs max-w-xs truncate" data-label="Descripción" title={row.description}>{row.description}</td>
+                        <td className="px-3 py-2 text-right text-xs tabular-nums" data-label="Monto">{money(row.amount)}</td>
+                        <td className="px-3 py-2 text-xs" data-label="Fuente">{SOURCE_LABELS[row.source] ?? row.source}</td>
+                        <td className="px-3 py-2 text-center" data-label="Recibo">
+                          {row.source === "DEVENGADO" ? null : hasReceipt ? (
+                            <Camera className="inline h-3.5 w-3.5" style={{ color: "var(--color-success-600)" }} aria-label="Con recibo" />
+                          ) : (
+                            <FileWarning className="inline h-3.5 w-3.5" style={{ color: "var(--color-warning-600)" }} aria-label="Sin recibo" />
+                          )}
+                        </td>
+                        {isMaster && (
+                          <td className="px-3 py-2 text-right">
+                            {row.category === "OTHER" && row.source !== "DEVENGADO" && (
+                              <button
+                                type="button"
+                                className="text-[11px] font-semibold hover:underline"
+                                style={{ color: "var(--color-master-700)" }}
+                                onClick={() => setReclassifyTarget({ id: row.id, amount: row.amount, description: row.description, effectiveFrom: row.date })}
+                              >
+                                Reclasificar
+                              </button>
+                            )}
+                          </td>
                         )}
-                      </td>
-                      <td className="px-3 py-2 text-right text-xs tabular-nums" data-label="Monto">{money(row.amount)}</td>
-                      <td className="px-3 py-2 text-xs" data-label="Fuente">{SOURCE_LABELS[row.source] ?? row.source}</td>
-                    </tr>
-                  ))}
+                      </tr>
+                    );
+                  })}
                   {report.rows.items.length === 0 && (
-                    <tr><td colSpan={6} className="px-3 py-6 text-center text-xs" style={{ color: "var(--color-text-muted)" }}>Sin gastos en este período.</td></tr>
+                    <tr><td colSpan={8} className="px-3 py-6 text-center text-xs" style={{ color: "var(--color-text-muted)" }}>Sin gastos en este período.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -471,6 +623,17 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
           end={report.period.end}
           branchId={effectiveBranchId ?? null}
           onClose={() => setClassifyCashOutOpen(false)}
+          onChanged={() => void load()}
+        />
+      )}
+      {reclassifyTarget && report && (
+        <ReclassifyExpenseModal
+          mode={reclassifyTarget === "bulk" ? "bulk" : "single"}
+          singleRow={reclassifyTarget === "bulk" ? undefined : reclassifyTarget}
+          start={report.period.start}
+          end={report.period.end}
+          branchId={effectiveBranchId ?? null}
+          onClose={() => setReclassifyTarget(null)}
           onChanged={() => void load()}
         />
       )}

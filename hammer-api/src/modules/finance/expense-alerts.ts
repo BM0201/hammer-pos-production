@@ -113,6 +113,29 @@ export function buildNoReceiptAlert(rows: ExpenseLedgerRow[], threshold = NO_REC
   };
 }
 
+const OTHER_SHARE_DEFAULT_THRESHOLD = 0.15;
+
+/**
+ * prompt-caja-gastos-pos-cobro.md Commit 3 — "El 79% del gasto está en
+ * Otros: reclasificá para ver en qué se gasta." OTHER es la categoría real
+ * (ExpenseCategory.OTHER) — distinta de UNCLASSIFIED (el marcador
+ * sintético de expense-ledger.ts para movimientos de tesorería sin
+ * OperatingExpense vinculado, que ya tiene su propia alerta aparte).
+ */
+export function buildOtherShareAlert(rows: ExpenseLedgerRow[], threshold = OTHER_SHARE_DEFAULT_THRESHOLD): ExpensePeriodAlert | null {
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  if (total <= 0) return null;
+  const otherTotal = rows.filter((r) => r.category === "OTHER").reduce((s, r) => s + r.amount, 0);
+  const share = otherTotal / total;
+  if (share <= threshold) return null;
+  return {
+    code: "OTHER_SHARE",
+    category: "OTHER",
+    message: `El ${Math.round(share * 100)}% del gasto está en Otros: reclasificá para ver en qué se gasta.`,
+    href: null,
+  };
+}
+
 /** Egresos de caja tipo CASH_OUT (retiro/traslado genérico) — no entran al total de gastos pero pueden ser un gasto disfrazado. */
 export function buildUnclassifiedCashOutAlert(totalAmount: number, count: number): ExpensePeriodAlert | null {
   if (count === 0 || totalAmount <= 0) return null;

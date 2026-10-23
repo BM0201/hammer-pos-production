@@ -13,6 +13,7 @@ import { computeCategoryStats, type CategoryStats, type ExpenseRecord } from "@/
 import {
   buildCategorySwingAlerts,
   buildNoReceiptAlert,
+  buildOtherShareAlert,
   buildOutlierAlerts,
   buildUnclassifiedCashOutAlert,
   buildUnclassifiedCategoryAlert,
@@ -372,6 +373,7 @@ export async function getExpensePeriodReport(input: ExpensePeriodReportInput, db
     ...[buildNoReceiptAlert(currentRows, input.noReceiptThreshold)].filter((a): a is ExpensePeriodAlert => a !== null),
     ...[buildUnclassifiedCashOutAlert(round2(num(cashOutAgg._sum.amount)), cashOutAgg._count)].filter((a): a is ExpensePeriodAlert => a !== null),
     ...[buildUnclassifiedCategoryAlert(currentCategoryTotals)].filter((a): a is ExpensePeriodAlert => a !== null),
+    ...[buildOtherShareAlert(currentRows)].filter((a): a is ExpensePeriodAlert => a !== null),
   ];
 
   const filter = input.rowsFilter;

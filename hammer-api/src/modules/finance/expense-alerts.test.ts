@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildNoReceiptAlert } from "@/modules/finance/expense-alerts";
+import { buildNoReceiptAlert, buildOtherShareAlert } from "@/modules/finance/expense-alerts";
 import type { ExpenseLedgerRow } from "@/modules/finance/expense-ledger";
 
 function row(overrides: Partial<ExpenseLedgerRow> = {}): ExpenseLedgerRow {
@@ -51,4 +51,27 @@ test("por debajo del umbral no alerta aunque no tenga recibo", () => {
 test("fuente DEVENGADO nunca entra (la planilla no tiene recibo por naturaleza)", () => {
   const alert = buildNoReceiptAlert([row({ source: "DEVENGADO" })]);
   assert.equal(alert, null);
+});
+
+/** prompt-caja-gastos-pos-cobro.md Commit 3 — "El 79% del gasto está en Otros". */
+test("más del 15% del gasto en OTHER → alerta con el porcentaje real", () => {
+  const alert = buildOtherShareAlert([
+    row({ category: "OTHER", amount: 7900 }),
+    row({ category: "TRANSPORT", amount: 2100 }),
+  ]);
+  assert.ok(alert);
+  assert.equal(alert!.category, "OTHER");
+  assert.match(alert!.message, /79% del gasto está en Otros/);
+});
+
+test("15% o menos en OTHER no alerta", () => {
+  const alert = buildOtherShareAlert([
+    row({ category: "OTHER", amount: 1000 }),
+    row({ category: "TRANSPORT", amount: 9000 }),
+  ]);
+  assert.equal(alert, null);
+});
+
+test("sin gasto total (todo cero) no alerta", () => {
+  assert.equal(buildOtherShareAlert([]), null);
 });
