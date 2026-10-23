@@ -146,6 +146,9 @@ export type PaymentComposerProps = {
   bankAccounts?: BankAccountOption[];
 };
 
+/** prompt-caja-gastos-pos-cobro.md Commit 4 — "método como pestañas: cambiar de pestaña CAMBIA el método, no agrega". */
+type TabMode = TenderMethod | "MIXED";
+
 export function PaymentComposer({
   total,
   isSubmitting = false,
@@ -154,12 +157,25 @@ export function PaymentComposer({
   availableMethods = ["CASH", "CARD", "TRANSFER"],
   bankAccounts = [],
 }: PaymentComposerProps) {
-  const [lines, setLines] = useState<DraftLine[]>(() => [newLine("CASH", total, [])]);
+  const [lines, setLines] = useState<DraftLine[]>(() => [newLine(availableMethods[0] ?? "CASH", total, [])]);
   // Acordeón: solo una línea abierta a la vez (§2.2, prueba 12). La línea
   // inicial de efectivo arranca abierta — es el caso simple, un toque.
   const [openLineId, setOpenLineId] = useState<string | null>(() => lines[0]?.id ?? null);
   const [pickerLineId, setPickerLineId] = useState<string | null>(null);
+  const [tabMode, setTabMode] = useState<TabMode>(availableMethods[0] ?? "CASH");
   const accountsAvailable = bankAccounts.length > 0;
+
+  // Pestaña simple (no MIXED): SIEMPRE una sola línea de ese método, por el
+  // total completo — "cambiar de pestaña cambia el método, no agrega nada".
+  // Combinado es la ÚNICA pestaña que deja 2+ líneas (el modelo viejo de
+  // "+ método" sigue intacto ahí adentro, sin tocar esa lógica).
+  function selectTab(mode: TabMode) {
+    setTabMode(mode);
+    if (mode === "MIXED") return;
+    const line = newLine(mode, total, []);
+    setLines([line]);
+    setOpenLineId(line.id);
+  }
 
   const validations = useMemo(() => lines.map((l) => validateLine(l, accountsAvailable)), [lines, accountsAvailable]);
   const covered = useMemo(() => round2(validations.reduce((sum, v) => sum + v.amount, 0)), [validations]);
@@ -230,6 +246,29 @@ export function PaymentComposer({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {/* Pestañas de método — Alt+1..4 en computadora (ver ChargeDialog). */}
+      <div className="mb-3 flex flex-none gap-1 rounded-xl bg-[var(--color-surface-muted)] p-1" data-testid="payment-composer-tabs">
+        {[...availableMethods, "MIXED" as const].map((m) => {
+          const Meta = m === "MIXED" ? { label: "Combinado", icon: Plus } : METHOD_META[m];
+          const active = tabMode === m;
+          return (
+            <button
+              key={m}
+              type="button"
+              data-testid={`payment-composer-tab-${m}`}
+              onClick={() => selectTab(m)}
+              disabled={isSubmitting}
+              className={[
+                "flex flex-1 items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] font-semibold transition-colors",
+                active ? "bg-[var(--color-surface)] text-[var(--color-pay)] shadow-sm" : "text-[var(--color-text-muted)]",
+              ].join(" ")}
+            >
+              <Meta.icon className="h-3 w-3" /> {Meta.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Barra de cubierto/falta — siempre visible (§2.3), no solo con 2+ líneas. */}
       <div
         className={[
@@ -263,26 +302,28 @@ export function PaymentComposer({
         ))}
       </div>
 
-      {/* Pie fijo: agregar método + confirmar (§2.5, prueba 11). */}
+      {/* Pie fijo: agregar método (solo en "Combinado") + confirmar (§2.5, prueba 11). */}
       <div className="flex-none space-y-2 pt-3">
-        <div className="flex flex-wrap gap-1.5">
-          {availableMethods
-            .filter((method) => method !== "CASH" || !hasCashLine) // §3: efectivo, una sola línea (prueba 5)
-            .map((method) => {
-              const Meta = METHOD_META[method];
-              return (
-                <button
-                  key={method}
-                  type="button"
-                  onClick={() => addLine(method)}
-                  disabled={isSubmitting}
-                  className="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-pay)] hover:text-[var(--color-pay)]"
-                >
-                  <Plus className="h-3 w-3" /> {Meta.label}
-                </button>
-              );
-            })}
-        </div>
+        {tabMode === "MIXED" && (
+          <div className="flex flex-wrap gap-1.5">
+            {availableMethods
+              .filter((method) => method !== "CASH" || !hasCashLine) // §3: efectivo, una sola línea (prueba 5)
+              .map((method) => {
+                const Meta = METHOD_META[method];
+                return (
+                  <button
+                    key={method}
+                    type="button"
+                    onClick={() => addLine(method)}
+                    disabled={isSubmitting}
+                    className="flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-pay)] hover:text-[var(--color-pay)]"
+                  >
+                    <Plus className="h-3 w-3" /> {Meta.label}
+                  </button>
+                );
+              })}
+          </div>
+        )}
 
         <Button
           variant="success"
@@ -305,9 +346,9 @@ export function PaymentComposer({
  * días menos comisión (prompt-pantallas-recorrido-dinero.md §1.4). */
 function CardSettlementNote() {
   return (
-    <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-[var(--color-warning-50)] px-2.5 py-2 text-[0.6875rem] leading-snug text-[var(--color-warning-700)]">
-      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-      Se liquida en 1–2 días, menos comisión. Entra a <b>Por liquidar</b>, no al banco.
+    <p className="mt-2 flex items-center gap-1.5 whitespace-nowrap overflow-x-auto rounded-lg bg-[var(--color-warning-50)] px-2.5 py-2 text-[0.6875rem] text-[var(--color-warning-700)]">
+      <AlertTriangle className="h-3 w-3 shrink-0" />
+      Se liquida en 1–2 días menos comisión · queda en <b>Por liquidar</b>, no en el banco
     </p>
   );
 }
@@ -341,6 +382,12 @@ function LineItem({
   const change = line.method === "CASH" && line.receivedRaw ? round2(received - validation.amount) : null;
   const selectedAccount = bankAccounts.find((a) => a.id === line.bankAccountId) ?? null;
   const quickAmounts = useMemo(() => quickCashAmounts(validation.amount || total), [validation.amount, total]);
+  // prompt-caja-gastos-pos-cobro.md Commit 4 — el teclado numérico en pantalla
+  // ocupa medio modal en computadora, donde ya hay uno físico. Solo se
+  // muestra solo por defecto en pantallas táctiles; en mouse+teclado queda
+  // un botón "Mostrar teclado" para el caso raro de una pantalla táctil que
+  // no se detectó bien.
+  const [showKeypad, setShowKeypad] = useState(() => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches);
 
   function appendDigit(digit: string) {
     if (digit === "00" && !line.receivedRaw) return;
@@ -404,16 +451,32 @@ function LineItem({
                 ))}
               </div>
 
-              <div className="grid grid-cols-3 gap-1.5">
-                {["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0"].map((d) => (
-                  <button key={d} onClick={() => appendDigit(d)} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 text-base font-semibold text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]">
-                    {d}
+              {showKeypad ? (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0"].map((d) => (
+                    <button key={d} onClick={() => appendDigit(d)} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 text-base font-semibold text-[var(--color-text)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]">
+                      {d}
+                    </button>
+                  ))}
+                  <button onClick={() => onChange({ receivedRaw: line.receivedRaw.slice(0, -1) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 flex items-center justify-center text-base text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]" aria-label="Borrar">
+                    ⌫
                   </button>
-                ))}
-                <button onClick={() => onChange({ receivedRaw: line.receivedRaw.slice(0, -1) })} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-2.5 flex items-center justify-center text-base text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-alt)] active:scale-95 transition-[background-color,transform]" aria-label="Borrar">
-                  ⌫
-                </button>
-              </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <input
+                    type="number"
+                    className="hm-input flex-1 text-right text-base"
+                    placeholder="Monto recibido"
+                    value={line.receivedRaw}
+                    onChange={(e) => onChange({ receivedRaw: e.target.value })}
+                    autoFocus
+                  />
+                  <button type="button" onClick={() => setShowKeypad(true)} className="shrink-0 rounded-lg border border-[var(--color-border)] px-2.5 py-2 text-xs font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-surface-alt)]">
+                    Mostrar teclado
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-2.5">
@@ -531,9 +594,15 @@ function AccountPickerStep({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-        {accounts.map((account) => {
+      {/* prompt-caja-gastos-pos-cobro.md Commit 4 — lista compacta con radio
+          (banco, moneda, titular, últimos 4 dígitos): antes eran tarjetas
+          grandes con el número completo, que obligaban a hacer scroll con
+          varias cuentas. "Copiar" sigue copiando el número COMPLETO — acá
+          solo se MUESTRA recortado. */}
+      <div className="min-h-0 flex-1 overflow-y-auto rounded-lg" style={{ border: "0.5px solid var(--color-border)" }}>
+        {accounts.map((account, i) => {
           const selected = account.id === selectedId;
+          const last4 = account.accountNumber.slice(-4);
           return (
             <button
               key={account.id}
@@ -541,37 +610,33 @@ function AccountPickerStep({
               onClick={() => onPick(account.id)}
               data-testid="payment-composer-account-card"
               className={[
-                "flex w-full items-start justify-between gap-3 rounded-xl border-2 p-3.5 text-left transition-colors",
-                selected
-                  ? "border-[var(--color-pay)] bg-[var(--color-success-50)]"
-                  : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-strong)]",
+                "flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors",
+                i > 0 ? "border-t" : "",
+                selected ? "bg-[var(--color-success-50)]" : "hover:bg-[var(--color-surface-alt)]",
               ].join(" ")}
+              style={{ borderColor: "var(--color-border)" }}
             >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-base font-bold text-[var(--color-text)]">{account.bankName}</span>
-                  <CurrencyChip currency={account.currencyCode} />
-                </div>
-                {account.owner ? (
-                  <p className="mt-1 text-xs uppercase tracking-wide text-[var(--color-text-muted)]">{account.owner}</p>
-                ) : null}
-                <p className="mt-0.5 font-mono text-[1.0625rem] tracking-wide text-[var(--color-text)]">{account.accountNumber}</p>
-                {account.accountAlias ? <p className="mt-0.5 text-xs text-[var(--color-text-soft)]">{account.accountAlias}</p> : null}
-              </div>
-              <div className="flex shrink-0 flex-col items-end gap-2">
-                {selected ? (
-                  <Check className="h-5 w-5 text-[var(--color-pay)]" />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={(e) => void copyNumber(e, account.accountNumber)}
-                    className="rounded-lg p-1.5 text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)]"
-                    aria-label="Copiar número de cuenta"
-                  >
-                    <Copy className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
+              <span
+                className={["flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2", selected ? "border-[var(--color-pay)]" : "border-[var(--color-border-strong)]"].join(" ")}
+                aria-hidden="true"
+              >
+                {selected && <span className="h-2 w-2 rounded-full bg-[var(--color-pay)]" />}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm">
+                <span className="font-semibold text-[var(--color-text)]">{account.bankName}</span>
+                {" · "}
+                <CurrencyChip currency={account.currencyCode} />
+                {account.owner && <span className="text-[var(--color-text-muted)]"> · {account.owner}</span>}
+                <span className="font-mono text-[var(--color-text-muted)]"> · ****{last4}</span>
+              </span>
+              <button
+                type="button"
+                onClick={(e) => void copyNumber(e, account.accountNumber)}
+                className="shrink-0 rounded-lg p-1.5 text-[var(--color-text-soft)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-text)]"
+                aria-label="Copiar número completo"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
             </button>
           );
         })}

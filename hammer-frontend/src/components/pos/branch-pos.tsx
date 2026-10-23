@@ -568,6 +568,7 @@ export function BranchPos({ branchId }: { branchId: string }) {
         branchId={branchId}
         onConfirm={(tenders) => completeTicket("DIRECT", tenders)}
         isSubmitting={isSubmittingPayment}
+        ticketLines={ticketLines}
       />
 
       <BelowCostOverrideDialog

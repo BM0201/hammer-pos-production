@@ -55,7 +55,11 @@ export function PosCheckoutBar({
       </div>
     );
   } else if (canCollectHere) {
-    // Cobrar (direct collect — opens charge dialog)
+    // Cobrar (direct collect — opens charge dialog). prompt-caja-gastos-pos-
+    // cobro.md Commit 4 — con la caja cerrada, el botón mismo lo dice: nunca
+    // "Cobrar C$X" deshabilitado sin explicación (el modal de cobro ya no se
+    // puede abrir en ese estado — disabled ya lo impedía, esto solo lo dice).
+    const cashClosed = hasTicketLines && !activeCashSessionId;
     const disabled = baseDisabled || !activeCashSessionId;
     action = (
       <div className="px-4 pb-4 flex flex-col gap-2">
@@ -69,13 +73,8 @@ export function PosCheckoutBar({
           icon={<Check className="h-4 w-4" />}
           loading={isSubmittingPayment}
         >
-          {!hasTicketLines ? "Agrega productos para cobrar" : `Cobrar  ${totalLabel}`}
+          {!hasTicketLines ? "Agrega productos para cobrar" : cashClosed ? "Abrí la caja para cobrar" : `Cobrar  ${totalLabel}`}
         </Button>
-        {hasTicketLines && !activeCashSessionId ? (
-          <p className="text-center text-[11px] text-[var(--color-warning-700)]">
-            Abre una sesión de caja para poder cobrar aquí.
-          </p>
-        ) : null}
         {canSendToCashier ? (
           <Button
             variant="ghost"
