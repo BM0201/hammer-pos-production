@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { Route } from "next";
 import dynamic from "next/dynamic";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
@@ -332,6 +332,12 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: "audit", label: "Auditoria", icon: BarChart3 },
 ];
 
+/** La URL es la única fuente de la pestaña; `movements` (links viejos) cae en Kardex, igual que en la barra. */
+function resolveTab(raw: string | null): Tab {
+  if (raw === "movements") return "kardex";
+  return TABS.some((t) => t.id === raw) ? (raw as Tab) : "summary";
+}
+
 const FILTERS = [
   { value: "", label: "Todos" },
   { value: "LOW_STOCK", label: "Stock bajo" },
@@ -551,42 +557,45 @@ function PaginationBar({ pagination, onPageChange }: { pagination: Pagination; o
    ═══════════════════════════════════════════════════════════ */
 export function CatalogInventoryAdmin() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const scope = useInventoryScope();
   const [data, setData] = useState<CenterData | null>(null);
-  const [tab, setTab] = useState<Tab>((searchParams.get("tab") as Tab) || "summary");
+  // La pestaña sale SIEMPRE de la URL: un setTab interno dejaba la barra
+  // marcando otra sección, rompía "Atrás" y volver a tocar la misma
+  // píldora no hacía nada (la URL no cambiaba).
+  const tab = resolveTab(searchParams.get("tab"));
+  const urlFilter = searchParams.get("filter") ?? "";
+  function goTab(next: Tab, nextFilter?: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", next);
+    if (nextFilter) params.set("filter", nextFilter);
+    else params.delete("filter");
+    router.push(`${pathname}?${params}` as Route);
+  }
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   // prompt-inventario-unificado.md Commit 1 §4 — ya no hay <select> de
-  // sucursal propio acá: lo da la barra (useInventoryScope). "Toda la red"
-  // cae a la primera sucursal visible para lo que esta pantalla todavía no
-  // sabe agregar en red (eso es Commit 2 — "Productos → Lista con la
-  // sucursal de la barra: Toda la red...").
+  // sucursal propio acá: lo da la barra (useInventoryScope). `branchId` es
+  // la sucursal concreta que necesitan Kardex, Precios y Reposición; la
+  // carga del centro en "Toda la red" va SIN sucursal (stock de toda la
+  // red, costos "—"), salvo Precios y costos, que es por sucursal.
   const branchId = (scope.mode === "branch" ? scope.branchId : scope.branches[0]?.id) ?? "";
+  const loadBranchId = scope.mode === "branch" || tab === "pricing" ? branchId : "";
   const [categoryId, setCategoryId] = useState("");
-  // Pendientes (Calidad) llega con ?filter=NO_COST ya en la URL — antes
-  // este estado SIEMPRE arrancaba vacío e ignoraba ese parámetro (el link
-  // no hacía nada real, bug #1/regla 5 del doc).
-  const [filter, setFilter] = useState(() => searchParams.get("filter") ?? "");
+  // Pendientes (Calidad) llega con ?filter=NO_COST ya en la URL.
+  const [filter, setFilter] = useState(urlFilter);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [stockSearch, setStockSearch] = useState("");
-  const activeTabRef = useRef<HTMLButtonElement | null>(null);
 
-  /* Scroll active tab into view when tab changes (prevents hidden tab on mobile) */
+  // Al cambiar de pestaña o de filtro en la URL, el filtro vuelve a ser el
+  // de la URL y la página a 1 — antes "Pendientes → Lista" seguía filtrando
+  // sin código aunque la barra dijera "Lista".
   useEffect(() => {
-    activeTabRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
-  }, [tab]);
-
-  // prompt-inventario-inicio-fix.md Commit 1 §1.2 — las píldoras de la
-  // barra superior nueva son <Link>, no llaman a setTab: navegan a
-  // ?tab=X. El useState de `tab` solo leía la URL una vez, al montar — sin
-  // este efecto, tocar una píldora cambiaba la URL pero el panel visible
-  // se quedaba igual.
-  useEffect(() => {
-    const requested = searchParams.get("tab") as Tab | null;
-    if (requested && requested !== tab && TABS.some((t) => t.id === requested)) setTab(requested);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+    setFilter(urlFilter);
+    setPage(1);
+  }, [tab, urlFilter]);
 
   /* Debounce the text search so each keystroke doesn't fire an API request */
   useEffect(() => {
@@ -617,7 +626,7 @@ export function CatalogInventoryAdmin() {
     setLoading(true);
     const params = new URLSearchParams();
     if (debouncedQ.trim()) params.set("q", debouncedQ.trim());
-    if (branchId) params.set("branchId", branchId);
+    if (loadBranchId) params.set("branchId", loadBranchId);
     if (categoryId) params.set("categoryId", categoryId);
     if (filter) params.set("filter", filter);
     params.set("page", String(page));
@@ -627,7 +636,7 @@ export function CatalogInventoryAdmin() {
     if (!response.ok) throw new Error(raw.message ?? "No se pudo cargar Catalogo e Inventario.");
     setData(unwrapApiData(raw));
     setLoading(false);
-  }, [branchId, categoryId, filter, debouncedQ, page]);
+  }, [loadBranchId, categoryId, filter, debouncedQ, page]);
 
   useEffect(() => {
     load().catch((error) => {
@@ -1089,7 +1098,12 @@ export function CatalogInventoryAdmin() {
         })
       : (data?.products ?? []);
     return products.map((product) => {
-      const byBranch = new Map(product.inventoryBalances.map((balance) => [balance.branchId, Number(balance.quantityOnHand)]));
+      // allSharedInventoryBalances trae TODAS las sucursales (inventoryBalances
+      // viene filtrado por la sucursal de la barra — por eso el resto salía
+      // en 0) y, en una fusión, el saldo del canónico en unidad base: se
+      // divide por el factor para mostrarlo en la unidad de este producto.
+      const factor = Number(product.stockConversion?.conversionFactor) || 1;
+      const byBranch = new Map((product.allSharedInventoryBalances ?? []).map((balance) => [balance.branchId, (Number(balance.quantityOnHand) || 0) / factor]));
       return { product, branches: branches.map((branch) => ({ branch, quantity: byBranch.get(branch.id) ?? 0 })) };
     });
   }, [data, stockSearch]);
@@ -1163,51 +1177,6 @@ export function CatalogInventoryAdmin() {
         </p>
       ) : null}
 
-      {/* ── Tabs — subrayado ──
-          prompt-inventario-inicio-fix.md Commit 1 §1.2 — oculta: la barra
-          superior nueva (InventoryTopbar, montada en page.tsx) es ahora la
-          única navegación entre estas secciones. El estado `tab`/`setTab`
-          de abajo se queda intacto — cada pestaña sigue siendo el mismo
-          panel de siempre, solo cambia quién decide cuál mostrar. */}
-      <div className="hidden overflow-x-auto" style={{ borderBottom: "0.5px solid var(--color-border)" }}>
-        <div className="flex min-w-max">
-          {TABS.map((item) => {
-            const Icon = item.icon;
-            const isActive = tab === item.id;
-            return (
-              <button
-                key={item.id}
-                ref={isActive ? activeTabRef : null}
-                type="button"
-                onClick={() => setTab(item.id)}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  padding: "0 14px 10px",
-                  fontSize: "0.8125rem",
-                  fontWeight: 500,
-                  whiteSpace: "nowrap",
-                  background: "none",
-                  border: "none",
-                  borderBottom: isActive
-                    ? "2px solid var(--color-master-600)"
-                    : "2px solid transparent",
-                  color: isActive ? "var(--color-master-600)" : "var(--color-text-secondary)",
-                  cursor: "pointer",
-                  transition: "color 140ms ease, border-color 140ms ease",
-                }}
-                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.color = "var(--color-text)"; }}
-                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.color = "var(--color-text-secondary)"; }}
-              >
-                <Icon className="h-3.5 w-3.5 shrink-0" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       {loading || !data ? <Card className="p-4 text-sm text-[var(--color-text-muted)]">Cargando centro de catalogo e inventario...</Card> : null}
 
       {/* ════════════ TAB: RESUMEN ════════════ */}
@@ -1215,7 +1184,7 @@ export function CatalogInventoryAdmin() {
         <div className="space-y-5">
           <InventorySummary
             kpis={data.kpis}
-            onNavigate={(t, f) => { setTab(t); if (f !== undefined) setFilter(f); setPage(1); }}
+            onNavigate={(t, f) => goTab(t, f)}
           />
           <Card noPadding>
             <div className="flex items-center gap-2 px-4 py-3" style={{ background: "var(--color-surface-alt)", borderBottom: "0.5px solid var(--color-border)" }}>
@@ -1654,7 +1623,7 @@ export function CatalogInventoryAdmin() {
                               size="sm"
                               onClick={() => {
                                 setFocusedPricingProductId(product.id);
-                                setTab("pricing");
+                                goTab("pricing");
                               }}
                               icon={<DollarSign className="h-3.5 w-3.5" />}
                             >
@@ -1714,8 +1683,8 @@ export function CatalogInventoryAdmin() {
               <select className="hm-input h-9" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }}>
                 {FILTERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
-              <Button variant="primary" onClick={() => { setMovementDialog("adjustment"); setTab("kardex"); }} icon={<Plus className="h-4 w-4" />}>Ajuste manual</Button>
-              <Button variant="success" onClick={() => { setMovementDialog("opening"); setTab("intakes"); }} icon={<Package className="h-4 w-4" />}>Carga inicial</Button>
+              <Button variant="primary" onClick={() => { setMovementDialog("adjustment"); goTab("kardex"); }} icon={<Plus className="h-4 w-4" />}>Ajuste manual</Button>
+              <Button variant="success" onClick={() => { setMovementDialog("opening"); goTab("intakes"); }} icon={<Package className="h-4 w-4" />}>Carga inicial</Button>
               <Button variant="ghost" onClick={() => load().catch((e) => toast.error(e.message))} icon={<RefreshCcw className="h-4 w-4" />}>Refrescar</Button>
             </div>
             <div className="overflow-x-auto">
@@ -1731,6 +1700,7 @@ export function CatalogInventoryAdmin() {
               </table>
             </div>
           </div>
+          {data.pagination && <PaginationBar pagination={data.pagination} onPageChange={setPage} />}
         </Card>
       ) : null}
 

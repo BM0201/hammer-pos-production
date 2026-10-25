@@ -18,7 +18,7 @@
 // "hammer-pos-v3" que queda commiteado acá es solo el default para `npm run
 // dev` (que nunca corre `next build`, así que nunca dispara el postbuild) —
 // en cualquier build real, este string sale sobrescrito.
-const CACHE = "hammer-pos-d--4mxgxaq8xqUslXxgTL";
+const CACHE = "hammer-pos-Cp6_vhGBYEy0QF48QSkGD";
 const PRECACHE = ["/"];
 
 self.addEventListener("install", (event) => {

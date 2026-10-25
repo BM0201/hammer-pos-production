@@ -168,7 +168,7 @@ export function buildAttentionItems(counts: InventoryAttentionCountsInput): Atte
       context: "Reintentar o revisar el detalle",
       count: counts.failedIntakeLines,
       actionLabel: "Reintentar →",
-      actionHref: "/app/master/catalog-inventory?tab=movements",
+      actionHref: "/app/master/catalog-inventory?tab=intakes",
       dotTone: "danger",
     });
   }

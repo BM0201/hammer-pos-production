@@ -7,8 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { DollarSign, Box, CircleMinus, Hourglass, Tag, Pause, Package, ScanLine, Plus, Boxes, ClipboardCheck } from "lucide-react";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
-import { useSession } from "@/lib/client/session";
-import { getActiveBranchId } from "@/lib/client/active-branch";
+import { useInventoryScope } from "@/hooks/use-inventory-scope";
 import { money, money0, moneyCompact, qty, fmtDate } from "@/lib/format";
 import { kpiTone, bucketCategoryValues, buildAttentionItems, combinedCoveragePercent, type AttentionItem, type CategoryBar, type KpiTone, type StateCoverage } from "@/lib/inventory-home-logic";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -73,16 +72,15 @@ function flattenCategoryValues(nodes: CategoryNode[]): Array<{ name: string; val
 
 export function InventoryHome() {
   const searchParams = useSearchParams();
-  const sessionState = useSession();
-  const branches = sessionState.status === "authenticated" ? (sessionState.session.branches ?? []) : [];
-  const defaultBranchId = sessionState.status === "authenticated" ? getActiveBranchId(sessionState.session.branchIds, sessionState.session.primaryBranchId) : "";
-
-  const isNetwork = searchParams.get("scope") === "network";
-  const branchIdParam = searchParams.get("branchId");
-  const branchId = isNetwork ? null : (branchIdParam || defaultBranchId || null);
+  // El mismo alcance que la barra (useInventoryScope: `?branch=`, links
+  // viejos y localStorage) — antes Inicio leía solo `?branchId=`/`?scope=`,
+  // que la barra ya no escribe, y cambiar de sucursal no cambiaba nada acá.
+  const scope = useInventoryScope();
+  const isNetwork = scope.mode === "all";
+  const branchId = isNetwork ? null : scope.branchId;
   // Referencia para lo que NO tiene variante de red (categorías, flujo diario) — siempre una sucursal concreta.
-  const referenceBranchId = branchId ?? defaultBranchId;
-  const referenceBranchCode = branches.find((b) => b.id === referenceBranchId)?.code ?? "";
+  const referenceBranchId = branchId ?? scope.branches[0]?.id ?? "";
+  const referenceBranchCode = scope.branches.find((b) => b.id === referenceBranchId)?.code ?? "";
   const tab = searchParams.get("tab");
 
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -91,18 +89,26 @@ export function InventoryHome() {
   const [dailyFlow, setDailyFlow] = useState<DailyFlowPoint[]>([]);
   const [categoryBars, setCategoryBars] = useState<CategoryBar[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    if (!isNetwork && !branchId) return;
-    if (!referenceBranchId) return;
+    if (scope.loading || !referenceBranchId) return;
     setLoading(true);
+    setLoadError(false);
     const scopeQs = isNetwork ? "" : `?branchId=${branchId}`;
+    // unwrapApiData no falla con una respuesta de error — sin este chequeo
+    // el sobre {ok:false} se guardaba como si fueran los datos.
+    const get = (url: string) => apiFetch(url).then(async (r) => {
+      if (!r.ok) throw new Error(url);
+      return unwrapApiData(await r.json());
+    });
     Promise.all([
-      apiFetch(`/api/master/inventory/overview${scopeQs}`).then((r) => r.json()).then(unwrapApiData),
-      apiFetch(`/api/master/inventory/quality`).then((r) => r.json()).then(unwrapApiData),
-      apiFetch(`/api/master/inventory/attention${scopeQs}`).then((r) => r.json()).then(unwrapApiData),
-      apiFetch(`/api/master/inventory/daily-flow?branchId=${referenceBranchId}`).then((r) => r.json()).then(unwrapApiData),
-      apiFetch(`/api/master/inventory/categories?branchId=${referenceBranchId}`).then((r) => r.json()).then(unwrapApiData),
+      get(`/api/master/inventory/overview${scopeQs}`),
+      get(`/api/master/inventory/quality`),
+      get(`/api/master/inventory/attention${scopeQs}`),
+      get(`/api/master/inventory/daily-flow?branchId=${referenceBranchId}`),
+      get(`/api/master/inventory/categories?branchId=${referenceBranchId}`),
     ])
       .then(([overviewData, qualityData, attentionData, flowData, categoriesData]) => {
         setOverview(overviewData as Overview);
@@ -111,10 +117,19 @@ export function InventoryHome() {
         setDailyFlow(flowData as DailyFlowPoint[]);
         setCategoryBars(bucketCategoryValues(flattenCategoryValues(categoriesData as CategoryNode[])));
       })
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false));
-  }, [branchId, isNetwork, referenceBranchId]);
+  }, [scope.loading, branchId, isNetwork, referenceBranchId, reloadKey]);
 
-  if (!isNetwork && !branchId) return <LoadingState message="Cargando sucursal…" />;
+  if (loadError) {
+    return (
+      <div className="rounded-xl border border-[var(--color-danger-300)] bg-[var(--color-danger-50)] p-4 text-sm text-[var(--color-danger-700)]">
+        No se pudo cargar el inventario.{" "}
+        <button type="button" onClick={() => setReloadKey((k) => k + 1)} className="font-semibold underline">Reintentar</button>
+      </div>
+    );
+  }
+  if (scope.loading || !referenceBranchId) return <LoadingState message="Cargando sucursal…" />;
   if (loading || !overview || !quality || !attentionCounts) return <LoadingState message="Cargando inventario…" />;
 
   const attentionItems = buildAttentionItems({ ...attentionCounts, topMoversNoCost: isNetwork ? null : attentionCounts.topMoversNoCost });
@@ -283,10 +298,10 @@ export function InventoryHome() {
           </div>
           {dailyFlowPanel}
           <div className="flex flex-wrap gap-2">
-            <QuickLink href="/app/master/catalog-inventory?tab=movements" icon={Package} label="Entrada de inventario" primary />
+            <QuickLink href="/app/master/catalog-inventory?tab=intakes" icon={Package} label="Entrada de inventario" primary />
             <QuickLink href="/app/master/catalog/products/quick-add" icon={ScanLine} label="Escanear productos" />
             <QuickLink href="/app/master/catalog-inventory?tab=products" icon={Plus} label="Nuevo producto" />
-            <QuickLink href="/app/master/catalog-inventory?tab=movements" icon={ClipboardCheck} label="Conteo" />
+            <QuickLink href="/app/master/catalog-inventory?tab=counts" icon={ClipboardCheck} label="Conteo" />
             <QuickLink href="/app/master/catalog-inventory?tab=stock" icon={Boxes} label="Ver stock por sucursal" />
           </div>
         </>
