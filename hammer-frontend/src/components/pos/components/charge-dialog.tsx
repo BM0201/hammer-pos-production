@@ -16,10 +16,21 @@ type ChargeDialogProps = {
   isSubmitting: boolean;
   /** prompt-caja-gastos-pos-cobro.md Commit 4 — el pedido, en solo lectura, al lado del pago en computadora. */
   ticketLines?: TicketLine[];
+  /** Ya va sumado en `total`; se muestra aparte para que el pedido cuadre con el total. */
+  transportAmount?: number;
 };
 
+function TransportRow({ amount }: { amount: number }) {
+  return (
+    <li className="flex justify-between gap-2 text-[var(--color-text-secondary)]">
+      <span>Transporte</span>
+      <span className="shrink-0 tabular-nums">{money(amount)}</span>
+    </li>
+  );
+}
+
 /** "2 productos · C$ 490.00" — el pedido plegado en tablet/móvil (doc punto 2). */
-function OrderSummaryLine({ lines, total }: { lines: TicketLine[]; total: number }) {
+function OrderSummaryLine({ lines, total, transportAmount }: { lines: TicketLine[]; total: number; transportAmount: number }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="flex-none lg:hidden">
@@ -39,6 +50,7 @@ function OrderSummaryLine({ lines, total }: { lines: TicketLine[]; total: number
               <span className="shrink-0 tabular-nums">{money(Number(l.lineSubtotal))}</span>
             </li>
           ))}
+          {transportAmount > 0 && <TransportRow amount={transportAmount} />}
         </ul>
       )}
     </div>
@@ -46,20 +58,21 @@ function OrderSummaryLine({ lines, total }: { lines: TicketLine[]; total: number
 }
 
 /** El pedido en solo lectura — columna izquierda en computadora (doc punto 2). */
-function OrderReadOnlyPanel({ lines, total, onBack }: { lines: TicketLine[]; total: number; onBack: () => void }) {
+function OrderReadOnlyPanel({ lines, total, transportAmount, onBack }: { lines: TicketLine[]; total: number; transportAmount: number; onBack: () => void }) {
   return (
     <div className="hidden min-h-0 flex-col lg:flex">
       <button type="button" onClick={onBack} className="mb-3 flex-none text-left text-xs font-semibold text-[var(--color-info-600)] hover:underline">
         ← Volver a productos
       </button>
       <p className="mb-2 flex-none text-xs font-bold uppercase tracking-wide text-[var(--color-text-soft)]">Pedido</p>
-      <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+      <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1 text-sm">
         {lines.map((l) => (
           <li key={l.id} className="flex justify-between gap-2 text-sm text-[var(--color-text-secondary)]">
             <span className="truncate">{l.product?.name ?? l.productId} <span className="text-[var(--color-text-soft)]">×{l.quantity}</span></span>
             <span className="shrink-0 tabular-nums font-medium text-[var(--color-text)]">{money(Number(l.lineSubtotal))}</span>
           </li>
         ))}
+        {transportAmount > 0 && <TransportRow amount={transportAmount} />}
       </ul>
       <div className="mt-3 flex-none border-t border-[var(--color-border)] pt-3">
         <div className="flex items-baseline justify-between">
@@ -71,7 +84,7 @@ function OrderReadOnlyPanel({ lines, total, onBack }: { lines: TicketLine[]; tot
   );
 }
 
-export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubmitting, ticketLines = [] }: ChargeDialogProps) {
+export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubmitting, ticketLines = [], transportAmount = 0 }: ChargeDialogProps) {
   const [bankAccounts, setBankAccounts] = useState<BankAccountOption[]>([]);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -84,22 +97,22 @@ export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubm
   }, [open, branchId]);
 
   // prompt-caja-gastos-pos-cobro.md Commit 4 — teclado en computadora: Enter
-  // confirma (si está completo y no se está escribiendo en un campo), Esc
-  // cierra, Alt+1..4 cambia de pestaña de método. Nunca intercepta Enter
-  // mientras el foco está en un input/select/textarea — ahí el navegador
-  // hace lo suyo (typing de números), igual que cualquier formulario.
+  // confirma (si está completo), Esc cierra, Alt+1..4 cambia de pestaña de
+  // método. Enter en un input confirma (como un formulario: "Monto recibido"
+  // arranca con el foco), pero NUNCA sobre un botón/select/textarea: ahí
+  // Enter es del propio control — si no, Tab a "Combinado" + Enter cobraba.
   useEffect(() => {
     if (!open) return;
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
-      const isFormField = target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
+      const ownsEnter = target && ["BUTTON", "SELECT", "TEXTAREA", "A"].includes(target.tagName);
 
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
         return;
       }
-      if (e.key === "Enter" && !isFormField) {
+      if (e.key === "Enter" && !ownsEnter && !e.repeat) {
         e.preventDefault();
         const btn = dialogRef.current?.querySelector<HTMLButtonElement>('[data-testid="payment-composer-confirm"]');
         if (btn && !btn.disabled) btn.click();
@@ -151,11 +164,11 @@ export function ChargeDialog({ open, onClose, total, branchId, onConfirm, isSubm
           </button>
         </div>
 
-        <OrderSummaryLine lines={ticketLines} total={total} />
+        <OrderSummaryLine lines={ticketLines} total={total} transportAmount={transportAmount} />
 
         {/* key=open fuerza reset del composer cada vez que se abre el diálogo */}
         <div className="mt-3 grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-          <OrderReadOnlyPanel lines={ticketLines} total={total} onBack={onClose} />
+          <OrderReadOnlyPanel lines={ticketLines} total={total} transportAmount={transportAmount} onBack={onClose} />
           <div className="min-h-0 flex-1">
             <PaymentComposer key={String(open)} total={total} isSubmitting={isSubmitting} onSubmit={onConfirm} bankAccounts={bankAccounts} />
           </div>
