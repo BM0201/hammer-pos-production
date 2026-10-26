@@ -226,7 +226,8 @@ export function RetainedCashExpenseSheet({
                 Cuenta de origen
                 <select ref={firstSelectFieldRef} className="hm-input mt-1 w-full" value={accountId} onChange={(e) => { setAccountId(e.target.value); setCardId(""); }} required>
                   <option value="">Selecciona una cuenta…</option>
-                  {bankAccounts.map((a) => (
+                  {/* Solo córdobas: el backend rechaza gastos desde cuentas USD (el P&L no convierte moneda). */}
+                  {bankAccounts.filter((a) => a.currencyCode === "NIO").map((a) => (
                     <option key={a.id} value={a.id}>{formatBankAccountOption({ ...a, accountAlias: a.owner ?? a.accountAlias })}</option>
                   ))}
                 </select>

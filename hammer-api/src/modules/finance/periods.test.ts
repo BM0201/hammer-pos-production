@@ -150,3 +150,13 @@ test("resolvePeriod sin anchorDate explícito usa 'ahora' (no revienta)", () => 
   assert.ok(p.start instanceof Date);
   assert.ok(p.end > p.start);
 });
+
+test("Navegación ←/→ — la fecha YYYY-MM-DD que manda el panel cae en el período vecino, no en el actual ni en el de más atrás", async () => {
+  const { expensePeriodReportSchema } = await import("@/modules/finance/validators");
+  for (const kind of ["DAY", "WEEK", "QUINCENA", "MONTH"] as const) {
+    const cur = resolvePeriod(kind, new Date("2026-10-26T18:00:00Z"));
+    const anchor = (d: Date) => expensePeriodReportSchema.parse({ kind, date: d.toISOString().slice(0, 10) }).date!;
+    assert.equal(resolvePeriod(kind, anchor(cur.next.start)).label, cur.next.label, `${kind} →`);
+    assert.equal(resolvePeriod(kind, anchor(cur.previous.start)).label, cur.previous.label, `${kind} ←`);
+  }
+});

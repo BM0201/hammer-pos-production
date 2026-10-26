@@ -55,7 +55,7 @@ test("getExpenseLedger — PAID: una fila de CAJA con OperatingExpense vinculado
         id: "cm-1", amount: decimal(300), createdAt: new Date("2026-10-06T12:00:00Z"), reason: "Limpieza",
         createdByUserId: "user-1", approvedByUserId: null,
         cashSession: { physicalCashBox: { branchId: "branch-1" } },
-        operatingExpense: { category: "MAINTENANCE", description: "Limpieza de local", payee: "Doña Rosa", receiptNumber: "R-001", conceptId: "c-1", concept: { name: "Limpieza" } },
+        operatingExpense: { id: "exp-1", category: "MAINTENANCE", description: "Limpieza de local", payee: "Doña Rosa", receiptNumber: "R-001", conceptId: "c-1", concept: { name: "Limpieza" } },
       },
     ],
   });
@@ -64,6 +64,9 @@ test("getExpenseLedger — PAID: una fila de CAJA con OperatingExpense vinculado
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].source, "CAJA");
+  // Reclasificar usa expenseId (el gasto), no id (el movimiento de caja).
+  assert.equal(rows[0].id, "cm-1");
+  assert.equal(rows[0].expenseId, "exp-1");
   assert.equal(rows[0].category, "MAINTENANCE");
   assert.equal(rows[0].conceptName, "Limpieza");
   assert.equal(rows[0].payee, "Doña Rosa");
@@ -89,6 +92,7 @@ test("getExpenseLedger — un EXPENSE_OUT sin OperatingExpense vinculado: catego
 
   assert.equal(rows[0].category, "UNCLASSIFIED");
   assert.equal(rows[0].description, "Gasto sin registrar");
+  assert.equal(rows[0].expenseId, null);
 });
 
 test("getExpenseLedger — PAID: fila de TESORERÍA (banco) con comisión de tarjeta identificada por su propia fuente", async () => {

@@ -398,6 +398,8 @@ export async function fetchTreasuryExpenseEntries(
     where: {
       direction: "OUT",
       entryType: { in: ["EXPENSE", "SUPPLIER_PAYMENT", "CARD_FEE"] },
+      // Totales en C$ sin conversión automática: una fila en USD sumaría dólares como córdobas.
+      currencyCode: "NIO",
       occurredAt: { gte: start, lt: end },
       ...(branchId ? { account: { is: { branchId } } } : {}),
     },

@@ -17,6 +17,7 @@ function row(overrides: Partial<ExpenseLedgerRow> = {}): ExpenseLedgerRow {
     payee: null,
     receiptNumber: null,
     receiptPhotoUrl: null,
+    expenseId: "exp-1",
     amount: 5000,
     source: "CAJA",
     registeredBy: null,

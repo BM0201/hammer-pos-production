@@ -26,6 +26,8 @@ export type ExpenseLedgerRow = {
   receiptNumber: string | null;
   /** prompt-caja-gastos-pos-cobro.md Commit 2 — "tiene recibo" = receiptNumber || receiptPhotoUrl. */
   receiptPhotoUrl: string | null;
+  /** Gasto (OperatingExpense) a reclasificar; `id` es el del movimiento. */
+  expenseId: string | null;
   amount: number;
   source: ExpenseLedgerSource;
   registeredBy: string | null;

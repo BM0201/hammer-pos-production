@@ -7,7 +7,7 @@ function row(overrides: Partial<ExpenseLedgerRow> = {}): ExpenseLedgerRow {
   return {
     id: "row-1", date: "2026-10-08T18:41:00.000Z", branchId: "branch-1", branchCode: "RIV", branchName: "Rivas",
     category: "OTHER", conceptId: null, conceptName: null, description: "arena (12 metros)", payee: null,
-    receiptNumber: null, receiptPhotoUrl: null, amount: 5640, source: "CAJA", registeredBy: null, approvedBy: null, reference: null,
+    receiptNumber: null, receiptPhotoUrl: null, expenseId: null, amount: 5640, source: "CAJA", registeredBy: null, approvedBy: null, reference: null,
     ...overrides,
   };
 }

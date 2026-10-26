@@ -30,6 +30,8 @@ export type ExpenseLedgerRow = {
   receiptNumber: string | null;
   /** prompt-caja-gastos-pos-cobro.md Commit 2 — URL del recibo (foto). "Tiene recibo" = receiptNumber || receiptPhotoUrl. */
   receiptPhotoUrl: string | null;
+  /** OperatingExpense ligado (el que se reclasifica); null si la fila no tiene uno (retiro sin clasificar, planilla, devengado). `id` es el del movimiento, NO sirve para eso. */
+  expenseId: string | null;
   amount: number;
   source: ExpenseLedgerSource;
   registeredBy: string | null;
@@ -77,6 +79,7 @@ async function loadCashRows(db: DbClient, branchId: string | null, start: Date, 
       cashSession: { select: { physicalCashBox: { select: { branchId: true } } } },
       operatingExpense: {
         select: {
+          id: true,
           category: true,
           description: true,
           payee: true,
@@ -109,6 +112,7 @@ async function loadCashRows(db: DbClient, branchId: string | null, start: Date, 
       payee: linked?.payee ?? null,
       receiptNumber: linked?.receiptNumber ?? null,
       receiptPhotoUrl: linked?.receiptPhotoUrl ?? null,
+      expenseId: linked?.id ?? null,
       amount: num(m.amount),
       source: "CAJA" as const,
       registeredBy: userMap.get(m.createdByUserId) ?? null,
@@ -124,6 +128,8 @@ async function loadTreasuryRows(db: DbClient, branchId: string | null, start: Da
     where: {
       direction: "OUT",
       entryType: { in: ["EXPENSE", "SUPPLIER_PAYMENT", "CARD_FEE"] },
+      // Mismo criterio que fetchTreasuryExpenseEntries: el libro es en C$, sin conversión.
+      currencyCode: "NIO",
       occurredAt: { gte: start, lt: end },
       ...(branchId ? { account: { is: { branchId } } } : {}),
     },
@@ -172,6 +178,7 @@ async function loadTreasuryRows(db: DbClient, branchId: string | null, start: Da
       payee: linked?.payee ?? e.counterpartyName ?? null,
       receiptNumber: linked?.receiptNumber ?? null,
       receiptPhotoUrl: linked?.receiptPhotoUrl ?? null,
+      expenseId: linked?.id ?? null,
       amount: num(e.amount),
       source,
       registeredBy: userMap.get(e.createdByUserId) ?? null,
@@ -214,6 +221,7 @@ async function loadPayrollPaidRows(db: DbClient, branchId: string | null, start:
       payee: d.employee.fullName,
       receiptNumber: null,
       receiptPhotoUrl: null,
+      expenseId: null,
       amount: payrollEmployerCostPaid(d),
       source: "PLANILLA" as const,
       registeredBy: d.paidByUserId ? (userMap.get(d.paidByUserId) ?? null) : null,
@@ -282,6 +290,7 @@ async function accruePayroll(db: DbClient, input: { start: Date; end: Date; bran
         payee: null,
         receiptNumber: null,
       receiptPhotoUrl: null,
+        expenseId: null,
         amount,
         source: "DEVENGADO",
         registeredBy: null,
@@ -351,6 +360,7 @@ export async function accrueRecurring(
         payee: null,
         receiptNumber: null,
       receiptPhotoUrl: null,
+        expenseId: null,
         amount,
         source: "DEVENGADO",
         registeredBy: null,

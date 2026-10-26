@@ -12,13 +12,25 @@ export const financeTrendSchema = z.object({
   months: z.coerce.number().int().min(1).max(12).optional(),
 });
 
+/**
+ * "YYYY-MM-DD" es un día de Managua, no medianoche UTC: z.coerce.date lo
+ * volvía 00:00 UTC = 18:00 del día ANTERIOR en Managua, y las flechas ←/→
+ * del panel (que mandan la fecha de inicio del período vecino) se quedaban
+ * en el mismo período o se saltaban uno. Mediodía UTC cae en ese mismo día
+ * en Managua (06:00).
+ */
+const managuaDay = z.preprocess(
+  (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T12:00:00Z` : v),
+  z.coerce.date(),
+);
+
 /** prompt-gastos-semana-quincena.md Fase 2.4 — GET /api/master/finance/expenses/period. */
 export const expensePeriodReportSchema = z.object({
   branchId: z.string().cuid().optional().nullable(),
   kind: z.enum(["DAY", "WEEK", "QUINCENA", "MONTH", "CUSTOM"]).default("MONTH"),
-  date: z.coerce.date().optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
+  date: managuaDay.optional(),
+  from: managuaDay.optional(),
+  to: managuaDay.optional(),
   basis: z.enum(["PAID", "ACCRUED"]).default("PAID"),
   limit: z.string().optional(),
   offset: z.coerce.number().int().min(0).optional(),

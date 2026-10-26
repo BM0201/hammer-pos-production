@@ -2386,6 +2386,12 @@ export async function recordAccountPaymentTx(tx: Prisma.TransactionClient, input
   if (!account.isActive) {
     throw new Error("VALIDATION_ERROR: la cuenta está inactiva");
   }
+  // EXPENSE y SUPPLIER_PAYMENT sin orden entran al estado de resultados, que
+  // es solo en córdobas y nunca convierte moneda sola: un pago de $500 se
+  // sumaría como C$500. (Con orden de compra, el chequeo de abajo da su propio error.)
+  if (account.currencyCode !== "NIO" && !input.purchaseOrderId && input.entryType !== "PAYROLL") {
+    throw new Error(`VALIDATION_ERROR: la cuenta es en ${account.currencyCode}; los gastos y pagos a proveedor solo se pueden registrar desde una cuenta en córdobas por ahora`);
+  }
 
   if (input.cardId) {
     const card = await tx.treasuryCard.findUnique({

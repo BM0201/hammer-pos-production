@@ -582,12 +582,12 @@ export function ExpensesPeriodPanel({ fixedBranchId }: { fixedBranchId?: string 
                         </td>
                         {isMaster && (
                           <td className="px-3 py-2 text-right">
-                            {row.category === "OTHER" && row.source !== "DEVENGADO" && (
+                            {row.category === "OTHER" && row.expenseId && (
                               <button
                                 type="button"
                                 className="text-[11px] font-semibold hover:underline"
                                 style={{ color: "var(--color-master-700)" }}
-                                onClick={() => setReclassifyTarget({ id: row.id, amount: row.amount, description: row.description, effectiveFrom: row.date })}
+                                onClick={() => setReclassifyTarget({ id: row.expenseId!, amount: row.amount, description: row.description, effectiveFrom: row.date })}
                               >
                                 Reclasificar
                               </button>

@@ -170,3 +170,13 @@ test("mezcla: un pago de mercadería (excluido) junto a un pago de servicio (inc
   assert.equal(result.length, 1);
   assert.equal(result[0].amount, 800);
 });
+
+test("solo cuenta filas en córdobas — una fila USD no se suma como C$ (P&L sin conversión automática)", async () => {
+  let where: Record<string, unknown> | undefined;
+  const db = {
+    treasuryEntry: { findMany: async (args: { where: Record<string, unknown> }) => { where = args.where; return []; } },
+    operatingExpense: { findMany: async () => [] },
+  } as unknown as Prisma.TransactionClient;
+  await fetchTreasuryExpenseEntries(null, RANGE.start, RANGE.end, db);
+  assert.equal(where?.currencyCode, "NIO");
+});

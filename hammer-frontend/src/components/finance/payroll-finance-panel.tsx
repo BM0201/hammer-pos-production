@@ -344,8 +344,11 @@ export function PayrollFinancePanel() {
   // INSS; INATEC 2% aparte). La cuota laboral ya se retuvo al trabajador; la
   // patronal y el INATEC los paga el patrón de su bolsillo. Vencen ~17 del mes
   // siguiente al período facturado.
+  // Siempre TODA la empresa, sin el filtro de sucursal/empleado: la factura
+  // es una sola por empleador y "marcar pagada" la guarda por año/mes/tipo
+  // sin sucursal — con el filtro puesto se registraba un monto parcial.
   const patronInvoice = useMemo(() => {
-    const active = employees.filter((e) => e.isActive && inBranchScope(e));
+    const active = employees.filter((e) => e.isActive);
     let laboral = 0;
     let patronal = 0;
     let inatec = 0;
@@ -362,9 +365,10 @@ export function PayrollFinancePanel() {
       inssTotal: round2(laboral + patronal),
       inatec: round2(inatec),
       dueLabel: `${dueDate.getDate()} ${MES_LARGO[dueDate.getMonth()].toLowerCase().slice(0, 3)} ${dueDate.getFullYear()}`,
+      activeEmployees: active.length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees, inBranchScope, breakdownOf]);
+  }, [employees, breakdownOf]);
 
   /* ── Acciones ── */
 
@@ -630,11 +634,14 @@ export function PayrollFinancePanel() {
       />
 
       {/* ── 3b · Planilla del patrón: las facturas que llegan (INSS + INATEC) ── */}
-      {heroTotals.activeEmployees > 0 && (
+      {patronInvoice.activeEmployees > 0 && (
         <div className="hm-module-card p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-[0.8125rem] font-bold text-[var(--color-text)]">
               Facturas del patrón · {periodLabel}
+              {(selectedBranch || selectedEmployee) && (
+                <span className="ml-1.5 text-[0.6875rem] font-normal text-[var(--color-text-soft)]">· toda la empresa (no aplica el filtro)</span>
+              )}
               <span className="ml-2 rounded-full border border-[var(--color-warning-100)] bg-[var(--color-warning-50)] px-2 py-0.5 text-[0.5938rem] font-bold uppercase tracking-wide text-[var(--color-warning-700)]">
                 Se pagan aparte · vencen ≈ {patronInvoice.dueLabel}
               </span>

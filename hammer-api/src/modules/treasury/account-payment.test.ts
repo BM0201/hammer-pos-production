@@ -252,6 +252,17 @@ test("rechaza pagar una orden desde una cuenta que no es NIO (D3 — una sola mo
   );
 });
 
+test("rechaza un gasto o pago a proveedor sin orden desde una cuenta USD (el P&L es en córdobas y no convierte)", async () => {
+  const { tx, entries } = createFakeTx({ accounts: [{ ...BANK, id: "bank-usd", openingBalance: 10_000, currencyCode: "USD" }] });
+  for (const entryType of ["EXPENSE", "SUPPLIER_PAYMENT"] as const) {
+    await assert.rejects(
+      () => recordAccountPaymentTx(tx, { accountId: "bank-usd", amount: 100, entryType, counterpartyType: "SUPPLIER", createdByUserId: "u" }),
+      /VALIDATION_ERROR: la cuenta es en USD/,
+    );
+  }
+  assert.equal(entries.length, 0);
+});
+
 test("rechaza pagar una orden sin recepciones (deuda 0)", async () => {
   const { tx } = createFakeTx({
     accounts: [{ ...BANK, openingBalance: 10_000 }],
