@@ -19,7 +19,7 @@ import { useCameraAvailable } from "@/lib/client/use-camera-available";
 import { getActiveBranchId } from "@/lib/client/active-branch";
 import { printProductLabels } from "@/lib/client/print-product-labels";
 import { money, qty } from "@/lib/format";
-import { COMMON_PRESENTATION_UNITS } from "@/lib/inventory/presentation-units";
+import { UnitPicker } from "@/components/inventory/unit-picker";
 import {
   decideScanStep,
   shouldIgnoreRepeatedCode,
@@ -588,12 +588,9 @@ function QuickAddProductContent() {
               </select>
             </div>
             <div>
-              <label htmlFor="quick-add-unit" className="mb-1 block text-xs font-bold" style={{ color: "var(--color-text-secondary)" }}>Se vende por</label>
-              {/* La misma lista que el alta manual y las fusiones (presentation-units.ts). */}
-              <input id="quick-add-unit" list="quick-add-units" className="hm-input h-11 uppercase" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="UNIDAD, QUINTAL, METRO…" />
-              <datalist id="quick-add-units">
-                {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
-              </datalist>
+              <p className="mb-1 block text-xs font-bold" style={{ color: "var(--color-text-secondary)" }}>Se vende por</p>
+              {/* El mismo selector que el alta manual, la edición y las fusiones. */}
+              <UnitPicker value={form.unit} onChange={(unit) => setForm({ ...form, unit })} label="Se vende por" />
             </div>
             <Input
               label="Precio de venta *"

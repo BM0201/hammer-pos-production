@@ -411,6 +411,30 @@ const sessionUser = {
   exp: Math.floor(Date.now() / 1000) + 12 * 3600,
 };
 
+/* ── Catálogo de muestra (en memoria) ──────────────────────────────────────── */
+
+const mockCategories = [
+  { id: "cat-hierro", code: "HIE", name: "Hierro", isActive: true },
+  { id: "cat-pintura", code: "PIN", name: "Pinturas", isActive: true },
+];
+type MockProduct = { id: string; sku: string; name: string; unit: string; categoryId: string; saleUnit?: string; factor?: number; canonical?: boolean };
+const mockProducts: MockProduct[] = [
+  { id: "p-varilla", sku: "MET-HIE-0001", name: "VARILLA DE HIERRO 3/8 STD", unit: "VARILLA", categoryId: "cat-hierro", saleUnit: "VARILLA", factor: 1, canonical: true },
+  { id: "p-quintal", sku: "MET-HIE-0002", name: "HIERRO DE 3/8 STD (QUINTAL)", unit: "UNIDAD", categoryId: "cat-hierro", saleUnit: "QUINTAL", factor: 14, canonical: false },
+  { id: "p-pintura", sku: "PIN-ACE-0001", name: "PINTURA DE ACEITE BLANCA", unit: "UN", categoryId: "cat-pintura" },
+];
+function mockProductRow(p: MockProduct) {
+  return {
+    id: p.id, sku: p.sku, name: p.name, unit: p.unit, isActive: true, barcode: null, barcodes: [],
+    category: mockCategories.find((c) => c.id === p.categoryId) ?? null,
+    inventoryBalances: [], branchProductSettings: [], reorderPolicies: [], totalStock: 0, effectiveCost: null, basePrice: 100,
+    allSharedInventoryBalances: [], branchEffectivePricing: [],
+    stockConversion: p.saleUnit
+      ? { stockGroupId: "g-hierro", stockGroupCode: "HIERRO_3_8_STD", stockGroupName: "Hierro 3/8 STD", baseUnit: "VARILLA", saleUnit: p.saleUnit, conversionFactor: p.factor ?? 1, isCanonical: Boolean(p.canonical) }
+      : null,
+  };
+}
+
 /* ── Servidor ───────────────────────────────────────────────────────────────── */
 
 function send(res: http.ServerResponse, status: number, body: unknown, extraHeaders: Record<string, string> = {}) {
@@ -455,6 +479,35 @@ const server = http.createServer(async (req, res) => {
 
   if (path === "/api/branches") {
     return ok(res, branches);
+  }
+
+  // ── Catálogo e Inventario (lo mínimo para previsualizar la Lista y su panel de edición) ──
+  if (path === "/api/master/branches") return ok(res, branches.map((b) => ({ ...b, isActive: true })));
+  if (path === "/api/master/inventory/config/primary-branch") return ok(res, { branchId: branches[0]?.id ?? null });
+  if (path === "/api/master/inventory/nav-counts") return ok(res, { activeProducts: mockProducts.length, negativeStock: 0, lowStock: 0, staleTransfers: 0, pendingQuality: 0 });
+  if (path === "/api/master/catalog-inventory" && method === "GET") {
+    return ok(res, {
+      branches, categories: mockCategories, costScope: "NETWORK", costBranchId: null, costBranchName: null,
+      kpis: { activeProducts: mockProducts.length, skusWithoutInventory: 0, criticalStockProducts: 0, zeroStockProducts: 0, totalInventoryValue: 0, productsWithoutCost: 0, productsWithoutPrice: 0, missingPriceCount: 0 },
+      products: mockProducts.map(mockProductRow), balances: [], movements: [], transfers: [], reorderAlerts: [], auditLogs: [],
+      pagination: { page: 1, limit: 50, total: mockProducts.length, totalPages: 1 },
+    });
+  }
+  if (path === "/api/catalog/products" && method === "GET") {
+    const q = (url.searchParams.get("q") ?? "").toUpperCase();
+    return ok(res, mockProducts.filter((p) => !q || `${p.sku} ${p.name}`.toUpperCase().includes(q)));
+  }
+  const productMatch = path.match(/^\/api\/catalog\/products\/([^/]+)$/);
+  if (productMatch && method === "PATCH") {
+    const product = mockProducts.find((p) => p.id === productMatch[1]);
+    if (!product) return send(res, 404, { ok: false, error: { code: "NOT_FOUND", message: "Producto no encontrado." } });
+    const body = await readJson(req);
+    if (typeof body.name === "string") product.name = body.name;
+    if (typeof body.unit === "string") {
+      product.unit = body.unit.toUpperCase();
+      if (product.saleUnit) product.saleUnit = product.unit;
+    }
+    return ok(res, product);
   }
 
   if (path === "/api/employees" && method === "GET") {

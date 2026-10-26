@@ -31,11 +31,21 @@ export function normalizePresentationUnit(value: string): string {
  * tildes: es la forma en que se guardan (normalizePresentationUnit). Solo
  * sugerencias — el usuario puede escribir otra.
  */
-export const COMMON_PRESENTATION_UNITS = [
-  "UNIDAD", "QUINTAL", "VARILLA", "METRO", "METRO CUADRADO", "METRO CUBICO",
-  "LITRO", "GALON", "CUBETA", "KILO", "LIBRA", "BOLSA", "SACO", "LATA", "PALADA",
-  "CAJA", "PAQUETE", "ROLLO", "PLIEGO", "PAR", "JUEGO", "CAMION", "VIAJE",
-] as const;
+export const UNIT_GROUPS: ReadonlyArray<{ label: string; units: readonly string[] }> = [
+  { label: "Conteo", units: ["UNIDAD", "PAR", "JUEGO", "PAQUETE", "CAJA"] },
+  { label: "Peso", units: ["QUINTAL", "KILO", "LIBRA"] },
+  { label: "Largo", units: ["METRO", "VARILLA", "ROLLO", "PLIEGO"] },
+  { label: "Área y volumen", units: ["METRO CUADRADO", "METRO CUBICO", "LATA", "PALADA", "CUBETA"] },
+  { label: "Líquidos", units: ["LITRO", "GALON"] },
+  { label: "Empaque", units: ["BOLSA", "SACO"] },
+  { label: "Acarreo", units: ["CAMION", "VIAJE"] },
+];
+
+/** Cómo se MUESTRA una unidad guardada sin tilde (GALON → GALÓN). */
+const UNIT_DISPLAY: Record<string, string> = { GALON: "GALÓN", "METRO CUBICO": "METRO CÚBICO", CAMION: "CAMIÓN" };
+export function displayUnit(unit: string): string {
+  return UNIT_DISPLAY[unit] ?? unit;
+}
 
 export type UnitCollision = {
   unit: string;

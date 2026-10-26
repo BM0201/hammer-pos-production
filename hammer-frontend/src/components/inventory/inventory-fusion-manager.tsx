@@ -9,7 +9,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { showToast } from "@/components/ui/toast";
 import { apiFetch, unwrapApiData } from "@/lib/client/api";
 import { Boxes, PackageCheck, PackageOpen, Pencil, Plus, Search, Split, Wrench, X } from "lucide-react";
-import { COMMON_PRESENTATION_UNITS, findDuplicateFactors, findUnitCollisions } from "@/lib/inventory/presentation-units";
+import { findDuplicateFactors, findUnitCollisions } from "@/lib/inventory/presentation-units";
+import { UnitPicker } from "@/components/inventory/unit-picker";
 import { qty2 as fmt } from "@/lib/format";
 
 /* ─────────────────────────── Tipos ─────────────────────────── */
@@ -167,16 +168,10 @@ function FusionMemberRow({
         <b className="flex-1 text-[12.5px]">{sku} — {name}</b>
       )}
 
-      <label className="flex items-center gap-1 text-[11.5px] text-[var(--color-text-muted)]">
+      <div className="flex items-center gap-1.5 text-[11.5px] text-[var(--color-text-muted)]">
         Se vende por
-        <input
-          list="presentation-units"
-          value={saleUnit}
-          onChange={(e) => onUnitChange(e.target.value)}
-          placeholder="Ej: LATA"
-          className="w-32 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-0.5 uppercase"
-        />
-      </label>
+        <UnitPicker compact value={saleUnit} onChange={onUnitChange} label={`Se vende por (${sku})`} />
+      </div>
 
       {isCanonical ? (
         <Badge variant="info">unidad base — el stock se guarda acá</Badge>
@@ -765,9 +760,6 @@ function FusionCreateWizard({ onClose, onCreated }: { onClose: () => void; onCre
                 onRemove={() => removeMember(m.productId)}
               />
             ))}
-            <datalist id="presentation-units">
-              {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
-            </datalist>
             <div className="relative">
               <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-soft)]">
                 <Search className="h-4 w-4" />
@@ -1121,9 +1113,6 @@ function EditMembersModal({ group, onClose, onSaved }: { group: FusionGroup; onC
               onRemove={m.productId === originalCanonicalId || m.isCanonical ? undefined : () => removeMember(m.productId)}
             />
           ))}
-          <datalist id="presentation-units">
-            {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
-          </datalist>
           <div className="relative">
             <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-soft)]">
               <Search className="h-4 w-4" />

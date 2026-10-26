@@ -22,7 +22,9 @@ import { tokenize } from "@/lib/product-search";
 import { formatSharedStock } from "@/lib/inventory/shared-stock-format";
 import { UNDO_WINDOW_MS, type BarcodeKind } from "@/lib/barcode-manager-logic";
 import { useInventoryScope } from "@/hooks/use-inventory-scope";
-import { COMMON_PRESENTATION_UNITS, normalizePresentationUnit } from "@/lib/inventory/presentation-units";
+import { ProductEditDrawer, type ProductEditDraft } from "./product-edit-drawer";
+import { normalizePresentationUnit } from "@/lib/inventory/presentation-units";
+import { UnitPicker } from "@/components/inventory/unit-picker";
 
 // Fase 5 (prompt-flujo-velocidad.md): FusionPricingPanel solo se monta con
 // la pestaña "fusion" activa (línea ~1568) — carga diferida para que su
@@ -606,7 +608,7 @@ export function CatalogInventoryAdmin() {
 
   /* ── Inline edit state for product rows ── */
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState({ name: "", categoryId: "", sku: "", unit: "", applySuggestedSku: false });
+  const [editDraft, setEditDraft] = useState<ProductEditDraft>({ name: "", categoryId: "", sku: "", unit: "", applySuggestedSku: false });
   const [editSkuPreview, setEditSkuPreview] = useState("");
   const [savingProduct, setSavingProduct] = useState(false);
   const [generatingSku, setGeneratingSku] = useState(false);
@@ -1148,10 +1150,6 @@ export function CatalogInventoryAdmin() {
 
   return (
     <section className="space-y-5">
-      {/* Sugerencias de unidad para el alta y la edición en fila (presentation-units.ts). */}
-      <datalist id="catalog-units">
-        {COMMON_PRESENTATION_UNITS.map((u) => <option key={u} value={u} />)}
-      </datalist>
       {/* ── Encabezado plano ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -1326,15 +1324,8 @@ export function CatalogInventoryAdmin() {
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="new-product-unit" className="block text-xs font-bold text-[var(--color-text-secondary)] mb-1">Se vende por *</label>
-                  <input
-                    id="new-product-unit"
-                    list="catalog-units"
-                    className="hm-input w-full uppercase"
-                    value={newProduct.unit}
-                    onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })}
-                    placeholder="UNIDAD, QUINTAL, METRO, LITRO…"
-                  />
+                  <p className="block text-xs font-bold text-[var(--color-text-secondary)] mb-1">Se vende por *</p>
+                  <UnitPicker value={newProduct.unit} onChange={(unit) => setNewProduct({ ...newProduct, unit })} label="Se vende por" />
                 </div>
                 <Input
                   label="Precio inicial (sucursal principal) *"
@@ -1531,176 +1522,96 @@ export function CatalogInventoryAdmin() {
               </thead>
               <tbody>
                 {data.products.map((product) => {
-                  const isEditing = editingProductId === product.id;
                   const sharedStock = formatSharedStock(product);
                   const { price: rowEffectivePrice, margin: rowMarginPercent } = effectivePriceAndMargin(product, data.costBranchId);
-                  const categoryChanged = isEditing && editDraft.categoryId !== (product.category?.id ?? "");
                   return (
                   <tr key={product.id}>
                     <td>
-                      {isEditing ? (
-                        <div className="space-y-1.5 min-w-[160px]">
-                          <div className="font-mono text-xs">
-                            {editDraft.applySuggestedSku && editSkuPreview ? (
-                              <>
-                                <span className="line-through text-[var(--color-text-muted)]">{product.sku}</span>
-                                <span className="ml-1.5 font-semibold" style={{ color: "var(--color-success-600)" }}>→ {editSkuPreview}</span>
-                              </>
-                            ) : (
-                              <span className="font-semibold text-[var(--color-text)]">{product.sku}</span>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => regenerateSku(product)}
-                            disabled={generatingSku}
-                            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[0.68rem] font-medium border transition-colors disabled:opacity-50"
-                            style={{
-                              background: "color-mix(in srgb, var(--color-master-600) 8%, transparent)",
-                              color: "var(--color-master-700)",
-                              borderColor: "color-mix(in srgb, var(--color-master-600) 30%, transparent)",
-                            }}
-                          >
-                            {generatingSku ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCcw className="h-3 w-3" />}
-                            Regenerar SKU
-                          </button>
-                          {editDraft.applySuggestedSku && editSkuPreview ? (
-                            <label className="flex cursor-pointer items-center gap-1.5 text-[0.68rem] text-[var(--color-text-secondary)]">
-                              <input
-                                type="checkbox"
-                                checked={editDraft.applySuggestedSku}
-                                onChange={(e) => setEditDraft({ ...editDraft, applySuggestedSku: e.target.checked })}
-                              />
-                              Aplicar nuevo SKU
-                            </label>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <span className="font-semibold">{product.sku}</span>
-                      )}
+                      <span className="font-semibold">{product.sku}</span>
                       {/* prompt-codigos-y-duplicados.md Fase 2 — no se agrega
                           el código al editor inline (editDraft no lo toca):
                           se gestiona desde la ficha, donde el historial y el
                           chequeo de duplicados tienen contexto completo. */}
-                      {!isEditing && (
-                        <div className="relative mt-1 flex items-center gap-1.5 text-[0.68rem]">
-                          <button
-                            type="button"
-                            onClick={() => { setCodeMenuProductId((id) => (id === product.id ? null : product.id)); setCodeMenuConfirmId(null); }}
-                            className="rounded border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-alt)]"
-                          >
+                      <div className="relative mt-1 flex items-center gap-1.5 text-[0.68rem]">
+                        <button
+                          type="button"
+                          onClick={() => { setCodeMenuProductId((id) => (id === product.id ? null : product.id)); setCodeMenuConfirmId(null); }}
+                          className="rounded border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-alt)]"
+                        >
+                          {product.barcode ? (
+                            <>
+                              {product.barcode}
+                              {(product.barcodes?.length ?? 0) > 1 && ` +${(product.barcodes?.length ?? 1) - 1}`}
+                            </>
+                          ) : (
+                            "Sin código"
+                          )}
+                        </button>
+                        <Link
+                          href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes` as Route}
+                          className="font-medium text-[var(--color-info-600)] hover:underline"
+                        >
+                          Códigos…
+                        </Link>
+
+                        {codeMenuProductId === product.id && (
+                          <div className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
                             {product.barcode ? (
                               <>
-                                {product.barcode}
-                                {(product.barcodes?.length ?? 0) > 1 && ` +${(product.barcodes?.length ?? 1) - 1}`}
-                              </>
-                            ) : (
-                              "Sin código"
-                            )}
-                          </button>
-                          <Link
-                            href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes` as Route}
-                            className="font-medium text-[var(--color-info-600)] hover:underline"
-                          >
-                            Códigos…
-                          </Link>
-
-                          {codeMenuProductId === product.id && (
-                            <div className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-xl">
-                              {product.barcode ? (
-                                <>
-                                  <Link
-                                    href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes&editPrimary=1` as Route}
-                                    onClick={() => setCodeMenuProductId(null)}
-                                    className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-alt)]"
-                                  >
-                                    <Pencil className="h-3 w-3" /> Editar
-                                  </Link>
-                                  {codeMenuConfirmId === product.id ? (
-                                    <div className="px-3 py-2">
-                                      <p className="mb-1.5 text-[var(--color-text-muted)]">¿Quitar {product.barcode}?</p>
-                                      <div className="flex gap-2">
-                                        <button
-                                          type="button"
-                                          disabled={codeMenuBusyId === product.id}
-                                          onClick={() => void removePrimaryBarcodeQuick(product)}
-                                          className="font-semibold text-[var(--color-danger-600)] hover:underline disabled:opacity-50"
-                                        >
-                                          {codeMenuBusyId === product.id ? "Quitando…" : "Sí, quitar"}
-                                        </button>
-                                        <button type="button" onClick={() => setCodeMenuConfirmId(null)} className="text-[var(--color-text-muted)] hover:underline">
-                                          Cancelar
-                                        </button>
-                                      </div>
+                                <Link
+                                  href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes&editPrimary=1` as Route}
+                                  onClick={() => setCodeMenuProductId(null)}
+                                  className="flex items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-alt)]"
+                                >
+                                  <Pencil className="h-3 w-3" /> Editar
+                                </Link>
+                                {codeMenuConfirmId === product.id ? (
+                                  <div className="px-3 py-2">
+                                    <p className="mb-1.5 text-[var(--color-text-muted)]">¿Quitar {product.barcode}?</p>
+                                    <div className="flex gap-2">
+                                      <button
+                                        type="button"
+                                        disabled={codeMenuBusyId === product.id}
+                                        onClick={() => void removePrimaryBarcodeQuick(product)}
+                                        className="font-semibold text-[var(--color-danger-600)] hover:underline disabled:opacity-50"
+                                      >
+                                        {codeMenuBusyId === product.id ? "Quitando…" : "Sí, quitar"}
+                                      </button>
+                                      <button type="button" onClick={() => setCodeMenuConfirmId(null)} className="text-[var(--color-text-muted)] hover:underline">
+                                        Cancelar
+                                      </button>
                                     </div>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => setCodeMenuConfirmId(product.id)}
-                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
-                                    >
-                                      <Trash2 className="h-3 w-3" /> Quitar
-                                    </button>
-                                  )}
-                                </>
-                              ) : null}
-                              <Link
-                                href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes` as Route}
-                                onClick={() => setCodeMenuProductId(null)}
-                                className="flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-surface-alt)]"
-                              >
-                                <ScanLine className="h-3 w-3" /> Ir a Códigos
-                              </Link>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setCodeMenuConfirmId(product.id)}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-[var(--color-danger-600)] hover:bg-[var(--color-danger-50)]"
+                                  >
+                                    <Trash2 className="h-3 w-3" /> Quitar
+                                  </button>
+                                )}
+                              </>
+                            ) : null}
+                            <Link
+                              href={`/app/master/catalog-inventory/products/${product.id}?tab=barcodes` as Route}
+                              onClick={() => setCodeMenuProductId(null)}
+                              className="flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-surface-alt)]"
+                            >
+                              <ScanLine className="h-3 w-3" /> Ir a Códigos
+                            </Link>
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td>
-                      {isEditing ? (
-                        <div className="space-y-2">
-                          <Input className="h-8 min-w-[220px]" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value, applySuggestedSku: false })} />
-                          {editSkuPreview && categoryChanged ? (
-                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[0.68rem] text-amber-800">
-                              <div>La categoria cambio. El SKU puede no corresponder a la nueva categoria.</div>
-                              <div className="mt-1">
-                                <strong>{product.category?.name ?? "Sin categoria"}</strong>{" → "}
-                                <strong>{data.categories.find((category) => category.id === editDraft.categoryId)?.name ?? "Sin categoria"}</strong>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : product.name}
+                      {product.name}
                     </td>
                     <td>
-                      {isEditing ? (
-                        <select
-                          className="hm-input h-8 min-w-[180px] text-xs"
-                          value={editDraft.categoryId}
-                          onChange={(event) => setEditDraft({ ...editDraft, categoryId: event.target.value, applySuggestedSku: false })}
-                        >
-                          <option value="">Sin categoria</option>
-                          {data.categories.filter((category) => category.isActive).map((category) => (
-                            <option key={category.id} value={category.id}>{category.name}</option>
-                          ))}
-                        </select>
-                      ) : product.category?.name ?? "Sin categoria"}
+                      {product.category?.name ?? "Sin categoria"}
                     </td>
                     <td>
-                      {isEditing ? (
-                        <input
-                          list="catalog-units"
-                          className="hm-input h-8 w-32 text-xs uppercase"
-                          value={editDraft.unit}
-                          onChange={(e) => setEditDraft({ ...editDraft, unit: e.target.value })}
-                          aria-label="Se vende por"
-                        />
-                      ) : (
-                        product.stockConversion?.saleUnit ?? product.unit
-                      )}
-                      {isEditing && product.stockConversion ? (
-                        <span className="mt-1 block text-[0.68rem] text-[var(--color-text-muted)]">También cambia en su fusión</span>
-                      ) : null}
+                      {product.stockConversion?.saleUnit ?? product.unit}
                     </td>
                     <td>
                       <div>{sharedStock?.primary ?? qty(product.totalStock)}</div>
@@ -1719,43 +1630,36 @@ export function CatalogInventoryAdmin() {
                     <td><Badge variant={product.isActive ? "success" : "warning"}>{product.isActive ? "Activo" : "Inactivo"}</Badge></td>
                     <td>
                       <div className="flex justify-end gap-1.5">
-                        {isEditing ? (
-                          <>
-                            <Button variant="success" size="sm" onClick={() => saveProductEdit(product)} loading={savingProduct} icon={<Check className="h-3.5 w-3.5" />}>Guardar</Button>
-                            <Button variant="ghost" size="sm" onClick={cancelEditing} icon={<X className="h-3.5 w-3.5" />}>Cancelar</Button>
-                          </>
-                        ) : (
-                          <>
-                            <Button variant="secondary" size="sm" onClick={() => startEditing(product)} icon={<Pencil className="h-3.5 w-3.5" />}>Editar</Button>
-                            <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 text-xs font-medium hover:bg-[var(--color-surface-alt)]">
-                              <Search className="h-3 w-3" /> Ver
-                            </Link>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setFocusedPricingProductId(product.id);
-                                goTab("pricing");
-                              }}
-                              icon={<DollarSign className="h-3.5 w-3.5" />}
-                            >
-                              Precio
-                            </Button>
-                            <Button variant={product.isActive ? "danger" : "success"} size="sm" onClick={() => toggleProduct(product).catch((error) => toast.error(error.message))}>
-                              {product.isActive ? "Desactivar" : "Activar"}
-                            </Button>
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              onClick={() => handleDeleteProduct(product)}
-                              disabled={deletingProductId === product.id}
-                              icon={deletingProductId === product.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                            >
-                              Eliminar
-                            </Button>
-                          </>
-                        )}
-                      </div>
+                        <>
+                          <Button variant="secondary" size="sm" onClick={() => startEditing(product)} icon={<Pencil className="h-3.5 w-3.5" />}>Editar</Button>
+                          <Link href={`/app/master/catalog-inventory/products/${product.id}` as Route} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 text-xs font-medium hover:bg-[var(--color-surface-alt)]">
+                            <Search className="h-3 w-3" /> Ver
+                          </Link>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setFocusedPricingProductId(product.id);
+                              goTab("pricing");
+                            }}
+                            icon={<DollarSign className="h-3.5 w-3.5" />}
+                          >
+                            Precio
+                          </Button>
+                          <Button variant={product.isActive ? "danger" : "success"} size="sm" onClick={() => toggleProduct(product).catch((error) => toast.error(error.message))}>
+                            {product.isActive ? "Desactivar" : "Activar"}
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => handleDeleteProduct(product)}
+                            disabled={deletingProductId === product.id}
+                            icon={deletingProductId === product.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                          >
+                            Eliminar
+                          </Button>
+                        </>
+                    </div>
                     </td>
                   </tr>
                   );
@@ -1848,6 +1752,24 @@ export function CatalogInventoryAdmin() {
       {data && tab === "reorder" ? <ReplenishmentPanel branches={data.branches} selectedBranchId={branchId} /> : null}
       {data && tab === "duplicates" ? <DuplicatesPanel onMerged={() => void load()} /> : null}
       {data && tab === "audit" ? <AuditPanel logs={data.auditLogs} /> : null}
+
+      {(() => {
+        const editingProduct = editingProductId ? data?.products.find((p) => p.id === editingProductId) : undefined;
+        return editingProduct && data ? (
+          <ProductEditDrawer
+            product={editingProduct}
+            categories={data.categories}
+            draft={editDraft}
+            onDraftChange={setEditDraft}
+            skuPreview={editSkuPreview}
+            generatingSku={generatingSku}
+            onRegenerateSku={() => void regenerateSku(editingProduct)}
+            saving={savingProduct}
+            onSave={() => void saveProductEdit(editingProduct)}
+            onClose={cancelEditing}
+          />
+        ) : null;
+      })()}
     </section>
   );
 }
