@@ -25,6 +25,8 @@ const lineSchema = z.object({
   // Commit 3 (prompt-entrada-reintento-precio.md) — mismo patrón que `overrides` de cantidad.
   salePriceOverrides: z.record(z.string(), z.number().positive()).optional(),
   unit: z.string().optional(),
+  // "¿Costo del paquete?" revisado con "Revisé los avisos" — el costo es por unidad.
+  confirmHighCost: z.boolean().optional(),
 });
 
 const createSchema = z.object({

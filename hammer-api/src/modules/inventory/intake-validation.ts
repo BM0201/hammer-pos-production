@@ -32,7 +32,8 @@ export type IntakeValidationMessage = {
     | "QUANTITY_FAR_ABOVE_TYPICAL"
     | "ALL_BRANCHES_SKIPPED"
     | "NO_SALE_PRICE"
-    | "MARGIN_BELOW_POLICY";
+    | "MARGIN_BELOW_POLICY"
+    | "PACKAGE_COST_SUSPECTED";
   text: string;
   /** DATA = falta un dato; BLOCKED = el producto no se puede cargar acá; RULE = una regla de negocio lo impide o lo marca para revisar. La pantalla elige el texto corto del badge con esto. */
   kind: IntakeMessageKind;
@@ -65,6 +66,12 @@ export type ValidateIntakeLineInput = {
   pendingPurchaseOrder: { poId: string; orderNumber: string } | null;
   /** Compra típica (p.ej. mediana de cantidad por línea de compra) — null = sin historial suficiente. */
   typicalPurchaseQuantity: number | null;
+  /**
+   * Ya decidido por la vista previa con isSuspectedPackageCostOnFirstEntry
+   * (wac.ts, la MISMA regla que bloquea al guardar): costo por unidad base
+   * mayor que el precio de venta por unidad base. Ausente/null = no aplica.
+   */
+  suspectedPackageCost?: { baseUnitCost: number; referenceSalePrice: number } | null;
 };
 
 export type IntakeLineValidation = { status: IntakeLineStatus; messages: IntakeValidationMessage[] };
@@ -170,6 +177,15 @@ export function validateIntakeLine(input: ValidateIntakeLineInput): IntakeLineVa
     }
   }
 
+  if (input.suspectedPackageCost) {
+    const { baseUnitCost, referenceSalePrice } = input.suspectedPackageCost;
+    reviews.push({
+      code: "PACKAGE_COST_SUSPECTED",
+      kind: "RULE",
+      text: `El costo por unidad (C$${baseUnitCost.toFixed(2)}) es mayor que el precio de venta por unidad (C$${referenceSalePrice.toFixed(2)}): ¿es el costo del paquete? Si es correcto, marcá "Revisé los avisos".`,
+    });
+  }
+
   if (input.kind === "PHYSICAL_COUNT" && quantityWritten && input.currentQty > 0) {
     const newQty = input.quantity!;
     if (newQty <= 0 || (input.currentQty - newQty) / input.currentQty > COUNT_DROP_THRESHOLD) {
@@ -219,8 +235,7 @@ export function formatGroupedMessageText(code: IntakeValidationMessage["code"], 
     case "NO_SALE_PRICE":
       return `No tiene precio de venta en ${joined}.`;
     case "MARGIN_BELOW_POLICY":
-      return `El margen queda bajo la política de la categoría en ${joined}.`;
-    default:
+      return `El margen queda bajo la política de la categoría en ${joined}.`;    default:
       return branchCodes.length > 0 ? `${fallbackText} (${joined})` : fallbackText;
   }
 }

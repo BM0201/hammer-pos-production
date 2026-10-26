@@ -415,3 +415,42 @@ test("precio bajo el costo resultante bloquea de punta a punta (vista previa rea
   assert.equal(result.cells[0].status, "ERROR");
   assert.ok(result.cells[0].messages.some((m) => m.code === "PRICE_BELOW_COST"));
 });
+
+// ── "¿costo del paquete?" — misma regla que el guardado (wac.ts) ─────────
+
+const FUSION_14 = [
+  { productId: "varilla", stockGroupId: "g1", isCanonical: true, conversionFactor: 1, saleUnit: "UN" },
+  { productId: "paquete", stockGroupId: "g1", isCanonical: false, conversionFactor: 14, saleUnit: "PAQ" },
+];
+
+test("primera entrada en la sucursal: costo por varilla mayor que el precio de la varilla EN ESA sucursal → aviso PACKAGE_COST_SUSPECTED (antes solo fallaba al guardar)", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "varilla", standardSalePrice: 1 }, { id: "paquete", standardSalePrice: 5000 }],
+    branchSettings: [{ branchId: BRANCH_1, productId: "varilla", branchPrice: 350 }],
+    fusionMembers: FUSION_14,
+  });
+  // 14 paquetes tecleados como 1: C$68,600 por paquete = C$4,900 por varilla, contra 350.
+  const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "paquete", quantity: 1, unitCost: 68600 }] }, db);
+  assert.ok(result.cells[0].messages.some((m) => m.code === "PACKAGE_COST_SUSPECTED"));
+  assert.equal(result.cells[0].status, "REVIEW", "es un aviso para revisar, no un error que impida guardar");
+});
+
+test("precio global de relleno (C$1) y sin precio de sucursal → no avisa: C$1 no es un precio real", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "varilla", standardSalePrice: 1 }, { id: "paquete", standardSalePrice: 5000 }],
+    fusionMembers: FUSION_14,
+  });
+  const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "paquete", quantity: 2, unitCost: 4200 }] }, db);
+  assert.ok(!result.cells[0].messages.some((m) => m.code === "PACKAGE_COST_SUSPECTED"));
+});
+
+test("el precio nuevo que trae la misma entrada gana sobre el vigente: paquete a C$4,200 con precio nuevo C$4,900 (350/varilla) → no avisa", async () => {
+  const db = buildFakeDb({
+    products: [{ id: "varilla", standardSalePrice: 250 }, { id: "paquete", standardSalePrice: 3500 }],
+    branchSettings: [{ branchId: BRANCH_1, productId: "varilla", branchPrice: 250 }],
+    fusionMembers: FUSION_14,
+  });
+  // 4,200 / 14 = 300 por varilla: más que 250 (precio vigente), menos que 350 (el nuevo).
+  const result = await previewIntake({ kind: "ADD_STOCK", branchIds: [BRANCH_1], lines: [{ productId: "paquete", quantity: 2, unitCost: 4200, salePrice: 4900 }] }, db);
+  assert.ok(!result.cells[0].messages.some((m) => m.code === "PACKAGE_COST_SUSPECTED"));
+});

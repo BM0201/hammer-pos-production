@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getProductStockConversionsBatch, calculateSharedStockChange } from "@/modules/inventory/unit-conversion";
 import { getEffectiveProductPricingBatch } from "@/modules/catalog/effective-pricing";
 import { resolvePolicyForProductBatch } from "@/modules/pricing/category-policy-service";
-import { recalculateWeightedAverage, WacValidationError } from "@/modules/inventory/wac";
+import { recalculateWeightedAverage, WacValidationError, isSuspectedPackageCostOnFirstEntry, referenceSalePricePerBaseUnit } from "@/modules/inventory/wac";
 import { normalizeIntakeKind, stockModeForKind, type NormalizedIntakeKind } from "@/modules/inventory/multi-branch-intake-service";
 import { validateIntakeLine, formatGroupedMessageText, type IntakeValidationMessage, type IntakeLineStatus } from "@/modules/inventory/intake-validation";
 
@@ -128,11 +128,21 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
   const branchCodeById = new Map(branchRows.map((b) => [b.id, b.code]));
 
   const canonicalProductIds = [...new Set(productIds.map((id) => conversionByProductId.get(id)?.canonicalProductId ?? id))];
-  const balances = await db.inventoryBalance.findMany({
-    where: { productId: { in: canonicalProductIds }, branchId: { in: branchIds } },
-    select: { branchId: true, productId: true, quantityOnHand: true, weightedAverageCost: true },
-  });
+  const [balances, canonicalSettings, canonicalProducts] = await Promise.all([
+    db.inventoryBalance.findMany({
+      where: { productId: { in: canonicalProductIds }, branchId: { in: branchIds } },
+      select: { branchId: true, productId: true, quantityOnHand: true, weightedAverageCost: true },
+    }),
+    // Precio del canónico por sucursal — referencia de "¿costo del paquete?" (mismo dato que lee el guardado).
+    db.branchProductSetting.findMany({
+      where: { productId: { in: canonicalProductIds }, branchId: { in: branchIds } },
+      select: { branchId: true, productId: true, branchPrice: true },
+    }),
+    db.product.findMany({ where: { id: { in: canonicalProductIds } }, select: { id: true, standardSalePrice: true } }),
+  ]);
   const balanceByKey = new Map(balances.map((b) => [`${b.branchId}:${b.productId}`, b]));
+  const canonicalBranchPriceByKey = new Map(canonicalSettings.map((s) => [`${s.branchId}:${s.productId}`, s.branchPrice]));
+  const canonicalStandardPriceById = new Map(canonicalProducts.map((p) => [p.id, p.standardSalePrice]));
   const productById = new Map(products.map((p) => [p.id, p]));
 
   // OC pendiente: una por (branchId, productId) — la primera que aparezca alcanza para avisar.
@@ -215,6 +225,26 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
       const currentSalePrice = effective?.effectivePrice !== null && effective?.effectivePrice !== undefined ? Number(effective.effectivePrice) : null;
       const minMarginPercent = policyByKey.get(key)?.categoryPolicy.minMarginPercent ?? null;
 
+      // Espejo de createInventoryMovementTx: solo una entrada con costo
+      // (Sumar) en una sucursal donde aún no hay costo promedio (<= C$2).
+      let suspectedPackageCost: { baseUnitCost: number; referenceSalePrice: number } | null = null;
+      const costForGuard = line.unitCost != null && line.unitCost > 0 ? line.unitCost : currentEffectiveCost;
+      if (kind === "ADD_STOCK" && conversion && delta > 0 && costForGuard !== null && costForGuard > 0 && currentBaseWac.lte(2)) {
+        // Con la unidad base elegida, el movimiento va al canónico (factor 1), igual que createOpeningBalanceTx.
+        const movementFactor = isBaseUnit ? new Prisma.Decimal(1) : factor;
+        const baseUnitCost = new Prisma.Decimal(costForGuard).div(movementFactor);
+        const packageFactor = conversion.conversionFactorToBase ?? movementFactor;
+        const referenceSalePrice = referenceSalePricePerBaseUnit({
+          newSalePrice: salePriceForBranch(line, branchId),
+          productFactor: factor,
+          canonicalBranchPrice: canonicalBranchPriceByKey.get(`${branchId}:${canonicalProductId}`) ?? null,
+          canonicalStandardSalePrice: canonicalStandardPriceById.get(canonicalProductId) ?? null,
+        });
+        if (isSuspectedPackageCostOnFirstEntry({ baseMovementUnitCost: baseUnitCost, referenceSalePrice, packageFactor })) {
+          suspectedPackageCost = { baseUnitCost: Number(baseUnitCost), referenceSalePrice: Number(referenceSalePrice) };
+        }
+      }
+
       const validation = validateIntakeLine({
         kind,
         quantity: resolvedQty,
@@ -228,6 +258,7 @@ export async function previewIntake(input: PreviewRequest, db: PrismaClient = pr
         productBlocked,
         pendingPurchaseOrder: pendingPO,
         typicalPurchaseQuantity: typicalQuantityByKey.get(key) ?? null,
+        suspectedPackageCost,
       });
 
       cells.push({

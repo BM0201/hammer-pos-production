@@ -227,7 +227,12 @@ export function applySalePriceCellInput(line: IntakeLine, branchId: string, rawV
   return { ...line, salePriceOverrides: { ...line.salePriceOverrides, [branchId]: parsed } };
 }
 
-export type IntakeLinePayload = { productId: string; quantity: number; unit?: string; unitCost?: number; salePrice?: number; overrides?: Record<string, number>; salePriceOverrides?: Record<string, number> };
+export type IntakeLinePayload = { productId: string; quantity: number; unit?: string; unitCost?: number; salePrice?: number; overrides?: Record<string, number>; salePriceOverrides?: Record<string, number>; confirmHighCost?: boolean };
+
+/** Productos cuya vista previa avisó "¿costo del paquete?" — al guardar (ya con "Revisé los avisos") viajan con confirmHighCost. */
+export function productIdsWithPackageCostWarning(lineMessages: Record<string, Array<{ code: string }>>): Set<string> {
+  return new Set(Object.entries(lineMessages).filter(([, messages]) => messages.some((m) => m.code === "PACKAGE_COST_SUSPECTED")).map(([productId]) => productId));
+}
 
 /**
  * "la cantidad vacía no se manda como 1" (tests 2.8) — una línea sin NINGÚN
@@ -237,7 +242,7 @@ export type IntakeLinePayload = { productId: string; quantity: number; unit?: st
  * multi-branch-matrix.ts). Commit 3 (prompt-entrada-reintento-precio.md) —
  * `salePriceOverrides` viaja con el MISMO criterio, en paralelo.
  */
-export function buildIntakePayloadLines(lines: IntakeLine[], branchIds: string[]): IntakeLinePayload[] {
+export function buildIntakePayloadLines(lines: IntakeLine[], branchIds: string[], confirmHighCostProductIds: Set<string> = new Set()): IntakeLinePayload[] {
   return lines
     .filter((line) => branchIds.some((id) => quantityForIntakeBranch(line, id) !== null))
     .map((line) => {
@@ -254,6 +259,7 @@ export function buildIntakePayloadLines(lines: IntakeLine[], branchIds: string[]
       if (line.salePrice !== null) payload.salePrice = line.salePrice;
       if (Object.keys(overrides).length > 0) payload.overrides = overrides;
       if (Object.keys(salePriceOverrides).length > 0) payload.salePriceOverrides = salePriceOverrides;
+      if (confirmHighCostProductIds.has(line.productId)) payload.confirmHighCost = true;
       return payload;
     });
 }
@@ -278,6 +284,7 @@ export function buildCreateIntakeRequest(input: {
   branchIds: string[];
   lines: IntakeLine[];
   confirmDuplicate?: boolean;
+  confirmHighCostProductIds?: Set<string>;
 }): CreateIntakeRequestBody {
   return {
     clientRequestId: input.clientRequestId,
@@ -285,7 +292,7 @@ export function buildCreateIntakeRequest(input: {
     reason: input.reason.trim(),
     notes: input.notes.trim() || undefined,
     branchIds: input.branchIds,
-    lines: buildIntakePayloadLines(input.lines, input.branchIds),
+    lines: buildIntakePayloadLines(input.lines, input.branchIds, input.confirmHighCostProductIds),
     ...(input.confirmDuplicate ? { confirmDuplicate: true } : {}),
   };
 }
@@ -401,6 +408,7 @@ export function rowStateLabel(status: IntakeLineStatus, messageCodes: string[]):
     return "Revisar";
   }
   if (status === "REVIEW") {
+    if (messageCodes.includes("PACKAGE_COST_SUSPECTED")) return "¿Costo del paquete?";
     if (messageCodes.includes("MARGIN_BELOW_POLICY") || messageCodes.includes("NO_SALE_PRICE")) return "Revisar margen";
     return "Revisar";
   }

@@ -101,6 +101,10 @@ export function createFusionFakeTx(config: FusionWorldConfig) {
     product: {
       findUnique: async () => null,
     },
+    // Mismo caso: precio del canónico EN la sucursal (sin fila = sin precio de sucursal).
+    branchProductSetting: {
+      findUnique: async () => null,
+    },
     productStockGroupMember: {
       findFirst: async (args: { where: Record<string, unknown> }) => {
         const where = args.where as { productId?: string; stockGroupId?: string; isActive?: boolean; isPackagePresentation?: boolean };

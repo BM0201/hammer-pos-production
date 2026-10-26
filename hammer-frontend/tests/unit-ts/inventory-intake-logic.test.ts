@@ -7,6 +7,7 @@ import {
   buildCreateIntakeRequest,
   readPossibleDuplicate,
   buildIntakePayloadLines,
+  productIdsWithPackageCostWarning,
   buildPreviewRequestLines,
   canConfirmIntake,
   clearIntakeDraft,
@@ -379,4 +380,15 @@ test("Crear nueva igual: confirmDuplicate viaja solo cuando se pide", () => {
   const base = { clientRequestId: "req-1", kind: "ADD_STOCK" as const, reason: "Pedido", notes: "", branchIds: ["b1"], lines: [line({ quantity: 5, unitCost: 100 })] };
   assert.equal(buildCreateIntakeRequest(base).confirmDuplicate, undefined);
   assert.equal(buildCreateIntakeRequest({ ...base, confirmDuplicate: true }).confirmDuplicate, true);
+});
+
+test("¿costo del paquete? revisado: solo esas filas viajan con confirmHighCost", () => {
+  const ids = productIdsWithPackageCostWarning({
+    p1: [{ code: "PACKAGE_COST_SUSPECTED" }],
+    p2: [{ code: "MARGIN_BELOW_POLICY" }],
+  });
+  assert.deepEqual([...ids], ["p1"]);
+  const payload = buildIntakePayloadLines([line({ productId: "p1", quantity: 2, unitCost: 4200 }), line({ productId: "p2", quantity: 1, unitCost: 10 })], ["b1"], ids);
+  assert.equal(payload.find((p) => p.productId === "p1")?.confirmHighCost, true);
+  assert.equal(payload.find((p) => p.productId === "p2")?.confirmHighCost, undefined);
 });

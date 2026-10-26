@@ -15,6 +15,7 @@ const lineSchema = z.object({
   unitCost: z.number().min(0).optional(),
   salePrice: z.number().positive().optional(),
   unit: z.string().optional(),
+  confirmHighCost: z.boolean().optional(),
 });
 
 const updateSchema = z.object({

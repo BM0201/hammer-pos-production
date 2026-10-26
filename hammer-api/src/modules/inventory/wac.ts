@@ -173,33 +173,60 @@ export function detectExcessiveWacJump(input: {
  * guard hermano (SUSPECTED_PACKAGE_COST_AS_UNIT_COST) y mismo escape
  * (allowHighUnitCost) — es la misma sospecha, solo con otra referencia.
  */
+/**
+ * Precio de venta POR UNIDAD BASE contra el que se compara la primera
+ * entrada. Antes era siempre el standardSalePrice GLOBAL del canónico —
+ * viejo o un relleno de C$1 (LATA) bloqueaba costos correctos. Ahora: el
+ * precio nuevo que trae la misma entrada (por unidad del producto
+ * cargado ÷ su factor) gana; si no, el de ESA sucursal del canónico
+ * (branchPrice ?? standardSalePrice, la misma regla que effectivePrice).
+ */
+export function referenceSalePricePerBaseUnit(input: {
+  newSalePrice?: number | null;
+  productFactor: Prisma.Decimal | number;
+  canonicalBranchPrice: Prisma.Decimal | null;
+  canonicalStandardSalePrice: Prisma.Decimal | null;
+}): Prisma.Decimal | null {
+  const factor = new Prisma.Decimal(input.productFactor);
+  if (input.newSalePrice != null && input.newSalePrice > 0 && factor.gt(0)) return new Prisma.Decimal(input.newSalePrice).div(factor);
+  return input.canonicalBranchPrice ?? input.canonicalStandardSalePrice;
+}
+
+/** Precio <= C$2 = relleno, no un precio real (mismo FLOOR que los otros dos guards). */
+const PLACEHOLDER_PRICE_FLOOR = new Prisma.Decimal(2);
+
+/** La regla en sí, sin lanzar — la vista previa la usa para avisar ANTES de guardar, el guardado para bloquear. */
+export function isSuspectedPackageCostOnFirstEntry(input: {
+  baseMovementUnitCost: Prisma.Decimal;
+  referenceSalePrice: Prisma.Decimal | null;
+  packageFactor: Prisma.Decimal;
+}): boolean {
+  if (input.packageFactor.lt(4)) return false;
+  if (input.referenceSalePrice === null || input.referenceSalePrice.lte(PLACEHOLDER_PRICE_FLOOR)) return false;
+  return input.baseMovementUnitCost.gt(input.referenceSalePrice);
+}
+
 export function detectSuspectedPackageCostOnFirstEntry(input: {
   inbound: boolean;
   hasExistingWacReference: boolean;
   baseMovementUnitCost: Prisma.Decimal;
-  canonicalStandardSalePrice: Prisma.Decimal | null;
+  referenceSalePrice: Prisma.Decimal | null;
   packageFactor: Prisma.Decimal;
   allowHighUnitCost?: boolean;
 }): void {
   if (input.allowHighUnitCost) return;
   if (!input.inbound) return;
   if (input.hasExistingWacReference) return; // ese caso ya lo cubre detectPackageCostAsUnitCost
-  if (input.canonicalStandardSalePrice === null) return;
+  if (!isSuspectedPackageCostOnFirstEntry(input)) return;
 
-  const MIN_FACTOR = new Prisma.Decimal(4);
-  if (input.packageFactor.lt(MIN_FACTOR)) return;
-  if (input.canonicalStandardSalePrice.lte(0)) return;
-
-  if (input.baseMovementUnitCost.gt(input.canonicalStandardSalePrice)) {
-    throw new WacValidationError(
-      "SUSPECTED_PACKAGE_COST_AS_UNIT_COST",
-      `El costo por unidad ingresado (C$${input.baseMovementUnitCost.toFixed(2)}) es MAYOR que el precio de venta ` +
-        `por unidad de este producto (C$${input.canonicalStandardSalePrice.toFixed(2)}). Nadie compra por unidad más ` +
-        `caro de lo que vende — esto suele significar que se tecleó el costo del PAQUETE completo (este producto ` +
-        `trae ${input.packageFactor.toFixed(0)} unidades por paquete). Si de verdad es el costo correcto (venta bajo ` +
-        `costo intencional), reintente autorizando costo alto (allowHighUnitCost).`,
-    );
-  }
+  throw new WacValidationError(
+    "SUSPECTED_PACKAGE_COST_AS_UNIT_COST",
+    `El costo por unidad ingresado (C$${input.baseMovementUnitCost.toFixed(2)}) es MAYOR que el precio de venta ` +
+      `por unidad de este producto (C$${input.referenceSalePrice!.toFixed(2)}). Nadie compra por unidad más ` +
+      `caro de lo que vende — esto suele significar que se tecleó el costo del PAQUETE completo (este producto ` +
+      `trae ${input.packageFactor.toFixed(0)} unidades por paquete). Si de verdad es el costo correcto (venta bajo ` +
+      `costo intencional), reintente autorizando costo alto (allowHighUnitCost).`,
+  );
 }
 
 /**

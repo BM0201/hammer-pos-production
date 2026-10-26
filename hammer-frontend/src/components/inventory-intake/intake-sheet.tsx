@@ -34,6 +34,7 @@ import {
   firstErrorProductId,
   loadIntakeDraft,
   priceForMarginPercent,
+  productIdsWithPackageCostWarning,
   quantityForIntakeBranch,
   readPossibleDuplicate,
   reasonChipsForKind,
@@ -512,13 +513,16 @@ export function IntakeSheet({
 
   // ── Confirmar y guardar (o, en modo edición, corregir + reintentar) ─────
   async function confirmAndSubmit(confirmDuplicate = false) {
+    // Solo se llega acá con "Revisé los avisos" marcado si hubo avisos (canConfirm/ConfirmSummaryModal):
+    // las filas con "¿costo del paquete?" van confirmadas como costo por unidad.
+    const confirmHighCostProductIds = productIdsWithPackageCostWarning(previewLineMessages);
     await runSubmit(async () => {
       try {
         let data: CreateIntakeResult;
         if (editMode) {
           const putResponse = await apiFetch(`/api/inventory/multi-branch-intake/${editMode.intakeId}/branches/${editMode.branchId}/lines`, {
             method: "PUT", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lines: buildIntakePayloadLines(lines, branchIds), expectedRevision: editMode.expectedRevision }),
+            body: JSON.stringify({ lines: buildIntakePayloadLines(lines, branchIds, confirmHighCostProductIds), expectedRevision: editMode.expectedRevision }),
           });
           const putRaw = await putResponse.json().catch(() => null);
           if (!putResponse.ok) throw new Error(putRaw?.error?.message ?? "No se pudo guardar la corrección.");
@@ -528,7 +532,7 @@ export function IntakeSheet({
           if (!retryResponse.ok) throw new Error(retryRaw?.error?.message ?? "Se guardó la corrección, pero no se pudo reintentar.");
           data = await settleUntilDone(unwrapApiData(retryRaw) as CreateIntakeResult);
         } else {
-          const body = buildCreateIntakeRequest({ clientRequestId, kind, reason, notes, branchIds, lines, confirmDuplicate });
+          const body = buildCreateIntakeRequest({ clientRequestId, kind, reason, notes, branchIds, lines, confirmDuplicate, confirmHighCostProductIds });
           const response = await apiFetch("/api/inventory/multi-branch-intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
           const raw = await response.json().catch(() => null);
           if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar la entrada.");

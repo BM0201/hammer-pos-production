@@ -370,6 +370,8 @@ test("LA QUE IMPORTA — OPENING_BALANCE sobre un producto que YA tiene existenc
   }, db);
   assert.equal(result.branches[0].status, "FAILED");
   assert.match(result.branches[0].error ?? "", /ya tiene existencias/);
+  // El error de guardado dice QUÉ producto falló (antes iba con productId "").
+  assert.equal(result.branches[0].errorJson?.lines[0]?.productId, "p1");
 });
 
 // ── Resto de escenarios ya cubiertos antes, adaptados al nuevo shape ──────

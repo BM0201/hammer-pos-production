@@ -5,6 +5,7 @@ import {
   detectExcessiveWacJump,
   detectPackageCostAsUnitCost,
   detectSuspectedPackageCostOnFirstEntry,
+  referenceSalePricePerBaseUnit,
   maxPackageFactorForSanityCheck,
   WacValidationError,
 } from "@/modules/inventory/wac";
@@ -125,7 +126,7 @@ test("6. Primera entrada, sin WAC previo, costo 470 contra precio de venta 35 de
       inbound: true,
       hasExistingWacReference: false,
       baseMovementUnitCost: d(470),
-      canonicalStandardSalePrice: d(35),
+      referenceSalePrice: d(35),
       packageFactor: d(40),
     }),
     (error: unknown) => error instanceof WacValidationError && error.code === "SUSPECTED_PACKAGE_COST_AS_UNIT_COST",
@@ -137,7 +138,7 @@ test("detectSuspectedPackageCostOnFirstEntry: costo por unidad por debajo del pr
     inbound: true,
     hasExistingWacReference: false,
     baseMovementUnitCost: d(18.55),
-    canonicalStandardSalePrice: d(35),
+    referenceSalePrice: d(35),
     packageFactor: d(40),
   }));
 });
@@ -147,7 +148,7 @@ test("detectSuspectedPackageCostOnFirstEntry: ya hay WAC de referencia real → 
     inbound: true,
     hasExistingWacReference: true,
     baseMovementUnitCost: d(470),
-    canonicalStandardSalePrice: d(35),
+    referenceSalePrice: d(35),
     packageFactor: d(40),
   }));
 });
@@ -157,7 +158,7 @@ test("detectSuspectedPackageCostOnFirstEntry: sin precio de venta cargado en el 
     inbound: true,
     hasExistingWacReference: false,
     baseMovementUnitCost: d(470),
-    canonicalStandardSalePrice: null,
+    referenceSalePrice: null,
     packageFactor: d(40),
   }));
 });
@@ -167,7 +168,7 @@ test("detectSuspectedPackageCostOnFirstEntry: presentación suelta (factor 2, ba
     inbound: true,
     hasExistingWacReference: false,
     baseMovementUnitCost: d(470),
-    canonicalStandardSalePrice: d(35),
+    referenceSalePrice: d(35),
     packageFactor: d(2),
   }));
 });
@@ -177,8 +178,30 @@ test("detectSuspectedPackageCostOnFirstEntry: allowHighUnitCost=true → pasa, e
     inbound: true,
     hasExistingWacReference: false,
     baseMovementUnitCost: d(470),
-    canonicalStandardSalePrice: d(35),
+    referenceSalePrice: d(35),
     packageFactor: d(40),
     allowHighUnitCost: true,
   }));
+});
+
+test("detectSuspectedPackageCostOnFirstEntry: precio de relleno (C$1, el de LATA) → no es un precio real, no bloquea", () => {
+  assert.doesNotThrow(() => detectSuspectedPackageCostOnFirstEntry({
+    inbound: true,
+    hasExistingWacReference: false,
+    baseMovementUnitCost: d(18.55),
+    referenceSalePrice: d(1),
+    packageFactor: d(40),
+  }));
+});
+
+test("referenceSalePricePerBaseUnit: el precio nuevo de la misma entrada gana (por paquete ÷ factor), si no el de la sucursal, si no el global", () => {
+  // Paquete de 14 varillas, precio nuevo C$4,900 por paquete → C$350 por varilla.
+  assert.equal(referenceSalePricePerBaseUnit({ newSalePrice: 4900, productFactor: 14, canonicalBranchPrice: d(300), canonicalStandardSalePrice: d(1) })!.toNumber(), 350);
+  assert.equal(referenceSalePricePerBaseUnit({ newSalePrice: null, productFactor: 14, canonicalBranchPrice: d(300), canonicalStandardSalePrice: d(1) })!.toNumber(), 300);
+  assert.equal(referenceSalePricePerBaseUnit({ newSalePrice: undefined, productFactor: 14, canonicalBranchPrice: null, canonicalStandardSalePrice: d(280) })!.toNumber(), 280);
+});
+
+test("primera entrada: costo 330/varilla con precio global viejo 250 pero precio de sucursal 350 → pasa (antes bloqueaba)", () => {
+  const referenceSalePrice = referenceSalePricePerBaseUnit({ newSalePrice: null, productFactor: 14, canonicalBranchPrice: d(350), canonicalStandardSalePrice: d(250) });
+  assert.doesNotThrow(() => detectSuspectedPackageCostOnFirstEntry({ inbound: true, hasExistingWacReference: false, baseMovementUnitCost: d(330), referenceSalePrice, packageFactor: d(14) }));
 });

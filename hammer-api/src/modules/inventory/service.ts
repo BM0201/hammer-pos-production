@@ -6,6 +6,7 @@ import {
   detectExcessiveWacJump,
   detectPackageCostAsUnitCost,
   detectSuspectedPackageCostOnFirstEntry,
+  referenceSalePricePerBaseUnit,
   isInboundMovement,
   recalculateWeightedAverage,
   WacValidationError,
@@ -261,6 +262,8 @@ type InventoryMovementInput = {
    * después, no.
    */
   allowLargeWacJump?: boolean;
+  /** Precio de venta nuevo que fija este mismo movimiento, ya por unidad BASE — referencia de SUSPECTED_PACKAGE_COST_AS_UNIT_COST en la primera entrada (gana sobre el precio vigente). */
+  newSalePricePerBaseUnit?: number | null;
 };
 
 type ConsumeSharedStockForSaleInput = {
@@ -565,6 +568,8 @@ export type OpeningBalanceInput = {
   notes?: string | null;
   /** Autoriza un salto grande del WAC (Parte B) cuando costMode=SET_WAC. */
   allowLargeWacJump?: boolean;
+  /** El usuario confirmó que el costo es por unidad aunque supere el precio de venta (SUSPECTED_PACKAGE_COST_AS_UNIT_COST). */
+  allowHighUnitCost?: boolean;
 };
 
 export type OpeningBalanceTxOptions = {
@@ -708,15 +713,25 @@ export async function createInventoryMovementTx(
   // caro de lo que vende. Solo se consulta el precio cuando hace falta
   // (no en cada movimiento) para no sumar una query al camino caliente.
   if (inbound && !input.allowHighUnitCost && balance.weightedAverageCost.lte(2) && packageFactor.gte(4) && resolved.conversion) {
-    const canonicalProduct = await tx.product.findUnique({
-      where: { id: resolved.conversion.canonicalProductId },
-      select: { standardSalePrice: true },
-    });
+    const canonicalProductId = resolved.conversion.canonicalProductId;
+    const [canonicalProduct, canonicalSetting] = await Promise.all([
+      tx.product.findUnique({ where: { id: canonicalProductId }, select: { standardSalePrice: true } }),
+      tx.branchProductSetting.findUnique({
+        where: { branchId_productId: { branchId: input.branchId, productId: canonicalProductId } },
+        select: { branchPrice: true },
+      }),
+    ]);
     detectSuspectedPackageCostOnFirstEntry({
       inbound,
       hasExistingWacReference: false,
       baseMovementUnitCost,
-      canonicalStandardSalePrice: canonicalProduct?.standardSalePrice ?? null,
+      // newSalePricePerBaseUnit ya viene por unidad base: factor 1.
+      referenceSalePrice: referenceSalePricePerBaseUnit({
+        newSalePrice: input.newSalePricePerBaseUnit,
+        productFactor: 1,
+        canonicalBranchPrice: canonicalSetting?.branchPrice ?? null,
+        canonicalStandardSalePrice: canonicalProduct?.standardSalePrice ?? null,
+      }),
       packageFactor,
       allowHighUnitCost: input.allowHighUnitCost,
     });
@@ -1953,6 +1968,11 @@ export async function createOpeningBalanceTx(
         referenceId,
         notes: `${input.reason}${input.notes ? ` - ${input.notes}` : ""}`,
         allowLargeWacJump: input.allowLargeWacJump,
+        allowHighUnitCost: input.allowHighUnitCost,
+        // salePrice es del producto cargado (por SU unidad): ÷ su factor = por unidad base.
+        newSalePricePerBaseUnit: input.priceMode !== "NO_PRICE_CHANGE" && input.salePrice && input.salePrice > 0
+          ? input.salePrice / Number(conversion?.conversionFactor ?? 1)
+          : null,
       });
     } else {
       const inventoryProductId = shared.inventoryProductId;

@@ -58,6 +58,8 @@ export type IntakeLineInput = {
   salePriceOverrides?: Record<string, number>;
   /** Selector de unidad, si el producto tiene conversión — igual que hoy. */
   unit?: string;
+  /** La vista previa avisó "¿costo del paquete?" y el usuario marcó "Revisé los avisos": el costo es por unidad (allowHighUnitCost). */
+  confirmHighCost?: boolean;
 };
 
 export type CreateIntakeInput = {
@@ -147,7 +149,15 @@ async function nextIntakeCodeTx(tx: Prisma.TransactionClient): Promise<{ code: s
   return { code: `IM-${String(sequence).padStart(6, "0")}`, sequence };
 }
 
-export type ResolvedLine = { productId: string; quantity: number; unitCost?: number; salePrice?: number; unit?: string };
+export type ResolvedLine = { productId: string; quantity: number; unitCost?: number; salePrice?: number; unit?: string; confirmHighCost?: boolean };
+
+/** Un error al aplicar UNA línea, con el producto — para que el mensaje de la sucursal diga cuál fue (antes iba sin producto). */
+class IntakeLineError extends Error {
+  constructor(public readonly productId: string, public readonly original: unknown) {
+    super(original instanceof Error ? original.message : String(original));
+    this.name = "IntakeLineError";
+  }
+}
 
 /**
  * Líneas de ESTA sucursal, con el override ya resuelto. Para ADD_STOCK/
@@ -157,7 +167,7 @@ export type ResolvedLine = { productId: string; quantity: number; unitCost?: num
  */
 function resolveLinesForBranch(lines: IntakeLineInput[], branchId: string, kind: NormalizedIntakeKind): ResolvedLine[] {
   return lines
-    .map((line) => ({ productId: line.productId, quantity: quantityForBranch(line, branchId), unitCost: line.unitCost, salePrice: salePriceForBranch(line, branchId), unit: line.unit }))
+    .map((line) => ({ productId: line.productId, quantity: quantityForBranch(line, branchId), unitCost: line.unitCost, salePrice: salePriceForBranch(line, branchId), unit: line.unit, confirmHighCost: line.confirmHighCost }))
     .filter((line) => (kind === "PHYSICAL_COUNT" ? line.quantity >= 0 : line.quantity > 0));
 }
 
@@ -216,33 +226,38 @@ async function processBatchTx(
     const costByProductId = kind === "PHYSICAL_COUNT" ? null : await resolveBatchCosts(tx, branchId, batch);
 
     for (const line of batch) {
-      if (kind === "OPENING_BALANCE") {
-        // Guarda de servidor — el preview (intake-preview-service.ts) ya
-        // avisa esto ANTES de guardar, pero un submit directo (o una
-        // carrera entre dos cargas) no debe poder cargar "inicial" sobre
-        // existencias reales: eso sería SUMAR disfrazado de apertura.
-        const shared = await getSharedInventoryBalance(tx, { branchId, productId: line.productId });
-        if (shared.balance && shared.balance.quantityOnHand.gt(0)) {
-          throw new Error(`VALIDATION_ERROR: ${line.productId} ya tiene existencias en esta sucursal — usá Sumar o Conteo.`);
+      try {
+        if (kind === "OPENING_BALANCE") {
+          // Guarda de servidor — el preview (intake-preview-service.ts) ya
+          // avisa esto ANTES de guardar, pero un submit directo (o una
+          // carrera entre dos cargas) no debe poder cargar "inicial" sobre
+          // existencias reales: eso sería SUMAR disfrazado de apertura.
+          const shared = await getSharedInventoryBalance(tx, { branchId, productId: line.productId });
+          if (shared.balance && shared.balance.quantityOnHand.gt(0)) {
+            throw new Error("VALIDATION_ERROR: ya tiene existencias en esta sucursal — usá Sumar o Conteo.");
+          }
         }
+        const resolvedCost = costByProductId?.get(line.productId) ?? null;
+        const costValue = resolvedCost !== null ? Number(resolvedCost) : null;
+        const hasCost = costValue !== null && costValue > 0;
+        await createOpeningBalanceTx(tx, {
+          actorUserId,
+          branchId,
+          productId: line.productId,
+          quantity: line.quantity,
+          unit: line.unit,
+          stockMode: stockModeForKind(kind),
+          unitCost: hasCost ? costValue : null,
+          costMode: costModeForKind(kind, hasCost),
+          salePrice: line.salePrice ?? null,
+          priceMode: line.salePrice !== undefined && line.salePrice > 0 ? "SET_BRANCH_PRICE" : "NO_PRICE_CHANGE",
+          reason: intake.reason,
+          notes,
+          allowHighUnitCost: line.confirmHighCost === true,
+        }, { referenceType: INTAKE_REFERENCE_TYPE, referenceId: intake.id, bulkReference: intake.id });
+      } catch (error) {
+        throw new IntakeLineError(line.productId, error);
       }
-      const resolvedCost = costByProductId?.get(line.productId) ?? null;
-      const costValue = resolvedCost !== null ? Number(resolvedCost) : null;
-      const hasCost = costValue !== null && costValue > 0;
-      await createOpeningBalanceTx(tx, {
-        actorUserId,
-        branchId,
-        productId: line.productId,
-        quantity: line.quantity,
-        unit: line.unit,
-        stockMode: stockModeForKind(kind),
-        unitCost: hasCost ? costValue : null,
-        costMode: costModeForKind(kind, hasCost),
-        salePrice: line.salePrice ?? null,
-        priceMode: line.salePrice !== undefined && line.salePrice > 0 ? "SET_BRANCH_PRICE" : "NO_PRICE_CHANGE",
-        reason: intake.reason,
-        notes,
-      }, { referenceType: INTAKE_REFERENCE_TYPE, referenceId: intake.id, bulkReference: intake.id });
     }
     return "applied";
   });
@@ -372,8 +387,20 @@ async function processBranchUntilDeadline(
     await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "DONE", processedAt: new Date(), error: null, errorJson: Prisma.JsonNull } });
     return { branchId, status: "DONE", error: null, errorJson: null, processedLines, totalLines };
   } catch (error) {
-    const { code, text } = mapIntakeErrorToSpanish(error, branchCode);
-    const errorJson = buildIntakeErrorJson([{ productId: "", sku: "", name: "", code, text }]);
+    const lineError = error instanceof IntakeLineError ? error : null;
+    const { code, text } = mapIntakeErrorToSpanish(lineError ? lineError.original : error, branchCode);
+    let product: { sku: string; name: string } | null = null;
+    if (lineError) {
+      try {
+        product = await db.product.findUnique({ where: { id: lineError.productId }, select: { sku: true, name: true } });
+      } catch {
+        // Solo para el texto: sin nombre, el mensaje sigue con el id.
+      }
+    }
+    const errorLine = lineError
+      ? { productId: lineError.productId, sku: product?.sku ?? lineError.productId, name: product?.name ?? "(producto)", code, text: `${product?.name ?? lineError.productId}: ${text}` }
+      : { productId: "", sku: "", name: "", code, text };
+    const errorJson = buildIntakeErrorJson([errorLine]);
     await db.multiBranchIntakeBranch.updateMany({ where: { intakeId: intake.id, branchId }, data: { status: "FAILED", error: errorJson.summary, errorJson: errorJson as unknown as Prisma.InputJsonValue, processedAt: new Date() } });
     return { branchId, status: "FAILED", error: errorJson.summary, errorJson, processedLines, totalLines };
   }
