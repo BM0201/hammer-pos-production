@@ -771,7 +771,7 @@ export function CatalogInventoryAdmin() {
   /* ── Inline product edit handlers ── */
   function startEditing(product: ProductRow) {
     setEditingProductId(product.id);
-    setEditDraft({ name: product.name, categoryId: product.category?.id ?? "", sku: product.sku, unit: product.unit, applySuggestedSku: false });
+    setEditDraft({ name: product.name, categoryId: product.category?.id ?? "", sku: product.sku, unit: product.stockConversion?.saleUnit ?? product.unit, applySuggestedSku: false });
     setEditSkuPreview("");
   }
   function cancelEditing() {
@@ -862,8 +862,8 @@ export function CatalogInventoryAdmin() {
       const body: Record<string, unknown> = {};
       if (editDraft.name.trim() !== product.name) body.name = editDraft.name.trim();
       if (editDraft.categoryId && editDraft.categoryId !== product.category?.id) body.categoryId = editDraft.categoryId;
-      // En una fusión la unidad se edita desde Presentaciones (el servidor también lo exige).
-      if (!product.stockConversion && editDraft.unit.trim() && normalizePresentationUnit(editDraft.unit) !== normalizePresentationUnit(product.unit)) body.unit = editDraft.unit.trim();
+      // En una fusión, el servidor cambia también su "se vende por" (el factor no se toca).
+      if (editDraft.unit.trim() && normalizePresentationUnit(editDraft.unit) !== normalizePresentationUnit(product.stockConversion?.saleUnit ?? product.unit)) body.unit = editDraft.unit.trim();
       if (editDraft.applySuggestedSku && editSkuPreview) {
         const hasHistory = product.totalStock !== 0 || product.inventoryBalances.length > 0;
         if (hasHistory) {
@@ -1687,7 +1687,7 @@ export function CatalogInventoryAdmin() {
                       ) : product.category?.name ?? "Sin categoria"}
                     </td>
                     <td>
-                      {isEditing && !product.stockConversion ? (
+                      {isEditing ? (
                         <input
                           list="catalog-units"
                           className="hm-input h-8 w-32 text-xs uppercase"
@@ -1699,9 +1699,7 @@ export function CatalogInventoryAdmin() {
                         product.stockConversion?.saleUnit ?? product.unit
                       )}
                       {isEditing && product.stockConversion ? (
-                        <Link href={"/app/master/inventory-fusion" as Route} className="mt-1 block text-[0.68rem] font-medium text-[var(--color-info-600)] hover:underline">
-                          En fusión: cambiar en Presentaciones
-                        </Link>
+                        <span className="mt-1 block text-[0.68rem] text-[var(--color-text-muted)]">También cambia en su fusión</span>
                       ) : null}
                     </td>
                     <td>

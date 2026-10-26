@@ -12,7 +12,7 @@ import type { ProductStockConversion } from "@/modules/inventory/unit-conversion
 import { detectPackageCostAsUnitCost, maxPackageFactorForSanityCheck } from "@/modules/inventory/wac";
 import { assertPriceNotBelowCost } from "@/modules/pricing/price-guard";
 import { buildProductSearchWhere, rankProductMatches, groupProductsByFamily, type FamilyGroup } from "@/modules/catalog/product-search";
-import { aggregateWeightedAverageCost } from "@/modules/catalog/stock-group-crud";
+import { aggregateWeightedAverageCost, updateStockGroup } from "@/modules/catalog/stock-group-crud";
 import { getVisibleProductIdsForBranch } from "@/modules/catalog/branch-visible-products-cache";
 import { refreshProductStateTx } from "@/modules/catalog-inventory/product-state-service";
 import { canonicalizePresentationUnit } from "@/modules/catalog/presentation-units";
@@ -930,7 +930,7 @@ export async function updateProduct(productId: string, input: {
 }) {
   const previous = await prisma.product.findUnique({
     where: { id: productId },
-    select: { id: true, sku: true, unit: true, categoryId: true, category: { select: { name: true } }, standardSalePrice: true, globalCost: true },
+    select: { id: true, sku: true, categoryId: true, category: { select: { name: true } }, standardSalePrice: true, globalCost: true },
   });
   if (!previous) throw new Error("NOT_FOUND");
   // prompt-wac-desactivar.md/docs/WAC-DESACTIVADO.md — leído una vez,
@@ -940,16 +940,26 @@ export async function updateProduct(productId: string, input: {
   // no es la fuente de verdad, ver Parte 2 del prompt).
   const wacEnabled = await isWacDrivesCostChainEnabled();
 
-  // En una fusión la unidad es la "se vende por" del miembro (y Product.unit
-  // la refleja): cambiarla solo acá volvería a separar los dos valores.
+  // En una fusión la unidad ES la "se vende por" del miembro (y Product.unit
+  // la refleja): cambiarla acá la cambia en la fusión, por updateStockGroup —
+  // misma validación (no repetir unidad entre presentaciones) y el factor
+  // queda igual. Antes se rechazaba y había que ir a Presentaciones.
   const nextUnit = input.unit !== undefined ? canonicalizePresentationUnit(input.unit) : undefined;
-  if (nextUnit !== undefined && nextUnit !== previous.unit) {
+  if (nextUnit !== undefined) {
     const member = await prisma.productStockGroupMember.findFirst({
       where: { productId, isActive: true, stockGroup: { isActive: true } },
-      select: { stockGroup: { select: { name: true } } },
+      select: { stockGroupId: true, saleUnit: true, stockGroup: { select: { products: { where: { isActive: true } } } } },
     });
-    if (member) {
-      throw new Error(`VALIDATION_ERROR: Este producto está en la fusión "${member.stockGroup.name}" — su unidad se cambia desde Presentaciones, donde se edita junto con el factor.`);
+    if (member && canonicalizePresentationUnit(member.saleUnit) !== nextUnit) {
+      await updateStockGroup(member.stockGroupId, {
+        members: member.stockGroup.products.map((m) => ({
+          productId: m.productId,
+          saleUnit: m.productId === productId ? nextUnit : m.saleUnit,
+          conversionFactor: Number(m.conversionFactor),
+          isCanonical: m.isCanonical,
+          isPackagePresentation: m.isPackagePresentation,
+        })),
+      }, input.actorUserId);
     }
   }
 
