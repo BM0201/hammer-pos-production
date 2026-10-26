@@ -35,6 +35,7 @@ import {
   loadIntakeDraft,
   priceForMarginPercent,
   quantityForIntakeBranch,
+  readPossibleDuplicate,
   reasonChipsForKind,
   rowStateLabel,
   salePriceForIntakeBranch,
@@ -46,6 +47,7 @@ import {
   type IntakeKind,
   type IntakeLine,
   type IntakeLineStatus,
+  type PossibleDuplicateIntake,
   type ScannedProductRef,
 } from "@/lib/inventory-intake-logic";
 import type { Branch, ProductRow, CenterData } from "@/components/catalog-inventory/catalog-inventory-admin";
@@ -213,6 +215,7 @@ export function IntakeSheet({
   const [result, setResult] = useState<CreateIntakeResult | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [clientRequestId] = useState(() => crypto.randomUUID());
+  const [duplicateWarning, setDuplicateWarning] = useState<PossibleDuplicateIntake | null>(null);
   const [draftBanner, setDraftBanner] = useState<{ savedAt: string } | null>(null);
   const draftCheckedKinds = useRef(new Set<IntakeKind>());
   const quantityRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -508,7 +511,7 @@ export function IntakeSheet({
   }
 
   // ── Confirmar y guardar (o, en modo edición, corregir + reintentar) ─────
-  async function confirmAndSubmit() {
+  async function confirmAndSubmit(confirmDuplicate = false) {
     await runSubmit(async () => {
       try {
         let data: CreateIntakeResult;
@@ -525,10 +528,17 @@ export function IntakeSheet({
           if (!retryResponse.ok) throw new Error(retryRaw?.error?.message ?? "Se guardó la corrección, pero no se pudo reintentar.");
           data = await settleUntilDone(unwrapApiData(retryRaw) as CreateIntakeResult);
         } else {
-          const body = buildCreateIntakeRequest({ clientRequestId, kind, reason, notes, branchIds, lines });
+          const body = buildCreateIntakeRequest({ clientRequestId, kind, reason, notes, branchIds, lines, confirmDuplicate });
           const response = await apiFetch("/api/inventory/multi-branch-intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
           const raw = await response.json().catch(() => null);
           if (!response.ok) throw new Error(raw?.error?.message ?? "No se pudo registrar la entrada.");
+          // Aviso, no error: no se creó nada todavía — el usuario decide.
+          const duplicate = readPossibleDuplicate(unwrapApiData(raw));
+          if (duplicate) {
+            setShowConfirm(false);
+            setDuplicateWarning(duplicate);
+            return;
+          }
           data = await settleUntilDone(unwrapApiData(raw) as CreateIntakeResult);
         }
 
@@ -944,6 +954,25 @@ export function IntakeSheet({
           onConfirm={() => void confirmAndSubmit()}
           editBranchCode={editMode?.branchCode}
         />
+      ) : null}
+
+      {duplicateWarning && !result ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="intake-duplicate-title" className="w-full max-w-md space-y-3 rounded-xl bg-[var(--color-surface)] p-5 shadow-2xl">
+            <h4 id="intake-duplicate-title" className="text-sm font-semibold">¿Es otra entrada o la misma de {duplicateWarning.code}?</h4>
+            <p className="text-xs text-[var(--color-text-secondary)]">
+              {duplicateWarning.code} tiene {duplicateWarning.matchPercent}% de los mismos productos y quedó <strong>fallida en {duplicateWarning.branchName}</strong> sin corregir. Todavía no se guardó nada.
+            </p>
+            <ul className="list-disc space-y-1 pl-4 text-xs text-[var(--color-text-secondary)]">
+              <li>Si es mercadería nueva (otro envío igual al anterior), creá la entrada igual.</li>
+              <li>Si es la misma que falló, cancelá y corregí {duplicateWarning.code} desde Entradas → Editar y reintentar, para no sumarla dos veces.</li>
+            </ul>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="ghost" onClick={() => setDuplicateWarning(null)} disabled={submitting}>Cancelar</Button>
+              <Button type="button" variant="success" loading={submitting} onClick={() => { setDuplicateWarning(null); void confirmAndSubmit(true); }}>Crear nueva igual</Button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

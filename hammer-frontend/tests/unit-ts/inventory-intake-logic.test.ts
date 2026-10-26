@@ -5,6 +5,7 @@ import {
   applyBranchCellInput,
   applySalePriceCellInput,
   buildCreateIntakeRequest,
+  readPossibleDuplicate,
   buildIntakePayloadLines,
   buildPreviewRequestLines,
   canConfirmIntake,
@@ -365,4 +366,17 @@ test("LA QUE IMPORTA — countMissingPriceByBranch: cuenta por sucursal, no mezc
     { branchId: "b2", messages: [{ code: "MARGIN_BELOW_POLICY" }] }, // no cuenta -- no es NO_SALE_PRICE
   ];
   assert.deepEqual(countMissingPriceByBranch(cells), { b1: 2, b2: 1 });
+});
+
+test("posible duplicado: la respuesta { possibleDuplicate } se reconoce (antes se trataba como resultado y reventaba)", () => {
+  const warning = { intakeId: "im-8", code: "IM-000008", branchId: "b2", branchName: "Rivas", matchPercent: 100 };
+  assert.deepEqual(readPossibleDuplicate({ possibleDuplicate: warning }), warning);
+  assert.equal(readPossibleDuplicate({ intake: { id: "x", code: "IM-1" }, overallStatus: "DONE", branches: [] }), null);
+  assert.equal(readPossibleDuplicate(null), null);
+});
+
+test("Crear nueva igual: confirmDuplicate viaja solo cuando se pide", () => {
+  const base = { clientRequestId: "req-1", kind: "ADD_STOCK" as const, reason: "Pedido", notes: "", branchIds: ["b1"], lines: [line({ quantity: 5, unitCost: 100 })] };
+  assert.equal(buildCreateIntakeRequest(base).confirmDuplicate, undefined);
+  assert.equal(buildCreateIntakeRequest({ ...base, confirmDuplicate: true }).confirmDuplicate, true);
 });

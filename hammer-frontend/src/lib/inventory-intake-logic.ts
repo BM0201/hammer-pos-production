@@ -265,6 +265,8 @@ export type CreateIntakeRequestBody = {
   notes?: string;
   branchIds: string[];
   lines: IntakeLinePayload[];
+  /** "Crear nueva igual" — salta el aviso de posible duplicado. */
+  confirmDuplicate?: boolean;
 };
 
 /** "armado del payload por kind" (tests 2.8) — el cuerpo completo que recibe POST /api/inventory/multi-branch-intake. */
@@ -275,6 +277,7 @@ export function buildCreateIntakeRequest(input: {
   notes: string;
   branchIds: string[];
   lines: IntakeLine[];
+  confirmDuplicate?: boolean;
 }): CreateIntakeRequestBody {
   return {
     clientRequestId: input.clientRequestId,
@@ -283,7 +286,23 @@ export function buildCreateIntakeRequest(input: {
     notes: input.notes.trim() || undefined,
     branchIds: input.branchIds,
     lines: buildIntakePayloadLines(input.lines, input.branchIds),
+    ...(input.confirmDuplicate ? { confirmDuplicate: true } : {}),
   };
+}
+
+export type PossibleDuplicateIntake = { intakeId: string; code: string; branchId: string; branchName: string; matchPercent: number };
+
+/**
+ * El POST responde 200 `{ possibleDuplicate }` (no un error, y sin crear
+ * nada) cuando una entrada de los últimos 14 días con ≥80% de los mismos
+ * productos sigue FALLIDA en alguna de las sucursales elegidas. Antes la
+ * pantalla lo trataba como resultado y reventaba con "Cannot read
+ * properties of undefined (reading 'filter')".
+ */
+export function readPossibleDuplicate(data: unknown): PossibleDuplicateIntake | null {
+  if (!data || typeof data !== "object" || !("possibleDuplicate" in data)) return null;
+  const warning = (data as { possibleDuplicate?: PossibleDuplicateIntake | null }).possibleDuplicate;
+  return warning ?? null;
 }
 
 export type PreviewRequestLine = { productId: string; quantity: number | null; overrides?: Record<string, number | null>; unitCost?: number | null; salePrice?: number | null; salePriceOverrides?: Record<string, number | null>; unit?: string };
